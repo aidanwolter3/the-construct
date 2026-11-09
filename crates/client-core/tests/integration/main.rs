@@ -6,6 +6,7 @@ mod also;
 mod apps;
 mod attachments;
 mod auth;
+mod data_events;
 mod engine;
 mod events;
 mod notifications;

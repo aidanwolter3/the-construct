@@ -51,6 +51,7 @@ pub mod events;
 /// The mutation-expression evaluator, shared with the Rust renderer.
 pub use protocol::expr;
 pub mod notify;
+pub mod reload;
 pub mod store;
 
 use std::collections::{BTreeMap, HashMap};
@@ -58,7 +59,10 @@ use std::fs;
 use std::panic::{self, AssertUnwindSafe};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Condvar, LazyLock, Mutex, MutexGuard, Weak, mpsc};
+use std::sync::{
+    Arc, Condvar, LazyLock, Mutex, MutexGuard, RwLock, RwLockReadGuard, RwLockWriteGuard, Weak,
+    mpsc,
+};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -525,6 +529,15 @@ struct State {
     /// Fields set on this device (`action.local.set`), by entity URI, kept
     /// over loads that can't know of them yet ([`State::hold_local_sets`]).
     local_sets: BTreeMap<String, LocalSet>,
+    /// What is on screen, topmost first ([`ConstructEngine::set_visible`]);
+    /// `None` until the client says.
+    visible: Option<Vec<String>>,
+    /// Load keys a scoped `event: data` matched while they were off
+    /// screen: reloaded once they are on screen again (`crate::reload`).
+    stale: std::collections::BTreeSet<String>,
+    /// The entity URIs of the workspace's last fetch this run (`None`:
+    /// not fetched yet), to match against a scoped `event: data`.
+    workspace_uris: Option<Vec<String>>,
 }
 
 /// An entity's fields set on this device, and the [`State::seq`] of the
@@ -829,6 +842,7 @@ impl State {
         self.workspace = Some(workspace);
         self.entities = merged;
         self.queries = queries;
+        self.workspace_uris = Some(uris);
     }
 
     /// Keep another layout's fetched workspace and version, cached for the
@@ -928,6 +942,19 @@ impl State {
         self.entities.extend(fetched);
         self.data.insert(path.to_owned(), load);
         self.loads.insert(path.to_owned(), LoadStatus::ready());
+    }
+
+    /// Forget the cached answer of data path `path` (its entities stay
+    /// until something else replaces them).
+    fn drop_data(&mut self, path: &str) {
+        self.stale.remove(path);
+        if self.data.remove(path).is_none() {
+            return;
+        }
+        println!("[ConstructEngine] {path} is gone; dropped from the cache");
+        if let Some(Err(e)) = self.store.as_ref().map(|s| s.delete_data_load(path)) {
+            eprintln!("[ConstructEngine] failed to forget data '{path}': {e}");
+        }
     }
 
     /// Sign-out: forget everything cached that may hold the account's data,
@@ -1302,12 +1329,13 @@ enum FlushResult {
 struct Inner {
     state: Mutex<State>,
     observers: Mutex<Vec<Arc<Observer>>>,
-    /// Serializes a workspace fetch+merge with an outbox POST+apply, so a
-    /// bundle never races a flush (the row would be counted twice or
-    /// dropped). Never held together with HTTP on the state mutex, and
-    /// released before observers are notified. Shared by all engines in
-    /// this process on the same cache file ([`net_lock_for`]).
-    net: Arc<Mutex<()>>,
+    /// Keeps workspace fetches and data loads (read: they run together)
+    /// apart from outbox POSTs (write), so a bundle never races a flush
+    /// (the row would be counted twice or dropped). Never held together
+    /// with HTTP on the state mutex, and released before observers are
+    /// notified. Shared by all engines in this process on the same cache
+    /// file ([`net_lock_for`]).
+    net: Arc<RwLock<()>>,
     signal: Arc<WorkerSignal>,
     config: EngineConfig,
     workspace_id: String,
@@ -1364,6 +1392,16 @@ impl Drop for ConstructEngine {
     }
 }
 
+/// The shared side of an `RwLock` (a poisoned one is still used).
+fn read<T>(l: &RwLock<T>) -> RwLockReadGuard<'_, T> {
+    l.read().unwrap_or_else(|e| e.into_inner())
+}
+
+/// The exclusive side of an `RwLock` (a poisoned one is still used).
+fn write<T>(l: &RwLock<T>) -> RwLockWriteGuard<'_, T> {
+    l.write().unwrap_or_else(|e| e.into_inner())
+}
+
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
     // A panicking observer must not brick the engine.
     m.lock().unwrap_or_else(|e| e.into_inner())
@@ -1390,8 +1428,8 @@ fn unix_now_ms() -> i64 {
 /// engine on the same storage starts (e.g. an Android activity relaunched):
 /// without a shared lock both workers could POST the same outbox row.
 /// `None` (in-memory store) gets a private lock.
-fn net_lock_for(db_path: Option<&Path>) -> Arc<Mutex<()>> {
-    static LOCKS: LazyLock<Mutex<HashMap<PathBuf, Weak<Mutex<()>>>>> =
+fn net_lock_for(db_path: Option<&Path>) -> Arc<RwLock<()>> {
+    static LOCKS: LazyLock<Mutex<HashMap<PathBuf, Weak<RwLock<()>>>>> =
         LazyLock::new(Mutex::default);
     let Some(path) = db_path else {
         return Arc::default();
@@ -1402,7 +1440,7 @@ fn net_lock_for(db_path: Option<&Path>) -> Arc<Mutex<()>> {
     if let Some(l) = locks.get(&key).and_then(Weak::upgrade) {
         return l;
     }
-    let l: Arc<Mutex<()>> = Arc::default();
+    let l: Arc<RwLock<()>> = Arc::default();
     locks.insert(key, Arc::downgrade(&l));
     l
 }
@@ -1412,7 +1450,7 @@ fn net_lock_for(db_path: Option<&Path>) -> Arc<Mutex<()>> {
 /// read but not written falls back to an in-memory copy of its workspaces
 /// and entities. Also returns the `net` lock for that store (see
 /// [`net_lock_for`]).
-fn open_store(storage_path: &str) -> (Option<Store>, Arc<Mutex<()>>) {
+fn open_store(storage_path: &str) -> (Option<Store>, Arc<RwLock<()>>) {
     if !storage_path.is_empty() {
         let path = PathBuf::from(storage_path).join(CACHE_DB_FILE);
         let opened = match store::make_private_dir(Path::new(storage_path)) {
@@ -2254,7 +2292,7 @@ impl Inner {
     }
 
     fn refresh(&self) -> FetchOutcome {
-        let net = lock(&self.net);
+        let net = read(&self.net);
         let stamp = lock(&self.state).load_stamp();
         let mut token = self.session_token();
         let mut result = fetch(&self.workspace_url, token.as_deref(), &self.device_id);
@@ -2327,6 +2365,8 @@ impl Inner {
                         _ => st.layout_version = version,
                     }
                     st.apply_fetched(&self.workspace_id, spec, stamp);
+                    st.stale
+                        .remove(&format!("{LAYOUT_LOAD_PREFIX}{}", self.workspace_id));
                     st.set_online(true);
                     st.gone = false;
                     outcome = FetchOutcome::Fetched;
@@ -2387,7 +2427,7 @@ impl Inner {
     /// until woken by a dispatch or by going online).
     fn flush_pass(&self, client: &reqwest::blocking::Client) -> Option<Duration> {
         loop {
-            let net = lock(&self.net);
+            let net = write(&self.net);
             if self.signal.is_shut_down() {
                 // The engine was dropped mid-pass: stop before the next row.
                 return None;
@@ -3071,6 +3111,7 @@ impl Inner {
                 return false;
             } else {
                 st.loads.insert(path.to_owned(), LoadStatus::loading());
+                st.stale.remove(path);
             }
             st.seq += 1;
             st.snapshot()
@@ -3085,7 +3126,7 @@ impl Inner {
     /// fetches and flushes (`net`). A 401 for the current session signs out
     /// like a fetch 401 (and refetches).
     fn load_data(&self, path: &str) {
-        let net = lock(&self.net);
+        let net = read(&self.net);
         let stamp = lock(&self.state).load_stamp();
         let token = self.session_token();
         // Another layout (decision `layouts-not-apps`): its workspace, whose
@@ -3150,6 +3191,11 @@ impl Inner {
                 }
                 Err(FetchError::Status(code)) => {
                     eprintln!("[ConstructEngine] load {url} failed: HTTP {code}");
+                    if code == 404 {
+                        // Gone from the pod: no `event: data` reloads it
+                        // again (decision `scoped-data-events`).
+                        st.drop_data(path);
+                    }
                     if let (Some(id), 404) = (layout_id, code) {
                         st.layouts
                             .entry(id.to_owned())
@@ -3207,21 +3253,6 @@ impl Inner {
                 Followup::Refresh => {
                     self.refresh();
                 }
-            }
-        }
-    }
-
-    /// The pod said our data changed (`event: data`, D50): refetch the
-    /// workspace, then every data path loaded so far.
-    fn reload_all(&self) {
-        self.refresh();
-        let paths: Vec<String> = lock(&self.state).data.keys().cloned().collect();
-        for path in paths {
-            if self.signal.is_shut_down() {
-                return;
-            }
-            if self.begin_load(&path) {
-                self.load_data(&path);
             }
         }
     }

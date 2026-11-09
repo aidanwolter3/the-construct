@@ -328,6 +328,74 @@ async fn a_write_on_one_device_reloads_the_app_on_every_device() {
     assert!(t.contains("event: data") && t.contains(&app), "{t}");
 }
 
+/// An events stream of `app` for device `device`.
+async fn device_stream(pod: &Pod, app: &str, device: &str) -> Body {
+    let mut body = pod_core::app(pod.clone())
+        .oneshot(
+            Request::get(format!("/v1/workspaces/{app}/events"))
+                .header(protocol::DEVICE_HEADER, device)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap()
+        .into_body();
+    assert!(
+        sse_text(&mut body, Duration::from_millis(200))
+            .await
+            .contains("event: layout")
+    );
+    body
+}
+
+/// The `event: data` payloads in SSE text.
+fn data_events(text: &str) -> Vec<Value> {
+    text.split("\n\n")
+        .filter(|e| e.contains("event: data"))
+        .filter_map(|e| {
+            let d = e.lines().find_map(|l| l.strip_prefix("data: "))?;
+            serde_json::from_str(d).ok()
+        })
+        .collect()
+}
+
+#[tokio::test]
+async fn a_write_names_its_rows_and_skips_the_device_that_made_it() {
+    let pod = pod();
+    define_todos(&pod).await;
+    let app = create_app(&pod, "Todos", todo_layout("")).await;
+    let (_, made) = add(&pod, json!({"title": "Milk"})).await;
+    let id = made["id"].as_str().unwrap().to_owned();
+    let mut laptop = device_stream(&pod, &app, "laptop-0001").await;
+    let mut phone = device_stream(&pod, &app, "phone-0001").await;
+    // The phone ticks it.
+    let resp = pod_core::app(pod.clone())
+        .oneshot(
+            Request::post("/v1/collections/todos/update")
+                .header("content-type", "application/json")
+                .header(protocol::DEVICE_HEADER, "phone-0001")
+                .body(Body::from(json!({"id": id, "done": true}).to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let seen = data_events(&sse_text(&mut laptop, Duration::from_millis(300)).await);
+    assert_eq!(seen.len(), 1, "{seen:?}");
+    let e = &seen[0];
+    assert_eq!(e["workspace_id"], app.as_str());
+    assert_eq!(e["source"], "collections");
+    assert_eq!(e["changes"], json!([{"collection": "todos", "rows": [id]}]));
+    assert_eq!(e["uri_prefixes"], json!(["collections://todos/"]));
+    assert_eq!(e["query_prefixes"], json!(["collection:todos"]));
+    let own = data_events(&sse_text(&mut phone, Duration::from_millis(300)).await);
+    assert!(own.is_empty(), "the phone shows its tick already: {own:?}");
+    // A write from no device (an agent, Claude) reaches every device.
+    add(&pod, json!({"title": "Eggs"})).await;
+    let own = data_events(&sse_text(&mut phone, Duration::from_millis(300)).await);
+    assert_eq!(own.len(), 1, "{own:?}");
+}
+
 #[tokio::test]
 async fn bindings_must_fit_the_collection() {
     let pod = pod();

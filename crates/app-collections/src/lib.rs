@@ -566,6 +566,18 @@ pub(crate) async fn refusable<T: Send + 'static>(
     pod: &Pod,
     f: impl FnOnce(&rusqlite::Transaction<'_>) -> rusqlite::Result<Result<T, Value>> + Send + 'static,
 ) -> Result<T, Value> {
+    let (v, followed) = refusable_followed(pod, f).await?;
+    followed.finish(pod);
+    Ok(v)
+}
+
+/// [`refusable`], leaving telling clients to the caller: what the
+/// transaction changed, to [`follow::Followed::finish`] or
+/// [`follow::Followed::publish`].
+async fn refusable_followed<T: Send + 'static>(
+    pod: &Pod,
+    f: impl FnOnce(&rusqlite::Transaction<'_>) -> rusqlite::Result<Result<T, Value>> + Send + 'static,
+) -> Result<(T, follow::Followed), Value> {
     let slot: Arc<std::sync::Mutex<Option<Value>>> = Default::default();
     let refused = slot.clone();
     let caps = adapter(pod).caps;
@@ -584,13 +596,11 @@ pub(crate) async fn refusable<T: Send + 'static>(
     if let Some(body) = slot.lock().unwrap_or_else(|e| e.into_inner()).take() {
         return Err(body);
     }
-    let (v, followed) = r.map_err(|e| {
+    r.map_err(|e| {
         let (status, Json(mut body)) = e;
         body["status"] = json!(status.as_u16());
         body
-    })?;
-    followed.finish(pod);
-    Ok(v)
+    })
 }
 
 // ---------- rows ----------
@@ -661,8 +671,18 @@ enum RowOp {
     Delete,
 }
 
-/// Create, update or delete a row from a layout's write `body`.
-async fn write_row(pod: &Pod, collection: &str, op: RowOp, body: Value) -> Result<Value, Value> {
+/// Create, update or delete a row from a layout's write `body`, sent by
+/// device `origin` (`x-construct-device`; `None`: not a device's write).
+/// Clients are told of the rows it changed, except `origin` when the pod
+/// changed nothing it didn't send (decision `scoped-data-events`): its
+/// engine shows the write already, and reloads a create's list itself.
+async fn write_row(
+    pod: &Pod,
+    collection: &str,
+    op: RowOp,
+    body: Value,
+    origin: Option<String>,
+) -> Result<Value, Value> {
     let Some(body) = body.as_object().cloned() else {
         return Err(fail(
             StatusCode::BAD_REQUEST,
@@ -672,7 +692,7 @@ async fn write_row(pod: &Pod, collection: &str, op: RowOp, body: Value) -> Resul
     };
     let caps = adapter(pod).caps;
     let name = collection.to_owned();
-    let out = refusable(pod, move |tx| {
+    let out = refusable_followed(pod, move |tx| {
         let Some((_, def)) = db::latest_def(tx, &name)? else {
             return Ok(Err(
                 json!({ "error": "collection_not_found", "collection": name, "status": 404 }),
@@ -705,6 +725,7 @@ async fn write_row(pod: &Pod, collection: &str, op: RowOp, body: Value) -> Resul
                     return Ok(Ok((
                         json!({ "ok": true, "id": r.id, "uri": db::row_uri(&name, &r.id) }),
                         Vec::new(),
+                        false,
                     )));
                 }
             }
@@ -748,6 +769,7 @@ async fn write_row(pod: &Pod, collection: &str, op: RowOp, body: Value) -> Resul
             return Ok(Ok((
                 json!({ "ok": true, "id": row.id, "uri": db::row_uri(&name, &row.id) }),
                 jobs,
+                false,
             )));
         }
         let Some(id) = str_of("id") else {
@@ -777,7 +799,7 @@ async fn write_row(pod: &Pod, collection: &str, op: RowOp, body: Value) -> Resul
                 row.updated_at = now;
                 db::save_row(tx, &name, &row)?;
             }
-            return Ok(Ok((json!({ "ok": true, "id": row.id }), Vec::new())));
+            return Ok(Ok((json!({ "ok": true, "id": row.id }), Vec::new(), false)));
         }
         if row.deleted_at.is_some() && body.get("deleted") != Some(&json!(false)) {
             return Ok(Err(
@@ -805,8 +827,11 @@ async fn write_row(pod: &Pod, collection: &str, op: RowOp, body: Value) -> Resul
                 e,
             )));
         }
+        let sent = row.values.clone();
         let jobs =
             compute::after_write(tx, &def, Some(&before_values), &mut row, &body, now, caps)?;
+        // A computed field of the row changed: the writer doesn't know it.
+        let computed = row.values != sent;
         match body.get("deleted") {
             Some(Value::Bool(true)) => row.deleted_at = row.deleted_at.or(Some(now)),
             Some(Value::Bool(false)) => {
@@ -829,11 +854,13 @@ async fn write_row(pod: &Pod, collection: &str, op: RowOp, body: Value) -> Resul
         }
         row.updated_at = now;
         db::save_row(tx, &name, &row)?;
-        Ok(Ok((json!({ "ok": true, "id": row.id }), jobs)))
+        Ok(Ok((json!({ "ok": true, "id": row.id }), jobs, computed)))
     })
     .await?;
-    pod.publish_data_all(NAME);
-    let (out, jobs) = out;
+    let ((out, jobs, computed), followed) = out;
+    if !followed.rows.is_empty() {
+        followed.publish(pod, origin.as_deref().filter(|_| !computed));
+    }
     compute::spawn(pod, collection, jobs);
     Ok(out)
 }
@@ -851,7 +878,7 @@ pub async fn update_row(
 ) -> Result<Value, Value> {
     let mut body = values;
     body.insert("id".into(), json!(id));
-    write_row(pod, collection, RowOp::Update, Value::Object(body)).await
+    write_row(pod, collection, RowOp::Update, Value::Object(body), None).await
 }
 
 async fn row_route(
@@ -865,7 +892,8 @@ async fn row_route(
         Ok(v) => v,
         Err(e) => return e.into_response(),
     };
-    match write_row(&pod, &collection, op, body).await {
+    let origin = pod_core::notify::device_id(&headers);
+    match write_row(&pod, &collection, op, body, origin).await {
         Ok(v) => Json(v).into_response(),
         Err(e) => refusal(e),
     }
@@ -926,9 +954,11 @@ pub(crate) async fn run_action(
         jobs,
         followed,
     } = done;
-    followed.finish(pod);
-    if answer["repeated"] != true {
-        pod.publish_data_all(NAME);
+    if answer["repeated"] == true {
+        followed.finish(pod);
+    } else {
+        // Every row it changed, in one event (decision `scoped-data-events`).
+        followed.publish(pod, None);
     }
     for (c, j) in jobs {
         compute::spawn(pod, &c, j);
