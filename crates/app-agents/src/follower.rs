@@ -196,6 +196,7 @@ async fn follow(weak: &Weak<AppState>, ctl: &Ctl, runner: &Runner, generation: u
                 .is_some_and(|t| now_ms() - t < SNAPSHOT_AFTER.as_millis() as i64)
     });
     let mut data_rx = pod.subscribe_data();
+    let mut stopped = std::collections::HashSet::new();
     drop(pod);
 
     if !fresh {
@@ -233,6 +234,9 @@ async fn follow(weak: &Weak<AppState>, ctl: &Ctl, runner: &Runner, generation: u
         let _ = pod.blocking(move |s| db::save(s, &st, &[], now)).await;
         pod.publish_data_all(crate::NAME);
         tasks::launch_queued(&pod, &clients, runner).await;
+        if tasks::stop_done(&pod, &clients, runner, &state, &mut stopped).await {
+            pod.publish_data_all(crate::NAME);
+        }
     }
     let mut parser = SseParser::default();
     let mut tick = tokio::time::interval(tasks_every);
@@ -310,6 +314,9 @@ async fn follow(weak: &Weak<AppState>, ctl: &Ctl, runner: &Runner, generation: u
                 return Outcome::Gone;
             };
             tasks::launch_queued(&pod, &clients, runner).await;
+            if tasks::stop_done(&pod, &clients, runner, &state, &mut stopped).await {
+                pod.publish_data_all(crate::NAME);
+            }
         }
     }
 }

@@ -6,6 +6,10 @@
 //! - `session.finished`: the summary and PR link appended to `diagnosis`,
 //!   `status = review`.
 //! - `session.failed`: `status = todo`, the error appended to `diagnosis`.
+//! - A row marked done (`status = done` or `done = true`) whose session is
+//!   still open: `stop_session`, so a finished task doesn't keep a session
+//!   waiting for you. A done row keeps its status whatever its session
+//!   sends after.
 //! - A `start_task` the runner refuses (400, 404): `status = failed` with
 //!   the reason. At the concurrency limit (429) the row stays queued and is
 //!   sent again later.
@@ -14,6 +18,8 @@
 //! adds what the wiring needs (the status options and the `session_id`,
 //! `workspace` and `diagnosis` fields) through Collections' own
 //! `apply_change`.
+
+use std::collections::HashSet;
 
 use pod_core::Pod;
 use pod_core::store::Store;
@@ -24,7 +30,7 @@ use app_collections::{db as cdb, model};
 
 use crate::cap::{self, CapError, Clients, Command, Runner};
 use crate::db;
-use crate::state::Effect;
+use crate::state::{Effect, State};
 
 /// Pod setting: the linked collection (`{collection, workspace}` as JSON).
 pub const TASKS_SETTING: &str = "agents.tasks";
@@ -139,6 +145,31 @@ pub async fn set_link(pod: &Pod, args: &Value) -> Result<Value, Value> {
 
 /// A row's values by field name.
 type Named = Map<String, Value>;
+
+/// Whether a row is marked done: `status = done`, or a `done` box ticked.
+fn is_done(row: &Named) -> bool {
+    text(row, "status") == "done" || row.get("done") == Some(&Value::Bool(true))
+}
+
+/// The open sessions of done rows: a session started for the row (its
+/// `task_id`) or the one the row names (`session_id`).
+fn done_sessions(rows: &[(String, Named)], state: &State) -> Vec<String> {
+    let done: Vec<(&str, String)> = rows
+        .iter()
+        .filter(|(_, r)| is_done(r))
+        .map(|(id, r)| (id.as_str(), text(r, "session_id")))
+        .collect();
+    state
+        .sessions
+        .values()
+        .filter(|s| s.is_active())
+        .filter(|s| {
+            done.iter()
+                .any(|(id, sid)| s.task_id == *id || (!sid.is_empty() && s.id == *sid))
+        })
+        .map(|s| s.id.clone())
+        .collect()
+}
 
 fn rows(store: &Store, collection: &str) -> rusqlite::Result<Vec<(String, Named)>> {
     store.with_conn(|c| {
@@ -276,6 +307,61 @@ pub async fn launch_queued(pod: &Pod, clients: &Clients, runner: &Runner) {
     }
 }
 
+/// Show the open sessions of done rows as finished, whatever the runner
+/// last said: a session it can't stop any more (its sandbox is gone) would
+/// otherwise wait for you forever.
+pub fn close_done(store: &Store, state: &mut State) -> rusqlite::Result<()> {
+    let Some(link) = link(store)? else {
+        return Ok(());
+    };
+    let rows = rows(store, &link.collection)?;
+    for id in done_sessions(&rows, state) {
+        if let Some(s) = state.sessions.get_mut(&id) {
+            s.status = crate::state::FINISHED.to_owned();
+        }
+    }
+    Ok(())
+}
+
+/// Send `stop_session` for each open session of a done row, once per
+/// session (`stopped` remembers them while the follower runs). Whether it
+/// found one it hadn't, so the feeds are sent again.
+pub async fn stop_done(
+    pod: &Pod,
+    clients: &Clients,
+    runner: &Runner,
+    state: &State,
+    stopped: &mut HashSet<String>,
+) -> bool {
+    let Ok(Some(link)) = pod.blocking(link).await else {
+        return false;
+    };
+    let coll = link.collection;
+    let Ok(rows) = pod.blocking(move |s| rows(s, &coll)).await else {
+        return false;
+    };
+    let mut new = false;
+    for session_id in done_sessions(&rows, state) {
+        if stopped.contains(&session_id) {
+            continue;
+        }
+        new = true;
+        let cmd = Command::StopSession {
+            session_id: session_id.clone(),
+        };
+        match cap::command(clients, runner, &cmd).await {
+            Ok(_) | Err(CapError::Status(400 | 404, _)) => {
+                stopped.insert(session_id);
+            }
+            Err(e) => {
+                tracing::info!(error = %e, "a done task's session waits to be stopped");
+                return new;
+            }
+        }
+    }
+    new
+}
+
 /// Apply the task effects among `effects` to the linked collection's rows.
 pub async fn apply(pod: &Pod, effects: &[Effect]) {
     if !effects.iter().any(|e| {
@@ -313,6 +399,12 @@ pub async fn apply(pod: &Pod, effects: &[Effect]) {
             continue;
         };
         let id = task_id.clone();
+        if is_done(&row) {
+            // Marked done already (often the session itself did, then was
+            // stopped): what the session sends after doesn't reopen it.
+            let _ = pod.blocking(move |s| db::remove_launch(s, &id)).await;
+            continue;
+        }
         let _ = pod.blocking(move |s| db::remove_launch(s, &id)).await;
         let values = match e {
             Effect::TaskStarted { session_id, .. } => {
@@ -357,6 +449,42 @@ mod tests {
         let out = append(&long, "end");
         assert_eq!(out.chars().count(), DIAGNOSIS_MAX);
         assert!(out.ends_with("\n\nend"));
+    }
+
+    #[test]
+    fn done_rows_name_their_open_sessions() {
+        use crate::state::{FINISHED, Session, WAITING_PERMISSION};
+        let session = |id: &str, task: &str, status: &str| Session {
+            id: id.into(),
+            task_id: task.into(),
+            status: status.into(),
+            ..Default::default()
+        };
+        let mut state = State::default();
+        for s in [
+            session("s-done", "r1", WAITING_PERMISSION),
+            session("s-named", "", WAITING_PERMISSION),
+            session("s-ended", "r3", FINISHED),
+            session("s-open", "r4", WAITING_PERMISSION),
+        ] {
+            state.sessions.insert(s.id.clone(), s);
+        }
+        let row = |v: Value| serde_json::from_value::<Named>(v).unwrap();
+        let rows = vec![
+            ("r1".to_owned(), row(json!({"status": "done"}))),
+            (
+                "r2".to_owned(),
+                row(json!({"status": "review", "done": true, "session_id": "s-named"})),
+            ),
+            ("r3".to_owned(), row(json!({"status": "done"}))),
+            (
+                "r4".to_owned(),
+                row(json!({"status": "review", "done": false})),
+            ),
+        ];
+        let mut got = done_sessions(&rows, &state);
+        got.sort();
+        assert_eq!(got, ["s-done", "s-named"]);
     }
 
     #[test]
