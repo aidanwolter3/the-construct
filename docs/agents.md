@@ -96,6 +96,9 @@ Collections' `apply_change`. Then:
 - `session.started` sets `status = started` and `session_id`;
 - `session.finished` appends the summary and PR link to `diagnosis` and sets `status = review`;
 - `session.failed` sets `status = todo` and appends the error.
+- a row marked done (`status = done`, or a `done` box ticked) whose session is still open sends `stop_session` once,
+  and the feeds show that session as finished whatever the runner last said (a session whose sandbox is gone can't be
+  stopped, and would otherwise wait for you forever). A done row keeps its status whatever its session sends after.
 
 ## Setting it up in a pod
 

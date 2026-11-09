@@ -431,7 +431,10 @@ impl AppAdapter for AgentsAdapter {
             follower::spawn(pod);
             let read = pod
                 .blocking(|s| {
-                    let st = db::state(s)?;
+                    let mut st = db::state(s)?;
+                    if let Some((state, _)) = st.as_mut() {
+                        tasks::close_done(s, state)?;
+                    }
                     let host = db::runner(s)?
                         .map(|r| cap::host_of(&r.url))
                         .unwrap_or_default();

@@ -195,3 +195,90 @@ async fn busy_refused_and_failed_tasks() {
     tokio::time::sleep(std::time::Duration::from_millis(300)).await;
     assert_eq!(starts(&fake).len(), n);
 }
+
+fn stops(fake: &crate::runner::Fake) -> Vec<Value> {
+    fake.commands
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|c| c["type"] == "stop_session")
+        .cloned()
+        .collect()
+}
+
+#[tokio::test]
+async fn a_done_task_closes_its_waiting_session() {
+    let (pod, fake, _) = signed_in().await;
+    tool(
+        &pod,
+        "define_collection",
+        json!({"name": "tasks", "title": "Tasks", "fields": [
+            {"name": "title", "type": "text"},
+            {"name": "status", "type": "choice", "options": ["todo", "queued", "done"], "default": "todo"}]}),
+    )
+    .await;
+    tool(
+        &pod,
+        "agents_link_tasks",
+        json!({"collection": "tasks", "workspace": "sample-repo"}),
+    )
+    .await;
+    let id = tool(
+        &pod,
+        "add_row",
+        json!({"collection": "tasks", "values": {"title": "Shade pressed rows", "status": "queued"}}),
+    )
+    .await["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    until("start_task sent", || async { !starts(&fake).is_empty() }).await;
+    fake.push(
+        json!({"type": "session.started", "session_id": "session_01Shade", "task_id": id,
+        "data": {"title": "Shade pressed rows"}}),
+    );
+    fake.push(
+        json!({"type": "permission.requested", "session_id": "session_01Shade",
+        "data": {"tool": "Bash", "detail": "git push"}}),
+    );
+    let app = crate::runner::agents_layout(&pod).await;
+    let uri = "agents://sessions/session_01Shade";
+    until("waiting for you", || async {
+        crate::runner::workspace(&pod, &app).await["entities"][uri]["needs_you"] == true
+    })
+    .await;
+
+    // Marked done (by the session or by hand): the session is stopped, and
+    // stops waiting for you even though the runner still says it waits.
+    app_collections::update_row(
+        &pod,
+        "tasks",
+        &id,
+        serde_json::from_value(json!({"status": "done"})).unwrap(),
+    )
+    .await
+    .unwrap();
+    until("stop_session sent", || async { !stops(&fake).is_empty() }).await;
+    assert_eq!(
+        stops(&fake)[0],
+        json!({"type": "stop_session", "session_id": "session_01Shade"})
+    );
+    let ws = crate::runner::workspace(&pod, &app).await;
+    assert_eq!(ws["entities"][uri]["needs_you"], false);
+    assert_eq!(ws["entities"][uri]["status_text"], "Finished");
+    assert_eq!(
+        ws["entities"]["agents://runner/status"]["needs_you_count"],
+        0
+    );
+    // Sent once, not on every pass.
+    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    assert_eq!(stops(&fake).len(), 1);
+
+    // What the session sends after doesn't reopen the row.
+    fake.push(
+        json!({"type": "session.finished", "session_id": "session_01Shade", "task_id": id,
+        "data": {"summary": "Stopped."}}),
+    );
+    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    assert_eq!(row(&pod, &id)["status"], "done");
+}
