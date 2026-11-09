@@ -39,8 +39,10 @@ Control keeps an idle standby session open and a finished run's session stays op
 - **Following:** a background task per open pod takes a snapshot (at sign-in, and when the last good answer is over
   10 minutes old), then follows the stream from the cursor, reconnecting with backoff (1 s doubling to 60 s). Each
   event updates the stored state and the session's timeline (`agents_events`, the last 200 per session), and the
-  pod's clients reload. While the runner can't be reached the feeds serve the last state, with
-  `agents:status.stale` true and a "Can't reach …" line.
+  pod's clients reload. Sandboxes and schedules come only with a snapshot (a redeployed runner can change a
+  schedule's time without an event), so the pod reads them again from a snapshot on every reconnect and every 10
+  minutes while following; sessions, checks and the cursor stay as the stream left them. While the runner can't be
+  reached the feeds serve the last state, with `agents:status.stale` true and a "Can't reach …" line.
 - **Feeds:** `sessions` (`agents:status` and `agents:sessions`: the ones that need you, then working, idle and ended
   ones, each newest first), `sandboxes`, `checks`, `schedules`; and `/v1/agents/sessions/timeline?id=<id>` (`agents:timeline:<id>`). The
   entities and their fields are in the source's manifest (`describe_vocabulary`, `list_data_sources`).

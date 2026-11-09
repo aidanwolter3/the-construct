@@ -353,6 +353,20 @@ impl State {
         }
         self.sessions = sessions;
         self.checks = checks;
+        self.apply_setup(snap);
+        if let Some(c) = snap.get("cursor").and_then(Value::as_i64) {
+            self.cursor = c;
+        }
+        self.trim();
+        effects
+    }
+
+    /// Take the runner's set-up from `snap`: its sandboxes and schedules,
+    /// which change when the runner is redeployed without an event saying
+    /// so (a schedule's new time, its next run). Sessions, checks and the
+    /// cursor stay as the stream left them, so nothing is notified twice or
+    /// skipped.
+    pub fn apply_setup(&mut self, snap: &Value) {
         self.sprites = list(snap, "sprites")
             .filter_map(sprite_of)
             .map(|x| (x.name.clone(), x))
@@ -361,11 +375,6 @@ impl State {
             .filter_map(schedule_of)
             .map(|x| (x.name.clone(), x))
             .collect();
-        if let Some(c) = snap.get("cursor").and_then(Value::as_i64) {
-            self.cursor = c;
-        }
-        self.trim();
-        effects
     }
 
     fn session(&mut self, e: &Event) -> Option<&mut Session> {
