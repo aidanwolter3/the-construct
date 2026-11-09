@@ -34,11 +34,13 @@ pub enum Dim {
     Count,
 }
 
-/// A built-in unit: its canonical name, plural, dimension, size in the
-/// dimension's base (ml, g) and whether it is metric.
+/// A built-in unit: its canonical name (as stored), how one is shown, its
+/// plural, dimension, size in the dimension's base (ml, g) and whether it is
+/// metric.
 #[derive(Debug, Clone, Copy)]
 pub struct Unit {
     pub name: &'static str,
+    pub label: &'static str,
     pub plural: &'static str,
     pub dim: Dim,
     pub base: f64,
@@ -48,6 +50,7 @@ pub struct Unit {
 const fn unit(name: &'static str, plural: &'static str, dim: Dim, base: f64, metric: bool) -> Unit {
     Unit {
         name,
+        label: name,
         plural,
         dim,
         base,
@@ -58,7 +61,11 @@ const fn unit(name: &'static str, plural: &'static str, dim: Dim, base: f64, met
 /// The built-in units.
 pub const UNITS: &[Unit] = &[
     unit("tsp", "tsp", Dim::Volume, 4.928_921_593_75, false),
-    unit("tbsp", "tbsp", Dim::Volume, 14.786_764_781_25, false),
+    // Shown as "Tbsp" (never "tablespoons"), stored as "tbsp".
+    Unit {
+        label: "Tbsp",
+        ..unit("tbsp", "Tbsp", Dim::Volume, 14.786_764_781_25, false)
+    },
     unit("fl oz", "fl oz", Dim::Volume, 29.573_529_562_5, false),
     unit("cup", "cups", Dim::Volume, 236.588_236_5, false),
     unit("pint", "pints", Dim::Volume, 473.176_473, false),
@@ -421,11 +428,8 @@ pub fn parse(text: &str) -> Option<Quantity> {
             Some(_) => return None,
         }
     }
-    if parts.len() == 1 {
-        return Some(Quantity { parts });
-    }
-    // "1/4 cup plus 2 tbsp": one amount.
-    Some(sum(std::iter::once(&Quantity { parts })))
+    // "1/4 cup plus 2 tbsp" stays as written; sums combine it.
+    Some(Quantity { parts })
 }
 
 // ---------- values ----------
@@ -773,7 +777,11 @@ fn part_text(p: &Part) -> String {
         return a;
     }
     let one = p.amount <= 1.0 + 1e-9;
-    let unit = if one { p.unit.clone() } else { plural(&p.unit) };
+    let unit = match (one, builtin(&p.unit)) {
+        (true, Some(u)) => u.label.to_owned(),
+        (true, None) => p.unit.clone(),
+        (false, _) => plural(&p.unit),
+    };
     format!("{a} {unit}")
 }
 
@@ -814,8 +822,10 @@ mod tests {
         assert_eq!(one("2 large"), (2.0, "large".into()));
         assert_eq!(one("3 sprigs"), (3.0, "sprig".into()));
         assert_eq!(one("250 ml"), (250.0, "ml".into()));
-        // Several terms of one dimension: one amount.
-        assert_eq!(one("1/4 cup plus 2 tbsp"), (0.375, "cup".into()));
+        // Several terms stay as written.
+        assert_eq!(q("1/4 cup plus 2 tbsp").text(), "1/4 cup + 2 Tbsp");
+        assert_eq!(q("1 1/2 Tablespoons").text(), "1 1/2 Tbsp");
+        assert_eq!(q("1 T").text(), "1 Tbsp");
         assert_eq!(q("2 cups + 3 cloves").text(), "2 cups + 3 cloves");
         for bad in [
             "to taste",
@@ -846,9 +856,9 @@ mod tests {
     fn sums_convert_within_a_dimension_and_keep_the_units_written() {
         // One unit stays as written.
         let s = sum([&q("4 T")]);
-        assert_eq!(s.text(), "4 tbsp");
+        assert_eq!(s.text(), "4 Tbsp");
         let s = sum([&q("4 tbsp"), &q("2 tbsp")]);
-        assert_eq!(s.text(), "6 tbsp");
+        assert_eq!(s.text(), "6 Tbsp");
         let s = sum([&q("48 tsp")]);
         assert_eq!(s.text(), "48 tsp");
         let s = sum([&q("4 cups"), &q("2 1/4 cups")]);
@@ -862,15 +872,15 @@ mod tests {
         assert_eq!(s.text(), "1 1/2 lb");
         // Else apart, largest first, whole larger units carried up.
         let s = sum([&q("1 cup"), &q("3 T")]);
-        assert_eq!(s.text(), "1 cup + 3 tbsp");
+        assert_eq!(s.text(), "1 cup + 3 Tbsp");
         let s = sum([&q("2 cups"), &q("1 tbsp")]);
-        assert_eq!(s.text(), "2 cups + 1 tbsp");
+        assert_eq!(s.text(), "2 cups + 1 Tbsp");
         let s = sum([&q("1/3 cup"), &q("1 tbsp")]);
-        assert_eq!(s.text(), "1/3 cup + 1 tbsp");
+        assert_eq!(s.text(), "1/3 cup + 1 Tbsp");
         let s = sum([&q("1 cup"), &q("19 tbsp")]);
-        assert_eq!(s.text(), "2 cups + 3 tbsp");
+        assert_eq!(s.text(), "2 cups + 3 Tbsp");
         let s = sum([&q("1 tbsp"), &q("4 tsp")]);
-        assert_eq!(s.text(), "2 tbsp + 1 tsp");
+        assert_eq!(s.text(), "2 Tbsp + 1 tsp");
         let s = sum([&q("1 lb"), &q("3 oz")]);
         assert_eq!(s.text(), "1 lb + 3 oz");
         // A sum's parts sum again to the same.

@@ -163,7 +163,8 @@ never writes code: it declares typed fields (`text`, `number`, `bool`, `date`, `
   or quantities), the smallest or largest number, whether there is any, or the distinct values as a ", " list. The
   field's only kind, live like a count; prefer it to `count` for new fields.
 - **Quantities.** A `quantity` field parses text such as "1 1/2 cups", "2 Tbsp", "1 (14 oz) can", "1/4 cup plus 2
-  tbsp" or "a pinch" (no model), stores `{amount, unit}`, and serves `<name>_text` ("1 1/2 cups"). Text that
+  tbsp" or "a pinch" (no model), stores `{amount, unit}`, and serves `<name>_text` ("1 1/2 cups", "2 Tbsp": one spelling per unit, so bind it rather than the text as
+  written). Text that
   doesn't parse ("to taste") is kept and shown as written, left out of sums, and counted by `describe_collection`.
   A rollup `sum` converts within volume and weight, keeping the units written: one unit stays (4 tbsp + 2 tbsp =
   "6 tbsp"), several make one amount of the largest when it is a plain fraction (1/2 cup + 2 tbsp = "5/8 cup"),

@@ -80,12 +80,15 @@ A field `{type: "quantity"}` holds an amount and a unit (`quantity.rs`, determin
   ...); any other single word is a count-like unit, singular (`sprigs` → `sprig`); a size makes its own unit
   (`1 (14 oz) can` is 1 of `(14 oz) can`). Text with anything else left over (`to taste`, `2 cups chopped`) doesn't
   parse.
-- **Stored** as `{amount, unit}` (a list of them when parts don't combine), the unit canonical; `""` for a plain
+- **Stored** as `{amount, unit}` (a list of them for several terms, kept as written: "1/4 cup plus 2 tbsp" is
+  1/4 cup + 2 tbsp, combined only by a sum), the unit canonical; `""` for a plain
   count. Text that doesn't parse is stored as the text, shown as is, left out of sums, and counted per field by
   `describe_collection` (`quantities`). Writes also take a number (a count) or `{amount, unit}`.
 - **Served** with `<name>_text`: ASCII fractions to sixteenths ("1 1/2 cups", "1 3/16 cups"), decimals when an
   amount isn't one ("0.35 cup") and for metric units ("1.25 kg"), plurals ("2 cloves", "2 (14 oz) cans"; tsp,
-  tbsp, oz, lb, g, ml and the sizes don't change), parts joined by " + ".
+  Tbsp, oz, lb, g, ml and the sizes don't change), parts joined by " + ". Tablespoons are always "Tbsp" (stored as
+  `tbsp`; 2026-11): every spelling written ("T", "tablespoons") reads the same, so a view binding `<name>_text`
+  shows one spelling.
 - **Sums** (rollup `sum`): volume (tsp, tbsp, fl oz, cup, pint, quart, ml, l) and weight (g, kg, oz, lb) convert
   within their dimension; count-like units add only to the same unit; the result lists volume, then weight, then
   each count-like unit in the order first seen ("2 cups + 3 cloves").
