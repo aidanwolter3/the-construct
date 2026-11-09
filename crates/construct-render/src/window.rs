@@ -37,6 +37,34 @@ struct Surface {
     config: wgpu::SurfaceConfiguration,
     gpu: Gpu,
     renderer: Renderer,
+    /// Whether `config` is applied; a failed configure is tried again
+    /// before the next frame.
+    configured: bool,
+}
+
+impl Surface {
+    /// Applies `config`. It can fail without anything being wrong with the
+    /// app: Android's driver sometimes can't wait for the GPU to go idle
+    /// right after the app comes back. wgpu's default answer to that is a
+    /// panic, which closes the activity, so catch it here; true when it
+    /// worked.
+    fn configure(&mut self) -> bool {
+        let scope = self
+            .gpu
+            .device
+            .push_error_scope(wgpu::ErrorFilter::Validation);
+        self.surface.configure(&self.gpu.device, &self.config);
+        self.configured = match pollster::block_on(scope.pop()) {
+            None => true,
+            Some(e) => {
+                log(&format!(
+                    "couldn't configure the surface (trying again): {e}"
+                ));
+                false
+            }
+        };
+        self.configured
+    }
 }
 
 type Waker = Arc<dyn Fn() + Send + Sync>;
@@ -565,7 +593,10 @@ impl App {
             desired_maximum_frame_latency: 2,
             color_space: wgpu::SurfaceColorSpace::Auto,
         };
-        surface.configure(&gpu.device, &config);
+        // Any other GPU error is logged: wgpu's default handler panics, and
+        // a panic here closes the app.
+        gpu.device
+            .on_uncaptured_error(Arc::new(|e| log(&format!("GPU error: {e}"))));
         let mut renderer = Renderer::new(&gpu, format);
         renderer.images = Some(self.controller.session.images.clone());
         log(&format!(
@@ -585,13 +616,16 @@ impl App {
             scale: window.scale_factor() as f32,
         });
         window.request_redraw();
-        self.surface = Some(Surface {
+        let mut s = Surface {
             window,
             surface,
             config,
             gpu,
             renderer,
-        });
+            configured: false,
+        };
+        s.configure();
+        self.surface = Some(s);
         self.update_insets();
         self.update_dark();
         Ok(())
@@ -613,11 +647,15 @@ impl App {
         let Some(s) = self.surface.as_mut() else {
             return;
         };
+        if !s.configured && !s.configure() {
+            s.window.request_redraw();
+            return;
+        }
         let started = Instant::now();
         let frame = match s.surface.get_current_texture() {
             wgpu::CurrentSurfaceTexture::Success(f) => f,
             wgpu::CurrentSurfaceTexture::Suboptimal(_) | wgpu::CurrentSurfaceTexture::Outdated => {
-                s.surface.configure(&s.gpu.device, &s.config);
+                s.configure();
                 s.window.request_redraw();
                 return;
             }
@@ -900,7 +938,7 @@ impl ApplicationHandler for App {
                 if let Some(s) = self.surface.as_mut() {
                     s.config.width = size.width.max(1);
                     s.config.height = size.height.max(1);
-                    s.surface.configure(&s.gpu.device, &s.config);
+                    s.configure();
                 }
                 self.apply(Event::Resized {
                     width_px: size.width.max(1),

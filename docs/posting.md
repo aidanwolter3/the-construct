@@ -65,7 +65,8 @@ Share ── Create ──────▶ temp post at top of feed
 - The outbox uploads a row's attachments first (`POST /v1/uploads`, raw body, `Idempotency-Key: <attachment id>`),
   remembers each `upload_id` so retries don't upload twice, then POSTs the payload as for any create. Attachment files
   are deleted when the row is.
-- `event: data` on the workspace's SSE stream makes the engine reload the workspace and its loaded data.
+- `event: data` on the workspace's SSE stream makes the engine reload the workspace and its loaded data (a Pixelfed
+  event doesn't say what changed, so everything; decision `scoped-data-events`).
 
 ### Pod
 - `POST /v1/uploads` (signed-in callers; jpeg/png/webp checked by magic bytes; `CONSTRUCT_UPLOAD_MAX_BYTES`, default

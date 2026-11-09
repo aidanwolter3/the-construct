@@ -29,6 +29,8 @@ pub const MAX_PROMPT_CHARS: usize = 500;
 pub const MAX_SOURCES: usize = 4;
 /// Most kinds in a `compute` list (tried in order).
 pub const MAX_COMPUTES: usize = 4;
+/// Most conditions of a `count`'s `where`.
+pub const MAX_CONDITIONS: usize = 8;
 /// Most fields a collection is ordered by.
 pub const MAX_ORDER_KEYS: usize = 4;
 
@@ -43,6 +45,12 @@ pub const SYSTEM_FIELDS: &[&str] = &[
     "updated_at",
     "client_id",
 ];
+
+/// What a compute stores for a row's system id where it would store a
+/// field id: a `lookup`'s `value` (the matched row's id) and `entity.id`
+/// in an `expr`. Field ids are `f<n>`, so it never names a field, and
+/// `id` is a system name, so no field is called that.
+pub const ROW_ID: &str = "id";
 
 /// What a field holds.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -60,10 +68,19 @@ pub enum Kind {
     Datetime,
     /// One of the field's `options`.
     Choice,
+    /// A row of collection `collection`, stored as its id (decision
+    /// `collection-primitives`, [`crate::refs`]).
+    Ref,
+    /// An amount and a unit ([`crate::quantity`]), stored as `{amount,
+    /// unit}` (or a list of them), or as text that didn't parse. Served with
+    /// `<name>_text`.
+    Quantity,
 }
 
 impl Kind {
-    pub const ALL: &[&str] = &["text", "number", "bool", "date", "datetime", "choice"];
+    pub const ALL: &[&str] = &[
+        "text", "number", "bool", "date", "datetime", "choice", "ref", "quantity",
+    ];
 
     pub fn parse(s: &str) -> Option<Kind> {
         serde_json::from_value(json!(s)).ok()
@@ -77,6 +94,8 @@ impl Kind {
             Kind::Date => "date",
             Kind::Datetime => "datetime",
             Kind::Choice => "choice",
+            Kind::Ref => "ref",
+            Kind::Quantity => "quantity",
         }
     }
 }
@@ -93,6 +112,12 @@ pub struct Field {
     /// A choice field's values.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub options: Vec<String>,
+    /// A ref field's collection.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub collection: Option<String>,
+    /// No two live rows share a value (text: ignoring case and spacing).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub unique: bool,
     /// May be empty.
     #[serde(default)]
     pub optional: bool,
@@ -163,8 +188,9 @@ pub enum Compute {
     Model { from: Vec<String>, prompt: String },
     /// The `value` of the best row of collection `collection` whose `key`
     /// matches field `from` (field ids on both sides); evaluated in the
-    /// write itself ([`crate::lookup`]). `learn`: a later kind's answer
-    /// and a hand edit become rules.
+    /// write itself ([`crate::lookup`]). `value` may be [`ROW_ID`]: the
+    /// matched row's id, as text. `learn`: a later kind's answer and a
+    /// hand edit become rules.
     Lookup {
         from: String,
         collection: String,
@@ -175,6 +201,102 @@ pub enum Compute {
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         learn: bool,
     },
+    /// The number of live rows of collection `collection` whose `key`
+    /// equals field `from` (as an `exact` lookup matches: ignoring case and
+    /// spacing) and which match every condition of `conditions` (decision
+    /// `live-computed-fields`, [`crate::follow`]). A number field's only
+    /// kind; kept up to date as those rows change.
+    Count {
+        from: String,
+        collection: String,
+        key: String,
+        #[serde(rename = "where", default, skip_serializing_if = "Vec::is_empty")]
+        conditions: Vec<Condition>,
+    },
+    /// An aggregate over the live rows of collection `collection` whose ref
+    /// field `via` points at this row and which match every condition
+    /// (decision `collection-primitives`): their number, the sum, smallest
+    /// or largest of field `field`, whether there is any, or the distinct
+    /// values of `field` as a list. The field's only kind; live like a
+    /// count ([`crate::follow`]).
+    Rollup {
+        collection: String,
+        via: String,
+        op: RollupOp,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        field: Option<String>,
+        #[serde(rename = "where", default, skip_serializing_if = "Vec::is_empty")]
+        conditions: Vec<Condition>,
+    },
+}
+
+/// What a `rollup` computes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum RollupOp {
+    /// How many rows (a number).
+    Count,
+    /// The sum of `field`: numbers into a number, quantities into a
+    /// quantity (text that didn't parse left out).
+    Sum,
+    /// The smallest number of `field`.
+    Min,
+    /// The largest number of `field`.
+    Max,
+    /// Whether there is any row (a bool).
+    Any,
+    /// The distinct values of `field` as text, in row order, joined by
+    /// ", " (a text field).
+    List,
+}
+
+impl RollupOp {
+    pub const ALL: &[&str] = &["count", "sum", "min", "max", "any", "list"];
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            RollupOp::Count => "count",
+            RollupOp::Sum => "sum",
+            RollupOp::Min => "min",
+            RollupOp::Max => "max",
+            RollupOp::Any => "any",
+            RollupOp::List => "list",
+        }
+    }
+
+    /// Whether it reads a field of the rows.
+    pub fn needs_field(self) -> bool {
+        matches!(
+            self,
+            RollupOp::Sum | RollupOp::Min | RollupOp::Max | RollupOp::List
+        )
+    }
+}
+
+/// A `count` condition: field `field` (an id of the counted collection),
+/// as text, equals `equals`, as a layout's `where` compares (a bool reads
+/// "true" or "false", a number its digits, an empty field its default).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Condition {
+    pub field: String,
+    pub equals: String,
+}
+
+impl Condition {
+    /// Whether the row `values` of `def` matches.
+    pub fn matches(&self, def: &Definition, values: &Map<String, Value>) -> bool {
+        let v = values
+            .get(&self.field)
+            .cloned()
+            .or_else(|| def.by_id(&self.field).map(Field::empty_value))
+            .unwrap_or(Value::Null);
+        let text = match v {
+            Value::Null => String::new(),
+            Value::String(s) => s,
+            other => other.to_string(),
+        };
+        text == self.equals
+    }
 }
 
 impl Compute {
@@ -183,6 +305,8 @@ impl Compute {
             Compute::Expr { .. } => "expr",
             Compute::Model { .. } => "model",
             Compute::Lookup { .. } => "lookup",
+            Compute::Count { .. } => "count",
+            Compute::Rollup { .. } => "rollup",
         }
     }
 
@@ -194,12 +318,49 @@ impl Compute {
         }
     }
 
-    /// The field ids (of its own row) it reads.
+    /// The field ids (of its own row) it reads; an `expr`'s `entity.id`
+    /// is not a field (see [`Compute::reads_row_id`]).
     pub fn sources(&self) -> Vec<String> {
         match self {
-            Compute::Expr { .. } => self.parsed().map(|e| e.fields()).unwrap_or_default(),
+            Compute::Expr { .. } => self
+                .parsed()
+                .map(|e| e.fields())
+                .unwrap_or_default()
+                .into_iter()
+                .filter(|id| id != ROW_ID)
+                .collect(),
             Compute::Model { from, .. } => from.clone(),
-            Compute::Lookup { from, .. } => vec![from.clone()],
+            Compute::Lookup { from, .. } | Compute::Count { from, .. } => vec![from.clone()],
+            // The row's own id: no field.
+            Compute::Rollup { .. } => Vec::new(),
+        }
+    }
+
+    /// Whether it is a lookup through a ref field (`via`): its key is the
+    /// read row's id ([`ROW_ID`]).
+    pub fn is_via(&self) -> bool {
+        matches!(self, Compute::Lookup { key, .. } if key == ROW_ID)
+    }
+
+    /// Whether it always answers (a count or a rollup): the field's only
+    /// kind.
+    pub fn always_answers(&self) -> bool {
+        matches!(self, Compute::Count { .. } | Compute::Rollup { .. })
+    }
+
+    /// Whether it is an `expr` reading `entity.id`, the row's own id.
+    pub fn reads_row_id(&self) -> bool {
+        self.parsed()
+            .is_some_and(|e| e.fields().iter().any(|id| id == ROW_ID))
+    }
+
+    /// The collection it reads rows of (a lookup's or a count's).
+    pub fn reads(&self) -> Option<&str> {
+        match self {
+            Compute::Lookup { collection, .. }
+            | Compute::Count { collection, .. }
+            | Compute::Rollup { collection, .. } => Some(collection),
+            Compute::Expr { .. } | Compute::Model { .. } => None,
         }
     }
 }
@@ -279,6 +440,12 @@ impl Field {
         if !self.options.is_empty() {
             v["options"] = json!(self.options);
         }
+        if let Some(c) = &self.collection {
+            v["collection"] = json!(c);
+        }
+        if self.unique {
+            v["unique"] = json!(true);
+        }
         if let Some(d) = &self.default {
             v["default"] = d.clone();
         }
@@ -328,6 +495,11 @@ pub struct Definition {
     /// on that app's channel.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub system: Option<System>,
+    /// Named insert-from-query actions that upsert rows of this collection
+    /// and add rows of another (decision `collection-primitives`,
+    /// [`crate::actions`]).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub actions: Vec<crate::actions::Action>,
 }
 
 /// The built-in app a system collection belongs to.
@@ -387,7 +559,7 @@ impl Definition {
     }
 
     /// The keys rows are served with besides their fields: a datetime's
-    /// `<name>_date`, `_time` and `_text`; with fillers, `filler_id` and
+    /// `<name>_date`, `_time` and `_text`; a quantity's `<name>_text`; with fillers, `filler_id` and
     /// `filler_title`; with alerts, `alert_matched` and `alert_names`. A
     /// field of the same name wins.
     pub fn derived_names(&self) -> Vec<String> {
@@ -397,6 +569,11 @@ impl Definition {
                 for suffix in ["_date", "_time", "_text"] {
                     out.push(format!("{n}{suffix}"));
                 }
+            }
+        }
+        for f in self.live_fields().filter(|f| f.kind == Kind::Quantity) {
+            for n in std::iter::once(&f.name).chain(&f.aliases) {
+                out.push(format!("{n}_text"));
             }
         }
         if !self.fillers.is_empty() {
@@ -433,6 +610,45 @@ impl Definition {
             Compute::Lookup {
                 from,
                 collection,
+                value,
+                ..
+            } if c.is_via() => {
+                let value = others
+                    .get(collection)
+                    .map_or_else(|| value.clone(), |d| d.name_of(value));
+                json!({ "kind": "lookup", "via": self.name_of(from), "collection": collection,
+                        "value": value })
+            }
+            Compute::Rollup {
+                collection,
+                via,
+                op,
+                field,
+                conditions,
+            } => {
+                let other = |id: &str| {
+                    others
+                        .get(collection)
+                        .map_or_else(|| id.to_owned(), |d| d.name_of(id))
+                };
+                let mut v = json!({ "kind": "rollup", "collection": collection,
+                    "via": other(via), "op": op.as_str() });
+                if let Some(f) = field {
+                    v["field"] = json!(other(f));
+                }
+                if !conditions.is_empty() {
+                    v["where"] = Value::Array(
+                        conditions
+                            .iter()
+                            .map(|c| json!({ "field": other(&c.field), "equals": c.equals }))
+                            .collect(),
+                    );
+                }
+                v
+            }
+            Compute::Lookup {
+                from,
+                collection,
                 key,
                 value,
                 mode,
@@ -448,6 +664,29 @@ impl Definition {
                     "match": mode.as_str() });
                 if *learn {
                     v["learn"] = json!(true);
+                }
+                v
+            }
+            Compute::Count {
+                from,
+                collection,
+                key,
+                conditions,
+            } => {
+                let other = |id: &str| {
+                    others
+                        .get(collection)
+                        .map_or_else(|| id.to_owned(), |d| d.name_of(id))
+                };
+                let mut v = json!({ "kind": "count", "from": self.name_of(from),
+                    "collection": collection, "key": other(key) });
+                if !conditions.is_empty() {
+                    v["where"] = Value::Array(
+                        conditions
+                            .iter()
+                            .map(|c| json!({ "field": other(&c.field), "equals": c.equals }))
+                            .collect(),
+                    );
                 }
                 v
             }
@@ -503,6 +742,7 @@ impl Definition {
             "reminders": self.reminders.iter().map(|r| r.describe(self)).collect::<Vec<_>>(),
             "fillers": self.fillers.iter().map(|f| f.describe(self)).collect::<Vec<_>>(),
             "alerts": self.alerts.iter().map(|a| a.describe(self)).collect::<Vec<_>>(),
+            "actions": self.actions.iter().map(|a| crate::actions::describe(self, a, others)).collect::<Vec<_>>(),
             "system_app": self.system.as_ref().map(|s| s.app.clone()),
         })
     }
@@ -633,7 +873,7 @@ fn parse_compute(
     };
     let shape = || {
         format!(
-            "field '{name}': compute is {{kind: \"expr\", expr}}, {{kind: \"model\", from, prompt}}, {{kind: \"lookup\", from, collection, key, value, match?, learn?}}, a list of those (tried in order) or null"
+            "field '{name}': compute is {{kind: \"expr\", expr}}, {{kind: \"model\", from, prompt}}, {{kind: \"lookup\", from, collection, key, value, match?, learn?}}, {{kind: \"lookup\", via, value}}, {{kind: \"count\", from, collection, key, where?}}, {{kind: \"rollup\", collection, via, op, field?, where?}}, a list of those (tried in order) or null"
         )
     };
     let Value::Object(o) = v else {
@@ -644,7 +884,13 @@ fn parse_compute(
             let text = o.get("expr").and_then(Value::as_str).unwrap_or("");
             let parsed = crate::expr::parse(text)
                 .map_err(|e| format!("field '{name}': compute.expr: {e}"))?;
-            let ids = parsed.map_fields(&|n| field_id(n))?;
+            let ids = parsed.map_fields(&|n| {
+                if n == ROW_ID {
+                    Ok(ROW_ID.to_owned())
+                } else {
+                    field_id(n)
+                }
+            })?;
             Ok(Compute::Expr {
                 expr: ids.to_string(),
             })
@@ -693,6 +939,66 @@ fn parse_compute(
                 prompt: prompt.to_owned(),
             })
         }
+        Some("lookup") if o.get("via").is_some_and(|v| !v.is_null()) => {
+            // Through a ref field: the value of the row it points at.
+            let via = o
+                .get("via")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .unwrap_or("");
+            let rf = def.field(via).ok_or_else(|| {
+                format!("field '{name}': compute.via '{via}' is not one of the fields")
+            })?;
+            let Some(collection) = rf.collection.clone().filter(|_| rf.kind == Kind::Ref) else {
+                return Err(format!(
+                    "field '{name}': compute.via '{via}' is not a ref field (a lookup through a ref names a ref field)"
+                ));
+            };
+            for k in ["from", "key", "learn"] {
+                if o.get(k)
+                    .is_some_and(|v| !v.is_null() && *v != Value::Bool(false))
+                {
+                    return Err(format!(
+                        "field '{name}': a lookup through a ref takes via and value (not {k})"
+                    ));
+                }
+            }
+            if o.get("match").is_some_and(|m| !m.is_null() && m != "exact") {
+                return Err(format!(
+                    "field '{name}': a lookup through a ref matches the row it points at (no match mode)"
+                ));
+            }
+            let other = others.get(&collection).ok_or_else(|| {
+                format!("field '{name}': '{via}' points at '{collection}', which doesn't exist")
+            })?;
+            let v = o
+                .get("value")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .unwrap_or("");
+            let value = if v == ROW_ID {
+                ROW_ID.to_owned()
+            } else {
+                other.field(v).map(|f| f.id.clone()).ok_or_else(|| {
+                    format!(
+                        "field '{name}': compute.value '{v}' is not a field of '{collection}' ({})",
+                        other
+                            .live_fields()
+                            .map(|f| f.name.as_str())
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    )
+                })?
+            };
+            Ok(Compute::Lookup {
+                from: rf.id.clone(),
+                collection,
+                key: ROW_ID.to_owned(),
+                value,
+                mode: Match::Exact,
+                learn: false,
+            })
+        }
         Some("lookup") => {
             let arg = |k: &str| {
                 o.get(k)
@@ -728,7 +1034,12 @@ fn parse_compute(
                 })
             };
             let key = other_id("key")?;
-            let value = other_id("value")?;
+            // The matched row's own id: the one system name a lookup returns.
+            let value = if arg("value")? == ROW_ID {
+                ROW_ID.to_owned()
+            } else {
+                other_id("value")?
+            };
             let mode = match o.get("match") {
                 None | Some(Value::Null) => Match::Exact,
                 Some(m) => serde_json::from_value(m.clone()).map_err(|_| {
@@ -752,17 +1063,279 @@ fn parse_compute(
                 learn,
             })
         }
+        Some("count") => {
+            let arg = |k: &str| {
+                o.get(k)
+                    .and_then(Value::as_str)
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+                    .ok_or_else(|| format!("field '{name}': a count needs \"{k}\" (a name)"))
+            };
+            let from = field_id(arg("from")?)?;
+            let collection = arg("collection")?.to_owned();
+            if collection == def.name {
+                return Err(format!(
+                    "field '{name}': a count reads another collection, not its own"
+                ));
+            }
+            let Some(other) = others.get(&collection) else {
+                return Err(format!(
+                    "field '{name}': compute.collection '{collection}' is not a collection ({}); define it first",
+                    others.keys().cloned().collect::<Vec<_>>().join(", ")
+                ));
+            };
+            let other_id = |at: &str, n: &str| -> Result<String, String> {
+                other.field(n).map(|f| f.id.clone()).ok_or_else(|| {
+                    format!(
+                        "field '{name}': compute.{at} '{n}' is not a field of '{collection}' ({})",
+                        other
+                            .live_fields()
+                            .map(|f| f.name.as_str())
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    )
+                })
+            };
+            let key = other_id("key", arg("key")?)?;
+            let conditions = parse_conditions(name, o.get("where"), &other_id)?;
+            Ok(Compute::Count {
+                from,
+                collection,
+                key,
+                conditions,
+            })
+        }
+        Some("rollup") => {
+            let arg = |k: &str| {
+                o.get(k)
+                    .and_then(Value::as_str)
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+                    .ok_or_else(|| format!("field '{name}': a rollup needs \"{k}\" (a name)"))
+            };
+            let collection = arg("collection")?.to_owned();
+            if collection == def.name {
+                return Err(format!(
+                    "field '{name}': a rollup reads another collection, not its own"
+                ));
+            }
+            let Some(other) = others.get(&collection) else {
+                return Err(format!(
+                    "field '{name}': compute.collection '{collection}' is not a collection ({}); define it first",
+                    others.keys().cloned().collect::<Vec<_>>().join(", ")
+                ));
+            };
+            let other_id = |at: &str, n: &str| -> Result<String, String> {
+                other.field(n).map(|f| f.id.clone()).ok_or_else(|| {
+                    format!(
+                        "field '{name}': compute.{at} '{n}' is not a field of '{collection}' ({})",
+                        other
+                            .live_fields()
+                            .map(|f| f.name.as_str())
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    )
+                })
+            };
+            let via = other_id("via", arg("via")?)?;
+            let op_text = arg("op")?;
+            let op: RollupOp = serde_json::from_value(json!(op_text)).map_err(|_| {
+                format!(
+                    "field '{name}': compute.op '{op_text}' is not one of {}",
+                    RollupOp::ALL.join(", ")
+                )
+            })?;
+            let field = match o.get("field").and_then(Value::as_str).map(str::trim) {
+                Some(f) if !f.is_empty() => Some(other_id("field", f)?),
+                _ => None,
+            };
+            match (op.needs_field(), &field) {
+                (true, None) => {
+                    return Err(format!(
+                        "field '{name}': a rollup {} needs \"field\" (a field of '{collection}')",
+                        op.as_str()
+                    ));
+                }
+                (false, Some(_)) => {
+                    return Err(format!(
+                        "field '{name}': a rollup {} reads no field (leave \"field\" out)",
+                        op.as_str()
+                    ));
+                }
+                _ => {}
+            }
+            let conditions = parse_conditions(name, o.get("where"), &other_id)?;
+            Ok(Compute::Rollup {
+                collection,
+                via,
+                op,
+                field,
+                conditions,
+            })
+        }
         _ => Err(shape()),
     }
 }
 
-/// Check the lookups of `def` against the collections they read (`defs`:
-/// every live definition, `def`'s own included): the collection and its
-/// fields exist, the key is text, the value's type fits, and a collection
-/// a lookup learns into can take a new row of a key and a value.
+/// A compute's `where`: `{field, equals}` or a list of them (`field_id`
+/// resolves a name of the collection it reads).
+fn parse_conditions(
+    name: &str,
+    v: Option<&Value>,
+    field_id: &dyn Fn(&str, &str) -> Result<String, String>,
+) -> Result<Vec<Condition>, String> {
+    let items: Vec<&Value> = match v {
+        None | Some(Value::Null) => Vec::new(),
+        Some(Value::Array(a)) => a.iter().collect(),
+        Some(one @ Value::Object(_)) => vec![one],
+        Some(_) => {
+            return Err(format!(
+                "field '{name}': compute.where is {{field, equals}} or a list of them"
+            ));
+        }
+    };
+    if items.len() > MAX_CONDITIONS {
+        return Err(format!(
+            "field '{name}': compute.where has at most {MAX_CONDITIONS} conditions"
+        ));
+    }
+    let mut conditions = Vec::new();
+    for c in items {
+        let field = c
+            .get("field")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .ok_or_else(|| format!("field '{name}': each compute.where condition names a field"))?;
+        let equals = match c.get("equals") {
+            Some(Value::String(s)) => s.clone(),
+            Some(v @ (Value::Bool(_) | Value::Number(_))) => v.to_string(),
+            _ => {
+                return Err(format!(
+                    "field '{name}': compute.where '{field}' needs equals (text, true, false or a number)"
+                ));
+            }
+        };
+        if equals.trim().is_empty() {
+            return Err(format!(
+                "field '{name}': compute.where '{field}': equals is not blank (a blank condition would match every row)"
+            ));
+        }
+        conditions.push(Condition {
+            field: field_id("where", field)?,
+            equals,
+        });
+    }
+    Ok(conditions)
+}
+
+/// Check the lookups and counts of `def` against the collections they read
+/// (`defs`: every live definition, `def`'s own included): the collection
+/// exists and isn't `def`'s, and the fields read are live; for a lookup
+/// also the key is text, the value's type fits, and a collection it learns
+/// into can take a new row of a key and a value.
 pub fn check_lookups(def: &Definition, defs: &Defs) -> Result<(), String> {
     for f in def.live_fields() {
+        if f.kind == Kind::Ref {
+            let target = f.collection.as_deref().unwrap_or("");
+            if !defs.contains_key(target) {
+                return Err(format!(
+                    "field '{}' of '{}' points at collection '{target}', which doesn't exist",
+                    f.name, def.name
+                ));
+            }
+        }
         for c in &f.compute {
+            if let Compute::Rollup {
+                collection,
+                via,
+                op,
+                field,
+                conditions,
+            } = c
+            {
+                check_rollup(
+                    def,
+                    f,
+                    collection,
+                    via,
+                    *op,
+                    field.as_deref(),
+                    conditions,
+                    defs,
+                )?;
+                continue;
+            }
+            if let Compute::Lookup {
+                from,
+                collection,
+                value,
+                ..
+            } = c
+                && c.is_via()
+            {
+                let at = format!("field '{}' of '{}'", f.name, def.name);
+                let rf = def.by_id(from).filter(|x| x.live()).ok_or_else(|| {
+                    format!("{at} looks up through a ref field that is removed or gone; change that lookup first")
+                })?;
+                if rf.kind != Kind::Ref || rf.collection.as_deref() != Some(collection.as_str()) {
+                    return Err(format!(
+                        "{at} looks up through '{}', which no longer points at '{collection}'; change that lookup first",
+                        rf.name
+                    ));
+                }
+                let Some(other) = defs.get(collection) else {
+                    return Err(format!("{at} looks up '{collection}', which doesn't exist"));
+                };
+                if value == ROW_ID {
+                    if !matches!(f.kind, Kind::Text | Kind::Ref) {
+                        return Err(format!(
+                            "{at}: a lookup of the row id fills a text or ref field (it is {})",
+                            f.kind.as_str()
+                        ));
+                    }
+                    continue;
+                }
+                let v = other.by_id(value).filter(|x| x.live()).ok_or_else(|| {
+                    format!("{at} looks up a field of '{collection}' that is removed or gone; change that lookup first")
+                })?;
+                if !(v.kind == f.kind || f.kind == Kind::Text) {
+                    return Err(format!(
+                        "{at}: the lookup's value '{}' of '{collection}' is {}, which doesn't fit a {} field (use text or the same type)",
+                        v.name,
+                        v.kind.as_str(),
+                        f.kind.as_str()
+                    ));
+                }
+                continue;
+            }
+            if let Compute::Count {
+                collection,
+                key,
+                conditions,
+                ..
+            } = c
+            {
+                let at = format!("field '{}' of '{}'", f.name, def.name);
+                if *collection == def.name {
+                    return Err(format!(
+                        "{at}: a count reads another collection, not its own"
+                    ));
+                }
+                let Some(other) = defs.get(collection) else {
+                    return Err(format!(
+                        "{at} counts rows of '{collection}', which doesn't exist"
+                    ));
+                };
+                for id in std::iter::once(key).chain(conditions.iter().map(|c| &c.field)) {
+                    if other.by_id(id).filter(|x| x.live()).is_none() {
+                        return Err(format!(
+                            "{at} counts rows of '{collection}' by a field that is removed or gone; change that count first"
+                        ));
+                    }
+                }
+                continue;
+            }
             let Compute::Lookup {
                 collection,
                 key,
@@ -790,11 +1363,35 @@ pub fn check_lookups(def: &Definition, defs: &Defs) -> Result<(), String> {
                 })
             };
             let k = live(key, "key")?;
-            let v = live(value, "value")?;
             if k.kind != Kind::Text {
                 return Err(format!(
                     "{at}: the lookup's key '{}' of '{collection}' must be text (it holds the patterns)",
                     k.name
+                ));
+            }
+            if value == ROW_ID {
+                if !matches!(f.kind, Kind::Text | Kind::Ref) {
+                    return Err(format!(
+                        "{at}: a lookup of the row id of '{collection}' fills a text or ref field (it is {})",
+                        f.kind.as_str()
+                    ));
+                }
+                if f.kind == Kind::Ref && f.collection.as_deref() != Some(collection.as_str()) {
+                    return Err(format!(
+                        "{at}: a lookup of the row id of '{collection}' fills a ref to '{collection}'"
+                    ));
+                }
+                if *learn {
+                    return Err(format!(
+                        "{at}: a lookup of the row id of '{collection}' can't learn (a rule can't choose a row's id)"
+                    ));
+                }
+                continue;
+            }
+            let v = live(value, "value")?;
+            if f.kind == Kind::Ref && (v.kind != Kind::Ref || v.collection != f.collection) {
+                return Err(format!(
+                    "{at}: a ref field takes a lookup of a row id (value: \"id\") or of a ref to the same collection"
                 ));
             }
             if !(v.kind == f.kind || v.kind == Kind::Text || f.kind == Kind::Text) {
@@ -824,7 +1421,78 @@ pub fn check_lookups(def: &Definition, defs: &Defs) -> Result<(), String> {
             }
         }
     }
-    Ok(())
+    crate::actions::check_all(def, defs)
+}
+
+/// Check a rollup of field `f` of `def` (see [`check_lookups`]).
+#[allow(clippy::too_many_arguments)]
+fn check_rollup(
+    def: &Definition,
+    f: &Field,
+    collection: &str,
+    via: &str,
+    op: RollupOp,
+    field: Option<&str>,
+    conditions: &[Condition],
+    defs: &Defs,
+) -> Result<(), String> {
+    let at = format!("field '{}' of '{}'", f.name, def.name);
+    if collection == def.name {
+        return Err(format!(
+            "{at}: a rollup reads another collection, not its own"
+        ));
+    }
+    let Some(other) = defs.get(collection) else {
+        return Err(format!(
+            "{at} rolls up rows of '{collection}', which doesn't exist"
+        ));
+    };
+    let live = |id: &str| {
+        other.by_id(id).filter(|x| x.live()).ok_or_else(|| {
+            format!("{at} rolls up rows of '{collection}' by a field that is removed or gone; change that rollup first")
+        })
+    };
+    let v = live(via)?;
+    if v.kind != Kind::Ref || v.collection.as_deref() != Some(def.name.as_str()) {
+        return Err(format!(
+            "{at}: the rollup's via '{}' of '{collection}' must be a ref field pointing at '{}'",
+            v.name, def.name
+        ));
+    }
+    for c in conditions {
+        live(&c.field)?;
+    }
+    let source = field.map(live).transpose()?;
+    let want = |k: Kind| {
+        if f.kind == k {
+            Ok(())
+        } else {
+            Err(format!(
+                "{at}: a rollup {} is a {} field (it is {})",
+                op.as_str(),
+                k.as_str(),
+                f.kind.as_str()
+            ))
+        }
+    };
+    match (op, source.map(|s| s.kind)) {
+        (RollupOp::Count, _) => want(Kind::Number),
+        (RollupOp::Any, _) => want(Kind::Bool),
+        (RollupOp::List, _) => want(Kind::Text),
+        (RollupOp::Sum, Some(Kind::Number))
+        | (RollupOp::Min | RollupOp::Max, Some(Kind::Number)) => want(Kind::Number),
+        (RollupOp::Sum, Some(Kind::Quantity)) => want(Kind::Quantity),
+        (_, k) => Err(format!(
+            "{at}: a rollup {} reads a number{} field (it reads {})",
+            op.as_str(),
+            if op == RollupOp::Sum {
+                " or quantity"
+            } else {
+                ""
+            },
+            k.map_or("nothing", Kind::as_str)
+        )),
+    }
 }
 
 /// The text `text` as a cache key: lowercase, inner spaces collapsed.
@@ -869,6 +1537,11 @@ pub fn valid_date(s: &str) -> bool {
     (1..=days).contains(&d)
 }
 
+/// A JSON number from `f` (integral when it is; 0 when not finite).
+pub fn number_value(f: f64) -> Value {
+    number((f * 1e9).round() / 1e9).unwrap_or_else(|| json!(0))
+}
+
 /// A JSON number from `f`, integral when it is.
 fn number(f: f64) -> Option<Value> {
     if !f.is_finite() {
@@ -888,6 +1561,9 @@ pub fn coerce(field: &Field, value: &Value, max_chars: usize) -> Result<Option<V
     coerce_kind(field.kind, &field.options, value, max_chars, false)
 }
 
+/// Longest row id a ref field takes.
+pub const MAX_ID_CHARS: usize = 64;
+
 /// [`coerce`] for converting stored values to a new type (also bool <->
 /// number as 1/0).
 pub fn convert(field: &Field, value: &Value, max_chars: usize) -> Result<Option<Value>, String> {
@@ -903,6 +1579,16 @@ fn coerce_kind(
 ) -> Result<Option<Value>, String> {
     if value.is_null() || value.as_str().is_some_and(|s| s.trim().is_empty()) {
         return Ok(None);
+    }
+    if kind == Kind::Quantity {
+        return crate::quantity::coerce(value, max_chars);
+    }
+    // A quantity converted to text reads as written ("1 1/2 cups").
+    if kind == Kind::Text
+        && converting
+        && let Some(q) = crate::quantity::from_value(value)
+    {
+        return Ok(Some(json!(q.text())));
     }
     let text = match value {
         Value::String(s) => Some(s.trim().to_owned()),
@@ -923,6 +1609,8 @@ fn coerce_kind(
                     "a date and time (2026-11-06T19:30, with an offset such as -07:00 when known)"
                         .to_owned(),
                 Kind::Choice => format!("one of {}", options.join(", ")),
+                Kind::Ref => "a row id (or {\"<unique field>\": value} naming the row)".to_owned(),
+                Kind::Quantity => "a quantity".to_owned(),
             }
         ))
     };
@@ -975,6 +1663,16 @@ fn coerce_kind(
             .or_else(|| options.iter().find(|o| o.eq_ignore_ascii_case(&text)))
             .map(|o| Some(json!(o)))
             .map_or_else(fail, Ok),
+        Kind::Ref => {
+            let ok = value.is_string()
+                && text.chars().count() <= MAX_ID_CHARS
+                && text
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_');
+            if ok { Ok(Some(json!(text))) } else { fail() }
+        }
+        // Handled above.
+        Kind::Quantity => fail(),
     }
 }
 
@@ -1007,6 +1705,8 @@ pub fn parse_field(spec: &Value, id: String, max_chars: usize) -> Result<Field, 
         name,
         kind,
         options: Vec::new(),
+        collection: None,
+        unique: false,
         optional: spec["optional"].as_bool().unwrap_or(false),
         default: None,
         aliases: Vec::new(),
@@ -1015,8 +1715,63 @@ pub fn parse_field(spec: &Value, id: String, max_chars: usize) -> Result<Field, 
         purged: false,
     };
     set_options(&mut field, spec.get("options"))?;
+    set_ref(&mut field, spec.get("collection"))?;
+    set_unique(&mut field, spec.get("unique"))?;
+    if field.kind == Kind::Ref && spec.get("default").is_some_and(|d| !d.is_null()) {
+        return Err(format!("field '{}': a ref has no default", field.name));
+    }
     set_default(&mut field, spec.get("default"), max_chars)?;
     Ok(field)
+}
+
+/// Set a ref field's collection from `v` (a collection name).
+pub fn set_ref(field: &mut Field, v: Option<&Value>) -> Result<(), String> {
+    match (field.kind, v) {
+        (Kind::Ref, Some(Value::String(c))) if valid_name(c.trim()) => {
+            field.collection = Some(c.trim().to_owned());
+            Ok(())
+        }
+        (Kind::Ref, None) if field.collection.is_some() => Ok(()),
+        (Kind::Ref, _) => Err(format!(
+            "field '{}': a ref needs \"collection\": the name of the collection it points at",
+            field.name
+        )),
+        (_, None | Some(Value::Null)) => {
+            field.collection = None;
+            Ok(())
+        }
+        (_, Some(_)) => Err(format!(
+            "field '{}': only a ref has a collection",
+            field.name
+        )),
+    }
+}
+
+/// Set a field's `unique` from `v` (true or false; text and ref fields).
+pub fn set_unique(field: &mut Field, v: Option<&Value>) -> Result<(), String> {
+    match v {
+        None => {
+            if !matches!(field.kind, Kind::Text | Kind::Ref) {
+                field.unique = false;
+            }
+            Ok(())
+        }
+        Some(Value::Null) => {
+            field.unique = false;
+            Ok(())
+        }
+        Some(Value::Bool(b)) => {
+            if *b && !matches!(field.kind, Kind::Text | Kind::Ref) {
+                return Err(format!(
+                    "field '{}': only a text or ref field can be unique",
+                    field.name
+                ));
+            }
+            field.unique = *b;
+            Ok(())
+        }
+        Some(_) => Err(format!("field '{}': unique is true or false", field.name)),
+    }
 }
 
 /// Set a choice field's options from `v` (a list of strings).
@@ -1137,6 +1892,33 @@ pub fn check_definition(def: &Definition, max_fields: usize) -> Result<(), Strin
         ));
     }
     for f in &live {
+        if f.unique && !matches!(f.kind, Kind::Text | Kind::Ref) {
+            return Err(format!(
+                "field '{}': only a text or ref field can be unique (it is {})",
+                f.name,
+                f.kind.as_str()
+            ));
+        }
+        if f.unique && f.computed() {
+            return Err(format!(
+                "field '{}': a computed field can't be unique",
+                f.name
+            ));
+        }
+        match (f.kind, &f.collection) {
+            (Kind::Ref, None) => {
+                return Err(format!(
+                    "field '{}': a ref needs \"collection\" (the collection it points at)",
+                    f.name
+                ));
+            }
+            (Kind::Ref, Some(_)) | (_, None) => {}
+            (_, Some(_)) => {
+                return Err(format!("field '{}': only a ref has a collection", f.name));
+            }
+        }
+    }
+    for f in &live {
         if !f.computed() {
             continue;
         }
@@ -1166,11 +1948,25 @@ pub fn check_definition(def: &Definition, max_fields: usize) -> Result<(), Strin
                         f.name
                     ));
                 }
+                Compute::Count { .. } | Compute::Rollup { .. } if f.compute.len() != 1 => {
+                    return Err(format!(
+                        "field '{}': a {} always answers, so it is the field's only kind",
+                        f.name,
+                        c.kind()
+                    ));
+                }
+                Compute::Count { .. } if f.kind != Kind::Number => {
+                    return Err(format!(
+                        "field '{}': a count is a number, so its field's type is number (it is {})",
+                        f.name,
+                        f.kind.as_str()
+                    ));
+                }
                 _ => {}
             }
-            if c.sources().is_empty() {
+            if c.sources().is_empty() && !c.reads_row_id() && !matches!(c, Compute::Rollup { .. }) {
                 return Err(format!(
-                    "field '{}' is computed from no field (an expression reads entity.<field>)",
+                    "field '{}' is computed from no field (an expression reads entity.<field> or entity.id)",
                     f.name
                 ));
             }
@@ -1245,6 +2041,15 @@ pub fn row_entity(
                     if def.field(&k).is_none() {
                         e.insert(k, json!(x));
                     }
+                }
+            }
+        }
+        if f.kind == Kind::Quantity {
+            let text = crate::quantity::text_of(&v);
+            for n in std::iter::once(&f.name).chain(&f.aliases) {
+                let k = format!("{n}_text");
+                if def.field(&k).is_none() {
+                    e.insert(k, json!(text));
                 }
             }
         }
@@ -1382,6 +2187,7 @@ mod tests {
             fillers: Vec::new(),
             alerts: Vec::new(),
             system: None,
+            actions: Vec::new(),
         }
     }
 

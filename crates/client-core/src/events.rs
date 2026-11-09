@@ -437,17 +437,19 @@ impl Inner {
             return;
         }
         if ev.event == "data" {
-            // D50: the pod's data changed (e.g. a post finished): reload the
-            // workspace and every loaded data path.
-            let ws = serde_json::from_str::<Value>(&ev.data)
-                .ok()
-                .and_then(|v| v.get("workspace_id")?.as_str().map(str::to_owned));
-            if ws.as_deref().is_some_and(|w| w != self.workspace_id) {
+            // D50: the pod's data changed (e.g. a post finished): reload
+            // what it says changed, or everything when it doesn't say
+            // (decision `scoped-data-events`, `crate::reload`).
+            let data = serde_json::from_str::<Value>(&ev.data).unwrap_or_default();
+            let ws = data.get("workspace_id").and_then(Value::as_str);
+            if ws.is_some_and(|w| w != self.workspace_id) {
                 return;
             }
-            println!("[ConstructEngine] events: data changed; reloading");
             if !self.signal.is_shut_down() {
-                self.reload_all();
+                match crate::reload::Scope::parse(&data) {
+                    Some(scope) => self.reload_scoped(&scope),
+                    None => self.reload_all(),
+                }
             }
             return;
         }

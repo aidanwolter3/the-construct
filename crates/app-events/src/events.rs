@@ -45,6 +45,7 @@ pub fn definition() -> Definition {
         fillers: Vec::new(),
         alerts: Vec::new(),
         system: Some(system()),
+        actions: Vec::new(),
     }
 }
 

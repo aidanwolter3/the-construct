@@ -167,6 +167,8 @@ enum Frame {
 /// How long a layout or screen takes to slide in or out (the shared UI's
 /// `FRAME_SLIDE_MS`).
 const SLIDE: Duration = Duration::from_millis(280);
+/// One turn of a spinner.
+const SPIN: Duration = Duration::from_millis(1000);
 /// A sheet's share of the screen's height, and a panel's of its width (at
 /// most [`PANEL_MAX_WIDTH`]), as in the shared UI.
 const SHEET_HEIGHT_FRACTION: f32 = 0.85;
@@ -237,6 +239,8 @@ struct Entry {
     error: Option<String>,
     /// The data path being loaded for it (`local://screen#loading`).
     loading: Option<String>,
+    /// Its screen's data path, if it has one.
+    data: Option<String>,
     /// Scroll offsets of this entry's scrolling views (by semantic id).
     scroll: BTreeMap<String, f32>,
     frame: Frame,
@@ -248,6 +252,9 @@ struct Entry {
     closing: Option<Instant>,
     /// Laid out at this size (points, with these insets).
     laid: Option<(Laid, [f32; 2])>,
+    /// The frame laid out before the last change, which the next layout
+    /// reuses what it can of ([`crate::layout::SceneBuilder::relayout`]).
+    stale: Option<Laid>,
     /// A page screen (opened by a `target_uri`), not the layout itself.
     screen: bool,
     /// An action from outside its `follow_end` scrolling views ran: they
@@ -256,6 +263,14 @@ struct Entry {
 }
 
 impl Entry {
+    /// Lays the entry out again on the next frame, reusing what it can of
+    /// this frame.
+    fn relay(&mut self) {
+        if let Some((laid, _)) = self.laid.take() {
+            self.stale = Some(laid);
+        }
+    }
+
     fn layout(id: &str, root: UiNode, route: BTreeMap<String, String>) -> Entry {
         let screens = match &root {
             UiNode::Page { screens, .. } => screens.clone(),
@@ -269,6 +284,7 @@ impl Entry {
             screens,
             error: None,
             loading: None,
+            data: None,
             scroll: BTreeMap::new(),
             frame: Frame::Full,
             size: None,
@@ -276,6 +292,7 @@ impl Entry {
             opened: Instant::now(),
             closing: None,
             laid: None,
+            stale: None,
             screen: false,
             follow: false,
         }
@@ -389,6 +406,11 @@ pub trait Loader: Send {
     fn take(&self, _intent: &Value) -> bool {
         false
     }
+    /// Keeps a device-only change (`action.local.set`, already made in the
+    /// session) where the loader holds its own copy of the data (the
+    /// engine), so its next [`Loader::changes`] carry the new values instead
+    /// of putting the old ones back.
+    fn local_set(&self, _intent: &Value) {}
     /// Starts a sign-in to an upstream or signs out of it, where the loader
     /// runs the engine's sign-in (`crate::signin`): `action.auth.login`, or
     /// `action.device` `sign_in`, `sign_out` and `set_server`. True when
@@ -415,6 +437,19 @@ pub trait Loader: Send {
     fn changes(&self) -> Option<Changes> {
         None
     }
+    /// What is on screen now, topmost first, whenever it changes: where
+    /// the loader reloads changed data (the engine, decision
+    /// `scoped-data-events`), it reloads this first. Must not block.
+    fn visible(&self, _shown: &[Shown]) {}
+}
+
+/// Something a frame draws ([`Loader::visible`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Shown {
+    /// A layout, by id (the home layout too).
+    Layout(String),
+    /// A screen's data path.
+    Data(String),
 }
 
 /// `uri` against a route pattern (`collections://tasks/{id}`): the captured
@@ -446,6 +481,26 @@ pub fn match_route(pattern: &str, uri: &str) -> Option<BTreeMap<String, String>>
 fn merge(into: &mut DataBundle, from: DataBundle) {
     into.entities.extend(from.entities);
     into.queries.extend(from.queries);
+}
+
+/// [`merge`] that keeps the entities and queries `into` already has as they
+/// are: true when any of them is new or different. A loader's news carry
+/// all its data each time (the engine's snapshots), most of it unchanged.
+fn merge_changed(into: &mut DataBundle, from: DataBundle) -> bool {
+    let mut changed = false;
+    for (uri, e) in from.entities {
+        if into.entities.get(&uri) != Some(&e) {
+            into.entities.insert(uri, e);
+            changed = true;
+        }
+    }
+    for (key, q) in from.queries {
+        if into.queries.get(&key) != Some(&q) {
+            into.queries.insert(key, q);
+            changed = true;
+        }
+    }
+    changed
 }
 
 /// `$route.<name>` replaced in every string of a node (a screen's tree).
@@ -507,6 +562,10 @@ pub struct Session {
     caret_shown: Option<bool>,
     /// The `core://Tappable` held down, drawn pressed until it is let go.
     pressed: Option<Pressed>,
+    /// Spinners turn from here.
+    spin_from: Instant,
+    /// Whether the frame kept draws a spinner (it turns).
+    spinning: bool,
     /// Where the edit handles are, to grab them (from the last frame).
     handles: Vec<(Grab, [f32; 4])>,
     /// A handle being dragged, and how far the finger is below the text
@@ -517,6 +576,8 @@ pub struct Session {
     picking: Option<(String, u32)>,
     /// Photos being picked or staged (a script waits for them).
     pub staging: usize,
+    /// What the loader was last told is on screen ([`Loader::visible`]).
+    shown: Vec<Shown>,
 }
 
 /// How long the caret shows, then hides (Android's 500 ms).
@@ -627,10 +688,13 @@ impl Session {
             edit: None,
             caret_shown: None,
             pressed: None,
+            spin_from: Instant::now(),
+            spinning: false,
             handles: Vec::new(),
             grab: None,
             picking: None,
             staging: 0,
+            shown: Vec::new(),
         }
     }
 
@@ -1230,7 +1294,7 @@ impl Session {
         }
         if !done.is_empty() {
             // The badge and dots show the new page.
-            self.stack[ti].laid = None;
+            self.stack[ti].relay();
         }
         self.scene = None;
     }
@@ -1439,7 +1503,11 @@ impl Session {
     /// a new root shows it where it is open (the base of the stack, and every
     /// entry still showing its old root; its screens stay as they are).
     fn apply_changes(&mut self, c: Changes) {
-        merge(&mut self.data, c.data);
+        let changed = merge_changed(&mut self.data, c.data);
+        if !changed && c.layouts.is_empty() {
+            // Nothing drawn can differ: the frame stays as it is.
+            return;
+        }
         for (id, root) in c.layouts {
             let old = self.layouts.insert(id.clone(), root.clone());
             for (i, e) in self.stack.iter_mut().enumerate() {
@@ -1586,7 +1654,8 @@ impl Session {
             return false;
         }
         let now = Instant::now();
-        if !self.pager_anims.is_empty()
+        if self.spinning
+            || !self.pager_anims.is_empty()
             || self
                 .frame_settle
                 .is_some_and(|(at, _)| now.duration_since(at) < SETTLE)
@@ -1650,6 +1719,7 @@ impl Session {
         if self.stack[i].laid.as_ref().is_some_and(|(_, s)| *s == size) {
             return Ok(());
         }
+        self.stack[i].relay();
         let e = &self.stack[i];
         let group = &self.stack[self.group_start(i)];
         let presentation = if i == 0 {
@@ -1683,20 +1753,24 @@ impl Session {
             height: size[1],
             scale: self.viewport.scale,
         };
+        let prev = self.stack[i].stale.take();
         let e = &self.stack[i];
-        let laid = self.builder.layout(&Input {
-            root: &e.root,
-            data: &self.data,
-            form: &self.form,
-            route: &e.route,
-            layouts: &self.layouts,
-            scroll: &e.scroll,
-            viewport: vp,
-            dark: self.dark,
-            item: e.item.as_deref(),
-            insets,
-            focused: self.focused.as_deref(),
-        })?;
+        let laid = self.builder.relayout(
+            &Input {
+                root: &e.root,
+                data: &self.data,
+                form: &self.form,
+                route: &e.route,
+                layouts: &self.layouts,
+                scroll: &e.scroll,
+                viewport: vp,
+                dark: self.dark,
+                item: e.item.as_deref(),
+                insets,
+                focused: self.focused.as_deref(),
+            },
+            prev,
+        )?;
         let e = &mut self.stack[i];
         // After an action from outside it, a `follow_end` view goes to
         // its end once it has something to scroll.
@@ -1756,6 +1830,7 @@ impl Session {
             }
         }
         visible.reverse();
+        self.report_shown(&visible);
         for &i in &visible {
             self.layout_entry(i)?;
         }
@@ -1774,6 +1849,12 @@ impl Session {
             height: h,
             scale: self.viewport.scale,
             background: theme.background.0,
+            // Still when not animating, so previews and tests are stable.
+            spin: if animate {
+                (now.duration_since(self.spin_from).as_secs_f32() / SPIN.as_secs_f32()).fract()
+            } else {
+                0.0
+            },
             ..Default::default()
         };
         let mut keep_from = 0;
@@ -1966,6 +2047,7 @@ impl Session {
         }
         self.caret_shown = self.caret_on();
         self.edit_overlay(&mut scene, &theme);
+        self.spinning = scene.spinning;
         self.scene = Some(scene);
         Ok(self.scene.as_ref().expect("just built"))
     }
@@ -2192,7 +2274,7 @@ impl Session {
     /// Lays the frame out again next time (data, form or size changed).
     pub fn invalidate(&mut self) {
         for e in &mut self.stack {
-            e.laid = None;
+            e.relay();
         }
         self.scene = None;
     }
@@ -2468,6 +2550,12 @@ impl Session {
                 for (f, v) in values {
                     entity.set(&f, v.clone());
                     fields.insert(f, v);
+                }
+                // The device's own data (`local://`) is the session's alone.
+                if !uri.starts_with("local://")
+                    && let Some(loader) = self.loader.as_ref()
+                {
+                    loader.local_set(intent);
                 }
                 out.push(Effect::LocalSet {
                     entity_uri: uri,
@@ -3179,6 +3267,7 @@ impl Session {
                     e.root = root.clone();
                     e.screens = screens.clone();
                     e.laid = None;
+                    e.stale = None;
                 }
                 self.layouts.insert(id.to_owned(), root);
             }
@@ -3292,6 +3381,7 @@ impl Session {
             screens,
             error: None,
             loading: None,
+            data: None,
             scroll: BTreeMap::new(),
             in_frame: frame != Frame::Full,
             frame,
@@ -3299,6 +3389,7 @@ impl Session {
             opened: Instant::now(),
             closing: None,
             laid: None,
+            stale: None,
             screen: true,
             follow: false,
         });
@@ -3308,7 +3399,10 @@ impl Session {
         if let Some(path) = &screen.data {
             let mut v = Value::String(path.clone());
             bind_route(&mut v, &route);
-            self.load_data(&crate::bind::render(&v), out);
+            let path = crate::bind::render(&v);
+            let ti = self.top_index();
+            self.stack[ti].data = Some(path.clone());
+            self.load_data(&path, out);
         }
         true
     }
@@ -3355,6 +3449,44 @@ impl Session {
         }
     }
 
+    /// Tells the loader what the entries `drawn` (bottom first) show, when
+    /// it changed: each one's layout and data path, and the layouts drawn
+    /// inline in them, topmost first ([`Loader::visible`]).
+    fn report_shown(&mut self, drawn: &[usize]) {
+        let Some(loader) = self.loader.as_ref() else {
+            return;
+        };
+        let mut shown = Vec::new();
+        for &i in drawn.iter().rev() {
+            let e = &self.stack[i];
+            if let Some(d) = &e.data {
+                push_new(&mut shown, Shown::Data(d.clone()));
+            }
+            push_new(&mut shown, Shown::Layout(e.id.clone()));
+            // Inline layouts, and theirs (each once).
+            let mut roots = vec![&e.root];
+            while let Some(root) = roots.pop() {
+                for n in root.walk() {
+                    if let UiNode::Layout {
+                        layout,
+                        presentation: protocol::EmbedPresentation::Inline,
+                        ..
+                    } = n
+                        && !layout.contains('$')
+                        && push_new(&mut shown, Shown::Layout(layout.clone()))
+                        && let Some(r) = self.layouts.get(layout)
+                    {
+                        roots.push(r);
+                    }
+                }
+            }
+        }
+        if shown != self.shown {
+            loader.visible(&shown);
+            self.shown = shown;
+        }
+    }
+
     /// Loads the layouts inline `core://Layout`s of the top entry draw.
     fn load_inline_layouts(&mut self) {
         if self.loader.is_none() {
@@ -3395,6 +3527,15 @@ impl Session {
                 "scroll": self.stack.last().map(|e| e.scroll.clone()).unwrap_or_default(),
                 "stack": self.stack.iter().map(|e| e.id.clone()).collect::<Vec<_>>() })
     }
+}
+
+/// Adds `s` unless `list` has it; true when added.
+fn push_new(list: &mut Vec<Shown>, s: Shown) -> bool {
+    if list.contains(&s) {
+        return false;
+    }
+    list.push(s);
+    true
 }
 
 /// An error as the notice bar shows it: the pod's own `detail` (or error

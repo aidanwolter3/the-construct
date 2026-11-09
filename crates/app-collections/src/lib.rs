@@ -28,6 +28,7 @@
 //! | `POST /v1/collections/<c>/refresh {filler?}` | fill a filled collection now (in the background; one filler or every one) |
 //! | `GET /v1/collections/<c>/fillers/<f>` | one filler's screen: `collection:<c>:filler:<f>` (itself), `…:rows`, `…:alerts` |
 //! | `GET /v1/collections/<c>/row?id=<id>` | one row as a one-item list `collection:<c>:row:<id>` |
+//! | `POST /v1/collections/<c>/actions/<a> {<param>: value, client_id?}` | run an insert-from-query action ([`actions`]) as one undoable edit |
 //!
 //! With fillers, the feed also fills `collection:<c>:fillers` (each filler's
 //! title, URL and health); with alerts, `collection:<c>:alerted` (the rows
@@ -44,6 +45,7 @@
 //! change still arrives. The MCP tools ([`mcp`]) define and change
 //! collections (atomically with the apps that show them) and edit rows.
 
+pub mod actions;
 pub mod agent;
 pub mod alerts;
 pub mod bindings;
@@ -53,9 +55,12 @@ pub mod db;
 pub mod expr;
 pub mod fill;
 pub mod filler;
+pub mod follow;
 pub mod lookup;
 mod mcp;
 pub mod model;
+pub mod quantity;
+pub mod refs;
 pub mod remind;
 
 use std::collections::HashMap;
@@ -188,6 +193,11 @@ pub const MANIFEST: SourceManifest = SourceManifest {
             doc: "Delete a row: payload {id: \"$item.id\"}, as a mutation of field \"deleted\" to true (hide it with the List's where: {field: \"deleted\", equals: \"false\"}).",
         },
         PathSpec {
+            pattern: "/v1/collections/{collection}/actions/{action}",
+            query_keys: &[],
+            doc: "Run an insert-from-query action of the collection (describe_collection lists them): payload {<param>: value, client_id: \"$nonce\"}, sent with action.mutation.optimistic (entity_uri and field: any view flag, e.g. \"$item.uri\" and \"adding\"); the rows arrive through the feed.",
+        },
+        PathSpec {
             pattern: "/v1/collections/{collection}/refresh",
             query_keys: &[],
             doc: "Fill a collection's fillers now (a \"Refresh\" button): payload {} for every filler or {filler: id} for one; the rows update when the fill ends.",
@@ -195,7 +205,7 @@ pub const MANIFEST: SourceManifest = SourceManifest {
     ],
     entities: &[EntityDoc {
         uri: "collections://{collection}/{id}",
-        doc: "A row of a collection: every field by name (see describe_collection), and the system fields; a datetime field also as <name>_date (YYYY-MM-DD), <name>_time (7:30 PM) and <name>_text (Fri Nov 6 · 7:30 PM); with fillers filler_id and filler_title; with alerts alert_matched and alert_names. A filler is collections://{collection}/fillers/{id} (title, kind, url, state, detail, failing, alerts_text), an alert collections://{collection}/alerts/{id} (name, summary).",
+        doc: "A row of a collection: every field by name (see describe_collection), and the system fields; a ref field holds the id of the row it points at (read through it with ${collections://<target>/$item.<ref>#<field>}); a quantity field also as <name>_text (1 1/2 cups); a datetime field also as <name>_date (YYYY-MM-DD), <name>_time (7:30 PM) and <name>_text (Fri Nov 6 · 7:30 PM); with fillers filler_id and filler_title; with alerts alert_matched and alert_names. A filler is collections://{collection}/fillers/{id} (title, kind, url, state, detail, failing, alerts_text), an alert collections://{collection}/alerts/{id} (name, summary).",
         fields: &[
             (
                 "id",
@@ -370,6 +380,10 @@ impl AppAdapter for CollectionsAdapter {
                 get(filler_route),
             )
             .route("/v1/collections/{collection}/row", get(row_screen_route))
+            .route(
+                "/v1/collections/{collection}/actions/{action}",
+                post(action_route),
+            )
     }
 
     fn migrations(&self) -> &'static [Step] {
@@ -552,12 +566,26 @@ pub(crate) async fn refusable<T: Send + 'static>(
     pod: &Pod,
     f: impl FnOnce(&rusqlite::Transaction<'_>) -> rusqlite::Result<Result<T, Value>> + Send + 'static,
 ) -> Result<T, Value> {
+    let (v, followed) = refusable_followed(pod, f).await?;
+    followed.finish(pod);
+    Ok(v)
+}
+
+/// [`refusable`], leaving telling clients to the caller: what the
+/// transaction changed, to [`follow::Followed::finish`] or
+/// [`follow::Followed::publish`].
+async fn refusable_followed<T: Send + 'static>(
+    pod: &Pod,
+    f: impl FnOnce(&rusqlite::Transaction<'_>) -> rusqlite::Result<Result<T, Value>> + Send + 'static,
+) -> Result<(T, follow::Followed), Value> {
     let slot: Arc<std::sync::Mutex<Option<Value>>> = Default::default();
     let refused = slot.clone();
+    let caps = adapter(pod).caps;
     let r = pod
         .blocking(move |s| {
             s.transaction(|tx| match f(tx)? {
-                Ok(v) => Ok(v),
+                // The rows it changed move the computes that read them.
+                Ok(v) => Ok((v, follow::settle(tx, pod_core::util::now_secs(), caps)?)),
                 Err(body) => {
                     *refused.lock().unwrap_or_else(|e| e.into_inner()) = Some(body);
                     Err(rusqlite::Error::QueryReturnedNoRows)
@@ -643,8 +671,18 @@ enum RowOp {
     Delete,
 }
 
-/// Create, update or delete a row from a layout's write `body`.
-async fn write_row(pod: &Pod, collection: &str, op: RowOp, body: Value) -> Result<Value, Value> {
+/// Create, update or delete a row from a layout's write `body`, sent by
+/// device `origin` (`x-construct-device`; `None`: not a device's write).
+/// Clients are told of the rows it changed, except `origin` when the pod
+/// changed nothing it didn't send (decision `scoped-data-events`): its
+/// engine shows the write already, and reloads a create's list itself.
+async fn write_row(
+    pod: &Pod,
+    collection: &str,
+    op: RowOp,
+    body: Value,
+    origin: Option<String>,
+) -> Result<Value, Value> {
     let Some(body) = body.as_object().cloned() else {
         return Err(fail(
             StatusCode::BAD_REQUEST,
@@ -654,7 +692,7 @@ async fn write_row(pod: &Pod, collection: &str, op: RowOp, body: Value) -> Resul
     };
     let caps = adapter(pod).caps;
     let name = collection.to_owned();
-    let out = refusable(pod, move |tx| {
+    let out = refusable_followed(pod, move |tx| {
         let Some((_, def)) = db::latest_def(tx, &name)? else {
             return Ok(Err(
                 json!({ "error": "collection_not_found", "collection": name, "status": 404 }),
@@ -687,9 +725,20 @@ async fn write_row(pod: &Pod, collection: &str, op: RowOp, body: Value) -> Resul
                     return Ok(Ok((
                         json!({ "ok": true, "id": r.id, "uri": db::row_uri(&name, &r.id) }),
                         Vec::new(),
+                        false,
                     )));
                 }
             }
+            let body = match refs::prepare_write(tx, &def, &body)? {
+                Ok(b) => b,
+                Err(e) => {
+                    return Ok(Err(fail(
+                        StatusCode::UNPROCESSABLE_ENTITY,
+                        "invalid_value",
+                        e,
+                    )));
+                }
+            };
             let mut values = Map::new();
             if let Err(e) =
                 model::apply_write(&def, &mut values, &body, Write::Create, caps.text_chars)
@@ -710,6 +759,9 @@ async fn write_row(pod: &Pod, collection: &str, op: RowOp, body: Value) -> Resul
                 filler: None,
             };
             let jobs = compute::after_write(tx, &def, None, &mut row, &body, now, caps)?;
+            if let Err(e) = refs::check_unique(tx, &def, &row)? {
+                return Ok(Err(fail(StatusCode::CONFLICT, "not_unique", e)));
+            }
             if let Err(e) = check_usage(tx, caps, 1, bytes_of(&row.values))? {
                 return Ok(Err(e));
             }
@@ -717,6 +769,7 @@ async fn write_row(pod: &Pod, collection: &str, op: RowOp, body: Value) -> Resul
             return Ok(Ok((
                 json!({ "ok": true, "id": row.id, "uri": db::row_uri(&name, &row.id) }),
                 jobs,
+                false,
             )));
         }
         let Some(id) = str_of("id") else {
@@ -746,7 +799,7 @@ async fn write_row(pod: &Pod, collection: &str, op: RowOp, body: Value) -> Resul
                 row.updated_at = now;
                 db::save_row(tx, &name, &row)?;
             }
-            return Ok(Ok((json!({ "ok": true, "id": row.id }), Vec::new())));
+            return Ok(Ok((json!({ "ok": true, "id": row.id }), Vec::new(), false)));
         }
         if row.deleted_at.is_some() && body.get("deleted") != Some(&json!(false)) {
             return Ok(Err(
@@ -755,6 +808,16 @@ async fn write_row(pod: &Pod, collection: &str, op: RowOp, body: Value) -> Resul
         }
         let before = bytes_of(&row.values);
         let before_values = row.values.clone();
+        let body = match refs::prepare_write(tx, &def, &body)? {
+            Ok(b) => b,
+            Err(e) => {
+                return Ok(Err(fail(
+                    StatusCode::UNPROCESSABLE_ENTITY,
+                    "invalid_value",
+                    e,
+                )));
+            }
+        };
         if let Err(e) =
             model::apply_write(&def, &mut row.values, &body, Write::Update, caps.text_chars)
         {
@@ -764,8 +827,11 @@ async fn write_row(pod: &Pod, collection: &str, op: RowOp, body: Value) -> Resul
                 e,
             )));
         }
+        let sent = row.values.clone();
         let jobs =
             compute::after_write(tx, &def, Some(&before_values), &mut row, &body, now, caps)?;
+        // A computed field of the row changed: the writer doesn't know it.
+        let computed = row.values != sent;
         match body.get("deleted") {
             Some(Value::Bool(true)) => row.deleted_at = row.deleted_at.or(Some(now)),
             Some(Value::Bool(false)) => {
@@ -778,16 +844,23 @@ async fn write_row(pod: &Pod, collection: &str, op: RowOp, body: Value) -> Resul
             }
             _ => {}
         }
+        if row.deleted_at.is_none()
+            && let Err(e) = refs::check_unique(tx, &def, &row)?
+        {
+            return Ok(Err(fail(StatusCode::CONFLICT, "not_unique", e)));
+        }
         if let Err(e) = check_usage(tx, caps, 0, bytes_of(&row.values) - before)? {
             return Ok(Err(e));
         }
         row.updated_at = now;
         db::save_row(tx, &name, &row)?;
-        Ok(Ok((json!({ "ok": true, "id": row.id }), jobs)))
+        Ok(Ok((json!({ "ok": true, "id": row.id }), jobs, computed)))
     })
     .await?;
-    pod.publish_data_all(NAME);
-    let (out, jobs) = out;
+    let ((out, jobs, computed), followed) = out;
+    if !followed.rows.is_empty() {
+        followed.publish(pod, origin.as_deref().filter(|_| !computed));
+    }
     compute::spawn(pod, collection, jobs);
     Ok(out)
 }
@@ -805,7 +878,7 @@ pub async fn update_row(
 ) -> Result<Value, Value> {
     let mut body = values;
     body.insert("id".into(), json!(id));
-    write_row(pod, collection, RowOp::Update, Value::Object(body)).await
+    write_row(pod, collection, RowOp::Update, Value::Object(body), None).await
 }
 
 async fn row_route(
@@ -819,7 +892,8 @@ async fn row_route(
         Ok(v) => v,
         Err(e) => return e.into_response(),
     };
-    match write_row(&pod, &collection, op, body).await {
+    let origin = pod_core::notify::device_id(&headers);
+    match write_row(&pod, &collection, op, body, origin).await {
         Ok(v) => Json(v).into_response(),
         Err(e) => refusal(e),
     }
@@ -850,6 +924,73 @@ async fn delete_route(
     body: Bytes,
 ) -> Response {
     row_route(pod, collection, RowOp::Delete, headers, body).await
+}
+
+/// Run action `name` of `collection` with `args` (see [`actions::run`]):
+/// one transaction, clients told, model jobs started.
+pub(crate) async fn run_action(
+    pod: &Pod,
+    collection: &str,
+    name: &str,
+    args: Map<String, Value>,
+    note: Option<String>,
+) -> Result<Value, Value> {
+    let caps = adapter(pod).caps;
+    let (c, n) = (collection.to_owned(), name.to_owned());
+    let done = refusable(pod, move |tx| {
+        actions::run(
+            tx,
+            &c,
+            &n,
+            &args,
+            note.as_deref(),
+            caps,
+            pod_core::util::now_secs(),
+        )
+    })
+    .await?;
+    let actions::Done {
+        answer,
+        jobs,
+        followed,
+    } = done;
+    if answer["repeated"] == true {
+        followed.finish(pod);
+    } else {
+        // Every row it changed, in one event (decision `scoped-data-events`).
+        followed.publish(pod, None);
+    }
+    for (c, j) in jobs {
+        compute::spawn(pod, &c, j);
+    }
+    Ok(answer)
+}
+
+async fn action_route(
+    State(pod): State<Pod>,
+    Path((collection, action)): Path<(String, String)>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response {
+    let body = if body.is_empty() {
+        json!({})
+    } else {
+        match pod_core::parse_json_body(&headers, &body) {
+            Ok(v) => v,
+            Err(e) => return e.into_response(),
+        }
+    };
+    let Some(args) = body.as_object().cloned() else {
+        return refusal(fail(
+            StatusCode::BAD_REQUEST,
+            "invalid_request",
+            "the body is a JSON object of the action's params",
+        ));
+    };
+    match run_action(&pod, &collection, &action, args, None).await {
+        Ok(v) => Json(v).into_response(),
+        Err(e) => refusal(e),
+    }
 }
 
 async fn refresh_route(

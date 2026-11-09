@@ -4,9 +4,23 @@
 
 use protocol::EntityRecord;
 use serde_json::Value;
-use std::collections::BTreeMap;
+use std::cell::RefCell;
+use std::collections::{BTreeMap, BTreeSet};
 
 use crate::style::Theme;
+
+/// What a part of a frame read from the data while it was built: the
+/// entities (by URI) and queries (by key) its bindings, conditions and
+/// lists looked at.
+#[derive(Debug, Default, Clone)]
+pub struct Reads {
+    pub entities: BTreeSet<String>,
+    pub queries: BTreeSet<String>,
+}
+
+/// The [`Reads`] of every part being recorded now (nested parts: each
+/// records what the parts inside it read too).
+pub type ReadLog = RefCell<Vec<Reads>>;
 
 /// What a binding reads: the data, the form values, the route and the
 /// current item.
@@ -19,6 +33,8 @@ pub struct Ctx<'a> {
     pub theme: &'a Theme,
     pub item: Option<&'a EntityRecord>,
     pub item_uri: Option<&'a str>,
+    /// Where reads are recorded, while a part is (`None`: nowhere).
+    pub reads: Option<&'a ReadLog>,
 }
 
 impl<'a> Ctx<'a> {
@@ -41,7 +57,30 @@ impl<'a> Ctx<'a> {
     }
 
     pub fn entity(&self, uri: &str) -> Option<&'a EntityRecord> {
+        self.read_entity(uri);
         self.entities.get(uri)
+    }
+
+    /// A query's entity URIs, in order.
+    pub fn query(&self, key: &str) -> Option<&'a Vec<String>> {
+        if let Some(log) = self.reads {
+            for r in log.borrow_mut().iter_mut() {
+                if !r.queries.contains(key) {
+                    r.queries.insert(key.to_owned());
+                }
+            }
+        }
+        self.queries.get(key)
+    }
+
+    fn read_entity(&self, uri: &str) {
+        if let Some(log) = self.reads {
+            for r in log.borrow_mut().iter_mut() {
+                if !r.entities.contains(uri) {
+                    r.entities.insert(uri.to_owned());
+                }
+            }
+        }
     }
 
     fn field(&self, uri: &str, field: &str) -> Option<Value> {
@@ -51,7 +90,7 @@ impl<'a> Ctx<'a> {
                 .token_text(field)
                 .map(|s| Value::String(s.into()));
         }
-        self.entities.get(uri)?.get(field).cloned()
+        self.entity(uri)?.get(field).cloned()
     }
 
     /// Text with every binding replaced (missing entity fields: "", a
@@ -256,6 +295,7 @@ mod tests {
             theme: &theme,
             item: None,
             item_uri: None,
+            reads: None,
         }
         .with_item("demo://x/1", &item);
         assert_eq!(ctx.text("$item.title"), "Tea");
@@ -269,6 +309,41 @@ mod tests {
         assert!(ctx.shows("$item.n", None));
         assert!(!ctx.shows("$item.gone", None));
         assert!(ctx.shows("$form.q", Some("soup")));
+    }
+
+    #[test]
+    fn an_entity_binding_can_name_the_item_s_ref() {
+        // A collection ref holds a row id; a layout reads through it
+        // (decision `collection-primitives`): `$item.` is bound first.
+        let mut entities = BTreeMap::new();
+        entities.insert(
+            "collections://ingredients/r1".to_owned(),
+            record(json!({"name": "Chicken broth"})),
+        );
+        let (form, route, queries) = (BTreeMap::new(), BTreeMap::new(), BTreeMap::new());
+        let theme = Theme::new(false, &entities);
+        let item = record(json!({"ingredient": "r1", "amount_text": "4 cups", "other": null}));
+        let ctx = Ctx {
+            entities: &entities,
+            queries: &queries,
+            form: &form,
+            route: &route,
+            theme: &theme,
+            item: None,
+            item_uri: None,
+            reads: None,
+        }
+        .with_item("collections://recipe_lines/r9", &item);
+        assert_eq!(
+            ctx.text("$item.amount_text ${collections://ingredients/$item.ingredient#name}"),
+            "4 cups Chicken broth"
+        );
+        // An empty ref, or a row not loaded, reads as nothing.
+        assert_eq!(
+            ctx.text("${collections://ingredients/$item.other#name}"),
+            ""
+        );
+        assert_eq!(ctx.text("${collections://ingredients/r2#name}"), "");
     }
 
     #[test]

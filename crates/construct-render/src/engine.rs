@@ -777,6 +777,20 @@ impl Loader for PodEngine {
         Ok((root, data))
     }
 
+    /// Tells the engine what's on screen, as its load keys (decision
+    /// `scoped-data-events`).
+    fn visible(&self, shown: &[crate::interact::Shown]) {
+        use crate::interact::Shown;
+        let keys = shown
+            .iter()
+            .map(|s| match s {
+                Shown::Layout(id) => format!("{}{id}", client_core::LAYOUT_LOAD_PREFIX),
+                Shown::Data(path) => path.clone(),
+            })
+            .collect();
+        self.engine.set_visible(keys);
+    }
+
     /// `action.data.load` through the engine (its answer is cached and
     /// shown offline); waits for it.
     fn data(&self, path: &str) -> Result<DataBundle, String> {
@@ -935,6 +949,13 @@ impl Loader for PodEngine {
             }
             _ => false,
         }
+    }
+
+    /// The engine sets the fields too: its snapshots (the next one comes
+    /// with the write that usually follows) would otherwise put the old
+    /// values back before the pod's answer brings the new ones.
+    fn local_set(&self, intent: &Value) {
+        self.engine.dispatch(&intent.to_string());
     }
 
     fn changes(&self) -> Option<Changes> {

@@ -40,7 +40,7 @@ removed one). A request without `X-Construct-Features` is served the latest vers
 | Event | Data | When |
 |---|---|---|
 | `layout` | `{version, workspace_id}` | A newer version this client can draw exists. |
-| `data` | `{workspace_id}` | The app's data changed for this session (e.g. a post finished uploading); reload. |
+| `data` | `{workspace_id}`, and when the pod knows what changed: `source`, `changes` (Collections: `[{collection, rows}]`), `uri_prefixes`, `query_prefixes` | The app's data changed for this session (e.g. a post finished uploading). With prefixes, reload only data holding an entity URI that starts with a `uri_prefix`, or a query whose key is a `query_prefix` or starts with one and `:`; without, reload everything. The device named by a write's `x-construct-device` isn't sent the event of its own write when the pod changed nothing else (decision `scoped-data-events`). |
 | `notification` | `{id, app_id, channel, title, body, target_uri, layout, unread_total}` | A notification for any app of the pod; `layout` is the layout to present it in. |
 | `notifications_read` | the new unread counts | Notifications were marked read on some device. |
 | `deleted` | `{workspace_id}` | The custom app was deleted. |

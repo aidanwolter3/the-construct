@@ -13,7 +13,9 @@
 //!   `describe_collection`).
 //!
 //! When several rules match, the longest key wins ("coconut milk" over
-//! "milk"), then the oldest rule. With `learn`, a later kind's answer (the
+//! "milk"), then the oldest rule (by `created_at`; deleted rows never
+//! match). The `value` may be the row's system `id` ([`model::ROW_ID`]):
+//! the answer is then the matched row's id, as text. With `learn`, a later kind's answer (the
 //! model's) and a hand edit of the field become rules (see [`learn`]).
 
 use regex::{Regex, RegexBuilder};
@@ -109,21 +111,40 @@ impl Rules {
         let Some((_, other)) = db::latest_def(conn, collection)? else {
             return Ok(out);
         };
-        let (Some(kf), Some(vf)) = (
-            other.by_id(key).filter(|f| f.live()),
-            other.by_id(value).filter(|f| f.live()),
-        ) else {
-            return Ok(out);
+        // `None`: the key is the row's id (a lookup through a ref field).
+        let kf = if key == model::ROW_ID {
+            None
+        } else {
+            match other.by_id(key).filter(|f| f.live()) {
+                Some(f) => Some(f),
+                None => return Ok(out),
+            }
+        };
+        // `None`: the value is the matched row's id (`model::ROW_ID`).
+        let vf = if value == model::ROW_ID {
+            None
+        } else {
+            match other.by_id(value).filter(|f| f.live()) {
+                Some(f) => Some(f),
+                None => return Ok(out),
+            }
         };
         for r in db::all_rows(conn, collection, false)? {
-            let Some(k) = r.values.get(&kf.id).and_then(text_of) else {
+            let k = match kf {
+                Some(kf) => r.values.get(&kf.id).and_then(text_of),
+                None => Some(r.id.clone()),
+            };
+            let Some(k) = k else {
                 continue;
             };
-            let v = r
-                .values
-                .get(&vf.id)
-                .cloned()
-                .unwrap_or_else(|| vf.empty_value());
+            let v = match vf {
+                Some(vf) => r
+                    .values
+                    .get(&vf.id)
+                    .cloned()
+                    .unwrap_or_else(|| vf.empty_value()),
+                None => json!(r.id),
+            };
             if text_of(&v).is_none() {
                 continue;
             }
@@ -186,6 +207,50 @@ impl Rules {
         }
         best.map(|r| &r.value)
     }
+}
+
+/// One rule key ready to match inputs under a mode, as [`Rules::find`]
+/// matches (an invalid `regex` key matches nothing).
+#[derive(Debug, Clone)]
+pub struct KeyMatcher {
+    mode: Match,
+    norm: String,
+    words: Vec<String>,
+    regex: Option<Regex>,
+}
+
+impl KeyMatcher {
+    pub fn new(mode: Match, key: &str) -> Self {
+        Self {
+            mode,
+            norm: model::cache_key(key),
+            words: words(key),
+            regex: (mode == Match::Regex).then(|| compile(key).ok()).flatten(),
+        }
+    }
+
+    /// Whether the key matches `input`.
+    pub fn matches(&self, input: &str) -> bool {
+        let norm = model::cache_key(input);
+        if norm.is_empty() {
+            return false;
+        }
+        match self.mode {
+            Match::Exact => self.norm == norm,
+            Match::Contains => {
+                !self.words.is_empty()
+                    && words(input)
+                        .windows(self.words.len())
+                        .any(|w| w == self.words.as_slice())
+            }
+            Match::Regex => self.regex.as_ref().is_some_and(|re| re.is_match(&norm)),
+        }
+    }
+}
+
+/// Whether a rule with key `key` matches `input` under `mode`.
+pub fn key_matches(mode: Match, key: &str, input: &str) -> bool {
+    KeyMatcher::new(mode, key).matches(input)
 }
 
 /// The key a learned rule gets for `input`: the normalized input; for a
@@ -366,6 +431,17 @@ mod tests {
         assert!(compile(&"a".repeat(MAX_PATTERN_CHARS + 1)).is_err());
         // Big repetitions exceed the size limit instead of costing time.
         assert!(compile("(\\w{100}){100}").is_err());
+    }
+
+    #[test]
+    fn key_matches_agrees_with_find() {
+        assert!(key_matches(Match::Contains, "milk", "Oat Milk"));
+        assert!(!key_matches(Match::Contains, "milk", "Buttermilk"));
+        assert!(key_matches(Match::Exact, "oat milk", " OAT  milk "));
+        assert!(!key_matches(Match::Exact, "oat milk", "oat milk 2%"));
+        assert!(key_matches(Match::Regex, "^cucumbers?$", "Cucumbers"));
+        assert!(!key_matches(Match::Regex, "(unclosed", "(unclosed"));
+        assert!(!key_matches(Match::Exact, "", ""));
     }
 
     #[test]

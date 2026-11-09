@@ -9,6 +9,9 @@
 //!   collection ([`crate::lookup`]), inside the write. With `learn`, a
 //!   model's answer and a hand edit become rules there (instead of the
 //!   per-input cache below).
+//! - `count`: the number of rows of another collection whose key equals
+//!   the row's `from` and that match its conditions, inside the write
+//!   (a number field's only kind).
 //! - `model`: a model's answer to the field's prompt about the source
 //!   fields' values, e.g. a grocery item's store section from its name. The
 //!   answer for the same inputs comes from `collections_computed` (keyed by
@@ -23,9 +26,11 @@
 //! A computed field still takes writes: a value set by hand stays until a
 //! source field changes (or the write clears the field), and then the field
 //! is computed again. A model, answering in the background, is always the
-//! last kind of a list.
+//! last kind of a list. Lookups and counts also follow the collection they
+//! read: a change there computes the affected rows again
+//! ([`crate::follow`], decision `live-computed-fields`).
 
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -36,7 +41,7 @@ use serde_json::{Map, Value, json};
 use crate::db::{self, Row};
 use crate::lookup::{self, Rules};
 use crate::model::{self, Compute, Definition, Field, Kind};
-use crate::{Caps, CollectionsAdapter, NAME};
+use crate::{Caps, CollectionsAdapter};
 
 /// What a `model` compute asks.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -131,7 +136,8 @@ pub fn prompt_text(q: &Question<'_>) -> String {
         Kind::Bool => "true or false and nothing else".into(),
         Kind::Date => "a date as YYYY-MM-DD and nothing else".into(),
         Kind::Datetime => "a date and time as YYYY-MM-DDTHH:MM and nothing else".into(),
-        Kind::Text => "the text only, with no preamble".into(),
+        Kind::Text | Kind::Ref => "the text only, with no preamble".into(),
+        Kind::Quantity => "an amount and a unit (such as 1 1/2 cups) and nothing else".into(),
     };
     format!(
         "{}\n\n{}\n\nAnswer with {answer}.",
@@ -288,13 +294,49 @@ pub fn eval_expr(
     model::coerce(field, &v, max_chars).ok().flatten()
 }
 
-/// The rules of each lookup kind, loaded once per write or backfill.
+/// The rules of each lookup kind and the counts of each count kind,
+/// loaded once per write, backfill or wave of [`crate::follow`].
 #[derive(Debug, Default)]
 pub struct Lookups {
     rules: BTreeMap<(String, usize), Rules>,
+    counts: BTreeMap<(String, usize), HashMap<String, i64>>,
+    rollups: BTreeMap<(String, usize), HashMap<String, Vec<Value>>>,
 }
 
 impl Lookups {
+    /// Rollup kind `i` of `field`: the values it aggregates (the rolled-up
+    /// field's, or `true` per row without a field) of the live rows of its
+    /// collection matching its conditions, by the row id their `via` holds.
+    fn rollups(
+        &mut self,
+        conn: &Connection,
+        field: &Field,
+        i: usize,
+    ) -> rusqlite::Result<&HashMap<String, Vec<Value>>> {
+        let k = (field.id.clone(), i);
+        if !self.rollups.contains_key(&k) {
+            let c = rollup_index(conn, &field.compute[i])?;
+            self.rollups.insert(k.clone(), c);
+        }
+        Ok(&self.rollups[&k])
+    }
+
+    /// Count kind `i` of `field`: the live rows of its collection matching
+    /// its conditions, by normalized key.
+    fn counts(
+        &mut self,
+        conn: &Connection,
+        field: &Field,
+        i: usize,
+    ) -> rusqlite::Result<&HashMap<String, i64>> {
+        let k = (field.id.clone(), i);
+        if !self.counts.contains_key(&k) {
+            let c = count_index(conn, &field.compute[i])?;
+            self.counts.insert(k.clone(), c);
+        }
+        Ok(&self.counts[&k])
+    }
+
     fn rules(&mut self, conn: &Connection, field: &Field, i: usize) -> rusqlite::Result<&Rules> {
         let k = (field.id.clone(), i);
         if !self.rules.contains_key(&k) {
@@ -302,6 +344,137 @@ impl Lookups {
             self.rules.insert(k.clone(), r);
         }
         Ok(&self.rules[&k])
+    }
+}
+
+/// The live rows of a count's collection that match its conditions, by
+/// their normalized key (empty for another kind, or when the collection or
+/// key is gone).
+fn count_index(conn: &Connection, compute: &Compute) -> rusqlite::Result<HashMap<String, i64>> {
+    let mut out = HashMap::new();
+    let Compute::Count {
+        collection,
+        key,
+        conditions,
+        ..
+    } = compute
+    else {
+        return Ok(out);
+    };
+    let Some((_, other)) = db::latest_def(conn, collection)? else {
+        return Ok(out);
+    };
+    let Some(kf) = other.by_id(key).filter(|f| f.live()) else {
+        return Ok(out);
+    };
+    for r in db::all_rows(conn, collection, false)? {
+        let k = r
+            .values
+            .get(&kf.id)
+            .cloned()
+            .unwrap_or_else(|| kf.empty_value());
+        let Some(k) = lookup::text_of(&k) else {
+            continue;
+        };
+        if conditions.iter().all(|c| c.matches(&other, &r.values)) {
+            *out.entry(model::cache_key(&k)).or_insert(0) += 1;
+        }
+    }
+    Ok(out)
+}
+
+/// The rows a rollup reads, grouped by the id their `via` holds (see
+/// [`Lookups::rollups`]).
+fn rollup_index(
+    conn: &Connection,
+    compute: &Compute,
+) -> rusqlite::Result<HashMap<String, Vec<Value>>> {
+    let mut out: HashMap<String, Vec<Value>> = HashMap::new();
+    let Compute::Rollup {
+        collection,
+        via,
+        field,
+        conditions,
+        ..
+    } = compute
+    else {
+        return Ok(out);
+    };
+    let Some((_, other)) = db::latest_def(conn, collection)? else {
+        return Ok(out);
+    };
+    if other.by_id(via).filter(|f| f.live()).is_none() {
+        return Ok(out);
+    }
+    let vf = field
+        .as_ref()
+        .and_then(|f| other.by_id(f))
+        .filter(|f| f.live());
+    for r in db::all_rows(conn, collection, false)? {
+        let Some(parent) = r.values.get(via).and_then(Value::as_str) else {
+            continue;
+        };
+        if !conditions.iter().all(|c| c.matches(&other, &r.values)) {
+            continue;
+        }
+        let v = match vf {
+            Some(f) => r
+                .values
+                .get(&f.id)
+                .cloned()
+                .unwrap_or_else(|| f.empty_value()),
+            None => json!(true),
+        };
+        out.entry(parent.to_owned()).or_default().push(v);
+    }
+    Ok(out)
+}
+
+/// A rollup's answer over `values` (see [`model::RollupOp`]) for a field of
+/// kind `kind`; `None`: empty.
+pub fn aggregate(op: model::RollupOp, kind: Kind, values: &[Value]) -> Option<Value> {
+    use model::RollupOp as Op;
+    let numbers = || {
+        values
+            .iter()
+            .filter_map(|v| v.as_f64().filter(|x| x.is_finite()))
+    };
+    match op {
+        Op::Count => Some(json!(values.len())),
+        Op::Any => Some(json!(!values.is_empty())),
+        Op::Sum => {
+            let qs: Vec<crate::quantity::Quantity> = values
+                .iter()
+                .filter_map(crate::quantity::from_value)
+                .collect();
+            if kind == Kind::Quantity {
+                let s = crate::quantity::sum(&qs);
+                return (!s.parts.is_empty()).then(|| s.to_value());
+            }
+            Some(model::number_value(numbers().sum::<f64>()))
+        }
+        Op::Min => numbers().reduce(f64::min).map(model::number_value),
+        Op::Max => numbers().reduce(f64::max).map(model::number_value),
+        Op::List => {
+            let mut seen: Vec<String> = Vec::new();
+            let mut out: Vec<String> = Vec::new();
+            for v in values {
+                let t = match v {
+                    Value::Null => continue,
+                    Value::String(s) => s.trim().to_owned(),
+                    other if crate::quantity::from_value(other).is_some() => {
+                        crate::quantity::text_of(other)
+                    }
+                    other => other.to_string(),
+                };
+                if t.is_empty() || seen.contains(&model::cache_key(&t)) {
+                    continue;
+                }
+                seen.push(model::cache_key(&t));
+                out.push(t);
+            }
+            (!out.is_empty()).then(|| json!(out.join(", ")))
+        }
     }
 }
 
@@ -328,6 +501,8 @@ fn answer(
 ) -> rusqlite::Result<Answer> {
     let mut values = row.values.clone();
     values.remove(&field.id);
+    // `entity.id` in an expression: the row's own id (never a field id).
+    values.insert(model::ROW_ID.to_owned(), json!(row.id));
     let learning = field.learning_lookup();
     for (i, c) in field.compute.iter().enumerate() {
         match c {
@@ -346,6 +521,29 @@ fn answer(
                 {
                     return Ok(Answer::Now(v));
                 }
+            }
+            Compute::Count { from, .. } => {
+                let n = match lookup::text_of(&value_of(def, from, &values)) {
+                    Some(input) => lookups
+                        .counts(conn, field, i)?
+                        .get(&model::cache_key(&input))
+                        .copied()
+                        .unwrap_or(0),
+                    None => 0,
+                };
+                return Ok(Answer::Now(json!(n)));
+            }
+            Compute::Rollup { op, .. } => {
+                let empty = Vec::new();
+                let index = lookups.rollups(conn, field, i)?;
+                let values = index.get(&row.id).unwrap_or(&empty);
+                return Ok(match aggregate(*op, field.kind, values) {
+                    Some(v) => match model::coerce(field, &v, max_chars) {
+                        Ok(Some(v)) => Answer::Now(v),
+                        _ => Answer::None,
+                    },
+                    None => Answer::None,
+                });
             }
             Compute::Model { from, .. } => {
                 let Some((texts, key)) = inputs(def, from, &values) else {
@@ -378,7 +576,7 @@ fn answer(
 
 /// Compute `field` of `row` now: the field is set to the answer, or left
 /// empty (its default) until a [`Job`] is answered.
-fn recompute(
+pub(crate) fn recompute(
     conn: &Connection,
     def: &Definition,
     field: &Field,
@@ -474,8 +672,8 @@ fn teach(
 
 /// After a change that adds or changes field `field_id`'s compute (`all`:
 /// or asks to compute it again), inside `tx`. A field computed only by
-/// expressions is computed for every live row. Otherwise a value already
-/// there may be a person's: an empty field is computed (a model job, at
+/// expressions or by a count is computed for every live row. Otherwise a
+/// value already there may be a person's: an empty field is computed (a model job, at
 /// most `limit`); with `all`, a row with a value gets what an expression,
 /// a rule or the cache answers now, and keeps its value when only the model
 /// could answer. A learning lookup first learns the field's cached model
@@ -496,10 +694,12 @@ pub fn backfill(
     if let Some(c) = field.learning_lookup() {
         learn_cache(tx, def, field, c, now, caps)?;
     }
-    let only_expr = field
-        .compute
-        .iter()
-        .all(|c| matches!(c, Compute::Expr { .. }));
+    let only_expr = field.compute.iter().all(|c| {
+        matches!(
+            c,
+            Compute::Expr { .. } | Compute::Count { .. } | Compute::Rollup { .. }
+        )
+    });
     let mut lookups = Lookups::default();
     let mut jobs = Vec::new();
     for mut r in db::all_rows(tx, &def.name, false)? {
@@ -627,13 +827,13 @@ pub fn spawn(pod: &Pod, collection: &str, jobs: Vec<Job>) {
                     s.transaction(|tx| {
                         let now = pod_core::util::now_secs();
                         let Some((_, def)) = db::latest_def(tx, &name)? else {
-                            return Ok(0);
+                            return Ok((0, crate::follow::Followed::default()));
                         };
                         let Some(field) = def.by_id(&field_id).filter(|f| f.live()) else {
-                            return Ok(0);
+                            return Ok((0, crate::follow::Followed::default()));
                         };
                         let Some((from, _)) = field.model_step() else {
-                            return Ok(0);
+                            return Ok((0, crate::follow::Followed::default()));
                         };
                         let mut n = 0;
                         let value = match (field.learning_lookup(), &learn_input) {
@@ -684,13 +884,17 @@ pub fn spawn(pod: &Pod, collection: &str, jobs: Vec<Job>) {
                             db::save_row(tx, &name, &r)?;
                             n += 1;
                         }
-                        Ok(n)
+                        // The rows and rules it changed move what reads them.
+                        let followed = crate::follow::settle(tx, now, caps)?;
+                        Ok((n, followed))
                     })
                 })
                 .await;
             match updated {
-                Ok(0) => {}
-                Ok(_) => pod.publish_data_all(NAME),
+                Ok((0, followed)) => followed.finish(&pod),
+                // The rows it answered and those that followed, in one
+                // event (decision `scoped-data-events`).
+                Ok((_, followed)) => followed.publish(&pod, None),
                 Err(e) => tracing::warn!(?e, "storing a computed value failed"),
             }
         }

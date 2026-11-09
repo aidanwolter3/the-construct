@@ -142,7 +142,9 @@ screen's `data` path answers the same `{entities, queries}` shape (`protocol::Da
 - **Event stream.** While online, the engine keeps `GET /v1/workspaces/<root>/events` open; home's stream carries
   every layout's events, starting with every layout's current version so a reconnect catches up. `layout` events
   trigger a refetch of that layout when a newer drawable version exists;
-  `deleted` marks it gone; `data` events say the data changed (D50); `notification` events feed the inbox (D52).
+  `deleted` marks it gone; `data` events say the data changed (D50), and usually what changed: the engine reloads
+  only the cached data that matches, what's on screen first, at most 4 requests at once, and marks the rest stale
+  until it's shown again (decision `scoped-data-events`); `notification` events feed the inbox (D52).
 - **Snapshots.** The UI observes immutable state snapshots (layout, entities, connectivity, pending count, sign-in
   state, unread counts) and dispatches intents back as JSON.
 

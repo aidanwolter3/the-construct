@@ -1,6 +1,8 @@
 //! Following the runner, one task per open pod: take a snapshot when the
 //! stored state is missing or old, then follow the event stream from the
-//! cursor, reconnecting with backoff. Each event is applied to the stored
+//! cursor, reconnecting with backoff. The runner's sandboxes and schedules
+//! come only with a snapshot, so they are read again on every reconnect and
+//! every [`SNAPSHOT_AFTER`] while following. Each event is applied to the stored
 //! state, its notifications sent and its task rows updated. While the runner
 //! can't be reached, the last state stays and the feeds say it's stale.
 //!
@@ -18,7 +20,8 @@ use crate::cap::{self, CapError, Event, Runner, SseParser};
 use crate::state::Effect;
 use crate::{AgentsAdapter, alerts, db, tasks};
 
-/// A snapshot is taken again when the last good answer is older than this.
+/// A snapshot is taken again when the last good answer is older than this,
+/// and the runner's set-up is read again this often while following.
 pub const SNAPSHOT_AFTER: Duration = Duration::from_secs(600);
 /// Waits between attempts, doubling from the first to the last.
 pub const BACKOFF_MIN: Duration = Duration::from_secs(1);
@@ -130,6 +133,34 @@ pub fn now_ms() -> i64 {
         .unwrap_or(0)
 }
 
+/// Read the runner's sandboxes and schedules again ([`State::apply_setup`]),
+/// save them and reload the pod's clients.
+async fn refresh_setup(
+    weak: &Weak<AppState>,
+    changed: impl Fn() -> bool,
+    clients: &cap::Clients,
+    runner: &Runner,
+    state: &mut crate::state::State,
+) -> Result<(), Outcome> {
+    let snap = cap::snapshot(clients, runner)
+        .await
+        .map_err(Outcome::Failed)?;
+    let Some(pod) = weak.upgrade() else {
+        return Err(Outcome::Gone);
+    };
+    if changed() {
+        return Err(Outcome::Changed);
+    }
+    let before = (state.sprites.clone(), state.schedules.clone());
+    state.apply_setup(&snap);
+    if before != (state.sprites.clone(), state.schedules.clone()) {
+        let (st, now) = (state.clone(), now_ms());
+        let _ = pod.blocking(move |s| db::save(s, &st, &[], now)).await;
+        pod.publish_data_all(crate::NAME);
+    }
+    Ok(())
+}
+
 /// Apply what an answer owes: notifications in the owner layout, then the
 /// task rows. `seq` names the answer for dedupe keys.
 pub async fn settle(pod: &Pod, effects: Vec<Effect>, seq: i64) {
@@ -183,6 +214,8 @@ async fn follow(weak: &Weak<AppState>, ctl: &Ctl, runner: &Runner, generation: u
         let _ = pod.blocking(move |s| db::save(s, &st, &[], now)).await;
         pod.publish_data_all(crate::NAME);
         settle(&pod, effects, state.cursor).await;
+    } else if let Err(e) = refresh_setup(weak, changed, &clients, runner, &mut state).await {
+        return e;
     }
 
     let mut resp = match cap::open_stream(&clients, runner, state.cursor).await {
@@ -204,6 +237,8 @@ async fn follow(weak: &Weak<AppState>, ctl: &Ctl, runner: &Runner, generation: u
     let mut parser = SseParser::default();
     let mut tick = tokio::time::interval(tasks_every);
     tick.tick().await;
+    let mut setup =
+        tokio::time::interval_at(tokio::time::Instant::now() + SNAPSHOT_AFTER, SNAPSHOT_AFTER);
     loop {
         let mut launch = false;
         tokio::select! {
@@ -259,6 +294,11 @@ async fn follow(weak: &Weak<AppState>, ctl: &Ctl, runner: &Runner, generation: u
                 }
             }
             _ = tick.tick() => launch = true,
+            _ = setup.tick() => {
+                if let Err(e) = refresh_setup(weak, changed, &clients, runner, &mut state).await {
+                    return e;
+                }
+            }
             got = data_rx.recv() => match got {
                 Ok(ev) => launch = ev.source == app_collections::NAME,
                 Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => launch = true,

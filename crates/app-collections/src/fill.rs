@@ -583,6 +583,7 @@ impl Stored {
 }
 
 fn hard_delete(tx: &Connection, collection: &str, id: &str) -> rusqlite::Result<()> {
+    db::note_change(tx, collection, id)?;
     tx.execute(
         "DELETE FROM collections_rows WHERE collection = ?1 AND id = ?2",
         params![collection, id],
@@ -1433,11 +1434,17 @@ async fn fill_details(
                         db::save_row(tx, &d2.name, &r)?;
                     }
                 }
-                Ok(jobs)
+                Ok((jobs, crate::follow::settle(tx, now, caps)?))
             })
         })
         .await;
-    stored.unwrap_or_default()
+    match stored {
+        Ok((jobs, followed)) => {
+            followed.finish(pod);
+            jobs
+        }
+        Err(_) => Vec::new(),
+    }
 }
 
 /// Fill `filler_id` of `collection` now. `force`: refetch even when the
@@ -1627,10 +1634,14 @@ pub async fn fill(pod: &Pod, collection: &str, filler_id: &str, force: bool) -> 
                                 out.unchanged += 1;
                             }
                         }
-                        Ok((out, jobs))
+                        Ok((out, jobs, crate::follow::settle(tx, now, caps)?))
                     })
                 })
-                .await;
+                .await
+                .map(|(out, jobs, followed)| {
+                    followed.finish(pod);
+                    (out, jobs)
+                });
             match stored {
                 Ok((stored, jobs)) if failed.is_empty() || any_page => {
                     st.failures = 0;

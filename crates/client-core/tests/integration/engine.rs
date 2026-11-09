@@ -871,3 +871,34 @@ fn mutate_dispatch_to_notify_latency() {
     assert_eq!(engine.snapshot().pending_actions, 50);
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// A tap that shows its result at once (`action.local.set`) and then
+/// writes (a create the pod hasn't taken yet): a refetch meanwhile answers
+/// what the pod had before, and must not put the old value back.
+#[test]
+fn a_local_set_survives_loads_that_cannot_know_of_it() {
+    let base = serve_fixture();
+    let dir = temp_dir("local-set-held");
+    let engine = ConstructEngine::init(dir.to_str().unwrap(), &base);
+    let rx = subscribe_channel(&engine);
+    assert_eq!(count(&wait_online(&rx)), 0);
+
+    engine.dispatch(
+        &serde_json::json!({ "intent": "action.sequence", "steps": [
+            { "intent": "action.local.set", "entity_uri": "core://counters/home",
+              "field": "count", "value_expr": "7" },
+            { "intent": "action.mutation.create", "query_key": "counter:notes",
+              "entity_uri": "core://notes/pending-1", "entity": { "text": "seven" },
+              "endpoint": "/v1/notes/create", "payload": { "client_id": "1" } }
+        ]})
+        .to_string(),
+    );
+    assert_eq!(count(&engine.snapshot()), 7);
+    // The fixture pod refuses writes for now (503): the create stays in
+    // the outbox, and a refetch brings the old count.
+    engine.refresh();
+    let snap = engine.snapshot();
+    assert_eq!(snap.pending_actions, 1);
+    assert_eq!(count(&snap), 7, "a stale load undid the local set");
+    let _ = std::fs::remove_dir_all(&dir);
+}

@@ -27,14 +27,20 @@ must show the user (the count and the sample) before calling again with its conf
 can be undone with undo_edit. delete_collection deletes a collection the user no longer wants once no layout \
 shows it (restore_collection brings it back for 30 days). Any field may be computed from the row's other fields \
 whenever they change: compute: {kind: \"expr\", expr} evaluates a small expression at once (entity.<field>, \
-literals, + joins text or adds numbers, -, !, c ? a : b, parentheses); compute: {kind: \"lookup\", from, \
+entity.id (the row's id), literals, + joins text or adds numbers, -, !, c ? a : b, parentheses); compute: {kind: \"lookup\", from, \
 collection, key, value, match: exact|contains|regex, learn?} takes the value of the best matching row of \
-another collection, kept as editable rules (the longest key wins); and compute: {kind: \"model\", from: \
+another collection, kept as editable rules (the longest key wins, then the oldest row); value: \"id\" \
+answers that row's id instead (a text field, no learn), e.g. to delete the matching row with \
+/v1/collections/<collection>/delete {id}; compute: {kind: \"count\", from, \
+collection, key, where?: [{field, equals}]} (a number field) counts the rows of another collection whose key \
+equals this row's from and that match every condition; and compute: {kind: \"model\", from: \
 [fields], prompt} has a model answer the prompt about those fields in the background (a choice answers one \
 of its options; each input is asked once, and a value set by hand is kept and remembered for that input). \
 compute may be a list tried in order, e.g. [lookup with learn: true, model]: rules first, the model only \
-when none matches, and its answers (and hand edits) are added as rules. After editing rules, apply_change \
-{op: recompute_field} computes the field again for every row. \
+when none matches, and its answers (and hand edits) are added as rules. Lookups and counts are live: \
+when rows of the collection they read are added, changed, deleted or restored, the rows whose answer could \
+change are computed again at once (and that cascades, so a count's where may name a lookup field of the \
+collection it counts). apply_change {op: recompute_field} computes a field again for every row. \
 order_by may list several fields ([\"section\", \"done\"]; a choice sorts by the order of its options). \
 A collection can remind the user: apply_change {op: add_reminder, field: <a date field>, title: \"Due today: \
 {title}\", unless: {field: \"done\", equals: true}, at?: \"09:00\"} sends a notification from the app showing \
@@ -59,7 +65,18 @@ when one is failing or finds nothing. An API key goes in with collections_set_se
 header value \"{secret:<name>}\", only to that host; ask the user for it and never repeat it. The Events app (app events) \
 shows the collection events: to watch a website for events, add a filler there (extract events, map \
 {source_id: id, title: title, start: start, end: end, venue: venue, url: url, tickets_url: tickets_url}, \
-key source_id, upcoming start, every_minutes 360) and alerts for what the user wants to hear about.";
+key source_id, upcoming start, every_minutes 360) and alerts for what the user wants to hear about. \
+Rows can point at rows: a field {type: \"ref\", collection} holds the id of a row of that collection (write an id or \
+{\"<unique field>\": value}; a layout reads through it with ${collections://<collection>/$item.<ref>#<field>}), and \
+unique: true keeps a text or ref field unique. compute {kind: \"lookup\", via: <ref field>, value} reads a field of the \
+row a ref points at; {kind: \"rollup\", collection, via, op: count|sum|min|max|any|list, field?, where?} aggregates \
+the rows of another collection whose ref via points at this row (prefer it to count). A field {type: \"quantity\"} \
+holds an amount and a unit parsed from text (\"1 1/2 cups\"), served also as <name>_text; a rollup sum adds \
+quantities, converting units. An action (define_collection actions, apply_change set_action) is a named \
+insert-from-query: for each row of a source collection matching where, it finds or creates a row of this collection \
+by match and adds a child row to another collection (or, with delete: true, deletes the rows of this collection \
+matching where, e.g. a grocery list's \"Clear bag\"); run it with run_action, or from a layout with \
+action.mutation.optimistic posting to /v1/collections/<collection>/actions/<action>; undo_edit reverts a call.";
 
 fn tool(name: &str, description: &str, properties: Value, required: &[&str]) -> Value {
     json!({
@@ -73,17 +90,26 @@ pub fn tools() -> Vec<Value> {
     let collection = json!({ "type": "string", "description": "A collection's name" });
     let note = json!({ "type": "string", "description": "What changed, in the user's words (shown in the history)" });
     let kind = json!({ "type": "object",
-        "properties": { "kind": { "type": "string", "enum": ["expr", "lookup", "model"] }, "expr": { "type": "string" },
+        "properties": { "kind": { "type": "string", "enum": ["expr", "lookup", "count", "rollup", "model"] }, "expr": { "type": "string" },
+            "via": { "type": "string", "description": "lookup: a ref field of this collection (read the row it points at); rollup: the ref field of the rolled-up collection that points at this collection" },
+            "op": { "type": "string", "enum": model::RollupOp::ALL, "description": "rollup: what it computes" },
+            "field": { "type": "string", "description": "rollup: the field of the rolled-up rows (sum, min, max, list)" },
             "from": { "anyOf": [{ "type": "string" }, { "type": "array", "items": { "type": "string" } }] },
             "prompt": { "type": "string" }, "collection": { "type": "string" }, "key": { "type": "string" },
             "value": { "type": "string" }, "match": { "type": "string", "enum": model::Match::ALL },
-            "learn": { "type": "boolean" } }, "required": ["kind"] });
+            "learn": { "type": "boolean" },
+            "where": { "description": "count, rollup: conditions every counted row matches, {field, equals} or a list of them",
+                "anyOf": [{ "type": "object" }, { "type": "array", "items": { "type": "object",
+                    "properties": { "field": { "type": "string" }, "equals": { "type": ["string", "number", "boolean"] } },
+                    "required": ["field", "equals"] } }] } }, "required": ["kind"] });
     let compute = json!({
-        "description": "The pod computes the value from the row's other fields (not from other computed fields), again whenever they change; a value written by hand stays until they change. One kind, or a list of kinds tried in order (the first with an answer wins; a model is last). kind \"lookup\": {kind, from: field, collection, key, value, match?: exact (the default; ignores case and spacing) | contains (the key's whole words, ignoring case) | regex (case-insensitive, at most 200 characters; an invalid one is skipped and listed by describe_collection), learn?}: the value field of the row of another collection whose key (a text field) matches this row's from field, the longest matching key winning; evaluated in the write; not recomputed when the rules change (apply_change recompute_field does). learn: true adds a rule (key: the input, lowercase with spaces collapsed; for match regex, that text escaped and anchored) when a later kind (the model) answers, and a hand edit of the field adds or changes that rule. Example: [{kind: \"lookup\", from: \"name\", collection: \"section_rules\", key: \"pattern\", value: \"section\", match: \"contains\", learn: true}, {kind: \"model\", from: \"name\", prompt: \"...\"}]. kind \"expr\": {kind, expr}, e.g. \"entity.quantity ? entity.name + \\\" (\\\" + entity.quantity + \\\")\\\" : entity.name\" (entity.<field>, JSON literals, + joins text or adds numbers, -, !, c ? a : b, parentheses; an empty value is \"\" or 0 and false in a condition), evaluated in the write. kind \"model\": {kind, from: field or [fields], prompt}, e.g. {from: \"name\", prompt: \"Which grocery store section is this item in?\"}: a model answers in the background (a choice: one of its options; text: trimmed), each input once; a value set by hand is remembered as the answer for that input. Needs optional or a default (what the row reads until computed). null: stop computing.",
+        "description": "The pod computes the value from the row's other fields (not from its other computed fields; a lookup or count may read computed fields of the collection it reads), again whenever they change; a value written by hand stays until they change (for a lookup or count, also until the rows it reads change). One kind, or a list of kinds tried in order (the first with an answer wins; a model is last). kind \"lookup\": {kind, from: field, collection, key, value, match?: exact (the default; ignores case and spacing) | contains (the key's whole words, ignoring case) | regex (case-insensitive, at most 200 characters; an invalid one is skipped and listed by describe_collection), learn?}: the value field of the row of another collection whose key (a text field) matches this row's from field, the longest matching key winning, then the oldest row (deleted rows never match); value may be \"id\" (the only system name allowed), which answers the matched row's id as text (the field must be text; no learn), so a button can act on that row (e.g. delete it); evaluated in the write, and live: when a row of that collection is added, changed (its key or value), deleted or restored, the rows whose from matched its key before or after are computed again at once. learn: true adds a rule (key: the input, lowercase with spaces collapsed; for match regex, that text escaped and anchored) when a later kind (the model) answers, and a hand edit of the field adds or changes that rule. Example: [{kind: \"lookup\", from: \"name\", collection: \"section_rules\", key: \"pattern\", value: \"section\", match: \"contains\", learn: true}, {kind: \"model\", from: \"name\", prompt: \"...\"}]. A lookup through a ref: {kind: \"lookup\", via: <a ref field of this collection>, value: <a field of the collection it points at, or \"id\">} (no from, collection, key, match or learn): the value of the row the ref points at (empty while the ref is empty or that row is deleted; it comes back on restore); the field's type is the value's type (or text); live: computed again when the ref changes and when that row's value changes, is deleted or restored. Example: recipe_lines.favorite = {kind: \"lookup\", via: \"meal\", value: \"favorite\"}. kind \"rollup\": {kind, collection, via, op, field?, where?: [{field, equals}]}: aggregates the live rows of another collection whose ref field via points at this row and that match every condition (as count's where; conditions may name computed fields of that collection, e.g. a lookup through a ref): op count (a number field: how many), any (a bool field: whether there is one), sum (field: a number field into a number field, or a quantity field into a quantity field; quantities of one dimension convert and add, e.g. 2 cups + 1 tbsp = 2 1/16 cups, other units stay separate parts, e.g. 2 cups + 3 cloves; text that didn't parse as a quantity is left out), min or max (field: a number field, into a number field), list (field: any field, into a text field: the distinct values as text in row order, joined by \", \"). With no rows: count 0, any false, a number sum 0, the others empty (the field's default). The field's only kind; live (computed again when those rows are added, deleted, restored or change their via, field or a where field). Prefer it to count for new fields. Examples: ingredients.favorite_count = {kind: \"rollup\", collection: \"recipe_lines\", via: \"ingredient\", op: \"count\", where: [{field: \"favorite\", equals: true}]}; groceries.total = {kind: \"rollup\", collection: \"grocery_entries\", via: \"grocery\", op: \"sum\", field: \"quantity\"}. kind \"count\": {kind, from: field, collection, key, where?: [{field, equals}]}: the number of live rows of another collection whose key equals this row's from field (ignoring case and spacing) and that match every condition (a field of that collection, computed ones too, whose value as text equals equals: \"true\", \"false\", a number or text; not blank); a number field's only kind; live like a lookup (computed again when those rows are added, deleted, restored or change their key or a where field, and when from changes). Example: {kind: \"count\", from: \"name\", collection: \"meal_ingredients\", key: \"item\", where: [{field: \"favorite\", equals: true}]}. A change cascades through lookups and counts (a few levels deep; a cycle stops). kind \"expr\": {kind, expr}, e.g. \"entity.quantity ? entity.name + \\\" (\\\" + entity.quantity + \\\")\\\" : entity.name\" (entity.<field>, entity.id: the row's own id, JSON literals, + joins text or adds numbers, -, !, c ? a : b, parentheses; an empty value is \"\" or 0 and false in a condition), evaluated in the write. kind \"model\": {kind, from: field or [fields], prompt}, e.g. {from: \"name\", prompt: \"Which grocery store section is this item in?\"}: a model answers in the background (a choice: one of its options; text: trimmed), each input once; a value set by hand is remembered as the answer for that input. Needs optional or a default (what the row reads until computed). null: stop computing.",
         "anyOf": [kind, { "type": "array", "items": kind }, { "type": "null" }] });
-    let field = json!({ "type": "object", "description": "{name, type: text|number|bool|date|datetime|choice, options? (choice), optional?, default?, compute?}",
+    let field = json!({ "type": "object", "description": "{name, type: text|number|bool|date|datetime|choice|ref|quantity, options? (choice), collection? (ref), unique?, optional?, default?, compute?}. type \"ref\" with collection: <name>: holds the id of a live row of that collection; a write gives the id (a row's id field) or {\"<a unique field of that collection>\": value} (e.g. {\"name\": \"Chicken broth\"}, matched ignoring case and spacing), and an id that names no live row is refused; a ref has no default; served as the id; a layout reads the row's fields with ${collections://<collection>/$item.<ref>#<field>} (that collection must be one of the layout's feeds); when the row is deleted the ref keeps its id (reading through it shows nothing) and a restore heals it. unique: true (text or ref, not computed): no two live rows share a value (text ignoring case and spacing); a create, update or restore that would is refused, and making a field unique fails while rows share a value (the error lists them). type \"quantity\": an amount and a unit; write text (\"1 1/2 cups\", \"2 tbsp\", \"3\", \"1 (14 oz) can\", \"1/4 cup plus 2 tbsp\", \"a pinch\", \"2-3 cloves\" (the upper end), \"½ cup\"), a number (a count) or {amount, unit} (or a list of those); it is stored as {amount, unit} (unit canonical: tsp, tbsp, fl oz, cup, pint, quart, ml, l, g, kg, oz, lb, clove, can, slice, bunch, large, medium, small, piece, pinch, dash, \"\" for a plain count, or any other single word, singular), or kept as the text when it doesn't parse (\"to taste\": shown as is, left out of sums; describe_collection counts these); served also as <name>_text (\"1 1/2 cups\", \"2 cups + 3 cloves\"): bind that to show it.",
         "properties": { "name": { "type": "string" }, "type": { "type": "string", "enum": model::Kind::ALL },
             "options": { "type": "array", "items": { "type": "string" } }, "optional": { "type": "boolean" }, "default": {},
+            "collection": { "type": "string", "description": "ref: the collection it points at" },
+            "unique": { "type": "boolean", "description": "text or ref: no two live rows share a value" },
             "compute": compute },
         "required": ["name", "type"] });
     let order = json!({ "description": "A field, or a list of fields (first key first), rows are listed by (else oldest first). A choice sorts by the order of its options; empty values last.",
@@ -92,6 +118,8 @@ pub fn tools() -> Vec<Value> {
         "description": "A filler: what keeps rows current from the web (decision collection-fillers); each writes only its own rows. kind \"fetch\" (a recipe, no model call per fill): {kind, title?, url (one page) | url_field (a text field holding each row's own page; that row is filled from it), extract: events (an ics feed or a page's schema.org events: items {id, title, start, end, venue, description, url, tickets_url}) | json | embedded-json (a page's <script id=script, default __NEXT_DATA__>) | jsonld (schema.org objects of types, e.g. [\"Product\"]) | rss (items {title, link, description, published, updated, id, author, category}) | ics (VEVENT properties lowercase: summary, dtstart, location, ...) | selectors (CSS) | llm (a model reads each changed page's text: fields? [names] and hint? instead of map), items? (json/embedded-json: a path to the list; selectors: a CSS selector per item), types?, script?, zone? (IANA, for times without an offset), map: {field: path} (paths: a.b, a[0], a[*]; a list key is looked into, so offers.price works; selectors: a CSS selector inside the item, sel@attr for an attribute, @attr for the item's own), headers? {name: value, value may be \"Bearer {secret:<name>}\"}, details? {link: a mapped field with the row's page, extract, types?, map: {field: path} (fields not in map), text?: a field for the page's text when nothing is found}: read each new row's own page}. kind \"agent\" (a model with web search and fetch answers the rows; costs model calls): {kind, title?, prompt, fields? (default every field that isn't computed), max_searches? (default 5, at most 20), max_fetches? (default 10, at most 30), fills_per_day? (default 4)}. Both: mode? replace (default: its rows are the latest answer; rows it no longer lists are deleted; they can't be added or deleted by hand) | upsert (adds and updates rows by key, keeps others; people may add rows), key? (a mapped field identifying a row; with replace, rows keep their ids and unfilled fields), upcoming? (a mapped date or datetime field: past items are left out), every_minutes? (fetch: 15..10080; agent: 60..10080), on_open_minutes? (1..1440: fill when an app showing it opens and the last fill is older). Values are coerced to the fields' types (prices like \"$1,299\" and feed dates are read); a value that doesn't fit is skipped. Filled fields can't be set by hand." });
     let alert = json!({ "type": "object",
         "description": "An alert: notify once when a row matches. {name?, any?: [phrases] (one must appear), all?: [phrases], none?: [phrases], fields?: [text fields searched; default all text fields], filler?: a filler id (only its rows), days?: [mon..sun], within_days?, date_field? (default the first date or datetime field; past rows stop matching), title?, body? (templates: {field}, {start_text}, {alert}, {filler}), label?, app?}" });
+    let action = json!({ "type": "object",
+        "description": "An insert-from-query action of this collection (the parent): {name ([a-z][a-z0-9_]*), title?, params?: [{name, type: text|number|ref, collection? (ref), optional?}], source: {collection, where?: [{field, equals} | {field, empty: true|false}]}, scale?: {times, per}, match: {<field of this collection>: value}, create?: {<field>: value}, update?: {<field>: value}, reset_when?: [{field, equals} | {field, empty}], child?: {collection, values: {<field of the child collection>: value | {from: value, scaled: true}}}}. A value is a literal (a string starting with $ as {value: \"...\"}) or a binding: \"$param.<name>\" (a call's parameter: text; a number; a ref param is given as a row id or {\"<unique field>\": value} and binds the id), \"$row.<field>\" (the source row; through refs \"$row.<ref>.<field>\", up to 4 names; \"$row.id\", \"$row.<ref>.id\") and, only in child.values, \"$parent.id\" or \"$parent.<field>\". A call: for each live row of source.collection matching every where condition (equals compares as text ignoring case and spacing, a ref by its id; empty: false keeps rows where the field has a value), in that collection's order: the match values are computed (a row with an empty match value is skipped and reported); the live row of this collection whose match fields all equal them is found (the oldest, also one made earlier in the same call), else created with match and create values; a found row first, when it matches every reset_when condition, has its children deleted (the child rows whose $parent.id field points at it; once per call), then gets the update values (once per call). Then, with child, a row of child.collection is added with child.values; exactly one of them is a ref field to this collection set to \"$parent.id\". A value with scaled: true (a number or quantity field) is multiplied by scale.times / scale.per when both read as numbers above 0 (a number, a quantity's amount, or the first number in text such as \"Serves 4\"), else by 1; text read into a quantity field is parsed first, and text that doesn't parse is added unscaled and listed in the answer's unparsed. Fields required without a default must be given (match or create for a parent; child.values for a child). A delete action {name, title?, params?, source: {collection: <this collection>, where?}, delete: true} (the only action whose source is its own collection; no match, create, update, reset_when, scale or child) instead deletes every live row of this collection matching where, as a row delete does (restorable; lookups, counts and rollups that read the collection follow), e.g. {name: \"clear_bag\", title: \"Clear the bag\", source: {collection: \"groceries\", where: [{field: \"done\", equals: true}]}, delete: true}. Every call is one edit across both collections (undo_edit reverts it: rows it made are deleted, rows it changed or deleted come back, rows changed since are left alone and listed; computed totals follow). Example (grocery list from recipe lines; on groceries): {name: \"add_recipe\", title: \"Add a recipe to groceries\", params: [{name: \"meal\", type: \"ref\", collection: \"meals\"}, {name: \"servings\", type: \"number\", optional: true}], source: {collection: \"recipe_lines\", where: [{field: \"meal\", equals: \"$param.meal\"}, {field: \"ingredient\", empty: false}]}, scale: {times: \"$param.servings\", per: \"$row.meal.servings\"}, match: {ingredient: \"$row.ingredient\"}, create: {name: \"$row.ingredient.name\", done: false}, update: {done: false}, reset_when: [{field: \"done\", equals: true}], child: {collection: \"grocery_entries\", values: {grocery: \"$parent.id\", quantity: {from: \"$row.amount\", scaled: true}, recipe: \"$row.meal\"}}}. Run it with run_action, or from a layout: {intent: \"action.mutation.optimistic\", entity_uri: \"$item.uri\", field: \"adding\", value_expr: \"true\", endpoint: \"/v1/collections/<collection>/actions/<name>\", payload: {<param>: \"$item.id\" or \"$form?.<field>\", client_id: \"$nonce\"}} (field is a view flag on the device only; the payload's keys must be params or client_id; a repeated client_id is applied once; the new rows arrive through the feed)." });
     let apps = json!({ "type": "array", "description": "Custom app layouts that change with it: [{app, layout | json_patch, base_version?, note?}]",
         "items": { "type": "object", "properties": { "app": { "type": "string" }, "layout": { "type": "object" },
             "json_patch": { "type": "array", "items": { "type": "object" } }, "base_version": { "type": "integer" }, "note": { "type": "string" } },
@@ -105,25 +133,26 @@ pub fn tools() -> Vec<Value> {
         ),
         tool(
             "define_collection",
-            "Declare a new collection (name [a-z][a-z0-9_]*, permanent) with typed fields. Custom apps then use it as a feed [\"collections\", name].",
+            "Declare a new collection (name [a-z][a-z0-9_]*, permanent) with typed fields. Custom apps then use it as a feed [\"collections\", name]. Define the collections a ref, lookup, rollup or action names first (a rollup's via is a ref of the other collection pointing at this one, so add the rollup with apply_change after both exist).",
             json!({ "name": collection, "title": { "type": "string" },
                     "fields": { "type": "array", "items": field },
                     "order_by": order,
                     "descending": { "type": "boolean" },
                     "fillers": { "type": "array", "items": filler.clone() },
                     "alerts": { "type": "array", "items": alert },
+                    "actions": { "type": "array", "items": action.clone() },
                     "note": note }),
             &["name", "fields"],
         ),
         tool(
             "describe_collection",
-            "A collection's definition (live and removed fields, aliases), version history, row count, values kept aside, recent row edits, the apps using it, and layout snippets for listing, adding, ticking and deleting rows.",
+            "A collection's definition (live and removed fields, aliases, actions with their endpoints), version history, row count, values kept aside, quantity values that didn't parse (quantities: {field, unparsed, samples}), recent row edits and action calls, the apps using it, and layout snippets for listing, adding, ticking and deleting rows.",
             json!({ "collection": collection, "version": { "type": "integer", "description": "An older definition version" } }),
             &["collection"],
         ),
         tool(
             "apply_change",
-            "Change a collection's definition and the custom apps that show it in one step. changes: [{op: add_field, name, type, options?, optional?, default?, compute?} | {op: rename_field, field, to} | {op: remove_field, field} | {op: restore_field, field} | {op: update_field, field, type?, options?, optional?, default?, compute?} | {op: recompute_field, field} | {op: set_order, field?: name or [names], descending?} | {op: set_title, title} | {op: add_reminder, field, title, body?, at?, unless?, label?, app?} | {op: update_reminder, reminder: id, ...} | {op: remove_reminder, reminder: id} | {op: set_filler, filler} | {op: remove_filler, filler: id} | {op: add_alert, ...} | {op: update_alert, alert: id, ...} | {op: remove_alert, alert: id}]. set_filler adds a filler (as define_collection's fillers), or changes the one filler.id names, and starts its fill; remove_filler stops one (its rows stay, no longer locked; its alerts go). add_alert notifies once per row when a row matches (as define_collection's alerts). describe_collection lists fillers and alerts with their ids. A reminder notifies the user once per row when its date field is reached: on that date at at (HH:MM, default 09:00) in the pod's time zone (set_time_zone), unless the row then has unless {field, equals} (e.g. {field: \"done\", equals: true}); dates before the day it was added never notify, and a reminder more than 7 days late is dropped. title and body are the notification's text with {field} replaced by the row's value; label names it in the user's notification settings (default \"<Title>: <field>\"); app (a custom app id) is the app it comes from and opens, default the oldest custom app with the collection as a feed (with none, nothing is sent). describe_collection lists reminders with their ids. compute (one kind or a list tried in order: {kind: \"expr\", expr}, {kind: \"lookup\", from, collection, key, value, match?, learn?} or {kind: \"model\", from, prompt}, as in define_collection) is computed for existing rows too (a model only fills empty ones); null stops computing and keeps the values. A lookup is not recomputed when its rules change: after editing them, recompute_field computes the field again for every row (a row only the model could answer keeps its value). Every custom app using Collections is checked against the new definition; if any would break, nothing applies and the error names the app and the binding. Renamed fields keep their old name as an alias; removed fields are hidden and restorable for 30 days; type changes convert row by row and keep values that don't convert aside.",
+            "Change a collection's definition and the custom apps that show it in one step. changes: [{op: add_field, name, type, options?, collection?, unique?, optional?, default?, compute?} | {op: rename_field, field, to} | {op: remove_field, field} | {op: restore_field, field} | {op: update_field, field, type?, options?, collection?, unique?, optional?, default?, compute?} | {op: set_action, action} | {op: remove_action, action: name} | {op: recompute_field, field} | {op: set_order, field?: name or [names], descending?} | {op: set_title, title} | {op: add_reminder, field, title, body?, at?, unless?, label?, app?} | {op: update_reminder, reminder: id, ...} | {op: remove_reminder, reminder: id} | {op: set_filler, filler} | {op: remove_filler, filler: id} | {op: add_alert, ...} | {op: update_alert, alert: id, ...} | {op: remove_alert, alert: id}]. set_filler adds a filler (as define_collection's fillers), or changes the one filler.id names, and starts its fill; remove_filler stops one (its rows stay, no longer locked; its alerts go). add_alert notifies once per row when a row matches (as define_collection's alerts). describe_collection lists fillers and alerts with their ids. A reminder notifies the user once per row when its date field is reached: on that date at at (HH:MM, default 09:00) in the pod's time zone (set_time_zone), unless the row then has unless {field, equals} (e.g. {field: \"done\", equals: true}); dates before the day it was added never notify, and a reminder more than 7 days late is dropped. title and body are the notification's text with {field} replaced by the row's value; label names it in the user's notification settings (default \"<Title>: <field>\"); app (a custom app id) is the app it comes from and opens, default the oldest custom app with the collection as a feed (with none, nothing is sent). describe_collection lists reminders with their ids. compute (one kind or a list tried in order: {kind: \"expr\", expr}, {kind: \"lookup\", from, collection, key, value, match?, learn?}, {kind: \"count\", from, collection, key, where?} or {kind: \"model\", from, prompt}, as in define_collection) is computed for existing rows too (a model only fills empty ones); null stops computing and keeps the values. Lookups and counts are live: a change to the rows of the collection they read recomputes the rows it affects at once, cascading. recompute_field computes the field again for every row (a row only the model could answer keeps its value), e.g. after changing a lookup's match. Fields and actions are as in define_collection. update_field {type: \"ref\", collection} turns a text field into a ref: each value becomes the id of the row of that collection whose id or unique text field equals it (ignoring case and spacing; make the target's name field unique first); values that match no row are kept aside and reported in conversions (set_aside, samples). unique: true fails while live rows share a value (the error lists them). set_action adds an action or replaces the one of that name; remove_action removes it. A collection can't be deleted while another collection's ref, lookup, count, rollup or action names it. Every custom app using Collections is checked against the new definition; if any would break, nothing applies and the error names the app and the binding. Renamed fields keep their old name as an alias; removed fields are hidden and restorable for 30 days; type changes convert row by row and keep values that don't convert aside.",
             json!({ "collection": collection, "base_version": { "type": "integer", "description": "The definition version you read" },
                     "changes": { "type": "array", "items": { "type": "object" } }, "apps": apps, "note": note }),
             &["collection", "changes"],
@@ -136,7 +165,7 @@ pub fn tools() -> Vec<Value> {
         ),
         tool(
             "delete_collection",
-            "Delete a collection: its definition, rows, fillers, alerts and reminders. Only when the user asked for it. Refused while a layout binds it or another collection's lookup reads it (the error names them: change those first). Drops it from home's feeds. Restorable with restore_collection for 30 days, then purged.",
+            "Delete a collection: its definition, rows, fillers, alerts and reminders. Only when the user asked for it. Refused while a layout binds it or another collection's lookup or count reads it (the error names them: change those first). Drops it from home's feeds. Restorable with restore_collection for 30 days, then purged.",
             json!({ "collection": collection, "base_version": { "type": "integer", "description": "The definition version you read" } }),
             &["collection"],
         ),
@@ -148,7 +177,7 @@ pub fn tools() -> Vec<Value> {
         ),
         tool(
             "edit_rows",
-            "Change rows directly, for imports, backfills and conversions: edits [{op: create, values: {field: value}} | {op: update, id, values} | {op: delete, id} | {op: restore, id}]. The first call answers a preview (count and sample) and a confirm token and changes nothing: show the preview to the user, and only after they agree call again with the same edits and confirm. Undo with undo_edit.",
+            "Change rows directly, for imports, backfills and conversions: edits [{op: create, values: {field: value}} | {op: update, id, values} | {op: delete, id} | {op: restore, id}]. A ref value is a row id or {\"<unique field>\": value} of its collection; a quantity value is text (\"1 1/2 cups\") or {amount, unit}; a unique field refuses a value another live row has. The first call answers a preview (count and sample) and a confirm token and changes nothing: show the preview to the user, and only after they agree call again with the same edits and confirm. Undo with undo_edit.",
             json!({ "collection": collection, "edits": { "type": "array", "items": { "type": "object" } },
                     "note": note, "confirm": { "type": "string", "description": "The token of the preview the user agreed to" } }),
             &["collection", "edits"],
@@ -160,8 +189,15 @@ pub fn tools() -> Vec<Value> {
             &["collection", "values"],
         ),
         tool(
+            "run_action",
+            "Run an insert-from-query action of a collection now (describe_collection lists them; see define_collection actions): params {<param>: value} (a ref param: a row id or {\"<unique field>\": value}). Written at once, no preview: run it when the user asked for it (\"add the lasagna to my groceries for 6\"). Answers {edit (for undo_edit), rows (source rows read), created (parents made), updated (parents changed), reset (children deleted by reset_when), added (children made), deleted (rows a delete action deleted), parents (their ids), skipped [{row, reason}], unparsed [{row, field, value}] (quantity text that didn't parse, added unscaled)}.",
+            json!({ "collection": collection, "action": { "type": "string", "description": "The action's name" },
+                    "params": { "type": "object", "description": "{param: value}" }, "note": note }),
+            &["collection", "action"],
+        ),
+        tool(
             "undo_edit",
-            "Undo one edit_rows or add_row edit as one step (rows changed since are left alone and reported).",
+            "Undo one edit_rows, add_row or run_action edit as one step (rows it made are deleted, rows it changed or deleted come back; rows changed since are left alone and reported; fields that follow other rows, such as rollups, don't count as changes).",
             json!({ "edit": { "type": "string", "description": "The edit id edit_rows answered" } }),
             &["edit"],
         ),
@@ -226,6 +262,7 @@ pub fn call<'a>(
         "edit_rows" => Box::pin(edit_rows(pod, caps, args)),
         "add_row" => Box::pin(add_row(pod, caps, args)),
         "undo_edit" => Box::pin(undo_edit(pod, args)),
+        "run_action" => Box::pin(run_action(pod, args)),
         "export_collection" => Box::pin(export(pod, args)),
         _ => return None,
     })
@@ -349,6 +386,7 @@ async fn define(pod: &Pod, adapter: &CollectionsAdapter, args: &Value) -> Result
         fillers: Vec::new(),
         alerts: Vec::new(),
         system: None,
+        actions: Vec::new(),
         order_by: Vec::new(),
         descending: args["descending"].as_bool().unwrap_or(false),
     };
@@ -390,6 +428,16 @@ async fn define(pod: &Pod, adapter: &CollectionsAdapter, args: &Value) -> Result
             crate::alerts::add(&mut def, spec, pod_core::util::now_secs()).map_err(
                 |e| json!({ "error": "invalid_alert", "at": format!("/alerts/{i}"), "detail": e, "status": 400 }),
             )?;
+        }
+    }
+    if let Some(Value::Array(a)) = args.get("actions") {
+        let mut with_self = others.clone();
+        with_self.insert(def.name.clone(), def.clone());
+        for (i, spec) in a.iter().enumerate() {
+            let action = crate::actions::parse(&def, spec, &with_self).map_err(
+                |e| json!({ "error": "invalid_action", "at": format!("/actions/{i}"), "detail": e, "status": 400 }),
+            )?;
+            def.actions.push(action);
         }
     }
     model::check_definition(&def, caps.fields)
@@ -553,6 +601,8 @@ async fn describe(pod: &Pod, args: &Value) -> Result<Value, Value> {
                     .filter_map(|(f, n)| def.by_id(&f).filter(|x| x.computed()).map(|x| json!({ "field": x.name, "answers": n })))
                     .collect();
                 let lookups = crate::lookup::report(c, &def)?;
+                let quantities = quantity_report(c, &def)?;
+                let lookups = (lookups, quantities);
                 let others = db::defs_by_name(c)?;
                 let fill_state = crate::fill::states(c, &def)?;
                 Ok(Some((
@@ -572,7 +622,7 @@ async fn describe(pod: &Pod, args: &Value) -> Result<Value, Value> {
         latest,
         shown,
         rows,
-        (aside, computed, lookups, others, (live, fill_state)),
+        (aside, computed, (lookups, quantities), others, (live, fill_state)),
         history,
         edits,
         used_by,
@@ -592,12 +642,40 @@ async fn describe(pod: &Pod, args: &Value) -> Result<Value, Value> {
         "kept_aside": aside,
         "computed_answers": computed,
         "lookups": lookups,
+        "quantities": quantities,
         "history": history,
         "recent_edits": edits,
         "used_by": used_by,
         "fill": fill_health(pod, &live, &fill_state).await,
         "layout_hints": hints(&def),
     }))
+}
+
+/// For each quantity field of `def`: how many live rows hold text that
+/// didn't parse (left out of sums), with a few samples.
+fn quantity_report(c: &rusqlite::Connection, def: &Definition) -> rusqlite::Result<Vec<Value>> {
+    let fields: Vec<&model::Field> = def
+        .live_fields()
+        .filter(|f| f.kind == model::Kind::Quantity)
+        .collect();
+    if fields.is_empty() {
+        return Ok(Vec::new());
+    }
+    let rows = db::all_rows(c, &def.name, false)?;
+    Ok(fields
+        .iter()
+        .map(|f| {
+            let bad: Vec<Value> = rows
+                .iter()
+                .filter_map(|r| {
+                    let v = r.values.get(&f.id)?;
+                    crate::quantity::is_unparsed(v).then(|| json!({ "id": r.id, "value": v }))
+                })
+                .collect();
+            json!({ "field": f.name, "unparsed": bad.len(),
+                    "samples": bad.into_iter().take(5).collect::<Vec<_>>() })
+        })
+        .collect())
 }
 
 /// Every filler's health of `def` ([`crate::fill::health`]).
@@ -1070,6 +1148,11 @@ async fn commit(
                 conversions.push(db::convert_field(tx, &coll, f, version, now, caps.text_chars)?);
             }
         }
+        let dups = crate::refs::duplicates(tx, &def)?;
+        if !dups.is_empty() {
+            return Ok(Err(json!({ "error": "not_unique", "status": 409, "duplicates": dups,
+                "detail": "a unique field would have rows sharing a value (listed in duplicates): change or delete those rows first" })));
+        }
         // The lookups were checked against the other collections as read
         // above; one changed meanwhile: refuse.
         if db::defs_by_name(tx)?
@@ -1201,7 +1284,7 @@ async fn restore_version(pod: &Pod, caps: crate::Caps, args: &Value) -> Result<V
 // ---------- deleting a collection ----------
 
 /// Delete collection `{collection}` (issue #107): refused while a layout
-/// binds it or another collection's lookup reads it; its feed leaves
+/// binds it or another collection's lookup or count reads it; its feed leaves
 /// home's; the data stays, hidden, for [`KEEP_SECS`].
 async fn delete(pod: &Pod, caps: Caps, args: &Value) -> Result<Value, Value> {
     let name = str_arg(args, "collection")?.to_owned();
@@ -1253,25 +1336,25 @@ async fn delete(pod: &Pod, caps: Caps, args: &Value) -> Result<Value, Value> {
             "detail": format!("layouts still show it: {}; remove it from them with update_layout first", titles.join(", ")) }),
         );
     }
-    let lookups: Vec<Value> = others
+    let mut lookups: Vec<Value> = others
         .values()
         .filter(|d| d.name != name)
         .flat_map(|d| {
             d.live_fields()
                 .filter(|f| {
-                    f.compute.iter().any(
-                        |c| matches!(c, model::Compute::Lookup { collection, .. } if *collection == name),
-                    )
+                    f.compute.iter().any(|c| c.reads() == Some(name.as_str()))
+                        || f.collection.as_deref() == Some(name.as_str())
                 })
                 .map(|f| json!({ "collection": d.name, "field": f.name }))
                 .collect::<Vec<_>>()
         })
         .collect();
+    lookups.extend(crate::actions::users_of(&others, &name));
     if !lookups.is_empty() {
         return Err(
             json!({ "error": "collection_in_use", "collection": name, "lookups": lookups,
             "status": 409,
-            "detail": "another collection's computed field looks rows up in it: change that field's compute with apply_change first" }),
+            "detail": "another collection's field points at it (a ref), computes from it (a lookup, count or rollup) or an action reads or adds its rows: change those with apply_change first" }),
         );
     }
     // Home's feed goes first: a layout naming a collection that doesn't
@@ -1453,6 +1536,10 @@ async fn edit(
                     deleted_at: None,
                     filler: None,
                 };
+                let values = match crate::refs::prepare_write(tx, &def, &values)? {
+                    Ok(v) => v,
+                    Err(d) => return invalid(d),
+                };
                 if let Err(d) = model::apply_write(&def, &mut row.values, &values, Write::Create, caps.text_chars) {
                     return invalid(d);
                 }
@@ -1478,6 +1565,10 @@ async fn edit(
                     if before.deleted_at.is_some() {
                         return invalid(format!("row '{id}' is deleted (restore it first)"));
                     }
+                    let values = match crate::refs::prepare_write(tx, &def, &values)? {
+                        Ok(v) => v,
+                        Err(d) => return invalid(d),
+                    };
                     if let Err(d) = model::apply_write(&def, &mut after.values, &values, Write::Update, caps.text_chars) {
                         return invalid(d);
                     }
@@ -1491,8 +1582,16 @@ async fn edit(
                 "delete" => "delete",
                 _ => "restore",
             };
+            let write = if op == "update" {
+                match crate::refs::prepare_write(tx, &def, &values)? {
+                    Ok(v) => v,
+                    Err(d) => return invalid(d),
+                }
+            } else {
+                Map::new()
+            };
             planned.push((op, id.to_owned(), Some(before), after));
-            writes.push(if op == "update" { values } else { Map::new() });
+            writes.push(write);
         }
         let token = hasher
             .finalize()
@@ -1560,6 +1659,12 @@ async fn edit(
                 )?);
             }
             let after = &*after;
+            if after.deleted_at.is_none()
+                && let Err(d) = crate::refs::check_unique(tx, &def, after)?
+            {
+                return Ok(Err(json!({ "error": "not_unique", "at": format!("/edits/{}", records.len()),
+                    "detail": d, "status": 409 })));
+            }
             if *op == "create" {
                 db::insert_row(tx, &name, after)?;
             } else {
@@ -1586,10 +1691,32 @@ async fn edit(
     Ok(out)
 }
 
+/// Run an insert-from-query action (decision `collection-primitives`):
+/// written at once, one edit that undo_edit reverts.
+async fn run_action(pod: &Pod, args: &Value) -> Result<Value, Value> {
+    let collection = str_arg(args, "collection")?.to_owned();
+    let action = str_arg(args, "action")?.to_owned();
+    let params = match &args["params"] {
+        Value::Null => Map::new(),
+        Value::Object(o) => o.clone(),
+        _ => return Err(bad("\"params\" is an object {param: value}")),
+    };
+    let note = args["note"]
+        .as_str()
+        .map(str::trim)
+        .filter(|n| !n.is_empty())
+        .map(str::to_owned);
+    let mut out = crate::run_action(pod, &collection, &action, params, note).await?;
+    if !out["edit"].is_null() {
+        out["undo"] = json!("undo_edit with this edit id reverts the whole call (for 30 days)");
+    }
+    Ok(out)
+}
+
 async fn undo_edit(pod: &Pod, args: &Value) -> Result<Value, Value> {
     let id = str_arg(args, "edit")?.to_owned();
     let out = refusable(pod, move |tx| {
-        let Some((collection, undone, rows)) = db::edit(tx, &id)? else {
+        let Some((_, undone, rows)) = db::edit(tx, &id)? else {
             return Ok(Err(
                 json!({ "error": "edit_not_found", "edit": id, "status": 404,
                 "detail": "edits can be undone for 30 days" }),
@@ -1601,23 +1728,34 @@ async fn undo_edit(pod: &Pod, args: &Value) -> Result<Value, Value> {
             ));
         }
         let now = pod_core::util::now_secs();
+        let defs = db::defs_by_name(tx)?;
         let (mut restored, mut skipped) = (0, Vec::new());
-        for (row_id, before, after) in rows {
-            let Some(mut row) = db::row(tx, &collection, &row_id)? else {
-                skipped.push(row_id);
+        // Children first (the reverse order), so a parent is undone last.
+        for r in rows.into_iter().rev() {
+            let collection = r.collection.clone();
+            let Some(mut row) = db::row(tx, &collection, &r.id)? else {
+                skipped.push(json!(r.id));
                 continue;
             };
-            if row.state() != after {
-                skipped.push(row_id);
+            let def = defs.get(&collection);
+            if own_state(def, &row.state()) != own_state(def, &r.after) {
+                skipped.push(json!(r.id));
                 continue;
             }
-            match before {
+            match &r.before {
                 Some(b) => {
                     row.values = b["values"].as_object().cloned().unwrap_or_default();
                     row.deleted_at = b["deleted_at"].as_i64();
                 }
                 // It was made by the edit.
                 None => row.deleted_at = Some(now),
+            }
+            if row.deleted_at.is_none()
+                && let Some(def) = def
+                && let Err(e) = crate::refs::check_unique(tx, def, &row)?
+            {
+                skipped.push(json!({ "id": r.id, "reason": e }));
+                continue;
             }
             row.updated_at = now;
             db::save_row(tx, &collection, &row)?;
@@ -1636,6 +1774,22 @@ async fn undo_edit(pod: &Pod, args: &Value) -> Result<Value, Value> {
     .await?;
     pod.publish_data_all(NAME);
     Ok(out)
+}
+
+/// A row's recorded state without the fields that follow other rows
+/// (lookups, counts, rollups): those move on their own after an edit, and
+/// don't make a row "changed since".
+fn own_state(def: Option<&Definition>, state: &Value) -> Value {
+    let mut s = state.clone();
+    if let (Some(def), Some(values)) = (def, s["values"].as_object_mut()) {
+        for f in def
+            .live_fields()
+            .filter(|f| f.compute.iter().any(|c| c.reads().is_some()))
+        {
+            values.remove(&f.id);
+        }
+    }
+    s
 }
 
 async fn export(pod: &Pod, args: &Value) -> Result<Value, Value> {

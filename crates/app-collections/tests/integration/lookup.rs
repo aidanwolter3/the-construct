@@ -308,8 +308,9 @@ async fn rules_answer_first_the_model_fills_in_and_its_answers_become_rules() {
     assert_eq!(section(&pod, "Coconut milk (can)").await, "Pantry");
     assert_eq!(fake.asked().len(), 3, "only Kale went to the model");
 
-    // Editing rules doesn't move rows until the field is computed again;
-    // recompute_field does, without asking the model about the rest.
+    // Editing a rule moves the rows it answers at once (decision
+    // `live-computed-fields`); recompute_field computes every row again
+    // without asking the model about the rest.
     let rule_rows = rows(&pod, "section_rules", "pattern", "section").await;
     let cucumber = &rule_rows.iter().find(|r| r.1 == "cucumber").unwrap().0;
     update(
@@ -318,7 +319,7 @@ async fn rules_answer_first_the_model_fills_in_and_its_answers_become_rules() {
         json!({"id": cucumber, "section": "Other"}),
     )
     .await;
-    assert_eq!(section(&pod, "English cucumber").await, "Produce");
+    assert_eq!(section(&pod, "English cucumber").await, "Other");
     let v = ok(
         &pod,
         "apply_change",
