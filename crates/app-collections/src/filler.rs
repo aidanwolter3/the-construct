@@ -73,6 +73,17 @@ pub struct Details {
     /// extractor finds nothing.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub text: Option<String>,
+    /// With extract [`LLM`]: notes for the model reading each page.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub hint: String,
+}
+
+impl Details {
+    /// Whether a model reads each page (extract [`LLM`]); its fields are
+    /// `map`'s keys.
+    pub fn is_llm(&self) -> bool {
+        self.extract == LLM
+    }
 }
 
 /// What fills the rows.
@@ -351,7 +362,15 @@ impl Filler {
                     v["map"] = names(map);
                 }
                 if let Some(d) = details {
-                    let mut dv = json!({ "link": name(&d.link), "extract": d.extract, "map": names(&d.map) });
+                    let mut dv = json!({ "link": name(&d.link), "extract": d.extract });
+                    if d.is_llm() {
+                        dv["fields"] = json!(d.map.keys().map(|id| name(id)).collect::<Vec<_>>());
+                        if !d.hint.is_empty() {
+                            dv["hint"] = json!(d.hint);
+                        }
+                    } else {
+                        dv["map"] = names(&d.map);
+                    }
                     if !d.items.is_empty() {
                         dv["items"] = json!(d.items);
                     }
@@ -640,12 +659,52 @@ pub fn parse(
             }
             let details = match o.get("details") {
                 None | Some(Value::Null) => None,
+                Some(Value::Object(d)) if text(d, "extract") == LLM => {
+                    // A model reads each new row's page once for `fields`.
+                    let link = field_id(def, text(d, "link"), "details.link")?;
+                    let fields: Vec<String> = match d.get("fields") {
+                        Some(Value::Array(a)) => a
+                            .iter()
+                            .map(|n| field_id(def, n.as_str().unwrap_or(""), "details.fields"))
+                            .collect::<Result<_, _>>()?,
+                        _ => {
+                            return Err(
+                                "filler.details with extract llm needs fields (a list of field names)"
+                                    .into(),
+                            );
+                        }
+                    };
+                    if fields.is_empty() {
+                        return Err("filler.details.fields names at least one field".into());
+                    }
+                    if d.get("map").is_some_and(|m| !m.is_null()) || !text(d, "text").is_empty() {
+                        return Err(
+                            "filler.details with extract llm takes fields (and hint), not map or text"
+                                .into(),
+                        );
+                    }
+                    let dhint = text(d, "hint").to_owned();
+                    if dhint.chars().count() > MAX_PROMPT_CHARS {
+                        return Err(format!(
+                            "filler.details.hint is at most {MAX_PROMPT_CHARS} characters"
+                        ));
+                    }
+                    Some(Box::new(Details {
+                        link,
+                        extract: LLM.to_owned(),
+                        items: String::new(),
+                        types: Vec::new(),
+                        map: fields.into_iter().map(|f| (f, String::new())).collect(),
+                        text: None,
+                        hint: dhint,
+                    }))
+                }
                 Some(Value::Object(d)) => {
                     let link = field_id(def, text(d, "link"), "details.link")?;
                     let dkind =
                         web_extract::items::Kind::parse(text(d, "extract")).ok_or_else(|| {
                             format!(
-                                "filler.details.extract is one of {}",
+                                "filler.details.extract is one of {}, {LLM}",
                                 web_extract::items::Kind::ALL.join(", ")
                             )
                         })?;
@@ -676,9 +735,15 @@ pub fn parse(
                         types: spec.types,
                         map: dmap,
                         text: dtext,
+                        hint: String::new(),
                     }))
                 }
-                Some(_) => return Err("filler.details is {link, extract, map?, text?}".into()),
+                Some(_) => {
+                    return Err(
+                        "filler.details is {link, extract, map?, text?} or {link, extract: llm, fields, hint?}"
+                            .into(),
+                    );
+                }
             };
             Source::Fetch {
                 url,

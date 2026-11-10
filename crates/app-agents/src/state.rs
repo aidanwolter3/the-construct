@@ -1,97 +1,124 @@
-//! What the pod knows of the runner: the last snapshot with every event
-//! since applied ([`State`]). Applying a snapshot or an event is pure and
-//! returns the [`Effect`]s it owes (notifications, task-row changes), so the
-//! rules are tested without a runner.
+//! What the pod knows of the runner: a mirror of its records (decision
+//! `agents-runs`). A snapshot replaces everything; an event's record
+//! replaces the stored one when its `version` is higher. The pod decides
+//! nothing about a run's state: it copies it. Applying is pure and returns
+//! the [`Effect`]s (notifications) owed by comparing each record before and
+//! after, so the rules are tested without a runner.
 
 use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::cap::Event;
+use crate::cap::{Event, Kind};
 use crate::text;
 
-/// At most this many sessions are kept (the oldest ended ones go first).
-pub const MAX_SESSIONS: usize = 200;
-
-/// Session statuses.
-/// How many notified runs [`State::notified`] remembers.
+/// How many notified transitions [`State::notified`] remembers.
 pub const MAX_NOTIFIED: usize = 200;
+/// At most this many runs are kept (the oldest ended ones go first); the
+/// runner's snapshot holds at most 200.
+pub const MAX_RUNS: usize = 300;
 
+/// Run states.
+pub const QUEUED: &str = "queued";
 pub const STARTING: &str = "starting";
 pub const WORKING: &str = "working";
-pub const WAITING_PERMISSION: &str = "waiting_permission";
-pub const WAITING_INPUT: &str = "waiting_input";
-pub const IDLE: &str = "idle";
-pub const FINISHED: &str = "finished";
-pub const FAILED: &str = "failed";
-pub const STALE: &str = "stale";
+pub const NEEDS_YOU: &str = "needs_you";
+pub const ENDED: &str = "ended";
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct State {
     /// The last event applied (the stream resumes after it).
     pub cursor: i64,
+    pub runs: BTreeMap<String, Run>,
     pub sprites: BTreeMap<String, Sprite>,
-    pub sessions: BTreeMap<String, Session>,
-    pub checks: BTreeMap<String, Check>,
     pub schedules: BTreeMap<String, Schedule>,
-    /// Runs already notified as timed out (`timeout:<session or task id>`)
-    /// or missed (`missed:<task id>`), newest last and at most
-    /// [`MAX_NOTIFIED`], so a runner repeating an event notifies once.
-    #[serde(default)]
+    pub checks: BTreeMap<String, Check>,
+    /// Transitions already notified (`needs:<run>:<version>`,
+    /// `ended:<run>`, `check:<id>:<version>`), newest last and at most
+    /// [`MAX_NOTIFIED`], so nothing is notified twice across restarts.
     pub notified: Vec<String>,
 }
 
+/// One attempt at one piece of work on one Sprite, as the runner sent it
+/// (cleaned). Empty strings and zero times stand for the runner's nulls.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
-pub struct Sprite {
-    pub name: String,
-    /// `awake`, `asleep`, or whatever the runner says.
-    pub state: String,
-    /// Milliseconds.
-    pub last_seen: i64,
-    /// The workspace `wake` takes (the sandbox's name unless the runner says).
-    pub workspace: String,
-}
-
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
-pub struct Session {
+#[serde(default)]
+pub struct Run {
     pub id: String,
-    pub title: String,
-    pub status: String,
-    pub sprite: String,
-    pub workspace: String,
+    pub version: i64,
+    /// The Tasks row (or `schedule/<name>/<minute>`), empty for phone runs.
     pub task_id: String,
+    pub title: String,
+    /// `task`, `schedule` or `phone`.
+    pub origin: String,
+    pub workspace: String,
+    pub sprite: String,
+    /// [`QUEUED`], [`STARTING`], [`WORKING`], [`NEEDS_YOU`] or [`ENDED`].
+    pub state: String,
+    /// When `needs_you`: `permission`, `question` or `stopped`, and the text.
+    pub needs_you_reason: String,
+    pub needs_you_text: String,
+    /// When ended: `reported`, `exited`, `stopped`, `timed_out`, `lost`,
+    /// `start_failed` or `expired`.
+    pub end_reason: String,
+    /// The agent's report: `done`, `review`, `blocked` or `failed` (empty
+    /// without one), its summary and pull request.
+    pub outcome: String,
+    pub outcome_summary: String,
+    pub outcome_pr_url: String,
+    pub error: String,
+    pub asleep: bool,
     pub current_tool: String,
-    pub tool_detail: String,
     pub summary: String,
     pub pr_url: String,
-    /// The session's page in the Claude app, when the runner knows it
-    /// (checked by [`text::claude_link`]).
-    #[serde(default)]
+    /// Checked by [`text::claude_link`].
     pub claude_url: String,
-    pub error: String,
-    pub reason: String,
+    pub session_id: String,
+    pub resumed_from: String,
     pub cost_usd: f64,
     pub input_tokens: i64,
     pub output_tokens: i64,
-    pub duration_s: f64,
     /// Milliseconds.
+    pub queued_at: i64,
     pub started_at: i64,
+    pub updated_at: i64,
+    pub ended_at: i64,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Sprite {
+    pub name: String,
+    pub workspace: String,
+    pub version: i64,
+    /// `unprovisioned`, `asleep`, `waking`, `awake`, `unreachable` or
+    /// `updating`.
+    pub state: String,
+    pub agentd_version: String,
+    /// Milliseconds.
+    pub last_heartbeat_at: i64,
     pub updated_at: i64,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct Check {
     pub id: String,
+    pub version: i64,
     pub title: String,
     /// `ok` or `warn`.
     pub status: String,
     pub detail: String,
+    pub checked_at: i64,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct Schedule {
     pub name: String,
+    pub version: i64,
     pub cron: String,
     pub timezone: String,
     pub workspace: String,
@@ -104,79 +131,54 @@ pub struct Schedule {
     pub last_run: Option<LastRun>,
 }
 
+/// A schedule's last run: `{run_id, due_at, state, end_reason, outcome}`.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct LastRun {
-    pub run_key: String,
+    pub run_id: String,
     pub due_at: Option<i64>,
-    pub status: String,
-    pub error: String,
-    pub session_id: String,
-    pub summary: String,
-    pub cost_usd: f64,
+    pub state: String,
+    pub end_reason: String,
+    pub outcome: String,
+    pub outcome_summary: String,
 }
 
-/// What applying something owes.
+/// What applying something owes: notifications.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Effect {
-    /// A session started waiting for a permission.
+    /// A run entered `needs_you` (`key`: the transition, for dedupe).
     NeedsYou {
-        session_id: String,
+        run_id: String,
         title: String,
-        detail: String,
+        reason: String,
+        text: String,
+        key: String,
     },
-    Finished {
-        session_id: String,
-        title: String,
-        summary: String,
-        pr_url: String,
-    },
-    Failed {
-        session_id: String,
-        title: String,
-        error: String,
-    },
+    /// A run ended.
+    Ended { run: Box<Run> },
     /// A security check turned to `warn`.
     CheckWarn {
         id: String,
         title: String,
         detail: String,
-    },
-    ScheduleMissed {
-        name: String,
-        error: String,
-    },
-    ScheduleTimeout {
-        name: String,
-        minutes: i64,
-        stopped: bool,
-    },
-    /// A session for task `task_id` (a Tasks row) started.
-    TaskStarted {
-        task_id: String,
-        session_id: String,
-    },
-    TaskFinished {
-        task_id: String,
-        summary: String,
-        pr_url: String,
-    },
-    TaskFailed {
-        task_id: String,
-        error: String,
+        key: String,
     },
 }
 
 // ---------- reading the runner's JSON ----------
 
-fn s(v: &Value, keys: &[&str], max: usize) -> String {
-    keys.iter()
-        .find_map(|k| v.get(*k).and_then(Value::as_str))
+fn s(v: &Value, k: &str, max: usize) -> String {
+    v.get(k)
+        .and_then(Value::as_str)
         .map(|x| text::clean(x, max))
         .unwrap_or_default()
 }
 
 fn f(v: &Value, k: &str) -> f64 {
-    v.get(k).and_then(Value::as_f64).unwrap_or(0.0)
+    v.get(k)
+        .and_then(Value::as_f64)
+        .filter(|x| x.is_finite())
+        .unwrap_or(0.0)
 }
 
 fn i(v: &Value, k: &str) -> i64 {
@@ -184,10 +186,8 @@ fn i(v: &Value, k: &str) -> i64 {
 }
 
 /// A time in milliseconds (seconds are taken for small values).
-fn ms(v: &Value, keys: &[&str]) -> Option<i64> {
-    let n = keys
-        .iter()
-        .find_map(|k| v.get(*k).and_then(Value::as_i64))?;
+fn ms(v: &Value, k: &str) -> Option<i64> {
+    let n = v.get(k).and_then(Value::as_i64)?;
     Some(if n.abs() < 100_000_000_000 {
         n * 1000
     } else {
@@ -195,8 +195,8 @@ fn ms(v: &Value, keys: &[&str]) -> Option<i64> {
     })
 }
 
-fn summary(v: &Value) -> String {
-    v.get("summary")
+fn lines(v: &Value, k: &str) -> String {
+    v.get(k)
         .and_then(Value::as_str)
         .map(|x| text::clean_lines(x, 2000))
         .unwrap_or_default()
@@ -209,68 +209,87 @@ fn pr(v: &Value) -> String {
         .unwrap_or_default()
 }
 
-fn link(v: &Value) -> String {
-    v.get("claude_url")
-        .and_then(Value::as_str)
-        .and_then(text::claude_link)
-        .unwrap_or_default()
+fn word(v: &Value, k: &str) -> String {
+    s(v, k, 40)
 }
 
-fn sprite_of(v: &Value) -> Option<Sprite> {
-    let name = s(v, &["name", "id", "sprite"], 100);
+/// A run record, or `None` without a usable id.
+pub fn run_of(v: &Value) -> Option<Run> {
+    let id = v.get("id").and_then(Value::as_str)?;
+    if !crate::cap::valid_id(id) {
+        return None;
+    }
+    let needs = v.get("needs_you").filter(|n| n.is_object());
+    let outcome = v.get("outcome").filter(|o| o.is_object());
+    Some(Run {
+        id: id.to_owned(),
+        version: i(v, "version"),
+        task_id: s(v, "task_id", 200),
+        title: s(v, "title", 200),
+        origin: word(v, "origin"),
+        workspace: s(v, "workspace", 100),
+        sprite: s(v, "sprite", 100),
+        state: word(v, "state"),
+        needs_you_reason: needs.map(|n| word(n, "reason")).unwrap_or_default(),
+        needs_you_text: needs.map(|n| lines(n, "text")).unwrap_or_default(),
+        end_reason: word(v, "end_reason"),
+        outcome: outcome.map(|o| word(o, "status")).unwrap_or_default(),
+        outcome_summary: outcome.map(|o| lines(o, "summary")).unwrap_or_default(),
+        outcome_pr_url: outcome.map(pr).unwrap_or_default(),
+        error: s(v, "error", 500),
+        asleep: v.get("asleep").and_then(Value::as_bool).unwrap_or(false),
+        current_tool: s(v, "current_tool", 300),
+        summary: lines(v, "summary"),
+        pr_url: pr(v),
+        claude_url: v
+            .get("claude_url")
+            .and_then(Value::as_str)
+            .and_then(text::claude_link)
+            .unwrap_or_default(),
+        session_id: s(v, "session_id", 120),
+        resumed_from: s(v, "resumed_from", 120),
+        cost_usd: f(v, "cost_usd"),
+        input_tokens: i(v, "input_tokens"),
+        output_tokens: i(v, "output_tokens"),
+        queued_at: ms(v, "queued_at").unwrap_or(0),
+        started_at: ms(v, "started_at").unwrap_or(0),
+        updated_at: ms(v, "updated_at").unwrap_or(0),
+        ended_at: ms(v, "ended_at").unwrap_or(0),
+    })
+}
+
+pub fn sprite_of(v: &Value) -> Option<Sprite> {
+    let name = s(v, "name", 100);
     if name.is_empty() {
         return None;
     }
-    let workspace = s(v, &["workspace"], 100);
+    let workspace = s(v, "workspace", 100);
     Some(Sprite {
         workspace: if workspace.is_empty() {
             name.clone()
         } else {
             workspace
         },
-        state: s(v, &["state", "status"], 40),
-        last_seen: ms(v, &["last_seen", "last_seen_at", "updated_at", "ts"]).unwrap_or(0),
+        version: i(v, "version"),
+        state: word(v, "state"),
+        agentd_version: s(v, "agentd_version", 40),
+        last_heartbeat_at: ms(v, "last_heartbeat_at").unwrap_or(0),
+        updated_at: ms(v, "updated_at").unwrap_or(0),
         name,
     })
 }
 
-fn session_of(v: &Value) -> Option<Session> {
-    let id = s(v, &["id", "session_id"], 120);
-    if id.is_empty() {
-        return None;
-    }
-    Some(Session {
-        title: s(v, &["title"], 200),
-        status: s(v, &["status"], 40),
-        sprite: s(v, &["sprite"], 100),
-        workspace: s(v, &["workspace"], 100),
-        task_id: s(v, &["task_id"], 200),
-        current_tool: s(v, &["current_tool", "tool"], 80),
-        tool_detail: s(v, &["tool_detail", "detail"], 300),
-        summary: summary(v),
-        pr_url: pr(v),
-        claude_url: link(v),
-        error: s(v, &["error"], 500),
-        reason: s(v, &["reason"], 100),
-        cost_usd: f(v, "cost_usd"),
-        input_tokens: i(v, "input_tokens"),
-        output_tokens: i(v, "output_tokens"),
-        duration_s: f(v, "duration_s"),
-        started_at: ms(v, &["started_at", "created_at"]).unwrap_or(0),
-        updated_at: ms(v, &["updated_at", "started_at", "created_at"]).unwrap_or(0),
-        id,
-    })
-}
-
-fn check_of(v: &Value) -> Option<Check> {
-    let id = s(v, &["id"], 100);
+pub fn check_of(v: &Value) -> Option<Check> {
+    let id = s(v, "id", 100);
     if id.is_empty() {
         return None;
     }
     Some(Check {
-        title: s(v, &["title"], 200),
-        status: s(v, &["status"], 20),
-        detail: s(v, &["detail"], 500),
+        version: i(v, "version"),
+        title: s(v, "title", 200),
+        status: s(v, "status", 20),
+        detail: s(v, "detail", 500),
+        checked_at: ms(v, "checked_at").unwrap_or(0),
         id,
     })
 }
@@ -279,31 +298,32 @@ fn last_run_of(v: &Value) -> Option<LastRun> {
     if !v.is_object() {
         return None;
     }
+    let outcome = v.get("outcome").filter(|o| o.is_object());
     Some(LastRun {
-        run_key: s(v, &["run_key"], 200),
-        due_at: ms(v, &["due_at"]),
-        status: s(v, &["status"], 40),
-        error: s(v, &["error"], 500),
-        session_id: s(v, &["session_id"], 120),
-        summary: summary(v),
-        cost_usd: f(v, "cost_usd"),
+        run_id: s(v, "run_id", 120),
+        due_at: ms(v, "due_at"),
+        state: word(v, "state"),
+        end_reason: word(v, "end_reason"),
+        outcome: outcome.map(|o| word(o, "status")).unwrap_or_default(),
+        outcome_summary: outcome.map(|o| lines(o, "summary")).unwrap_or_default(),
     })
 }
 
-fn schedule_of(v: &Value) -> Option<Schedule> {
-    let name = s(v, &["name"], 100);
+pub fn schedule_of(v: &Value) -> Option<Schedule> {
+    let name = s(v, "name", 100);
     if name.is_empty() {
         return None;
     }
     Some(Schedule {
-        cron: s(v, &["cron"], 100),
-        timezone: s(v, &["timezone"], 64),
-        workspace: s(v, &["workspace"], 100),
-        model: s(v, &["model"], 100),
+        version: i(v, "version"),
+        cron: s(v, "cron", 100),
+        timezone: s(v, "timezone", 64),
+        workspace: s(v, "workspace", 100),
+        model: s(v, "model", 100),
         max_runtime_minutes: i(v, "max_runtime_minutes"),
         enabled: v.get("enabled").and_then(Value::as_bool).unwrap_or(true),
         paused: v.get("paused").and_then(Value::as_bool).unwrap_or(false),
-        next_run: ms(v, &["next_run"]),
+        next_run: ms(v, "next_run"),
         last_run: v.get("last_run").and_then(last_run_of),
         name,
     })
@@ -322,63 +342,55 @@ pub fn schedule_of_task(task_id: &str) -> Option<&str> {
 
 // ---------- applying ----------
 
-impl Session {
-    /// Running or waiting (not finished, failed or stale).
+impl Run {
+    /// Not ended.
     pub fn is_active(&self) -> bool {
-        !matches!(self.status.as_str(), FINISHED | FAILED | STALE)
+        self.state != ENDED
+    }
+
+    /// The pull request: the outcome's, else the last one seen.
+    pub fn pr(&self) -> &str {
+        if self.outcome_pr_url.is_empty() {
+            &self.pr_url
+        } else {
+            &self.outcome_pr_url
+        }
+    }
+
+    /// When it last changed, for sorting newest first.
+    pub fn last_at(&self) -> i64 {
+        self.updated_at
+            .max(self.ended_at)
+            .max(self.started_at)
+            .max(self.queued_at)
     }
 }
 
 impl State {
-    /// Replace everything with `snap` (`GET /v1/snapshot`). Owes a
-    /// notification for each session now waiting for a permission and each
-    /// check now warning that weren't before.
+    /// Replace everything with `snap` (`GET /v2/snapshot`). Owes what each
+    /// record's change from the one stored owes; a run seen for the first
+    /// time owes a needs-you notification only (an ended run that is new to
+    /// the pod is history, not news).
     pub fn apply_snapshot(&mut self, snap: &Value) -> Vec<Effect> {
         let mut effects = Vec::new();
-        let sessions: BTreeMap<String, Session> = list(snap, "sessions")
-            .filter_map(session_of)
+        let runs: BTreeMap<String, Run> = list(snap, "runs")
+            .filter_map(run_of)
             .map(|x| (x.id.clone(), x))
             .collect();
-        for x in sessions.values() {
-            let before = self.sessions.get(&x.id).map(|o| o.status.as_str());
-            if x.status == WAITING_PERMISSION && before != Some(WAITING_PERMISSION) {
-                effects.push(Effect::NeedsYou {
-                    session_id: x.id.clone(),
-                    title: x.title.clone(),
-                    detail: tool_text(&x.current_tool, &x.tool_detail),
-                });
-            }
+        for r in runs.values() {
+            let before = self.runs.get(&r.id).cloned();
+            self.run_effects(before.as_ref(), r, false, &mut effects);
         }
         let checks: BTreeMap<String, Check> = list(snap, "checks")
             .filter_map(check_of)
             .map(|x| (x.id.clone(), x))
             .collect();
-        for x in checks.values() {
-            let before = self.checks.get(&x.id).map(|o| o.status.as_str());
-            if x.status == "warn" && before != Some("warn") {
-                effects.push(Effect::CheckWarn {
-                    id: x.id.clone(),
-                    title: x.title.clone(),
-                    detail: x.detail.clone(),
-                });
-            }
+        for c in checks.values() {
+            let before = self.checks.get(&c.id).cloned();
+            self.check_effects(before.as_ref(), c, &mut effects);
         }
-        self.sessions = sessions;
+        self.runs = runs;
         self.checks = checks;
-        self.apply_setup(snap);
-        if let Some(c) = snap.get("cursor").and_then(Value::as_i64) {
-            self.cursor = c;
-        }
-        self.trim();
-        effects
-    }
-
-    /// Take the runner's set-up from `snap`: its sandboxes and schedules,
-    /// which change when the runner is redeployed without an event saying
-    /// so (a schedule's new time, its next run). Sessions, checks and the
-    /// cursor stay as the stream left them, so nothing is notified twice or
-    /// skipped.
-    pub fn apply_setup(&mut self, snap: &Value) {
         self.sprites = list(snap, "sprites")
             .filter_map(sprite_of)
             .map(|x| (x.name.clone(), x))
@@ -387,277 +399,116 @@ impl State {
             .filter_map(schedule_of)
             .map(|x| (x.name.clone(), x))
             .collect();
-    }
-
-    fn session(&mut self, e: &Event) -> Option<&mut Session> {
-        let id = e.session_id.clone()?;
-        let s = self.sessions.entry(id.clone()).or_insert_with(|| Session {
-            id,
-            status: STARTING.into(),
-            started_at: e.ts,
-            ..Default::default()
-        });
-        s.updated_at = s.updated_at.max(e.ts);
-        if let Some(t) = &e.task_id {
-            s.task_id = text::clean(t, 200);
-        }
-        if let Some(sp) = &e.sprite {
-            s.sprite = text::clean(sp, 100);
-        }
-        for (k, field) in [("title", &mut s.title), ("workspace", &mut s.workspace)] {
-            if let Some(v) = e.text(k) {
-                *field = text::clean(&v, 200);
-            }
-        }
-        let url = link(&e.data);
-        if !url.is_empty() {
-            s.claude_url = url;
-        }
-        Some(s)
-    }
-
-    /// Apply one event. Events at or before the cursor are skipped (a
-    /// replay after a reconnect).
-    pub fn apply(&mut self, e: &Event) -> Vec<Effect> {
-        if e.seq <= self.cursor {
-            return Vec::new();
-        }
-        self.cursor = e.seq;
-        let mut out = Vec::new();
-        let status = e.status.as_deref().map(|x| text::clean(x, 40));
-        match e.kind.as_str() {
-            "task.launched" => {
-                if let Some(s) = self.session(e) {
-                    s.status = status.unwrap_or_else(|| STARTING.into());
-                }
-            }
-            "session.started" => {
-                if let Some(s) = self.session(e) {
-                    s.status = status.unwrap_or_else(|| WORKING.into());
-                    if s.started_at == 0 {
-                        s.started_at = e.ts;
-                    }
-                    if !s.task_id.is_empty() {
-                        out.push(Effect::TaskStarted {
-                            task_id: s.task_id.clone(),
-                            session_id: s.id.clone(),
-                        });
-                    }
-                }
-            }
-            "session.status" | "permission.requested" => {
-                let is_perm = e.kind == "permission.requested";
-                let tool = e.text("tool").map(|t| text::clean(&t, 80));
-                let detail = e.text("detail").map(|t| text::clean(&t, 300));
-                if let Some(s) = self.session(e) {
-                    let before = std::mem::take(&mut s.status);
-                    s.status = if is_perm {
-                        WAITING_PERMISSION.into()
-                    } else {
-                        status.unwrap_or_else(|| before.clone())
-                    };
-                    if let Some(t) = tool {
-                        s.current_tool = t;
-                        s.tool_detail = detail.unwrap_or_default();
-                    }
-                    if s.status == WAITING_PERMISSION && before != WAITING_PERMISSION {
-                        out.push(Effect::NeedsYou {
-                            session_id: s.id.clone(),
-                            title: s.title.clone(),
-                            detail: tool_text(&s.current_tool, &s.tool_detail),
-                        });
-                    }
-                }
-            }
-            // The runner learned the session's Claude app link (and maybe
-            // its workspace): `session` records both.
-            "session.link" => {
-                self.session(e);
-            }
-            "tool.used" => {
-                let tool = e.text("tool").map(|t| text::clean(&t, 80));
-                let detail = e.text("detail").map(|t| text::clean(&t, 300));
-                if let Some(s) = self.session(e) {
-                    if let Some(t) = tool {
-                        s.current_tool = t;
-                        s.tool_detail = detail.unwrap_or_default();
-                    }
-                    if s.status == STARTING || s.status == WAITING_PERMISSION {
-                        s.status = WORKING.into();
-                    }
-                }
-            }
-            "session.finished" => {
-                let d = e.data.clone();
-                if let Some(s) = self.session(e) {
-                    s.status = FINISHED.into();
-                    s.summary = summary(&d);
-                    s.pr_url = pr(&d);
-                    s.cost_usd = f(&d, "cost_usd");
-                    s.input_tokens = i(&d, "input_tokens");
-                    s.output_tokens = i(&d, "output_tokens");
-                    s.duration_s = f(&d, "duration_s");
-                    s.reason = text::clean(d["reason"].as_str().unwrap_or(""), 100);
-                    s.current_tool.clear();
-                    s.tool_detail.clear();
-                    let s = s.clone();
-                    out.push(Effect::Finished {
-                        session_id: s.id.clone(),
-                        title: s.title.clone(),
-                        summary: s.summary.clone(),
-                        pr_url: s.pr_url.clone(),
-                    });
-                    if let Some(name) = schedule_of_task(&s.task_id)
-                        && let Some(sc) = self.schedules.get_mut(name)
-                    {
-                        sc.last_run = Some(LastRun {
-                            status: FINISHED.into(),
-                            session_id: s.id.clone(),
-                            summary: s.summary.clone(),
-                            cost_usd: s.cost_usd,
-                            ..sc.last_run.clone().unwrap_or_default()
-                        });
-                    } else if !s.task_id.is_empty() {
-                        out.push(Effect::TaskFinished {
-                            task_id: s.task_id,
-                            summary: s.summary,
-                            pr_url: s.pr_url,
-                        });
-                    }
-                }
-            }
-            "session.failed" => {
-                let error = text::clean(e.data["error"].as_str().unwrap_or(""), 500);
-                if let Some(s) = self.session(e) {
-                    s.status = FAILED.into();
-                    s.error = error.clone();
-                    s.current_tool.clear();
-                    s.tool_detail.clear();
-                    let s = s.clone();
-                    out.push(Effect::Failed {
-                        session_id: s.id.clone(),
-                        title: s.title.clone(),
-                        error: error.clone(),
-                    });
-                    if let Some(name) = schedule_of_task(&s.task_id)
-                        && let Some(sc) = self.schedules.get_mut(name)
-                    {
-                        sc.last_run = Some(LastRun {
-                            status: FAILED.into(),
-                            session_id: s.id.clone(),
-                            error,
-                            ..sc.last_run.clone().unwrap_or_default()
-                        });
-                    } else if !s.task_id.is_empty() {
-                        out.push(Effect::TaskFailed {
-                            task_id: s.task_id,
-                            error,
-                        });
-                    }
-                }
-            }
-            "sprite.state" => {
-                if let Some(name) = e.sprite.as_deref().map(|n| text::clean(n, 100))
-                    && !name.is_empty()
-                {
-                    let sp = self.sprites.entry(name.clone()).or_insert_with(|| Sprite {
-                        workspace: name.clone(),
-                        name,
-                        ..Default::default()
-                    });
-                    if let Some(st) = status {
-                        sp.state = st;
-                    }
-                    sp.last_seen = e.ts;
-                }
-            }
-            "security.check" => {
-                let id = e
-                    .text("id")
-                    .map(|x| text::clean(&x, 100))
-                    .unwrap_or_default();
-                if !id.is_empty() {
-                    let c = self.checks.entry(id.clone()).or_insert_with(|| Check {
-                        id: id.clone(),
-                        ..Default::default()
-                    });
-                    let before = std::mem::take(&mut c.status);
-                    c.status = status.unwrap_or_else(|| before.clone());
-                    if let Some(t) = e.text("title") {
-                        c.title = text::clean(&t, 200);
-                    }
-                    if let Some(d) = e.text("detail") {
-                        c.detail = text::clean(&d, 500);
-                    }
-                    if c.status == "warn" && before != "warn" {
-                        out.push(Effect::CheckWarn {
-                            id,
-                            title: c.title.clone(),
-                            detail: c.detail.clone(),
-                        });
-                    }
-                }
-            }
-            "schedule.state" => {
-                if let Some(sc) = self.schedule(e) {
-                    match status.as_deref() {
-                        Some("paused") => sc.paused = true,
-                        Some("active") => sc.paused = false,
-                        _ => {}
-                    }
-                }
-            }
-            "schedule.missed" => {
-                let error = text::clean(e.data["error"].as_str().unwrap_or(""), 500);
-                if let Some(sc) = self.schedule(e) {
-                    sc.last_run = Some(LastRun {
-                        status: "missed".into(),
-                        error: error.clone(),
-                        ..Default::default()
-                    });
-                    let name = sc.name.clone();
-                    if self.first_notice("missed", e.task_id.as_deref()) {
-                        out.push(Effect::ScheduleMissed { name, error });
-                    }
-                }
-            }
-            "schedule.timeout" => {
-                let minutes = i(&e.data, "max_runtime_minutes");
-                let stopped = e.data["stopped"].as_bool().unwrap_or(false);
-                if let Some(sc) = self.schedule(e) {
-                    let name = sc.name.clone();
-                    let minutes = if minutes > 0 {
-                        minutes
-                    } else {
-                        sc.max_runtime_minutes
-                    };
-                    let run = e.session_id.as_deref().or(e.task_id.as_deref());
-                    if self.first_notice("timeout", run) {
-                        out.push(Effect::ScheduleTimeout {
-                            name,
-                            minutes,
-                            stopped,
-                        });
-                    }
-                }
-            }
-            _ => {}
+        if let Some(c) = snap.get("cursor").and_then(Value::as_i64) {
+            self.cursor = c;
         }
         self.trim();
+        effects
+    }
+
+    /// Apply one event: its record replaces the stored one when its version
+    /// is higher (or there is none). An older or equal version changes
+    /// nothing, so a replay is harmless.
+    pub fn apply(&mut self, e: &Event) -> Vec<Effect> {
+        self.cursor = self.cursor.max(e.seq);
+        let mut out = Vec::new();
+        match e.kind {
+            Kind::Run => {
+                let Some(r) = run_of(&e.record) else {
+                    return out;
+                };
+                let before = self.runs.get(&r.id).cloned();
+                if before.as_ref().is_some_and(|b| b.version >= r.version) {
+                    return out;
+                }
+                self.run_effects(before.as_ref(), &r, true, &mut out);
+                self.runs.insert(r.id.clone(), r);
+                self.trim();
+            }
+            Kind::Sprite => {
+                if let Some(x) = sprite_of(&e.record)
+                    && self
+                        .sprites
+                        .get(&x.name)
+                        .is_none_or(|b| b.version < x.version)
+                {
+                    self.sprites.insert(x.name.clone(), x);
+                }
+            }
+            Kind::Schedule => {
+                if let Some(x) = schedule_of(&e.record)
+                    && self
+                        .schedules
+                        .get(&x.name)
+                        .is_none_or(|b| b.version < x.version)
+                {
+                    self.schedules.insert(x.name.clone(), x);
+                }
+            }
+            Kind::Check => {
+                if let Some(c) = check_of(&e.record) {
+                    let before = self.checks.get(&c.id).cloned();
+                    if before.as_ref().is_none_or(|b| b.version < c.version) {
+                        self.check_effects(before.as_ref(), &c, &mut out);
+                        self.checks.insert(c.id.clone(), c);
+                    }
+                }
+            }
+        }
         out
     }
 
-    /// Whether `kind` hasn't been notified for run `run` yet (and remember
-    /// it now). An event without a run id always notifies.
-    fn first_notice(&mut self, kind: &str, run: Option<&str>) -> bool {
-        let Some(run) = run.map(str::trim).filter(|r| !r.is_empty()) else {
-            return true;
-        };
-        let key = format!("{kind}:{}", text::clean(run, 200));
-        if self.notified.contains(&key) {
+    /// What run `after` owes compared with `before`. `news`: it came on the
+    /// stream (a run new to the pod that already ended is still news).
+    fn run_effects(
+        &mut self,
+        before: Option<&Run>,
+        after: &Run,
+        news: bool,
+        out: &mut Vec<Effect>,
+    ) {
+        let was = before.map(|b| b.state.as_str());
+        if after.state == NEEDS_YOU && was != Some(NEEDS_YOU) {
+            let key = format!("needs:{}:{}", after.id, after.version);
+            if self.first_notice(&key) {
+                out.push(Effect::NeedsYou {
+                    run_id: after.id.clone(),
+                    title: after.title.clone(),
+                    reason: after.needs_you_reason.clone(),
+                    text: after.needs_you_text.clone(),
+                    key,
+                });
+            }
+        }
+        let ended_now = after.state == ENDED && was != Some(ENDED) && (was.is_some() || news);
+        if ended_now && self.first_notice(&format!("ended:{}", after.id)) {
+            out.push(Effect::Ended {
+                run: Box::new(after.clone()),
+            });
+        }
+    }
+
+    fn check_effects(&mut self, before: Option<&Check>, after: &Check, out: &mut Vec<Effect>) {
+        let was = before.map(|b| b.status.as_str());
+        if after.status == "warn" && was != Some("warn") {
+            let key = format!("check:{}:{}", after.id, after.version);
+            if self.first_notice(&key) {
+                out.push(Effect::CheckWarn {
+                    id: after.id.clone(),
+                    title: after.title.clone(),
+                    detail: after.detail.clone(),
+                    key,
+                });
+            }
+        }
+    }
+
+    /// Whether `key` hasn't been notified yet (and remember it now).
+    fn first_notice(&mut self, key: &str) -> bool {
+        if self.notified.iter().any(|k| k == key) {
             return false;
         }
-        self.notified.push(key);
+        self.notified.push(key.to_owned());
         if self.notified.len() > MAX_NOTIFIED {
             let extra = self.notified.len() - MAX_NOTIFIED;
             self.notified.drain(..extra);
@@ -665,47 +516,35 @@ impl State {
         true
     }
 
-    fn schedule(&mut self, e: &Event) -> Option<&mut Schedule> {
-        let name = text::clean(&e.text("schedule")?, 100);
-        if name.is_empty() {
-            return None;
-        }
-        Some(
-            self.schedules
-                .entry(name.clone())
-                .or_insert_with(|| Schedule {
-                    name,
-                    enabled: true,
-                    ..Default::default()
-                }),
-        )
-    }
-
-    /// Keep at most [`MAX_SESSIONS`], dropping the oldest ended ones.
+    /// Keep at most [`MAX_RUNS`], dropping the oldest ended ones.
     fn trim(&mut self) {
-        if self.sessions.len() <= MAX_SESSIONS {
+        if self.runs.len() <= MAX_RUNS {
             return;
         }
         let mut ended: Vec<(i64, String)> = self
-            .sessions
+            .runs
             .values()
-            .filter(|s| !s.is_active())
-            .map(|s| (s.updated_at, s.id.clone()))
+            .filter(|r| !r.is_active())
+            .map(|r| (r.last_at(), r.id.clone()))
             .collect();
         ended.sort();
-        let extra = self.sessions.len() - MAX_SESSIONS;
+        let extra = self.runs.len() - MAX_RUNS;
         for (_, id) in ended.into_iter().take(extra) {
-            self.sessions.remove(&id);
+            self.runs.remove(&id);
         }
     }
-}
 
-/// `Bash: npm test`, or the tool alone.
-pub fn tool_text(tool: &str, detail: &str) -> String {
-    match (tool.is_empty(), detail.is_empty()) {
-        (true, _) => String::new(),
-        (false, true) => tool.to_owned(),
-        (false, false) => format!("{tool}: {detail}"),
+    /// The current run of a task row: run `run_id` when the row names one
+    /// (`None` while the pod hasn't seen it), else the newest run whose
+    /// `task_id` is the row's id.
+    pub fn current_run(&self, row_id: &str, run_id: &str) -> Option<&Run> {
+        if !run_id.is_empty() {
+            return self.runs.get(run_id);
+        }
+        self.runs
+            .values()
+            .filter(|r| r.task_id == row_id)
+            .max_by_key(|r| (r.queued_at, r.last_at(), r.id.clone()))
     }
 }
 
@@ -714,275 +553,216 @@ mod tests {
     use super::*;
     use serde_json::json;
 
-    fn ev(seq: i64, kind: &str, rest: Value) -> Event {
-        let mut v = json!({"v": 1, "seq": seq, "ts": seq * 1000, "type": kind});
-        for (k, x) in rest.as_object().unwrap() {
+    fn run(id: &str, version: i64, state: &str, extra: Value) -> Value {
+        let mut v = json!({"id": id, "version": version, "state": state, "title": "Fix the footer",
+            "task_id": "r1", "queued_at": 1_800_000_000_000_i64});
+        for (k, x) in extra.as_object().unwrap() {
             v[k] = x.clone();
         }
-        Event::parse(&v).unwrap()
+        v
+    }
+
+    fn ev(seq: i64, kind: &str, record: Value) -> Event {
+        Event::parse(&json!({"v": 2, "seq": seq, "ts": seq, "type": kind, "record": record}))
+            .unwrap()
     }
 
     #[test]
-    fn a_session_link_from_the_runner_is_kept_only_when_it_is_claude_s() {
+    fn a_record_with_a_higher_version_replaces_the_stored_one() {
         let mut st = State::default();
-        st.apply(&ev(
-            1,
-            "session.started",
-            json!({"session_id": "u-1", "data": {"workspace": "construct"}}),
-        ));
-        assert_eq!(st.sessions["u-1"].workspace, "construct");
+        st.apply_snapshot(&json!({"cursor": 5, "runs": [run("run_1", 2, "working", json!({}))]}));
+        assert_eq!(st.cursor, 5);
+        // An older version (a replay, or a late copy) changes nothing.
         assert!(
-            st.apply(&ev(
-                2,
-                "session.link",
-                json!({"session_id": "u-1", "data": {"claude_url": "https://evil.example/code/x"}})
-            ))
-            .is_empty()
+            st.apply(&ev(6, "run.updated", run("run_1", 1, "queued", json!({}))))
+                .is_empty()
         );
-        assert_eq!(st.sessions["u-1"].claude_url, "");
-        st.apply(&ev(
-            3,
-            "session.link",
-            json!({"session_id": "u-1", "data": {"claude_url": "https://claude.ai/code/session_01Ab"}}),
-        ));
-        assert_eq!(
-            st.sessions["u-1"].claude_url,
-            "https://claude.ai/code/session_01Ab"
-        );
-        // A later event without one keeps it.
-        st.apply(&ev(
-            4,
-            "session.status",
-            json!({"session_id": "u-1", "status": "idle"}),
-        ));
-        assert_eq!(
-            st.sessions["u-1"].claude_url,
-            "https://claude.ai/code/session_01Ab"
-        );
-    }
-
-    #[test]
-    fn a_session_runs_to_a_pull_request() {
-        let mut st = State::default();
-        assert!(
-            st.apply(&ev(
-                1,
-                "task.launched",
-                json!({"session_id": "s1", "task_id": "r1",
-                "data": {"title": "Fix the login page"}})
-            ))
-            .is_empty()
-        );
-        assert_eq!(
-            st.apply(&ev(
-                2,
-                "session.started",
-                json!({"session_id": "s1", "sprite": "box-1"})
-            )),
-            [Effect::TaskStarted {
-                task_id: "r1".into(),
-                session_id: "s1".into()
-            }]
-        );
-        st.apply(&ev(
-            3,
-            "tool.used",
-            json!({"session_id": "s1", "data": {"tool": "Bash", "detail": "npm test"}}),
-        ));
-        assert_eq!(st.sessions["s1"].current_tool, "Bash");
+        assert_eq!(st.runs["run_1"].state, WORKING);
+        assert_eq!(st.cursor, 6);
         let got = st.apply(&ev(
-            4,
-            "permission.requested",
-            json!({"session_id": "s1", "data": {"tool": "Bash", "detail": "rm -rf build"}}),
+            7,
+            "run.updated",
+            run(
+                "run_1",
+                3,
+                "needs_you",
+                json!({"needs_you": {"reason": "question",
+                "text": "Open the PR now?"}}),
+            ),
         ));
         assert_eq!(
             got,
             [Effect::NeedsYou {
-                session_id: "s1".into(),
-                title: "Fix the login page".into(),
-                detail: "Bash: rm -rf build".into()
+                run_id: "run_1".into(),
+                title: "Fix the footer".into(),
+                reason: "question".into(),
+                text: "Open the PR now?".into(),
+                key: "needs:run_1:3".into(),
             }]
         );
-        // The status event for the same wait owes nothing more.
+        // Still waiting (a new version, e.g. asleep): nothing more.
         assert!(
             st.apply(&ev(
-                5,
-                "session.status",
-                json!({"session_id": "s1", "status": "waiting_permission"})
+                8,
+                "run.updated",
+                run("run_1", 4, "needs_you", json!({"asleep": true}))
             ))
             .is_empty()
         );
-        let got = st.apply(&ev(6, "session.finished", json!({"session_id": "s1", "data": {
-            "summary": "Fixed it.", "pr_url": "https://github.com/owner/repo/pull/7", "cost_usd": 0.5}})));
-        assert_eq!(got.len(), 2);
+        assert!(st.runs["run_1"].asleep);
+        // Answered, then waiting again: a second notice.
+        st.apply(&ev(9, "run.updated", run("run_1", 5, "working", json!({}))));
         assert_eq!(
-            got[1],
-            Effect::TaskFinished {
-                task_id: "r1".into(),
-                summary: "Fixed it.".into(),
-                pr_url: "https://github.com/owner/repo/pull/7".into()
-            }
+            st.apply(&ev(
+                10,
+                "run.updated",
+                run("run_1", 6, "needs_you", json!({}))
+            ))
+            .len(),
+            1
         );
-        assert_eq!(st.cursor, 6);
-        // A replay is skipped.
+        // Ending: once, whatever repeats it.
+        let end = run(
+            "run_1",
+            7,
+            "ended",
+            json!({"end_reason": "reported",
+            "outcome": {"status": "review", "summary": "Opened a PR.",
+            "pr_url": "https://github.com/sample-owner/sample-repo/pull/4"}}),
+        );
+        let got = st.apply(&ev(11, "run.updated", end.clone()));
         assert!(
-            st.apply(&ev(6, "session.failed", json!({"session_id": "s1"})))
-                .is_empty()
+            matches!(&got[..], [Effect::Ended { run }] if run.outcome == "review"
+            && run.pr() == "https://github.com/sample-owner/sample-repo/pull/4")
         );
-        assert_eq!(st.sessions["s1"].status, FINISHED);
+        let mut again = end;
+        again["version"] = json!(8);
+        assert!(st.apply(&ev(12, "run.updated", again)).is_empty());
     }
 
     #[test]
-    fn a_bad_pr_link_is_dropped() {
+    fn a_snapshot_owes_only_the_changes_it_shows() {
+        let mut st = State::default();
+        let snap = json!({"cursor": 3, "runs": [
+            run("run_old", 4, "ended", json!({"end_reason": "reported", "outcome": {"status": "done"}})),
+            run("run_wait", 2, "needs_you", json!({"needs_you": {"reason": "permission", "text": "Bash: git push"}})),
+            run("run_work", 2, "working", json!({}))],
+            "checks": [{"id": "egress", "status": "warn", "title": "Egress", "version": 1}]});
+        let got = st.apply_snapshot(&snap);
+        // A run ended before the pod saw it is history; one waiting is news.
+        assert_eq!(got.len(), 2, "{got:?}");
+        assert!(matches!(&got[0], Effect::NeedsYou { run_id, .. } if run_id == "run_wait"));
+        assert!(matches!(&got[1], Effect::CheckWarn { .. }));
+        // The same snapshot again owes nothing.
+        assert!(st.apply_snapshot(&snap).is_empty());
+        // A run that ended while the pod was away is news.
+        let snap = json!({"cursor": 9, "runs": [
+            run("run_work", 5, "ended", json!({"end_reason": "lost", "error": "the process is gone"}))]});
+        let got = st.apply_snapshot(&snap);
+        assert!(matches!(&got[..], [Effect::Ended { run }] if run.end_reason == "lost"));
+        // Replaced: runs the runner no longer lists are gone.
+        assert_eq!(st.runs.len(), 1);
+        assert!(st.checks.is_empty());
+    }
+
+    #[test]
+    fn notices_are_remembered_across_restarts() {
         let mut st = State::default();
         st.apply(&ev(
             1,
-            "session.finished",
-            json!({"session_id": "s1", "data": {
-            "summary": "x", "pr_url": "https://evil.example/pull/1"}}),
+            "run.updated",
+            run("run_1", 1, "needs_you", json!({})),
         ));
-        assert_eq!(st.sessions["s1"].pr_url, "");
+        let mut back: State = serde_json::from_str(&serde_json::to_string(&st).unwrap()).unwrap();
+        // The pod lost the record (e.g. a re-sign-in kept the memory) but
+        // not the notice.
+        back.runs.clear();
+        assert!(
+            back.apply(&ev(
+                2,
+                "run.updated",
+                run("run_1", 1, "needs_you", json!({}))
+            ))
+            .is_empty()
+        );
+        // A state stored before a field existed still reads.
+        let old: State = serde_json::from_value(json!({"cursor": 3})).unwrap();
+        assert!(old.runs.is_empty());
+        for n in 0..(MAX_NOTIFIED as i64 + 10) {
+            back.apply(&ev(
+                10 + n,
+                "run.updated",
+                run(&format!("run_{n}x"), 1, "needs_you", json!({})),
+            ));
+        }
+        assert_eq!(back.notified.len(), MAX_NOTIFIED);
     }
 
     #[test]
-    fn a_check_warns_once_until_ok() {
+    fn runner_text_is_cleaned_and_links_checked() {
+        let r = run_of(
+            &json!({"id": "run_1", "title": "a\u{7}b", "pr_url": "https://evil.example/pull/1",
+            "claude_url": "https://claude.ai/code/session_01Ab", "outcome": {"status": "done",
+            "pr_url": "https://github.com/o/r/pull/2"}}),
+        )
+        .unwrap();
+        assert_eq!(r.title, "ab");
+        assert_eq!(r.pr_url, "");
+        assert_eq!(r.pr(), "https://github.com/o/r/pull/2");
+        assert_eq!(r.claude_url, "https://claude.ai/code/session_01Ab");
+        assert!(run_of(&json!({"id": "../etc"})).is_none());
+        assert!(run_of(&json!({"title": "no id"})).is_none());
+    }
+
+    #[test]
+    fn sprites_schedules_and_checks_keep_the_newest_version() {
         let mut st = State::default();
-        let warn = |seq| {
+        st.apply(&ev(
+            1,
+            "sprite.updated",
+            json!({"name": "box-1", "version": 2, "state": "awake"}),
+        ));
+        st.apply(&ev(
+            2,
+            "sprite.updated",
+            json!({"name": "box-1", "version": 1, "state": "asleep"}),
+        ));
+        assert_eq!(st.sprites["box-1"].state, "awake");
+        assert_eq!(st.sprites["box-1"].workspace, "box-1");
+        st.apply(&ev(
+            3,
+            "schedule.updated",
+            json!({"name": "nightly", "version": 1, "paused": true,
+            "last_run": {"run_id": "run_9", "state": "ended", "end_reason": "expired"}}),
+        ));
+        let last = st.schedules["nightly"].last_run.clone().unwrap();
+        assert_eq!(
+            (last.run_id.as_str(), last.end_reason.as_str()),
+            ("run_9", "expired")
+        );
+        let warn = |v: i64| {
             ev(
-                seq,
-                "security.check",
-                json!({"status": "warn", "data": {"id": "egress", "title": "Egress"}}),
+                4 + v,
+                "check.updated",
+                json!({"id": "egress", "version": v, "status": "warn"}),
             )
         };
         assert_eq!(st.apply(&warn(1)).len(), 1);
+        assert!(st.apply(&warn(1)).is_empty());
         assert!(st.apply(&warn(2)).is_empty());
-        st.apply(&ev(
-            3,
-            "security.check",
-            json!({"status": "ok", "data": {"id": "egress"}}),
-        ));
-        assert_eq!(st.apply(&warn(4)).len(), 1);
-        // A snapshot with the check still warning owes nothing.
-        let snap =
-            json!({"cursor": 9, "checks": [{"id": "egress", "status": "warn", "title": "Egress"}]});
-        assert!(st.apply_snapshot(&snap).is_empty());
-        assert_eq!(st.cursor, 9);
     }
 
     #[test]
-    fn schedules_follow_their_events() {
+    fn a_tasks_current_run() {
         let mut st = State::default();
-        st.apply_snapshot(
-            &json!({"cursor": 1, "schedules": [{"name": "nightly", "cron": "0 3 * * *",
-            "timezone": "UTC", "workspace": "repo", "max_runtime_minutes": 30, "enabled": true,
-            "paused": false, "next_run": 1_800_000_000_000_i64, "last_run": null}]}),
-        );
-        st.apply(&ev(
-            2,
-            "schedule.state",
-            json!({"status": "paused", "data": {"schedule": "nightly"}}),
-        ));
-        assert!(st.schedules["nightly"].paused);
-        assert_eq!(
-            st.apply(&ev(
-                3,
-                "schedule.timeout",
-                json!({"data": {"schedule": "nightly", "stopped": true}})
-            )),
-            [Effect::ScheduleTimeout {
-                name: "nightly".into(),
-                minutes: 30,
-                stopped: true
-            }]
-        );
-        // A scheduled run's session updates the schedule, not a task row.
-        let got = st.apply(&ev(4, "session.finished", json!({"session_id": "s9",
-            "task_id": "schedule/nightly/2026-11-07T03:00", "data": {"summary": "Done", "cost_usd": 0.2}})));
-        assert_eq!(got.len(), 1);
-        let last = st.schedules["nightly"].last_run.clone().unwrap();
-        assert_eq!(
-            (last.status.as_str(), last.summary.as_str()),
-            (FINISHED, "Done")
-        );
-        assert_eq!(
-            st.apply(&ev(
-                5,
-                "schedule.missed",
-                json!({"data": {"schedule": "nightly", "error": "runner was down"}})
-            )),
-            [Effect::ScheduleMissed {
-                name: "nightly".into(),
-                error: "runner was down".into()
-            }]
-        );
-    }
-
-    #[test]
-    fn repeated_schedule_alerts_notify_once_per_run() {
-        let mut st = State::default();
-        let timeout = |seq, session: &str| {
-            ev(
-                seq,
-                "schedule.timeout",
-                json!({"session_id": session, "task_id": "schedule/nightly/2026-11-07T03:00",
-                    "data": {"schedule": "nightly", "max_runtime_minutes": 30, "stopped": false}}),
-            )
-        };
-        let missed = |seq, task: &str| {
-            ev(
-                seq,
-                "schedule.missed",
-                json!({"task_id": task, "data": {"schedule": "nightly", "error": "runner was down"}}),
-            )
-        };
-        let mut seq = 0;
-        let mut count = |st: &mut State, e: &dyn Fn(i64) -> Event| {
-            (0..10)
-                .map(|_| {
-                    seq += 1;
-                    st.apply(&e(seq)).len()
-                })
-                .sum::<usize>()
-        };
-        // A runner repeating the same run's timeout every 30 s: one notice.
-        assert_eq!(count(&mut st, &|n| timeout(n, "s1")), 1);
-        // Another run's timeout still notifies, once.
-        assert_eq!(count(&mut st, &|n| timeout(n, "s2")), 1);
-        assert_eq!(
-            count(&mut st, &|n| missed(n, "schedule/nightly/2026-11-08T03:00")),
-            1
-        );
-        assert_eq!(
-            count(&mut st, &|n| missed(n, "schedule/nightly/2026-11-09T03:00")),
-            1
-        );
-        // Remembered across a snapshot and a restart (the stored state).
-        st.apply_snapshot(&json!({"cursor": 100}));
-        let mut st: State = serde_json::from_str(&serde_json::to_string(&st).unwrap()).unwrap();
-        assert!(st.apply(&timeout(200, "s1")).is_empty());
-        // A state stored before this field existed still reads.
-        let old: State = serde_json::from_value(json!({"cursor": 3, "sprites": {}, "sessions": {},
-            "checks": {}, "schedules": {}}))
-        .unwrap();
-        assert!(old.notified.is_empty());
-        // The memory is capped.
-        for n in 0..(MAX_NOTIFIED as i64 + 10) {
-            st.apply(&missed(300 + n, &format!("run-{n}")));
-        }
-        assert_eq!(st.notified.len(), MAX_NOTIFIED);
-    }
-
-    #[test]
-    fn old_ended_sessions_are_dropped() {
-        let mut st = State::default();
-        for n in 0..(MAX_SESSIONS as i64 + 5) {
-            st.apply(&ev(
-                n + 1,
-                "session.failed",
-                json!({"session_id": format!("s{n}")}),
-            ));
-        }
-        assert_eq!(st.sessions.len(), MAX_SESSIONS);
-        assert!(!st.sessions.contains_key("s0"));
+        st.apply_snapshot(&json!({"runs": [
+            run("run_a", 1, "ended", json!({"queued_at": 1_000})),
+            run("run_b", 1, "working", json!({"queued_at": 2_000})),
+            run("run_c", 1, "working", json!({"task_id": "r2"}))]}));
+        assert_eq!(st.current_run("r1", "").unwrap().id, "run_b");
+        assert_eq!(st.current_run("r1", "run_a").unwrap().id, "run_a");
+        // A run the row names that the pod hasn't seen yet: none.
+        assert!(st.current_run("r1", "run_new").is_none());
+        assert!(st.current_run("r9", "").is_none());
     }
 }

@@ -1,7 +1,7 @@
-//! A fake agent runner speaking CAP v1 on 127.0.0.1, and a pod to point at
+//! A fake agent runner speaking CAP v2 on 127.0.0.1, and a pod to point at
 //! it. Its data is made up.
 
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::convert::Infallible;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -12,7 +12,7 @@ use app_collections::CollectionsAdapter;
 use axum::{
     Json, Router,
     body::{Body, Bytes},
-    extract::{Query, State},
+    extract::{Path, Query, State},
     http::{HeaderMap, Request, StatusCode},
     response::{IntoResponse, Response},
     routing::{get, post},
@@ -29,11 +29,17 @@ pub const TOKEN: &str = "test-runner-token";
 pub struct Fake {
     pub snapshot: Mutex<Value>,
     pub events: Mutex<Vec<Value>>,
+    /// Each run as last sent, for [`Fake::run`].
+    pub runs: Mutex<HashMap<String, Value>>,
     /// `(since, Last-Event-ID)` of each stream request.
     pub streams: Mutex<Vec<(i64, Option<String>)>>,
     pub commands: Mutex<Vec<Value>>,
-    /// Answers for the next commands; then 202 `{ok}`.
+    /// Answers for the next commands; then the runner's usual answer.
     pub answers: Mutex<VecDeque<(u16, Value)>>,
+    /// Run ids `start_run` hands out, in order (then `run_new<n>`).
+    pub next_runs: Mutex<VecDeque<String>>,
+    /// How many times each run's log was read.
+    pub log_reads: Mutex<HashMap<String, usize>>,
     /// End each stream once its backlog is sent.
     pub end_streams: AtomicBool,
     /// Answer 502 and end streams, like a runner that's gone.
@@ -41,22 +47,42 @@ pub struct Fake {
 }
 
 impl Fake {
-    pub fn push(&self, mut e: Value) {
+    /// Send an event of `kind` (`run.updated`, ...) carrying `record`.
+    pub fn push(&self, kind: &str, record: Value) {
         let mut events = self.events.lock().unwrap();
         let seq = events.len() as i64
             + 1
             + self.snapshot.lock().unwrap()["cursor"]
                 .as_i64()
                 .unwrap_or(0);
-        e["v"] = json!(1);
-        e["seq"] = json!(seq);
-        if e.get("ts").is_none() {
-            e["ts"] = json!(1_800_000_000_000_i64 + seq * 1000);
-        }
-        if e.get("data").is_none() {
-            e["data"] = json!({});
-        }
-        events.push(e);
+        events.push(
+            json!({"v": 2, "seq": seq, "ts": 1_800_000_000_000_i64 + seq * 1000,
+            "type": kind, "record": record}),
+        );
+    }
+
+    /// Change run `id` (starting from its last record, or a new one) by
+    /// `fields`, raise its version and send it.
+    pub fn run(&self, id: &str, fields: Value) {
+        let record = {
+            let mut runs = self.runs.lock().unwrap();
+            let r = runs.entry(id.to_owned()).or_insert_with(|| {
+                json!({"id": id, "version": 0, "task_id": null, "title": "", "origin": "task",
+                    "workspace": "sample-repo", "sprite": "box-1", "state": "queued",
+                    "needs_you": null, "end_reason": null, "outcome": null, "error": null,
+                    "asleep": false, "current_tool": null, "summary": null, "pr_url": null,
+                    "claude_url": null, "session_id": null, "resumed_from": null,
+                    "cost_usd": 0, "input_tokens": 0, "output_tokens": 0,
+                    "queued_at": 1_800_000_000_000_i64, "started_at": null,
+                    "updated_at": 1_800_000_000_000_i64, "ended_at": null})
+            });
+            for (k, v) in fields.as_object().unwrap() {
+                r[k] = v.clone();
+            }
+            r["version"] = json!(r["version"].as_i64().unwrap() + 1);
+            r.clone()
+        };
+        self.push("run.updated", record);
     }
 
     pub fn sinces(&self) -> Vec<i64> {
@@ -65,6 +91,17 @@ impl Fake {
             .unwrap()
             .iter()
             .map(|(s, _)| *s)
+            .collect()
+    }
+
+    /// The commands of type `kind` sent so far.
+    pub fn sent(&self, kind: &str) -> Vec<Value> {
+        self.commands
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|c| c["type"] == kind)
+            .cloned()
             .collect()
     }
 }
@@ -89,7 +126,7 @@ async fn snapshot(State(f): State<Arc<Fake>>, headers: HeaderMap) -> Response {
         return refuse(502, "down");
     }
     let mut s = f.snapshot.lock().unwrap().clone();
-    s["v"] = json!(1);
+    s["v"] = json!(2);
     Json(s).into_response()
 }
 
@@ -129,7 +166,10 @@ async fn stream(
                 .cloned();
             if let Some(e) = next {
                 since = e["seq"].as_i64().unwrap();
-                let msg = format!("id: {since}\nevent: cap\ndata: {e}\n\n");
+                let msg = format!(
+                    "id: {since}\nevent: {}\ndata: {e}\n\n",
+                    e["type"].as_str().unwrap()
+                );
                 return Some((Ok::<_, Infallible>(Bytes::from(msg)), (f, since)));
             }
             if f.end_streams.load(Ordering::SeqCst) {
@@ -156,34 +196,65 @@ async fn command(
         return refuse(502, "down");
     }
     f.commands.lock().unwrap().push(body.clone());
-    match f.answers.lock().unwrap().pop_front() {
-        Some((status, answer)) => {
-            (StatusCode::from_u16(status).unwrap(), Json(answer)).into_response()
-        }
-        None => {
-            let status = match body["type"].as_str() {
-                Some("pause_schedule" | "resume_schedule" | "stop_session") => StatusCode::OK,
-                _ => StatusCode::ACCEPTED,
-            };
-            let mut answer = json!({"ok": true});
-            if body["type"] == "run_schedule" {
-                answer["run_key"] = json!(format!("{}/manual-1", body["name"].as_str().unwrap()));
-                answer["task_id"] = json!(format!(
+    if let Some((status, answer)) = f.answers.lock().unwrap().pop_front() {
+        return (StatusCode::from_u16(status).unwrap(), Json(answer)).into_response();
+    }
+    let n = f.commands.lock().unwrap().len();
+    match body["type"].as_str().unwrap_or("") {
+        "start_run" | "run_schedule" => {
+            let id = f
+                .next_runs
+                .lock()
+                .unwrap()
+                .pop_front()
+                .unwrap_or_else(|| format!("run_new{n}"));
+            let task_id = if body["type"] == "run_schedule" {
+                json!(format!(
                     "schedule/{}/manual-1",
                     body["name"].as_str().unwrap()
-                ));
-            }
-            (status, Json(answer)).into_response()
+                ))
+            } else {
+                body["task_id"].clone()
+            };
+            let run = json!({"id": id, "version": 1, "state": "queued", "task_id": task_id,
+                "title": body["title"], "resumed_from": body["resume_from"]});
+            (StatusCode::ACCEPTED, Json(json!({"run": run}))).into_response()
         }
+        "stop_run" => {
+            Json(json!({"run": {"id": body["run_id"], "state": "working"}})).into_response()
+        }
+        "wake_sprite" => {
+            Json(json!({"sprite": {"name": body["workspace"], "state": "awake"}})).into_response()
+        }
+        _ => Json(json!({"schedule": {"name": body["name"]}})).into_response(),
     }
+}
+
+async fn log(State(f): State<Arc<Fake>>, headers: HeaderMap, Path(id): Path<String>) -> Response {
+    if !authorized(&headers) {
+        return refuse(401, "unauthorized");
+    }
+    if f.down.load(Ordering::SeqCst) {
+        return refuse(502, "down");
+    }
+    *f.log_reads.lock().unwrap().entry(id.clone()).or_default() += 1;
+    if id == "run_unknown" {
+        return refuse(404, "no such run");
+    }
+    Json(json!({"entries": [
+        {"ts": 1_800_000_000_000_i64, "kind": "state", "text": "Queued"},
+        {"ts": 1_800_000_060_000_i64, "kind": "state", "text": "Working"},
+        {"ts": 1_800_000_120_000_i64, "kind": "tool", "text": "Edit: CHANGELOG.md"}]}))
+    .into_response()
 }
 
 /// Serve `fake`; its base URL.
 pub async fn serve(fake: Arc<Fake>) -> String {
     let app = Router::new()
-        .route("/v1/snapshot", get(snapshot))
-        .route("/v1/stream", get(stream))
-        .route("/v1/commands", post(command))
+        .route("/v2/snapshot", get(snapshot))
+        .route("/v2/stream", get(stream))
+        .route("/v2/commands", post(command))
+        .route("/v2/runs/{id}/log", get(log))
         .with_state(fake);
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
@@ -193,25 +264,38 @@ pub async fn serve(fake: Arc<Fake>) -> String {
 
 pub fn snapshot_data() -> Value {
     json!({
-        "v": 1,
+        "v": 2,
         "cursor": 10,
+        "runs": [
+            {"id": "run_work", "version": 3, "task_id": "pod/1", "title": "Tidy the readme",
+             "origin": "task", "workspace": "sample-repo", "sprite": "box-1", "state": "working",
+             "needs_you": null, "end_reason": null, "outcome": null, "asleep": false,
+             "current_tool": "Bash: cargo test", "session_id": "session_01Work",
+             "queued_at": 1_800_000_000_000_i64, "started_at": 1_800_000_000_000_i64,
+             "updated_at": 1_800_000_000_000_i64},
+            {"id": "run_old", "version": 9, "task_id": "schedule/nightly-deps/2026-11-06T03:00",
+             "title": "nightly-deps", "origin": "schedule", "workspace": "sample-repo",
+             "sprite": "box-1", "state": "ended", "end_reason": "reported",
+             "outcome": {"status": "done", "summary": "Bumped two packages.", "pr_url": null},
+             "cost_usd": 0.31, "queued_at": 1_799_990_000_000_i64,
+             "started_at": 1_799_990_000_000_i64, "ended_at": 1_799_990_600_000_i64,
+             "updated_at": 1_799_990_600_000_i64}
+        ],
         "sprites": [
-            {"name": "box-1", "state": "awake", "last_seen": 1_800_000_000_000_i64, "workspace": "sample-repo"},
-            {"name": "box-2", "state": "asleep", "last_seen": 1_799_999_000_000_i64}
+            {"name": "box-1", "workspace": "sample-repo", "version": 4, "state": "awake",
+             "agentd_version": "a1b2c3d4", "last_heartbeat_at": 1_800_000_000_000_i64},
+            {"name": "box-2", "version": 1, "state": "asleep", "agentd_version": null,
+             "last_heartbeat_at": 1_799_999_000_000_i64}
         ],
-        "sessions": [
-            {"id": "session_01Work", "title": "Tidy the readme", "status": "working",
-             "sprite": "box-1", "workspace": "sample-repo", "task_id": "pod/1",
-             "started_at": 1_800_000_000_000_i64}
-        ],
-        "checks": [{"id": "egress", "title": "Network egress", "status": "ok", "detail": "Allowlist only"}],
+        "checks": [{"id": "egress", "title": "Network egress", "status": "ok",
+            "detail": "Allowlist only", "version": 1}],
         "schedules": [
-            {"name": "nightly-deps", "cron": "0 3 * * *", "timezone": "UTC", "workspace": "sample-repo",
-             "model": "a-model", "max_runtime_minutes": 30, "enabled": true, "paused": false,
-             "next_run": 1_800_010_000_000_i64,
-             "last_run": {"run_key": "nightly-deps/2026-11-06T03:00", "due_at": 1_799_990_000_000_i64,
-                          "status": "finished", "error": null, "session_id": "session_01Old",
-                          "summary": "Bumped two packages.", "cost_usd": 0.31}}
+            {"name": "nightly-deps", "version": 2, "cron": "0 3 * * *", "timezone": "UTC",
+             "workspace": "sample-repo", "model": "a-model", "max_runtime_minutes": 30,
+             "enabled": true, "paused": false, "next_run": 1_800_010_000_000_i64,
+             "last_run": {"run_id": "run_old", "due_at": 1_799_990_000_000_i64, "state": "ended",
+                          "end_reason": "reported", "outcome": {"status": "done",
+                          "summary": "Bumped two packages.", "pr_url": null}}}
         ]
     })
 }

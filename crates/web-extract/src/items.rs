@@ -12,8 +12,9 @@
 //! | `events` | events of an iCalendar feed or a page's schema.org `Event`s, normalized ([`crate::events::items`]: `id`, `title`, `start`, `end`, `venue`, `description`, `url`, `tickets_url`) | a path |
 //! | `selectors` | the elements matching the CSS selector `items` | a CSS selector inside the item: its text; `sel@attr`: an attribute; `@attr`: the item's own; `""`: the item's text |
 //!
-//! Links (`href`, `src`, and `url`/`link` values) are made absolute against
-//! the page's URL.
+//! A path may end in filters (`description | link`, `description | text`:
+//! [`crate::path`]). Links (`href`, `src`, and `url`/`link` values) are made
+//! absolute against the page's URL.
 
 use serde_json::{Map, Value, json};
 
@@ -128,7 +129,12 @@ pub fn check(spec: &Spec, map: &[(String, String)]) -> Result<(), String> {
             }
         }
         _ => {
-            path::parse(&spec.items).map_err(|e| format!("items: {e}"))?;
+            if path::parse(&spec.items)
+                .map_err(|e| format!("items: {e}"))?
+                .has_filters()
+            {
+                return Err("items: filters (| link, | text) go on map paths, not items".into());
+            }
             for (k, v) in map {
                 path::parse(v).map_err(|e| format!("map.{k}: {e}"))?;
             }

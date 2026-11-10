@@ -1,36 +1,40 @@
-# Agents: Claude Code sessions from an agent runner
+# Agents: runs from an agent runner
 
-The **Agents** data source (`agents`, `crates/app-agents`, decision
-[`agents-data-source`](decisions/agents-data-source.md)) shows and controls Claude Code sessions that an external
-**agent runner** starts on cloud sandboxes. The pod is the dashboard and the "start work" button; the sessions
-themselves are watched and steered in the Claude app.
+The **Agents** data source (`agents`, `crates/app-agents`, decisions
+[`agents-data-source`](decisions/agents-data-source.md) and [`agents-runs`](decisions/agents-runs.md)) shows and
+controls Claude Code work that an external **agent runner** (the Foreman) does on cloud sandboxes. The pod is the
+dashboard and the "start work" button; the work itself is watched and steered in the Claude app.
 
-## The runner's protocol (CAP v1)
+The unit is the **run**: one attempt at one piece of work on one sandbox. The runner alone decides a run's state; the
+pod keeps a mirror of what it sends and decides nothing.
+
+## The runner's protocol (CAP v2)
 
 The pod connects out to the runner; the runner never calls the pod. Every request carries the pod's bearer token for
-the runner.
+the runner. The runner sends whole records, each with a `version` that goes up on every change; the pod keeps the
+higher one.
 
-- `GET /v1/snapshot`: `{v, cursor, sprites[], sessions[], checks[], schedules[]}`, the state now. A schedule is
-  `{name, cron, timezone, workspace, model, max_runtime_minutes, enabled, paused, next_run, last_run}`, `last_run`
-  `null` or `{run_key, due_at, status, error, session_id, summary, cost_usd}`; times are milliseconds.
-- `GET /v1/stream?since=<cursor>`: server-sent events with `id: <seq>`, resumable with `Last-Event-ID`. Each event
-  is `{v: 1, seq, ts, type, sprite?, session_id?, task_id?, status?, data}`. Types: `task.launched`,
-  `sprite.state` (awake/asleep), `session.started`, `session.status`, `tool.used`, `permission.requested`,
-  `session.finished` `{summary, pr_url, cost_usd, input_tokens, output_tokens, duration_s, reason}`,
-  `session.failed` `{error}`, `session.link` `{claude_url, workspace?}` (the session's page in the Claude app),
-  `security.check` `{id, title, detail}` (ok/warn), `schedule.state` `{schedule}`
-  (paused/active), `schedule.missed` `{schedule, error}`, `schedule.timeout` `{schedule, max_runtime_minutes,
-  stopped}`.
-- `POST /v1/commands`, a fixed set: `wake {workspace, minutes}`, `start_task {workspace, task_id, title, prompt}`
-  (429 at the concurrency limit), `stop_session {session_id}`, `run_schedule {name}`, `pause_schedule {name}`,
-  `resume_schedule {name}`. Errors are `{error}` with 400, 401, 404, 429 or 502.
+- `GET /v2/snapshot`: `{v: 2, cursor, runs[], sprites[], schedules[], checks[]}`. `runs` holds every run that hasn't
+  ended and ended ones from the last 7 days.
+- `GET /v2/stream?since=<cursor>`: server-sent events with `id: <seq>`, resumable with `Last-Event-ID`. Each is
+  `{v: 2, seq, ts, type, record}`, `type` one of `run.updated`, `sprite.updated`, `schedule.updated`,
+  `check.updated`, `record` the whole record.
+- `GET /v2/runs/<id>/log`: `{entries: [{ts, kind, text}]}`, the run's history, oldest first.
+- `POST /v2/commands`, a fixed set, each `{type, ...}`: `start_run {workspace, task_id, title, prompt,
+  resume_from?}` (202 `{run}`; 200 with the task's run that hasn't ended), `stop_run {run_id}`, `wake_sprite
+  {workspace, minutes}`, `run_schedule`, `pause_schedule`, `resume_schedule {name}`. Errors are `{error}` with 400,
+  401, 404, 409 or 502. The runner queues work itself: there is no "busy" answer.
 
-A snapshot's session may carry `workspace` and `claude_url`; `session.started` may carry `workspace` in its data.
-
-Session statuses: `starting`, `working`, `waiting_permission`, `waiting_input`, `idle`, `finished`, `failed`,
-`stale`. Only `starting` and `working` count as working in `agents:status` (`working_count`, `summary_text`), and
-`waiting_permission` and `waiting_input` as needing you; `idle` counts as neither, since each sandbox's Remote
-Control keeps an idle standby session open and a finished run's session stays open idle. A scheduled run's `task_id` is `schedule/<name>/<local minute or manual-…>`.
+A run: `{id, version, task_id, title, origin, workspace, sprite, state, needs_you {reason, text}, end_reason,
+outcome {status, summary, pr_url}, error, asleep, current_tool, summary, pr_url, claude_url, session_id,
+resumed_from, cost_usd, input_tokens, output_tokens, queued_at, started_at, updated_at, ended_at}` (times in
+milliseconds). States: `queued`, `starting`, `working`, `needs_you` (reason `permission`, `question` or `stopped`)
+and `ended` (`end_reason` `reported`, `exited`, `stopped`, `timed_out`, `lost`, `start_failed` or `expired`). The
+agent reports its `outcome` (`done`, `review`, `blocked`, `failed`); it survives the run ending. A run can be
+`asleep` (its sandbox sleeps; frozen, not ended). A sprite is `{name, workspace, version, state, agentd_version,
+last_heartbeat_at}`, state `unprovisioned`, `asleep`, `waking`, `awake`, `unreachable` or `updating`. A schedule
+carries `last_run {run_id, due_at, state, end_reason, outcome}`. A scheduled run's `task_id` is
+`schedule/<name>/<minute>`.
 
 ## In the pod
 
@@ -39,31 +43,36 @@ Control keeps an idle standby session open and a finished run's session stays op
   sealed (`CONSTRUCT_SECRETS_KEY`) in `agents_runner`. The URL must be `https://` on a public host name
   (`CONSTRUCT_AGENTS_PRIVATE_HOSTS=1` allows any address, for local development). Requests follow no redirects.
   `POST /v1/agents/sign-out` forgets the runner and everything it sent. One runner per pod.
-- **Following:** a background task per open pod takes a snapshot (at sign-in, and when the last good answer is over
-  10 minutes old), then follows the stream from the cursor, reconnecting with backoff (1 s doubling to 60 s). Each
-  event updates the stored state and the session's timeline (`agents_events`, the last 200 per session), and the
-  pod's clients reload. Sandboxes and schedules come only with a snapshot (a redeployed runner can change a
-  schedule's time without an event), so the pod reads them again from a snapshot on every reconnect and every 10
-  minutes while following; sessions, checks and the cursor stay as the stream left them. While the runner can't be
-  reached the feeds serve the last state, with `agents:status.stale` true and a "Can't reach …" line.
-- **Feeds:** `sessions` (`agents:status` and `agents:sessions`: the ones that need you, then working, idle and ended
-  ones, each newest first), `sandboxes`, `checks`, `schedules`; and `/v1/agents/sessions/timeline?id=<id>` (`agents:timeline:<id>`). The
-  entities and their fields are in the source's manifest (`describe_vocabulary`, `list_data_sources`).
-- **Actions:** `/v1/agents/sessions/stop`, `/v1/agents/sandboxes/wake`, `/v1/agents/tasks/start`,
-  `/v1/agents/schedules/run`, `/pause` and `/resume`. They need a valid pod session; runner refusals come back as
-  429 `runner_busy`, 400 or 404 `runner_refused`, and 502 otherwise (never 401, which would sign the device out).
+- **Following, always:** a pod signed in to a runner is opened when the server starts and stays open
+  (`AppAdapter::keeps_open`), so its follower runs whether or not anyone uses the pod. The follower takes a snapshot
+  (at sign-in, and when the last good answer is over 10 minutes old), then follows the stream from the cursor,
+  reconnecting with backoff (1 s doubling to 60 s). A snapshot replaces the stored records; an event's record
+  replaces the stored one only when its version is higher, so replays and late copies change nothing. While the
+  runner can't be reached the feeds serve the last state, with `agents:status.stale` true and a "Can't reach …" line.
+- **Feeds:** `sessions` (`agents:status` and `agents:sessions`: the runs that need you, then starting and working,
+  then queued, then ended ones, each newest first; entity `agents://sessions/<run id>`), `sandboxes`, `checks`,
+  `schedules`; and `/v1/agents/sessions/timeline?id=<run id>` (`agents:timeline:<id>`), the run's log read from the
+  runner when the screen opens (kept 10 s). `agents:status.summary_text` reads e.g. "1 working · 1 needs you · 2
+  queued" or "Nothing running". A run's `status_text` is one of Queued, Starting, Working, Needs you, Done, Needs
+  review, Blocked, Failed, Stopped, Lost, Didn't start, Timed out, Expired. The entities and their fields are in the
+  source's manifest (`describe_vocabulary`, `list_data_sources`).
+- **Actions:** `/v1/agents/sessions/stop {run_id}` (`session_id` is read the same way, for older layouts),
+  `/v1/agents/sandboxes/wake`, `/v1/agents/tasks/start`, `/v1/agents/tasks/reopen`, `/v1/agents/schedules/run`,
+  `/pause` and `/resume`. They need a valid pod session; runner refusals come back as 400, 404 or 409
+  `runner_refused`, and 502 otherwise (never 401, which would sign the device out).
 - **Untrusted text:** everything the runner sends is plain display text, cleaned of control characters and capped.
   The links kept are `pr_url`, only as `https://github.com/<owner>/<repo>/pull/<n>`, and `claude_url`, only as
   `https://claude.ai/code/` and a path of plain segments; without a `claude_url`, "Open in Claude" is built from the
-  session id when it is a claude.ai one (`session_…`).
+  run's `session_id` when it is a claude.ai one (`session_…`). Run ids are letters, digits, `_` and `-`.
 
 ## The Agents blueprint
 
 `agents` (`crates/app-agents/layouts/agents/`): the sign-in form until the pod is signed in; then a summary card
-("2 working · 1 needs you"), chips for Sessions, Schedules, Sandboxes and Checks, a "Start a session" form, and Sign
-out (asks first). A session's screen shows its status, tool, summary, error, **Open in Claude** and **Pull request**
-links, **Stop** (asks first) and its timeline. Schedules have **Run now**, **Pause** (asks first) and **Resume**;
-sandboxes that are asleep have **Wake**. It uses existing vocabulary only.
+("1 working · 1 needs you · 2 queued"), chips for Runs, Schedules, Sandboxes and Checks, a "Start a run" form, and
+Sign out (asks first). A run's card shows its status, Asleep, what it needs from you (e.g. "Has a question" and the
+question), its tool or outcome. A run's screen adds **Open in Claude**, **Pull request**, **Stop** (on active runs,
+asks first), a **Follow up** form (Reopen) on an ended task run, and its log. Schedules have **Run now**, **Pause**
+(asks first) and **Resume**; sandboxes that aren't awake have **Wake**. It uses existing vocabulary only.
 
 A layout made from it (`{"type": "core://Ref", "app": "agents", "part": "layout"}`) is linked from home; home can
 show `${agents://runner/status#summary_text}` as its one-line summary.
@@ -75,27 +84,44 @@ is signed in:
 
 | Channel | Importance | Sends |
 |---|---|---|
-| `needs_you` "Needs you" | high | a session starts waiting for a permission |
-| `sessions` "Finished sessions" | default | a session finishes (summary and PR link) or fails |
-| `warnings` "Runner warnings" | high | a security check turns to warn (again only after it was ok), a schedule is missed or runs past its limit (once per run: a repeated event for the same run is ignored) |
+| `needs_you` "Needs you" | high | a run enters `needs_you` (the question, the permission, or Claude's last message), once per entry |
+| `sessions` "Finished runs" | default | a run ends with an outcome or a report (its summary and PR link) |
+| `warnings` "Runner warnings" | high | a run ends lost, didn't start, timed out or expired; a security check turns to warn |
 
-A run is the event's `session_id` (else `task_id`) for a timeout and its `task_id` for a missed run; the pod
-remembers the last 200 notified runs in its stored state. The follower sends them as events arrive, while the pod is
-open; the source's 60-second poll keeps the follower running for pods with a registered device.
+Each is worked out by comparing a run's stored record with the new one, and remembered by run and transition (the
+last 200, in the stored state), so a restart or a repeated record notifies nothing twice. A run the pod first sees in
+a snapshot already ended is history and notifies nothing.
 
 ## The Tasks wiring
 
 Opt-in per collection, with the MCP tool `agents_link_tasks {collection, workspace}` (`collection: null` unlinks).
 The collection needs a `title` and a choice `status` with the option `queued`; linking adds the options `todo`,
-`started`, `review` and `failed` and optional text fields `session_id`, `workspace` and `diagnosis`, through
-Collections' `apply_change`. Then:
+`queued`, `running`, `needs_you`, `review`, `done` and `failed` (none is removed, so an old `started` stays) and
+optional text fields `run_id`, `session_id`, `workspace` and `diagnosis`, through Collections' `apply_change`. Then:
 
-- a row that becomes `queued` sends `start_task` with the row's id as `task_id`, its title and notes as the prompt,
-  and its `workspace` (else the linked default). At the runner's limit (429) it stays queued and is sent again
-  later; a refusal (400, 404) sets `failed` with the reason in `diagnosis`.
-- `session.started` sets `status = started` and `session_id`;
-- `session.finished` appends the summary and PR link to `diagnosis` and sets `status = review`;
-- `session.failed` sets `status = todo` and appends the error.
+- a row that becomes `queued` sends `start_run` once, with the row's id as `task_id`, its title, its title and notes
+  as the prompt (the runner adds its own preamble), and its `workspace` (else the linked default); the answer's run
+  id goes in `run_id`. A refusal (400, 404, 409) sets `failed` with the reason in `diagnosis`; an unreachable runner
+  leaves it queued for the next pass (every 30 s and on each change). A row queued again after its run ended (a
+  retry) gets a new run.
+- the row's status then follows its current run (the one `run_id` names, else the newest run whose `task_id` is the
+  row's id) through one table:
+
+  | current run | row status |
+  |---|---|
+  | queued | queued |
+  | starting, working | running |
+  | needs_you | needs_you |
+  | ended, outcome done | done |
+  | ended, outcome review; or reported, exited or stopped without an outcome | review |
+  | outcome failed or blocked; or lost, start_failed, timed_out or expired | failed |
+
+  When the run ends, its summary and PR link (or why it failed) are appended to `diagnosis`, once.
+- a row you set to `done` (or whose `done` box you tick) or `todo` keeps that status: its run only adds to
+  `diagnosis`, and a run that hasn't ended gets `stop_run`, once.
+- **Reopen:** `POST /v1/agents/tasks/reopen {id, message}` (or `{run_id, message}` from a run's screen) needs the
+  row's last run to have ended. It sends `start_run` with `resume_from` the last run and `message` as the prompt; the
+  new run continues the conversation in its worktree, and the row goes back to `queued` with the new `run_id`.
 
 ## Setting it up in a pod
 

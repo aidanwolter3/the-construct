@@ -41,6 +41,11 @@ pub const KEEP_SECS: i64 = 30 * 86_400;
 pub const MAX_DEVICES: i64 = 20;
 /// A device not seen for this long is no reason to poll.
 pub const DEVICE_ACTIVE_SECS: i64 = 30 * 86_400;
+/// What [`AppState::poll_due`] answers for a pod an adapter keeps open
+/// ([`crate::AppAdapter::keeps_open`]) and with nothing to poll: due at
+/// once, so the host opens it whenever the server starts. It never
+/// changes, so the host doesn't write it again on every pass.
+pub const KEEP_OPEN_WAKE: i64 = 0;
 /// One adapter poll may take this long.
 pub const POLL_TIMEOUT: Duration = Duration::from_secs(20);
 /// Longest backoff after failed polls.
@@ -691,6 +696,13 @@ impl AppState {
     /// `None`: nothing to poll, e.g. no device registered). Called by the host
     /// scheduler; overlapping calls return at once.
     pub async fn poll_due(self: &Pod) -> Option<i64> {
+        let pod = self.clone();
+        let keep = blocking(self, move |s| {
+            Ok(pod.catalog().adapters().iter().any(|a| a.keeps_open(s)))
+        })
+        .await
+        .unwrap_or(false);
+        let idle = keep.then_some(KEEP_OPEN_WAKE);
         let pollers: Vec<_> = self
             .catalog()
             .adapters()
@@ -698,7 +710,7 @@ impl AppState {
             .filter_map(|a| a.poll_interval().map(|i| (a.clone(), i)))
             .collect();
         if pollers.is_empty() {
-            return None;
+            return idle;
         }
         let Ok(_guard) = self.notifier.poll_lock.try_lock() else {
             return Some(now_secs() + 30);
@@ -708,7 +720,7 @@ impl AppState {
             .await
             .unwrap_or(false)
         {
-            return None;
+            return idle;
         }
         let ctx = PollCtx {
             public_prefix: self.public_prefix().to_owned(),
@@ -774,7 +786,7 @@ impl AppState {
             })
             .await;
         }
-        next
+        next.or(idle)
     }
 
     /// When [`Self::poll_due`] has work next, without polling (`None`: no

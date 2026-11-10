@@ -8,51 +8,58 @@ use crate::runner::{call, pod, signed_in};
 #[tokio::test]
 async fn actions_send_their_commands() {
     let (pod, fake, _) = signed_in().await;
-    let cases: [(&str, Value, Value, u16); 6] = [
+    let cases: [(&str, Value, Value); 7] = [
         (
             "/v1/agents/sessions/stop",
-            json!({"session_id": "session_01Work"}),
-            json!({"type": "stop_session", "session_id": "session_01Work"}),
-            200,
+            json!({"run_id": "run_work"}),
+            json!({"type": "stop_run", "run_id": "run_work"}),
+        ),
+        // Layouts made before runs send the entity's id as session_id.
+        (
+            "/v1/agents/sessions/stop",
+            json!({"session_id": "run_work"}),
+            json!({"type": "stop_run", "run_id": "run_work"}),
         ),
         (
             "/v1/agents/sandboxes/wake",
             json!({"workspace": "sample-repo"}),
-            json!({"type": "wake", "workspace": "sample-repo", "minutes": 30}),
-            200,
+            json!({"type": "wake_sprite", "workspace": "sample-repo", "minutes": 30}),
         ),
         (
             "/v1/agents/tasks/start",
             json!({"workspace": "sample-repo", "title": "Add tests", "prompt": "Cover the parser", "task_id": "pod/abc"}),
-            json!({"type": "start_task", "workspace": "sample-repo", "task_id": "pod/abc",
+            json!({"type": "start_run", "workspace": "sample-repo", "task_id": "pod/abc",
                 "title": "Add tests", "prompt": "Cover the parser"}),
-            200,
         ),
         (
             "/v1/agents/schedules/run",
             json!({"name": "nightly-deps"}),
             json!({"type": "run_schedule", "name": "nightly-deps"}),
-            200,
         ),
         (
             "/v1/agents/schedules/pause",
             json!({"name": "nightly-deps"}),
             json!({"type": "pause_schedule", "name": "nightly-deps"}),
-            200,
         ),
         (
             "/v1/agents/schedules/resume",
             json!({"name": "nightly-deps"}),
             json!({"type": "resume_schedule", "name": "nightly-deps"}),
-            200,
         ),
     ];
-    for (path, body, sent, status) in cases {
+    fake.next_runs
+        .lock()
+        .unwrap()
+        .extend(["run_started".to_owned(), "run_scheduled".to_owned()]);
+    for (path, body, sent) in cases {
         let (s, answer) = call(&pod, "POST", path, Some("phone"), Some(body)).await;
-        assert_eq!(s.as_u16(), status, "{path}: {answer}");
+        assert_eq!(s, StatusCode::OK, "{path}: {answer}");
         assert_eq!(fake.commands.lock().unwrap().last(), Some(&sent), "{path}");
+        if path.ends_with("/start") {
+            assert_eq!(answer["run_id"], "run_started");
+        }
         if path.ends_with("/run") {
-            assert_eq!(answer["run_key"], "nightly-deps/manual-1");
+            assert_eq!(answer["run_id"], "run_scheduled");
             assert_eq!(answer["task_id"], "schedule/nightly-deps/manual-1");
         }
     }
@@ -64,7 +71,7 @@ async fn runner_refusals_come_through() {
     fake.answers
         .lock()
         .unwrap()
-        .push_back((429, json!({"error": "at the concurrency limit"})));
+        .push_back((404, json!({"error": "no workspace w"})));
     let (s, b) = call(
         &pod,
         "POST",
@@ -73,23 +80,23 @@ async fn runner_refusals_come_through() {
         Some(json!({"workspace": "w", "title": "t", "prompt": "p"})),
     )
     .await;
-    assert_eq!(s, StatusCode::TOO_MANY_REQUESTS, "{b}");
-    assert_eq!(b["error"], "runner_busy");
-    assert_eq!(b["detail"], "at the concurrency limit");
+    assert_eq!(s, StatusCode::NOT_FOUND, "{b}");
+    assert_eq!(b["error"], "runner_refused");
+    assert_eq!(b["detail"], "no workspace w");
     fake.answers
         .lock()
         .unwrap()
-        .push_back((404, json!({"error": "no such schedule"})));
+        .push_back((502, json!({"error": "the sprite couldn't be reached"})));
     let (s, b) = call(
         &pod,
         "POST",
-        "/v1/agents/schedules/run",
+        "/v1/agents/sandboxes/wake",
         Some("phone"),
-        Some(json!({"name": "nope"})),
+        Some(json!({"workspace": "sample-repo"})),
     )
     .await;
-    assert_eq!(s, StatusCode::NOT_FOUND, "{b}");
-    assert_eq!(b["detail"], "no such schedule");
+    assert_eq!(s, StatusCode::BAD_GATEWAY, "{b}");
+    assert_eq!(b["error"], "runner_unreachable");
     // A token the runner no longer takes is never the client's 401.
     fake.answers
         .lock()
@@ -100,7 +107,7 @@ async fn runner_refusals_come_through() {
         "POST",
         "/v1/agents/sessions/stop",
         Some("phone"),
-        Some(json!({"session_id": "x"})),
+        Some(json!({"run_id": "run_x"})),
     )
     .await;
     assert_eq!(s, StatusCode::BAD_GATEWAY, "{b}");
@@ -120,6 +127,8 @@ async fn runner_refusals_come_through() {
             "/v1/agents/tasks/start",
             json!({"workspace": "w", "title": "t", "prompt": "p", "task_id": "schedule/x/1"}),
         ),
+        ("/v1/agents/sessions/stop", json!({"run_id": "a/b"})),
+        ("/v1/agents/tasks/reopen", json!({"id": "r1"})),
         ("/v1/agents/schedules/pause", json!({})),
     ] {
         let (s, b) = call(&pod, "POST", path, Some("phone"), Some(body)).await;

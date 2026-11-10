@@ -210,7 +210,10 @@ A collection can keep itself current from the web (decision
 - **`fetch`** (no model call per fill): a URL (or each row's own URL), an extractor and a map from fields to paths in
   each item. Extractors: `events` (an iCalendar feed or a page's schema.org events), `json`, `embedded-json`,
   `jsonld`, `rss`, `ics`, `selectors` (CSS), and `llm` (a model reads the page's text, only when it changed).
-  Conditional requests and a body hash skip unchanged pages; errors back off; values are coerced to the fields'
+  A map path may end in filters: `description | link` (the first link in it, Google redirects unwrapped) and
+  `description | text` (its text without HTML), e.g. to give `details` a link to follow (decision
+  `map-path-filters`). `details` reads each new row's own page once; with `extract: "llm"` and `fields` (and a
+  `hint`) a model reads that page for those fields, for pages with no structured data (decision `details-llm`). Conditional requests and a body hash skip unchanged pages; errors back off; values are coerced to the fields'
   types. Headers can carry a sealed secret (`collections_set_secret`, with the host it may be sent to; a
   request to any other host, a redirect off it, or a plain `http://` request doesn't get it). Extraction lives in
   `crates/web-extract`.
