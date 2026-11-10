@@ -10,9 +10,14 @@ use crate::style::{Face, Type};
 const SANS: &[u8] = include_bytes!("../fonts/InstrumentSans-Regular.ttf");
 const SANS_BOLD: &[u8] = include_bytes!("../fonts/InstrumentSans-Bold.ttf");
 const SERIF: &[u8] = include_bytes!("../fonts/Lora-Regular.ttf");
-/// Symbols the faces above lack (♥, ✓, ★, arrows): cosmic-text falls back
-/// to any loaded font that has a glyph, so this one fills those gaps.
+/// Symbols the faces above lack (♥, ✓, ★, arrows, fractions such as ⅓):
+/// cosmic-text falls back to any loaded font that has a glyph, so these fill
+/// those gaps. The bold cut holds only fractions, superscripts and
+/// subscripts, so a bold amount ("⅓ cup") keeps a bold fraction.
 const SYMBOLS: &[u8] = include_bytes!("../fonts/DejaVuSans-Symbols.ttf");
+const SYMBOLS_BOLD: &[u8] = include_bytes!("../fonts/DejaVuSans-Bold-Fractions.ttf");
+/// Emoji and symbols DejaVu lacks (⏰, 📅), drawn as monochrome outlines.
+const EMOJI: &[u8] = include_bytes!("../fonts/NotoEmoji-Regular.ttf");
 
 /// A measured text: its size in logical points.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -71,22 +76,21 @@ impl Default for TextEngine {
 impl TextEngine {
     pub fn new() -> TextEngine {
         let mut db = fontdb::Database::new();
-        for data in [SANS, SANS_BOLD, SERIF, SYMBOLS] {
+        for data in [SANS, SANS_BOLD, SERIF] {
             db.load_font_data(data.to_vec());
         }
-        let family = |weight: u16, sans: bool| {
+        let family = |sans: bool| {
             db.faces()
-                .find(|f| {
-                    let name = &f.families[0].0;
-                    f.weight.0 == weight
-                        && name.contains("Sans") == sans
-                        && !name.contains("DejaVu")
-                })
+                .find(|f| f.weight.0 == 400 && f.families[0].0.contains("Sans") == sans)
                 .map(|f| f.families[0].0.clone())
                 .unwrap_or_default()
         };
-        let sans = family(400, true);
-        let serif = family(400, false);
+        let sans = family(true);
+        let serif = family(false);
+        // The fallbacks, loaded after the faces are named.
+        for data in [SYMBOLS, SYMBOLS_BOLD, EMOJI] {
+            db.load_font_data(data.to_vec());
+        }
         TextEngine {
             fonts: FontSystem::new_with_locale_and_db("en-US".into(), db),
             sans,
@@ -266,8 +270,12 @@ mod tests {
     #[test]
     fn symbols_fall_back_to_a_font_that_has_them() {
         let mut t = TextEngine::new();
-        for text in ["♥ 3", "✓", "★ ☆", "→ ›"] {
-            let buffer = t.buffer(text, type_for(TextStyle::Body), None, 2.0);
+        let texts = ["♥ 3", "✓", "★ ☆", "→ ›", "¼ ½ ¾ ⅓ ⅔ ⅛ ⅜ ⅝ ⅞ ⅕ ⅙", "⏰ 📅"];
+        for (text, ty) in texts
+            .iter()
+            .flat_map(|t| [(t, type_for(TextStyle::Body)), (t, LABEL_LARGE)])
+        {
+            let buffer = t.buffer(text, ty, None, 2.0);
             let glyphs: Vec<u16> = buffer
                 .layout_runs()
                 .flat_map(|r| r.glyphs.iter().map(|g| g.glyph_id))
@@ -277,6 +285,17 @@ mod tests {
                 !glyphs.is_empty() && glyphs.iter().all(|g| *g != 0),
                 "{text}: {glyphs:?}"
             );
+        }
+    }
+
+    #[test]
+    fn bold_text_keeps_bold_fractions() {
+        let mut t = TextEngine::new();
+        for text in ["⅓ cup", "½ cup"] {
+            let buffer = t.buffer(text, LABEL_LARGE, None, 2.0);
+            let fraction = buffer.layout_runs().next().expect("a line").glyphs[0].font_id;
+            let face = t.font_system().db().face(fraction).expect("a face");
+            assert_eq!(face.weight.0, 700, "{text}: {}", face.families[0].0);
         }
     }
 

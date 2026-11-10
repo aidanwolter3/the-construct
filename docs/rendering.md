@@ -48,8 +48,12 @@ PNG / WebP (encode.rs)                 HeadlessSurface (readback) or a window / 
 The pod builds the crate with `default-features = false`: no wgpu, CPU only.
 
 Fonts are bundled in `fonts/` and nothing else is loaded: Instrument Sans (regular, bold), Lora (the Display
-style) and `DejaVuSans-Symbols.ttf`, DejaVu Sans cut to punctuation, arrows, shapes, symbols and dingbats.
-cosmic-text falls back to any loaded font with the glyph, so ♥, ✓ and ★ come from the last one.
+style), and three fallbacks: `DejaVuSans-Symbols.ttf`, DejaVu Sans cut to punctuation, arrows, shapes, symbols,
+dingbats and number forms (fractions such as ⅓ and ⅝, which Instrument Sans lacks); `DejaVuSans-Bold-Fractions.ttf`,
+the bold cut of just the fractions, superscripts and subscripts, so bold text keeps bold fractions; and
+`NotoEmoji-Regular.ttf`, monochrome Noto Emoji cut to what DejaVu lacks (⏰, 📅). cosmic-text falls back to a loaded
+font with the glyph, DejaVu Sans of the matching weight first, so ♥, ✓, ★ and ⅓ come from DejaVu. To change a cut,
+subset the font with fontTools' `pyftsubset` and keep its license next to it.
 
 ## Semantic ids
 
