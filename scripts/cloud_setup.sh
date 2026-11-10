@@ -40,7 +40,12 @@ if command -v apt-get >/dev/null; then
   dpkg -s pkg-config >/dev/null 2>&1 || need+=(pkg-config)
   dpkg -s mesa-vulkan-drivers >/dev/null 2>&1 || need+=(mesa-vulkan-drivers)  # lavapipe: construct-render's GPU tests
   if [[ ${#need[@]} -gt 0 ]]; then
-    $SUDO apt-get update -y
+    # Cloud containers reach the network only through an HTTPS proxy: plain-http Ubuntu mirrors hang until apt's
+    # retries run out (~10 minutes). Use https for them, and cap each request so a blocked source can't stall setup.
+    for f in /etc/apt/sources.list /etc/apt/sources.list.d/*.list /etc/apt/sources.list.d/*.sources; do
+      if [[ -f $f ]]; then $SUDO sed -i 's#http://\([a-z.]*\)ubuntu\.com#https://\1ubuntu.com#g' "$f"; fi
+    done
+    $SUDO apt-get -o Acquire::http::Timeout=20 -o Acquire::https::Timeout=20 -o Acquire::Retries=1 update -y
     DEBIAN_FRONTEND=noninteractive $SUDO apt-get install -y "${need[@]}"
   fi
 fi
