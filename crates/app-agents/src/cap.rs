@@ -262,12 +262,41 @@ impl Clients {
     }
 }
 
+/// The most the pod reads of one runner answer (a snapshot, a run's log, a
+/// command's answer). A runner is any https host its pod names, so a larger
+/// answer is refused rather than held in the shared server's memory.
+pub const MAX_BODY: usize = 4 * 1024 * 1024;
+/// The most the pod reads of an error answer.
+const MAX_ERROR_BODY: usize = 16 * 1024;
+
+/// The answer's body as JSON, read up to `max` bytes; `Invalid` past that.
+async fn json_capped(mut resp: reqwest::Response, max: usize) -> Result<Value, CapError> {
+    let too_long = || CapError::Invalid("the answer is too long".into());
+    if resp.content_length().is_some_and(|n| n > max as u64) {
+        return Err(too_long());
+    }
+    let mut bytes = Vec::new();
+    while let Some(chunk) = resp
+        .chunk()
+        .await
+        .map_err(|e| CapError::Invalid(short(&e)))?
+    {
+        if bytes.len() + chunk.len() > max {
+            return Err(too_long());
+        }
+        bytes.extend_from_slice(&chunk);
+    }
+    serde_json::from_slice(&bytes).map_err(|_| CapError::Invalid("unreadable answer".into()))
+}
+
 async fn error_of(resp: reqwest::Response) -> CapError {
     let status = resp.status().as_u16();
     if status == 401 {
         return CapError::Unauthorized;
     }
-    let body: Value = resp.json().await.unwrap_or(Value::Null);
+    let body: Value = json_capped(resp, MAX_ERROR_BODY)
+        .await
+        .unwrap_or(Value::Null);
     let text = body
         .get("error")
         .and_then(Value::as_str)
@@ -288,10 +317,7 @@ pub async fn snapshot(clients: &Clients, runner: &Runner) -> Result<Value, CapEr
     if !resp.status().is_success() {
         return Err(error_of(resp).await);
     }
-    let v: Value = resp
-        .json()
-        .await
-        .map_err(|e| CapError::Invalid(short(&e)))?;
+    let v = json_capped(resp, MAX_BODY).await?;
     if !v.is_object() || v.get("v").and_then(Value::as_i64) != Some(2) {
         return Err(CapError::Invalid("not a v2 snapshot".into()));
     }
@@ -313,10 +339,7 @@ pub async fn run_log(clients: &Clients, runner: &Runner, id: &str) -> Result<Val
     if !resp.status().is_success() {
         return Err(error_of(resp).await);
     }
-    let v: Value = resp
-        .json()
-        .await
-        .map_err(|e| CapError::Invalid(short(&e)))?;
+    let v = json_capped(resp, MAX_BODY).await?;
     if !v.get("entries").is_some_and(Value::is_array) {
         return Err(CapError::Invalid("not a run log".into()));
     }
@@ -337,7 +360,11 @@ pub async fn command(clients: &Clients, runner: &Runner, cmd: &Command) -> Resul
     if !resp.status().is_success() {
         return Err(error_of(resp).await);
     }
-    Ok(resp.json().await.unwrap_or_else(|_| json!({"ok": true})))
+    match json_capped(resp, MAX_BODY).await {
+        Ok(v) => Ok(v),
+        Err(CapError::Invalid(e)) if e == "unreadable answer" => Ok(json!({"ok": true})),
+        Err(e) => Err(e),
+    }
 }
 
 /// `GET /v2/stream?since=<cursor>`: the open response, its body still to
@@ -382,6 +409,8 @@ fn short(e: &reqwest::Error) -> String {
 pub struct SseParser {
     buf: Vec<u8>,
     data: Vec<String>,
+    /// The bytes in `data` so far.
+    data_len: usize,
     id: Option<String>,
 }
 
@@ -392,12 +421,13 @@ pub struct SseMessage {
     pub data: String,
 }
 
-/// The most a single SSE line may hold before the stream is dropped.
+/// The most a single SSE line, or a whole message (its `data` lines
+/// together), may hold before the stream is dropped.
 const MAX_LINE: usize = 256 * 1024;
 
 impl SseParser {
-    /// Add `chunk`; returns the messages it completed. `Err` when a line
-    /// grows past [`MAX_LINE`].
+    /// Add `chunk`; returns the messages it completed. `Err` when a line or
+    /// a message grows past [`MAX_LINE`].
     pub fn push(&mut self, chunk: &[u8]) -> Result<Vec<SseMessage>, String> {
         self.buf.extend_from_slice(chunk);
         let mut out = Vec::new();
@@ -415,6 +445,7 @@ impl SseParser {
                         data: self.data.join("\n"),
                     });
                     self.data.clear();
+                    self.data_len = 0;
                 }
                 self.id = None;
                 continue;
@@ -427,7 +458,13 @@ impl SseParser {
                 None => (line.as_str(), ""),
             };
             match field {
-                "data" => self.data.push(value.to_owned()),
+                "data" => {
+                    self.data_len += value.len() + 1;
+                    if self.data_len > MAX_LINE {
+                        return Err("an event is too long".into());
+                    }
+                    self.data.push(value.to_owned());
+                }
                 "id" => self.id = Some(value.to_owned()),
                 _ => {}
             }
@@ -464,6 +501,26 @@ mod tests {
                 data: "x".into()
             }]
         );
+    }
+
+    #[test]
+    fn sse_messages_are_capped_across_lines() {
+        let mut p = SseParser::default();
+        let line = format!("data: {}\n", "x".repeat(1024));
+        let mut failed = false;
+        for _ in 0..(MAX_LINE / 1024 + 2) {
+            if p.push(line.as_bytes()).is_err() {
+                failed = true;
+                break;
+            }
+        }
+        assert!(failed, "a message of many short data lines is refused");
+        // A message under the cap still arrives, and the count restarts.
+        let mut p = SseParser::default();
+        for _ in 0..3 {
+            let got = p.push(format!("{line}\n").as_bytes()).unwrap();
+            assert_eq!(got.len(), 1);
+        }
     }
 
     #[test]

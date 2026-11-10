@@ -44,7 +44,8 @@ is plugged and to which URL; `unplug_jack agent_runner` signs out, like `POST /v
 - **Sign-in:** the Agents layout's form posts the runner's URL and token to `POST /v1/agents/sign-in`. The pod asks
   the runner for a snapshot with it first (a refused token is 400 `runner_refused_token`), then stores the token
   sealed (`CONSTRUCT_SECRETS_KEY`) in `agents_runner`. The URL must be `https://` on a public host name
-  (`CONSTRUCT_AGENTS_PRIVATE_HOSTS=1` allows any address, for local development). Requests follow no redirects.
+  (`CONSTRUCT_AGENTS_PRIVATE_HOSTS=1` allows any address, for local development). Requests follow no redirects. An
+  answer over 4 MiB, or a stream message over 256 KiB, is refused, so a runner can't fill the shared server's memory.
   `POST /v1/agents/sign-out` forgets the runner and everything it sent. One runner per pod.
 - **Following, always:** a pod signed in to a runner is opened when the server starts and stays open
   (`AppAdapter::keeps_open`), so its follower runs whether or not anyone uses the pod. The follower takes a snapshot
