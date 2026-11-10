@@ -217,6 +217,24 @@ async fn a_wrong_token_or_url_is_refused() {
 }
 
 #[tokio::test]
+async fn an_oversized_snapshot_is_refused() {
+    let fake = std::sync::Arc::new(crate::runner::Fake::default());
+    let mut snap = crate::runner::snapshot_data();
+    snap["padding"] = json!("x".repeat(app_agents::cap::MAX_BODY + 1));
+    *fake.snapshot.lock().unwrap() = snap;
+    let url = crate::runner::serve(fake).await;
+    let (status, body) = call(
+        &pod(),
+        "POST",
+        "/v1/agents/sign-in",
+        Some("phone"),
+        Some(json!({"url": url, "token": TOKEN})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_GATEWAY, "{body}");
+}
+
+#[tokio::test]
 async fn signing_out_forgets_the_runner() {
     let (pod, _fake, _) = signed_in().await;
     let app = agents_layout(&pod).await;
