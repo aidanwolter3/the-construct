@@ -55,7 +55,8 @@ An adapter implements `pod_core::AppAdapter` (`crates/pod-core/src/adapter.rs`).
 - add its own **routes** (sign-in, mutations, media proxies) and its own **tables** (`<adapter>_*`, migrated by the
   core);
 - declare **notification channels** and poll an upstream for new notifications (D52);
-- **resume** background jobs when a pod opens (D50).
+- **resume** background jobs when a pod opens (D50), and keep the pod open from server start when that work can't
+  wait for a request (`keeps_open`, decision `agents-runs`).
 
 The server binary picks the adapters at compile time (`server::adapters`). Apps in this repository:
 
@@ -173,6 +174,8 @@ More on running them: [clients.md](clients.md); on the renderer: [rendering.md](
 Pods open lazily on their first request. The host's scheduler wakes pods that have work due (`host.db`
 `pods.next_wake_at`): notification polls, collection fillers that keep rows current from the web, and reminders. A
 pod polls upstreams only while it has a device seen in the last 30 days, so idle and temporary pods cost nothing.
+A pod an adapter keeps open (`AppAdapter::keeps_open`: the Agents source while signed in to a runner) is always due,
+so the scheduler opens it when the server starts and its background work runs without a request.
 
 ## Where decisions are recorded
 

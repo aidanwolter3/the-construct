@@ -7,7 +7,7 @@ use protocol::{DataBundle, EntityRecord};
 use serde_json::{Value, json};
 
 use crate::db::Health;
-use crate::state::{self, Session, State};
+use crate::state::{self, Run, State};
 use crate::text;
 
 pub const STATUS_URI: &str = "agents://runner/status";
@@ -25,50 +25,59 @@ fn record(v: Value) -> EntityRecord {
     }
 }
 
-/// A session status's word and colour.
-pub fn status_look(status: &str) -> (&'static str, &'static str) {
-    match status {
+pub const PURPLE: &str = "#7B4FC9";
+
+/// A run's word and colour, from its state, end reason and outcome.
+pub fn run_look(state: &str, end_reason: &str, outcome: &str) -> (&'static str, &'static str) {
+    match state {
+        state::QUEUED => ("Queued", GRAY),
         state::STARTING => ("Starting", BLUE),
         state::WORKING => ("Working", BLUE),
-        state::WAITING_PERMISSION => ("Needs you", ORANGE),
-        state::WAITING_INPUT => ("Waiting for you", ORANGE),
-        state::IDLE => ("Idle", GRAY),
-        state::FINISHED => ("Finished", GREEN),
-        state::FAILED => ("Failed", RED),
-        state::STALE => ("Lost", GRAY),
-        "missed" => ("Missed", RED),
-        "running" => ("Running", BLUE),
+        state::NEEDS_YOU => ("Needs you", ORANGE),
+        state::ENDED => match (outcome, end_reason) {
+            ("done", _) => ("Done", GREEN),
+            ("review", _) => ("Needs review", PURPLE),
+            ("blocked", _) => ("Blocked", RED),
+            ("failed", _) => ("Failed", RED),
+            (_, "stopped") => ("Stopped", GRAY),
+            (_, "lost") => ("Lost", RED),
+            (_, "start_failed") => ("Didn't start", RED),
+            (_, "timed_out") => ("Timed out", RED),
+            (_, "expired") => ("Expired", GRAY),
+            // Ended by itself without a report: a person should look.
+            _ => ("Needs review", PURPLE),
+        },
         "" => ("", GRAY),
         _ => ("Unknown", GRAY),
     }
 }
 
-fn needs_you(s: &Session) -> bool {
-    matches!(
-        s.status.as_str(),
-        state::WAITING_PERMISSION | state::WAITING_INPUT
-    )
-}
-
-/// Whether `s` is doing something right now (starting or working). Idle
-/// sessions are not: a sandbox's Remote Control keeps an idle standby
-/// session open, and a finished run's session stays open idle.
-fn is_working(s: &Session) -> bool {
-    matches!(s.status.as_str(), state::STARTING | state::WORKING)
-}
-
-/// Where `s` sorts in `agents:sessions`: waiting for you, then working,
-/// then idle, then ended.
-fn rank(s: &Session) -> u8 {
-    if needs_you(s) {
-        0
-    } else if is_working(s) {
-        1
-    } else if s.is_active() {
-        2
-    } else {
-        3
+/// What a waiting run waits for, e.g. `Wants permission`.
+pub fn needs_you_label(reason: &str) -> &'static str {
+    match reason {
+        "permission" => "Wants permission",
+        "question" => "Has a question",
+        _ => "Waiting for your reply",
     }
+}
+
+/// Where `r` sorts in `agents:sessions`: waiting for you, then starting or
+/// working, then queued, then ended.
+fn rank(r: &Run) -> u8 {
+    match r.state.as_str() {
+        state::NEEDS_YOU => 0,
+        state::STARTING | state::WORKING => 1,
+        state::QUEUED => 2,
+        state::ENDED => 4,
+        _ => 3,
+    }
+}
+
+fn count(st: &State, states: &[&str]) -> usize {
+    st.runs
+        .values()
+        .filter(|r| states.contains(&r.state.as_str()))
+        .count()
 }
 
 /// The zone a schedule's times read in: its own `timezone`, else the pod's.
@@ -89,18 +98,22 @@ pub fn status(st: Option<&(State, Health)>, host: &str, now_ms: i64) -> EntityRe
         return record(json!({
             "signed_in": false, "connected": false, "stale": false, "host": "",
             "status_text": "Not signed in to an agent runner",
-            "summary_text": "", "working_count": 0, "needs_you_count": 0, "color": GRAY,
-            "updated_text": "",
+            "summary_text": "", "working_count": 0, "needs_you_count": 0, "queued_count": 0,
+            "color": GRAY, "updated_text": "",
         }));
     };
-    let needs = st.sessions.values().filter(|s| needs_you(s)).count();
-    let working = st.sessions.values().filter(|s| is_working(s)).count();
+    let working = count(st, &[state::STARTING, state::WORKING]);
+    let needs = count(st, &[state::NEEDS_YOU]);
+    let queued = count(st, &[state::QUEUED]);
     let mut parts = Vec::new();
     if working > 0 {
         parts.push(format!("{working} working"));
     }
     if needs > 0 {
         parts.push(format!("{needs} needs you"));
+    }
+    if queued > 0 {
+        parts.push(format!("{queued} queued"));
     }
     let summary = if parts.is_empty() {
         "Nothing running".to_owned()
@@ -136,73 +149,97 @@ pub fn status(st: Option<&(State, Health)>, host: &str, now_ms: i64) -> EntityRe
         "summary_text": summary,
         "working_count": working,
         "needs_you_count": needs,
+        "queued_count": queued,
         "color": if !h.connected { GRAY } else if needs > 0 { ORANGE } else if working > 0 { BLUE } else { GREEN },
         "updated_text": updated,
     }))
 }
 
-/// One session's entity.
-pub fn session(s: &Session, now_ms: i64) -> EntityRecord {
-    let (status_text, color) = status_look(&s.status);
-    let elapsed = if s.started_at <= 0 {
-        String::new()
-    } else if s.is_active() {
-        text::duration((now_ms - s.started_at) / 1000)
-    } else if s.duration_s > 0.0 {
-        text::duration(s.duration_s as i64)
-    } else {
-        text::duration((s.updated_at - s.started_at) / 1000)
+/// One run's entity (`agents://sessions/<run id>`).
+pub fn session(r: &Run, now_ms: i64) -> EntityRecord {
+    let (status_text, color) = run_look(&r.state, &r.end_reason, &r.outcome);
+    let active = r.is_active();
+    let elapsed = match (r.started_at, r.ended_at) {
+        (s, _) if s <= 0 => String::new(),
+        (s, e) if e > 0 => text::duration((e - s) / 1000),
+        (s, _) => text::duration((now_ms - s) / 1000),
     };
-    let tokens = s.input_tokens + s.output_tokens;
+    let tokens = r.input_tokens + r.output_tokens;
+    let needs_you = r.state == state::NEEDS_YOU;
     record(json!({
-        "id": s.id,
-        "title": if s.title.is_empty() { "Untitled session" } else { &s.title },
-        "status": s.status,
+        "id": r.id,
+        "title": if r.title.is_empty() { "Untitled run" } else { &r.title },
+        "state": r.state,
+        "status": r.state,
         "status_text": status_text,
         "status_color": color,
-        "active": s.is_active(),
-        "needs_you": needs_you(s),
-        "current_tool": state::tool_text(&s.current_tool, &s.tool_detail),
-        "summary": s.summary,
-        "pr_url": s.pr_url,
-        "error": s.error,
-        "cost_text": text::cost(s.cost_usd),
+        "active": active,
+        "needs_you": needs_you,
+        "needs_you_reason": if needs_you { r.needs_you_reason.as_str() } else { "" },
+        "needs_you_label": if needs_you { needs_you_label(&r.needs_you_reason) } else { "" },
+        "needs_you_text": if needs_you { r.needs_you_text.as_str() } else { "" },
+        "end_reason": r.end_reason,
+        "outcome": r.outcome,
+        "outcome_summary": r.outcome_summary,
+        "summary": r.summary,
+        "error": r.error,
+        "pr_url": r.pr(),
+        "asleep": r.asleep && active,
+        "current_tool": if active { r.current_tool.as_str() } else { "" },
+        "cost_text": text::cost(r.cost_usd),
         "tokens_text": if tokens > 0 { format!("{tokens} tokens") } else { String::new() },
         "elapsed_text": elapsed,
-        "updated_text": if s.updated_at > 0 { text::ago(s.updated_at, now_ms) } else { String::new() },
-        "task_id": s.task_id,
-        "schedule": state::schedule_of_task(&s.task_id).unwrap_or(""),
-        "sandbox": s.sprite,
-        "workspace": s.workspace,
+        "updated_text": if r.last_at() > 0 { text::ago(r.last_at(), now_ms) } else { String::new() },
+        "task_id": r.task_id,
+        "schedule": state::schedule_of_task(&r.task_id).unwrap_or(""),
+        "sandbox": r.sprite,
+        "workspace": r.workspace,
+        "origin": r.origin,
+        "session_id": r.session_id,
+        "resumed_from": r.resumed_from,
         // The runner's link, else one built from a claude.ai session id.
-        "claude_url": if s.claude_url.is_empty() {
-            text::claude_url(&s.id).unwrap_or_default()
+        "claude_url": if r.claude_url.is_empty() {
+            text::claude_url(&r.session_id).unwrap_or_default()
         } else {
-            s.claude_url.clone()
+            r.claude_url.clone()
         },
     }))
 }
 
-/// The `sessions` feed: `agents:status` and `agents:sessions` (the ones
-/// that need you, then working, idle and ended ones, each newest first).
+/// The `sessions` feed: `agents:status` and `agents:sessions` (runs that
+/// need you, then starting or working, then queued, then ended ones, each
+/// newest first).
 pub fn sessions(st: Option<&(State, Health)>, host: &str, now_ms: i64) -> DataBundle {
     let mut b = DataBundle::default();
     b.entities
         .insert(STATUS_URI.into(), status(st, host, now_ms));
     b.queries
         .insert(crate::STATUS_QUERY.into(), vec![STATUS_URI.into()]);
-    let mut list: Vec<&Session> = st
-        .map(|(s, _)| s.sessions.values().collect())
+    let mut list: Vec<&Run> = st
+        .map(|(s, _)| s.runs.values().collect())
         .unwrap_or_default();
-    list.sort_by_key(|s| (rank(s), -s.updated_at.max(s.started_at)));
+    list.sort_by_key(|r| (rank(r), -r.last_at(), r.id.clone()));
     let mut order = Vec::new();
-    for s in list {
-        let uri = format!("agents://sessions/{}", s.id);
-        b.entities.insert(uri.clone(), session(s, now_ms));
+    for r in list {
+        let uri = format!("agents://sessions/{}", r.id);
+        b.entities.insert(uri.clone(), session(r, now_ms));
         order.push(uri);
     }
     b.queries.insert(crate::SESSIONS_QUERY.into(), order);
     b
+}
+
+/// A sandbox state's word and colour.
+pub fn sprite_look(state: &str) -> (&'static str, &'static str) {
+    match state {
+        "awake" => ("Awake", GREEN),
+        "asleep" => ("Asleep", GRAY),
+        "waking" => ("Waking", BLUE),
+        "updating" => ("Updating", BLUE),
+        "unreachable" => ("Unreachable", ORANGE),
+        "unprovisioned" => ("Not set up", GRAY),
+        _ => ("Unknown", GRAY),
+    }
 }
 
 /// The `sandboxes` feed: `agents:sandboxes`, awake first.
@@ -215,21 +252,17 @@ pub fn sandboxes(st: Option<&(State, Health)>, now_ms: i64) -> DataBundle {
     let mut order = Vec::new();
     for x in list {
         let uri = format!("agents://sandboxes/{}", x.name);
-        let awake = x.state == "awake";
+        let (state_text, color) = sprite_look(&x.state);
         b.entities.insert(
             uri.clone(),
             record(json!({
                 "name": x.name,
                 "state": x.state,
-                "awake": awake,
-                "state_text": match x.state.as_str() {
-                    "awake" => "Awake",
-                    "asleep" => "Asleep",
-                    "" => "Unknown",
-                    _ => "Unknown",
-                },
-                "color": if awake { GREEN } else { GRAY },
-                "last_seen_text": if x.last_seen > 0 { text::ago(x.last_seen, now_ms) } else { String::new() },
+                "awake": x.state == "awake",
+                "state_text": state_text,
+                "color": color,
+                "last_seen_text": if x.last_heartbeat_at > 0 { text::ago(x.last_heartbeat_at, now_ms) } else { String::new() },
+                "agentd_version": x.agentd_version,
                 "workspace": x.workspace,
             })),
         );
@@ -296,7 +329,13 @@ pub fn schedules(st: Option<&(State, Health)>, now_ms: i64, tz: &TimeZone) -> Da
             None => "Not scheduled".to_owned(),
         };
         let last = sc.last_run.clone().unwrap_or_default();
-        let (last_text, last_color) = status_look(&last.status);
+        let run = st.and_then(|(s, _)| s.runs.get(&last.run_id));
+        let (last_text, last_color) = run_look(&last.state, &last.end_reason, &last.outcome);
+        let last_summary = if !last.outcome_summary.is_empty() {
+            last.outcome_summary.clone()
+        } else {
+            run.map(|r| r.summary.clone()).unwrap_or_default()
+        };
         b.entities.insert(
             uri.clone(),
             record(json!({
@@ -312,13 +351,14 @@ pub fn schedules(st: Option<&(State, Health)>, now_ms: i64, tz: &TimeZone) -> Da
                 "state_text": state_text,
                 "next_run_text": next,
                 "ran": sc.last_run.is_some(),
-                "last_status": last.status,
+                "last_status": if last.state == state::ENDED && !last.outcome.is_empty() { &last.outcome } else if last.state == state::ENDED { &last.end_reason } else { &last.state },
                 "last_status_text": last_text,
                 "last_status_color": last_color,
-                "last_summary": last.summary,
-                "last_error": last.error,
-                "last_cost_text": text::cost(last.cost_usd),
-                "last_session_id": last.session_id,
+                "last_summary": last_summary,
+                "last_error": run.map(|r| r.error.as_str()).unwrap_or(""),
+                "last_cost_text": run.map(|r| text::cost(r.cost_usd)).unwrap_or_default(),
+                "last_session_id": last.run_id,
+                "last_run_id": last.run_id,
                 "last_run_text": last.due_at.map(|t| text::ago(t, now_ms)).unwrap_or_default(),
             })),
         );
@@ -328,67 +368,37 @@ pub fn schedules(st: Option<&(State, Health)>, now_ms: i64, tz: &TimeZone) -> Da
     b
 }
 
-/// One timeline line for a stored event.
-pub fn event_text(e: &Value) -> String {
-    let d = &e["data"];
-    let t = |k: &str, max| text::clean(d[k].as_str().unwrap_or(""), max);
-    let status = e["status"].as_str().unwrap_or("");
-    match e["type"].as_str().unwrap_or("") {
-        "task.launched" => "Launched".to_owned(),
-        "session.started" => "Started".to_owned(),
-        "session.status" => {
-            let (word, _) = status_look(status);
-            if word.is_empty() {
-                "Status changed".to_owned()
-            } else {
-                word.to_owned()
-            }
-        }
-        "tool.used" => match state::tool_text(&t("tool", 80), &t("detail", 200)) {
-            s if s.is_empty() => "Used a tool".to_owned(),
-            s => format!("Used {s}"),
-        },
-        "permission.requested" => match state::tool_text(&t("tool", 80), &t("detail", 200)) {
-            s if s.is_empty() => "Asked for permission".to_owned(),
-            s => format!("Asked to use {s}"),
-        },
-        "session.finished" => match t("summary", 300) {
-            s if s.is_empty() => "Finished".to_owned(),
-            s => format!("Finished: {s}"),
-        },
-        "session.failed" => match t("error", 300) {
-            s if s.is_empty() => "Failed".to_owned(),
-            s => format!("Failed: {s}"),
-        },
-        other => text::clean(other, 60),
-    }
-}
-
-/// The timeline data path: session `id` and `agents:timeline:<id>`.
+/// The run-log data path: run `id` and `agents:timeline:<id>`, its log
+/// (`GET /v2/runs/<id>/log`'s `{entries: [{ts, kind, text}]}`), oldest
+/// first. `log` is `None` when the runner couldn't be asked.
 pub fn timeline(
     st: Option<&(State, Health)>,
     id: &str,
-    events: &[Value],
+    log: Option<&Value>,
     now_ms: i64,
 ) -> DataBundle {
     let mut b = DataBundle::default();
-    if let Some(s) = st.and_then(|(s, _)| s.sessions.get(id)) {
+    if let Some(r) = st.and_then(|(s, _)| s.runs.get(id)) {
         b.entities
-            .insert(format!("agents://sessions/{id}"), session(s, now_ms));
+            .insert(format!("agents://sessions/{id}"), session(r, now_ms));
     }
+    let entries: Vec<&Value> = log
+        .and_then(|l| l.get("entries"))
+        .and_then(Value::as_array)
+        .map(|a| a.iter().take(LOG_MAX).collect())
+        .unwrap_or_default();
     let mut order = Vec::new();
-    for e in events {
-        let Some(seq) = e["seq"].as_i64() else {
-            continue;
-        };
-        let uri = format!("agents://events/{seq}");
-        let ts = e["ts"].as_i64().unwrap_or(0);
+    for (n, e) in entries.into_iter().enumerate() {
+        let uri = format!("agents://events/{id}-{n}");
+        let ts = e.get("ts").and_then(Value::as_i64).unwrap_or(0);
+        let kind = text::clean(e.get("kind").and_then(Value::as_str).unwrap_or(""), 40);
+        let line = text::clean(e.get("text").and_then(Value::as_str).unwrap_or(""), 500);
         b.entities.insert(
             uri.clone(),
             record(json!({
-                "seq": seq,
-                "type": e["type"],
-                "text": event_text(e),
+                "seq": n,
+                "type": kind,
+                "text": if line.is_empty() { kind.clone() } else { line },
                 "time_text": if ts > 0 { text::ago(ts, now_ms) } else { String::new() },
             })),
         );
@@ -398,6 +408,9 @@ pub fn timeline(
     b
 }
 
+/// The most log lines shown.
+pub const LOG_MAX: usize = 500;
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -405,16 +418,32 @@ mod tests {
 
     fn st() -> (State, Health) {
         let mut s = State::default();
-        for (id, status, at) in [
-            ("a", state::FINISHED, 5),
-            ("b", state::WORKING, 1),
-            ("c", state::WAITING_PERMISSION, 2),
-        ] {
-            s.sessions.insert(
+        let runs = [
+            ("ended_old", "ended", 5, ("reported", "done")),
+            ("ended_new", "ended", 8, ("lost", "")),
+            ("work", "working", 1, ("", "")),
+            ("start", "starting", 3, ("", "")),
+            ("wait", "needs_you", 2, ("", "")),
+            ("queue", "queued", 9, ("", "")),
+        ];
+        for (id, state, at, (end, outcome)) in runs {
+            s.runs.insert(
                 id.into(),
-                Session {
+                Run {
                     id: id.into(),
-                    status: status.into(),
+                    state: state.into(),
+                    end_reason: end.into(),
+                    outcome: outcome.into(),
+                    needs_you_reason: if state == "needs_you" {
+                        "question".into()
+                    } else {
+                        String::new()
+                    },
+                    needs_you_text: if state == "needs_you" {
+                        "Merge now?".into()
+                    } else {
+                        String::new()
+                    },
                     started_at: at * 1000,
                     updated_at: at * 1000,
                     ..Default::default()
@@ -432,29 +461,64 @@ mod tests {
     }
 
     #[test]
-    fn active_sessions_come_first() {
+    fn runs_sort_by_what_they_need() {
         let s = st();
         let b = sessions(Some(&s), "runner.example", 120_000);
         assert_eq!(
             b.queries[crate::SESSIONS_QUERY],
             [
-                "agents://sessions/c",
-                "agents://sessions/b",
-                "agents://sessions/a"
+                "agents://sessions/wait",
+                "agents://sessions/start",
+                "agents://sessions/work",
+                "agents://sessions/queue",
+                "agents://sessions/ended_new",
+                "agents://sessions/ended_old",
             ]
         );
         let status = &b.entities[STATUS_URI];
         assert_eq!(
             status.get_str("summary_text"),
-            Some("1 working · 1 needs you")
+            Some("2 working · 1 needs you · 1 queued")
         );
+        assert_eq!(status.get("queued_count"), Some(&json!(1)));
+        let wait = &b.entities["agents://sessions/wait"];
+        assert_eq!(wait.get_str("status_text"), Some("Needs you"));
+        assert_eq!(wait.get_str("needs_you_label"), Some("Has a question"));
+        assert_eq!(wait.get_str("needs_you_text"), Some("Merge now?"));
+        assert_eq!(wait.get("active"), Some(&json!(true)));
+        let lost = &b.entities["agents://sessions/ended_new"];
+        assert_eq!(lost.get_str("status_text"), Some("Lost"));
+        assert_eq!(lost.get("active"), Some(&json!(false)));
         assert_eq!(
-            status.get_str("status_text"),
-            Some("Connected to runner.example")
+            b.entities["agents://sessions/ended_old"].get_str("status_text"),
+            Some("Done")
         );
-        let c = &b.entities["agents://sessions/c"];
-        assert_eq!(c.get_str("status_text"), Some("Needs you"));
-        assert_eq!(c.get_str("elapsed_text"), Some("1 min"));
+    }
+
+    #[test]
+    fn every_run_state_has_words() {
+        for (state, end, outcome, want) in [
+            ("queued", "", "", "Queued"),
+            ("starting", "", "", "Starting"),
+            ("working", "", "", "Working"),
+            ("needs_you", "", "", "Needs you"),
+            ("ended", "reported", "done", "Done"),
+            ("ended", "reported", "review", "Needs review"),
+            ("ended", "exited", "", "Needs review"),
+            ("ended", "reported", "blocked", "Blocked"),
+            ("ended", "lost", "failed", "Failed"),
+            ("ended", "stopped", "", "Stopped"),
+            ("ended", "lost", "", "Lost"),
+            ("ended", "start_failed", "", "Didn't start"),
+            ("ended", "timed_out", "", "Timed out"),
+            ("ended", "expired", "", "Expired"),
+        ] {
+            assert_eq!(
+                run_look(state, end, outcome).0,
+                want,
+                "{state} {end} {outcome}"
+            );
+        }
     }
 
     #[test]
@@ -472,6 +536,19 @@ mod tests {
         );
         let signed_out = status(None, "", 0);
         assert_eq!(signed_out.get("signed_in"), Some(&json!(false)));
+        let idle = status(
+            Some(&(
+                State::default(),
+                Health {
+                    connected: true,
+                    ..Default::default()
+                },
+            )),
+            "r",
+            0,
+        );
+        assert_eq!(idle.get_str("summary_text"), Some("Nothing running"));
+        assert_eq!(idle.get_str("color"), Some(GREEN));
     }
 
     #[test]
@@ -483,6 +560,12 @@ mod tests {
                 name: "nightly".into(),
                 enabled: true,
                 next_run: Some(1_800_000_000_000 + 3 * 3_600_000),
+                last_run: Some(crate::state::LastRun {
+                    run_id: "run_9".into(),
+                    state: "ended".into(),
+                    end_reason: "expired".into(),
+                    ..Default::default()
+                }),
                 ..Default::default()
             },
         );
@@ -492,51 +575,8 @@ mod tests {
         assert_eq!(e.get_str("next_run_text"), Some("in 3 h · Fri 11:00"));
         assert_eq!(e.get_str("state_text"), Some("Active"));
         assert_eq!(e.get("can_pause"), Some(&json!(true)));
-    }
-
-    #[test]
-    fn idle_sessions_are_not_working() {
-        let (mut s, h) = st();
-        // A sandbox's idle standby session and a finished run's open one.
-        for (id, at) in [("idle-standby", 9), ("idle-run", 3)] {
-            s.sessions.insert(
-                id.into(),
-                Session {
-                    id: id.into(),
-                    status: state::IDLE.into(),
-                    started_at: at * 1000,
-                    updated_at: at * 1000,
-                    ..Default::default()
-                },
-            );
-        }
-        let b = sessions(Some(&(s.clone(), h.clone())), "runner.example", 120_000);
-        let st_e = &b.entities[STATUS_URI];
-        assert_eq!(st_e.get("working_count"), Some(&json!(1)));
-        assert_eq!(st_e.get("needs_you_count"), Some(&json!(1)));
-        assert_eq!(
-            st_e.get_str("summary_text"),
-            Some("1 working · 1 needs you")
-        );
-        assert_eq!(
-            b.queries[crate::SESSIONS_QUERY],
-            [
-                "agents://sessions/c",
-                "agents://sessions/b",
-                "agents://sessions/idle-standby",
-                "agents://sessions/idle-run",
-                "agents://sessions/a",
-            ]
-        );
-
-        // Only idle and ended sessions: nothing is running.
-        s.sessions
-            .retain(|_, x| !matches!(x.id.as_str(), "b" | "c"));
-        let e = status(Some(&(s, h)), "runner.example", 120_000);
-        assert_eq!(e.get("working_count"), Some(&json!(0)));
-        assert_eq!(e.get("needs_you_count"), Some(&json!(0)));
-        assert_eq!(e.get_str("summary_text"), Some("Nothing running"));
-        assert_eq!(e.get_str("color"), Some(GREEN));
+        assert_eq!(e.get_str("last_status_text"), Some("Expired"));
+        assert_eq!(e.get_str("last_run_id"), Some("run_9"));
     }
 
     #[test]
@@ -574,5 +614,44 @@ mod tests {
         // No zone of its own (or an unknown one): the pod's.
         assert_eq!(text("unset").as_deref(), Some("in 14 h 3 min · Sun 14:12"));
         assert_eq!(text("bad").as_deref(), Some("in 14 h 3 min · Sun 14:12"));
+    }
+
+    #[test]
+    fn sandboxes_say_their_state() {
+        let mut s = State::default();
+        for (name, state) in [("a", "asleep"), ("b", "awake"), ("c", "unprovisioned")] {
+            s.sprites.insert(
+                name.into(),
+                crate::state::Sprite {
+                    name: name.into(),
+                    state: state.into(),
+                    ..Default::default()
+                },
+            );
+        }
+        let b = sandboxes(Some(&(s, Health::default())), 0);
+        assert_eq!(b.queries[crate::SANDBOXES_QUERY][0], "agents://sandboxes/b");
+        assert_eq!(
+            b.entities["agents://sandboxes/c"].get_str("state_text"),
+            Some("Not set up")
+        );
+    }
+
+    #[test]
+    fn a_run_log_reads_as_lines() {
+        let log = json!({"entries": [{"ts": 1000, "kind": "state", "text": "Working"},
+            {"ts": 2000, "kind": "tool", "text": "Bash: cargo test\u{7}"}]});
+        let b = timeline(None, "run_1", Some(&log), 61_000);
+        let order = &b.queries["agents:timeline:run_1"];
+        assert_eq!(order.len(), 2);
+        assert_eq!(
+            b.entities[&order[1]].get_str("text"),
+            Some("Bash: cargo test")
+        );
+        assert_eq!(
+            b.entities[&order[0]].get_str("time_text"),
+            Some("1 min ago")
+        );
+        assert!(timeline(None, "run_1", None, 0).queries["agents:timeline:run_1"].is_empty());
     }
 }

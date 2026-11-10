@@ -5,7 +5,7 @@ edition.workspace = true
 publish.workspace = true
 
 # The `agents` data source (decision `agents-data-source`): Claude Code
-# sessions run by an external agent runner (CAP v1), shown and controlled
+# runs started by an external agent runner (CAP v2), shown and controlled
 # from the pod, with notifications and an opt-in Tasks collection.
 
 [dependencies]
