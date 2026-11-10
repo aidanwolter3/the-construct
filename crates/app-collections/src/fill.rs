@@ -31,7 +31,7 @@
 //! most a day, at least `Retry-After`).
 
 use std::collections::{HashMap, HashSet};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use pod_core::Pod;
 use rusqlite::{Connection, OptionalExtension, params};
@@ -43,17 +43,15 @@ use crate::filler::{Filler, Source};
 use crate::model::{self, Definition, Kind};
 use crate::{Caps, CollectionsAdapter, NAME};
 
-/// Pod setting: `0` turns fillers off (temporary pods, which anyone can
-/// make, must not make the server fetch URLs of their choosing or spend its
-/// model key).
+/// The pod setting that turned fillers off before jacks (decision `jacks`):
+/// `0` became a lock on the `web` jack (a migration, [`crate::db`]).
 pub const FILL_SETTING: &str = "collections.fill";
-/// The error a fill records when fillers are off.
-pub const FILL_OFF: &str =
-    "fillers are turned off on this pod (temporary pods can't fetch or ask a model)";
+/// The error a fill records when the pod's `web` jack is unplugged.
+pub const FILL_OFF: &str = "the pod's web jack is unplugged, so fillers can't fetch websites (plug_jack web, if the server allows it)";
+/// The error of a `query_field` fill without a search provider.
+pub const NO_SEARCH: &str = "this filler searches the web for each row: plug the pod's web_search jack (plug_jack web_search with a provider and its key)";
 /// The error of a model fill without a model.
 pub const NO_AGENT: &str = "this filler needs a model: set CONSTRUCT_INFER_API_KEY on the server";
-/// The least time between two requests to one host from a pod.
-pub const HOST_SPACING: Duration = Duration::from_secs(1);
 /// A whole fetch fill's time limit.
 pub const FETCH_FILL_TIMEOUT: Duration = Duration::from_secs(5 * 60);
 /// A whole model fill's time limit.
@@ -848,27 +846,10 @@ pub fn is_busy(pod: &Pod, collection: &str) -> bool {
         .any(|k| k.starts_with(&prefix))
 }
 
-/// When the pod last sent a request to each host.
-#[derive(Default)]
-pub struct Hosts(tokio::sync::Mutex<HashMap<String, Instant>>);
-
-/// Wait until a request to `url`'s host keeps [`HOST_SPACING`] from the
-/// last one.
-async fn space(pod: &Pod, url: &str) {
-    let hosts = pod.local::<Hosts>();
-    let host = web_extract::fetch::host_of(url);
-    let wait = {
-        let mut m = hosts.0.lock().await;
-        let now = Instant::now();
-        let at = m
-            .get(&host)
-            .map_or(now, |last| (*last + HOST_SPACING).max(now));
-        m.insert(host, at);
-        at.saturating_duration_since(now)
-    };
-    if !wait.is_zero() {
-        tokio::time::sleep(wait).await;
-    }
+/// The pod's host policy (decision `web-and-agent-modules`): every
+/// request to a website goes through it.
+fn hosts(pod: &Pod) -> std::sync::Arc<web_extract::hosts::Hosts> {
+    pod.local::<web_extract::hosts::Hosts>()
 }
 
 /// How a fill went.
@@ -926,11 +907,7 @@ pub fn today(store: &pod_core::store::Store, now: i64) -> String {
 
 /// Whether fillers may run on this pod.
 pub async fn allowed(pod: &Pod) -> bool {
-    pod.blocking(|s| s.pod_setting(FILL_SETTING))
-        .await
-        .ok()
-        .flatten()
-        .is_none_or(|v| v != "0")
+    pod_core::jacks::core_plugged(pod.store(), pod_core::jacks::WEB)
 }
 
 /// What a source answered before storing.
@@ -942,9 +919,11 @@ enum Fetch {
         last_modified: Option<String>,
         hash: Option<String>,
     },
-    /// `url_field`: each row's own values.
+    /// `url_field` / `query_field`: each row's own values, and what each
+    /// filled row was filled from (`(row id, source, content key)`).
     PerRow {
         rows: Vec<(String, Map<String, Value>)>,
+        marks: Vec<(String, String, String)>,
         items: usize,
         skipped: usize,
         failed: Vec<String>,
@@ -1067,6 +1046,7 @@ async fn run_fetch(
     let Source::Fetch {
         url,
         url_field,
+        query_field,
         headers,
         map,
         hint,
@@ -1089,17 +1069,14 @@ async fn run_fetch(
     let get = |u: String, etag: Option<String>, lm: Option<String>| async move {
         // Per URL: a secret goes only to its own host.
         let resolved = resolve_headers(pod.store(), headers, &u, adapter.allow_private_hosts())
-            .map_err(|message| web_extract::fetch::FetchError {
-                message,
-                retry_after: None,
-            })?;
+            .map_err(web_extract::fetch::FetchError::new)?;
         let client = if resolved.has_secret {
             adapter.secret_fetch_client()
         } else {
             adapter.fetch_client()
         };
-        space(pod, &u).await;
-        web_extract::fetch::fetch(
+        web_extract::hosts::fetch(
+            &hosts(pod),
             client,
             &u,
             etag.as_deref(),
@@ -1124,6 +1101,7 @@ async fn run_fetch(
                     let text = web_extract::html::to_text(&body);
                     let rows = agent
                         .read_page(PageRequest {
+                            pod,
                             title: &def.title,
                             fields: &fields,
                             page_text: &text,
@@ -1184,23 +1162,40 @@ async fn run_fetch(
             Err(e) => Fetch::Failed(e, None),
         };
     }
-    let Some(field) = url_field else {
-        return Fetch::Failed("the filler has no URL".into(), None);
+    // Each row from its own page or its own search (decision
+    // `web-and-agent-modules`): a row whose page or search yields nothing
+    // keeps its values (unless `on_empty: clear`), and with `refresh: once`
+    // a row is filled only when its URL or query first appears or changes.
+    let (field, searching) = match (url_field, query_field) {
+        (Some(f), _) => (f, false),
+        (None, Some(f)) => (f, true),
+        (None, None) => return Fetch::Failed("the filler has no URL".into(), None),
     };
-    if filler.is_llm() {
-        match take_model_budget(pod, adapter, filler, state, now).await {
-            Ok(d) => *day = Some(d),
-            Err(e) => return Fetch::Failed(e, None),
+    let web = if searching {
+        match crate::agent::pod_web(pod) {
+            Some(w) => Some(w),
+            None => return Fetch::Failed(NO_SEARCH.into(), None),
         }
+    } else {
+        None
+    };
+    if searching && adapter.agent().is_none() {
+        return Fetch::Failed(NO_AGENT.into(), None);
     }
-    // Each row from its own page.
     let name = def.name.clone();
-    let rows = pod
-        .blocking(move |s| s.with_conn(|c| db::all_rows(c, &name, false)))
+    let fid = filler.id.clone();
+    let (rows, marks) = pod
+        .blocking(move |s| {
+            s.with_conn(|c| Ok((db::all_rows(c, &name, false)?, row_marks(c, &name, &fid)?)))
+        })
         .await
         .unwrap_or_default();
+    let refresh = filler.refresh();
+    let force_all = force || state.fingerprint != filler.fingerprint();
     let mut out = Vec::new();
+    let mut new_marks = Vec::new();
     let (mut items, mut skipped, mut failed) = (0, 0, Vec::new());
+    let mut budget_taken = day.is_some();
     for r in rows
         .into_iter()
         .filter(|r| {
@@ -1209,46 +1204,189 @@ async fn run_fetch(
                 .and_then(Value::as_str)
                 .is_some_and(|u| !u.trim().is_empty())
         })
+        .filter(|r| {
+            // `once`: only rows whose source is new or changed.
+            let src = r.values[field].as_str().unwrap_or("").trim().to_owned();
+            force_all
+                || refresh == crate::filler::Refresh::Every
+                || marks.get(&r.id).is_none_or(|(s, _)| *s != src)
+        })
         .take(caps.fill_urls)
     {
-        let u = r.values[field].as_str().unwrap_or("").trim().to_owned();
-        let u = match web_extract::fetch::check_url(&u, adapter.allow_private_hosts()) {
-            Ok(u) => u,
-            Err(e) => {
-                failed.push(format!("{u}: {e}"));
+        let src = r.values[field].as_str().unwrap_or("").trim().to_owned();
+        let prev_key = marks
+            .get(&r.id)
+            .filter(|(s, _)| *s == src)
+            .map(|(_, k)| k.clone());
+        // What the model reads, and its content key.
+        let (found, key) = if let Some(web) = &web {
+            let results = match web_extract::search::search(
+                &web.hosts,
+                &web.cache,
+                &web.client,
+                &web.provider,
+                &src,
+                8,
+            )
+            .await
+            {
+                Ok(r) => r,
+                Err(e) => {
+                    failed.push(format!("{src}: {e}"));
+                    // A refusal or a spent cap holds for every other row too.
+                    if e.contains("refused") || e.contains("daily limit") || e.contains("waits") {
+                        break;
+                    }
+                    continue;
+                }
+            };
+            let key = hash_of(
+                results
+                    .iter()
+                    .map(|x| x.url.as_str())
+                    .collect::<Vec<_>>()
+                    .join("\n")
+                    .as_bytes(),
+            );
+            if !force_all && prev_key.as_deref() == Some(key.as_str()) {
                 continue;
             }
-        };
-        let body = match get(u.clone(), None, None).await {
-            Ok(web_extract::fetch::Fetched::Body { bytes, .. }) => {
-                String::from_utf8_lossy(&bytes).into_owned()
+            if !budget_taken {
+                match take_model_budget(pod, adapter, filler, state, now).await {
+                    Ok(d) => *day = Some(d),
+                    Err(e) => return Fetch::Failed(e, None),
+                }
+                budget_taken = true;
             }
-            Ok(web_extract::fetch::Fetched::NotModified) => continue,
-            Err(e) => {
-                failed.push(format!("{u}: {}", e.message));
+            let Some(agent) = adapter.agent() else {
+                return Fetch::Failed(NO_AGENT.into(), None);
+            };
+            let fields = agent_fields(def, &ids);
+            let notes = r
+                .values
+                .iter()
+                .filter(|(k, _)| k.as_str() != field && !ids.contains(k))
+                .filter_map(|(k, v)| {
+                    let f = def.by_id(k)?;
+                    let t = v.as_str()?.trim();
+                    (f.kind == Kind::Text && !t.is_empty()).then(|| format!("{}: {t}", f.name))
+                })
+                .collect::<Vec<_>>()
+                .join("; ");
+            let item = if notes.is_empty() {
+                src.clone()
+            } else {
+                format!("{src} ({notes})")
+            };
+            let today = day.clone().unwrap_or_default();
+            let picked = agent
+                .pick(crate::agent::PickRequest {
+                    pod,
+                    title: &def.title,
+                    fields: &fields,
+                    item: &item,
+                    results: &results,
+                    hint,
+                    today: &today,
+                })
+                .await
+                .map(|rows| by_ids(def, rows, &ids));
+            (picked, key)
+        } else {
+            let u = match web_extract::fetch::check_url(&src, adapter.allow_private_hosts()) {
+                Ok(u) => u,
+                Err(e) => {
+                    failed.push(format!("{src}: {e}"));
+                    continue;
+                }
+            };
+            let body = match get(u.clone(), None, None).await {
+                Ok(web_extract::fetch::Fetched::Body { bytes, .. }) => {
+                    String::from_utf8_lossy(&bytes).into_owned()
+                }
+                Ok(web_extract::fetch::Fetched::NotModified) => continue,
+                Err(e) => {
+                    failed.push(format!("{u}: {}", e.message));
+                    continue;
+                }
+            };
+            let key = hash_of(web_extract::html::to_text(&body).as_bytes());
+            if !force_all && filler.is_llm() && prev_key.as_deref() == Some(key.as_str()) {
+                // The page's text didn't change: no model call.
                 continue;
             }
+            if filler.is_llm() && !budget_taken {
+                match take_model_budget(pod, adapter, filler, state, now).await {
+                    Ok(d) => *day = Some(d),
+                    Err(e) => return Fetch::Failed(e, None),
+                }
+                budget_taken = true;
+            }
+            (
+                read(body, u.clone(), day.clone().unwrap_or_default()).await,
+                key,
+            )
         };
-        match read(body, u.clone(), day.clone().unwrap_or_default()).await {
+        match found {
             Ok(found) => {
                 let (mut vals, s) = coerce_all(def, found, 1, caps.text_chars, zone.as_ref());
                 skipped += s;
                 if let Some(v) = vals.pop() {
                     items += 1;
                     out.push((r.id.clone(), v));
-                } else {
+                    new_marks.push((r.id.clone(), src, key));
+                } else if filler.on_empty == crate::filler::OnEmpty::Clear {
                     out.push((r.id.clone(), Map::new()));
+                    new_marks.push((r.id.clone(), src, key));
                 }
+                // `keep`: an empty answer writes nothing and is tried again.
             }
-            Err(e) => failed.push(format!("{u}: {e}")),
+            Err(e) => failed.push(format!("{src}: {e}")),
         }
     }
     Fetch::PerRow {
         rows: out,
+        marks: new_marks,
         items,
         skipped,
         failed,
     }
+}
+
+/// What each row of a per-row filler was last filled from: `row id ->
+/// (source, content key)`.
+fn row_marks(
+    conn: &Connection,
+    collection: &str,
+    filler: &str,
+) -> rusqlite::Result<HashMap<String, (String, String)>> {
+    let mut stmt = conn.prepare_cached(
+        "SELECT row_id, source, content_key FROM collections_row_fills
+         WHERE collection = ?1 AND filler = ?2",
+    )?;
+    let rows = stmt.query_map(params![collection, filler], |r| {
+        Ok((r.get::<_, String>(0)?, (r.get(1)?, r.get(2)?)))
+    })?;
+    rows.collect()
+}
+
+fn save_marks(
+    tx: &Connection,
+    collection: &str,
+    filler: &str,
+    marks: &[(String, String, String)],
+    now: i64,
+) -> rusqlite::Result<()> {
+    for (row, source, key) in marks {
+        tx.execute(
+            "INSERT INTO collections_row_fills (collection, filler, row_id, source, content_key, filled_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+             ON CONFLICT (collection, filler, row_id) DO UPDATE SET source = excluded.source,
+                 content_key = excluded.content_key, filled_at = excluded.filled_at",
+            params![collection, filler, row, source, key, now],
+        )?;
+    }
+    Ok(())
 }
 
 async fn run_agent(
@@ -1299,6 +1437,7 @@ async fn run_agent(
     let key_name = filler.key.as_ref().map(|k| def.name_of(k));
     let answer = agent
         .fill(AgentRequest {
+            pod,
             title: &def.title,
             prompt,
             fields: &agent_fields,
@@ -1389,9 +1528,9 @@ async fn fill_details(
             tracing::warn!("a details page was not fetched: not a public website");
             continue;
         };
-        space(pod, &link).await;
         let Ok(web_extract::fetch::Fetched::Body { bytes, .. }) =
-            web_extract::fetch::fetch(adapter.fetch_client(), &link, None, None, &[]).await
+            web_extract::hosts::fetch(&hosts(pod), adapter.fetch_client(), &link, None, None, &[])
+                .await
         else {
             continue;
         };
@@ -1406,6 +1545,7 @@ async fn fill_details(
                 let text = web_extract::html::to_text(&page);
                 match agent
                     .read_page(PageRequest {
+                        pod,
                         title: &def.title,
                         fields: &fields,
                         page_text: &text,
@@ -1633,6 +1773,7 @@ pub async fn fill(pod: &Pod, collection: &str, filler_id: &str, force: bool) -> 
         }
         Fetch::PerRow {
             rows,
+            marks,
             items,
             skipped,
             failed,
@@ -1672,6 +1813,7 @@ pub async fn fill(pod: &Pod, collection: &str, filler_id: &str, force: bool) -> 
                                 out.unchanged += 1;
                             }
                         }
+                        save_marks(tx, &d2.name, &f2.id, &marks, now)?;
                         Ok((out, jobs, crate::follow::settle(tx, now, caps)?))
                     })
                 })

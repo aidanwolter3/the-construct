@@ -1,0 +1,22 @@
+[package]
+name = "construct-agent"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+# The agent module (decision `web-and-agent-modules`): every model call the
+# pod makes goes through it. It knows models, budgets and the Messages API,
+# and nothing about pages, collections or fields: callers (the web module,
+# computed fields) write the prompts and hand it a task.
+
+[dependencies]
+pod-core = { path = "../pod-core" }
+serde_json.workspace = true
+rusqlite.workspace = true
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+tokio = { version = "1", features = ["time"] }
+tracing = "0.1"
+getrandom = "0.3"
+
+[dev-dependencies]
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "time"] }

@@ -941,7 +941,7 @@ async fn an_agent_upserts_within_its_budget() {
 async fn temporary_pods_dont_fill_and_no_model_means_unavailable() {
     let pod = pod_with(None);
     pod.store()
-        .set_pod_setting(fill::FILL_SETTING, "0")
+        .set_pod_setting("jack.web", pod_core::jacks::LOCKED)
         .unwrap();
     let (err, e) = tool(
         &pod,

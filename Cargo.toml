@@ -15,6 +15,7 @@ members = [
     "crates/app-agents",
     "crates/app-shell",
     "crates/web-extract",
+    "crates/agent",
     "crates/server",
     "fake-pixelfed",
     "crates/e2e",

@@ -273,6 +273,7 @@ version = "0.1.0"
 dependencies = [
  "app-shell",
  "axum",
+ "construct-agent",
  "getrandom 0.3.4",
  "http-body-util",
  "pod-core",
@@ -778,6 +779,19 @@ name = "constant_time_eq"
 version = "0.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3d52eff69cd5e647efe296129160853a42795992097e8af39800e1060caeea9b"
+
+[[package]]
+name = "construct-agent"
+version = "0.1.0"
+dependencies = [
+ "getrandom 0.3.4",
+ "pod-core",
+ "reqwest",
+ "rusqlite",
+ "serde_json",
+ "tokio",
+ "tracing",
+]
 
 [[package]]
 name = "construct-render"
@@ -5266,6 +5280,7 @@ dependencies = [
 name = "web-extract"
 version = "0.1.0"
 dependencies = [
+ "construct-agent",
  "pod-core",
  "reqwest",
  "scraper",

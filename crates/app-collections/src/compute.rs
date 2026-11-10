@@ -32,9 +32,8 @@
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
-use std::time::Duration;
 
-use pod_core::{BoxFuture, Pod, metrics};
+use pod_core::{BoxFuture, Pod};
 use rusqlite::Connection;
 use serde_json::{Map, Value, json};
 
@@ -44,8 +43,10 @@ use crate::model::{self, Compute, Definition, Field, Kind};
 use crate::{Caps, CollectionsAdapter};
 
 /// What a `model` compute asks.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone)]
 pub struct Question<'a> {
+    /// The pod asking (the agent module counts the call against it).
+    pub pod: &'a Pod,
     /// The field's prompt ("Which grocery store section is this item in?").
     pub prompt: &'a str,
     /// The source fields' names and values, in order.
@@ -61,68 +62,8 @@ pub trait FieldModel: Send + Sync + std::fmt::Debug {
     fn answer<'a>(&'a self, q: Question<'a>) -> BoxFuture<'a, Option<String>>;
 }
 
-/// The env var with the model API key; unset: no model.
-pub const API_KEY_VAR: &str = "CONSTRUCT_INFER_API_KEY";
-/// The env var with the model to ask; unset: no model.
-pub const MODEL_VAR: &str = "CONSTRUCT_INFER_MODEL";
-/// The env var with the Messages API URL.
-pub const URL_VAR: &str = "CONSTRUCT_INFER_URL";
-/// [`URL_VAR`] when unset.
-pub const DEFAULT_URL: &str = "https://api.anthropic.com/v1/messages";
-
-/// Pod setting: `0` turns `model` computes off on this pod (temporary pods,
-/// which anyone can make, must not spend the server's model key). Such
-/// fields keep their default, as without a model.
-pub const MODEL_SETTING: &str = "collections.model";
-
-/// The `feature` of `model` computes' calls in the metrics.
+/// The `feature` of `model` computes' calls (metrics, budgets).
 const LLM_FEATURE: &str = "collections";
-
-/// A [`FieldModel`] that asks a model over the Anthropic Messages API.
-pub struct MessagesModel {
-    client: reqwest::Client,
-    url: String,
-    key: String,
-    model: String,
-}
-
-impl std::fmt::Debug for MessagesModel {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("MessagesModel")
-            .field("url", &self.url)
-            .field("model", &self.model)
-            .finish_non_exhaustive()
-    }
-}
-
-impl MessagesModel {
-    pub fn new(url: String, key: String, model: String) -> Self {
-        let client = pod_core::net::builder(Duration::from_secs(20))
-            .build()
-            .expect("an HTTP client");
-        Self {
-            client,
-            url,
-            key,
-            model,
-        }
-    }
-
-    /// From [`API_KEY_VAR`], [`MODEL_VAR`] and [`URL_VAR`]; `None` unless
-    /// the key and the model are both set.
-    pub fn from_env() -> Option<Arc<dyn FieldModel>> {
-        let var = |k: &str| {
-            std::env::var(k)
-                .ok()
-                .map(|v| v.trim().to_owned())
-                .filter(|v| !v.is_empty())
-        };
-        let key = var(API_KEY_VAR)?;
-        let model = var(MODEL_VAR)?;
-        let url = var(URL_VAR).unwrap_or_else(|| DEFAULT_URL.to_owned());
-        Some(Arc::new(Self::new(url, key, model)))
-    }
-}
 
 /// The prompt a [`Question`] sends.
 pub fn prompt_text(q: &Question<'_>) -> String {
@@ -146,46 +87,46 @@ pub fn prompt_text(q: &Question<'_>) -> String {
     )
 }
 
-impl FieldModel for MessagesModel {
+/// The pod's [`FieldModel`]: a cheap-tier task for the agent module
+/// ([`construct_agent::Agent`]: the `model` jack, daily budgets, retries).
+#[derive(Debug, Clone)]
+pub struct PodModel {
+    agent: Arc<construct_agent::Agent>,
+}
+
+impl PodModel {
+    pub fn new(agent: Arc<construct_agent::Agent>) -> Self {
+        Self { agent }
+    }
+
+    /// Over [`construct_agent::Agent::from_env`]; `None` unless the server
+    /// names a cheap model ([`construct_agent::CHEAP_MODEL_VAR`]).
+    pub fn from_env() -> Option<Arc<dyn FieldModel>> {
+        let agent = construct_agent::Agent::from_env()?;
+        agent.model(construct_agent::Tier::Cheap)?;
+        Some(Arc::new(Self::new(agent)))
+    }
+}
+
+impl FieldModel for PodModel {
     fn answer<'a>(&'a self, q: Question<'a>) -> BoxFuture<'a, Option<String>> {
         Box::pin(async move {
-            let body = json!({
-                "model": self.model,
-                "max_tokens": if q.kind == Kind::Text { 300 } else { 32 },
-                "messages": [{ "role": "user", "content": prompt_text(&q) }],
-            });
-            let resp = self
-                .client
-                .post(&self.url)
-                .header("x-api-key", &self.key)
-                .header("anthropic-version", "2023-06-01")
-                .json(&body)
-                .send()
-                .await;
-            let resp = match resp {
-                Ok(r) if r.status().is_success() => r,
-                Ok(r) => {
-                    tracing::warn!(status = %r.status(), "computing a collection field failed");
-                    let answer = r.json::<Value>().await.ok();
-                    metrics::record_llm(LLM_FEATURE, false, answer.as_ref());
-                    return None;
+            let task = construct_agent::Task::new(
+                LLM_FEATURE,
+                construct_agent::Tier::Cheap,
+                prompt_text(&q),
+            )
+            .max_tokens(if q.kind == Kind::Text { 300 } else { 32 });
+            match self.agent.run(q.pod.store(), task).await {
+                Ok(out) => {
+                    let t = out.text();
+                    (!t.trim().is_empty()).then_some(t)
                 }
                 Err(e) => {
                     tracing::warn!(error = %e, "computing a collection field failed");
-                    metrics::record_llm(LLM_FEATURE, false, None);
-                    return None;
+                    None
                 }
-            };
-            let Ok(v) = resp.json::<Value>().await else {
-                metrics::record_llm(LLM_FEATURE, false, None);
-                return None;
-            };
-            metrics::record_llm(LLM_FEATURE, true, Some(&v));
-            let text = v["content"]
-                .as_array()?
-                .iter()
-                .find_map(|c| c["text"].as_str())?;
-            Some(text.to_owned())
+            }
         })
     }
 }
@@ -763,12 +704,8 @@ pub fn spawn(pod: &Pod, collection: &str, jobs: Vec<Job>) {
     let collection = collection.to_owned();
     tokio::spawn(async move {
         let Some(pod) = weak.upgrade() else { return };
-        let allowed = pod
-            .blocking(|s| s.pod_setting(MODEL_SETTING))
-            .await
-            .ok()
-            .flatten()
-            .is_none_or(|v| v != "0");
+        // Model work needs the pod's `model` jack (decision `jacks`).
+        let allowed = pod_core::jacks::core_plugged(pod.store(), pod_core::jacks::MODEL);
         drop(pod);
         if !allowed {
             return;
@@ -808,14 +745,17 @@ pub fn spawn(pod: &Pod, collection: &str, jobs: Vec<Job>) {
                 .map(|id| def.name_of(id))
                 .zip(texts.iter().cloned())
                 .collect();
+            let Some(pod) = weak.upgrade() else { return };
             let answer = field_model
                 .answer(Question {
+                    pod: &pod,
                     prompt: &prompt,
                     inputs: &named,
                     kind: field.kind,
                     options: &field.options,
                 })
                 .await;
+            drop(pod);
             let Some(value) = answer.and_then(|a| coerce_answer(&field, &a, max_chars)) else {
                 tracing::info!(collection, field = field.name, "no computed value");
                 continue;
@@ -909,7 +849,9 @@ mod tests {
     fn the_prompt_names_the_inputs_and_the_answer_type() {
         let inputs = vec![("name".to_owned(), "Oat milk".to_owned())];
         let options = vec!["Produce".to_owned(), "Dairy".to_owned()];
+        let pod: Pod = std::sync::Arc::new(pod_core::AppState::in_memory(Vec::new()));
         let q = Question {
+            pod: &pod,
             prompt: "Which grocery store section is this item in?",
             inputs: &inputs,
             kind: Kind::Choice,

@@ -700,12 +700,16 @@ async fn temporary_pods_stay_on_the_default_instance() {
 #[test]
 fn temporary_pods_fetch_nothing_and_ask_no_model() {
     let settings = server::temporary_pod_settings();
-    for key in [
-        app_collections::compute::MODEL_SETTING,
-        app_collections::fill::FILL_SETTING,
+    for jack in [
+        pod_core::jacks::MODEL,
+        pod_core::jacks::WEB,
+        pod_core::jacks::WEB_SEARCH,
     ] {
+        let key = format!("jack.{jack}");
         assert!(
-            settings.iter().any(|(k, v)| k == key && v == "0"),
+            settings
+                .iter()
+                .any(|(k, v)| *k == key && v == pod_core::jacks::LOCKED),
             "{key}: {settings:?}"
         );
     }

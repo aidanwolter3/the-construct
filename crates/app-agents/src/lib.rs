@@ -72,6 +72,8 @@ pub const CHECKS_QUERY: &str = "agents:checks";
 pub const SCHEDULES_QUERY: &str = "agents:schedules";
 
 pub const SIGN_IN_PATH: &str = "/v1/agents/sign-in";
+/// The agent runner jack's id.
+pub const JACK: &str = "agent_runner";
 pub const SIGN_OUT_PATH: &str = "/v1/agents/sign-out";
 pub const STOP_PATH: &str = "/v1/agents/sessions/stop";
 pub const WAKE_PATH: &str = "/v1/agents/sandboxes/wake";
@@ -547,6 +549,60 @@ impl AppAdapter for AgentsAdapter {
     /// server start whether or not anyone uses the pod.
     fn keeps_open(&self, store: &Store) -> bool {
         db::signed_in(store).unwrap_or(false)
+    }
+
+    /// The agent runner jack (decision `jacks`): the Foreman, which runs
+    /// Claude Code work on cloud sandboxes. Plugged by the Agents layout's
+    /// sign-in form (its URL and token); unplugging signs out.
+    fn jacks(&self) -> Vec<pod_core::jacks::JackSpec> {
+        vec![pod_core::jacks::JackSpec {
+            id: JACK,
+            title: "Agent runner",
+            summary: "An agent runner (the Foreman): runs, sandboxes, schedules and checks of \
+                      Claude Code work, tasks collections that start runs (agents_link_tasks), \
+                      and their notifications (the agents blueprint and source).",
+            kind: pod_core::jacks::JackKind::Account {
+                how: "sign in from the Agents layout's form (the runner's https:// URL and its token; \
+                      never ask for the token in the conversation)",
+            },
+        }]
+    }
+
+    fn jack_status<'a>(
+        &'a self,
+        pod: &'a Pod,
+        jack: &'a str,
+    ) -> BoxFuture<'a, Option<pod_core::jacks::JackStatus>> {
+        Box::pin(async move {
+            if jack != JACK {
+                return None;
+            }
+            let runner = pod.blocking(db::runner).await.ok().flatten();
+            Some(match runner {
+                Some(r) => pod_core::jacks::JackStatus {
+                    plugged: true,
+                    detail: Some(r.url),
+                },
+                None => pod_core::jacks::JackStatus::default(),
+            })
+        })
+    }
+
+    fn unplug_jack<'a>(
+        &'a self,
+        pod: &'a Pod,
+        jack: &'a str,
+    ) -> Option<BoxFuture<'a, Result<(), String>>> {
+        (jack == JACK).then(|| {
+            Box::pin(async move {
+                pod.blocking(db::sign_out)
+                    .await
+                    .map_err(|_| "signing out of the runner failed".to_owned())?;
+                pod.local::<follower::Ctl>().changed();
+                pod.publish_data_all(NAME);
+                Ok(())
+            }) as BoxFuture<'a, Result<(), String>>
+        })
     }
 
     fn mcp_tools(&self) -> Vec<Value> {

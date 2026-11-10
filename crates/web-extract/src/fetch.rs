@@ -18,13 +18,51 @@ pub struct FetchError {
     pub message: String,
     /// The server asked to wait this long (`Retry-After`, seconds).
     pub retry_after: Option<i64>,
+    /// The site refused the pod as an automated visitor (a 403 or 429, or a
+    /// captcha / "unusual traffic" page): not content, and a reason to stay
+    /// away from the host for a while ([`crate::hosts`]).
+    pub blocked: bool,
+}
+
+impl FetchError {
+    pub fn new(message: impl Into<String>) -> Self {
+        Self {
+            message: message.into(),
+            retry_after: None,
+            blocked: false,
+        }
+    }
 }
 
 fn fail(message: impl Into<String>) -> FetchError {
-    FetchError {
-        message: message.into(),
-        retry_after: None,
+    FetchError::new(message)
+}
+
+/// Words of a page that answers an automated visitor with a challenge
+/// instead of content (lowercase; matched in the first part of the page).
+const BLOCK_MARKERS: &[&str] = &[
+    "unusual traffic",
+    "are you a robot",
+    "are you a human",
+    "verify you are human",
+    "verify you are a human",
+    "please complete the security check",
+    "captcha",
+    "anomaly-modal",
+    "bots use duckduckgo too",
+    "access denied",
+    "request blocked",
+];
+
+/// Why `body` looks like a block page rather than content, if it does: a
+/// short page carrying one of the challenge markers.
+pub fn block_reason(body: &[u8]) -> Option<&'static str> {
+    // A real page may mention a captcha in passing; a block page is short.
+    if body.len() > 120_000 {
+        return None;
     }
+    let head = String::from_utf8_lossy(&body[..body.len().min(60_000)]).to_ascii_lowercase();
+    BLOCK_MARKERS.iter().copied().find(|m| head.contains(m))
 }
 
 /// What a fetch answered.
@@ -89,9 +127,15 @@ pub async fn fetch(
             .and_then(|v| v.to_str().ok())
             .and_then(|v| v.trim().parse::<i64>().ok())
             .filter(|s| *s > 0);
+        let blocked = matches!(status.as_u16(), 403 | 429);
         return Err(FetchError {
-            message: format!("the site answered {status}"),
+            message: if blocked {
+                format!("the site answered {status}: it is refusing automated visits for now")
+            } else {
+                format!("the site answered {status}")
+            },
             retry_after,
+            blocked,
         });
     }
     let header_of = |h: header::HeaderName| {
@@ -108,6 +152,15 @@ pub async fn fetch(
             return Err(fail(format!("the page is over {} MiB", MAX_BODY >> 20)));
         }
         bytes.extend_from_slice(&chunk);
+    }
+    if let Some(reason) = block_reason(&bytes) {
+        return Err(FetchError {
+            message: format!(
+                "the site answered with a check for automated visitors (\"{reason}\") instead of the page"
+            ),
+            retry_after: None,
+            blocked: true,
+        });
     }
     Ok(Fetched::Body {
         bytes,
@@ -185,5 +238,15 @@ mod tests {
             "https://a.example/y"
         );
         assert_eq!(absolute("https://a.example/", "javascript:alert(1)"), "");
+    }
+
+    #[test]
+    fn block_pages_are_recognised() {
+        let ddg = br#"<html><div class="anomaly-modal__title">Unfortunately, bots use DuckDuckGo too.</div></html>"#;
+        assert!(block_reason(ddg).is_some());
+        assert!(block_reason(b"<p>Please verify you are human</p>").is_some());
+        assert!(block_reason(b"<html><h1>AeroPress filters</h1><p>$5.95</p></html>").is_none());
+        let long = "a".repeat(200_000) + "captcha";
+        assert!(block_reason(long.as_bytes()).is_none());
     }
 }

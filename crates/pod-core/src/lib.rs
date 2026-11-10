@@ -17,6 +17,7 @@ pub mod adapter;
 pub mod components;
 pub mod custom;
 pub mod disk;
+pub mod jacks;
 pub mod layouts;
 pub mod mcp;
 pub mod metrics;
@@ -644,6 +645,7 @@ pub fn app(state: Pod) -> Router {
         .merge(notify::router())
         .merge(custom::router())
         .merge(mcp::router())
+        .route("/v1/jacks", get(get_jacks))
         .merge(uploads::router(state.upload_max_bytes));
     for a in state.catalog.adapters() {
         router = router.merge(a.router());
@@ -654,6 +656,22 @@ pub fn app(state: Pod) -> Router {
     router
         .route_layer(middleware::from_fn_with_state(state.clone(), fault_layer))
         .with_state(state)
+}
+
+/// `GET /v1/jacks`: every jack of the pod and its state (decision `jacks`),
+/// for the pod's owner.
+async fn get_jacks(State(pod): State<Pod>, headers: HeaderMap) -> Response {
+    match pod.caller(&headers).await {
+        Ok(Caller::Signed(_)) => {}
+        Ok(_) => {
+            return json_error(
+                StatusCode::UNAUTHORIZED,
+                json!({ "error": "unauthorized", "detail": "open your pod first" }),
+            );
+        }
+        Err(e) => return e.into_response(),
+    }
+    axum::Json(json!({ "jacks": jacks::list(&pod).await })).into_response()
 }
 
 /// Run a blocking store operation off the async workers.

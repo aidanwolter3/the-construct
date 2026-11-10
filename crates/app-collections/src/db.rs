@@ -64,7 +64,29 @@ pub static MIGRATIONS: &[Step] = &[
     // the client id of an action call, so a retried call is applied once
     // (decision `collection-primitives`).
     Step::sql("action_edits", ACTION_EDITS),
+    // 9: what each row of a per-row filler was last filled from (decision
+    // `web-and-agent-modules`: `refresh: once`, unchanged pages skip the
+    // model), and the old on/off settings as jack locks (decision `jacks`):
+    // `collections.model = 0` locks the `model` jack, `collections.fill =
+    // 0` the `web` jack.
+    Step::sql("row_fills_and_jack_locks", ROW_FILLS_AND_JACK_LOCKS),
 ];
+
+const ROW_FILLS_AND_JACK_LOCKS: &str = "
+CREATE TABLE collections_row_fills (
+    collection  TEXT NOT NULL,
+    filler      TEXT NOT NULL,
+    row_id      TEXT NOT NULL,
+    source      TEXT NOT NULL,
+    content_key TEXT NOT NULL,
+    filled_at   INTEGER NOT NULL,
+    PRIMARY KEY (collection, filler, row_id)
+) WITHOUT ROWID;
+INSERT OR REPLACE INTO pod_settings (key, value)
+    SELECT 'jack.model', 'locked' FROM pod_settings WHERE key = 'collections.model' AND value = '0';
+INSERT OR REPLACE INTO pod_settings (key, value)
+    SELECT 'jack.web', 'locked' FROM pod_settings WHERE key = 'collections.fill' AND value = '0';
+";
 
 const ACTION_EDITS: &str = "
 ALTER TABLE collections_edit_rows ADD COLUMN collection TEXT;
@@ -667,9 +689,13 @@ pub fn alert_record(def: &Definition, a: &crate::alerts::Alert) -> EntityRecord 
     EntityRecord(e)
 }
 
-/// Whether fillers are off on this pod (`collections.fill = 0`).
+/// Whether fillers are off on this pod: its `web` jack is unplugged
+/// (decision `jacks`).
 fn fills_off(conn: &Connection) -> rusqlite::Result<bool> {
-    Ok(pod_core::store::pod_setting_on(conn, crate::fill::FILL_SETTING)?.is_some_and(|v| v == "0"))
+    Ok(!pod_core::jacks::core_plugged_on(
+        conn,
+        pod_core::jacks::WEB,
+    )?)
 }
 
 /// A collection's list as a `DataBundle`: each live row at
