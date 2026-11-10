@@ -62,7 +62,8 @@ and Back, and wraps what scrolls in `core://Scroll`:
 }
 ```
 
-`title` names the layout (lists, accessibility) and is not drawn. In the root column a `core://Scroll`, a filling
+`title` names the layout (lists, accessibility) and is not drawn. `core:page_header` draws that header row (Back, the
+title, actions as its children). In the root column a `core://Scroll`, a filling
 `core://Box` or an inline `core://Layout` (or a `core://Gesture` around one) takes the height the other children
 leave. A screen's `item` binds `$item`
 throughout it (feature `screen_item`). `local://nav` and `local://screen` say where it is drawn and how its data load
@@ -257,6 +258,7 @@ The server components:
 | `core:screen` | `title`, `data`, `has_footer`; children: content, footer | A screen as the app drew it: Back, title and spinner, the load's error with Try again, scrolling content, footer. Its `data` is only for Try again: the screen's own `data` (the same path) is what loads when it opens, and a screen that gives `core:screen` a `data` without loading it is refused. |
 | `core:back_button` | | Back, shown while `local://nav#can_go_back`. |
 | `core:header_bar` | `title`, `style`, paddings; children: actions | A title on the left and icon buttons on the right, on one line. |
+| `core:page_header` | `title`, `style`, paddings; children: actions | A `core://Page`'s header on one line: Back (while it can go back), the title, and icon buttons on the right. |
 | `core:section_header` | `text`, `style`, `padding_v`, `divider` | A section's padded heading, optionally under a divider. |
 | `core:list_row` | `title`, `trailing`, `padding_v` | A row with a title and a quiet trailing text. |
 | `core:card` | `spacing`, `border`; children | A bordered, rounded card of its children in a column. |
