@@ -56,7 +56,8 @@ An adapter implements `pod_core::AppAdapter` (`crates/pod-core/src/adapter.rs`).
   core);
 - declare **notification channels** and poll an upstream for new notifications (D52);
 - **resume** background jobs when a pod opens (D50), and keep the pod open from server start when that work can't
-  wait for a request (`keeps_open`, decision `agents-runs`).
+  wait for a request (`keeps_open`, decision `agents-runs`);
+- declare **jacks** (decision `jacks`): abilities a pod can be plugged into, such as an account it connects.
 
 The server binary picks the adapters at compile time (`server::adapters`). Apps in this repository:
 
@@ -168,6 +169,15 @@ and the inbox are layouts too. Platform code is thin:
   `dispatch_virtual_interaction`.
 
 More on running them: [clients.md](clients.md); on the renderer: [rendering.md](rendering.md).
+
+## Jacks, the web module and the agent module
+
+A pod's **jacks** (`pod_core::jacks`, decision `jacks`) are the abilities it is plugged into: the core's `model`,
+`web` and `web_search`, and adapters' accounts (`pixelfed`, `agent_runner`). Each is a switch, a config with sealed
+secrets, or an account; the host can lock one off (temporary pods). Every request to a website goes through the
+**web module** (`crates/web-extract`: block detection, one policy per host, search providers, the prompts for web
+content), and every model call through the **agent module** (`crates/agent`: the `model` jack, tiers, daily budgets,
+retries, the tool loop) (decision `web-and-agent-modules`).
 
 ## Background work on the server
 

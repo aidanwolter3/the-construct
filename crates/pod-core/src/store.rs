@@ -287,6 +287,25 @@ const MIGRATIONS: &[Step] = &[
             PRIMARY KEY (name, version)
         ) WITHOUT ROWID;",
     ),
+    // Decision `jacks`: each jack's state on this pod (no row: its
+    // default), and the model calls the agent module made per day and
+    // feature (its daily budgets).
+    Step::sql(
+        "jacks",
+        "CREATE TABLE jacks (
+            id         TEXT PRIMARY KEY NOT NULL,
+            plugged    INTEGER NOT NULL,
+            config     TEXT NOT NULL DEFAULT '{}',
+            secrets    TEXT NOT NULL DEFAULT '{}',
+            updated_at INTEGER NOT NULL
+        );
+        CREATE TABLE agent_usage (
+            day     TEXT NOT NULL,
+            feature TEXT NOT NULL,
+            calls   INTEGER NOT NULL,
+            PRIMARY KEY (day, feature)
+        ) WITHOUT ROWID;",
+    ),
 ];
 
 /// A pod setting inside a transaction (an adapter migration reads its

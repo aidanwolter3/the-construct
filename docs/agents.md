@@ -38,6 +38,9 @@ carries `last_run {run_id, due_at, state, end_reason, outcome}`. A scheduled run
 
 ## In the pod
 
+The runner is the pod's `agent_runner` jack (decision [`jacks`](decisions/jacks.md)): `list_jacks` shows whether it
+is plugged and to which URL; `unplug_jack agent_runner` signs out, like `POST /v1/agents/sign-out`.
+
 - **Sign-in:** the Agents layout's form posts the runner's URL and token to `POST /v1/agents/sign-in`. The pod asks
   the runner for a snapshot with it first (a refused token is 400 `runner_refused_token`), then stores the token
   sealed (`CONSTRUCT_SECRETS_KEY`) in `agents_runner`. The URL must be `https://` on a public host name

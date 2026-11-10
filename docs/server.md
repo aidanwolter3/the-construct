@@ -81,9 +81,9 @@ settings are logged at startup.
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `CONSTRUCT_INFER_API_KEY`, `CONSTRUCT_INFER_MODEL` | unset | Both set: `model`-computed collection fields are answered by this model over the Messages API. Temporary pods never use it. |
+| `CONSTRUCT_INFER_API_KEY`, `CONSTRUCT_INFER_MODEL` | unset | The agent module's key (every model call goes through `crates/agent`) and its cheap model: both set, `model`-computed collection fields are answered by it. A pod with its `model` jack unplugged or locked (temporary pods) never uses it. |
 | `CONSTRUCT_INFER_URL` | `https://api.anthropic.com/v1/messages` | The Messages API endpoint. |
-| `CONSTRUCT_FILL_MODEL` | `claude-opus-5-5` | The model for `agent` and `extract: llm` fillers (same key and endpoint). Without a key those fillers report themselves unavailable. |
+| `CONSTRUCT_FILL_MODEL` | `claude-opus-5-5` | The agent module's capable model: `agent`, `extract: llm` and `query_field` fillers (same key and endpoint). Without a key those fillers report themselves unavailable. Each pod's model calls have daily budgets per feature (`agent_usage`). |
 | `CONSTRUCT_FILL_AGENT_DAILY` | `20` | Agent filler runs per pod per day. |
 | `CONSTRUCT_FILL_PRIVATE_HOSTS` | unset | `1`: fetch fillers may read private addresses (local development only). |
 
@@ -148,7 +148,8 @@ machine only.
 
 With `CONSTRUCT_TEMP_PODS=1`, `POST /v1/pods/temporary` makes a pod that is deleted with everything in it after
 `CONSTRUCT_TEMP_POD_HOURS`. Temporary pods have every app, but Pixelfed only on the default instance (no typed-in
-servers), no model calls and no fetch fillers, and a smaller upload quota. At most 5 are made per client address an
+servers), the `model`, `web` and `web_search` jacks locked (no model calls, no fetch fillers, no searches; decision
+`jacks`), and a smaller upload quota. At most 5 are made per client address an
 hour. They are how visitors and automated sessions try a deployed server:
 
 ```bash

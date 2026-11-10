@@ -217,8 +217,18 @@ A collection can keep itself current from the web (decision
   types. Headers can carry a sealed secret (`collections_set_secret`, with the host it may be sent to; a
   request to any other host, a redirect off it, or a plain `http://` request doesn't get it). Extraction lives in
   `crates/web-extract`.
+- **Per-row fetches:** `url_field` fills each row from its own page; `query_field` (with `extract: "llm"` and
+  `fields`) searches each row's text with the pod's `web_search` jack and has a model pick the row's fields from
+  the results (a shopping list's store, price and link; people add the rows). A blocked, failed or empty page or
+  search never erases a row's values (`on_empty: "keep"`, the default; `"clear"` empties them). `refresh: "once"`
+  fills a row when its URL or query is new or changed (the default for `query_field`); `"every"` (the default
+  for `url_field`) fills on each run but skips the model when the page's text didn't change (decision
+  [`web-and-agent-modules`](decisions/web-and-agent-modules.md)).
 - **`agent`** (costs model calls): a prompt; a model with web search answers rows that fit the fields, within a
-  daily budget.
+  daily budget. With the `web_search` jack plugged it searches and reads pages with the pod's own tools.
+- **The web module:** every request goes through the pod's host policy (`web-extract`'s `hosts`: 1 s spacing, a
+  daily cap per site, and a shared backoff after a site blocks the pod as an automated visitor). Model work runs
+  through the agent module (`crates/agent`): the `model` jack, daily budgets per feature, retries.
 - **Modes:** `replace` (the filler's rows are its latest answer, kept stable by `key`) or `upsert` by `key`. Filled
   fields can't be edited by hand.
 - **Alerts** notify once when a row matches: `any` / `all` / `none` phrases, a filler, days of the week, a window on a
@@ -232,7 +242,16 @@ A collection can keep itself current from the web (decision
 
 MCP tools: `collections_preview` (try a recipe without storing anything), `collections_status`,
 `collections_refresh`, `collections_set_secret`; `apply_change` ops `set_filler`, `remove_filler`, `add_alert`,
-`update_alert`, `remove_alert`. Fillers are off on temporary pods.
+`update_alert`, `remove_alert`. Fillers need the pod's `web` jack and model work its `model` jack (decision
+[`jacks`](decisions/jacks.md)); both are locked off on temporary pods.
+
+### Jacks
+
+A pod's **jacks** are the abilities it is plugged into (decision [`jacks`](decisions/jacks.md)): `model` and `web`
+(switches, on by default), `web_search` (config: `provider` `brave` with the pod's own `api_key`, `searxng` with a
+`base_url`, or `duckduckgo`), and accounts adapters declare: `pixelfed` and `agent_runner` (plugged by their own
+sign-in). Claude uses `list_jacks`, `plug_jack` and `unplug_jack`; `GET /v1/jacks` lists them. Secrets are sealed and
+never shown back. The host can lock a jack off for a pod (`jack.<id> = locked` in `pod_settings`).
 
 ## The Events app
 

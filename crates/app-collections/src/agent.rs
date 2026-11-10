@@ -1,19 +1,27 @@
-//! The `agent` filler (decision `collection-fillers`): a model with web
-//! search and web fetch answers a collection's rows for a prompt ("the five
-//! best-reviewed 27-inch monitors under $400 and where each is cheapest").
+//! Model work for fillers (decisions `collection-fillers`,
+//! `web-and-agent-modules`), behind the [`FillAgent`] trait so tests use a
+//! fake:
 //!
-//! One fill is one conversation over the Messages API: the model searches
-//! and reads pages with the server-side web tools (capped by the filler's
-//! `max_searches` and `max_fetches`), then calls `save_rows`, a strict tool
-//! whose schema is built from the collection's fields, so every row fits
-//! them. A `pause_turn` (the server's tool loop paused) is resumed. Behind
-//! the [`FillAgent`] trait, so tests use a fake.
+//! - **agent fillers** ([`FillAgent::fill`]): a research request answered as
+//!   rows. With the pod's `web_search` jack plugged, the model searches and
+//!   reads pages with the pod's own tools ([`web_extract::tools`]: the pod's
+//!   host policy, cache and search provider); without it, with the API's
+//!   server-side web tools, as before.
+//! - **`llm` pages** ([`FillAgent::read_page`]): a page's text into rows.
+//! - **`query_field` rows** ([`FillAgent::pick`]): one row's fields chosen
+//!   from web search results.
+//!
+//! The prompts are the web module's ([`web_extract::tasks`]); the calls are
+//! the agent module's ([`construct_agent::Agent`]: the `model` jack, daily
+//! budgets, retries). Answers are checked against what was fetched
+//! ([`web_extract::tasks::check_rows`]) before they are stored.
 
 use std::sync::Arc;
-use std::time::Duration;
 
-use pod_core::BoxFuture;
+use construct_agent::{Agent, AgentError};
+use pod_core::{BoxFuture, Pod};
 use serde_json::{Map, Value, json};
+use web_extract::tasks::{self, RowField};
 
 use crate::model::Kind;
 
@@ -25,9 +33,24 @@ pub struct AgentField {
     pub options: Vec<String>,
 }
 
-/// What one fill asks.
-#[derive(Debug, Clone)]
+impl AgentField {
+    pub fn row_field(&self) -> RowField {
+        RowField {
+            name: self.name.clone(),
+            kind: self.kind.as_str().to_owned(),
+            options: self.options.clone(),
+        }
+    }
+}
+
+fn row_fields(fields: &[AgentField]) -> Vec<RowField> {
+    fields.iter().map(AgentField::row_field).collect()
+}
+
+/// What one agent fill asks.
+#[derive(Clone)]
 pub struct AgentRequest<'a> {
+    pub pod: &'a Pod,
     /// The collection's title.
     pub title: &'a str,
     pub prompt: &'a str,
@@ -43,7 +66,7 @@ pub struct AgentRequest<'a> {
     pub current: &'a [Map<String, Value>],
 }
 
-/// What one fill answered.
+/// What one agent fill answered.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct AgentAnswer {
     /// Rows by field name.
@@ -53,8 +76,9 @@ pub struct AgentAnswer {
 }
 
 /// What an `llm` fetch filler asks about one page.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct PageRequest<'a> {
+    pub pod: &'a Pod,
     pub title: &'a str,
     pub fields: &'a [AgentField],
     /// The page's readable text.
@@ -68,8 +92,21 @@ pub struct PageRequest<'a> {
     pub with_past: bool,
 }
 
-/// Answers an [`AgentRequest`] (an `agent` filler) and a [`PageRequest`]
-/// (an `llm` fetch filler).
+/// What a `query_field` filler asks about one row.
+#[derive(Clone)]
+pub struct PickRequest<'a> {
+    pub pod: &'a Pod,
+    pub title: &'a str,
+    pub fields: &'a [AgentField],
+    /// The row's item, as its query field (and notes) say it.
+    pub item: &'a str,
+    pub results: &'a [web_extract::search::SearchResult],
+    pub hint: &'a str,
+    pub today: &'a str,
+}
+
+/// Answers an [`AgentRequest`] (an `agent` filler), a [`PageRequest`] (an
+/// `llm` fetch filler) and a [`PickRequest`] (a `query_field` filler).
 pub trait FillAgent: Send + Sync + std::fmt::Debug {
     fn fill<'a>(&'a self, req: AgentRequest<'a>) -> BoxFuture<'a, Result<AgentAnswer, String>>;
 
@@ -81,392 +118,163 @@ pub trait FillAgent: Send + Sync + std::fmt::Debug {
         let _ = req;
         Box::pin(async { Err("this model can't read pages".to_owned()) })
     }
+
+    /// One row's fields (by name) from search results; no rows when no
+    /// result is about the item.
+    fn pick<'a>(
+        &'a self,
+        req: PickRequest<'a>,
+    ) -> BoxFuture<'a, Result<Vec<Map<String, Value>>, String>> {
+        let _ = req;
+        Box::pin(async { Err("this model can't pick from search results".to_owned()) })
+    }
 }
 
-/// Most page text sent to the model.
-pub const MAX_PAGE_CHARS: usize = 60_000;
-
-const PAGE_SYSTEM: &str = "You read the text of a web page and list the items it holds as rows of \
-a table in a personal app. Give every field of each row: the page's own words for text; null for \
-anything the page doesn't say; never guess a number, a price or a date. Dates are YYYY-MM-DD; a date \
-and time is YYYY-MM-DDTHH:MM, with the UTC offset only when the page states one. Skip navigation, ads \
-and anything the notes exclude. Answer {\"rows\": []} when there are none.";
-
-/// The request body of a [`PageRequest`].
-pub fn page_request_body(model: &str, req: &PageRequest<'_>) -> Value {
-    let schema = save_rows_tool(req.fields)["input_schema"].clone();
-    let fields: Vec<String> = req
-        .fields
-        .iter()
-        .map(|f| format!("- {} ({})", f.name, f.kind.as_str()))
-        .collect();
-    let mut prompt = format!(
-        "Today is {}. The table is \"{}\", with columns:\n{}\n\nThe page is {}.\n\n<page>\n{}\n</page>",
-        req.today,
-        req.title,
-        fields.join("\n"),
-        req.url,
-        web_extract::html::truncate(req.page_text, MAX_PAGE_CHARS)
-    );
-    if !req.hint.trim().is_empty() {
-        prompt.push_str(&format!("\n\nNotes about this page: {}", req.hint.trim()));
-    }
-    if req.with_past {
-        prompt.push_str(
-            "\n\nList past items too, with their dates, even when the notes ask for upcoming \
-             ones: the app leaves out past items itself.",
-        );
-    }
-    json!({
-        "model": model,
-        "max_tokens": 16000,
-        "system": PAGE_SYSTEM,
-        "output_config": { "effort": "low", "format": { "type": "json_schema", "schema": schema } },
-        "fallbacks": "default",
-        "messages": [{ "role": "user", "content": prompt }],
-    })
-}
-
-/// The rows of a [`PageRequest`]'s answer.
-pub fn page_rows(answer: &Value) -> Result<Vec<Map<String, Value>>, String> {
-    match answer["stop_reason"].as_str() {
-        Some("refusal") => return Err("the model declined to read this page".into()),
-        Some("max_tokens") => return Err("the model's answer was cut off (too many rows)".into()),
-        _ => {}
-    }
-    let text: String = answer["content"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .filter(|b| b["type"] == "text")
-        .filter_map(|b| b["text"].as_str())
-        .collect();
-    let parsed: Value = serde_json::from_str(text.trim())
-        .map_err(|e| format!("the model's answer is not JSON: {e}"))?;
-    Ok(parsed["rows"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .filter_map(|r| r.as_object().cloned())
-        .take(MAX_ROWS * 2)
-        .collect())
-}
-
-/// The env var naming the model agent fillers use; unset:
-/// [`DEFAULT_MODEL`]. The key and URL are the computed fields'
-/// (`CONSTRUCT_INFER_API_KEY`, `CONSTRUCT_INFER_URL`).
-pub const MODEL_VAR: &str = "CONSTRUCT_FILL_MODEL";
-pub const DEFAULT_MODEL: &str = "claude-opus-5-5";
-/// Requests per fill (the first and `pause_turn` resumptions).
-pub const MAX_TURNS: usize = 6;
+/// Requests per agent fill (the first, resumptions and tool results).
+pub const MAX_TURNS: usize = 12;
 /// Rows one fill may answer.
-pub const MAX_ROWS: usize = 100;
+pub const MAX_ROWS: usize = tasks::MAX_ROWS;
 /// Current rows shown to the model.
-pub const MAX_CURRENT: usize = 50;
+pub const MAX_CURRENT: usize = tasks::MAX_CURRENT;
 
-const SYSTEM: &str = "You keep a table in a personal app up to date. Research the request on the web \
-with the tools you have, then call save_rows exactly once with every row the request asks for. Each row \
-gives every field: use null for anything you could not find; never guess a number, a price or a date. \
-Dates are YYYY-MM-DD. Prefer primary sources (the store's own page, the official results page) and \
-current information. Keep a current row when it still holds, with the same key.";
-
-/// A [`FillAgent`] over the Anthropic Messages API with the server-side
-/// web tools.
-pub struct MessagesAgent {
-    client: reqwest::Client,
-    url: String,
-    key: String,
-    model: String,
+/// The pod's [`FillAgent`]: the web module's tasks run by the agent module.
+#[derive(Debug, Clone)]
+pub struct PodAgent {
+    agent: Arc<Agent>,
 }
 
-impl std::fmt::Debug for MessagesAgent {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("MessagesAgent")
-            .field("url", &self.url)
-            .field("model", &self.model)
-            .finish_non_exhaustive()
-    }
-}
-
-impl MessagesAgent {
-    pub fn new(url: String, key: String, model: String) -> Self {
-        let client = pod_core::net::builder(Duration::from_secs(600))
-            .build()
-            .expect("an HTTP client");
-        Self {
-            client,
-            url,
-            key,
-            model,
-        }
+impl PodAgent {
+    pub fn new(agent: Arc<Agent>) -> Self {
+        Self { agent }
     }
 
-    /// From `CONSTRUCT_INFER_API_KEY` (required), [`MODEL_VAR`] and
-    /// `CONSTRUCT_INFER_URL`.
+    /// Over [`Agent::from_env`].
     pub fn from_env() -> Option<Arc<dyn FillAgent>> {
-        let var = |k: &str| {
-            std::env::var(k)
-                .ok()
-                .map(|v| v.trim().to_owned())
-                .filter(|v| !v.is_empty())
-        };
-        let key = var(crate::compute::API_KEY_VAR)?;
-        let model = var(MODEL_VAR).unwrap_or_else(|| DEFAULT_MODEL.to_owned());
-        let url =
-            var(crate::compute::URL_VAR).unwrap_or_else(|| crate::compute::DEFAULT_URL.to_owned());
-        Some(Arc::new(Self::new(url, key, model)))
+        Agent::from_env().map(|a| Arc::new(Self::new(a)) as Arc<dyn FillAgent>)
     }
 }
 
-/// The JSON schema of one value of `f` (null: not found).
-fn field_schema(f: &AgentField) -> Value {
-    let one = match f.kind {
-        Kind::Text => json!({ "type": "string" }),
-        Kind::Number => json!({ "type": "number" }),
-        Kind::Bool => json!({ "type": "boolean" }),
-        Kind::Date => json!({ "type": "string", "format": "date" }),
-        Kind::Datetime => {
-            json!({ "type": "string", "description": "YYYY-MM-DDTHH:MM with the UTC offset when the source gives one (e.g. 2026-11-06T19:30-07:00), or YYYY-MM-DD" })
-        }
-        Kind::Choice => json!({ "type": "string", "enum": f.options }),
-        Kind::Ref => json!({ "type": "string", "description": "a row id" }),
-        Kind::Quantity => {
-            json!({ "type": "string", "description": "an amount and a unit, e.g. 1 1/2 cups" })
-        }
-    };
-    json!({ "anyOf": [one, { "type": "null" }] })
+fn err(e: AgentError) -> String {
+    e.to_string()
 }
 
-/// The `save_rows` tool for `fields`.
-pub fn save_rows_tool(fields: &[AgentField]) -> Value {
-    let props: Map<String, Value> = fields
-        .iter()
-        .map(|f| (f.name.clone(), field_schema(f)))
-        .collect();
-    let names: Vec<&str> = fields.iter().map(|f| f.name.as_str()).collect();
-    json!({
-        "name": "save_rows",
-        "description": "Save the rows of the table. Call it once, with every row.",
-        "strict": true,
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "rows": {
-                    "type": "array",
-                    "items": {
-                        "type": "object",
-                        "properties": props,
-                        "required": names,
-                        "additionalProperties": false,
-                    },
-                },
-            },
-            "required": ["rows"],
-            "additionalProperties": false,
-        },
+/// The pod's own web tools for a research task, when its `web_search` jack
+/// is plugged: `(search, fetch)` sharing the pod's host policy and cache.
+pub fn pod_web(pod: &Pod) -> Option<web_extract::tools::Web> {
+    let config = pod_core::jacks::config(pod.store(), pod_core::jacks::WEB_SEARCH)?;
+    let provider = web_extract::search::Provider::from_config(&config).ok()?;
+    let adapter = pod.adapter::<crate::CollectionsAdapter>()?;
+    Some(web_extract::tools::Web {
+        hosts: pod.local::<web_extract::hosts::Hosts>(),
+        cache: pod.local::<web_extract::search::SearchCache>(),
+        client: adapter.fetch_client().clone(),
+        provider,
+        allow_private: adapter.allow_private_hosts(),
     })
 }
 
-/// The first user message of a fill.
-pub fn user_prompt(req: &AgentRequest<'_>) -> String {
-    let fields: Vec<String> = req
-        .fields
-        .iter()
-        .map(|f| match f.kind {
-            Kind::Choice => format!("- {} (one of: {})", f.name, f.options.join(", ")),
-            k => format!("- {} ({})", f.name, k.as_str()),
-        })
-        .collect();
-    let mut p = format!(
-        "Today is {}. The table is \"{}\". Its columns:\n{}\n\nRequest: {}",
-        req.today,
-        req.title,
-        fields.join("\n"),
-        req.prompt
-    );
-    if let Some(k) = req.key {
-        p.push_str(&format!(
-            "\n\nA row is identified by its {k}: give the same {k} for the same thing."
-        ));
-    }
-    if !req.current.is_empty() {
-        let rows: Vec<String> = req
-            .current
-            .iter()
-            .take(MAX_CURRENT)
-            .map(|r| Value::Object(r.clone()).to_string())
-            .collect();
-        p.push_str(&format!(
-            "\n\nThe table's current rows (check them; they may be out of date):\n{}",
-            rows.join("\n")
-        ));
-    }
-    p
-}
-
-/// The request body for `messages`.
-pub fn request_body(model: &str, req: &AgentRequest<'_>, messages: &[Value]) -> Value {
-    let mut tools = Vec::new();
-    if req.max_searches > 0 {
-        tools.push(json!({ "type": "web_search_20260209", "name": "web_search", "max_uses": req.max_searches }));
-    }
-    if req.max_fetches > 0 {
-        tools.push(json!({ "type": "web_fetch_20260209", "name": "web_fetch", "max_uses": req.max_fetches }));
-    }
-    tools.push(save_rows_tool(req.fields));
-    json!({
-        "model": model,
-        "max_tokens": 16000,
-        "system": SYSTEM,
-        "output_config": { "effort": "medium" },
-        "fallbacks": "default",
-        "tools": tools,
-        "tool_choice": { "type": "auto" },
-        "messages": messages,
-    })
-}
-
-/// What a response means for the fill.
-#[derive(Debug, Clone, PartialEq)]
-pub enum Turn {
-    /// The server's tool loop paused: send the content back to resume.
-    Resume(Value),
-    /// `save_rows` was called with these rows.
-    Rows(Vec<Map<String, Value>>),
-    Failed(String),
-}
-
-/// Count the web tool calls in `answer` into `(searches, fetches)`.
-pub fn count_tools(answer: &Value, out: &mut (u32, u32)) {
-    for b in answer["content"].as_array().into_iter().flatten() {
-        if b["type"] == "server_tool_use" {
-            match b["name"].as_str() {
-                Some("web_search") => out.0 += 1,
-                Some("web_fetch") => out.1 += 1,
-                _ => {}
-            }
-        }
-    }
-}
-
-/// Read one response.
-pub fn read_turn(answer: &Value) -> Turn {
-    let content = answer["content"].clone();
-    if let Some(input) = content
-        .as_array()
-        .into_iter()
-        .flatten()
-        .find(|b| b["type"] == "tool_use" && b["name"] == "save_rows")
-        .map(|b| b["input"].clone())
-    {
-        let rows = input["rows"]
-            .as_array()
-            .into_iter()
-            .flatten()
-            .filter_map(|r| r.as_object().cloned())
-            .take(MAX_ROWS)
-            .collect();
-        return Turn::Rows(rows);
-    }
-    match answer["stop_reason"].as_str() {
-        Some("pause_turn") => Turn::Resume(content),
-        Some("refusal") => Turn::Failed("the model declined this request".into()),
-        Some("max_tokens") => Turn::Failed("the model's answer was cut off".into()),
-        _ => Turn::Failed("the model answered without saving rows".into()),
-    }
-}
-
-/// The `feature` of a page read's model calls in the metrics (decision
-/// `server-monitoring`).
-const PAGE_FEATURE: &str = "fill_page";
-/// The `feature` of an agent fill's model calls.
-const AGENT_FEATURE: &str = "fill_agent";
-
-impl MessagesAgent {
-    /// One Messages API call, counted under `feature` (calls, tokens and
-    /// web tool uses).
-    async fn post(&self, feature: &str, body: &Value) -> Result<Value, String> {
-        use pod_core::metrics;
-        let resp = self
-            .client
-            .post(&self.url)
-            .header("x-api-key", &self.key)
-            .header("anthropic-version", "2026-10-21")
-            .header("anthropic-beta", "server-side-fallback-2026-07-01")
-            .json(body)
-            .send()
-            .await
-            .map_err(|e| {
-                metrics::record_llm(feature, false, None);
-                format!("the model could not be reached: {e}")
-            })?;
-        let status = resp.status();
-        let answer: Value = match resp.json().await {
-            Ok(a) => a,
-            Err(e) => {
-                metrics::record_llm(feature, false, None);
-                return Err(format!("the model's answer could not be read: {e}"));
-            }
-        };
-        metrics::record_llm(feature, status.is_success(), Some(&answer));
-        let mut tools = (0, 0);
-        count_tools(&answer, &mut tools);
-        for (tool, n) in [("web_search", tools.0), ("web_fetch", tools.1)] {
-            if n > 0 {
-                metrics::add(
-                    metrics::LLM_WEB_TOOLS,
-                    &[("feature", feature), ("tool", tool)],
-                    u64::from(n),
-                );
-            }
-        }
-        if !status.is_success() {
-            let msg = answer["error"]["message"].as_str().unwrap_or("");
-            return Err(format!(
-                "the model answered {status}: {}",
-                web_extract::html::truncate(msg, 200)
-            ));
-        }
-        Ok(answer)
-    }
-}
-
-impl FillAgent for MessagesAgent {
+impl FillAgent for PodAgent {
     fn read_page<'a>(
         &'a self,
         req: PageRequest<'a>,
     ) -> BoxFuture<'a, Result<Vec<Map<String, Value>>, String>> {
         Box::pin(async move {
-            let answer = self
-                .post(PAGE_FEATURE, &page_request_body(&self.model, &req))
-                .await?;
-            page_rows(&answer)
+            let fields = row_fields(req.fields);
+            let task = tasks::extract_rows(&tasks::PageInput {
+                title: req.title,
+                fields: &fields,
+                page_text: req.page_text,
+                url: req.url,
+                hint: req.hint,
+                today: req.today,
+                with_past: req.with_past,
+            });
+            let out = self.agent.run(req.pod.store(), task).await.map_err(err)?;
+            let mut rows = tasks::rows_of(&out)?;
+            tasks::check_rows(&mut rows, &format!("{}\n{}", req.url, req.page_text));
+            Ok(rows)
+        })
+    }
+
+    fn pick<'a>(
+        &'a self,
+        req: PickRequest<'a>,
+    ) -> BoxFuture<'a, Result<Vec<Map<String, Value>>, String>> {
+        Box::pin(async move {
+            let fields = row_fields(req.fields);
+            let task = tasks::pick_from_search(&tasks::PickInput {
+                title: req.title,
+                fields: &fields,
+                item: req.item,
+                results: req.results,
+                hint: req.hint,
+                today: req.today,
+            });
+            let out = self.agent.run(req.pod.store(), task).await.map_err(err)?;
+            let mut rows = tasks::rows_of(&out)?;
+            rows.truncate(1);
+            tasks::check_rows(&mut rows, &web_extract::search::results_text(req.results));
+            Ok(rows)
         })
     }
 
     fn fill<'a>(&'a self, req: AgentRequest<'a>) -> BoxFuture<'a, Result<AgentAnswer, String>> {
         Box::pin(async move {
-            let mut messages = vec![json!({ "role": "user", "content": user_prompt(&req) })];
-            let mut used = (0, 0);
-            for _ in 0..MAX_TURNS {
-                let body = request_body(&self.model, &req, &messages);
-                let answer = self.post(AGENT_FEATURE, &body).await?;
-                count_tools(&answer, &mut used);
-                match read_turn(&answer) {
-                    Turn::Rows(rows) => {
-                        return Ok(AgentAnswer {
-                            rows,
-                            searches: used.0,
-                            fetches: used.1,
-                        });
+            let fields = row_fields(req.fields);
+            let mut task = tasks::research(
+                &tasks::ResearchInput {
+                    title: req.title,
+                    prompt: req.prompt,
+                    fields: &fields,
+                    today: req.today,
+                    key: req.key,
+                    current: req.current,
+                },
+                MAX_TURNS,
+            );
+            let mut own_tools = false;
+            match pod_web(req.pod) {
+                Some(web) => {
+                    own_tools = true;
+                    if req.max_searches > 0 {
+                        task.tools
+                            .push(Arc::new(web_extract::tools::SearchTool::new(
+                                web.clone(),
+                                req.max_searches,
+                            )));
                     }
-                    Turn::Resume(content) => {
-                        messages.push(json!({ "role": "assistant", "content": content }));
+                    if req.max_fetches > 0 {
+                        task.tools.push(Arc::new(web_extract::tools::FetchTool::new(
+                            web,
+                            req.max_fetches,
+                        )));
                     }
-                    Turn::Failed(e) => return Err(e),
+                }
+                None => {
+                    if req.max_searches > 0 {
+                        task.server_tools.push(json!({ "type": "web_search_20260209", "name": "web_search", "max_uses": req.max_searches }));
+                    }
+                    if req.max_fetches > 0 {
+                        task.server_tools.push(json!({ "type": "web_fetch_20260209", "name": "web_fetch", "max_uses": req.max_fetches }));
+                    }
                 }
             }
-            Err("the model didn't finish within its turns".into())
+            let out = self.agent.run(req.pod.store(), task).await.map_err(err)?;
+            let Some(input) = out.finished.as_ref() else {
+                return Err("the model answered without saving rows".into());
+            };
+            let rows = tasks::rows_in(input);
+            let (searches, fetches) = if own_tools {
+                // The pod's tools: each call is a search or a fetch.
+                (out.tool_calls, 0)
+            } else {
+                (out.server_searches, out.server_fetches)
+            };
+            Ok(AgentAnswer {
+                rows,
+                searches,
+                fetches,
+            })
         })
     }
 }
@@ -475,114 +283,18 @@ impl FillAgent for MessagesAgent {
 mod tests {
     use super::*;
 
-    fn fields() -> Vec<AgentField> {
-        vec![
-            AgentField {
-                name: "name".into(),
-                kind: Kind::Text,
-                options: Vec::new(),
-            },
-            AgentField {
-                name: "price".into(),
-                kind: Kind::Number,
-                options: Vec::new(),
-            },
-            AgentField {
-                name: "stock".into(),
-                kind: Kind::Choice,
-                options: vec!["in".into(), "out".into()],
-            },
-        ]
-    }
-
     #[test]
-    fn a_page_read_for_upcoming_items_asks_for_past_ones_too() {
-        let f = fields();
-        let prompt = |with_past| {
-            let req = PageRequest {
-                title: "Shows",
-                fields: &f,
-                page_text: "May 29: a talk",
-                url: "https://club.example/shows",
-                hint: "upcoming shows",
-                today: "2026-11-05",
-                with_past,
-            };
-            page_request_body("m", &req)["messages"][0]["content"]
-                .as_str()
-                .unwrap()
-                .to_owned()
+    fn fields_carry_their_kind_names() {
+        let f = AgentField {
+            name: "stock".into(),
+            kind: Kind::Choice,
+            options: vec!["in".into(), "out".into()],
         };
-        assert!(prompt(true).contains("List past items too"));
-        assert!(!prompt(false).contains("past items"));
-    }
-
-    #[test]
-    fn the_request_has_the_web_tools_and_a_strict_save_tool() {
-        let f = fields();
-        let current = vec![
-            json!({"name": "Acme 27", "price": 329})
-                .as_object()
-                .unwrap()
-                .clone(),
-        ];
-        let req = AgentRequest {
-            title: "Monitors",
-            prompt: "the five best-reviewed 27-inch monitors under $400",
-            fields: &f,
-            today: "2026-11-04",
-            max_searches: 3,
-            max_fetches: 0,
-            key: Some("name"),
-            current: &current,
-        };
-        let body = request_body(
-            "m",
-            &req,
-            &[json!({"role": "user", "content": user_prompt(&req)})],
-        );
-        let tools = body["tools"].as_array().unwrap();
-        assert_eq!(tools.len(), 2, "no fetch tool with max_fetches 0");
-        assert_eq!(tools[0]["type"], "web_search_20260209");
-        assert_eq!(tools[0]["max_uses"], 3);
-        let save = &tools[1];
-        assert_eq!(save["strict"], true);
-        let item = &save["input_schema"]["properties"]["rows"]["items"];
-        assert_eq!(item["required"], json!(["name", "price", "stock"]));
+        let r = f.row_field();
+        assert_eq!(r.kind, "choice");
         assert_eq!(
-            item["properties"]["stock"]["anyOf"][0]["enum"],
+            tasks::field_schema(&r)["anyOf"][0]["enum"],
             json!(["in", "out"])
         );
-        assert_eq!(body["tool_choice"]["type"], "auto");
-        let prompt = body["messages"][0]["content"].as_str().unwrap();
-        assert!(
-            prompt.contains("Today is 2026-11-04") && prompt.contains("Acme 27"),
-            "{prompt}"
-        );
-    }
-
-    #[test]
-    fn turns_are_read() {
-        let saved = json!({"stop_reason": "tool_use", "content": [
-            {"type": "server_tool_use", "name": "web_search", "id": "s1", "input": {}},
-            {"type": "text", "text": "Found them."},
-            {"type": "tool_use", "name": "save_rows", "id": "t1", "input": {"rows": [{"name": "A", "price": 1, "stock": null}]}}]});
-        let mut used = (0, 0);
-        count_tools(&saved, &mut used);
-        assert_eq!(used, (1, 0));
-        match read_turn(&saved) {
-            Turn::Rows(r) => assert_eq!(r[0]["name"], "A"),
-            other => panic!("{other:?}"),
-        }
-        let paused = json!({"stop_reason": "pause_turn", "content": [{"type": "server_tool_use", "name": "web_fetch"}]});
-        assert!(matches!(read_turn(&paused), Turn::Resume(_)));
-        assert!(matches!(
-            read_turn(&json!({"stop_reason": "end_turn", "content": []})),
-            Turn::Failed(_)
-        ));
-        assert!(matches!(
-            read_turn(&json!({"stop_reason": "refusal", "content": []})),
-            Turn::Failed(_)
-        ));
     }
 }

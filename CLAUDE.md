@@ -20,7 +20,9 @@ issues. `docs/history/` is archived; don't treat it as current.
   binary and `server pods` CLI.
 - `crates/app-pixelfed`, `app-recipes`, `app-collections`, `app-events` (Events), `app-monitor`, `app-agents` (Agents:
   an external agent runner, [docs/agents.md](docs/agents.md)), `app-shell` (the home blueprint): the adapters.
-  `crates/web-extract`: page fetching and extraction for fillers.
+  `crates/web-extract`: the web module (page fetching and extraction, host policy, search, web prompts);
+  `crates/agent` (`construct-agent`): the agent module every model call goes through; `pod_core::jacks`: the
+  abilities a pod is plugged into (decisions `jacks`, `web-and-agent-modules`).
 - `crates/client-core` the engine (cache, outbox, sign-in, event stream), a library of the clients.
 - `crates/construct-render` the renderer and the clients (taffy, wgpu, a CPU rasterizer): the pod's MCP layout
   previews, `construct-viewer` (desktop; `scripts/macos_app.sh` bundles the Mac app) and the Android app

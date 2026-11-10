@@ -309,6 +309,36 @@ pub trait AppAdapter: Any + Send + Sync {
         Ok(())
     }
 
+    /// The jacks this adapter declares (decision `jacks`): the abilities it
+    /// lets a pod plug in, such as an account it connects. Ids are unique
+    /// across the core and every adapter (checked at startup) and stored,
+    /// so never renamed. Default: none.
+    fn jacks(&self) -> Vec<crate::jacks::JackSpec> {
+        Vec::new()
+    }
+
+    /// An account jack's state on this pod (one of [`Self::jacks`] whose
+    /// kind is `Account`), from stored data only. Default: unplugged.
+    fn jack_status<'a>(
+        &'a self,
+        pod: &'a Pod,
+        jack: &'a str,
+    ) -> BoxFuture<'a, Option<crate::jacks::JackStatus>> {
+        let _ = (pod, jack);
+        Box::pin(async { None })
+    }
+
+    /// Unplug account jack `jack` (forget the account), or `None` when it
+    /// can only be unplugged where it was signed in. Default: `None`.
+    fn unplug_jack<'a>(
+        &'a self,
+        pod: &'a Pod,
+        jack: &'a str,
+    ) -> Option<BoxFuture<'a, Result<(), String>>> {
+        let _ = (pod, jack);
+        None
+    }
+
     /// Extra MCP tools this source offers Claude (decision `collections`),
     /// as MCP tool definitions (`{name, description, inputSchema}`). Names
     /// must not clash with the core's tools or another adapter's (checked
@@ -503,6 +533,16 @@ impl Catalog {
                 return Err(format!("two adapters are named '{name}'"));
             }
             names.push(name);
+            for j in a.jacks() {
+                if crate::jacks::core_jacks().iter().any(|c| c.id == j.id)
+                    || adapters[..i]
+                        .iter()
+                        .any(|b| b.jacks().iter().any(|x| x.id == j.id))
+                    || a.jacks().iter().filter(|x| x.id == j.id).count() > 1
+                {
+                    return Err(format!("jack '{}' is declared twice", j.id));
+                }
+            }
             for app in a.apps() {
                 if !app
                     .id

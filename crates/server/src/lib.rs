@@ -43,8 +43,8 @@ pub fn adapters(pixelfed: PixelfedConfig) -> Vec<Arc<dyn AppAdapter>> {
         app_shell::inbox_adapter(),
         Arc::new(
             app_collections::CollectionsAdapter::with_caps(collections_caps_from_env())
-                .with_model(app_collections::compute::MessagesModel::from_env())
-                .with_agent(app_collections::agent::MessagesAgent::from_env())
+                .with_model(app_collections::compute::PodModel::from_env())
+                .with_agent(app_collections::agent::PodAgent::from_env())
                 .with_private_hosts(std::env::var(FILL_PRIVATE_HOSTS_VAR).as_deref() == Ok("1")),
         ),
         Arc::new(app_monitor::MonitorAdapter::new(
@@ -108,26 +108,21 @@ pub fn check_open_pod(addr: &str, on_fly: bool, insecure_opt_in: bool) -> Result
 }
 
 /// Extra settings of temporary pods (anyone can make one, D46): Pixelfed
-/// only on the default instance, no collection `model` computes and no
-/// collection fillers (the Events app's websites included), so a visitor
-/// can't make the server
-/// contact hosts of their choosing (fetch URLs, register OAuth apps) or
-/// spend its model key.
+/// only on the default instance, and the `model`, `web` and `web_search`
+/// jacks locked unplugged (decision `jacks`), so a visitor can't make the
+/// server contact hosts of their choosing (fetch URLs, search, register
+/// OAuth apps) or spend its model key.
 pub fn temporary_pod_settings() -> Vec<(String, String)> {
-    vec![
-        (
-            app_pixelfed::OTHER_INSTANCES_SETTING.to_owned(),
-            "0".to_owned(),
-        ),
-        (
-            app_collections::compute::MODEL_SETTING.to_owned(),
-            "0".to_owned(),
-        ),
-        (
-            app_collections::fill::FILL_SETTING.to_owned(),
-            "0".to_owned(),
-        ),
-    ]
+    let mut out = vec![(
+        app_pixelfed::OTHER_INSTANCES_SETTING.to_owned(),
+        "0".to_owned(),
+    )];
+    out.extend(pod_core::jacks::lock_settings(&[
+        pod_core::jacks::MODEL,
+        pod_core::jacks::WEB,
+        pod_core::jacks::WEB_SEARCH,
+    ]));
+    out
 }
 
 /// Builds each pod of a host (D46): every pod gets the same adapters (shared

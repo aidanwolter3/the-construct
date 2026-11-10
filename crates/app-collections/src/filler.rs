@@ -89,6 +89,8 @@ impl Details {
 /// What fills the rows.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "lowercase")]
+// A definition holds a few fillers: boxing the recipe would only add noise.
+#[allow(clippy::large_enum_variant)]
 pub enum Source {
     /// A declarative recipe: fetch, extract, map.
     Fetch {
@@ -99,6 +101,12 @@ pub enum Source {
         /// from it.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         url_field: Option<String>,
+        /// The field (id) holding each row's search query (decision
+        /// `web-and-agent-modules`): the row's item is searched with the
+        /// pod's `web_search` jack and a model fills the row's fields from
+        /// the results (extract [`LLM`] only).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        query_field: Option<String>,
         /// Request headers; values may name a secret, `{secret:<name>}`.
         #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
         headers: BTreeMap<String, String>,
@@ -151,6 +159,46 @@ impl Mode {
     }
 }
 
+/// When a per-row filler (`url_field`, `query_field`) fills a row again.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Refresh {
+    /// Once, when the row's URL or query first appears or changes.
+    Once,
+    /// On every fill (only when the page changed, for `llm`).
+    Every,
+}
+
+impl Refresh {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Refresh::Once => "once",
+            Refresh::Every => "every",
+        }
+    }
+}
+
+/// What a per-row fill does when the row's page or search yields nothing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum OnEmpty {
+    /// Keep the row's last values (a blocked or empty page never erases
+    /// them).
+    #[default]
+    Keep,
+    /// Clear the filled fields.
+    Clear,
+}
+
+impl OnEmpty {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            OnEmpty::Keep => "keep",
+            OnEmpty::Clear => "clear",
+        }
+    }
+}
+
 /// One filler of a collection.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Filler {
@@ -176,6 +224,17 @@ pub struct Filler {
     /// out (so past events drop off).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub upcoming: Option<String>,
+    /// Per-row fillers: when a row is filled again (default: `every` for
+    /// `url_field`, `once` for `query_field`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub refresh: Option<Refresh>,
+    /// Per-row fillers: what an empty answer does (default `keep`).
+    #[serde(default, skip_serializing_if = "is_keep")]
+    pub on_empty: OnEmpty,
+}
+
+fn is_keep(o: &OnEmpty) -> bool {
+    *o == OnEmpty::Keep
 }
 
 impl Filler {
@@ -232,6 +291,29 @@ impl Filler {
         }
     }
 
+    /// The field id of each row's search query (`fetch` with `query_field`).
+    pub fn query_field(&self) -> Option<&str> {
+        match &self.source {
+            Source::Fetch { query_field, .. } => query_field.as_deref(),
+            Source::Agent { .. } => None,
+        }
+    }
+
+    /// Whether it fills rows one by one (`url_field` or `query_field`)
+    /// rather than answering a list.
+    pub fn per_row(&self) -> bool {
+        self.url_field().is_some() || self.query_field().is_some()
+    }
+
+    /// When a per-row filler fills a row again.
+    pub fn refresh(&self) -> Refresh {
+        self.refresh.unwrap_or(if self.query_field().is_some() {
+            Refresh::Once
+        } else {
+            Refresh::Every
+        })
+    }
+
     /// The page it reads (`fetch` with `url`).
     pub fn url(&self) -> Option<&str> {
         match &self.source {
@@ -243,7 +325,7 @@ impl Filler {
     /// Whether its rows belong to it: it adds and removes them (`replace`,
     /// not filling rows from their own URLs).
     pub fn owns_rows(&self) -> bool {
-        self.mode == Mode::Replace && self.url_field().is_none()
+        self.mode == Mode::Replace && !self.per_row()
     }
 
     /// A stable fingerprint: a changed recipe fills afresh (no 304 or
@@ -323,6 +405,7 @@ impl Filler {
             Source::Fetch {
                 url,
                 url_field,
+                query_field,
                 headers,
                 extract,
                 items,
@@ -339,6 +422,9 @@ impl Filler {
                 }
                 if let Some(f) = url_field {
                     v["url_field"] = json!(name(f));
+                }
+                if let Some(f) = query_field {
+                    v["query_field"] = json!(name(f));
                 }
                 for (k, x) in [
                     ("items", items),
@@ -411,6 +497,10 @@ impl Filler {
         }
         if let Some(u) = &self.upcoming {
             v["upcoming"] = json!(name(u));
+        }
+        if self.per_row() {
+            v["refresh"] = json!(self.refresh().as_str());
+            v["on_empty"] = json!(self.on_empty.as_str());
         }
         v
     }
@@ -509,6 +599,9 @@ fn parse_map(def: &Definition, v: Option<&Value>, at: &str) -> Result<Mapped, St
 
 /// A title for a filler without one: the page's host, else its kind.
 fn default_title(url: Option<&str>, kind: &str) -> String {
+    if kind == "search" {
+        return "Web search".into();
+    }
     url.map(web_extract::fetch::host_of)
         .filter(|h| !h.is_empty())
         .map(|h| h.trim_start_matches("www.").to_owned())
@@ -546,8 +639,20 @@ pub fn parse(
                 .filter(|u| !u.is_empty())
                 .map(|n| field_id(def, n, "url_field"))
                 .transpose()?;
-            if url.is_some() == url_field.is_some() {
-                return Err("a fetch filler has either \"url\" (one page) or \"url_field\" (each row's own page)".into());
+            let query_field = Some(text(o, "query_field"))
+                .filter(|u| !u.is_empty())
+                .map(|n| field_id(def, n, "query_field"))
+                .transpose()?;
+            if [url.is_some(), url_field.is_some(), query_field.is_some()]
+                .iter()
+                .filter(|x| **x)
+                .count()
+                != 1
+            {
+                return Err("a fetch filler has one of \"url\" (one page), \"url_field\" (each row's own page) or \"query_field\" (each row's own web search)".into());
+            }
+            if query_field.is_some() && text(o, "extract") != LLM {
+                return Err("a query_field filler has extract \"llm\": a model picks each row's fields from its search results".into());
             }
             let mut headers = BTreeMap::new();
             match o.get("headers") {
@@ -600,7 +705,11 @@ pub fn parse(
                 let fields: Vec<String> = match o.get("fields") {
                     None | Some(Value::Null) => def
                         .live_fields()
-                        .filter(|f| !f.computed() && url_field.as_ref() != Some(&f.id))
+                        .filter(|f| {
+                            !f.computed()
+                                && url_field.as_ref() != Some(&f.id)
+                                && query_field.as_ref() != Some(&f.id)
+                        })
                         .map(|f| f.id.clone())
                         .collect(),
                     Some(Value::Array(a)) => a
@@ -748,6 +857,7 @@ pub fn parse(
             Source::Fetch {
                 url,
                 url_field,
+                query_field,
                 headers,
                 extract,
                 items,
@@ -827,6 +937,10 @@ pub fn parse(
         .transpose()?;
     let kind = match source {
         Source::Agent { .. } => "agent",
+        Source::Fetch {
+            query_field: Some(_),
+            ..
+        } => "search",
         _ => "fetch",
     };
     let url = match &source {
@@ -842,6 +956,33 @@ pub fn parse(
         }
         t => t.to_owned(),
     };
+    let per_row = matches!(
+        &source,
+        Source::Fetch {
+            url_field: Some(_),
+            ..
+        } | Source::Fetch {
+            query_field: Some(_),
+            ..
+        }
+    );
+    let refresh = match text(o, "refresh") {
+        "" => None,
+        _ if !per_row => {
+            return Err("filler.refresh is for url_field and query_field fillers".into());
+        }
+        "once" => Some(Refresh::Once),
+        "every" => Some(Refresh::Every),
+        other => return Err(format!("filler.refresh '{other}' is once or every")),
+    };
+    let on_empty = match text(o, "on_empty") {
+        "" | "keep" => OnEmpty::Keep,
+        "clear" if per_row => OnEmpty::Clear,
+        "clear" => {
+            return Err("filler.on_empty is for url_field and query_field fillers".into());
+        }
+        other => return Err(format!("filler.on_empty '{other}' is keep or clear")),
+    };
     Ok(Filler {
         id,
         title,
@@ -851,6 +992,8 @@ pub fn parse(
         every_minutes: uint(o, "every_minutes")?,
         on_open_minutes: uint(o, "on_open_minutes")?,
         upcoming,
+        refresh,
+        on_empty,
     })
 }
 
@@ -914,22 +1057,25 @@ fn check_one(def: &Definition, f: &Filler, max_fills_per_day: u32) -> Result<(),
             );
         }
     }
-    if let Some(u) = f.url_field() {
-        let x = live(u, "url_field")?;
+    for (u, role, what) in [
+        (f.url_field(), "url_field", "URL"),
+        (f.query_field(), "query_field", "search"),
+    ] {
+        let Some(u) = u else { continue };
+        let x = live(u, role)?;
         if x.kind != Kind::Text {
-            return Err(format!("its url_field '{}' must be a text field", x.name));
+            return Err(format!("its {role} '{}' must be a text field", x.name));
         }
         if filled.iter().any(|i| i == u) {
             return Err(format!(
-                "'{}' holds each row's URL, so it can't be filled too",
+                "'{}' holds each row's {what}, so it can't be filled too",
                 x.name
             ));
         }
         if f.key.is_some() || f.mode != Mode::Replace {
-            return Err(
-                "with url_field each row is filled from its own URL: it takes no mode or key"
-                    .into(),
-            );
+            return Err(format!(
+                "with {role} each row is filled from its own {what}: it takes no mode or key"
+            ));
         }
     }
     if let Some(k) = &f.key {
@@ -960,7 +1106,7 @@ fn check_one(def: &Definition, f: &Filler, max_fills_per_day: u32) -> Result<(),
         );
     }
     // Rows it adds have only filled values (and defaults).
-    if f.url_field().is_none()
+    if !f.per_row()
         && let Some(x) = def.live_fields().find(|x| {
             !filled.contains(&x.id) && !x.computed() && !x.optional && x.default.is_none()
         })

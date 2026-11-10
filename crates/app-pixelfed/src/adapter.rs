@@ -362,4 +362,63 @@ impl AppAdapter for PixelfedAdapter {
     fn resume<'a>(&'a self, pod: &'a Pod) -> BoxFuture<'a, ()> {
         Box::pin(crate::posting::resume(pod))
     }
+
+    /// The Pixelfed account jack (decision `jacks`): plugged while an
+    /// account is stored; signed in and out from Settings.
+    fn jacks(&self) -> Vec<pod_core::jacks::JackSpec> {
+        vec![pod_core::jacks::JackSpec {
+            id: JACK,
+            title: "Pixelfed",
+            summary: "A Pixelfed account: the photo feed, likes, bookmarks, comments, posting and \
+                      Pixelfed notifications (the pixelfed blueprint and source).",
+            kind: pod_core::jacks::JackKind::Account {
+                how: "sign in from Settings → Sign-ins (or the Pixelfed layout's Sign in button); \
+                      sign out there too",
+            },
+        }]
+    }
+
+    fn jack_status<'a>(
+        &'a self,
+        pod: &'a Pod,
+        jack: &'a str,
+    ) -> BoxFuture<'a, Option<pod_core::jacks::JackStatus>> {
+        Box::pin(async move {
+            if jack != JACK {
+                return None;
+            }
+            let account: Option<(String, String)> = pod
+                .blocking(|s| {
+                    s.with_conn(|c| {
+                        c.query_row(
+                            "SELECT instance, username FROM pixelfed_account ORDER BY created_at DESC LIMIT 1",
+                            [],
+                            |r| Ok((r.get(0)?, r.get(1)?)),
+                        )
+                        .map(Some)
+                        .or_else(|e| match e {
+                            rusqlite::Error::QueryReturnedNoRows => Ok(None),
+                            e => Err(e),
+                        })
+                    })
+                })
+                .await
+                .ok()
+                .flatten();
+            Some(match account {
+                Some((instance, username)) => pod_core::jacks::JackStatus {
+                    plugged: true,
+                    detail: Some(if username.is_empty() {
+                        instance
+                    } else {
+                        format!("@{username} · {instance}")
+                    }),
+                },
+                None => pod_core::jacks::JackStatus::default(),
+            })
+        })
+    }
 }
+
+/// The Pixelfed account jack's id.
+pub const JACK: &str = "pixelfed";

@@ -182,7 +182,11 @@ or scrolls that preview, so look at a layout after changing it. A layout whose r
 core://Page gets no chrome from the app: it draws its own header (a title with actions on one line) and Back \
 (core:back_button); core://Workspace is drawn as core:workspace. Use ${local://theme#<token>} for colours \
 (set_theme). A button whose step can't be undone (action.device leave_pod or sign_out, a delete) asks first: wrap \
-its intent in action.confirm.";
+its intent in action.confirm. Jacks are the abilities the pod is plugged into (a model, fetching websites, web search \
+with the pod's own key, accounts such as an agent runner): list_jacks shows each and its state, plug_jack and \
+unplug_jack change the switch and config ones (a search key is given once and never shown back); account jacks are \
+plugged through their own sign-in. A feature whose jack is unplugged says so: tell the user which jack it needs \
+rather than working around it.";
 
 // ---------- tools ----------
 
@@ -226,6 +230,27 @@ fn base_tools() -> Vec<Value> {
     let copied = json!({ "type": "object", "description": "When the layout copies parts of a blueprint: {app, version} of what was copied",
         "properties": { "app": { "type": "string" }, "version": { "type": "integer" } } });
     vec![
+        tool(
+            "list_jacks",
+            "The pod's jacks (the abilities it is plugged into: model, web, web_search, and the accounts adapters declare): each one's kind (switch, config or account), state (plugged, unplugged or locked by the server), what it enables, and for config jacks their fields (secrets show only whether they are set).",
+            json!({}),
+            &[],
+        ),
+        tool(
+            "plug_jack",
+            "Plug a switch or config jack: {id} for a switch; {id, config: {field: value}} for a config jack (web_search: {provider: brave, api_key} or {provider: searxng, base_url} or {provider: duckduckgo}). A secret left out keeps its stored value. Account jacks are plugged by their own sign-in; this answers where. A locked jack can't be plugged.",
+            json!({
+                "id": { "type": "string", "description": "A jack id from list_jacks" },
+                "config": { "type": "object", "description": "A config jack's values by field name" },
+            }),
+            &["id"],
+        ),
+        tool(
+            "unplug_jack",
+            "Unplug a jack: a switch turns off, a config jack forgets its values and secrets, the agent_runner account signs out of its runner (forgetting what it sent). Features that need it stop (fillers that need web or web_search fail with a message naming the jack). Ask the user first.",
+            json!({ "id": { "type": "string", "description": "A jack id from list_jacks" } }),
+            &["id"],
+        ),
         tool(
             "list_layouts",
             "The user's layouts (home first, with the feeds every layout may bind) and the blueprints layouts can start from, with their latest version.",
@@ -439,6 +464,9 @@ async fn call_tool(pod: &Pod, headers: &HeaderMap, params: &Value) -> Value {
         _ => {}
     }
     let r = match name {
+        "list_jacks" => Ok(json!({ "jacks": crate::jacks::list(pod).await })),
+        "plug_jack" => crate::jacks::plug_tool(pod, &args).await,
+        "unplug_jack" => crate::jacks::unplug_tool(pod, &args).await,
         "list_layouts" | "list_apps" => list_apps(pod).await,
         "list_data_sources" => list_data_sources(pod).await,
         "describe_vocabulary" => vocabulary(pod).await,

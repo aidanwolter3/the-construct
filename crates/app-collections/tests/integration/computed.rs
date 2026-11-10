@@ -294,12 +294,12 @@ async fn a_model_field_is_answered_cached_and_learned() {
 
 #[tokio::test]
 async fn a_pod_with_model_computes_off_never_asks_the_model() {
-    // Temporary pods (anyone can make one) get `collections.model = 0`, so
+    // Temporary pods (anyone can make one) get the `model` jack locked, so
     // they can't spend the server's model key.
     let fake = Arc::new(Fake::default());
     let pod = pod(Some(fake.clone()));
     pod.store()
-        .set_pod_setting(app_collections::compute::MODEL_SETTING, "0")
+        .set_pod_setting("jack.model", pod_core::jacks::LOCKED)
         .unwrap();
     define_groceries(&pod).await;
     ok(
