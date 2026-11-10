@@ -967,3 +967,63 @@ async fn temporary_pods_dont_fill_and_no_model_means_unavailable() {
     let st = ok(&pod, "collections_status", json!({})).await;
     assert_eq!(st["fillers"][0]["state"], "unavailable", "{st}");
 }
+
+#[tokio::test]
+async fn details_llm_reads_each_new_rows_page_once() {
+    let base = serve(Arc::new(Site::default())).await;
+    let agent = Arc::new(FakeAgent::default());
+    *agent.page_rows.lock().unwrap() =
+        vec![json!({"description": "Brass Lanterns and Teacup Riot improvise a full show."})];
+    let pod = pod_with(Some(agent.clone()));
+    let fields = json!([
+        {"name": "source_id", "type": "text", "optional": true},
+        {"name": "title", "type": "text", "optional": true},
+        {"name": "start", "type": "datetime", "optional": true},
+        {"name": "description", "type": "text", "optional": true},
+        {"name": "url", "type": "text", "optional": true}]);
+    let filler = json!({"kind": "fetch", "url": format!("{base}/club.ics"), "extract": "events",
+        "zone": "America/Denver",
+        "map": {"source_id": "id", "title": "title", "start": "start", "url": "url"},
+        "key": "source_id", "upcoming": "start",
+        "details": {"link": "url", "extract": "llm", "fields": ["description"],
+                    "hint": "One sentence on the show."}});
+    // llm details take fields, not map or text.
+    let (err, e) = tool(
+        &pod,
+        "define_collection",
+        json!({"name": "bad", "fields": fields, "fillers": [{"kind": "fetch",
+            "url": format!("{base}/club.ics"), "extract": "events",
+            "map": {"source_id": "id", "url": "url"},
+            "details": {"link": "url", "extract": "llm", "map": {"description": "description"}}}]}),
+    )
+    .await;
+    assert!(err && e.to_string().contains("needs fields"), "{e}");
+    ok(
+        &pod,
+        "define_collection",
+        json!({"name": "shows", "fields": fields, "fillers": [filler]}),
+    )
+    .await;
+    settle(&pod, "shows").await;
+    let d = ok(&pod, "describe_collection", json!({"collection": "shows"})).await;
+    let shown = &d["definition"]["fillers"][0]["details"];
+    assert_eq!(shown["extract"], "llm", "{shown}");
+    assert_eq!(shown["fields"], json!(["description"]), "{shown}");
+    assert_eq!(shown["hint"], "One sentence on the show.", "{shown}");
+    let r = rows(&pod, "shows").await;
+    let friday = r.iter().find(|x| x["title"] == "Friday Improv").unwrap();
+    assert_eq!(
+        friday["description"],
+        "Brass Lanterns and Teacup Riot improvise a full show."
+    );
+    let class = r.iter().find(|x| x["title"] != "Friday Improv").unwrap();
+    assert!(
+        class["description"].is_null(),
+        "no page, nothing read: {class}"
+    );
+    assert_eq!(agent.pages.lock().unwrap().len(), 1, "one page with a link");
+    // A refetch keeps the rows: their pages aren't read again.
+    ok(&pod, "collections_refresh", json!({"collection": "shows"})).await;
+    settle(&pod, "shows").await;
+    assert_eq!(agent.pages.lock().unwrap().len(), 1, "read once per row");
+}

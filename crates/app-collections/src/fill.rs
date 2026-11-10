@@ -1351,16 +1351,26 @@ async fn fill_details(
     else {
         return Vec::new();
     };
-    let Some(kind) = web_extract::items::Kind::parse(&d.extract) else {
-        return Vec::new();
+    // A path extractor, or (extract llm) a model reading the page's text.
+    let spec = if d.is_llm() {
+        if adapter.agent().is_none() {
+            return Vec::new();
+        }
+        None
+    } else {
+        let Some(kind) = web_extract::items::Kind::parse(&d.extract) else {
+            return Vec::new();
+        };
+        Some(web_extract::items::Spec {
+            kind,
+            items: d.items.clone(),
+            types: d.types.clone(),
+            script: String::new(),
+            zone: zone.clone(),
+        })
     };
-    let spec = web_extract::items::Spec {
-        kind,
-        items: d.items.clone(),
-        types: d.types.clone(),
-        script: String::new(),
-        zone: zone.clone(),
-    };
+    let ids: Vec<String> = d.map.keys().cloned().collect();
+    let today = today(pod.store(), pod_core::util::now_secs());
     let pairs: Vec<(String, String)> = d.map.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
     let caps = adapter.caps();
     let mut found: Vec<(String, Map<String, Value>)> = Vec::new();
@@ -1386,8 +1396,36 @@ async fn fill_details(
             continue;
         };
         let page = String::from_utf8_lossy(&bytes);
-        let mut item = web_extract::items::extract(&spec, &page, &link, &pairs)
-            .ok()
+        let found_items = match &spec {
+            Some(spec) => web_extract::items::extract(spec, &page, &link, &pairs).ok(),
+            None => {
+                let Some(agent) = adapter.agent() else {
+                    continue;
+                };
+                let fields = agent_fields(def, &ids);
+                let text = web_extract::html::to_text(&page);
+                match agent
+                    .read_page(PageRequest {
+                        title: &def.title,
+                        fields: &fields,
+                        page_text: &text,
+                        url: &link,
+                        hint: &d.hint,
+                        today: &today,
+                        // One row's own page: keep what it says even if dated.
+                        with_past: true,
+                    })
+                    .await
+                {
+                    Ok(rows) => Some(by_ids(def, rows, &ids)),
+                    Err(e) => {
+                        tracing::warn!("a details page was not read by the model: {e}");
+                        None
+                    }
+                }
+            }
+        };
+        let mut item = found_items
             .and_then(|mut v| (!v.is_empty()).then(|| v.remove(0)))
             .unwrap_or_default();
         if item.is_empty()
