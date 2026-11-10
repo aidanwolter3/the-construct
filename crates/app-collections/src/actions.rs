@@ -1073,6 +1073,14 @@ impl Run<'_> {
         if let Err(e) = crate::refs::check_unique(self.tx, def, row)? {
             return Ok(Err(e));
         }
+        // Growth counts against the pod's storage quota, as on create.
+        let grown = crate::bytes_of(&row.values) - crate::bytes_of(&before.values);
+        if let Err(e) = crate::check_usage(self.tx, self.caps, 0, grown)? {
+            return Ok(Err(e["detail"]
+                .as_str()
+                .unwrap_or("the pod is full")
+                .to_owned()));
+        }
         row.updated_at = self.now;
         self.touch(&def.name, &row.id, Some(before.state()));
         db::save_row(self.tx, &def.name, row)?;

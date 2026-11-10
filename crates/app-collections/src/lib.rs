@@ -643,7 +643,7 @@ pub(crate) fn check_usage(
     Ok(Ok(()))
 }
 
-fn bytes_of(values: &Map<String, Value>) -> i64 {
+pub(crate) fn bytes_of(values: &Map<String, Value>) -> i64 {
     Value::Object(values.clone()).to_string().len() as i64
 }
 

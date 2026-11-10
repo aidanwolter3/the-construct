@@ -1320,3 +1320,56 @@ async fn a_delete_action_keeps_to_the_row_cap() {
     .await;
     assert_eq!(v["error"], "too_many_rows", "{v}");
 }
+
+#[tokio::test]
+async fn an_update_action_keeps_to_the_storage_quota() {
+    let adapter = CollectionsAdapter::with_caps(Caps {
+        bytes: 3_000,
+        ..Caps::default()
+    });
+    let pod: Pod = Arc::new(AppState::in_memory(vec![Arc::new(adapter)]));
+    pod.store()
+        .create_pinned_session(&session_hash("pod"))
+        .unwrap();
+    pod.store().create_session(&session_hash("phone")).unwrap();
+    ok(
+        &pod,
+        "define_collection",
+        json!({"name": "seeds", "fields": [{"name": "name", "type": "text"}]}),
+    )
+    .await;
+    ok(
+        &pod,
+        "define_collection",
+        json!({"name": "notes", "fields": [
+            {"name": "name", "type": "text"},
+            {"name": "body", "type": "text", "optional": true}],
+            "actions": [{"name": "stamp", "params": [{"name": "t", "type": "text"}],
+                "source": {"collection": "seeds"},
+                "match": {"name": "$row.name"},
+                "create": {"name": "$row.name"},
+                "update": {"body": "$param.t"}}]}),
+    )
+    .await;
+    for n in ["Fern", "Moss"] {
+        ok(
+            &pod,
+            "add_row",
+            json!({"collection": "seeds", "values": {"name": n}}),
+        )
+        .await;
+    }
+    // The first call creates the notes; small updates fit.
+    let stamp = |t: String| json!({"collection": "notes", "action": "stamp", "params": {"t": t}});
+    ok(&pod, "run_action", stamp("a".into())).await;
+    ok(&pod, "run_action", stamp("b".into())).await;
+    // Growing both notes past the pod's bytes is refused, and nothing is kept.
+    let v = refused(&pod, "run_action", stamp("x".repeat(1_600))).await;
+    assert!(v["detail"].as_str().unwrap_or("").contains("bytes"), "{v}");
+    let notes = rows(&pod, "notes").await;
+    assert_eq!(notes.len(), 2, "{notes:?}");
+    assert!(
+        notes.iter().all(|n| n["body"] == "b"),
+        "nothing was written: {notes:?}"
+    );
+}
