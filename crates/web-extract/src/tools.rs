@@ -43,9 +43,16 @@ impl SearchTool {
     }
 }
 
+/// Take one use, if any is left.
 fn take(left: &AtomicU32) -> bool {
-    left.fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| n.checked_sub(1))
-        .is_ok()
+    let mut n = left.load(Ordering::SeqCst);
+    while n > 0 {
+        match left.compare_exchange(n, n - 1, Ordering::SeqCst, Ordering::SeqCst) {
+            Ok(_) => return true,
+            Err(now) => n = now,
+        }
+    }
+    false
 }
 
 impl Tool for SearchTool {
