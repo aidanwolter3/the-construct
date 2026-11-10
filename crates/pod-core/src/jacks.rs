@@ -124,7 +124,7 @@ const SEARCH_FIELDS: &[JackField] = &[
     },
     JackField {
         name: "base_url",
-        doc: "the instance's https:// address (searxng)",
+        doc: "the instance's https:// address on a public host name (searxng)",
         secret: false,
         required: false,
         options: &[],
@@ -354,11 +354,19 @@ fn check_search(values: &Map<String, Value>, stored: &Map<String, Value>) -> Res
             let Some(base) = text("base_url") else {
                 return Err(Refusal::new("invalid_config", "searxng needs base_url"));
             };
+            // A public host name, as for every other address a pod names:
+            // an IP literal or an internal name would let the pod's searches
+            // reach the server's own network.
             match reqwest::Url::parse(base) {
-                Ok(u) if u.scheme() == "https" && u.host_str().is_some() => Ok(()),
+                Ok(u)
+                    if u.scheme() == "https"
+                        && u.host_str().is_some_and(crate::net::is_public_host) =>
+                {
+                    Ok(())
+                }
                 _ => Err(Refusal::new(
                     "invalid_config",
-                    "base_url is an https:// address",
+                    "base_url is an https:// address on a public host name",
                 )),
             }
         }
@@ -704,6 +712,31 @@ mod tests {
         )
         .unwrap_err();
         assert!(e.detail.contains("https"), "{e:?}");
+        for base in [
+            "https://10.0.0.5",
+            "https://127.0.0.1:8443",
+            "https://[::1]",
+            "https://[fdaa::3]:8443",
+            "https://169.254.169.254",
+            "https://searx.internal",
+            "https://localhost",
+        ] {
+            let e = plug(
+                &s,
+                &search(),
+                &obj(json!({"provider": "searxng", "base_url": base})),
+                3,
+            )
+            .unwrap_err();
+            assert!(e.detail.contains("public host"), "{base}: {e:?}");
+        }
+        plug(
+            &s,
+            &search(),
+            &obj(json!({"provider": "searxng", "base_url": "https://searx.example"})),
+            3,
+        )
+        .unwrap();
         unplug(&s, &search(), 4).unwrap();
         assert!(config(&s, WEB_SEARCH).is_none());
     }
