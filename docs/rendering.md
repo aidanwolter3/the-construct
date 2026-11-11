@@ -111,8 +111,10 @@ sideways toward its edge, follows the finger and closes past a quarter of its si
 clock, so gestures replay in its unit tests: the release velocity is a least-squares fit over the last 100 ms (at
 least 3 samples; none after a 40 ms pause), counting moves that arrive in one burst as one sample, since Android
 delivers the moves queued during a frame together; a fling follows Android's `OverScroller` curve (Flutter's closed
-form, starting at the release speed), 50 to 8000 points per second, and stops at the view's end; a finger landing on
-a fling faster than 50 points per second stops it without tapping. A mouse wheel notch glides 64 points over about
+form, starting at the release speed), 50 to 8000 points per second; a finger landing on a fling faster than 50 points
+per second stops it without tapping. Past an end, a view whose content scrolls stretches as Android 12's do: a pull
+stretches it (pushing back undoes that first), letting go springs it back, and a fling that meets the end bumps it;
+the content draws scaled along the axis from that end (`stretch:<id>` among the scroll offsets, up to about 10%). A mouse wheel notch glides 64 points over about
 120 ms; trackpad deltas apply as they come (macOS adds its own momentum). A drag's scrolling is applied once per frame, and the GPU renderer keeps shaped text between frames. `action.device` `show_versions` fills `local://versions` and `local:versions` from
 `/v1/apps/<id>/versions`; `pin_version` draws that version (`/v1/apps/<id>/versions/<n>`'s layout over the
 layout's latest data) wherever the layout shows, home included, until `follow_latest`, and new versions published

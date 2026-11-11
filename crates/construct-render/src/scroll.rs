@@ -309,6 +309,173 @@ impl WheelGlide {
     }
 }
 
+/// The stretch spring (Android's `EdgeEffect`): natural frequency (radians
+/// per second) and damping ratio.
+const STRETCH_FREQUENCY: f64 = 24.657;
+const STRETCH_DAMPING: f64 = 0.98;
+/// A fling meeting the end throws this many times its speed into the
+/// stretch (`ON_ABSORB_VELOCITY_ADJUSTMENT`).
+const ABSORB: f32 = 13.0;
+/// Close to rest, the spring hands over to a straight 200 points per second
+/// for the last 8 points, so it lands instead of creeping
+/// (`LINEAR_VELOCITY_TAKE_OVER`, `LINEAR_DISTANCE_TAKE_OVER`).
+const SETTLE_SPEED: f64 = 200.0;
+const SETTLE_DISTANCE: f64 = 8.0;
+/// How strongly a pull stretches: Android's `dampStretchVector` intensities
+/// (a linear part and one that saturates by a third of the view's height).
+const LINEAR_INTENSITY: f32 = 0.016;
+const EXP_INTENSITY: f32 = 0.016;
+const EXP_REACH: f32 = 0.33;
+/// The content's scale per unit of intensity. Android stretches with a GPU
+/// shader, strongest at the pulled edge; here the whole content scales along
+/// the axis, by up to about 10% at a full pull.
+pub const STRETCH_GAIN: f32 = 3.0;
+
+/// Android 12's stretch at a scrolling view's ends: pulling past an end
+/// stretches the content instead of moving it, a fling that meets an end
+/// stretches it for a moment, and letting go springs it back
+/// (`EdgeEffect`'s stretch, decision `scroll-physics`).
+///
+/// The pull is a fraction of the view's height, at most 1: negative past
+/// its start (the top, pulled down), positive past its end.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct Stretch {
+    pull: f32,
+    /// The view's height (points).
+    height: f32,
+    /// Springing back (else held by a finger, or at rest).
+    springing: bool,
+    /// The spring's speed away from rest (points per second), and when it
+    /// was last stepped.
+    speed: f64,
+    at: f64,
+}
+
+impl Stretch {
+    /// Stretched at all (a frame should draw it).
+    pub fn active(&self) -> bool {
+        self.pull != 0.0 || self.springing
+    }
+
+    /// The pull: a signed fraction of the view's height.
+    pub fn pull(&self) -> f32 {
+        self.pull
+    }
+
+    /// How much longer the content draws along the axis (0: not at all;
+    /// 0.05: 5% taller), signed as the pull: negative anchored at the top.
+    pub fn scale(&self) -> f32 {
+        let d = self.pull.abs().min(1.0);
+        let intensity = LINEAR_INTENSITY * d
+            + EXP_INTENSITY * (1.0 - (-d * std::f32::consts::E / EXP_REACH).exp());
+        self.pull.signum() * STRETCH_GAIN * intensity
+    }
+
+    /// A finger landed: the spring stops where it is, for the drag to pull
+    /// or let go (Android "catches" the stretch).
+    pub fn hold(&mut self) {
+        self.springing = false;
+        self.speed = 0.0;
+    }
+
+    /// The finger lifted: spring back from where it is.
+    pub fn release(&mut self, now: f64) {
+        if self.pull != 0.0 {
+            self.springing = true;
+            self.speed = 0.0;
+            self.at = now;
+        }
+    }
+
+    /// A fling meets an end at `velocity` (points per second; positive at
+    /// the end, negative at the start): the content stretches for a moment.
+    pub fn absorb(&mut self, velocity: f32, height: f32, now: f64) {
+        if height <= 0.0 || velocity == 0.0 {
+            return;
+        }
+        self.height = height;
+        self.pull = velocity.signum() * self.pull.abs();
+        // A tiny pull gives the spring its direction.
+        if self.pull == 0.0 {
+            self.pull = velocity.signum() * f32::MIN_POSITIVE;
+        }
+        self.speed = (velocity.abs() * ABSORB) as f64;
+        self.springing = true;
+        self.at = now;
+    }
+
+    /// Moves the spring on to `now`; true while it still moves.
+    pub fn step(&mut self, now: f64) -> bool {
+        if !self.springing {
+            return false;
+        }
+        let dt = now - self.at;
+        if dt < 0.001 {
+            return true;
+        }
+        self.at = now;
+        let sign = self.pull.signum();
+        let x = (self.pull.abs() * self.height) as f64;
+        let v = self.speed;
+        let (x, v) = if v.abs() <= SETTLE_SPEED && x < SETTLE_DISTANCE && v <= 0.0 {
+            (x - SETTLE_SPEED * dt, -SETTLE_SPEED)
+        } else {
+            // Underdamped: x(t) = e^(-ζωt)(c cos ω't + s sin ω't).
+            let (w, z) = (STRETCH_FREQUENCY, STRETCH_DAMPING);
+            let wd = w * (1.0 - z * z).sqrt();
+            let (c, s) = (x, (z * w * x + v) / wd);
+            let decay = (-z * w * dt).exp();
+            let (cos, sin) = ((wd * dt).cos(), (wd * dt).sin());
+            let x1 = decay * (c * cos + s * sin);
+            let v1 = -z * w * x1 + decay * (-wd * c * sin + wd * s * cos);
+            (x1, v1)
+        };
+        let max = self.height as f64;
+        if x <= 0.0 || (v.abs() < 0.01 && x < 0.001) {
+            *self = Stretch {
+                height: self.height,
+                ..Stretch::default()
+            };
+            return false;
+        }
+        let (x, v) = if x > max { (max, 0.0) } else { (x, v) };
+        self.pull = sign * (x / max) as f32;
+        self.speed = v;
+        true
+    }
+
+    /// Splits a drag's scrolling `dy` (points, positive forward) on a view
+    /// at `offset` of `0..=max`, `height` tall: it first undoes the
+    /// stretch, then scrolls, then stretches past the end. Returns the new
+    /// offset (Android's `ScrollView` with `onPullDistance`).
+    pub fn drag(&mut self, offset: f32, max: f32, height: f32, dy: f32) -> f32 {
+        // A view whose content fits doesn't stretch (Android's
+        // `OVER_SCROLL_IF_CONTENT_SCROLLS`): a pull there stays a swipe.
+        if height <= 0.0 || (max <= 0.0 && self.pull == 0.0) {
+            return (offset + dy).clamp(0.0, max.max(0.0));
+        }
+        self.height = height;
+        self.springing = false;
+        self.speed = 0.0;
+        let mut dy = dy;
+        // Pushing back against a stretch undoes it first.
+        if self.pull != 0.0 && self.pull.signum() != dy.signum() {
+            let undo = (dy / height).abs().min(self.pull.abs());
+            self.pull -= self.pull.signum() * undo;
+            dy -= dy.signum() * undo * height;
+            if self.pull.abs() < 1e-6 {
+                self.pull = 0.0;
+            }
+        }
+        let to = (offset + dy).clamp(0.0, max);
+        let past = offset + dy - to;
+        if past != 0.0 {
+            self.pull = (self.pull + past / height).clamp(-1.0, 1.0);
+        }
+        to
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -561,5 +728,118 @@ mod tests {
             back += w.step(t);
         }
         assert!((back + 100.0).abs() < 1e-3, "{back}");
+    }
+
+    /// Steps a spring frame by frame until it rests; the pulls it went
+    /// through, and how long it took.
+    fn settle(s: &mut Stretch, from: f64) -> (Vec<f32>, f64) {
+        let mut now = from;
+        let mut pulls = Vec::new();
+        while s.step(now + FRAME) {
+            now += FRAME;
+            pulls.push(s.pull());
+            assert!(now - from < 3.0, "never settled");
+        }
+        (pulls, now + FRAME - from)
+    }
+
+    #[test]
+    fn pulling_past_the_top_stretches_instead_of_scrolling() {
+        let mut s = Stretch::default();
+        // At the top, the finger moves down 100 points of a 800-point view.
+        let at = s.drag(0.0, 2000.0, 800.0, -100.0);
+        assert_eq!(at, 0.0);
+        assert!((s.pull() + 0.125).abs() < 1e-6, "{}", s.pull());
+        assert!(s.scale() < 0.0, "anchored at the top");
+        // And past the bottom, the other way.
+        let mut s = Stretch::default();
+        let at = s.drag(1990.0, 2000.0, 800.0, 50.0);
+        assert_eq!(at, 2000.0);
+        assert!((s.pull() - 40.0 / 800.0).abs() < 1e-6);
+        assert!(s.scale() > 0.0);
+    }
+
+    #[test]
+    fn pushing_back_undoes_the_stretch_before_scrolling() {
+        let mut s = Stretch::default();
+        s.drag(0.0, 2000.0, 800.0, -80.0);
+        // Back up 30: still stretched, nothing scrolls.
+        assert_eq!(s.drag(0.0, 2000.0, 800.0, 30.0), 0.0);
+        assert!((s.pull() + 50.0 / 800.0).abs() < 1e-6);
+        // Up 70 more: the last 50 undo it, then 20 scroll.
+        let at = s.drag(0.0, 2000.0, 800.0, 70.0);
+        assert_eq!(s.pull(), 0.0);
+        assert!((at - 20.0).abs() < 1e-3, "{at}");
+        assert!(!s.active());
+    }
+
+    #[test]
+    fn a_view_whose_content_fits_does_not_stretch() {
+        let mut s = Stretch::default();
+        assert_eq!(s.drag(0.0, 0.0, 800.0, -100.0), 0.0);
+        assert!(!s.active());
+    }
+
+    #[test]
+    fn a_pull_stops_at_the_views_height() {
+        let mut s = Stretch::default();
+        s.drag(0.0, 100.0, 500.0, -2000.0);
+        assert_eq!(s.pull(), -1.0);
+        // The stretch grows ever more slowly, to about 10%.
+        assert!((s.scale() + 0.096).abs() < 0.002, "{}", s.scale());
+        let mut half = Stretch::default();
+        half.drag(0.0, 100.0, 500.0, -250.0);
+        assert!(half.scale().abs() > 0.6 * s.scale().abs());
+    }
+
+    #[test]
+    fn letting_go_springs_back_quickly_and_smoothly() {
+        let mut s = Stretch::default();
+        s.drag(0.0, 2000.0, 800.0, -200.0);
+        s.release(0.0);
+        let (pulls, took) = settle(&mut s, 0.0);
+        assert!(took < 0.4, "{took}");
+        // Straight back, no wobble past rest.
+        assert!(pulls.windows(2).all(|p| p[1] >= p[0]), "{pulls:?}");
+        assert!(pulls.iter().all(|p| *p <= 0.0));
+        assert_eq!(
+            s,
+            Stretch {
+                height: 800.0,
+                ..Stretch::default()
+            }
+        );
+    }
+
+    #[test]
+    fn a_fling_meeting_the_end_stretches_for_a_moment() {
+        let mut s = Stretch::default();
+        s.absorb(3000.0, 800.0, 0.0);
+        let (pulls, took) = settle(&mut s, 0.0);
+        let peak = pulls.iter().cloned().fold(0.0f32, f32::max);
+        // Up, then back: a visible bump that's over in well under a second.
+        assert!(peak > 0.1 && peak < 1.0, "{peak}");
+        assert!(took < 0.6, "{took}");
+        let top = pulls.iter().position(|p| *p == peak).unwrap();
+        assert!(top > 0 && top < pulls.len() - 1);
+        // Harder flings bump further.
+        let mut hard = Stretch::default();
+        hard.absorb(-8000.0, 800.0, 0.0);
+        let (pulls, _) = settle(&mut hard, 0.0);
+        let low = pulls.iter().cloned().fold(0.0f32, f32::min);
+        assert!(-low > peak, "{low}");
+    }
+
+    #[test]
+    fn a_finger_catches_the_spring() {
+        let mut s = Stretch::default();
+        s.drag(0.0, 2000.0, 800.0, -200.0);
+        s.release(0.0);
+        s.step(0.05);
+        let caught = s.pull();
+        s.hold();
+        assert!(!s.step(0.2));
+        assert_eq!(s.pull(), caught);
+        assert!(s.active(), "still drawn stretched");
     }
 }

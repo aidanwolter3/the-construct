@@ -19,8 +19,16 @@ frame. What it does, following Android's and Flutter's sources:
   than 4 ms apart (real touch is at most 240 Hz) are one sample, the last position at the last time, so a burst's
   movement is measured over the time between bursts, which is when it happened.
 - **Fling**: Android's curve in Flutter's closed form (`ClampingScrollSimulation`): Android's distance, starting at
-  exactly the release speed so the content doesn't change speed as the finger leaves. 50 to 8000 points per second;
-  it stops at the view's end (clamping, as Android).
+  exactly the release speed so the content doesn't change speed as the finger leaves. 50 to 8000 points per second.
+- **Stretch at the ends** (Android 12's `EdgeEffect`): pulling past an end stretches the content instead of moving
+  it, by the pull as a fraction of the view's height (at most 1), with Android's intensity curve (linear plus one
+  that saturates by a third of the height). Pushing back undoes the stretch before scrolling. Letting go springs it
+  back (natural frequency 24.657, damping 0.98, the last 8 points at 200 per second); a finger landing catches it. A
+  fling that meets an end stops there and throws 13× its speed into the spring: a short bump. A view whose content
+  fits doesn't stretch, so a pull on it stays a swipe. Android stretches with a GPU shader, strongest at the pulled
+  edge; this renderer has no transforms, so the view's content (`stretch:<id>` among the scroll offsets) is drawn
+  scaled along the axis from the pulled end, boxes and images taller, text and icons moved but their size kept, up
+  to about 10% at a full pull (`STRETCH_GAIN`, matched by eye, not from source).
 - **Catching**: a finger landing on a fling still faster than 50 points per second stops it and is not a tap or a
   long press (Android's `ScrollView`, Flutter's `IgnorePointer` while flinging, Firefox's 0.05 px/ms threshold);
   on the last slow crawl a tap goes through.
@@ -31,12 +39,11 @@ frame. What it does, following Android's and Flutter's sources:
 Mobile and desktop differ by input device, not by platform: touch flings with Android's curve wherever it comes from
 (Android is where touch is), the wheel glides, the trackpad follows the OS. The other choices considered:
 
-- **iOS-style physics** (exponential decay at 0.998 per ms, rubber-band overscroll): longer, floatier flings. On an
-  Android phone they'd feel foreign, and rubber-banding conflicts with what a pull at an end already does here (a
-  swipe, or a sheet's dismissal).
+- **iOS-style physics** (exponential decay at 0.998 per ms, rubber-band overscroll that moves the content): longer,
+  floatier flings. On an Android phone they'd feel foreign.
 - **The events' own timestamps**: the right fix, but winit doesn't expose them, and the Java bridge doesn't see
   touch (NativeActivity). Burst coalescing gets the same velocity without them.
 - **Fling stacking** (successive flicks speed up, iOS): Android's stock views don't (a touch aborts the fling).
 
-Not yet: Android 12's stretch at the ends (the view stops dead), and smoothing a burst's moves across the frame (a
-drag's scrolling is applied once per frame).
+Not yet: smoothing a burst's moves across the frame (a drag's scrolling is applied once per frame), and the stretch
+on horizontal carousels and for the mouse wheel or trackpad.

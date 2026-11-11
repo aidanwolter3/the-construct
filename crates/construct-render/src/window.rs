@@ -21,7 +21,9 @@ use crate::interact::Target;
 pub use crate::platform::{
     Platform, PlatformEvent, Reopen, clipboard_here, open_link_here, set_clipboard_here,
 };
-use crate::scroll::{Fling, Flinging, TOUCH_SLOP, VelocityTracker, WHEEL_NOTCH, WheelGlide};
+use crate::scroll::{
+    Fling, Flinging, Stretch, TOUCH_SLOP, VelocityTracker, WHEEL_NOTCH, WheelGlide,
+};
 use crate::viewer::{Controller, EditKey, Event};
 
 /// Writes a line to the platform log (logcat on Android, stderr elsewhere).
@@ -174,6 +176,8 @@ pub struct App {
     fling: Option<(Flinging, (f32, f32))>,
     /// Mouse wheel notches still gliding, and where the pointer was.
     wheel: (WheelGlide, (f32, f32)),
+    /// A scrolling view stretched at an end (by its id).
+    stretch: Option<(Stretch, String)>,
     /// Time zero for the scroll physics, which take seconds.
     epoch: Instant,
     /// Wakes the event loop (a session's images and answers arriving).
@@ -197,6 +201,7 @@ impl App {
             drag: None,
             fling: None,
             wheel: Default::default(),
+            stretch: None,
             epoch: Instant::now(),
             waker: None,
             mods: ModifiersState::empty(),
@@ -348,6 +353,7 @@ impl App {
         self.drag = None;
         self.fling = None;
         self.wheel.0.stop();
+        self.stretch = None;
         if let Some(s) = self.surface.as_mut() {
             s.renderer.images = Some(self.controller.session.images.clone());
             s.window.request_redraw();
@@ -401,6 +407,37 @@ impl App {
         at.duration_since(self.epoch).as_secs_f64()
     }
 
+    /// The stretch of the view `id` (any other view's ends).
+    fn take_stretch(&mut self, id: &str) -> Stretch {
+        match self.stretch.take() {
+            Some((st, at)) if at == id => st,
+            Some((_, other)) => {
+                self.controller.session.set_stretch(&other, 0.0);
+                Stretch::default()
+            }
+            None => Stretch::default(),
+        }
+    }
+
+    /// A drag's scrolling `dy` on the view at `at`: it undoes a stretch,
+    /// scrolls, and stretches past the ends. True if the content moved.
+    fn drag_scroll(&mut self, at: (f32, f32), dy: f32) -> bool {
+        let Some(v) = self.controller.session.scroll_view_at(at.0, at.1) else {
+            return false;
+        };
+        let mut st = self.take_stretch(&v.id);
+        let to = st.drag(v.offset, v.max, v.height, dy);
+        let session = &mut self.controller.session;
+        if to != v.offset {
+            session.set_scroll(&v.id, to);
+        }
+        session.set_stretch(&v.id, st.scale());
+        if st.active() {
+            self.stretch = Some((st, v.id));
+        }
+        to != v.offset
+    }
+
     /// Moves a fling and a wheel glide on to this frame; true while either
     /// still moves. Each stops at its view's end.
     fn step_scrolling(&mut self) -> bool {
@@ -408,10 +445,30 @@ impl App {
         let mut moving = false;
         if let Some((mut f, (x, y))) = self.fling.take() {
             let (dy, done) = f.step(now);
-            let moved = dy == 0.0 || self.scroll(x, y, dy);
-            if moved && !done {
-                self.fling = Some((f, (x, y)));
-                moving = true;
+            let session = &mut self.controller.session;
+            if let Some(v) = session.scroll_view_at(x, y) {
+                let to = (v.offset + dy).clamp(0.0, v.max);
+                if to != v.offset {
+                    session.set_scroll(&v.id, to);
+                }
+                if to != v.offset + dy {
+                    // It met an end: the content stretches for a moment.
+                    if v.max > 0.0 {
+                        let mut st = self.take_stretch(&v.id);
+                        st.absorb(f.velocity(now), v.height, now);
+                        self.stretch = Some((st, v.id));
+                    }
+                } else if !done {
+                    self.fling = Some((f, (x, y)));
+                    moving = true;
+                }
+            }
+        }
+        if let Some((mut st, id)) = self.stretch.take() {
+            moving |= st.step(now);
+            self.controller.session.set_stretch(&id, st.scale());
+            if st.active() {
+                self.stretch = Some((st, id));
             }
         }
         if self.wheel.0.active() {
@@ -558,7 +615,7 @@ impl App {
         if let Some(mut d) = self.drag.take() {
             if d.pending != 0.0 {
                 let dy = std::mem::take(&mut d.pending);
-                if self.scroll(d.start.0, d.start.1, dy) {
+                if self.drag_scroll(d.start, dy) {
                     d.scrolled = true;
                 }
             }
@@ -915,8 +972,13 @@ impl ApplicationHandler for App {
                     TouchPhase::Started => {
                         // A finger on a moving fling stops it, and is no tap.
                         let secs = self.secs(now);
-                        let caught = self.fling.take().is_some_and(|(f, _)| f.caught(secs));
+                        let mut caught = self.fling.take().is_some_and(|(f, _)| f.caught(secs));
                         self.wheel.0.stop();
+                        // And a stretch stays where it is, for the drag.
+                        if let Some((st, _)) = self.stretch.as_mut() {
+                            st.hold();
+                            caught = true;
+                        }
                         let (mut vx, mut vy) = (VelocityTracker::new(), VelocityTracker::new());
                         vx.add(secs, p.0);
                         vy.add(secs, p.1);
@@ -1007,8 +1069,13 @@ impl ApplicationHandler for App {
                             }
                             return;
                         }
-                        if d.pending != 0.0 && self.scroll(d.start.0, d.start.1, d.pending) {
+                        if d.pending != 0.0 && self.drag_scroll(d.start, d.pending) {
                             d.scrolled = true;
+                        }
+                        // A stretch springs back.
+                        let secs = self.secs(now);
+                        if let Some((st, _)) = self.stretch.as_mut() {
+                            st.release(secs);
                         }
                         let (tx, ty) = (p.0 - d.start.0, p.1 - d.start.1);
                         // The release velocity over the last 100 ms; none if
@@ -1064,6 +1131,10 @@ impl ApplicationHandler for App {
                     }
                     TouchPhase::Cancelled => {
                         self.release_press();
+                        let secs = self.secs(now);
+                        if let Some((st, _)) = self.stretch.as_mut() {
+                            st.release(secs);
+                        }
                         if let Some(d) = self.drag.take() {
                             if d.grabbing {
                                 self.controller.session.release_grab();

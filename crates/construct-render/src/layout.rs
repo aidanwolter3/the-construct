@@ -2448,6 +2448,57 @@ fn matches_text(v: &Value, want: &str) -> bool {
     }
 }
 
+/// Stretches what a scrolling view drew from `from` (draws, semantics,
+/// fields) by `scale` along its axis, away from `anchor`, inside its `clip`
+/// (Android's stretch at an end, `scroll::Stretch`). Boxes and images grow;
+/// text and icons move with them but keep their size.
+fn stretch_content(
+    scene: &mut Scene,
+    from: (usize, usize, usize),
+    anchor: f32,
+    scale: f32,
+    clip: [f32; 4],
+) {
+    let grow = |r: [f32; 4]| [r[0], anchor + (r[1] - anchor) * scale, r[2], r[3] * scale];
+    let shift = |r: [f32; 4]| {
+        let mid = r[1] + r[3] / 2.0;
+        [
+            r[0],
+            anchor + (mid - anchor) * scale - r[3] / 2.0,
+            r[2],
+            r[3],
+        ]
+    };
+    let clipped = |c: [f32; 4]| intersect(grow(c), clip);
+    for d in &mut scene.draws[from.0..] {
+        match d {
+            Draw::Quad(q) => {
+                q.rect = grow(q.rect);
+                q.clip = clipped(q.clip);
+            }
+            Draw::Image(i) => {
+                i.rect = grow(i.rect);
+                i.clip = clipped(i.clip);
+            }
+            Draw::Text(t) => {
+                t.rect = shift(t.rect);
+                t.clip = clipped(t.clip);
+            }
+            Draw::Icon(i) => {
+                i.rect = shift(i.rect);
+                i.clip = clipped(i.clip);
+            }
+        }
+    }
+    for n in &mut scene.semantics[from.1..] {
+        n.bounds = intersect(grow(n.bounds), clip);
+    }
+    for f in &mut scene.fields[from.2..] {
+        f.rect = shift(f.rect);
+        f.clip = clipped(f.clip);
+    }
+}
+
 fn intersect(a: [f32; 4], b: [f32; 4]) -> [f32; 4] {
     let x0 = a[0].max(b[0]);
     let y0 = a[1].max(b[1]);
@@ -2695,12 +2746,18 @@ impl Laid {
         };
         let mut own_pins = Vec::new();
         let scrolls = e.scrolls && e.sem.is_some();
+        let mut stretch = 0.0;
         if scrolls && let Some(s) = &e.sem {
             let max = (self.content_height(e) - h).max(0.0);
             oy = scroll.get(&s.id).copied().unwrap_or(0.0).clamp(0.0, max);
             kid_at.scroll_top = Some(y);
             kid_at.scrolled = oy;
+            stretch = scroll
+                .get(&format!("stretch:{}", s.id))
+                .copied()
+                .unwrap_or(0.0);
         }
+        let drawn = (scene.draws.len(), scene.semantics.len(), scene.fields.len());
         let ox = e
             .pager
             .as_ref()
@@ -2719,6 +2776,11 @@ impl Laid {
                 pins,
                 scene,
             );
+        }
+        if stretch != 0.0 {
+            // Pulled past an end: the content stretches from that end.
+            let anchor = if stretch < 0.0 { y } else { y + h };
+            stretch_content(scene, drawn, anchor, 1.0 + stretch.abs(), inner_clip);
         }
         // Sticky nodes pinned in this view go over its content.
         for p in own_pins {
