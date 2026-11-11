@@ -1,4 +1,5 @@
-# Keeps the SHA-pinned GitHub Actions in .github/workflows current (security audit #31, L8).
+# Keeps the SHA-pinned GitHub Actions in .github/workflows and the CI image's base (.github/ci) current
+# (security audit #31, L8).
 # Dependabot updates both the commit SHA and the version comment next to it.
 version: 2
 updates:
@@ -9,3 +10,8 @@ updates:
     groups:
       github-actions:
         patterns: ["*"]
+  # The CI image's Debian base, pinned by digest (.github/ci/Dockerfile, decision `ci-container-image`).
+  - package-ecosystem: docker
+    directory: /.github/ci
+    schedule:
+      interval: weekly

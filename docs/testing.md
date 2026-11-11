@@ -7,7 +7,11 @@ scripts/android_native.sh                    # Android build check (needs an And
                                              # device is connected)
 ```
 
-CI runs `scripts/check_decisions.sh`, `scripts/check_test_data.sh` (no test data in the pod binary, decision
+CI's Rust job runs in a container image, `.github/ci/Dockerfile` (Debian, as uid 1001), that has everything it
+needs (the pinned Rust, cargo-nextest, lavapipe, the simulator's fonts), so a run installs nothing from package
+mirrors. CI builds and pushes it to `ghcr.io/aidanwolter3/the-construct-ci` only when that file or
+`rust-toolchain.toml` changes (decision `ci-container-image`); to try a change locally, build it from a directory
+holding only `rust-toolchain.toml`. CI runs `scripts/check_decisions.sh`, `scripts/check_test_data.sh` (no test data in the pod binary, decision
 `data-next-to-its-code`), clippy with warnings denied, the Rust tests (with
 [cargo-nextest](https://nexte.st), which runs tests from different binaries in parallel, plus `cargo test --doc`,
 which nextest skips), a dependency advisory check (`cargo-deny`), the simulator's scenarios
@@ -21,8 +25,8 @@ file's tests with a filter, e.g. `cargo test -p server --test integration fixtur
 process under `cargo test`, so don't assume process-wide state (such as the server's metrics counters) starts empty.
 
 The Rust rendering engine (`crates/construct-render`) has golden frames: CPU frames are compared with
-`tests/data/goldens/`, and GPU frames with the same files when a wgpu adapter exists (CI installs lavapipe,
-`mesa-vulkan-drivers`, and sets `CONSTRUCT_REQUIRE_GPU=1`). See [rendering.md](rendering.md#tests).
+`tests/data/goldens/`, and GPU frames with the same files when a wgpu adapter exists (CI's image has lavapipe,
+`mesa-vulkan-drivers`, and CI sets `CONSTRUCT_REQUIRE_GPU=1`). See [rendering.md](rendering.md#tests).
 
 There are no on-device tests: UI is checked with the [headless simulator](simulator.md), which draws with the same
 renderer as the apps. The Android build checks that every Java class the Rust code names in a JNI signature exists;
