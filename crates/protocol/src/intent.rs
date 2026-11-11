@@ -152,8 +152,7 @@ pub enum ActionIntent {
     OpenLink { url: String },
 
     /// Feature `device_action`: something the device does itself, named by
-    /// `command` ([`DEVICE_COMMANDS`]): `open_settings` and `open_inbox`
-    /// (present the `settings` and `inbox` layouts), `refresh`, `leave_pod`
+    /// `command` ([`DEVICE_COMMANDS`]): `refresh`, `leave_pod`
     /// (forget the pod on this device), `open_notification` (`id`),
     /// `mark_all_read`, `toggle_channel` (`app`, `id`: a notification
     /// channel), `sign_in` (`id`: a sign-in provider; `value`: another
@@ -238,9 +237,7 @@ impl ActionIntent {
 }
 
 /// The `action.device` commands this build knows.
-pub const DEVICE_COMMANDS: [&str; 19] = [
-    "open_settings",
-    "open_inbox",
+pub const DEVICE_COMMANDS: [&str; 17] = [
     "refresh",
     "leave_pod",
     "open_notification",
@@ -289,6 +286,12 @@ pub const NOTIFICATION_PERMISSION_COMMAND: &str = "request_notification_permissi
 /// Commands retired by decision `layouts-not-apps` (feature
 /// `device_open_app`, removed): old layouts still parse, they do nothing.
 pub const RETIRED_DEVICE_COMMANDS: [&str; 2] = ["open_app", "show"];
+
+/// Commands that only opened a layout: `open_settings` presented `settings`
+/// as a panel and `open_inbox` presented `inbox` as a sheet, which
+/// `action.navigation.open` `layout` says for any layout. A new write is
+/// refused; versions that hold them still parse and clients still run them.
+pub const RETIRED_SHELL_COMMANDS: [&str; 2] = ["open_settings", "open_inbox"];
 
 /// One extra field update carried by `ActionIntent::OptimisticMutate.also`
 /// (and `ActionIntent::LocalSet.also`).

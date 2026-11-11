@@ -2775,6 +2775,8 @@ impl Session {
                         out.push(Effect::Device { command });
                         return;
                     }
+                    // Retired (`RETIRED_SHELL_COMMANDS`): kept so layout
+                    // versions written before still open their layout.
                     "open_settings" | "open_inbox" => {
                         let (layout, presentation) = if command == "open_settings" {
                             ("settings", "Panel")

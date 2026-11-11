@@ -265,8 +265,9 @@ it (a refusal takes it out). A loader without an outbox (`PodClient`) POSTs on a
 `open_notification` marks it read (`POST /v1/notifications/read`), closes the inbox's sheet or panel and opens the
 notification's layout and `target_uri` screen; `mark_read` and `mark_all_read` mark them here and on the pod;
 `load_older_notifications` adds the next page under the newer ones (`local://inbox` keeps `has_older` and
-`next_before`; older pages stay when the inbox is listed again). `open_settings` and `open_inbox` present the
-`settings` layout as a panel and `inbox` as a sheet. `toggle_channel` flips the switch at once and the engine tells
+`next_before`; older pages stay when the inbox is listed again). `open_settings` and `open_inbox`, retired from new
+layouts, still present the `settings` layout as a panel and `inbox` as a sheet for versions written before.
+`toggle_channel` flips the switch at once and the engine tells
 the pod (registering the device first), flipping it back when refused. `hide_layout`, `unhide_layout` and
 `delete_layout` go to the pod through the engine and load its list of layouts again; a deleted layout leaves the
 stack and its pin is forgotten; home is never hidden or deleted. `set_server` hands the platform another of
