@@ -18,8 +18,9 @@ public final class TextInputView extends View {
 
     private TextInputView(Activity activity) {
         super(activity);
-        setFocusable(true);
-        setFocusableInTouchMode(true);
+        // Focusable only while the keyboard is up: a focused text editor makes Android bring the keyboard back on its
+        // own when the window returns (from another app, the lock screen), whatever screen is showing.
+        setFocusable(false);
         imm = activity.getSystemService(InputMethodManager.class);
     }
 
@@ -48,14 +49,19 @@ public final class TextInputView extends View {
     /** Shows the keyboard, connected to this view (called from Rust). */
     public void showKeyboard() {
         post(() -> {
+            setFocusable(true);
+            setFocusableInTouchMode(true);
             requestFocus();
             imm.showSoftInput(this, 0);
         });
     }
 
-    /** Hides the keyboard (called from Rust). */
+    /** Hides the keyboard and gives up focus, so nothing brings it back but a tapped field (called from Rust). */
     public void hideKeyboard() {
-        post(() -> imm.hideSoftInputFromWindow(getWindowToken(), 0));
+        post(() -> {
+            imm.hideSoftInputFromWindow(getWindowToken(), 0);
+            setFocusable(false);
+        });
     }
 
     /** Another field, or its text changed under the keyboard (called from Rust). */
