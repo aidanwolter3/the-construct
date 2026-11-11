@@ -1,6 +1,8 @@
 # Custom apps keep their own data in Collections, one generic data source that Claude declares data in
 
 Extended by [collection-reminders](collection-reminders.md) (reminders, open question 3 below).
+Extended by [bulk-row-edits](bulk-row-edits.md) (a kept preview confirmed by its token, edits from a file, 5,000
+rows per edit), which amends "at most 500 rows" below.
 Extended by [collection-computed-fields](collection-computed-fields.md) (computed fields, multi-key order), which
 amends "no computed fields" below.
 Extended by [collection-delete](collection-delete.md) (deleting a whole collection, "not done yet" below).

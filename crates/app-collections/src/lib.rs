@@ -29,6 +29,7 @@
 //! | `GET /v1/collections/<c>/fillers/<f>` | one filler's screen: `collection:<c>:filler:<f>` (itself), `…:rows`, `…:alerts` |
 //! | `GET /v1/collections/<c>/row?id=<id>` | one row as a one-item list `collection:<c>:row:<id>` |
 //! | `POST /v1/collections/<c>/actions/<a> {<param>: value, client_id?}` | run an insert-from-query action ([`actions`]) as one undoable edit |
+//! | `POST /v1/collections/<c>/import?format=&note=` (a JSON, JSON lines or CSV file) | preview its row edits ([`import`]) and keep them for `edit_rows {collection, confirm}`; changes nothing |
 //!
 //! With fillers, the feed also fills `collection:<c>:fillers` (each filler's
 //! title, URL and health); with alerts, `collection:<c>:alerted` (the rows
@@ -56,6 +57,7 @@ pub mod expr;
 pub mod fill;
 pub mod filler;
 pub mod follow;
+pub mod import;
 pub mod lookup;
 mod mcp;
 pub mod model;
@@ -69,7 +71,7 @@ use std::sync::Arc;
 use axum::{
     Json, Router,
     body::Bytes,
-    extract::{Path, State},
+    extract::{DefaultBodyLimit, Path, Query, State},
     http::{HeaderMap, StatusCode},
     response::{IntoResponse, Response},
     routing::{get, post},
@@ -125,7 +127,8 @@ impl Default for Caps {
             fields: 40,
             rows: 5_000,
             bytes: 4 * 1024 * 1024,
-            edit_rows: 500,
+            // As many as a pod holds: one import is one preview and one edit.
+            edit_rows: 5_000,
             text_chars: 4_000,
             fill_items: 200,
             fill_urls: 20,
@@ -383,6 +386,10 @@ impl AppAdapter for CollectionsAdapter {
             .route(
                 "/v1/collections/{collection}/actions/{action}",
                 post(action_route),
+            )
+            .route(
+                "/v1/collections/{collection}/import",
+                post(import_route).layer(DefaultBodyLimit::max(import::MAX_BYTES)),
             )
     }
 
@@ -988,6 +995,40 @@ async fn action_route(
         ));
     };
     match run_action(&pod, &collection, &action, args, None).await {
+        Ok(v) => Json(v).into_response(),
+        Err(e) => refusal(e),
+    }
+}
+
+/// Preview a file of row edits ([`import`]) and keep them under the
+/// preview's confirm token; `edit_rows {collection, confirm}` applies them
+/// once the user agrees. The format is `?format=`, else the
+/// `Content-Type`, else read from the file.
+async fn import_route(
+    State(pod): State<Pod>,
+    Path(collection): Path<String>,
+    Query(q): Query<HashMap<String, String>>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response {
+    let format = match q.get("format") {
+        Some(f) => match import::Format::parse(f) {
+            Some(f) => f,
+            None => {
+                return refusal(fail(
+                    StatusCode::BAD_REQUEST,
+                    "invalid_request",
+                    "format is json, jsonl or csv",
+                ));
+            }
+        },
+        None => headers
+            .get(axum::http::header::CONTENT_TYPE)
+            .and_then(|v| v.to_str().ok())
+            .and_then(import::Format::of_content_type)
+            .unwrap_or_else(|| import::Format::sniff(&String::from_utf8_lossy(&body))),
+    };
+    match mcp::import_file(&pod, collection, &body, format, q.get("note").cloned()).await {
         Ok(v) => Json(v).into_response(),
         Err(e) => refusal(e),
     }
