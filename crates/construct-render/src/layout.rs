@@ -177,6 +177,9 @@ struct Elem {
     /// A carousel's track: its pages, side by side, move left by the
     /// offset at `pager:<id>` (points).
     pager: Option<String>,
+    /// A sideways-scrolling row (a chip row): its children move left by the
+    /// offset at `slide:<id>` (points), up to its content's overflow.
+    slides: Option<String>,
     /// A text field's text: its field and maximum length.
     field: Option<(String, Option<usize>)>,
 }
@@ -480,12 +483,18 @@ impl SceneBuilder {
             viewport: vp,
             scroll_max: BTreeMap::new(),
             pagers: BTreeMap::new(),
+            slides: BTreeMap::new(),
             follow_end: b.follow_end,
             env,
             parts: b.parts,
             reuse: b.reuse,
         };
         laid.scroll_max = laid.scroll_extents();
+        laid.slides = laid
+            .elems
+            .iter()
+            .filter_map(|e| Some((e.slides.clone()?, laid.slide_extent(e)?)))
+            .collect();
         laid.pagers = laid
             .elems
             .iter()
@@ -764,6 +773,7 @@ impl<'i> Build<'_, 'i> {
             scrolls: false,
             sticky: false,
             pager: None,
+            slides: None,
             field: None,
         });
         self.elems.len() - 1
@@ -796,6 +806,7 @@ impl<'i> Build<'_, 'i> {
             scrolls: false,
             sticky: false,
             pager: None,
+            slides: None,
             field: None,
         });
         self.elems.len() - 1
@@ -1624,10 +1635,15 @@ impl<'i> Build<'_, 'i> {
                     };
                     kids.push(self.push(style, vec![t], paint, Some(sem), false));
                 }
-                let style = row(8, pad(*padding_h_dp, 0), AlignItems::CENTER);
+                let mut style = row(8, pad(*padding_h_dp, 0), AlignItems::CENTER);
+                // As wide as its place, whatever its chips; they scroll sideways.
+                style.overflow.x = taffy::Overflow::Hidden;
                 let mut sem = self.sem(b, n, None, None);
                 sem.id = format!("chips:{field}");
-                self.push(style, kids, Paint::None, Some(sem), true)
+                let id = sem.id.clone();
+                let i = self.push(style, kids, Paint::None, Some(sem), true);
+                self.elems[i].slides = Some(id);
+                i
             }
             UiNode::List {
                 query_key,
@@ -2595,6 +2611,9 @@ pub struct Laid {
     pub scroll_max: BTreeMap<String, f32>,
     /// Each carousel (by semantic id): its page width and page count.
     pub pagers: BTreeMap<String, (f32, usize)>,
+    /// How far each sideways-scrolling row can scroll (its content past its
+    /// width).
+    pub slides: BTreeMap<String, f32>,
     /// The scrolling views that follow their content to the end after an
     /// action from outside them (`core://Scroll` `follow_end`).
     pub follow_end: Vec<String>,
@@ -2678,6 +2697,18 @@ impl Laid {
     /// How tall the root's content is (a bar laid out on its own).
     pub fn used_height(&self) -> f32 {
         self.content_height(&self.elems[self.root])
+    }
+
+    /// How far a sideways-scrolling row's content reaches past its width.
+    fn slide_extent(&self, e: &Elem) -> Option<f32> {
+        let l = self.tree.layout(e.node).ok()?;
+        let right = e
+            .kids
+            .iter()
+            .filter_map(|k| self.tree.layout(self.elems[*k].node).ok())
+            .map(|kl| kl.location.x + kl.size.width)
+            .fold(0.0, f32::max);
+        Some((right + l.padding.right - l.size.width).max(0.0))
     }
 
     fn content_height(&self, e: &Elem) -> f32 {
@@ -2793,6 +2824,11 @@ impl Laid {
             .pager
             .as_ref()
             .and_then(|id| scroll.get(&format!("pager:{id}")).copied())
+            .or_else(|| {
+                let id = e.slides.as_ref()?;
+                let max = self.slide_extent(e)?;
+                Some(scroll.get(&format!("slide:{id}"))?.clamp(0.0, max))
+            })
             .unwrap_or(0.0);
         for k in &e.kids {
             let pins = if scrolls { &mut own_pins } else { &mut *pinned };

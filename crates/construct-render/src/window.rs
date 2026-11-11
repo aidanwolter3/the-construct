@@ -148,6 +148,10 @@ struct Drag {
     /// the drag pages it.
     pager: Option<(String, f32)>,
     paging: bool,
+    /// The chip row under its start and where it was, and whether the drag
+    /// scrolls it.
+    slide: Option<(String, f32)>,
+    sliding: bool,
     /// Scrolling not applied yet: applied once per frame, in `draw`.
     pending: f32,
     /// When the finger went down.
@@ -946,25 +950,42 @@ impl ApplicationHandler for App {
             }
             // A mouse wheel's notches glide; a trackpad's pixels apply as
             // they come (macOS sends its own momentum after the fingers lift).
-            WindowEvent::MouseWheel { delta, .. } => match delta {
-                MouseScrollDelta::LineDelta(_, y) => {
-                    let now = self.secs(Instant::now());
-                    self.fling = None;
-                    self.wheel.1 = self.cursor;
-                    self.wheel.0.push(now, -y * WHEEL_NOTCH);
-                    if let Some(s) = &self.surface {
-                        s.window.request_redraw();
+            // A sideways one (or Shift and a plain wheel) scrolls a chip row.
+            WindowEvent::MouseWheel { delta, .. } => {
+                let (dx, dy) = match delta {
+                    MouseScrollDelta::LineDelta(x, y) => (-x * WHEEL_NOTCH, -y * WHEEL_NOTCH),
+                    MouseScrollDelta::PixelDelta(p) => (-p.x as f32 / scale, -p.y as f32 / scale),
+                };
+                let dx = if self.mods.shift_key() && dx == 0.0 {
+                    dy
+                } else {
+                    dx
+                };
+                if dx.abs() > dy.abs() || (dx != 0.0 && self.mods.shift_key()) {
+                    let (x, y) = self.cursor;
+                    self.apply(Event::ScrollSideways { x, y, dx });
+                    return;
+                }
+                match delta {
+                    MouseScrollDelta::LineDelta(_, y) => {
+                        let now = self.secs(Instant::now());
+                        self.fling = None;
+                        self.wheel.1 = self.cursor;
+                        self.wheel.0.push(now, -y * WHEEL_NOTCH);
+                        if let Some(s) = &self.surface {
+                            s.window.request_redraw();
+                        }
+                    }
+                    MouseScrollDelta::PixelDelta(p) => {
+                        self.wheel.0.stop();
+                        self.apply(Event::Scroll {
+                            x: self.cursor.0,
+                            y: self.cursor.1,
+                            dy: -p.y as f32 / scale,
+                        });
                     }
                 }
-                MouseScrollDelta::PixelDelta(p) => {
-                    self.wheel.0.stop();
-                    self.apply(Event::Scroll {
-                        x: self.cursor.0,
-                        y: self.cursor.1,
-                        dy: -p.y as f32 / scale,
-                    });
-                }
-            },
+            }
             WindowEvent::Touch(t) => {
                 let p = (t.location.x as f32 / scale, t.location.y as f32 / scale);
                 let now = Instant::now();
@@ -997,6 +1018,11 @@ impl ApplicationHandler for App {
                                 (id, at)
                             }),
                             paging: false,
+                            slide: self.controller.session.slide_at(p.0, p.1).map(|id| {
+                                let at = self.controller.session.slide_offset(&id);
+                                (id, at)
+                            }),
+                            sliding: false,
                             started: now,
                             grabbing: self.controller.session.grab_at(p.0, p.1).is_some(),
                             long_pressed: false,
@@ -1036,8 +1062,16 @@ impl ApplicationHandler for App {
                                 None => false,
                             };
                             d.paging = !d.moving_frame && d.pager.is_some() && tx.abs() > ty.abs();
+                            d.sliding = !d.moving_frame
+                                && !d.paging
+                                && d.slide.is_some()
+                                && tx.abs() > ty.abs();
                         }
-                        if d.paging
+                        if d.sliding
+                            && let Some((id, at)) = &d.slide
+                        {
+                            self.controller.session.drag_slide(id, at - tx);
+                        } else if d.paging
                             && let Some((id, at)) = &d.pager
                         {
                             self.controller.session.drag_pager(id, at - tx);
@@ -1089,6 +1123,8 @@ impl ApplicationHandler for App {
                             if let Some(s) = &self.surface {
                                 s.window.request_redraw();
                             }
+                        } else if d.sliding {
+                            // The row stays where the finger left it.
                         } else if d.moving_frame {
                             if self.controller.session.release_frame(vx, vy)
                                 && let Some(p) = &self.platform

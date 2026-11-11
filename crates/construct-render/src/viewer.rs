@@ -21,6 +21,9 @@ pub enum Event {
     LongPress { x: f32, y: f32 },
     /// A wheel or drag scrolled by `dy` points (positive: content moves up).
     Scroll { x: f32, y: f32, dy: f32 },
+    /// A sideways wheel or trackpad scroll by `dx` points (positive: content
+    /// moves left): a chip row there scrolls.
+    ScrollSideways { x: f32, y: f32, dx: f32 },
     /// Text typed into the focused field.
     Text(String),
     /// A character deleted from the focused field.
@@ -96,6 +99,12 @@ impl Controller {
             Event::LongPress { x, y } => self.session.long_press(x, y).ok(),
             Event::Scroll { x, y, dy } => {
                 self.session.scroll_by(Some(&Target::Point(x, y)), dy).ok()
+            }
+            Event::ScrollSideways { x, y, dx } => {
+                let id = self.session.slide_at(x, y)?;
+                let at = self.session.slide_offset(&id);
+                self.session.drag_slide(&id, at + dx);
+                None
             }
             Event::Text(t) => {
                 self.session.focused.as_ref()?;

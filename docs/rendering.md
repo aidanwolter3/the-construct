@@ -28,7 +28,7 @@ PNG / WebP (encode.rs)                 HeadlessSurface (readback) or a window / 
 | `accessibility` | The semantic tree as an AccessKit tree for screen readers (roles, labels, values, states), and their requests back as taps, scrolls and field values |
 | `cpu` | The CPU rasterizer: `sd_rounded_box` and `shade` (the shader's maths), 8-bit premultiplied target, glyphs placed as glyphon places them |
 | `gpu` | `Renderer` (any texture view), `HeadlessSurface` (offscreen + readback); feature `gpu` (default) |
-| `interact` | `Session`: a layout with form values, scroll offsets and a back stack; `tap`, `long_press`, `scroll_by`, `type_text`, `dispatch`; text editing (cursor, selection, handles, the edit bar); confirm dialogs; sheet drags and carousel paging; writes through its `Loader`; photos for a media picker (`interact/media.rs`: staged through the `Loader`, the desktop's file dialog) |
+| `interact` | `Session`: a layout with form values, scroll offsets and a back stack; `tap`, `long_press`, `scroll_by`, `type_text`, `dispatch`; text editing (cursor, selection, handles, the edit bar); confirm dialogs; sheet drags, carousel paging and chip rows scrolled sideways (`slide_at`, `drag_slide`); writes through its `Loader`; photos for a media picker (`interact/media.rs`: staged through the `Loader`, the desktop's file dialog) |
 | `text` | Fonts, shaping and measuring (cosmic-text); caret stops for editing |
 | `dates` | `core://Text` `format`: `YYYY-MM-DD` values as "tomorrow" or "Nov 5", against the device's day (its time zone through jiff) |
 | `images` | Images by URL, cut to their box (on a background thread for the GPU) |
@@ -89,7 +89,8 @@ a light page and lightens it on a dark one, rounded as its one child is; it goes
 becomes a scroll or swipe: `Session::press` / `release_press`), Gesture (tap), Scroll (clipped, offsets; with `follow_end`, a tap outside it, such as a
 footer's Send, makes it follow its content to the end once that has grown, while a tap inside it, a like, doesn't), Text
 `format` (bound `YYYY-MM-DD` values as "today", "in 3 days" or "Nov 5", or `past`, against the device's own day; a
-`SceneBuilder` can be given another with `today`), List (`where`, `filter`, `group_by`, `columns`, `focus`, `indent`, `empty_text`), ChoiceChips, TextField
+`SceneBuilder` can be given another with `today`), List (`where`, `filter`, `group_by`, `columns`, `focus`, `indent`, `empty_text`), ChoiceChips (a row as wide as its place; chips past its
+edge scroll sideways under a finger, a sideways wheel or trackpad, or Shift and the wheel), TextField
 (with its Send button beside it when it has `on_submit`), Switch, Progress, Dock, Layout (inline, from the layouts
 given), Carousel (pages side by side, an "n/N" badge and dots; a sideways drag pages it, snapping to a page), and
 every named icon (`icons.rs`: Material path data, rasterized with zeno; on the GPU they are glyphon
@@ -359,7 +360,7 @@ letters, digits, `_` and `-`, at most 64) answers `unknown_layout` before any re
 - `engine` (feature `remote`, against a stub pod): offline starts and the outbox, layout events, a pinned home that
   stays on its version until `follow_latest`, and hiding a layout.
 - `writes`: optimistic changes and creates (sent, refused and undone), form binding, notifications, links, dragging a
-  sheet closed, carousel paging, confirm dialogs, signing in, and editing text (cursor, selection, the edit bar,
+  sheet closed, carousel paging, scrolling a chip row, confirm dialogs, signing in, and editing text (cursor, selection, the edit bar,
   `max_length`).
 
 The MCP round trip is `mcp::agents_preview_a_layout_and_tap_it` in the server's integration tests.
