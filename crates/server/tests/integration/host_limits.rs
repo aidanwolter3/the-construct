@@ -180,4 +180,14 @@ async fn a_nearly_full_disk_stops_uploads_and_new_temporary_pods() {
     let (status, body) = env.upload(&admin, "1", 10 * KIB).await;
     assert_eq!(status, StatusCode::INSUFFICIENT_STORAGE);
     assert_eq!(body["error"], "low_disk_space");
+    // OAuth clients are never deleted, so registering stops too.
+    let resp = reqwest::Client::new()
+        .post(format!("{}/oauth/register", env.url))
+        .json(&json!({"client_name": "C", "redirect_uris": ["https://c.example/cb"]}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
+    let body: Value = resp.json().await.unwrap();
+    assert_eq!(body["error"], "temporarily_unavailable");
 }

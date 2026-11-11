@@ -296,11 +296,21 @@ fn oauth_error(status: StatusCode, error: &str, description: &str) -> Response {
 
 /// `POST /oauth/register` (RFC 7591).
 pub(crate) async fn register(State(host): State<Arc<Host>>, req: Request) -> Response {
-    let key = client_keys(req.headers(), peer(&req), host.config.trust_fly_client_ip).narrow;
-    if !host.registrations.allow(&key) {
+    let keys = client_keys(req.headers(), peer(&req), host.config.trust_fly_client_ip);
+    if !host.registrations.allow(&keys) {
         tracing::warn!("OAuth client registration rate-limited");
         metrics::inc(metrics::RATE_LIMITED, &[("limit", "oauth_register")]);
         return rate_limited();
+    }
+    // Clients are kept (a connector reuses its client id), so registrations
+    // stop before they fill the volume every pod's data is on.
+    if host.low_on_disk() {
+        tracing::warn!("OAuth client registration refused: low disk space");
+        return oauth_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "temporarily_unavailable",
+            "low disk space",
+        );
     }
     let headers = req.headers().clone();
     let body = match axum::body::to_bytes(req.into_body(), 16 * 1024).await {
@@ -616,7 +626,7 @@ pub(crate) async fn authorize_page(
 
 /// `POST /oauth/authorize` (the form).
 pub(crate) async fn authorize_submit(State(host): State<Arc<Host>>, req: Request) -> Response {
-    let key = client_keys(req.headers(), peer(&req), host.config.trust_fly_client_ip).narrow;
+    let key = client_keys(req.headers(), peer(&req), host.config.trust_fly_client_ip);
     let headers = req.headers().clone();
     let Form(p): Form<HashMap<String, String>> = match Form::from_request_parts_and_body(req).await
     {

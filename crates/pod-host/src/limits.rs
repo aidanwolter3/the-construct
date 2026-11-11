@@ -66,6 +66,37 @@ pub struct TwoLevel {
 }
 
 impl TwoLevel {
+    /// Pod codes typed (`/v1/pods/open`, the OAuth consent form): 10 a
+    /// minute per IPv4 address or IPv6 /64, 50 per /48. No global limit: a
+    /// 256-bit code can't be guessed, and a global one lets anyone lock
+    /// everyone out of entering their code. The /48 limit keeps one network
+    /// from filling the table with /64s, which would do the same.
+    pub fn code_tries() -> Self {
+        Self {
+            narrow: RateLimit::new(10, Duration::from_secs(60)),
+            wide: RateLimit::new(50, Duration::from_secs(60)),
+        }
+    }
+
+    /// OAuth client registrations: 20 an hour per IPv4 address or IPv6
+    /// /64, 40 per /48.
+    pub fn registrations() -> Self {
+        Self {
+            narrow: RateLimit::new(20, Duration::from_secs(3600)),
+            wide: RateLimit::new(40, Duration::from_secs(3600)),
+        }
+    }
+
+    /// Temporary pods: 5 an hour per IPv4 address or IPv6 /64, 10 per /48
+    /// (security audit #31, M2: a /48 holds 65536 /64s, and a few are
+    /// enough to take every temporary pod).
+    pub fn temp_creates() -> Self {
+        Self {
+            narrow: RateLimit::new(5, Duration::from_secs(3600)),
+            wide: RateLimit::new(10, Duration::from_secs(3600)),
+        }
+    }
+
     pub fn allow(&self, keys: &ClientKeys) -> bool {
         if let Some(wide) = &keys.wide
             && !self.wide.allow(wide)
@@ -184,5 +215,26 @@ mod tests {
         // IPv4 (also mapped) has no wide key.
         assert_eq!(key("::ffff:198.51.100.1"), key("198.51.100.1"));
         assert_eq!(key("198.51.100.1").wide, None);
+    }
+
+    /// One /48 cycling through its 65536 /64s used to fill the pod-code and
+    /// registration tables, so every new client was refused.
+    #[test]
+    fn one_48_cannot_lock_everyone_out() {
+        for l in [
+            TwoLevel::code_tries(),
+            TwoLevel::registrations(),
+            TwoLevel::temp_creates(),
+        ] {
+            for i in 0..=MAX_KEYS {
+                let ip = format!("2001:db8:1:{i:x}::1");
+                l.allow(&ClientKeys::of(Some(ip.parse().unwrap())));
+            }
+            assert!(
+                l.allow(&ClientKeys::of(Some("198.51.100.1".parse().unwrap()))),
+                "a new client is still let in"
+            );
+            assert!(l.allow(&ClientKeys::of(Some("2001:db8:2::1".parse().unwrap()))));
+        }
     }
 }
