@@ -12,13 +12,14 @@ LABEL org.opencontainers.image.source=https://github.com/aidanwolter3/the-constr
 LABEL org.opencontainers.image.description="CI image for The Construct's Rust job"
 
 # The same packages scripts/cloud_setup.sh installs: a C toolchain, the simulator's fonts, lavapipe (Mesa's
-# software Vulkan, which construct-render's GPU tests draw on), plus git, zstd and xz for checkout and the cache.
+# software Vulkan, which construct-render's GPU tests draw on), plus git, zstd and xz for checkout and the cache,
+# and procps (`kill`: the server's shutdown tests signal it).
 RUN apt-get update \
     && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
         build-essential ca-certificates curl git jq sqlite3 pkg-config \
         fonts-dejavu-core fontconfig \
         mesa-vulkan-drivers libvulkan1 \
-        xz-utils zstd \
+        procps xz-utils zstd \
     && rm -rf /var/lib/apt/lists/*
 
 ENV RUSTUP_HOME=/usr/local/rustup \
