@@ -2,7 +2,8 @@
 //! that says what changed reloads only the cached data it matches (on
 //! screen first, the rest when shown again), an event that doesn't say
 //! reloads everything, loads run a few at a time, and a path the pod
-//! answers 404 for is dropped. Against a small stub pod.
+//! answers 404 for is dropped. An event sent while the stream was down is
+//! caught up on when it reconnects. Against a small stub pod.
 
 use std::collections::BTreeMap;
 use std::io::{BufRead, BufReader, Write};
@@ -37,6 +38,8 @@ struct StubState {
     streams: Mutex<Vec<mpsc::Sender<String>>>,
     /// `/v1/data/gone` answers 404.
     gone: AtomicBool,
+    /// Part of every row's name: bumped to change the data.
+    generation: AtomicUsize,
 }
 
 struct Stub {
@@ -64,6 +67,12 @@ impl Stub {
         self.st.hits.lock().unwrap().get(path).copied().unwrap_or(0)
     }
 
+    /// Ends every open events stream (the engine reconnects after its
+    /// backoff); events sent until then reach no one.
+    fn cut_streams(&self) {
+        self.st.streams.lock().unwrap().clear();
+    }
+
     fn data_event(&self, body: Value) {
         let text = format!("event: data\ndata: {body}\n\n");
         for tx in self.st.streams.lock().unwrap().iter() {
@@ -81,8 +90,9 @@ fn respond(stream: &mut TcpStream, status: &str, body: &str) {
     let _ = stream.write_all(resp.as_bytes());
 }
 
-fn bundle(uri: &str, key: &str) -> String {
-    json!({ "entities": { uri: { "name": uri } }, "queries": { key: [uri] } }).to_string()
+fn bundle(uri: &str, key: &str, generation: usize) -> String {
+    let name = format!("{uri} v{generation}");
+    json!({ "entities": { uri: { "name": name } }, "queries": { key: [uri] } }).to_string()
 }
 
 fn handle(mut stream: TcpStream, st: &StubState) {
@@ -116,6 +126,7 @@ fn handle(mut stream: TcpStream, st: &StubState) {
     if path != "/v1/workspaces/home" {
         thread::sleep(SLOW);
     }
+    let generation = st.generation.load(Ordering::SeqCst);
     match path.as_str() {
         "/v1/workspaces/home" => respond(&mut stream, "200 OK", FIXTURE),
         "/v1/workspaces/sub" => {
@@ -128,9 +139,13 @@ fn handle(mut stream: TcpStream, st: &StubState) {
         "/v1/data/gone" if st.gone.load(Ordering::SeqCst) => {
             respond(&mut stream, "404 Not Found", "{}")
         }
-        "/v1/data/gone" => respond(&mut stream, "200 OK", &bundle("t://other/1", "list:other")),
+        "/v1/data/gone" => respond(
+            &mut stream,
+            "200 OK",
+            &bundle("t://other/1", "list:other", generation),
+        ),
         p => match PATHS.iter().find(|(q, _, _)| *q == p) {
-            Some((_, uri, key)) => respond(&mut stream, "200 OK", &bundle(uri, key)),
+            Some((_, uri, key)) => respond(&mut stream, "200 OK", &bundle(uri, key, generation)),
             None => respond(&mut stream, "404 Not Found", "{}"),
         },
     }
@@ -340,4 +355,53 @@ fn a_path_the_pod_no_longer_has_is_dropped_from_reloads() {
     wait_until("a reloaded twice", || stub.hits("/v1/data/a") == a + 2);
     settle(&stub);
     assert_eq!(stub.hits("/v1/data/gone"), gone + 1, "not asked again");
+}
+
+fn name_of(engine: &ConstructEngine, uri: &str) -> String {
+    let entities: Value = serde_json::from_str(&engine.snapshot().entities_json).unwrap();
+    entities[uri]["name"]
+        .as_str()
+        .unwrap_or_default()
+        .to_owned()
+}
+
+#[test]
+fn a_data_event_sent_while_the_stream_was_down_is_caught_up_on_reconnect() {
+    let stub = Stub::start();
+    let engine = ready(&stub);
+    engine.set_visible(vec!["/v1/data/a".into(), "layout:home".into()]);
+    settle(&stub);
+    assert_eq!(name_of(&engine, "t://groceries/1"), "t://groceries/1 v0");
+    let (b, c) = (stub.hits("/v1/data/b"), stub.hits("/v1/data/c"));
+    // The stream drops (the app in the background); the data changes and
+    // the pod's event reaches no one.
+    stub.cut_streams();
+    stub.st.generation.store(1, Ordering::SeqCst);
+    stub.data_event(json!({ "workspace_id": "home" }));
+    wait_until("the stream reconnected", || {
+        stub.st.event_conns.load(Ordering::SeqCst) >= 2
+    });
+    // What's on screen shows the change without anything opening it.
+    wait_until("a caught up", || {
+        name_of(&engine, "t://groceries/1") == "t://groceries/1 v1"
+    });
+    settle(&stub);
+    // The rest is only marked stale: reloaded once shown again.
+    assert_eq!(stub.hits("/v1/data/b"), b, "b is off screen");
+    assert_eq!(stub.hits("/v1/data/c"), c, "c is off screen");
+    engine.set_visible(vec!["/v1/data/c".into(), "layout:home".into()]);
+    wait_until("c caught up", || {
+        name_of(&engine, "t://groceries/2") == "t://groceries/2 v1"
+    });
+}
+
+#[test]
+fn the_first_connection_reloads_nothing() {
+    let stub = Stub::start();
+    let _engine = ready(&stub);
+    settle(&stub);
+    let a = stub.hits("/v1/data/a");
+    thread::sleep(SLOW * 4);
+    assert_eq!(stub.st.event_conns.load(Ordering::SeqCst), 1);
+    assert_eq!(stub.hits("/v1/data/a"), a);
 }

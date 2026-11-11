@@ -4,7 +4,14 @@
 //! `layout` event names a version newer than the last applied one. The same
 //! stream carries `notification` / `notifications_read` events for every app
 //! of the pod (D52, handled in [`crate::notify`]); after each (re)connect with
-//! a session the engine fetches recent notifications to catch up.
+//! a session the engine fetches recent notifications to catch up. Every
+//! reconnect after the first (same session) also catches up on data: an
+//! `event: data` sent while the stream was down is lost, so the engine
+//! reloads what's on screen and marks the rest stale
+//! ([`Inner::catch_up_data`]). When the app returns to the foreground
+//! ([`crate::ConstructEngine::app_foregrounded`]) a stream that is down
+//! reconnects at once, and one silent for longer than the pod's keepalive
+//! (dead while the app was suspended) is reopened.
 //!
 //! The stream is read with async reqwest on a private current-thread Tokio
 //! runtime, in short slices ([`TICK`]), so a dropped engine is noticed
@@ -12,6 +19,7 @@
 //! `Weak<Inner>` while reading; the refetch runs outside the runtime (it
 //! uses blocking reqwest).
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Weak};
 use std::time::{Duration, Instant};
 
@@ -26,6 +34,9 @@ pub const RECONNECT_MAX: Duration = Duration::from_secs(30);
 /// No bytes at all (not even the server's 15 s `: keepalive`) for this long:
 /// the connection is considered dead and reopened.
 pub const READ_TIMEOUT: Duration = Duration::from_secs(45);
+/// The pod sends `: keepalive` every 15 s: a stream silent this long when
+/// the app returns to the foreground died while it was suspended.
+pub const FOREGROUND_SILENCE: Duration = Duration::from_secs(20);
 /// Read slice: how quickly a dropped engine or a session change is noticed.
 const TICK: Duration = Duration::from_millis(200);
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
@@ -155,15 +166,16 @@ pub fn parse_layout_event(ev: &SseEvent) -> Option<(Option<String>, u64)> {
     Some((ws, version))
 }
 
-/// Sleep up to `d`, returning false as soon as the engine shuts down.
-fn sleep_unless_shut_down(signal: &WorkerSignal, d: Duration) -> bool {
+/// Sleep up to `d`, returning false as soon as the engine shuts down, and
+/// early when the app came back to the foreground (`wake`).
+fn sleep_unless_shut_down(signal: &WorkerSignal, wake: &AtomicBool, d: Duration) -> bool {
     let deadline = Instant::now() + d;
     loop {
         if signal.is_shut_down() {
             return false;
         }
         let now = Instant::now();
-        if now >= deadline {
+        if now >= deadline || wake.swap(false, Ordering::SeqCst) {
             return true;
         }
         std::thread::sleep((deadline - now).min(TICK));
@@ -179,6 +191,7 @@ enum ConnectError {
 pub(crate) fn events_thread(
     weak: Weak<Inner>,
     signal: Arc<WorkerSignal>,
+    wake: Arc<AtomicBool>,
     url: String,
     poll: Duration,
 ) {
@@ -208,6 +221,9 @@ pub(crate) fn events_thread(
     };
     let mut backoff = RECONNECT_MIN;
     let mut last_error: Option<String> = None;
+    // The session of the last connection: a reconnect with the same one
+    // catches up on data events missed in between.
+    let mut connected_with: Option<Option<String>> = None;
     loop {
         if signal.is_shut_down() {
             return;
@@ -220,7 +236,7 @@ pub(crate) fn events_thread(
             None => return,
         };
         if !online {
-            if !sleep_unless_shut_down(&signal, poll) {
+            if !sleep_unless_shut_down(&signal, &wake, poll) {
                 return;
             }
             continue;
@@ -262,15 +278,32 @@ pub(crate) fn events_thread(
                 {
                     inner.on_stream_connected(t);
                 }
+                // A fresh connection is what a foreground return asks for.
+                wake.store(false, Ordering::SeqCst);
+                if connected_with.as_ref() == Some(&token)
+                    && let Some(inner) = weak.upgrade()
+                {
+                    inner.catch_up_data();
+                }
+                connected_with = Some(token.clone());
                 match read_stream(
                     &rt,
                     &mut resp,
                     &weak,
                     &signal,
+                    &wake,
                     token.as_deref(),
                     &mut backoff,
                 ) {
                     StreamEnd::ShutDown => return,
+                    StreamEnd::Silent => {
+                        println!(
+                            "[ConstructEngine] events: no keepalive for {} s after returning to \
+                             the foreground; reconnecting",
+                            FOREGROUND_SILENCE.as_secs()
+                        );
+                        continue;
+                    }
                     StreamEnd::SessionChanged => {
                         println!("[ConstructEngine] events: session changed; reconnecting");
                         continue;
@@ -311,7 +344,7 @@ pub(crate) fn events_thread(
             );
         }
         last_error = Some(error);
-        if !sleep_unless_shut_down(&signal, backoff) {
+        if !sleep_unless_shut_down(&signal, &wake, backoff) {
             return;
         }
         backoff = (backoff * 2).min(RECONNECT_MAX);
@@ -321,6 +354,9 @@ pub(crate) fn events_thread(
 enum StreamEnd {
     ShutDown,
     SessionChanged,
+    /// The app returned to the foreground and the stream had been silent
+    /// for [`FOREGROUND_SILENCE`]: reopen it at once.
+    Silent,
     Closed(String),
 }
 
@@ -331,6 +367,7 @@ fn read_stream(
     resp: &mut reqwest::Response,
     weak: &Weak<Inner>,
     signal: &WorkerSignal,
+    wake: &AtomicBool,
     token: Option<&str>,
     backoff: &mut Duration,
 ) -> StreamEnd {
@@ -346,6 +383,9 @@ fn read_stream(
             Err(_) => {
                 if last_data.elapsed() >= READ_TIMEOUT {
                     return StreamEnd::Closed(format!("no data for {} s", READ_TIMEOUT.as_secs()));
+                }
+                if wake.swap(false, Ordering::SeqCst) && last_data.elapsed() >= FOREGROUND_SILENCE {
+                    return StreamEnd::Silent;
                 }
                 let Some(inner) = weak.upgrade() else {
                     return StreamEnd::ShutDown;

@@ -890,6 +890,11 @@ impl ApplicationHandler for App {
     }
 
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
+        // Android resumes the app here after it was in the background,
+        // where its events stream may have gone down.
+        if let Some(loader) = &self.controller.session.loader {
+            loader.foregrounded();
+        }
         if self.surface.is_none()
             && let Err(e) = self.create(event_loop)
         {

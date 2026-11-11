@@ -41,6 +41,14 @@ Decision:
 - **404 drops the path:** a data path or layout that answers 404 is dropped from the cache (memory and the store),
   so no later event reloads it.
 - An event without prefixes still reloads everything, 4 at a time.
+- **A reconnect catches up** (2026-11-11). An `event: data` sent while the stream was down (the app in the
+  background, a network drop) is lost: tasks set to done through the connector stayed in their old section until
+  opened. Every reconnect after the stream's first connection with the same session counts as one unscoped event
+  that respects what's on screen (`Inner::catch_up_data`): what's on screen reloads now, every other cached path and
+  layout is marked stale. When the app returns to the foreground (`Loader::foregrounded` →
+  `ConstructEngine::app_foregrounded`, from the window's `resumed`), a stream waiting out its backoff reconnects at
+  once, and one silent for over 20 s (`events::FOREGROUND_SILENCE`, past the pod's 15 s keepalive: it died while the
+  app was suspended) is reopened; either way the reconnect catches up.
 
 Not done: other sources (Pixelfed posts, Events fillers) still send unscoped events; a filler run could name its
 collection. The renderer reports a sheet's or panel's own layout and the entries under it, but not which list
