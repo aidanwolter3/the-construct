@@ -32,6 +32,7 @@ PNG / WebP (encode.rs)                 HeadlessSurface (readback) or a window / 
 | `text` | Fonts, shaping and measuring (cosmic-text); caret stops for editing |
 | `dates` | `core://Text` `format`: `YYYY-MM-DD` values as "tomorrow" or "Nov 5", against the device's day (its time zone through jiff) |
 | `images` | Images by URL, cut to their box (on a background thread for the GPU) |
+| `perf` | Frame diagnostics: each window frame's timings and counts, one log line per burst of frames ([below](#frame-diagnostics)) |
 | `viewer` | `Controller`: platform events (resize, tap, long press, wheel, text, editing keys, Back) applied to a session; what windows feed |
 | `window` | winit + wgpu surface (feature `window`): touch (drags, flings, swipes, long presses, handles), the clipboard, the `Platform` a window runs on; used by `construct-viewer` and Android |
 | `engine` | `PodEngine`: a live session over a pod run by the engine (`client-core`: cache, outbox, event stream), the session's `Loader` (feature `remote`); `FileStore`, a desktop's secure store without a keychain |
@@ -328,6 +329,40 @@ is `None` and the window types what key events bring.
 
 The headless simulator, `construct-sim` ([simulator.md](simulator.md)), drives a session from a script on fixture
 bundles or a live pod and writes PNGs drawn on the CPU.
+
+## Frame diagnostics
+
+Windows (Android and the desktop viewer) measure every frame they draw (`perf`) and log one line per burst of frames:
+a drag and its fling, a screen sliding in, a tap. A burst ends when nothing is left to draw; a long one (a spinner on
+screen) is summed up every 5 seconds, and windows with no touches and no frame over 25 ms aren't logged (the next
+line says how many were skipped). Recording a frame is a few clock reads and a copy into a buffer allocated once; the
+summary is worked out after the burst's last frame, and the frame after a mid-burst summary doesn't count as back to
+back, so the diagnostics don't show up in what they measure. Only timings and counts are logged: no text or data from
+the pod, only the layout's id (and the page screen's) on top. On Android: `adb logcat -s construct-render | grep perf`.
+
+```
+perf agents/task: 96 frames in 1580 ms, 60 fps; display 8.3 ms (120 Hz); slow 31 (worst: interval 48.2 work 41.0 =
+scene 38.1 [layout 37.9 x1, data 1] + render 2.6 [shape 1.9 x14, atlas 0.0 x0] + present 0.3; acquire 6.1; moves 3);
+interval 16.6/25.0/48.2; work 1.9/9.8/41.0; ...; moves/frame 0:3 1:60 2:28 3+:4; drag step 21.3 pt ±38%
+```
+
+An example, wrapped here (it is one line). Spreads are p50/p95/max in milliseconds.
+
+| Field | Meaning |
+|---|---|
+| frames, fps | Frames in the burst, and their rate over the back-to-back ones (idle gaps between taps don't count) |
+| display | The display's frame time: Android's `Display.getRefreshRate()`, the desktop monitor's, else estimated from the shortest steady intervals |
+| slow | Frames more than 1.5 display frames after the one before (or, the first of a burst, whose work took over one); `worst` breaks the slowest one down |
+| interval | Time between back-to-back frame starts |
+| work | The frame's own time: scene + render + present (not waiting for the surface) |
+| scene | `Session::scene`: placing the laid-out frame again (a scroll), or laying it out (`layouts`: how many, how long; `data`: engine snapshots that changed what is drawn) |
+| render | The GPU renderer's CPU side; `shaped` text runs not kept from earlier frames, `atlas` images and icons drawn into the glyph atlas (count, KB) |
+| acquire | Waiting for the surface's next image: vsync and the GPU's backlog |
+| present | Handing the image to the compositor |
+| latency | From the first touch a frame shows to the frame starting |
+| moves/frame | During a drag, frames by how many touch moves arrived since the one before; uneven counts mean uneven steps |
+| drag step | During a drag, the scroll per frame: mean and variation (standard deviation over mean); a high variation judders |
+| runs, quads | The most text runs (with icons and images) and quads a frame drew |
 
 ## Agent previews (MCP)
 

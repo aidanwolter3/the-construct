@@ -44,6 +44,7 @@ Build and install on the adb device (a phone over USB, or an arm64 emulator):
 ```bash
 scripts/android_native.sh               # build/android-native/construct-render.apk, installed and started
 adb logcat -s construct-render          # the app's log
+adb logcat -s construct-render | grep perf   # frame diagnostics (rendering.md#frame-diagnostics)
 ```
 
 A development build is debuggable and signed with this machine's debug key; it installs over an earlier build signed

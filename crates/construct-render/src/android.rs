@@ -198,6 +198,10 @@ impl crate::window::Platform for Android {
         }
     }
 
+    fn refresh_rate(&self) -> Option<f32> {
+        refresh_rate(&self.0)
+    }
+
     fn clipboard(&self) -> Option<String> {
         clipboard_text(&self.0)
     }
@@ -341,6 +345,50 @@ fn night_mode(app: &AndroidApp) -> Option<bool> {
             Ok(d) => Some(d),
             Err(e) => {
                 log(&format!("night mode: {}", java_error(env, e)));
+                None
+            }
+        })
+    })
+    .ok()
+    .flatten()
+}
+
+/// The display's refresh rate now (`getWindowManager().getDefaultDisplay()
+/// .getRefreshRate()`), for frame diagnostics. It can change while the app
+/// runs (adaptive refresh), so it is read when a summary is logged.
+fn refresh_rate(app: &AndroidApp) -> Option<f32> {
+    use jni::objects::JObject;
+    use jni::{jni_sig, jni_str};
+    // SAFETY: the VM pointer is valid for the life of the process.
+    let vm = unsafe { jni::JavaVM::from_raw(app.vm_as_ptr().cast()) };
+    let activity = app.activity_as_ptr() as jni::sys::jobject;
+    vm.attach_current_thread(|env| -> jni::errors::Result<Option<f32>> {
+        let run = |env: &mut jni::Env| -> jni::errors::Result<f32> {
+            // SAFETY: android-activity keeps its own reference to the activity.
+            let activity = unsafe { env.as_cast_raw::<JObject>(&activity)? };
+            let wm = env
+                .call_method(
+                    &*activity,
+                    jni_str!("getWindowManager"),
+                    jni_sig!("()Landroid/view/WindowManager;"),
+                    &[],
+                )?
+                .l()?;
+            let display = env
+                .call_method(
+                    &wm,
+                    jni_str!("getDefaultDisplay"),
+                    jni_sig!("()Landroid/view/Display;"),
+                    &[],
+                )?
+                .l()?;
+            env.call_method(&display, jni_str!("getRefreshRate"), jni_sig!("()F"), &[])?
+                .f()
+        };
+        Ok(match run(env) {
+            Ok(hz) => Some(hz),
+            Err(e) => {
+                log(&format!("refresh rate: {}", java_error(env, e)));
                 None
             }
         })

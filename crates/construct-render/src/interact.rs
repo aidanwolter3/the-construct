@@ -268,6 +268,8 @@ struct Entry {
     stale: Option<Laid>,
     /// A page screen (opened by a `target_uri`), not the layout itself.
     screen: bool,
+    /// The page screen's id, for frame diagnostics (empty for a layout).
+    screen_id: String,
     /// An action from outside its `follow_end` scrolling views ran: they
     /// follow their content to the end once it is laid out.
     follow: bool,
@@ -305,6 +307,7 @@ impl Entry {
             laid: None,
             stale: None,
             screen: false,
+            screen_id: String::new(),
             follow: false,
         }
     }
@@ -536,6 +539,8 @@ fn bind_route(v: &mut Value, route: &BTreeMap<String, String>) {
 /// A live layout.
 pub struct Session {
     stack: Vec<Entry>,
+    /// What building frames cost since the window last asked.
+    work: Work,
     pub data: DataBundle,
     pub form: BTreeMap<String, String>,
     pub layouts: BTreeMap<String, UiNode>,
@@ -677,10 +682,37 @@ fn next_char(text: &str, at: usize) -> usize {
     text[at..].chars().next().map_or(at, |c| at + c.len_utf8())
 }
 
+/// What building frames cost (frame diagnostics, [`crate::perf`]).
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Work {
+    /// Layouts or screens laid out again, and the time it took.
+    pub laid_out: u16,
+    pub layout: Duration,
+    /// Data snapshots that changed what is drawn.
+    pub data_changes: u16,
+}
+
 impl Session {
+    /// What building frames cost since last asked.
+    pub fn take_work(&mut self) -> Work {
+        std::mem::take(&mut self.work)
+    }
+
+    /// What the top of the screen shows, for frame diagnostics: the
+    /// layout's id, and the page screen's after a slash.
+    pub fn showing(&self) -> String {
+        let e = &self.stack[self.top_index()];
+        if e.screen_id.is_empty() {
+            e.id.clone()
+        } else {
+            format!("{}/{}", e.id, e.screen_id)
+        }
+    }
+
     pub fn new(id: &str, root: UiNode, data: DataBundle, viewport: Viewport) -> Session {
         Session {
             stack: vec![Entry::layout(id, root, BTreeMap::new())],
+            work: Work::default(),
             data,
             form: BTreeMap::new(),
             layouts: BTreeMap::new(),
@@ -1598,6 +1630,7 @@ impl Session {
                 }
             }
         }
+        self.work.data_changes = self.work.data_changes.saturating_add(1);
         self.invalidate();
     }
 
@@ -1834,6 +1867,7 @@ impl Session {
         };
         let prev = self.stack[i].stale.take();
         let e = &self.stack[i];
+        let started = Instant::now();
         let laid = self.builder.relayout(
             &Input {
                 root: &e.root,
@@ -1850,6 +1884,8 @@ impl Session {
             },
             prev,
         )?;
+        self.work.laid_out = self.work.laid_out.saturating_add(1);
+        self.work.layout += started.elapsed();
         let e = &mut self.stack[i];
         // After an action from outside it, a `follow_end` view goes to
         // its end once it has something to scroll.
@@ -3551,6 +3587,7 @@ impl Session {
             laid: None,
             stale: None,
             screen: true,
+            screen_id: screen.id.clone(),
             follow: false,
         });
         out.push(Effect::OpenedScreen {

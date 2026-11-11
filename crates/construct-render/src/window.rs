@@ -192,6 +192,8 @@ pub struct App {
     inbox: Arc<std::sync::Mutex<A11yInbox>>,
     #[cfg(not(target_os = "android"))]
     a11y: Option<A11y>,
+    /// Frame diagnostics: one log line per burst of frames.
+    perf: crate::perf::Recorder,
 }
 
 impl App {
@@ -212,7 +214,24 @@ impl App {
             inbox: Default::default(),
             #[cfg(not(target_os = "android"))]
             a11y: None,
+            perf: Default::default(),
         }
+    }
+
+    /// The display's refresh rate, when the platform says.
+    fn refresh_hz(&self) -> Option<f32> {
+        self.platform
+            .as_ref()
+            .and_then(|p| p.refresh_rate())
+            .or_else(|| {
+                let mhz = self
+                    .surface
+                    .as_ref()?
+                    .window
+                    .current_monitor()?
+                    .refresh_rate_millihertz()?;
+                Some(mhz as f32 / 1000.0)
+            })
     }
 
     fn clipboard(&self) -> Option<String> {
@@ -614,11 +633,15 @@ impl App {
     }
 
     fn draw(&mut self) {
+        let started = Instant::now();
+        let dragging = self.drag.as_ref().is_some_and(|d| d.dragging);
+        let mut stats = self.perf.begin(started, dragging);
         self.update_insets();
         // The drag's scrolling since the last frame, in one step.
         if let Some(mut d) = self.drag.take() {
             if d.pending != 0.0 {
                 let dy = std::mem::take(&mut d.pending);
+                stats.scroll = dy;
                 if self.drag_scroll(d.start, dy) {
                     d.scrolled = true;
                 }
@@ -627,41 +650,70 @@ impl App {
         }
         let flinging = self.step_scrolling();
         let Some(s) = self.surface.as_mut() else {
+            self.perf.skip();
             return;
         };
         if !s.configured && !s.configure() {
             s.window.request_redraw();
+            self.perf.skip();
             return;
         }
-        let started = Instant::now();
+        let t = Instant::now();
         let frame = match s.surface.get_current_texture() {
             wgpu::CurrentSurfaceTexture::Success(f) => f,
             wgpu::CurrentSurfaceTexture::Suboptimal(_) | wgpu::CurrentSurfaceTexture::Outdated => {
                 s.configure();
                 s.window.request_redraw();
+                self.perf.skip();
                 return;
             }
             other => {
                 log(&format!("no frame: {other:?}"));
                 s.window.request_redraw();
+                self.perf.skip();
                 return;
             }
         };
+        stats.acquire = t.elapsed();
         let view = frame
             .texture
             .create_view(&wgpu::TextureViewDescriptor::default());
         let px = (s.config.width, s.config.height);
+        let t = Instant::now();
         match self.controller.session.scene_and_text() {
             Ok((scene, text)) => {
+                stats.scene = t.elapsed();
+                let t = Instant::now();
                 if let Err(e) = s.renderer.render(&s.gpu, &view, px, scene, text) {
                     log(&format!("draw failed: {e}"));
                 }
+                stats.render = t.elapsed();
             }
             Err(e) => log(&format!("layout failed: {e}")),
         }
+        let t = Instant::now();
         s.gpu.queue.present(frame);
-        if flinging || self.controller.session.animating() {
+        stats.present = t.elapsed();
+        let wants_next = flinging || self.controller.session.animating();
+        if wants_next {
             s.window.request_redraw();
+        }
+        let r = s.renderer.stats;
+        let work = self.controller.session.take_work();
+        stats.laid_out = work.laid_out;
+        stats.layout = work.layout;
+        stats.data_changes = work.data_changes;
+        stats.shaped = r.shaped;
+        stats.shape = r.shape;
+        stats.rasterized = r.rasterized;
+        stats.raster_bytes = r.raster_bytes;
+        stats.raster = r.raster;
+        stats.runs = r.runs;
+        stats.quads = r.quads;
+        let gesture = self.drag.is_some();
+        if let Some(summary) = self.perf.end(stats, Instant::now(), wants_next, gesture) {
+            let line = summary.line(&self.controller.session.showing(), self.refresh_hz());
+            log(&line);
         }
         if self.controller.frames == 0 {
             log(&format!(
@@ -994,6 +1046,7 @@ impl ApplicationHandler for App {
             WindowEvent::Touch(t) => {
                 let p = (t.location.x as f32 / scale, t.location.y as f32 / scale);
                 let now = Instant::now();
+                self.perf.input(now, matches!(t.phase, TouchPhase::Moved));
                 match t.phase {
                     TouchPhase::Started => {
                         // A finger on a moving fling stops it, and is no tap.
