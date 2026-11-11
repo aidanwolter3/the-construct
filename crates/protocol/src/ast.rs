@@ -50,7 +50,7 @@ pub const NODE_TYPES: [&str; 30] = [
 ];
 
 /// Icon names clients draw (`core://IconButton`, `core://Chip`).
-pub const ICONS: [&str; 22] = [
+pub const ICONS: [&str; 23] = [
     "favorite",
     "favorite_border",
     "chat_bubble",
@@ -78,6 +78,8 @@ pub const ICONS: [&str; 22] = [
     "notifications",
     // Feature `icons_cart` (crates/protocol/features/icons_cart.md).
     "shopping_cart",
+    // Feature `icons_stapler` (crates/protocol/features/icons_stapler.md).
+    "stapler",
 ];
 
 fn one() -> f64 {

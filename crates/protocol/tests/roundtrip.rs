@@ -850,6 +850,16 @@ fn the_cart_icon_needs_its_feature() {
     assert!(protocol::ICONS.contains(&"shopping_cart"));
 }
 
+#[test]
+fn the_stapler_icon_needs_its_feature() {
+    let staples = json!({"type": "core://IconButton", "icon": "stapler",
+        "content_description": "Staples", "on_click": {"intent": "action.navigation.back"}});
+    let n: UiNode = serde_json::from_value(staples).unwrap();
+    assert_eq!(additive_features(&n), ["icons_stapler"]);
+    assert!(protocol::FEATURES.contains(&"icons_stapler"));
+    assert!(protocol::ICONS.contains(&"stapler"));
+}
+
 /// The features a node needs beyond the vocabulary of the numbered schemas
 /// (1-12, named since decision `named-vocabulary`): what these tests check.
 fn additive_features(node: &protocol::UiNode) -> Vec<&'static str> {
