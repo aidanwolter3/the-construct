@@ -2469,8 +2469,11 @@ fn matches_text(v: &Value, want: &str) -> bool {
 
 /// Stretches what a scrolling view drew from `from` (draws, semantics,
 /// fields) by `scale` along its axis, away from `anchor`, inside its `clip`
-/// (Android's stretch at an end, `scroll::Stretch`). Boxes and images grow;
-/// text and icons move with them but keep their size.
+/// (Android's stretch at an end, `scroll::Stretch`). Boxes grow; text,
+/// icons and images move with them but keep their size. An image (and its
+/// placeholder, drawn just before it in its box) keeps its size because it
+/// is cut to its exact pixel size: a new size each frame would cut it again
+/// each frame, showing the placeholder meanwhile (`ImageStore::prepare`).
 fn stretch_content(
     scene: &mut Scene,
     from: (usize, usize, usize),
@@ -2489,14 +2492,23 @@ fn stretch_content(
         ]
     };
     let clipped = |c: [f32; 4]| intersect(grow(c), clip);
-    for d in &mut scene.draws[from.0..] {
-        match d {
+    let draws = &mut scene.draws[from.0..];
+    for k in 0..draws.len() {
+        let placeholder = match (&draws[k], draws.get(k + 1)) {
+            (Draw::Quad(q), Some(Draw::Image(i))) => q.rect == i.rect,
+            _ => false,
+        };
+        match &mut draws[k] {
             Draw::Quad(q) => {
-                q.rect = grow(q.rect);
+                q.rect = if placeholder {
+                    shift(q.rect)
+                } else {
+                    grow(q.rect)
+                };
                 q.clip = clipped(q.clip);
             }
             Draw::Image(i) => {
-                i.rect = grow(i.rect);
+                i.rect = shift(i.rect);
                 i.clip = clipped(i.clip);
             }
             Draw::Text(t) => {
@@ -3020,6 +3032,55 @@ impl Laid {
                 t.clip = clip;
                 scene.draws.push(Draw::Quad(t));
             }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::scene::{ImageRun, NO_CLIP};
+
+    fn quad(rect: [f32; 4]) -> Draw {
+        Draw::Quad(QuadInstance::fill(rect, Rgba::rgb(128, 128, 128), 0.0))
+    }
+
+    fn rect(d: &Draw) -> [f32; 4] {
+        match d {
+            Draw::Quad(q) => q.rect,
+            Draw::Image(i) => i.rect,
+            Draw::Text(t) => t.rect,
+            Draw::Icon(i) => i.rect,
+        }
+    }
+
+    /// A stretch must not resize images: each new size would be cut again,
+    /// and the placeholder would flash while it is.
+    #[test]
+    fn a_stretch_moves_images_and_their_placeholders_without_resizing_them() {
+        let photo = [0.0, 100.0, 300.0, 200.0];
+        let mut scene = Scene {
+            draws: vec![
+                quad([0.0, 0.0, 300.0, 400.0]), // a card
+                quad(photo),                    // the photo's placeholder
+                Draw::Image(ImageRun {
+                    url: "https://img.example/a.jpg".into(),
+                    rect: photo,
+                    radius: 0.0,
+                    clip: NO_CLIP,
+                }),
+            ],
+            ..Scene::default()
+        };
+        stretch_content(&mut scene, (0, 0, 0), 0.0, 1.1, NO_CLIP);
+        // The card grows from the top.
+        assert_eq!(rect(&scene.draws[0]), [0.0, 0.0, 300.0, 440.0]);
+        // The photo and its placeholder keep their size, centred where the
+        // stretch takes their middle (200 → 220).
+        for d in &scene.draws[1..] {
+            let r = rect(d);
+            assert_eq!((r[2], r[3]), (300.0, 200.0));
+            assert!((r[1] + r[3] / 2.0 - 220.0).abs() < 1e-3, "{r:?}");
         }
     }
 }

@@ -47,3 +47,7 @@ Mobile and desktop differ by input device, not by platform: touch flings with An
 
 Not yet: smoothing a burst's moves across the frame (a drag's scrolling is applied once per frame), and the stretch
 on horizontal carousels and for the mouse wheel or trackpad.
+
+Amended 2026-11-11: images, and their placeholders, move with a stretch but keep their size. An image is cut to its
+exact pixel size, so a new size every frame was cut again every frame and drew its placeholder meanwhile: the photos
+flickered while a feed stretched.
