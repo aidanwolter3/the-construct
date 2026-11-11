@@ -31,24 +31,67 @@ env:
   # version comes from rust-toolchain.toml, the same as local and cloud builds.
 
 jobs:
+  # The image the Rust job runs in (.github/ci/Dockerfile, decision `ci-container-image`): its tag is a hash of the
+  # Dockerfile and rust-toolchain.toml, so it is built and pushed to ghcr.io only when one of them changes; any
+  # other run finds it and moves on. A pull request from a fork can't push, so it can't change either file.
+  image:
+    name: CI image
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      ref: ${{ steps.tag.outputs.ref }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Which image
+        id: tag
+        run: |
+          tag=$(cat .github/ci/Dockerfile rust-toolchain.toml | sha256sum | cut -c1-16)
+          echo "ref=ghcr.io/${GITHUB_REPOSITORY,,}-ci:$tag" >> "$GITHUB_OUTPUT"
+      - name: Build and push it, unless it exists
+        env:
+          REF: ${{ steps.tag.outputs.ref }}
+          TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          echo "$TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+          if docker manifest inspect "$REF" >/dev/null 2>&1; then
+            echo "$REF exists"
+            exit 0
+          fi
+          ctx=$(mktemp -d)
+          cp rust-toolchain.toml "$ctx/"
+          docker build -f .github/ci/Dockerfile -t "$REF" "$ctx"
+          docker push "$REF"
+
   rust:
     name: Rust (clippy + tests)
+    needs: image
     runs-on: ubuntu-latest
     timeout-minutes: 45
+    permissions:
+      contents: read
+      packages: read
+    # Everything the job installs is in the image (lavapipe for the GPU tests, cargo-nextest, the pinned Rust).
+    # uid 1001 is the runner's user: the workspace is its, and tests that need a non-root user run.
+    container:
+      image: ${{ needs.image.outputs.ref }}
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+      options: --user 1001
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false # no job pushes; keep GITHUB_TOKEN out of .git/config
-      - name: Install the pinned Rust (rust-toolchain.toml)
+      - name: The pinned Rust (rust-toolchain.toml; the image has it)
         run: rustup toolchain install
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
-      - uses: taiki-e/install-action@3a3daafd3b7f23b8f65d9f5ba2db203fb59b79e2 # v2.90.2
-        with:
-          tool: cargo-nextest@0.9.145
-      # lavapipe (Mesa's software Vulkan): construct-render's GPU tests draw on it, and must
+      # construct-render's GPU tests draw on the image's lavapipe (Mesa's software Vulkan), and must
       # (CONSTRUCT_REQUIRE_GPU below fails them instead of skipping when no adapter is found).
-      - name: Install a software Vulkan driver
-        run: sudo apt-get update -y && sudo apt-get install -y --no-install-recommends mesa-vulkan-drivers
       - run: scripts/check_decisions.sh
       - run: scripts/check_test_data.sh
       - run: cargo clippy --workspace --all-targets -- -D warnings
@@ -64,13 +107,14 @@ jobs:
       - run: cargo test --workspace --doc
       # The headless simulator (docs/simulator.md), CPU-drawn: the scenarios' PNGs are what PRs embed.
       - name: Simulator screenshots (construct-sim, fixture mode)
-        run: scripts/sim_scenarios.sh "$RUNNER_TEMP/sim"
+        # In the workspace: inside the container, runner.temp names the host's path.
+        run: scripts/sim_scenarios.sh sim-screenshots
       - name: Upload simulator screenshots
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: simulator
-          path: ${{ runner.temp }}/sim
+          path: sim-screenshots
           if-no-files-found: ignore
           retention-days: 14
 
