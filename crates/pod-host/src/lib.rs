@@ -45,7 +45,7 @@ use serde_json::json;
 use tower::ServiceExt;
 
 pub use db::{CredentialKind, HostStore, PodKind, PodRow};
-use limits::{ClientKeys, RateLimit, TwoLevel};
+use limits::{ClientKeys, TwoLevel};
 
 /// Builds a pod over its opened store: runs the adapters' migrations and the
 /// layout sync (the binary's [`AppState::try_new`] with its adapters).
@@ -98,7 +98,7 @@ pub struct StorageLimits {
     /// The same for a temporary pod (`CONSTRUCT_TEMP_POD_UPLOAD_QUOTA_BYTES`,
     /// default 25 MiB): anyone can make one.
     pub temporary_upload_quota_bytes: u64,
-    /// Uploads and new temporary pods are refused when the data volume has
+    /// Uploads, new temporary pods and OAuth registrations are refused when the data volume has
     /// less free (`CONSTRUCT_MIN_FREE_DISK_BYTES`, default 100 MiB).
     pub min_free_disk_bytes: u64,
     /// Most bytes an admin pod's database holds, everything included
@@ -290,9 +290,10 @@ pub struct Host {
     open: Mutex<HashMap<String, Arc<OpenPod>>>,
     opening: tokio::sync::Mutex<()>,
     open_pod_id: OnceLock<String>,
-    code_tries: RateLimit,
-    /// OAuth client registrations per client address.
-    registrations: RateLimit,
+    /// Pod codes typed, per client address and per IPv6 /48.
+    code_tries: TwoLevel,
+    /// OAuth client registrations, per client address and per IPv6 /48.
+    registrations: TwoLevel,
     temp_creates: TwoLevel,
     /// Makes the temporary-pod cap check and the creation one step.
     temp_lock: Mutex<()>,
@@ -319,18 +320,9 @@ impl Host {
             open: Mutex::new(HashMap::new()),
             opening: tokio::sync::Mutex::new(()),
             open_pod_id: OnceLock::new(),
-            // Per client address (IPv6 per /64). No global limit: a 256-bit
-            // code can't be guessed, and a global one lets anyone lock
-            // everyone out of entering their code.
-            code_tries: RateLimit::new(10, Duration::from_secs(60)),
-            registrations: RateLimit::new(20, Duration::from_secs(3600)),
-            // Per IPv4 address or IPv6 /64, and per /48 (security audit #31,
-            // M2): a /48 holds 65536 /64s, and a few are enough to take
-            // every temporary pod.
-            temp_creates: TwoLevel {
-                narrow: RateLimit::new(5, Duration::from_secs(3600)),
-                wide: RateLimit::new(10, Duration::from_secs(3600)),
-            },
+            code_tries: TwoLevel::code_tries(),
+            registrations: TwoLevel::registrations(),
+            temp_creates: TwoLevel::temp_creates(),
             temp_lock: Mutex::new(()),
             wakes: Mutex::new(HashMap::new()),
         };
@@ -912,7 +904,7 @@ impl Host {
         }
         gauges.push(metrics::Gauge::one(
             "construct_disk_min_free_bytes",
-            "Free space below which uploads and new temporary pods stop.",
+            "Free space below which uploads, new temporary pods and OAuth client registrations stop.",
             self.config.storage.min_free_disk_bytes as f64,
         ));
         gauges
@@ -1308,8 +1300,8 @@ fn no_pod(host: &Host, req: &Request, had_token: bool) -> Response {
 /// would add nothing against guessing, but would let one client behind a
 /// shared address (CGNAT) lock its neighbours out of their pods.
 async fn open_with_token(State(host): State<Arc<Host>>, req: Request) -> Response {
-    let key = client_keys(req.headers(), peer(&req), host.config.trust_fly_client_ip).narrow;
-    if !host.code_tries.allow(&key) {
+    let keys = client_keys(req.headers(), peer(&req), host.config.trust_fly_client_ip);
+    if !host.code_tries.allow(&keys) {
         tracing::warn!("pod code tries rate-limited");
         metrics::inc(metrics::RATE_LIMITED, &[("limit", "pod_code")]);
         return rate_limited();
