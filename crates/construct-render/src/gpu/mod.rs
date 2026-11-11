@@ -131,6 +131,23 @@ pub struct Renderer {
     /// change them), with the frame it was last drawn in.
     shaped: std::collections::HashMap<ShapeKey, (glyphon::Buffer, u64)>,
     frame: u64,
+    /// What the last frame cost (frame diagnostics, [`crate::perf`]).
+    pub stats: RenderStats,
+}
+
+/// What a frame cost the renderer beyond its plain drawing.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct RenderStats {
+    /// Text runs shaped (not kept from an earlier frame), and the time.
+    pub shaped: u16,
+    pub shape: std::time::Duration,
+    /// Images and icons rasterized into the atlas, their bytes and time.
+    pub rasterized: u16,
+    pub raster_bytes: u32,
+    pub raster: std::time::Duration,
+    /// Text runs, icons and images, and quads drawn.
+    pub runs: u32,
+    pub quads: u32,
 }
 
 /// A text run's shape: its text, face, size, line height, wrap width and
@@ -168,6 +185,36 @@ type Layers = (
     Vec<Vec<TextRun>>,
     Vec<Vec<GlyphRun>>,
 );
+
+/// An image (cut to the request's size) or an icon's mask, for the atlas.
+fn rasterize(
+    images: Option<&crate::images::ImageStore>,
+    req: glyphon::RasterizeCustomGlyphRequest,
+) -> Option<RasterizedCustomGlyph> {
+    if req.id >= crate::images::FIRST_GLYPH_ID {
+        let store = images?;
+        let (url, radius) = store.glyph(req.id)?;
+        let img = store.cut(&url, req.width as u32, req.height as u32, radius as f32)?;
+        return Some(RasterizedCustomGlyph {
+            data: img.as_raw().clone(),
+            content_type: ContentType::Color,
+        });
+    }
+    let name = crate::icons::name(req.id)?;
+    let size = req.width.min(req.height) as u32;
+    let mask = crate::icons::mask(name, size)?;
+    // A square mask in a request that isn't square: pad it.
+    let (w, h) = (req.width as usize, req.height as usize);
+    let mut data = vec![0u8; w * h];
+    for y in 0..size as usize {
+        data[y * w..y * w + size as usize]
+            .copy_from_slice(&mask[y * size as usize..(y + 1) * size as usize]);
+    }
+    Some(RasterizedCustomGlyph {
+        data,
+        content_type: ContentType::Mask,
+    })
+}
 
 fn layers(scene: &Scene, images: Option<&crate::images::ImageStore>) -> Layers {
     let mut quads: Vec<Vec<QuadInstance>> = vec![Vec::new()];
@@ -356,6 +403,7 @@ impl Renderer {
             images: None,
             shaped: std::collections::HashMap::new(),
             frame: 0,
+            stats: RenderStats::default(),
         }
     }
 
@@ -385,6 +433,12 @@ impl Renderer {
             }),
         );
         let (quad_layers, text_layers, icon_layers) = layers(scene, self.images.as_ref());
+        let mut stats = RenderStats {
+            runs: text_layers.iter().map(|l| l.len() as u32).sum::<u32>()
+                + icon_layers.iter().map(|l| l.len() as u32).sum::<u32>(),
+            quads: quad_layers.iter().map(|l| l.len() as u32).sum(),
+            ..RenderStats::default()
+        };
         let mut all: Vec<QuadInstance> = Vec::new();
         let mut plan: Vec<Layer> = Vec::new();
         for (i, qs) in quad_layers.iter().enumerate() {
@@ -447,6 +501,7 @@ impl Renderer {
                 match self.shaped.get_mut(&k) {
                     Some(e) => e.1 = frame_no,
                     None => {
+                        let started = std::time::Instant::now();
                         let ty = Type {
                             face: t.face,
                             size: t.size,
@@ -454,6 +509,8 @@ impl Renderer {
                         };
                         let b = text.buffer(&t.text, ty, Some(t.rect[2] + 0.5), s);
                         self.shaped.insert(k, (b, frame_no));
+                        stats.shaped = stats.shaped.saturating_add(1);
+                        stats.shape += started.elapsed();
                     }
                 }
             }
@@ -533,34 +590,14 @@ impl Renderer {
                     areas.chain(icon_areas),
                     &mut self.swash,
                     |req| {
-                        if req.id >= crate::images::FIRST_GLYPH_ID {
-                            let store = images.as_ref()?;
-                            let (url, radius) = store.glyph(req.id)?;
-                            let img = store.cut(
-                                &url,
-                                req.width as u32,
-                                req.height as u32,
-                                radius as f32,
-                            )?;
-                            return Some(RasterizedCustomGlyph {
-                                data: img.as_raw().clone(),
-                                content_type: ContentType::Color,
-                            });
-                        }
-                        let name = crate::icons::name(req.id)?;
-                        let size = req.width.min(req.height) as u32;
-                        let mask = crate::icons::mask(name, size)?;
-                        // A square mask in a request that isn't square: pad it.
-                        let (w, h) = (req.width as usize, req.height as usize);
-                        let mut data = vec![0u8; w * h];
-                        for y in 0..size as usize {
-                            data[y * w..y * w + size as usize]
-                                .copy_from_slice(&mask[y * size as usize..(y + 1) * size as usize]);
-                        }
-                        Some(RasterizedCustomGlyph {
-                            data,
-                            content_type: ContentType::Mask,
-                        })
+                        let started = std::time::Instant::now();
+                        let out = rasterize(images.as_ref(), req);
+                        stats.rasterized = stats.rasterized.saturating_add(1);
+                        stats.raster_bytes = stats
+                            .raster_bytes
+                            .saturating_add(out.as_ref().map_or(0, |g| g.data.len() as u32));
+                        stats.raster += started.elapsed();
+                        out
                     },
                 )
                 .map_err(|e| GpuError(format!("text: {e}")))?;
@@ -609,6 +646,7 @@ impl Renderer {
         }
         queue.submit(Some(encoder.finish()));
         self.atlas.trim();
+        self.stats = stats;
         Ok(())
     }
 }

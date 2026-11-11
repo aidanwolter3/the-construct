@@ -21,6 +21,7 @@ pub mod images;
 pub mod ime;
 pub mod interact;
 pub mod layout;
+pub mod perf;
 pub mod platform;
 pub mod scene;
 pub mod scroll;
