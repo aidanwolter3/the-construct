@@ -779,6 +779,10 @@ impl Loader for PodEngine {
 
     /// Tells the engine what's on screen, as its load keys (decision
     /// `scoped-data-events`).
+    fn foregrounded(&self) {
+        self.engine.app_foregrounded();
+    }
+
     fn visible(&self, shown: &[crate::interact::Shown]) {
         use crate::interact::Shown;
         let keys = shown

@@ -455,6 +455,11 @@ pub trait Loader: Send {
     /// the loader reloads changed data (the engine, decision
     /// `scoped-data-events`), it reloads this first. Must not block.
     fn visible(&self, _shown: &[Shown]) {}
+    /// The app came back to the foreground: where the loader keeps an
+    /// events stream (the engine), a stream that went down meanwhile
+    /// reconnects now and catches up on the changes it missed. Must not
+    /// block.
+    fn foregrounded(&self) {}
 }
 
 /// Something a frame draws ([`Loader::visible`]).

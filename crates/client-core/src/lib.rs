@@ -1367,6 +1367,9 @@ struct Inner {
     notification_listener: Mutex<Option<NotificationListener>>,
     /// Mark-reads the pod has not confirmed (sent on reconnect).
     pending_reads: Mutex<Vec<notify::ReadReq>>,
+    /// Set when the app returns to the foreground: the events thread
+    /// reconnects now if its stream is down or silent (see [`events`]).
+    stream_wake: Arc<std::sync::atomic::AtomicBool>,
     /// Where staged attachments are written (`<storage>/attachments`, or a
     /// temporary directory for an in-memory store).
     attachments_dir: PathBuf,
@@ -1731,6 +1734,7 @@ impl ConstructEngine {
             device_io: Mutex::new(()),
             notification_listener: Mutex::new(None),
             pending_reads: Mutex::new(Vec::new()),
+            stream_wake: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             attachments_dir,
         });
 
@@ -1781,10 +1785,19 @@ impl ConstructEngine {
 
         let events: Weak<Inner> = Arc::downgrade(&inner);
         let events_signal = Arc::clone(&inner.signal);
+        let events_wake = Arc::clone(&inner.stream_wake);
         let events_url = format!("{base}/v1/workspaces/{workspace_id}/events");
         let spawned = thread::Builder::new()
             .name("construct-engine-events".into())
-            .spawn(move || events::events_thread(events, events_signal, events_url, poll_interval));
+            .spawn(move || {
+                events::events_thread(
+                    events,
+                    events_signal,
+                    events_wake,
+                    events_url,
+                    poll_interval,
+                )
+            });
         if let Err(e) = spawned {
             eprintln!("[ConstructEngine] failed to spawn the events thread: {e}");
         }
@@ -1816,6 +1829,19 @@ impl ConstructEngine {
     /// unsupported intents are logged and ignored.
     pub fn dispatch(&self, intent_json: &str) {
         self.inner.dispatch(intent_json);
+    }
+
+    /// The app came back to the foreground (Android resumed it). Data
+    /// changes the pod sent while the events stream was down were lost: if
+    /// the stream is down (waiting to retry) it reconnects now, and if it
+    /// has been silent longer than the pod's keepalive (it died while the
+    /// app was suspended) it is reopened; the reconnect reloads what's on
+    /// screen and marks the rest stale. A live stream is left alone. Never
+    /// blocks.
+    pub fn app_foregrounded(&self) {
+        self.inner
+            .stream_wake
+            .store(true, std::sync::atomic::Ordering::SeqCst);
     }
 
     /// The current snapshot. Before the first fetch (and with no cached

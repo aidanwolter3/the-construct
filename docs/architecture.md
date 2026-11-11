@@ -146,7 +146,9 @@ screen's `data` path answers the same `{entities, queries}` shape (`protocol::Da
   trigger a refetch of that layout when a newer drawable version exists;
   `deleted` marks it gone; `data` events say the data changed (D50), and usually what changed: the engine reloads
   only the cached data that matches, what's on screen first, at most 4 requests at once, and marks the rest stale
-  until it's shown again (decision `scoped-data-events`); `notification` events feed the inbox (D52).
+  until it's shown again (decision `scoped-data-events`); `notification` events feed the inbox (D52). A
+  `data` event sent while the stream was down is lost, so each reconnect reloads what's on screen and marks the
+  rest stale, and returning to the foreground reconnects a stream that is down or went silent.
 - **Snapshots.** The UI observes immutable state snapshots (layout, entities, connectivity, pending count, sign-in
   state, unread counts) and dispatches intents back as JSON.
 
