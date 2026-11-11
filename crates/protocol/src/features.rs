@@ -306,6 +306,8 @@ fn node_features(node: &UiNode, out: &mut BTreeSet<&'static str>) {
             add(feature::ICONS_SHELL);
         } else if CART_ICONS.contains(&i) {
             add(feature::ICONS_CART);
+        } else if STAPLER_ICONS.contains(&i) {
+            add(feature::ICONS_STAPLER);
         } else if ICONS_9.contains(&i) {
             add(feature::ICONS_POST);
         } else if ICONS_6.contains(&i) {
@@ -318,6 +320,8 @@ fn node_features(node: &UiNode, out: &mut BTreeSet<&'static str>) {
 const SHELL_ICONS: [&str; 2] = ["settings", "notifications"];
 /// Icons of the `icons_cart` feature.
 const CART_ICONS: [&str; 1] = ["shopping_cart"];
+/// Icons of the `icons_stapler` feature.
+const STAPLER_ICONS: [&str; 1] = ["stapler"];
 /// Icons of the `todo_icons` feature.
 const TODO_ICONS: [&str; 4] = ["check", "check_box", "check_box_outline_blank", "delete"];
 /// Icons added in schema 6 (D44).
