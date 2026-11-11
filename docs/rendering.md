@@ -315,8 +315,9 @@ field's `max_length`. With a hardware keyboard: arrows, Home and End (Shift sele
 X and V. On Android the clipboard is `ClipboardManager` through the SDK.
 
 On Android the keyboard connects to the focused field (`ime.rs`), so its suggestions, autocorrect, swipe and voice
-typing, emoji and its own paste work. The bridge's `TextInputView` is an invisible, focusable view over the
-NativeActivity; its `InputConnection` (`TextInput`) forwards each call to `NativeText`'s natives, which run on
+typing, emoji and its own paste work. The bridge's `TextInputView` is an invisible view over the NativeActivity,
+focusable only while the keyboard is up (with the activity's `stateAlwaysHidden`, so returning to the app never opens
+the keyboard by itself); its `InputConnection` (`TextInput`) forwards each call to `NativeText`'s natives, which run on
 Android's main thread and answer at once from a copy of the field (`Connection`). The keyboard's edits change the
 copy and wake the window, which applies them to the session first (`Session::set_text_state`, cut to `max_length`);
 the engine's own changes (a tap, a handle, the edit bar, a hardware key) then reach the keyboard: a moved selection

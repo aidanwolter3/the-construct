@@ -41,13 +41,14 @@
         android:extractNativeLibs="true"
         android:theme="@style/Construct">
         <!-- The bridge (android/java): NativeActivity plus the callbacks it doesn't pass on (links, the photo
-             picker's result), each forwarded to Rust. singleTask: a link reaches this same activity (onNewIntent). -->
+             picker's result), each forwarded to Rust. singleTask: a link reaches this same activity (onNewIntent).
+             stateAlwaysHidden: only a tapped field opens the keyboard (Rust asks), never the window coming back. -->
         <activity
             android:name=".ConstructActivity"
             android:exported="true"
             android:launchMode="singleTask"
             android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout|keyboard|keyboardHidden|navigation|uiMode|density|fontScale|fontWeightAdjustment|colorMode|layoutDirection|locale"
-            android:windowSoftInputMode="adjustResize">
+            android:windowSoftInputMode="adjustResize|stateAlwaysHidden">
             <meta-data android:name="android.app.lib_name" android:value="construct_render" />
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
