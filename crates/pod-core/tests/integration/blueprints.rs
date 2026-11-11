@@ -352,6 +352,16 @@ async fn embedded_and_presented_layouts_are_checked() {
             "device_open_app",
         ),
         (
+            json!({"type": "core://Button", "label": "x", "on_click": {"intent": "action.device", "command": "open_settings"}}),
+            "open the layout with action.navigation.open",
+        ),
+        (
+            json!({"type": "core://Button", "label": "x", "on_click": {"intent": "action.sequence", "steps": [
+                {"intent": "action.device", "command": "refresh"},
+                {"intent": "action.device", "command": "open_inbox"}]}}),
+            "open_settings and open_inbox were retired",
+        ),
+        (
             json!({"type": "core://Button", "label": "x", "on_click": {"intent": "action.confirm",
                 "title": " ", "confirm_label": "Leave", "then": {"intent": "action.device", "command": "leave_pod"}}}),
             "needs a title and a confirm_label",

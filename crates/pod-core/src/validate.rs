@@ -169,7 +169,9 @@ fn finish_structure(node: UiNode) -> Result<UiNode, String> {
                 let c = command.as_str();
                 // Retired (decision `layouts-not-apps`): old versions still
                 // hold them; a new write is refused for the removed feature.
-                if protocol::intent::RETIRED_DEVICE_COMMANDS.contains(&c) {
+                if protocol::intent::RETIRED_DEVICE_COMMANDS.contains(&c)
+                    || protocol::intent::RETIRED_SHELL_COMMANDS.contains(&c)
+                {
                     continue;
                 }
                 if !protocol::DEVICE_COMMANDS.contains(&c) {
@@ -932,6 +934,20 @@ pub fn custom_layout(
         return Err(LayoutError::new(
             &at,
             format!("'{f}' was removed from the layout vocabulary{hint}"),
+        ));
+    }
+    // Commands that only opened a layout: a new write says it in general.
+    if let Some(at) = find_pointer(doc, "", &|k, v| {
+        k == "command"
+            && v.as_str()
+                .is_some_and(|c| protocol::intent::RETIRED_SHELL_COMMANDS.contains(&c))
+    }) {
+        return Err(LayoutError::new(
+            &at,
+            "action.device open_settings and open_inbox were retired; open the layout with \
+             action.navigation.open {\"layout\": \"settings\", \"presentation\": \"Panel\"} \
+             (the inbox: {\"layout\": \"inbox\", \"presentation\": \"Sheet\"})"
+                .to_string(),
         ));
     }
     let caps = Caps::new(sources);
