@@ -59,7 +59,7 @@ subset the font with fontTools' `pyftsubset` and keep its license next to it.
 
 What agents and tests address: a node's `tag` (bound, e.g. `task_$item.id`); `<field>=<value>` for a
 `core://ChoiceChips` option or a `core://Dock` tab (`filter=started`, `filter=` for the empty value);
-`field:<name>` for a `core://TextField`; `list:<query_key>`, `chips:<field>`, `layout:<id>`; otherwise the node's
+`field:<name>` for a `core://TextField` (`clear:<name>` its x, `send:<name>` its Send); `list:<query_key>`, `chips:<field>`, `layout:<id>`; otherwise the node's
 path from the root (`root/0/2/i3/0`, `i3` being a list's fourth item). Bounds are logical points.
 
 ## Screen readers
@@ -108,9 +108,15 @@ Presented layouts are drawn as the Compose UI drew them: a sheet (85% of the hei
 tapped; a screen a sheet or panel opens stays inside it. A sheet dragged by its handle strip, or a panel dragged
 sideways toward its edge, follows the finger and closes past a quarter of its size or on a flick faster than
 500 points per second, else settles back. In a window, layouts and screens slide in and out over
-280 ms (`FastOutSlowInEasing`); a fling follows Android's `OverScroller` spline from the release velocity, estimated
-over the last 100 ms with Android's impulse strategy (`VelocityTracker`'s and Compose's default), which weighs the
-speed at release over the average. A drag's scrolling is applied once per frame, and the GPU renderer keeps shaped text between frames. `action.device` `show_versions` fills `local://versions` and `local:versions` from
+280 ms (`FastOutSlowInEasing`). Scrolling's physics are `scroll.rs` (decision `scroll-physics`), which reads no
+clock, so gestures replay in its unit tests: the release velocity is a least-squares fit over the last 100 ms (at
+least 3 samples; none after a 40 ms pause), counting moves that arrive in one burst as one sample, since Android
+delivers the moves queued during a frame together; a fling follows Android's `OverScroller` curve (Flutter's closed
+form, starting at the release speed), 50 to 8000 points per second; a finger landing on a fling faster than 50 points
+per second stops it without tapping. Past an end, a view whose content scrolls stretches as Android 12's do: a pull
+stretches it (pushing back undoes that first), letting go springs it back, and a fling that meets the end bumps it;
+the content draws scaled along the axis from that end (`stretch:<id>` among the scroll offsets, up to about 10%). A mouse wheel notch glides 64 points over about
+120 ms; trackpad deltas apply as they come (macOS adds its own momentum). A drag's scrolling is applied once per frame, and the GPU renderer keeps shaped text between frames. `action.device` `show_versions` fills `local://versions` and `local:versions` from
 `/v1/apps/<id>/versions`; `pin_version` draws that version (`/v1/apps/<id>/versions/<n>`'s layout over the
 layout's latest data) wherever the layout shows, home included, until `follow_latest`, and new versions published
 meanwhile don't replace it; the engine keeps pins across restarts (`set_pinned_version`) and forgets them on Leave
@@ -260,8 +266,9 @@ it (a refusal takes it out). A loader without an outbox (`PodClient`) POSTs on a
 `open_notification` marks it read (`POST /v1/notifications/read`), closes the inbox's sheet or panel and opens the
 notification's layout and `target_uri` screen; `mark_read` and `mark_all_read` mark them here and on the pod;
 `load_older_notifications` adds the next page under the newer ones (`local://inbox` keeps `has_older` and
-`next_before`; older pages stay when the inbox is listed again). `open_settings` and `open_inbox` present the
-`settings` layout as a panel and `inbox` as a sheet. `toggle_channel` flips the switch at once and the engine tells
+`next_before`; older pages stay when the inbox is listed again). `open_settings` and `open_inbox`, retired from new
+layouts, still present the `settings` layout as a panel and `inbox` as a sheet for versions written before.
+`toggle_channel` flips the switch at once and the engine tells
 the pod (registering the device first), flipping it back when refused. `hide_layout`, `unhide_layout` and
 `delete_layout` go to the pod through the engine and load its list of layouts again; a deleted layout leaves the
 stack and its pin is forgotten; home is never hidden or deleted. `set_server` hands the platform another of

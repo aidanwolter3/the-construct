@@ -11,7 +11,7 @@ and `X-Construct-Device` (a client-made device id, used by notifications).
 
 | Call | Answer |
 |---|---|
-| `POST /v1/pods/open {"token": "cpod_…"}` *public* | `{session_token}`; 401 `pod_not_found`. 10 tries a minute per client address. |
+| `POST /v1/pods/open {"token": "cpod_…"}` *public* | `{session_token}`; 401 `pod_not_found`. 10 tries a minute per client address (IPv4 address or IPv6 /64), 50 per IPv6 /48. |
 | `POST /v1/pods/temporary` *public* | `{session_token, expires_at, pod}`; 404 when disabled, 429, 503 `temporary_pods_full` or `low_disk_space`. |
 | `GET /v1/auth/sign-ins` | Every upstream sign-in on the pod, and the ones it offers. |
 | `POST /v1/auth/logout` | Deletes the session and its sign-ins. |
@@ -99,7 +99,8 @@ How a create carries attachments: [posting.md](posting.md).
 ## Claude (MCP)
 
 `POST /v1/mcp` is the pod's MCP endpoint, with OAuth discovery at `/.well-known/oauth-protected-resource` and
-`/.well-known/oauth-authorization-server`, and `/oauth/register`, `/oauth/authorize` and `/oauth/token`. The
+`/.well-known/oauth-authorization-server`, and `/oauth/register` (20 an hour per client address, 40 per IPv6 /48;
+503 `temporarily_unavailable` when the data volume is nearly full), `/oauth/authorize` and `/oauth/token`. The
 credential it issues reaches only `/v1/mcp`. See [custom-apps.md](custom-apps.md#building-apps-with-claude).
 
 ## Development and test routes

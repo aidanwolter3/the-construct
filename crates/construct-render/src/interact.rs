@@ -29,6 +29,17 @@ use crate::style::Rgba;
 mod media;
 pub use media::{StageDone, Staged, attachment_uri, pick_files_here};
 
+/// A scrolling view under a point ([`Session::scroll_view_at`]).
+#[derive(Debug, Clone, PartialEq)]
+pub struct ScrollView {
+    pub id: String,
+    /// Points scrolled, of `0..=max`.
+    pub offset: f32,
+    pub max: f32,
+    /// Its height on screen (points).
+    pub height: f32,
+}
+
 /// What a tap or scroll aims at.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Target {
@@ -2496,6 +2507,57 @@ impl Session {
         }
     }
 
+    /// The scrolling view at a point: its id, where it is scrolled to, how
+    /// far it can scroll, and how tall it is (for the window's drags, flings
+    /// and stretches, `scroll.rs`).
+    pub fn scroll_view_at(&mut self, x: f32, y: f32) -> Option<ScrollView> {
+        let scene = self.scene().ok()?;
+        let (id, height) = scene
+            .semantics
+            .iter()
+            .rev()
+            .filter(|n| n.node_type == "core://Scroll")
+            .find(|n| {
+                let [bx, by, bw, bh] = n.bounds;
+                x >= bx && x < bx + bw && y >= by && y < by + bh
+            })
+            .map(|n| (n.id.clone(), n.bounds[3]))?;
+        let top = &self.stack[self.top_index()];
+        let max = top
+            .laid
+            .as_ref()
+            .and_then(|(l, _)| l.scroll_max.get(&id).copied())
+            .unwrap_or(0.0);
+        let offset = top.scroll.get(&id).copied().unwrap_or(0.0).clamp(0.0, max);
+        Some(ScrollView {
+            id,
+            offset,
+            max,
+            height,
+        })
+    }
+
+    /// Places a scrolling view of the top screen at `offset`.
+    pub fn set_scroll(&mut self, id: &str, offset: f32) {
+        let ti = self.top_index();
+        self.stack[ti].scroll.insert(id.to_owned(), offset);
+        self.scene = None;
+    }
+
+    /// Draws a scrolling view of the top screen `stretch` longer along its
+    /// axis (`scroll::Stretch::scale`; 0 for not at all).
+    pub fn set_stretch(&mut self, id: &str, stretch: f32) {
+        let ti = self.top_index();
+        let scroll = &mut self.stack[ti].scroll;
+        let key = format!("stretch:{id}");
+        if stretch == 0.0 {
+            scroll.remove(&key);
+        } else {
+            scroll.insert(key, stretch);
+        }
+        self.scene = None;
+    }
+
     /// Scrolls the scrolling view at or around `target` by `dy` points.
     pub fn scroll_by(&mut self, target: Option<&Target>, dy: f32) -> Result<Outcome, String> {
         let scene = self.scene().map_err(|e| e.to_string())?;
@@ -2652,9 +2714,17 @@ impl Session {
                 out.push(Effect::Nothing);
             }
             "form.clear" => {
-                // The session's own step after a field's Send.
+                // The session's own step after a field's Send, and a field's
+                // clear button (`focus`: typing goes on in the emptied field).
                 if let Some(f) = intent["field"].as_str() {
                     self.form.remove(f);
+                    if intent["focus"] == true {
+                        self.focused = Some(f.to_owned());
+                        self.edit = None;
+                        out.push(Effect::Focused {
+                            field: f.to_owned(),
+                        });
+                    }
                 }
             }
             "action.mutation.optimistic" => self.optimistic(intent, out),
@@ -2768,6 +2838,8 @@ impl Session {
                         out.push(Effect::Device { command });
                         return;
                     }
+                    // Retired (`RETIRED_SHELL_COMMANDS`): kept so layout
+                    // versions written before still open their layout.
                     "open_settings" | "open_inbox" => {
                         let (layout, presentation) = if command == "open_settings" {
                             ("settings", "Panel")

@@ -26,23 +26,27 @@ pub fn ld_json_blocks(html: &str) -> Vec<&str> {
 }
 
 /// Remove `<tag ...>...</tag>` elements (case-insensitive) whose content is
-/// not text: scripts, styles, templates.
+/// not text: scripts, styles, templates. One pass per tag, so the work grows
+/// with the page's length, not its length times its `<` count: pages come
+/// from any public host.
 fn drop_elements(html: &str, tags: &[&str]) -> String {
     let mut s = html.to_owned();
     for tag in tags {
         let open = format!("<{tag}");
         let close = format!("</{tag}");
-        loop {
-            let lower = s.to_ascii_lowercase();
-            let Some(start) = lower.find(&open) else {
-                break;
-            };
+        // ASCII lowercasing keeps every byte in place, so offsets in `lower`
+        // are offsets in `s`.
+        let lower = s.to_ascii_lowercase();
+        let mut out = String::with_capacity(s.len());
+        // `s[..copied]` is handled; the search goes on from `at`.
+        let (mut copied, mut at) = (0, 0);
+        while let Some(i) = lower[at..].find(&open) {
+            let start = at + i;
             // `<s` must not match `<script>` when dropping `s`: the next
             // byte ends the name.
             let next = lower.as_bytes().get(start + open.len()).copied();
             if !matches!(next, Some(b'>' | b' ' | b'\t' | b'\n' | b'\r' | b'/')) {
-                // Not this element: blank the `<` so the search moves on.
-                s.replace_range(start..start + 1, " ");
+                at = start + 1;
                 continue;
             }
             let end = match lower[start..].find(&close) {
@@ -52,8 +56,12 @@ fn drop_elements(html: &str, tags: &[&str]) -> String {
                 }
                 None => lower.len(),
             };
-            s.replace_range(start..end, " ");
+            out.push_str(&s[copied..start]);
+            out.push(' ');
+            (copied, at) = (end, end);
         }
+        out.push_str(&s[copied..]);
+        s = out;
     }
     s
 }
@@ -143,7 +151,9 @@ pub fn decode_entities(s: &str) -> String {
     while let Some(i) = rest.find('&') {
         out.push_str(&rest[..i]);
         let after = &rest[i + 1..];
-        let end = after.find(';').filter(|e| *e <= 10);
+        // Only look a few bytes ahead (the longest entity is `#x10FFFF`), so
+        // a long run of `&` without `;` stays linear.
+        let end = after.bytes().take(11).position(|b| b == b';');
         let decoded = end.and_then(|e| {
             let name = &after[..e];
             let c = if let Some(num) = name.strip_prefix('#') {
@@ -349,5 +359,36 @@ mod tests {
             "a 'b' &bogus; &"
         );
         assert_eq!(truncate("héllo", 2), "hé…");
+    }
+
+    #[test]
+    fn a_tag_that_only_starts_like_a_dropped_one_stays() {
+        assert_eq!(
+            to_text("<HEAD><title>t</title></head><header>Top</header><svgx>a</svgx>"),
+            "Top\na"
+        );
+    }
+
+    /// A page of near-miss tags or bare `&`s, as any public host can serve,
+    /// is read in time that grows with its length. Each took minutes when
+    /// every `<svg`-like start re-read the whole page.
+    #[test]
+    fn hostile_pages_are_read_in_linear_time() {
+        for page in [
+            "<svgx".repeat(400_000),
+            "<head".repeat(400_000),
+            "&".repeat(2_000_000),
+            "<script>a</script>".repeat(100_000),
+        ] {
+            let t = std::time::Instant::now();
+            let _ = to_text(&page);
+            let _ = decode_entities(&page);
+            assert!(
+                t.elapsed() < std::time::Duration::from_secs(5),
+                "{} bytes took {:?}",
+                page.len(),
+                t.elapsed()
+            );
+        }
     }
 }

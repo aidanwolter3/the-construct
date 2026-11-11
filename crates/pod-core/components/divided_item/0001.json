@@ -1,0 +1,93 @@
+{
+  "note": "First version: the list item with a divider under it that log, task and settings layouts repeat",
+  "component": {
+    "doc": "A list item set off from the next: its children in a column with a divider under them (a log entry, a task, a setting).",
+    "params": [
+      {
+        "name": "inset",
+        "type": "number",
+        "doc": "Side padding of the divider; 0 runs it edge to edge.",
+        "default": 0
+      }
+    ],
+    "children": true,
+    "template": {
+      "type": "core://Column",
+      "children": [
+        {
+          "type": "core://Children"
+        },
+        {
+          "type": "core://IfArg",
+          "arg": "inset",
+          "then": {
+            "type": "core://Column",
+            "padding_h_dp": "$arg.inset",
+            "children": [
+              {
+                "type": "core://Divider"
+              }
+            ]
+          },
+          "else": {
+            "type": "core://Divider"
+          }
+        }
+      ]
+    },
+    "examples": [
+      {
+        "args": {},
+        "children": [
+          {
+            "type": "core://Row",
+            "padding_v_dp": 12,
+            "spacing_dp": 12,
+            "children": [
+              {
+                "type": "core://Text",
+                "value_expr": "$item.date",
+                "style": "Caption"
+              },
+              {
+                "type": "core://Text",
+                "value_expr": "$item.title",
+                "style": "Body"
+              }
+            ]
+          }
+        ],
+        "note": "a timeline entry, the divider edge to edge"
+      },
+      {
+        "args": {
+          "inset": 16
+        },
+        "children": [
+          {
+            "type": "core://Row",
+            "padding_h_dp": 16,
+            "padding_v_dp": 10,
+            "spacing_dp": 12,
+            "children": [
+              {
+                "type": "core://Text",
+                "value_expr": "$item.title",
+                "style": "Label"
+              },
+              {
+                "type": "core://Spacer"
+              },
+              {
+                "type": "core://Text",
+                "value_expr": "$item.status_text",
+                "style": "Secondary"
+              }
+            ]
+          }
+        ],
+        "note": "a status row, the divider inset to the row's padding"
+      }
+    ]
+  }
+}

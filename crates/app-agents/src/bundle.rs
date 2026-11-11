@@ -36,7 +36,7 @@ pub fn run_look(state: &str, end_reason: &str, outcome: &str) -> (&'static str, 
         state::NEEDS_YOU => ("Needs you", ORANGE),
         state::ENDED => match (outcome, end_reason) {
             ("done", _) => ("Done", GREEN),
-            ("review", _) => ("Needs review", PURPLE),
+            ("review", _) => (NEEDS_REVIEW, PURPLE),
             ("blocked", _) => ("Blocked", RED),
             ("failed", _) => ("Failed", RED),
             (_, "stopped") => ("Stopped", GRAY),
@@ -45,10 +45,33 @@ pub fn run_look(state: &str, end_reason: &str, outcome: &str) -> (&'static str, 
             (_, "timed_out") => ("Timed out", RED),
             (_, "expired") => ("Expired", GRAY),
             // Ended by itself without a report: a person should look.
-            _ => ("Needs review", PURPLE),
+            _ => (NEEDS_REVIEW, PURPLE),
         },
         "" => ("", GRAY),
         _ => ("Unknown", GRAY),
+    }
+}
+
+/// Whether a run in this look waits for a person to review it: the ones
+/// "Mark reviewed" applies to.
+pub fn needs_review(state: &str, end_reason: &str, outcome: &str) -> bool {
+    run_look(state, end_reason, outcome).0 == NEEDS_REVIEW
+}
+
+pub const NEEDS_REVIEW: &str = "Needs review";
+
+/// A run's word and colour as this pod shows it: [`run_look`], with a run
+/// that needs review and was marked reviewed here reading Reviewed.
+pub fn shown_look(
+    state: &str,
+    end_reason: &str,
+    outcome: &str,
+    reviewed: bool,
+) -> (&'static str, &'static str) {
+    if reviewed && needs_review(state, end_reason, outcome) {
+        ("Reviewed", GREEN)
+    } else {
+        run_look(state, end_reason, outcome)
     }
 }
 
@@ -155,9 +178,12 @@ pub fn status(st: Option<&(State, Health)>, host: &str, now_ms: i64) -> EntityRe
     }))
 }
 
-/// One run's entity (`agents://sessions/<run id>`).
-pub fn session(r: &Run, now_ms: i64) -> EntityRecord {
-    let (status_text, color) = run_look(&r.state, &r.end_reason, &r.outcome);
+/// One run's entity (`agents://sessions/<run id>`). `reviewed`: marked
+/// reviewed on this pod.
+pub fn session(r: &Run, reviewed: bool, now_ms: i64) -> EntityRecord {
+    let waits = needs_review(&r.state, &r.end_reason, &r.outcome);
+    let reviewed = reviewed && waits;
+    let (status_text, color) = shown_look(&r.state, &r.end_reason, &r.outcome, reviewed);
     let active = r.is_active();
     let elapsed = match (r.started_at, r.ended_at) {
         (s, _) if s <= 0 => String::new(),
@@ -175,6 +201,8 @@ pub fn session(r: &Run, now_ms: i64) -> EntityRecord {
         "status_color": color,
         "active": active,
         "needs_you": needs_you,
+        "needs_review": waits && !reviewed,
+        "reviewed": reviewed,
         "needs_you_reason": if needs_you { r.needs_you_reason.as_str() } else { "" },
         "needs_you_label": if needs_you { needs_you_label(&r.needs_you_reason) } else { "" },
         "needs_you_text": if needs_you { r.needs_you_text.as_str() } else { "" },
@@ -222,7 +250,8 @@ pub fn sessions(st: Option<&(State, Health)>, host: &str, now_ms: i64) -> DataBu
     let mut order = Vec::new();
     for r in list {
         let uri = format!("agents://sessions/{}", r.id);
-        b.entities.insert(uri.clone(), session(r, now_ms));
+        let reviewed = st.is_some_and(|(s, _)| s.reviewed.contains(&r.id));
+        b.entities.insert(uri.clone(), session(r, reviewed, now_ms));
         order.push(uri);
     }
     b.queries.insert(crate::SESSIONS_QUERY.into(), order);
@@ -330,7 +359,9 @@ pub fn schedules(st: Option<&(State, Health)>, now_ms: i64, tz: &TimeZone) -> Da
         };
         let last = sc.last_run.clone().unwrap_or_default();
         let run = st.and_then(|(s, _)| s.runs.get(&last.run_id));
-        let (last_text, last_color) = run_look(&last.state, &last.end_reason, &last.outcome);
+        let reviewed = st.is_some_and(|(s, _)| s.reviewed.contains(&last.run_id));
+        let (last_text, last_color) =
+            shown_look(&last.state, &last.end_reason, &last.outcome, reviewed);
         let last_summary = if !last.outcome_summary.is_empty() {
             last.outcome_summary.clone()
         } else {
@@ -378,9 +409,13 @@ pub fn timeline(
     now_ms: i64,
 ) -> DataBundle {
     let mut b = DataBundle::default();
-    if let Some(r) = st.and_then(|(s, _)| s.runs.get(id)) {
-        b.entities
-            .insert(format!("agents://sessions/{id}"), session(r, now_ms));
+    if let Some((s, _)) = st
+        && let Some(r) = s.runs.get(id)
+    {
+        b.entities.insert(
+            format!("agents://sessions/{id}"),
+            session(r, s.reviewed.contains(id), now_ms),
+        );
     }
     let entries: Vec<&Value> = log
         .and_then(|l| l.get("entries"))
@@ -519,6 +554,45 @@ mod tests {
                 "{state} {end} {outcome}"
             );
         }
+    }
+
+    #[test]
+    fn a_run_marked_reviewed_reads_reviewed() {
+        let mut s = st();
+        for (id, outcome, end) in [
+            ("ended_old", "review", "reported"),
+            ("ended_new", "", "lost"),
+        ] {
+            let r = s.0.runs.get_mut(id).unwrap();
+            r.outcome = outcome.into();
+            r.end_reason = end.into();
+        }
+        let look = |s: &(State, Health), id: &str| {
+            let b = sessions(Some(s), "r", 0);
+            let e = b.entities[&format!("agents://sessions/{id}")].clone();
+            (
+                e.get_str("status_text").unwrap().to_owned(),
+                e.get("needs_review").cloned(),
+                e.get("reviewed").cloned(),
+            )
+        };
+        assert_eq!(
+            look(&s, "ended_old"),
+            ("Needs review".into(), Some(json!(true)), Some(json!(false)))
+        );
+        s.0.reviewed
+            .extend(["ended_old".into(), "ended_new".into(), "work".into()]);
+        assert_eq!(
+            look(&s, "ended_old"),
+            ("Reviewed".into(), Some(json!(false)), Some(json!(true)))
+        );
+        // Only a run that needs review reads Reviewed.
+        assert_eq!(
+            look(&s, "ended_new"),
+            ("Lost".into(), Some(json!(false)), Some(json!(false)))
+        );
+        assert_eq!(look(&s, "work").0, "Working");
+        assert!(shown_look("ended", "exited", "", true).0 == "Reviewed");
     }
 
     #[test]

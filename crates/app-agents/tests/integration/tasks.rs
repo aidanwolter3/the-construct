@@ -429,3 +429,68 @@ async fn reopen_resumes_the_last_run() {
     .await;
     assert_eq!(s, StatusCode::NOT_FOUND);
 }
+
+/// Run `id` as the layout sees it (the run screen's data path).
+async fn shown(pod: &Pod, id: &str) -> Value {
+    let path = format!("/v1/agents/sessions/timeline?id={id}");
+    let (s, b) = call(pod, "GET", &path, Some("phone"), None).await;
+    assert_eq!(s, StatusCode::OK, "{b}");
+    b["entities"][format!("agents://sessions/{id}")].clone()
+}
+
+async fn review(pod: &Pod, run_id: &str) -> (StatusCode, Value) {
+    call(
+        pod,
+        "POST",
+        "/v1/agents/sessions/review",
+        Some("phone"),
+        Some(json!({"run_id": run_id})),
+    )
+    .await
+}
+
+#[tokio::test]
+async fn marking_a_run_reviewed_sets_its_row_done() {
+    let (pod, fake, _) = signed_in().await;
+    linked(&pod, json!(["todo", "queued"])).await;
+    fake.next_runs.lock().unwrap().push_back("run_rv".into());
+    let id = add(
+        &pod,
+        json!({"title": "Tidy the footer", "status": "queued"}),
+    )
+    .await;
+    assert_eq!(started(&pod, &id).await, "run_rv");
+    fake.run(
+        "run_rv",
+        json!({"task_id": id, "state": "ended", "end_reason": "reported",
+            "outcome": {"status": "review", "summary": "Ready for a look."}}),
+    );
+    status_is(&pod, &id, "review").await;
+    let before = shown(&pod, "run_rv").await;
+    assert_eq!(before["status_text"], "Needs review");
+    assert_eq!(before["needs_review"], true);
+
+    let (s, b) = review(&pod, "run_rv").await;
+    assert_eq!(s, StatusCode::OK, "{b}");
+    assert_eq!(b["task_done"], true);
+    assert_eq!(field(&pod, &id, "status"), "done");
+    let after = shown(&pod, "run_rv").await;
+    assert_eq!(after["status_text"], "Reviewed");
+    assert_eq!(after["needs_review"], false);
+    assert_eq!(after["reviewed"], true);
+
+    // Again: still fine, and the row (no longer in review) is left alone.
+    let (s, b) = review(&pod, "run_rv").await;
+    assert_eq!(s, StatusCode::OK, "{b}");
+    assert_eq!(b["task_done"], false);
+    // A run that doesn't need review, and one the runner doesn't list.
+    let (s, b) = review(&pod, "run_old").await;
+    assert_eq!(s, StatusCode::CONFLICT, "{b}");
+    assert_eq!(b["error"], "not_needing_review");
+    let (s, _) = review(&pod, "run_nowhere").await;
+    assert_eq!(s, StatusCode::NOT_FOUND);
+    // The runner was told nothing: its record stays as it was.
+    assert!(fake.sent("stop_run").is_empty());
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert_eq!(field(&pod, &id, "status"), "done");
+}

@@ -53,7 +53,7 @@ settings are logged at startup.
 | `CONSTRUCT_TEMP_POD_UPLOAD_QUOTA_BYTES` | 25 MiB | The same for a temporary pod. |
 | `CONSTRUCT_POD_STORAGE_QUOTA_BYTES` | 768 MiB | An admin pod's whole database: uploads, layouts and their versions, components, collections. Past it, writes get 507 `pod_storage_full`. |
 | `CONSTRUCT_TEMP_POD_STORAGE_QUOTA_BYTES` | 16 MiB | The same for a temporary pod (below its upload quota, so this one binds first). |
-| `CONSTRUCT_MIN_FREE_DISK_BYTES` | 100 MiB | Below this free space, uploads and new temporary pods are refused, so other writes keep working. |
+| `CONSTRUCT_MIN_FREE_DISK_BYTES` | 100 MiB | Below this free space, uploads, new temporary pods and OAuth client registrations are refused, so other writes keep working. |
 
 ### Pixelfed
 

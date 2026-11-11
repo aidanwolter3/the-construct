@@ -111,7 +111,7 @@ of the semantic tree, so a target not on screen is searched for along each chip 
 screen's largest scrolling view; a chip past its row's edge is scrolled sideways into view.
 
 Common ids: a node's own `tag` (`like:<post uri>`, `comment:<post uri>`, `carousel:<post uri>`), `field:<name>`,
-`send:<name>`, `<field>=<value>` for a chip or dock tab, `list:<query key>`, `layout:<id>`, `page:<carousel>`, and
+`send:<name>`, `clear:<name>`, `<field>=<value>` for a chip or dock tab, `list:<query key>`, `layout:<id>`, `page:<carousel>`, and
 `confirm:ok` / `confirm:cancel` for an `action.confirm` dialog's buttons.
 
 Examples:

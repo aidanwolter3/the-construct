@@ -57,11 +57,13 @@ Decision:
   that layout and then the notification's `target_uri` in it.
 - **Menu and inbox are layouts.** Two blueprints of `app-shell`: `settings` (connection, sign-ins, notification
   channels, the pod's layouts with their versions, the server, Leave pod) and `inbox` (the notifications, newest first,
-  by day). They read only device data. Any layout opens them with `action.navigation.open` (`Panel` and `Sheet`);
-  `action.device` `open_settings` and `open_inbox` do the same. The native menu, bell, inbox and Settings panels are
-  gone. The bundled sign-in and rescue layouts stay in the client.
+  by day). They read only device data. Any layout opens them with `action.navigation.open` (`Panel` and `Sheet`),
+  as it opens any layout. The native menu, bell, inbox and Settings panels are gone. The bundled sign-in and rescue layouts stay in the client.
 - **Retired** (moved to `features/removed/`): `core://Dock` (`dock`), `core://Drawer` (`drawer`), `core://AppFrame`
   (`app_frame`). `action.device` `open_app` and `show` are no longer accepted in new layouts and do nothing.
+  Later (2026-11-11) `action.device` `open_settings` and `open_inbox`, which only presented the
+  `settings` and `inbox` layouts, are refused in new writes too, pointing at `action.navigation.open`; versions
+  that hold them still parse, are served as before, and clients still open their layout.
 - **Migration `layouts_not_apps`** (pod-core, named): home's feeds become the union of every custom layout's feeds,
   and a home whose latest version uses a retired node gets a new version: a plain list of the pod's layouts, each
   pushing its layout, with Settings and the inbox at the top. Old versions stay in the history.
