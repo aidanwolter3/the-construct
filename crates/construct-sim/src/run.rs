@@ -427,7 +427,18 @@ impl Runner {
                 None => self.search(target)?,
             };
             let scene = self.scene()?;
-            let (_, y) = center(&node);
+            let (x, y) = center(&node);
+            // Inside a chip row: scrolled sideways into it first.
+            if let Some(row) = slide_ancestor(&scene, &node) {
+                let [rx, _, rw, _] = row.bounds;
+                if x < rx || x >= rx + rw {
+                    let at = self.session.slide_offset(&row.id);
+                    if !self.session.drag_slide(&row.id, at + x - (rx + rw / 2.0)) {
+                        return Err(format!("'{target}' is off screen and can't be scrolled to"));
+                    }
+                    continue;
+                }
+            }
             // Inside its scrolling view (else the screen).
             let view = scroll_ancestor(&scene, &node);
             let [_, vy, _, vh] = view.as_ref().map(|v| v.bounds).unwrap_or([
@@ -463,6 +474,27 @@ impl Runner {
         let first = self.scene()?;
         let missing =
             |scene: &Scene| format!("nothing matches '{target}'; texts: {}", texts(scene));
+        // Along each chip row on screen first.
+        let rows: Vec<SemanticNode> = first
+            .semantics
+            .iter()
+            .filter(|n| n.node_type == "core://ChoiceChips")
+            .cloned()
+            .collect();
+        for row in rows {
+            let step = (row.bounds[2] * 0.6).max(40.0);
+            for _ in 0..100 {
+                let at = self.session.slide_offset(&row.id);
+                if !self.session.drag_slide(&row.id, at + step) {
+                    break;
+                }
+                if let Some(n) = find(&self.scene()?, target) {
+                    return Ok(n);
+                }
+            }
+            self.session.drag_slide(&row.id, 0.0);
+        }
+        let first = self.scene()?;
         let Some(view) = first
             .semantics
             .iter()
@@ -531,6 +563,14 @@ impl Runner {
         let (x, y) = self.drag_point(target)?;
         match dir {
             Direction::Left | Direction::Right => {
+                if let Some(id) = self.session.slide_at(x, y) {
+                    // A chip row scrolls by most of its width.
+                    let at = self.session.slide_offset(&id);
+                    let step = self.session.viewport.width * 0.6;
+                    let dx = if dir == Direction::Left { step } else { -step };
+                    let moved = self.session.drag_slide(&id, at + dx);
+                    return Ok((if moved { "scrolled" } else { "at its end" }.into(), None));
+                }
                 if let Some(id) = self.session.pager_at(x, y) {
                     let at = self.session.pager_offset(&id);
                     let (dx, v) = if dir == Direction::Left {
@@ -699,6 +739,20 @@ fn scroll_ancestor(scene: &Scene, node: &SemanticNode) -> Option<SemanticNode> {
     while let Some(i) = at {
         let n = &scene.semantics[i];
         if n.node_type == "core://Scroll" {
+            return Some(n.clone());
+        }
+        at = n.parent;
+    }
+    None
+}
+
+/// The chip row `node` is in, if any.
+fn slide_ancestor(scene: &Scene, node: &SemanticNode) -> Option<SemanticNode> {
+    let index = scene.semantics.iter().position(|n| n.id == node.id)?;
+    let mut at = scene.semantics[index].parent;
+    while let Some(i) = at {
+        let n = &scene.semantics[i];
+        if n.node_type == "core://ChoiceChips" {
             return Some(n.clone());
         }
         at = n.parent;

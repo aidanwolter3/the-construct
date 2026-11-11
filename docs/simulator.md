@@ -79,7 +79,7 @@ word is the command and the rest of the entry, as written, its argument: `click 
 | `click <target>` | Taps the node's centre, scrolling it into view first. |
 | `press <target>` / `release` | Holds a finger down on the node's centre (a `core://Tappable` there is drawn pressed) until `release` or a `click`. |
 | `type <target> <text>` | Replaces a text field's text (`field:<name>`, `tag:textfield:<name>`, its placeholder, or the field's name). |
-| `swipe-left <target>` / `swipe-right <target>` | Pages a carousel, else runs the `core://Gesture`'s `on_swipe_left` / `on_swipe_right` there. |
+| `swipe-left <target>` / `swipe-right <target>` | Scrolls a chip row (`tag:chips:<field>`) by 60% of the screen's width, else pages a carousel, else runs the `core://Gesture`'s `on_swipe_left` / `on_swipe_right` there. |
 | `swipe-down <target>` / `swipe-up <target>` | A flick: closes a sheet from its handle (`tag:sheet-handle`), else runs the gesture's `on_swipe_down` / `on_swipe_up`. |
 | `drag-down <points> <target>` | Drags a sheet's handle down and lets go without a fling (it closes past a quarter of its height), else scrolls the view there up by that much. |
 | `scroll-to <target>` | Scrolls until the node is on screen. |
@@ -107,7 +107,8 @@ A `<target>` is `tag:<id>`, a single word, or `"quoted text"`. `tag:<id>` is a s
 ([rendering.md](rendering.md#semantic-ids)): exact, else the first id containing it; the old Compose
 simulator's tags `textfield:<f>` and `textfield-send:<f>` stand for `field:<f>` and `send:<f>`. Text is matched exactly (tappable
 nodes first), then as a substring, against texts and content descriptions. The engine leaves what is off screen out
-of the semantic tree, so a target not on screen is searched for by scrolling the screen's largest scrolling view.
+of the semantic tree, so a target not on screen is searched for along each chip row on screen, then by scrolling the
+screen's largest scrolling view; a chip past its row's edge is scrolled sideways into view.
 
 Common ids: a node's own `tag` (`like:<post uri>`, `comment:<post uri>`, `carousel:<post uri>`), `field:<name>`,
 `send:<name>`, `<field>=<value>` for a chip or dock tab, `list:<query key>`, `layout:<id>`, `page:<carousel>`, and

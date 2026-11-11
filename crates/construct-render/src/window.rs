@@ -143,6 +143,10 @@ struct Drag {
     /// the drag pages it.
     pager: Option<(String, f32)>,
     paging: bool,
+    /// The chip row under its start and where it was, and whether the drag
+    /// scrolls it.
+    slide: Option<(String, f32)>,
+    sliding: bool,
     /// Scrolling not applied yet: applied once per frame, in `draw`.
     pending: f32,
     /// When the finger went down.
@@ -967,15 +971,22 @@ impl ApplicationHandler for App {
                 })
             }
             WindowEvent::MouseWheel { delta, .. } => {
-                let dy = match delta {
-                    MouseScrollDelta::LineDelta(_, y) => -y * 40.0,
-                    MouseScrollDelta::PixelDelta(p) => -p.y as f32 / scale,
+                let (dx, dy) = match delta {
+                    MouseScrollDelta::LineDelta(x, y) => (-x * 40.0, -y * 40.0),
+                    MouseScrollDelta::PixelDelta(p) => (-p.x as f32 / scale, -p.y as f32 / scale),
                 };
-                self.apply(Event::Scroll {
-                    x: self.cursor.0,
-                    y: self.cursor.1,
-                    dy,
-                });
+                // Shift turns a plain wheel sideways.
+                let (dx, dy) = if self.mods.shift_key() && dx == 0.0 {
+                    (dy, 0.0)
+                } else {
+                    (dx, dy)
+                };
+                let (x, y) = self.cursor;
+                if dx.abs() > dy.abs() {
+                    self.apply(Event::ScrollSideways { x, y, dx });
+                } else {
+                    self.apply(Event::Scroll { x, y, dy });
+                }
             }
             WindowEvent::Touch(t) => {
                 let p = (t.location.x as f32 / scale, t.location.y as f32 / scale);
@@ -997,6 +1008,11 @@ impl ApplicationHandler for App {
                                 (id, at)
                             }),
                             paging: false,
+                            slide: self.controller.session.slide_at(p.0, p.1).map(|id| {
+                                let at = self.controller.session.slide_offset(&id);
+                                (id, at)
+                            }),
+                            sliding: false,
                             started: now,
                             grabbing: self.controller.session.grab_at(p.0, p.1).is_some(),
                             long_pressed: false,
@@ -1034,8 +1050,16 @@ impl ApplicationHandler for App {
                                 None => false,
                             };
                             d.paging = !d.moving_frame && d.pager.is_some() && tx.abs() > ty.abs();
+                            d.sliding = !d.moving_frame
+                                && !d.paging
+                                && d.slide.is_some()
+                                && tx.abs() > ty.abs();
                         }
-                        if d.paging
+                        if d.sliding
+                            && let Some((id, at)) = &d.slide
+                        {
+                            self.controller.session.drag_slide(id, at - tx);
+                        } else if d.paging
                             && let Some((id, at)) = &d.pager
                         {
                             self.controller.session.drag_pager(id, at - tx);
@@ -1091,6 +1115,8 @@ impl ApplicationHandler for App {
                             if let Some(s) = &self.surface {
                                 s.window.request_redraw();
                             }
+                        } else if d.sliding {
+                            // The row stays where the finger left it.
                         } else if d.moving_frame {
                             let (vx, vy) = if stale { (0.0, 0.0) } else { (vx, vy) };
                             if self.controller.session.release_frame(vx, vy)

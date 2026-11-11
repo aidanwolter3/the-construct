@@ -1272,6 +1272,69 @@ impl Session {
         }
     }
 
+    /// The sideways-scrolling row (a chip row) under a point, if its
+    /// content overflows it.
+    pub fn slide_at(&mut self, x: f32, y: f32) -> Option<String> {
+        let under: Vec<String> = self
+            .scene()
+            .ok()?
+            .semantics
+            .iter()
+            .rev()
+            .filter(|n| {
+                let [bx, by, bw, bh] = n.bounds;
+                x >= bx && x < bx + bw && y >= by && y < by + bh
+            })
+            .map(|n| n.id.clone())
+            .collect();
+        let top = &self.stack[self.top_index()];
+        let slides = &top.laid.as_ref()?.0.slides;
+        under
+            .into_iter()
+            .find(|id| slides.get(id).is_some_and(|max| *max > 0.0))
+    }
+
+    /// Where a sideways-scrolling row is (points scrolled left; within its
+    /// last layout's extent).
+    pub fn slide_offset(&self, id: &str) -> f32 {
+        let top = &self.stack[self.top_index()];
+        let max = top
+            .laid
+            .as_ref()
+            .and_then(|(l, _)| l.slides.get(id).copied())
+            .unwrap_or(f32::MAX);
+        top.scroll
+            .get(&format!("slide:{id}"))
+            .copied()
+            .unwrap_or(0.0)
+            .clamp(0.0, max)
+    }
+
+    /// Scrolls a sideways-scrolling row to `offset` (points from its start);
+    /// true if it moved.
+    pub fn drag_slide(&mut self, id: &str, offset: f32) -> bool {
+        // Laid out first: a tap may have left the layout to be rebuilt.
+        if self.scene().is_err() {
+            return false;
+        }
+        let before = self.slide_offset(id);
+        let ti = self.top_index();
+        let Some(max) = self.stack[ti]
+            .laid
+            .as_ref()
+            .and_then(|(l, _)| l.slides.get(id).copied())
+        else {
+            return false;
+        };
+        let to = offset.clamp(0.0, max);
+        if to == before {
+            return false;
+        }
+        self.stack[ti].scroll.insert(format!("slide:{id}"), to);
+        self.scene = None;
+        true
+    }
+
     /// Moves sliding carousels on; one that arrives shows its page number.
     fn step_pagers(&mut self, now: Instant) {
         if self.pager_anims.is_empty() {

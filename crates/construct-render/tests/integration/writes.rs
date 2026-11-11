@@ -1,5 +1,5 @@
 //! Taps that write to the pod, the device commands of the inbox, links,
-//! dragging sheets and paging carousels.
+//! dragging sheets, paging carousels and scrolling chip rows.
 
 use construct_render::Viewport;
 use construct_render::interact::{Changes, Done, Effect, Loader, Session, Target, Write, Written};
@@ -297,6 +297,64 @@ fn a_carousel_pages_on_a_swipe() {
     s.drag_pager(&id, 10_000.0);
     s.release_pager(&id, 0.0);
     assert!(s.scene().unwrap().find_text("3/3").is_some());
+}
+
+#[test]
+fn a_chip_row_wider_than_the_screen_scrolls_sideways() {
+    let labels = [
+        "All",
+        "Salads & sides",
+        "Mains",
+        "Rice & grains",
+        "Desserts",
+        "Breakfast",
+        "Baking",
+        "Snacks",
+        "Drinks",
+    ];
+    let options: Vec<Value> = labels
+        .iter()
+        .map(|l| json!({ "label": l, "value": l }))
+        .collect();
+    let root = json!({ "type": "core://Column", "children": [
+        { "type": "core://ChoiceChips", "field": "cat", "padding_h_dp": 16, "options": options }
+    ] });
+    let (mut s, _) = session(root, json!({ "entities": {}, "queries": {} }), false);
+    let width = s.viewport.width;
+    let scene = s.scene().unwrap();
+    let row = scene.find_node("chips:cat").unwrap().clone();
+    // The last chips are past the screen's edge, so not drawn.
+    assert!(scene.find_node("cat=Drinks").is_none());
+    let (x, y) = (row.bounds[0] + 20.0, row.bounds[1] + row.bounds[3] / 2.0);
+    assert_eq!(s.slide_at(x, y).as_deref(), Some("chips:cat"));
+    // Not before its start.
+    assert!(!s.drag_slide("chips:cat", -50.0));
+    // A drag far left stops with the last chip at the row's end.
+    assert!(s.drag_slide("chips:cat", 10_000.0));
+    let scene = s.scene().unwrap();
+    let drinks = scene.find_node("cat=Drinks").unwrap().clone();
+    assert!((drinks.bounds[0] + drinks.bounds[2] - (width - 16.0)).abs() < 1.0);
+    assert!(scene.find_node("cat=All").is_none());
+    // A chip scrolled in is tapped where it is drawn.
+    let tap = Target::Point(drinks.bounds[0] + 4.0, drinks.bounds[1] + 4.0);
+    s.tap(&tap).unwrap();
+    assert_eq!(s.form.get("cat").map(String::as_str), Some("Drinks"));
+    // Back to the start.
+    assert!(s.drag_slide("chips:cat", 0.0));
+    assert!(s.scene().unwrap().find_node("cat=All").is_some());
+}
+
+#[test]
+fn a_chip_row_that_fits_does_not_scroll() {
+    let root = json!({ "type": "core://ChoiceChips", "field": "f", "options": [
+        { "label": "One", "value": "1" }, { "label": "Two", "value": "2" } ] });
+    let (mut s, _) = session(root, json!({ "entities": {}, "queries": {} }), false);
+    let row = s.scene().unwrap().find_node("chips:f").unwrap().clone();
+    assert!(
+        s.slide_at(row.bounds[0] + 4.0, row.bounds[1] + 4.0)
+            .is_none()
+    );
+    assert!(!s.drag_slide("chips:f", 40.0));
 }
 
 #[test]
