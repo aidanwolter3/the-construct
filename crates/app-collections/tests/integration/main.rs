@@ -2,6 +2,7 @@
 //! binary per file made CI spend most of its build time linking.
 //! Add a new test file as a module here.
 
+mod bulk;
 mod collections;
 mod computed;
 mod fillers;

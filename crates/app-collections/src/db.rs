@@ -27,6 +27,9 @@
 //! - `collections_reminders_sent`: which row a reminder (decision
 //!   `collection-reminders`) already notified about, for which date, so
 //!   each fires once even after the core's notification retention.
+//! - `collections_staged`: the edits of an `edit_rows` preview under its
+//!   confirm token, for [`STAGED_SECS`], so the confirming call can name
+//!   the token alone.
 //! - `collections_deleted`: deleted collections (decision
 //!   `collections`, issue #107). Their definitions, rows and fill state
 //!   stay, hidden from everything that reads live definitions, until
@@ -70,7 +73,20 @@ pub static MIGRATIONS: &[Step] = &[
     // `collections.model = 0` locks the `model` jack, `collections.fill =
     // 0` the `web` jack.
     Step::sql("row_fills_and_jack_locks", ROW_FILLS_AND_JACK_LOCKS),
+    // 10: the edits of an edit_rows preview, kept under its confirm token
+    // so the confirming call needn't send them again.
+    Step::sql("staged_edits", STAGED),
 ];
+
+const STAGED: &str = "
+CREATE TABLE collections_staged (
+    token      TEXT PRIMARY KEY NOT NULL,
+    collection TEXT NOT NULL,
+    edits_json TEXT NOT NULL,
+    note       TEXT NOT NULL,
+    created_at INTEGER NOT NULL
+) WITHOUT ROWID;
+";
 
 const ROW_FILLS_AND_JACK_LOCKS: &str = "
 CREATE TABLE collections_row_fills (
@@ -1460,4 +1476,65 @@ pub fn purge(tx: &Transaction<'_>, now: i64, window: i64) -> rusqlite::Result<Pu
         out.fields += expired.len();
     }
     Ok(out)
+}
+
+// ---------- staged edits ----------
+
+/// How long a preview's edits are kept for its confirm token.
+pub const STAGED_SECS: i64 = 3600;
+/// Most previews a pod keeps at once (the oldest go first).
+pub const MAX_STAGED: i64 = 5;
+
+/// Keep a preview's `edits` (`[[at, edit], ...]`) under `token`, forgetting
+/// expired previews and all but the newest [`MAX_STAGED`].
+pub fn stage(
+    conn: &Connection,
+    token: &str,
+    collection: &str,
+    edits: &Value,
+    note: &str,
+    now: i64,
+) -> rusqlite::Result<()> {
+    conn.execute(
+        "DELETE FROM collections_staged WHERE created_at < ?1",
+        params![now - STAGED_SECS],
+    )?;
+    conn.execute(
+        "INSERT OR REPLACE INTO collections_staged (token, collection, edits_json, note, created_at)
+         VALUES (?1, ?2, ?3, ?4, ?5)",
+        params![token, collection, edits.to_string(), note, now],
+    )?;
+    conn.execute(
+        "DELETE FROM collections_staged WHERE token NOT IN
+           (SELECT token FROM collections_staged ORDER BY created_at DESC, token LIMIT ?1)",
+        params![MAX_STAGED],
+    )?;
+    Ok(())
+}
+
+/// The edits and note a live preview of `collection` kept under `token`.
+pub fn staged(
+    conn: &Connection,
+    token: &str,
+    collection: &str,
+    now: i64,
+) -> rusqlite::Result<Option<(Value, String)>> {
+    let found = conn
+        .query_row(
+            "SELECT edits_json, note FROM collections_staged
+             WHERE token = ?1 AND collection = ?2 AND created_at >= ?3",
+            params![token, collection, now - STAGED_SECS],
+            |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)),
+        )
+        .optional()?;
+    Ok(found.map(|(e, n)| (serde_json::from_str(&e).unwrap_or(Value::Null), n)))
+}
+
+/// Forget a preview once applied.
+pub fn unstage(conn: &Connection, token: &str) -> rusqlite::Result<()> {
+    conn.execute(
+        "DELETE FROM collections_staged WHERE token = ?1",
+        params![token],
+    )?;
+    Ok(())
 }

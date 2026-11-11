@@ -22,8 +22,9 @@ as a feed ([\"collections\", \"<name>\"]) and add, change and delete rows with t
 intents (describe_collection gives ready-made layout snippets). Change a collection with apply_change, \
 sending the app layout changes that go with it in the same call: nothing applies if any app would \
 break. add_row adds one row the user just asked for (\"log that I had the oil changed\") at once. \
-edit_rows changes rows directly (imports, backfills): it first answers a preview, which you \
-must show the user (the count and the sample) before calling again with its confirm token; every edit \
+edit_rows changes rows directly (imports, backfills; all of them in one call, from inline edits or a file \
+by url): it first answers a preview, which you must show the user (the count and the sample) before \
+calling again with just its confirm token; every edit \
 can be undone with undo_edit. delete_collection deletes a collection the user no longer wants once no layout \
 shows it (restore_collection brings it back for 30 days). Any field may be computed from the row's other fields \
 whenever they change: compute: {kind: \"expr\", expr} evaluates a small expression at once (entity.<field>, \
@@ -182,10 +183,12 @@ pub fn tools() -> Vec<Value> {
         ),
         tool(
             "edit_rows",
-            "Change rows directly, for imports, backfills and conversions: edits [{op: create, values: {field: value}} | {op: update, id, values} | {op: delete, id} | {op: restore, id}]. A ref value is a row id or {\"<unique field>\": value} of its collection; a quantity value is text (\"1 1/2 cups\") or {amount, unit}; a unique field refuses a value another live row has. The first call answers a preview (count and sample) and a confirm token and changes nothing: show the preview to the user, and only after they agree call again with the same edits and confirm. Undo with undo_edit.",
+            "Change rows directly, for imports, backfills and conversions: edits [{op: create, values: {field: value}} | {op: update, id, values} | {op: delete, id} | {op: restore, id}]. A ref value is a row id or {\"<unique field>\": value} of its collection; a quantity value is text (\"1 1/2 cups\") or {amount, unit}; a unique field refuses a value another live row has. Send the whole set in one call (up to the pod's row cap), not in batches. Data already in a file: give url (a https file the pod fetches: a JSON array of edits or of {field: value} rows, JSON lines, or CSV with a header of field names, optional op and id columns, and <ref field>.<unique field> columns naming a ref's row) instead of edits, or POST the file to /v1/collections/<collection>/import with the pod token. The first call answers a preview (count and sample) and a confirm token and changes nothing; every edit is checked first, and invalid ones are listed with where they are (/edits/<i>, or a file's line or item). Show the preview to the user, and only after they agree call again with just collection and confirm: the pod applies exactly the edits it previewed (kept for an hour). Undo with undo_edit.",
             json!({ "collection": collection, "edits": { "type": "array", "items": { "type": "object" } },
+                    "url": { "type": "string", "description": "A file of edits or rows to fetch instead of edits" },
+                    "format": { "type": "string", "enum": ["json", "jsonl", "csv"], "description": "The file's format (default: from its name or content)" },
                     "note": note, "confirm": { "type": "string", "description": "The token of the preview the user agreed to" } }),
-            &["collection", "edits"],
+            &["collection"],
         ),
         tool(
             "add_row",
@@ -264,7 +267,7 @@ pub fn call<'a>(
         "restore_collection_version" => Box::pin(restore_version(pod, caps, args)),
         "delete_collection" => Box::pin(delete(pod, caps, args)),
         "restore_collection" => Box::pin(restore(pod, caps, args)),
-        "edit_rows" => Box::pin(edit_rows(pod, caps, args)),
+        "edit_rows" => Box::pin(edit_rows(pod, adapter, args)),
         "add_row" => Box::pin(add_row(pod, caps, args)),
         "undo_edit" => Box::pin(undo_edit(pod, args)),
         "run_action" => Box::pin(run_action(pod, args)),
@@ -1446,21 +1449,144 @@ async fn restore(pod: &Pod, caps: crate::Caps, args: &Value) -> Result<Value, Va
 /// One planned row change: `(op, row id, before, after)`.
 type Change = (&'static str, String, Option<Row>, Row);
 
-async fn edit_rows(pod: &Pod, caps: crate::Caps, args: &Value) -> Result<Value, Value> {
+/// One planned edit: its change and the write it makes.
+type Planned1 = (Change, Map<String, Value>);
+
+/// What writing an edit made: the model jobs and each row's
+/// `(id, state before, state after)` for its undo record.
+type Written = (
+    Vec<crate::compute::Job>,
+    Vec<(String, Option<Value>, Value)>,
+);
+
+/// Most invalid edits a refusal lists (it counts them all).
+const MAX_ERRORS: usize = 50;
+
+async fn edit_rows(pod: &Pod, adapter: &CollectionsAdapter, args: &Value) -> Result<Value, Value> {
+    let caps = adapter.caps;
     let name = str_arg(args, "collection")?.to_owned();
-    let Some(edits) = args["edits"].as_array().cloned() else {
-        return Err(bad("\"edits\" is a list of {op, id?, values?}"));
+    let token = args["confirm"]
+        .as_str()
+        .map(str::trim)
+        .filter(|t| !t.is_empty())
+        .map(str::to_owned);
+    let url = args["url"]
+        .as_str()
+        .map(str::trim)
+        .filter(|u| !u.is_empty());
+    let mut note = note_arg(args, "Edited rows");
+    let edits: Vec<crate::import::Located> = if let Some(list) = args["edits"].as_array() {
+        if url.is_some() {
+            return Err(bad("give edits or url, not both"));
+        }
+        list.iter()
+            .enumerate()
+            .map(|(i, e)| (format!("/edits/{i}"), e.clone()))
+            .collect()
+    } else if let Some(url) = url {
+        let format = match args["format"].as_str() {
+            Some(f) => Some(
+                crate::import::Format::parse(f)
+                    .ok_or_else(|| bad("format is json, jsonl or csv"))?,
+            ),
+            None => None,
+        };
+        fetch_edits(pod, adapter, url, format).await?
+    } else if let Some(token) = &token {
+        let (lookup, t) = (name.clone(), token.clone());
+        let now = pod_core::util::now_secs();
+        let staged = pod
+            .blocking(move |s| s.with_conn(|c| db::staged(c, &t, &lookup, now)))
+            .await
+            .map_err(db_err)?;
+        let Some((stored, stored_note)) = staged else {
+            return Err(fail(
+                StatusCode::CONFLICT,
+                "preview_expired",
+                format!(
+                    "no preview of '{name}' has that confirm token now (previews are kept for an hour, and only the newest {}): call edit_rows with the edits or url again for a new preview",
+                    db::MAX_STAGED
+                ),
+            ));
+        };
+        if args["note"].as_str().is_none_or(|n| n.trim().is_empty()) {
+            note = stored_note;
+        }
+        stored
+            .as_array()
+            .map(|a| {
+                a.iter()
+                    .map(|p| (p[0].as_str().unwrap_or("").to_owned(), p[1].clone()))
+                    .collect()
+            })
+            .unwrap_or_default()
+    } else {
+        return Err(bad(
+            "give edits (a list of {op, id?, values?}), url (a file of them), or confirm (the token of a preview)",
+        ));
     };
-    let confirm = Confirm::Token(args["confirm"].as_str().map(str::to_owned));
-    edit(
-        pod,
-        caps,
-        name,
-        edits,
-        note_arg(args, "Edited rows"),
-        confirm,
+    edit(pod, caps, name, edits, note, Confirm::Token(token)).await
+}
+
+/// `POST /v1/collections/<c>/import`: preview the edits of a posted file
+/// and keep them under the preview's confirm token. Nothing changes until
+/// edit_rows {collection, confirm} (the user's agreement, over MCP).
+pub(crate) async fn import_file(
+    pod: &Pod,
+    collection: String,
+    bytes: &[u8],
+    format: crate::import::Format,
+    note: Option<String>,
+) -> Result<Value, Value> {
+    let edits = crate::import::parse(bytes, format)
+        .map_err(|d| fail(StatusCode::UNPROCESSABLE_ENTITY, "invalid_file", d))?;
+    let note = note_arg(&json!({ "note": note }), "Imported rows");
+    let caps = crate::adapter(pod).caps;
+    edit(pod, caps, collection, edits, note, Confirm::Token(None)).await
+}
+
+/// The edits of the file at `url` ([`crate::import`]), fetched through the
+/// pod's web module.
+async fn fetch_edits(
+    pod: &Pod,
+    adapter: &CollectionsAdapter,
+    url: &str,
+    format: Option<crate::import::Format>,
+) -> Result<Vec<crate::import::Located>, Value> {
+    if !crate::fill::allowed(pod).await {
+        return Err(fail(
+            StatusCode::CONFLICT,
+            "web_unplugged",
+            "the pod's web jack is unplugged, so it can't fetch the file: plug_jack web, or POST the file to /v1/collections/<collection>/import",
+        ));
+    }
+    let url = web_extract::fetch::check_url(url, adapter.allow_private_hosts()).map_err(bad)?;
+    let headers = [(
+        "Accept".to_owned(),
+        "application/json, application/x-ndjson, text/csv, text/plain;q=0.9, */*;q=0.5".to_owned(),
+    )];
+    let fetched = web_extract::hosts::fetch(
+        &pod.local::<web_extract::hosts::Hosts>(),
+        adapter.fetch_client(),
+        &url,
+        None,
+        None,
+        &headers,
     )
     .await
+    .map_err(|e| fail(StatusCode::BAD_GATEWAY, "fetch_failed", e.message))?;
+    let web_extract::fetch::Fetched::Body { bytes, .. } = fetched else {
+        return Err(fail(
+            StatusCode::BAD_GATEWAY,
+            "fetch_failed",
+            "the site answered 304",
+        ));
+    };
+    let format = format
+        .or_else(|| crate::import::Format::of_url(&url))
+        .unwrap_or_else(|| crate::import::Format::sniff(&String::from_utf8_lossy(&bytes)));
+    crate::import::parse(&bytes, format)
+        .map_err(|d| fail(StatusCode::UNPROCESSABLE_ENTITY, "invalid_file", d))
 }
 
 /// One row the user just asked for in the conversation ("log that I had
@@ -1472,7 +1598,10 @@ async fn add_row(pod: &Pod, caps: crate::Caps, args: &Value) -> Result<Value, Va
     let Some(values) = args["values"].as_object().cloned() else {
         return Err(bad("\"values\" is an object {field: value}"));
     };
-    let edits = vec![json!({ "op": "create", "values": values })];
+    let edits = vec![(
+        "/values".to_owned(),
+        json!({ "op": "create", "values": values }),
+    )];
     let mut out = edit(
         pod,
         caps,
@@ -1481,13 +1610,7 @@ async fn add_row(pod: &Pod, caps: crate::Caps, args: &Value) -> Result<Value, Va
         note_arg(args, "Added a row"),
         Confirm::Skip,
     )
-    .await
-    .map_err(|mut e| {
-        if e["at"] == "/edits/0" {
-            e["at"] = json!("/values");
-        }
-        e
-    })?;
+    .await?;
     if let Some(id) = out["created"][0].as_str() {
         out["id"] = json!(id);
     }
@@ -1495,18 +1618,201 @@ async fn add_row(pod: &Pod, caps: crate::Caps, args: &Value) -> Result<Value, Va
 }
 
 /// Whether an edit waits for the user's agreement.
-enum Confirm {
+pub(crate) enum Confirm {
     /// edit_rows: applies only with the token of the preview the user saw.
     Token(Option<String>),
     /// add_row: the user's own request is the agreement.
     Skip,
 }
 
+/// Plan one edit: the change and the write it makes, or why it is invalid.
+#[allow(clippy::too_many_arguments)]
+fn plan_one(
+    tx: &rusqlite::Transaction<'_>,
+    def: &Definition,
+    name: &str,
+    e: &Value,
+    now: i64,
+    caps: crate::Caps,
+    seen: &mut std::collections::HashSet<String>,
+    hasher: &mut Sha256,
+) -> rusqlite::Result<Result<Planned1, String>> {
+    let op = e["op"].as_str().unwrap_or("");
+    let values = e["values"].as_object().cloned().unwrap_or_default();
+    if op == "create" {
+        if let Err(d) = crate::filler::check_write(def, &values, op, None) {
+            return Ok(Err(d));
+        }
+        let mut row = Row {
+            id: db::new_id("r"),
+            client_id: None,
+            values: Map::new(),
+            created_at: now,
+            updated_at: now,
+            deleted_at: None,
+            filler: None,
+        };
+        let values = match crate::refs::prepare_write(tx, def, &values)? {
+            Ok(v) => v,
+            Err(d) => return Ok(Err(d)),
+        };
+        if let Err(d) = model::apply_write(
+            def,
+            &mut row.values,
+            &values,
+            Write::Create,
+            caps.text_chars,
+        ) {
+            return Ok(Err(d));
+        }
+        return Ok(Ok((("create", row.id.clone(), None, row), values)));
+    }
+    let op = match op {
+        "update" => "update",
+        "delete" => "delete",
+        "restore" => "restore",
+        other => {
+            return Ok(Err(format!(
+                "unknown op '{other}' (create, update, delete, restore)"
+            )));
+        }
+    };
+    let id = e["id"].as_str().unwrap_or("").trim();
+    let Some(before) = db::row(tx, name, id)? else {
+        return Ok(Err(format!("no row '{id}'")));
+    };
+    if let Err(d) = crate::filler::check_write(def, &values, op, before.filler.as_deref()) {
+        return Ok(Err(d));
+    }
+    if !seen.insert(id.to_owned()) {
+        return Ok(Err(format!("row '{id}' is edited twice")));
+    }
+    hasher.update(before.state().to_string());
+    let mut after = before.clone();
+    after.updated_at = now;
+    let mut write = Map::new();
+    match op {
+        "update" => {
+            if before.deleted_at.is_some() {
+                return Ok(Err(format!("row '{id}' is deleted (restore it first)")));
+            }
+            write = match crate::refs::prepare_write(tx, def, &values)? {
+                Ok(v) => v,
+                Err(d) => return Ok(Err(d)),
+            };
+            if let Err(d) = model::apply_write(
+                def,
+                &mut after.values,
+                &write,
+                Write::Update,
+                caps.text_chars,
+            ) {
+                return Ok(Err(d));
+            }
+        }
+        "delete" => after.deleted_at = Some(now),
+        _ => after.deleted_at = None,
+    }
+    Ok(Ok(((op, id.to_owned(), Some(before), after), write)))
+}
+
+/// A refusal listing invalid edits (`(at, detail)`), the first one as
+/// `at` and `detail`.
+fn invalid_edits(error: &str, status: u16, errors: &[(String, String)], total: usize) -> Value {
+    let (at, first) = &errors[0];
+    json!({
+        "error": error, "status": status, "at": at,
+        "detail": if errors.len() == 1 { first.clone() } else {
+            format!("{} of {total} edits are invalid and nothing changed; the first: {first}", errors.len())
+        },
+        "invalid": errors.len(),
+        "errors": errors.iter().take(MAX_ERRORS)
+            .map(|(at, d)| json!({ "at": at, "detail": d })).collect::<Vec<_>>(),
+    })
+}
+
+/// Write the planned changes (checking the caps and unique fields), or
+/// refuse with every row that breaks a unique field.
+#[allow(clippy::too_many_arguments)]
+fn write_all(
+    tx: &rusqlite::Transaction<'_>,
+    def: &Definition,
+    name: &str,
+    planned: &mut [Change],
+    writes: &[Map<String, Value>],
+    ats: &[String],
+    caps: crate::Caps,
+    now: i64,
+) -> rusqlite::Result<Result<Written, Value>> {
+    let count = |op: &str| planned.iter().filter(|(o, ..)| *o == op).count() as i64;
+    let restored = planned
+        .iter()
+        .filter(|(o, _, b, _)| {
+            *o == "restore" && b.as_ref().is_some_and(|b| b.deleted_at.is_some())
+        })
+        .count() as i64;
+    let added_rows = count("create") + restored - count("delete");
+    let bytes: i64 = planned
+        .iter()
+        .map(|(_, _, b, a)| {
+            let live = |r: &Row| {
+                if r.deleted_at.is_none() {
+                    crate::bytes_of(&r.values)
+                } else {
+                    0
+                }
+            };
+            live(a) - b.as_ref().map_or(0, live)
+        })
+        .sum();
+    if let Err(e) = crate::check_usage(tx, caps, added_rows, bytes)? {
+        return Ok(Err(e));
+    }
+    let mut records = Vec::new();
+    let mut jobs = Vec::new();
+    let mut not_unique = Vec::new();
+    for (((op, id, before, after), write), at) in planned.iter_mut().zip(writes).zip(ats) {
+        if *op == "create" || *op == "update" {
+            jobs.extend(crate::compute::after_write(
+                tx,
+                def,
+                before.as_ref().map(|b| &b.values),
+                after,
+                write,
+                now,
+                caps,
+            )?);
+        }
+        let after = &*after;
+        if after.deleted_at.is_none()
+            && let Err(d) = crate::refs::check_unique(tx, def, after)?
+        {
+            not_unique.push((at.clone(), d));
+            continue;
+        }
+        if *op == "create" {
+            db::insert_row(tx, name, after)?;
+        } else {
+            db::save_row(tx, name, after)?;
+        }
+        records.push((id.clone(), before.as_ref().map(Row::state), after.state()));
+    }
+    if !not_unique.is_empty() {
+        return Ok(Err(invalid_edits(
+            "not_unique",
+            409,
+            &not_unique,
+            planned.len(),
+        )));
+    }
+    Ok(Ok((jobs, records)))
+}
+
 async fn edit(
     pod: &Pod,
     caps: crate::Caps,
     name: String,
-    edits: Vec<Value>,
+    edits: Vec<crate::import::Located>,
     note: String,
     confirm: Confirm,
 ) -> Result<Value, Value> {
@@ -1514,7 +1820,11 @@ async fn edit(
         return Err(fail(
             StatusCode::BAD_REQUEST,
             "too_many_edits",
-            format!("an edit changes 1..={} rows", caps.edit_rows),
+            format!(
+                "an edit changes 1..={} rows (this one: {})",
+                caps.edit_rows,
+                edits.len()
+            ),
         ));
     }
     let collection = name.clone();
@@ -1525,85 +1835,24 @@ async fn edit(
         let now = pod_core::util::now_secs();
         let mut planned: Vec<Change> = Vec::new();
         let mut writes: Vec<Map<String, Value>> = Vec::new();
+        let mut ats: Vec<String> = Vec::new();
+        let mut errors: Vec<(String, String)> = Vec::new();
+        let mut seen = std::collections::HashSet::new();
         let mut hasher = Sha256::new();
         hasher.update(format!("{name}\n{version}\n"));
-        for (i, e) in edits.iter().enumerate() {
-            let at = format!("/edits/{i}");
-            let op = e["op"].as_str().unwrap_or("");
-            let values = e["values"].as_object().cloned().unwrap_or_default();
+        for (at, e) in &edits {
             hasher.update(e.to_string());
-            let invalid = |detail: String| Ok(Err(json!({ "error": "invalid_edit", "at": at, "detail": detail, "status": 422 })));
-            if op == "create"
-                && let Err(d) = crate::filler::check_write(&def, &values, op, None)
-            {
-                return invalid(d);
-            }
-            if op == "create" {
-                let mut row = Row {
-                    id: db::new_id("r"),
-                    client_id: None,
-                    values: Map::new(),
-                    created_at: now,
-                    updated_at: now,
-                    deleted_at: None,
-                    filler: None,
-                };
-                let values = match crate::refs::prepare_write(tx, &def, &values)? {
-                    Ok(v) => v,
-                    Err(d) => return invalid(d),
-                };
-                if let Err(d) = model::apply_write(&def, &mut row.values, &values, Write::Create, caps.text_chars) {
-                    return invalid(d);
+            match plan_one(tx, &def, &name, e, now, caps, &mut seen, &mut hasher)? {
+                Ok((change, write)) => {
+                    planned.push(change);
+                    writes.push(write);
+                    ats.push(at.clone());
                 }
-                planned.push(("create", row.id.clone(), None, row));
-                writes.push(values);
-                continue;
+                Err(d) => errors.push((at.clone(), d)),
             }
-            let id = e["id"].as_str().unwrap_or("");
-            let Some(before) = db::row(tx, &name, id)? else {
-                return invalid(format!("no row '{id}'"));
-            };
-            if let Err(d) = crate::filler::check_write(&def, &values, op, before.filler.as_deref()) {
-                return invalid(d);
-            }
-            if planned.iter().any(|(_, r, _, _)| r == id) {
-                return invalid(format!("row '{id}' is edited twice"));
-            }
-            hasher.update(before.state().to_string());
-            let mut after = before.clone();
-            after.updated_at = now;
-            match op {
-                "update" => {
-                    if before.deleted_at.is_some() {
-                        return invalid(format!("row '{id}' is deleted (restore it first)"));
-                    }
-                    let values = match crate::refs::prepare_write(tx, &def, &values)? {
-                        Ok(v) => v,
-                        Err(d) => return invalid(d),
-                    };
-                    if let Err(d) = model::apply_write(&def, &mut after.values, &values, Write::Update, caps.text_chars) {
-                        return invalid(d);
-                    }
-                }
-                "delete" => after.deleted_at = Some(now),
-                "restore" => after.deleted_at = None,
-                other => return invalid(format!("unknown op '{other}' (create, update, delete, restore)")),
-            }
-            let op = match op {
-                "update" => "update",
-                "delete" => "delete",
-                _ => "restore",
-            };
-            let write = if op == "update" {
-                match crate::refs::prepare_write(tx, &def, &values)? {
-                    Ok(v) => v,
-                    Err(d) => return invalid(d),
-                }
-            } else {
-                Map::new()
-            };
-            planned.push((op, id.to_owned(), Some(before), after));
-            writes.push(write);
+        }
+        if !errors.is_empty() {
+            return Ok(Err(invalid_edits("invalid_edit", 422, &errors, edits.len())));
         }
         let token = hasher
             .finalize()
@@ -1611,7 +1860,7 @@ async fn edit(
             .take(8)
             .map(|b| format!("{b:02x}"))
             .collect::<String>();
-        let count = |op: &str| planned.iter().filter(|(o, ..)| *o == op).count();
+        let count = |planned: &[Change], op: &str| planned.iter().filter(|(o, ..)| *o == op).count();
         let confirm = match &confirm {
             Confirm::Skip => None,
             Confirm::Token(t) => Some(t.as_deref()),
@@ -1631,71 +1880,54 @@ async fn edit(
                     v
                 })
                 .collect();
+            // Try the whole set (caps, unique fields), then put everything back.
+            tx.execute_batch("SAVEPOINT edit_preview")?;
+            let tried = write_all(tx, &def, &name, &mut planned.clone(), &writes, &ats, caps, now);
+            tx.execute_batch("ROLLBACK TO edit_preview; RELEASE edit_preview")?;
+            if let Err(e) = tried? {
+                return Ok(Err(e));
+            }
+            let kept = Value::Array(
+                edits
+                    .iter()
+                    .map(|(at, e)| json!([at, e]))
+                    .collect(),
+            );
+            db::stage(tx, &token, &name, &kept, &note, now)?;
             let mut preview = json!({
                 "needs_confirmation": true, "confirm": token, "count": planned.len(),
-                "creates": count("create"), "updates": count("update"),
-                "deletes": count("delete"), "restores": count("restore"), "sample": sample,
-                "detail": "Nothing changed yet. Show the user this preview (the count and the sample); if they agree, call edit_rows again with the same edits and this confirm token.",
+                "creates": count(&planned, "create"), "updates": count(&planned, "update"),
+                "deletes": count(&planned, "delete"), "restores": count(&planned, "restore"), "sample": sample,
+                "detail": "Nothing changed yet. Show the user this preview (the count and the sample); if they agree, call edit_rows again with just {collection, confirm: this token}: the pod keeps these edits for an hour.",
             });
             if confirm.is_some() {
                 preview["error"] = json!("stale_preview");
                 preview["status"] = json!(409);
                 preview["detail"] = json!("the rows or the collection changed since that preview (or the edits differ); show the user this new preview");
-                return Ok(Err(preview));
+                // Keep the new preview: a refusal rolls back.
+                return Ok(Ok((Vec::new(), preview)));
             }
             return Ok(Ok((Vec::new(), preview)));
         }
-        let added_rows = count("create") as i64 + planned.iter().filter(|(o, _, b, _)| *o == "restore" && b.as_ref().is_some_and(|b| b.deleted_at.is_some())).count() as i64 - count("delete") as i64;
-        let bytes: i64 = planned
-            .iter()
-            .map(|(_, _, b, a)| {
-                let live = |r: &Row| if r.deleted_at.is_none() { crate::bytes_of(&r.values) } else { 0 };
-                live(a) - b.as_ref().map_or(0, live)
-            })
-            .sum();
-        if let Err(e) = crate::check_usage(tx, caps, added_rows, bytes)? {
-            return Ok(Err(e));
-        }
-        let mut records = Vec::new();
-        let mut jobs = Vec::new();
-        for ((op, id, before, after), write) in planned.iter_mut().zip(&writes) {
-            if *op == "create" || *op == "update" {
-                jobs.extend(crate::compute::after_write(
-                    tx,
-                    &def,
-                    before.as_ref().map(|b| &b.values),
-                    after,
-                    write,
-                    now,
-                    caps,
-                )?);
-            }
-            let after = &*after;
-            if after.deleted_at.is_none()
-                && let Err(d) = crate::refs::check_unique(tx, &def, after)?
-            {
-                return Ok(Err(json!({ "error": "not_unique", "at": format!("/edits/{}", records.len()),
-                    "detail": d, "status": 409 })));
-            }
-            if *op == "create" {
-                db::insert_row(tx, &name, after)?;
-            } else {
-                db::save_row(tx, &name, after)?;
-            }
-            records.push((id.clone(), before.as_ref().map(Row::state), after.state()));
-        }
+        let (jobs, records) = match write_all(tx, &def, &name, &mut planned, &writes, &ats, caps, now)? {
+            Ok(v) => v,
+            Err(e) => return Ok(Err(e)),
+        };
+        db::unstage(tx, &token)?;
         let edit = db::record_edit(tx, &name, &note, &records, now)?;
-        let count = |op: &str| planned.iter().filter(|(o, ..)| *o == op).count();
         Ok(Ok((jobs, json!({
             "ok": true, "edit": edit, "count": planned.len(),
-            "creates": count("create"), "updates": count("update"),
-            "deletes": count("delete"), "restores": count("restore"),
+            "creates": count(&planned, "create"), "updates": count(&planned, "update"),
+            "deletes": count(&planned, "delete"), "restores": count(&planned, "restore"),
             "created": planned.iter().filter(|(o, ..)| *o == "create").map(|(_, id, ..)| id).collect::<Vec<_>>(),
             "undo": "undo_edit with this edit id (for 30 days)",
         }))))
     })
     .await?;
     let (jobs, out) = out;
+    if out["error"] == "stale_preview" {
+        return Err(out);
+    }
     if out["ok"] == true {
         pod.publish_data_all(NAME);
         crate::compute::spawn(pod, &collection, jobs);

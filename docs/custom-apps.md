@@ -185,9 +185,14 @@ never writes code: it declares typed fields (`text`, `number`, `bool`, `date`, `
   "done", equals: true}, at?: "09:00"}` notifies once per row when its date arrives, in the pod's time zone
   (`set_time_zone`). Decision [`collection-reminders`](decisions/collection-reminders.md).
 - **Row edits by Claude.** `edit_rows` (imports, backfills) first answers a preview and a confirm token, which Claude
-  shows the user before applying; `undo_edit` reverts it. `add_row` writes one row the user just asked for at once,
-  undoable the same way (decision [`collections-add-row`](decisions/collections-add-row.md)).
-- **Limits per pod:** 20 collections, 40 fields each, 5,000 rows and 4 MiB of values in all, 500 rows per edit or action call,
+  shows the user before applying with `edit_rows {collection, confirm}` (the pod keeps the previewed edits for an
+  hour, so they aren't sent twice); `undo_edit` reverts it. The edits are inline, or a file: `url` (fetched with the
+  `web` jack) or a body posted to `POST /v1/collections/<c>/import` with the pod token, as a JSON array of edits or
+  rows, JSON lines, or CSV (a header of field names, optional `op` and `id` columns, `recipe.name` columns naming a
+  ref's row by a unique field). A preview checks the whole set and lists every invalid edit by `/edits/<i>` or the
+  file's line (decision [`bulk-row-edits`](decisions/bulk-row-edits.md)). `add_row` writes one row the user just
+  asked for at once, undoable the same way (decision [`collections-add-row`](decisions/collections-add-row.md)).
+- **Limits per pod:** 20 collections, 40 fields each, 5,000 rows and 4 MiB of values in all, 5,000 rows per edit or action call (8 MiB per imported file),
   4,000 characters per text value.
 
 - **Deleting.** `delete_collection` removes a collection once no layout binds it and no other collection's ref,
