@@ -543,3 +543,30 @@ fn a_spinner_turns_while_the_session_animates() {
     assert_ne!(head(&mut s), first);
     assert_eq!(still[2], first[2], "same dots, turned");
 }
+
+#[test]
+fn a_fields_clear_button_empties_it_and_keeps_it_focused() {
+    let root = serde_json::from_value(
+        json!({ "type": "core://TextField", "field": "q", "placeholder": "Search" }),
+    )
+    .unwrap();
+    let mut s = Session::new("search", root, Default::default(), Viewport::PHONE);
+    // Nothing to clear: no button.
+    assert!(s.scene().unwrap().find_node("clear:q").is_none());
+    s.tap(&Target::Id("field:q".into())).unwrap();
+    s.type_text("q", "soup");
+    let field = s.scene().unwrap().find_node("field:q").unwrap().bounds;
+    let clear = s.scene().unwrap().find_node("clear:q").unwrap().bounds;
+    // At the field's right end, inside it.
+    assert!(clear[0] + clear[2] <= field[0] + field[2]);
+    assert!(clear[0] > field[0] + field[2] / 2.0);
+    // A point on it hits the button, not the field around it.
+    let (x, y) = (clear[0] + clear[2] / 2.0, clear[1] + clear[3] / 2.0);
+    let out = s.tap(&Target::Point(x, y)).unwrap();
+    assert!(!s.form.contains_key("q"));
+    assert_eq!(s.focused.as_deref(), Some("q"));
+    assert_eq!(Session::focused_field(&out), Some("q"));
+    assert!(s.scene().unwrap().find_node("clear:q").is_none());
+    s.type_text("q", "bread");
+    assert_eq!(s.form["q"], "bread");
+}

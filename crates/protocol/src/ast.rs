@@ -234,7 +234,8 @@ pub enum UiNode {
         blurhash: Option<String>,
     },
     /// A text input whose value is the form value `$form.<field>` for the
-    /// intents of its screen. `on_submit` (a send button, and the keyboard's
+    /// intents of its screen. While it has text, an x at its right end
+    /// empties it (typing goes on). `on_submit` (a send button, and the keyboard's
     /// submit) is dispatched with the value bound, then the field is cleared;
     /// it is not dispatched while the field is blank. `lines` (schema 9,
     /// D51) makes a field without `on_submit` multi-line, growing up to that
