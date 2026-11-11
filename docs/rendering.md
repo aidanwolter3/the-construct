@@ -107,9 +107,13 @@ Presented layouts are drawn as the Compose UI drew them: a sheet (85% of the hei
 tapped; a screen a sheet or panel opens stays inside it. A sheet dragged by its handle strip, or a panel dragged
 sideways toward its edge, follows the finger and closes past a quarter of its size or on a flick faster than
 500 points per second, else settles back. In a window, layouts and screens slide in and out over
-280 ms (`FastOutSlowInEasing`); a fling follows Android's `OverScroller` spline from the release velocity, estimated
-over the last 100 ms with Android's impulse strategy (`VelocityTracker`'s and Compose's default), which weighs the
-speed at release over the average. A drag's scrolling is applied once per frame, and the GPU renderer keeps shaped text between frames. `action.device` `show_versions` fills `local://versions` and `local:versions` from
+280 ms (`FastOutSlowInEasing`). Scrolling's physics are `scroll.rs` (decision `scroll-physics`), which reads no
+clock, so gestures replay in its unit tests: the release velocity is a least-squares fit over the last 100 ms (at
+least 3 samples; none after a 40 ms pause), counting moves that arrive in one burst as one sample, since Android
+delivers the moves queued during a frame together; a fling follows Android's `OverScroller` curve (Flutter's closed
+form, starting at the release speed), 50 to 8000 points per second, and stops at the view's end; a finger landing on
+a fling faster than 50 points per second stops it without tapping. A mouse wheel notch glides 64 points over about
+120 ms; trackpad deltas apply as they come (macOS adds its own momentum). A drag's scrolling is applied once per frame, and the GPU renderer keeps shaped text between frames. `action.device` `show_versions` fills `local://versions` and `local:versions` from
 `/v1/apps/<id>/versions`; `pin_version` draws that version (`/v1/apps/<id>/versions/<n>`'s layout over the
 layout's latest data) wherever the layout shows, home included, until `follow_latest`, and new versions published
 meanwhile don't replace it; the engine keeps pins across restarts (`set_pinned_version`) and forgets them on Leave

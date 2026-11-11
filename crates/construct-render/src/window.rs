@@ -21,6 +21,7 @@ use crate::interact::Target;
 pub use crate::platform::{
     Platform, PlatformEvent, Reopen, clipboard_here, open_link_here, set_clipboard_here,
 };
+use crate::scroll::{Fling, Flinging, TOUCH_SLOP, VelocityTracker, WHEEL_NOTCH, WheelGlide};
 use crate::viewer::{Controller, EditKey, Event};
 
 /// Writes a line to the platform log (logcat on Android, stderr elsewhere).
@@ -128,9 +129,11 @@ impl accesskit::DeactivationHandler for Inbox {
 struct Drag {
     start: (f32, f32),
     last: (f32, f32),
-    at: Instant,
-    /// Recent positions (time, x, y), for the release velocity.
-    samples: std::collections::VecDeque<(Instant, f32, f32)>,
+    /// Its positions across and down, for the release velocity.
+    vx: VelocityTracker,
+    vy: VelocityTracker,
+    /// It landed on a moving fling: it stopped it, and is no tap.
+    caught: bool,
     /// Moved far enough to be a drag, not a tap.
     dragging: bool,
     /// Something scrolled during it (so it is not a swipe).
@@ -153,113 +156,11 @@ struct Drag {
     long_pressed: bool,
 }
 
-impl Drag {
-    /// The release velocity over the last 100 ms, points per second (x, y),
-    /// estimated as Compose's `VelocityTracker` does by default.
-    fn velocity(&self) -> (f32, f32) {
-        let Some(&(t0, _, _)) = self.samples.front() else {
-            return (0.0, 0.0);
-        };
-        let t: Vec<f32> = self
-            .samples
-            .iter()
-            .map(|s| s.0.duration_since(t0).as_secs_f32())
-            .collect();
-        let x: Vec<f32> = self.samples.iter().map(|s| s.1).collect();
-        let y: Vec<f32> = self.samples.iter().map(|s| s.2).collect();
-        (impulse_velocity(&t, &x), impulse_velocity(&t, &y))
-    }
-}
-
-/// Android's impulse velocity strategy (`VelocityTracker`'s default, and
-/// Compose's): the kinetic energy each movement adds, oldest to newest, so
-/// the speed at release weighs more than an average over the window.
-/// `t` in seconds, `p` positions, both oldest first.
-fn impulse_velocity(t: &[f32], p: &[f32]) -> f32 {
-    let speed = |work: f32| work.signum() * (2.0 * work.abs()).sqrt();
-    let mut work = 0.0f32;
-    let mut first = true;
-    for k in 1..t.len().min(p.len()) {
-        let dt = t[k] - t[k - 1];
-        if dt <= 0.0 {
-            continue;
-        }
-        let v = (p[k] - p[k - 1]) / dt;
-        let before = speed(work);
-        work += (v - before) * v.abs();
-        if first {
-            work *= 0.5;
-            first = false;
-        }
-    }
-    speed(work)
-}
-
-/// A scroll still moving after the finger left, along Android's fling
-/// curve (`OverScroller`'s spline, which Compose's default fling uses too).
-struct Fling {
-    at: (f32, f32),
-    start: Instant,
-    /// Up (content moves up) or down.
-    sign: f32,
-    duration: f32,
-    distance: f32,
-    applied: f32,
-}
-
-/// Android's fling constants (`ViewConfiguration.getScrollFriction()`,
-/// `OverScroller`), in points.
-const INFLEXION: f32 = 0.35;
-const SCROLL_FRICTION: f32 = 0.015;
-/// `ln(0.78) / ln(0.9)`.
-const DECELERATION_RATE: f32 = 2.358_201_7;
-/// g × inches per meter × 160 points per inch × 0.84 (`OverScroller`).
-const PHYSICAL_COEFF: f32 = 9.806_65 * 39.37 * 160.0 * 0.84;
-
-impl Fling {
-    /// A fling at `velocity` points per second: how long and how far it goes.
-    fn new(at: (f32, f32), velocity: f32, start: Instant) -> Fling {
-        let v = velocity.abs().min(MAX_FLING);
-        let l = (INFLEXION * v / (SCROLL_FRICTION * PHYSICAL_COEFF)).ln();
-        let duration = (l / (DECELERATION_RATE - 1.0)).exp();
-        let distance = SCROLL_FRICTION
-            * PHYSICAL_COEFF
-            * (DECELERATION_RATE / (DECELERATION_RATE - 1.0) * l).exp();
-        Fling {
-            at,
-            start,
-            sign: velocity.signum(),
-            duration,
-            distance,
-            applied: 0.0,
-        }
-    }
-
-    /// How far along the curve it is at `now` (points), and whether done.
-    fn position(&self, now: Instant) -> (f32, bool) {
-        let u = (now.duration_since(self.start).as_secs_f32() / self.duration).min(1.0);
-        (
-            self.distance * (1.0 - (1.0 - u).powf(DECELERATION_RATE)),
-            u >= 1.0,
-        )
-    }
-}
-
-/// Movement before a touch counts as a drag (points).
-const TOUCH_SLOP: f32 = 8.0;
 /// A touch held this long without moving is a long press (Android's
 /// `ViewConfiguration.getLongPressTimeout()`).
 const LONG_PRESS: f32 = 0.5;
 /// Movement for a drag that scrolled nothing to count as a swipe (points).
 const SWIPE_DISTANCE: f32 = 48.0;
-/// Slowest and fastest flings (points per second, Android's
-/// `ViewConfiguration` minimum and maximum fling velocities).
-const MIN_FLING: f32 = 50.0;
-const MAX_FLING: f32 = 8000.0;
-/// How far back the release velocity looks, and how long a finger held
-/// still before lifting means no fling (Compose's `VelocityTracker`).
-const VELOCITY_HORIZON: f32 = 0.1;
-const STILL_BEFORE_LIFT: f32 = 0.04;
 
 /// The window's state across the event loop.
 pub struct App {
@@ -269,7 +170,12 @@ pub struct App {
     surface: Option<Surface>,
     cursor: (f32, f32),
     drag: Option<Drag>,
-    fling: Option<Fling>,
+    /// A fling under way, and the point whose scrolling view it moves.
+    fling: Option<(Flinging, (f32, f32))>,
+    /// Mouse wheel notches still gliding, and where the pointer was.
+    wheel: (WheelGlide, (f32, f32)),
+    /// Time zero for the scroll physics, which take seconds.
+    epoch: Instant,
     /// Wakes the event loop (a session's images and answers arriving).
     waker: Option<Waker>,
     /// Shift, Control, Command held on a hardware keyboard.
@@ -290,6 +196,8 @@ impl App {
             cursor: (0.0, 0.0),
             drag: None,
             fling: None,
+            wheel: Default::default(),
+            epoch: Instant::now(),
             waker: None,
             mods: ModifiersState::empty(),
             inbox: Default::default(),
@@ -439,6 +347,7 @@ impl App {
         self.controller = Controller::new(session);
         self.drag = None;
         self.fling = None;
+        self.wheel.0.stop();
         if let Some(s) = self.surface.as_mut() {
             s.renderer.images = Some(self.controller.session.images.clone());
             s.window.request_redraw();
@@ -487,21 +396,33 @@ impl App {
         true
     }
 
-    /// Moves a fling on by the time since the last frame; true while it
-    /// still moves.
-    fn step_fling(&mut self) -> bool {
-        let Some(f) = self.fling.as_mut() else {
-            return false;
-        };
-        let (pos, done) = f.position(Instant::now());
-        let dy = f.sign * (pos - f.applied);
-        f.applied = pos;
-        let (x, y) = f.at;
-        let moved = dy == 0.0 || self.scroll(x, y, dy);
-        if !moved || done {
-            self.fling = None;
+    /// Seconds since `epoch`, as the scroll physics count time.
+    fn secs(&self, at: Instant) -> f64 {
+        at.duration_since(self.epoch).as_secs_f64()
+    }
+
+    /// Moves a fling and a wheel glide on to this frame; true while either
+    /// still moves. Each stops at its view's end.
+    fn step_scrolling(&mut self) -> bool {
+        let now = self.secs(Instant::now());
+        let mut moving = false;
+        if let Some((mut f, (x, y))) = self.fling.take() {
+            let (dy, done) = f.step(now);
+            let moved = dy == 0.0 || self.scroll(x, y, dy);
+            if moved && !done {
+                self.fling = Some((f, (x, y)));
+                moving = true;
+            }
         }
-        moved && !done
+        if self.wheel.0.active() {
+            let (x, y) = self.wheel.1;
+            let dy = self.wheel.0.step(now);
+            if dy != 0.0 && !self.scroll(x, y, dy) {
+                self.wheel.0.stop();
+            }
+            moving |= self.wheel.0.active();
+        }
+        moving
     }
 
     /// A finger or the mouse button went down: the row there darkens.
@@ -643,7 +564,7 @@ impl App {
             }
             self.drag = Some(d);
         }
-        let flinging = self.step_fling();
+        let flinging = self.step_scrolling();
         let Some(s) = self.surface.as_mut() else {
             return;
         };
@@ -862,7 +783,7 @@ impl ApplicationHandler for App {
         let held = self
             .drag
             .as_ref()
-            .filter(|d| !d.dragging && !d.long_pressed && !d.grabbing)
+            .filter(|d| !d.dragging && !d.long_pressed && !d.grabbing && !d.caught)
             .map(|d| {
                 (
                     d.started + std::time::Duration::from_secs_f32(LONG_PRESS),
@@ -966,28 +887,45 @@ impl ApplicationHandler for App {
                     y: self.cursor.1,
                 })
             }
-            WindowEvent::MouseWheel { delta, .. } => {
-                let dy = match delta {
-                    MouseScrollDelta::LineDelta(_, y) => -y * 40.0,
-                    MouseScrollDelta::PixelDelta(p) => -p.y as f32 / scale,
-                };
-                self.apply(Event::Scroll {
-                    x: self.cursor.0,
-                    y: self.cursor.1,
-                    dy,
-                });
-            }
+            // A mouse wheel's notches glide; a trackpad's pixels apply as
+            // they come (macOS sends its own momentum after the fingers lift).
+            WindowEvent::MouseWheel { delta, .. } => match delta {
+                MouseScrollDelta::LineDelta(_, y) => {
+                    let now = self.secs(Instant::now());
+                    self.fling = None;
+                    self.wheel.1 = self.cursor;
+                    self.wheel.0.push(now, -y * WHEEL_NOTCH);
+                    if let Some(s) = &self.surface {
+                        s.window.request_redraw();
+                    }
+                }
+                MouseScrollDelta::PixelDelta(p) => {
+                    self.wheel.0.stop();
+                    self.apply(Event::Scroll {
+                        x: self.cursor.0,
+                        y: self.cursor.1,
+                        dy: -p.y as f32 / scale,
+                    });
+                }
+            },
             WindowEvent::Touch(t) => {
                 let p = (t.location.x as f32 / scale, t.location.y as f32 / scale);
                 let now = Instant::now();
                 match t.phase {
                     TouchPhase::Started => {
-                        self.fling = None;
+                        // A finger on a moving fling stops it, and is no tap.
+                        let secs = self.secs(now);
+                        let caught = self.fling.take().is_some_and(|(f, _)| f.caught(secs));
+                        self.wheel.0.stop();
+                        let (mut vx, mut vy) = (VelocityTracker::new(), VelocityTracker::new());
+                        vx.add(secs, p.0);
+                        vy.add(secs, p.1);
                         self.drag = Some(Drag {
                             start: p,
                             last: p,
-                            at: now,
-                            samples: std::iter::once((now, p.0, p.1)).collect(),
+                            vx,
+                            vy,
+                            caught,
                             dragging: false,
                             scrolled: false,
                             frame: self.controller.session.frame_drag_at(p.0, p.1),
@@ -1002,7 +940,9 @@ impl ApplicationHandler for App {
                             long_pressed: false,
                             pending: 0.0,
                         });
-                        self.press(p.0, p.1);
+                        if !caught {
+                            self.press(p.0, p.1);
+                        }
                     }
                     TouchPhase::Moved => {
                         let Some(mut d) = self.drag.take() else {
@@ -1045,13 +985,9 @@ impl ApplicationHandler for App {
                             d.pending += d.last.1 - p.1;
                         }
                         d.last = p;
-                        d.at = now;
-                        d.samples.push_back((now, p.0, p.1));
-                        while d.samples.len() > 2
-                            && now.duration_since(d.samples[0].0).as_secs_f32() > VELOCITY_HORIZON
-                        {
-                            d.samples.pop_front();
-                        }
+                        let secs = self.secs(now);
+                        d.vx.add(secs, p.0);
+                        d.vy.add(secs, p.1);
                         self.drag = Some(d);
                         if let Some(s) = &self.surface {
                             s.window.request_redraw();
@@ -1075,24 +1011,18 @@ impl ApplicationHandler for App {
                             d.scrolled = true;
                         }
                         let (tx, ty) = (p.0 - d.start.0, p.1 - d.start.1);
-                        // The release velocity over the last 100 ms (content
-                        // moving up is positive); none if the finger was held
-                        // still before lifting.
-                        let stale = now.duration_since(d.at).as_secs_f32() > STILL_BEFORE_LIFT;
-                        let (vx, vy) = d.velocity();
-                        // Content moving up is a positive scroll velocity.
-                        let velocity = -vy;
+                        // The release velocity over the last 100 ms; none if
+                        // the finger was held still before lifting.
+                        let secs = self.secs(now);
+                        let (vx, vy) = (d.vx.velocity(secs), d.vy.velocity(secs));
                         if d.paging
                             && let Some((id, _)) = &d.pager
                         {
-                            self.controller
-                                .session
-                                .release_pager(id, if stale { 0.0 } else { vx });
+                            self.controller.session.release_pager(id, vx);
                             if let Some(s) = &self.surface {
                                 s.window.request_redraw();
                             }
                         } else if d.moving_frame {
-                            let (vx, vy) = if stale { (0.0, 0.0) } else { (vx, vy) };
                             if self.controller.session.release_frame(vx, vy)
                                 && let Some(p) = &self.platform
                             {
@@ -1102,7 +1032,9 @@ impl ApplicationHandler for App {
                                 s.window.request_redraw();
                             }
                         } else if !d.dragging {
-                            self.apply(Event::Tap { x: p.0, y: p.1 });
+                            if !d.caught {
+                                self.apply(Event::Tap { x: p.0, y: p.1 });
+                            }
                         } else if !d.scrolled && tx.abs().max(ty.abs()) > SWIPE_DISTANCE {
                             let kind = if tx.abs() > ty.abs() {
                                 if tx > 0.0 {
@@ -1120,8 +1052,11 @@ impl ApplicationHandler for App {
                                 y: d.start.1,
                                 kind,
                             });
-                        } else if d.scrolled && !stale && velocity.abs() > MIN_FLING {
-                            self.fling = Some(Fling::new(d.start, velocity, now));
+                        } else if d.scrolled
+                            // Content moving up is a positive scroll velocity.
+                            && let Some(fling) = Fling::new(-vy)
+                        {
+                            self.fling = Some((Flinging::new(fling, secs), d.start));
                             if let Some(s) = &self.surface {
                                 s.window.request_redraw();
                             }
@@ -1235,24 +1170,4 @@ pub fn run_app(event_loop: EventLoop<()>, mut app: App) -> Result<(), String> {
     app.controller.session.images.set_waker(move || w());
     app.waker = Some(waker);
     event_loop.run_app(&mut app).map_err(|e| e.to_string())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::impulse_velocity;
-
-    #[test]
-    fn a_steady_drag_gives_its_speed_and_a_flick_its_last_speed() {
-        let t: Vec<f32> = (0..7).map(|i| i as f32 * 0.016).collect();
-        let steady: Vec<f32> = t.iter().map(|t| t * 1000.0).collect();
-        let v = impulse_velocity(&t, &steady);
-        assert!((v - 1000.0).abs() < 1.0, "{v}");
-        // Speeding up to 3000 points/s: well above the average (about 1700).
-        let mut flick = vec![0.0f32];
-        for k in 1..7 {
-            flick.push(flick[k - 1] + 0.016 * 500.0 * k as f32);
-        }
-        let v = impulse_velocity(&t, &flick);
-        assert!(v > 2200.0, "{v}");
-    }
 }

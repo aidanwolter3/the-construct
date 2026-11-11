@@ -22,6 +22,7 @@ pub mod interact;
 pub mod layout;
 pub mod platform;
 pub mod scene;
+pub mod scroll;
 pub mod style;
 pub mod text;
 pub mod viewer;
