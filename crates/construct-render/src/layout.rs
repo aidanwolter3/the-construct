@@ -589,10 +589,19 @@ fn fills_height(n: &UiNode) -> bool {
     }
 }
 
-/// A row child that shrinks and wraps (Compose `RowPart.Flexible`).
+/// A row child that shrinks and wraps (Compose `RowPart.Flexible`). A
+/// horizontal container of controls only (chips, buttons, sized boxes) is a
+/// control: it keeps its width, so a text beside it that wraps can't squeeze
+/// it and push its chips past the row.
 fn row_flexible(n: &UiNode) -> bool {
     match n {
-        UiNode::Text { .. } | UiNode::Container { .. } | UiNode::Column { .. } => true,
+        UiNode::Text { .. } | UiNode::Column { .. } => true,
+        UiNode::Container {
+            orientation: Orientation::Horizontal,
+            children,
+            ..
+        } => children.iter().any(row_flexible),
+        UiNode::Container { .. } => true,
         UiNode::Conditional { content, .. }
         | UiNode::Tappable { content, .. }
         | UiNode::Gesture { content, .. } => row_flexible(content),
@@ -625,6 +634,10 @@ fn placed(mut style: Style, n: &UiNode, axis: Axis) -> Style {
             style.flex_grow = style.flex_grow.max(0.0);
             if row_flexible(n) {
                 style.flex_shrink = 1.0;
+                // Text and columns wrap down to nothing; a container keeps
+                // its content's minimum (its widest control, its longest
+                // word), or a chip in it would spill past the row when a
+                // text beside it wraps.
                 style.min_size.width = length(0.0);
             } else if wide && !matches!(n, UiNode::Column { .. } | UiNode::Container { .. }) {
                 style.flex_grow = 1.0;
