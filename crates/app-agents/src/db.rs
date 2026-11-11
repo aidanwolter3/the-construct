@@ -7,10 +7,15 @@
 //!   it answered, so a queued row is sent once.
 //! - `agents_marks`: what the Tasks wiring did once per run (a `stop_run`
 //!   sent, an ended run noted in the row's diagnosis).
+//! - `agents_reviewed`: runs marked reviewed on this pod (decision
+//!   `agents-runs`: the runner's record stays as it is). A run leaves it
+//!   when it leaves the mirror.
 //!
 //! Step `cap_v2` (decision `agents-runs`) drops v1's event timeline (a run's
 //! log is read from the runner on demand) and empties the stored state, so
 //! the follower takes a v2 snapshot.
+
+use std::collections::BTreeSet;
 
 use pod_core::store::{Step, Store};
 use rusqlite::{OptionalExtension, params};
@@ -49,7 +54,18 @@ CREATE TABLE agents_launches (
 
 /// By name: add steps at the end; never rename, edit or remove one that
 /// shipped.
-pub static MIGRATIONS: &[Step] = &[Step::sql("schema", SCHEMA), Step::sql("cap_v2", CAP_V2)];
+pub static MIGRATIONS: &[Step] = &[
+    Step::sql("schema", SCHEMA),
+    Step::sql("cap_v2", CAP_V2),
+    Step::sql("reviewed", REVIEWED),
+];
+
+const REVIEWED: &str = "
+CREATE TABLE agents_reviewed (
+    run_id TEXT PRIMARY KEY,
+    at INTEGER NOT NULL
+);
+";
 
 const CAP_V2: &str = "
 DROP TABLE agents_events;
@@ -110,7 +126,7 @@ pub fn sign_in(store: &Store, runner: &Runner, state: &State, now: i64) -> rusql
 fn clear_on(tx: &rusqlite::Connection) -> rusqlite::Result<()> {
     tx.execute_batch(
         "DELETE FROM agents_runner; DELETE FROM agents_state; DELETE FROM agents_launches;
-         DELETE FROM agents_marks;",
+         DELETE FROM agents_marks; DELETE FROM agents_reviewed;",
     )
 }
 
@@ -150,16 +166,17 @@ pub struct Health {
     pub last_ok_at: Option<i64>,
 }
 
-/// The stored state and health (`None` when signed out).
+/// The stored state and health (`None` when signed out), with the runs
+/// marked reviewed in [`State::reviewed`].
 pub fn state(store: &Store) -> rusqlite::Result<Option<(State, Health)>> {
     store.with_conn(|c| {
-        c.query_row(
+        let found = c.query_row(
             "SELECT state_json, connected, last_error, last_ok_at FROM agents_state WHERE id = 1",
             [],
             |r| {
                 let json: String = r.get(0)?;
                 Ok((
-                    serde_json::from_str(&json).unwrap_or_default(),
+                    serde_json::from_str::<State>(&json).unwrap_or_default(),
                     Health {
                         connected: r.get::<_, i64>(1)? != 0,
                         last_error: r.get(2)?,
@@ -168,20 +185,46 @@ pub fn state(store: &Store) -> rusqlite::Result<Option<(State, Health)>> {
                 ))
             },
         )
-        .optional()
+        .optional()?;
+        let Some((mut st, h)) = found else {
+            return Ok(None);
+        };
+        st.reviewed = reviewed_on(c)?;
+        Ok(Some((st, h)))
+    })
+}
+
+fn reviewed_on(c: &rusqlite::Connection) -> rusqlite::Result<BTreeSet<String>> {
+    let mut stmt = c.prepare_cached("SELECT run_id FROM agents_reviewed")?;
+    stmt.query_map([], |r| r.get(0))?.collect()
+}
+
+/// Mark run `run_id` reviewed on this pod.
+pub fn set_reviewed(store: &Store, run_id: &str, now: i64) -> rusqlite::Result<()> {
+    store.with_conn(|c| {
+        c.execute(
+            "INSERT OR IGNORE INTO agents_reviewed (run_id, at) VALUES (?1, ?2)",
+            params![run_id, now],
+        )
+        .map(|_| ())
     })
 }
 
 /// Save `state` after a good answer from the runner. Nothing is saved once
-/// signed out.
+/// signed out. Runs no longer in it are no longer marked reviewed.
 pub fn save(store: &Store, state: &State, now: i64) -> rusqlite::Result<()> {
-    store.with_conn(|c| {
-        c.execute(
+    store.transaction(|tx| {
+        tx.execute(
             "UPDATE agents_state SET state_json = ?1, connected = 1, last_error = NULL,
              last_ok_at = ?2, updated_at = ?2 WHERE id = 1",
             params![serde_json::to_string(state).expect("serializes"), now],
-        )
-        .map(|_| ())
+        )?;
+        for id in reviewed_on(tx)? {
+            if !state.runs.contains_key(&id) {
+                tx.execute("DELETE FROM agents_reviewed WHERE run_id = ?1", [id])?;
+            }
+        }
+        Ok(())
     })
 }
 
@@ -285,7 +328,8 @@ mod tests {
                      VALUES (1, '{\"cursor\": 42, \"sessions\": {}}', 1, 5, 5);
                      INSERT INTO agents_launches (task_id, collection, at) VALUES ('r1', 'tasks', 1);",
                 )?;
-                c.execute_batch(CAP_V2)
+                c.execute_batch(CAP_V2)?;
+                c.execute_batch(REVIEWED)
             })
             .unwrap();
         let (st, h) = state(&store).unwrap().unwrap();
@@ -295,5 +339,38 @@ mod tests {
         assert!(mark(&store, "stop:run_1", 1).unwrap());
         assert!(!mark(&store, "stop:run_1", 2).unwrap());
         assert!(marked(&store, "stop:run_1").unwrap());
+    }
+
+    #[test]
+    fn a_reviewed_run_is_forgotten_when_it_leaves_the_mirror() {
+        let store = Store::open_in_memory().unwrap();
+        store
+            .with_conn(|c| {
+                c.execute_batch(SCHEMA)?;
+                c.execute_batch(CAP_V2)?;
+                c.execute_batch(REVIEWED)
+            })
+            .unwrap();
+        let runner = Runner {
+            url: "https://runner.example".into(),
+            token: "t".into(),
+        };
+        let mut st = State::default();
+        for id in ["run_a", "run_b"] {
+            st.runs.insert(id.into(), crate::state::Run::default());
+        }
+        sign_in(&store, &runner, &st, 1).unwrap();
+        set_reviewed(&store, "run_a", 2).unwrap();
+        set_reviewed(&store, "run_b", 2).unwrap();
+        // The follower's copy knows nothing of the marks; saving keeps them.
+        save(&store, &st, 3).unwrap();
+        assert_eq!(state(&store).unwrap().unwrap().0.reviewed.len(), 2);
+        st.runs.remove("run_a");
+        save(&store, &st, 4).unwrap();
+        let reviewed = state(&store).unwrap().unwrap().0.reviewed;
+        assert_eq!(reviewed.into_iter().collect::<Vec<_>>(), ["run_b"]);
+        sign_out(&store).unwrap();
+        sign_in(&store, &runner, &st, 5).unwrap();
+        assert!(state(&store).unwrap().unwrap().0.reviewed.is_empty());
     }
 }

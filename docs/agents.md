@@ -58,12 +58,18 @@ is plugged and to which URL; `unplug_jack agent_runner` signs out, like `POST /v
   `schedules`; and `/v1/agents/sessions/timeline?id=<run id>` (`agents:timeline:<id>`), the run's log read from the
   runner when the screen opens (kept 10 s). `agents:status.summary_text` reads e.g. "1 working · 1 needs you · 2
   queued" or "Nothing running". A run's `status_text` is one of Queued, Starting, Working, Needs you, Done, Needs
-  review, Blocked, Failed, Stopped, Lost, Didn't start, Timed out, Expired. The entities and their fields are in the
-  source's manifest (`describe_vocabulary`, `list_data_sources`).
+  review, Blocked, Failed, Stopped, Lost, Didn't start, Timed out, Expired, or Reviewed for a run that needed review
+  and was marked reviewed on this pod (`needs_review` turns false, `reviewed` true). The entities and their fields are
+  in the source's manifest (`describe_vocabulary`, `list_data_sources`).
 - **Actions:** `/v1/agents/sessions/stop {run_id}` (`session_id` is read the same way, for older layouts),
   `/v1/agents/sandboxes/wake`, `/v1/agents/tasks/start`, `/v1/agents/tasks/reopen`, `/v1/agents/schedules/run`,
-  `/pause` and `/resume`. They need a valid pod session; runner refusals come back as 400, 404 or 409
-  `runner_refused`, and 502 otherwise (never 401, which would sign the device out).
+  `/pause` and `/resume`; and `/v1/agents/sessions/review {run_id}`, which tells the runner nothing. They need a
+  valid pod session; runner refusals come back as 400, 404 or 409 `runner_refused`, and 502 otherwise (never 401,
+  which would sign the device out).
+- **Mark reviewed** (decision [`agents-reviewed`](decisions/agents-reviewed.md)): `/v1/agents/sessions/review`
+  acknowledges an ended run that needs review, on this pod only (409 `not_needing_review` for any other run). The
+  mark is kept in `agents_reviewed` until the run leaves the runner's snapshot (or the pod signs out). A linked task
+  row in `review` whose current run it is goes to `done`.
 - **Untrusted text:** everything the runner sends is plain display text, cleaned of control characters and capped.
   The links kept are `pr_url`, only as `https://github.com/<owner>/<repo>/pull/<n>`, and `claude_url`, only as
   `https://claude.ai/code/` and a path of plain segments; without a `claude_url`, "Open in Claude" is built from the
@@ -75,7 +81,8 @@ is plugged and to which URL; `unplug_jack agent_runner` signs out, like `POST /v
 ("1 working · 1 needs you · 2 queued"), chips for Runs, Schedules, Sandboxes and Checks, a "Start a run" form, and
 Sign out (asks first). A run's card shows its status, Asleep, what it needs from you (e.g. "Has a question" and the
 question), its tool or outcome. A run's screen adds **Open in Claude**, **Pull request**, **Stop** (on active runs,
-asks first), a **Follow up** form (Reopen) on an ended task run, and its log. Schedules have **Run now**, **Pause**
+asks first), **Mark reviewed** on an ended run that needs review, a **Follow up** form (Reopen) on an ended task run,
+and its log. Schedules have **Run now**, **Pause**
 (asks first) and **Resume**; sandboxes that aren't awake have **Wake**. It uses existing vocabulary only.
 
 A layout made from it (`{"type": "core://Ref", "app": "agents", "part": "layout"}`) is linked from home; home can
@@ -126,6 +133,7 @@ optional text fields `run_id`, `session_id`, `workspace` and `diagnosis`, throug
 - **Reopen:** `POST /v1/agents/tasks/reopen {id, message}` (or `{run_id, message}` from a run's screen) needs the
   row's last run to have ended. It sends `start_run` with `resume_from` the last run and `message` as the prompt; the
   new run continues the conversation in its worktree, and the row goes back to `queued` with the new `run_id`.
+- **Mark reviewed** on the row's current run sets a row in `review` to `done`.
 
 ## Setting it up in a pod
 

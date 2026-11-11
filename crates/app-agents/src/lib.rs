@@ -82,6 +82,7 @@ pub const RUN_SCHEDULE_PATH: &str = "/v1/agents/schedules/run";
 pub const PAUSE_SCHEDULE_PATH: &str = "/v1/agents/schedules/pause";
 pub const RESUME_SCHEDULE_PATH: &str = "/v1/agents/schedules/resume";
 pub const REOPEN_PATH: &str = "/v1/agents/tasks/reopen";
+pub const REVIEW_PATH: &str = "/v1/agents/sessions/review";
 pub const TIMELINE_PATH: &str = "/v1/agents/sessions/timeline";
 
 /// Minutes a Wake keeps a sandbox up unless the request says.
@@ -139,6 +140,14 @@ pub const MANIFEST: SourceManifest = SourceManifest {
             query_keys: &[],
             doc: "Stop a run: {run_id} (the session entity's id; session_id is taken too). \
                   Wrap it in action.confirm.",
+        },
+        PathSpec {
+            pattern: REVIEW_PATH,
+            query_keys: &[],
+            doc: "Mark an ended run that needs review reviewed, on this pod only: {run_id}. \
+                  Its status_text reads Reviewed and needs_review turns false (the runner's \
+                  record stays as it is); a linked task row in review whose current run it \
+                  is is set to done. Kept until the run leaves the runner's records.",
         },
         PathSpec {
             pattern: WAKE_PATH,
@@ -212,11 +221,19 @@ pub const MANIFEST: SourceManifest = SourceManifest {
                 ("status", "the same as state"),
                 (
                     "status_text",
-                    "e.g. Queued, Working, Needs you, Done, Needs review, Failed, Stopped, Lost",
+                    "e.g. Queued, Working, Needs you, Done, Needs review, Reviewed, Failed, Stopped, Lost",
                 ),
                 ("status_color", "#RRGGBB"),
                 ("active", "true until it ends"),
                 ("needs_you", "true while it waits for you"),
+                (
+                    "needs_review",
+                    "true once ended needing a person's review, until marked reviewed here",
+                ),
+                (
+                    "reviewed",
+                    "true once marked reviewed on this pod (status_text Reviewed)",
+                ),
                 (
                     "needs_you_reason",
                     "permission, question or stopped (while waiting)",
@@ -467,6 +484,7 @@ impl AppAdapter for AgentsAdapter {
             .route(PAUSE_SCHEDULE_PATH, post(pause_schedule_route))
             .route(RESUME_SCHEDULE_PATH, post(resume_schedule_route))
             .route(REOPEN_PATH, post(reopen_route))
+            .route(REVIEW_PATH, post(review_route))
             .route(TIMELINE_PATH, get(timeline_route))
     }
 
@@ -616,7 +634,8 @@ impl AppAdapter for AgentsAdapter {
         default), and the row's status follows its run: running, needs_you, then done, review or failed, with \
         the outcome's summary and pull request (or why it failed) appended to diagnosis. A row set to done or \
         todo keeps that status (its run is stopped). The action /v1/agents/tasks/reopen continues an ended \
-        run with a follow-up message.",
+        run with a follow-up message; /v1/agents/sessions/review marks a run reviewed and sets its row in \
+        review to done.",
             "inputSchema": {"type": "object", "properties": {
                 "collection": {"type": ["string", "null"], "description": "The collection's name, or null to unlink"},
                 "workspace": {"type": "string", "description": "The runner workspace tasks start in by default"}},
@@ -1002,6 +1021,52 @@ async fn reopen_route(State(pod): State<Pod>, headers: HeaderMap, body: Bytes) -
             detail,
         ),
     }
+}
+
+async fn review_route(State(pod): State<Pod>, headers: HeaderMap, body: Bytes) -> Response {
+    let body = match body_of(&pod, &headers, &body).await {
+        Ok(b) => b,
+        Err(r) => return r,
+    };
+    let run_id = match field(&body, "run_id", 120) {
+        Ok(id) if cap::valid_id(&id) => id,
+        Ok(_) => {
+            return refuse(
+                StatusCode::BAD_REQUEST,
+                "invalid_request",
+                "\"run_id\" names a run",
+            );
+        }
+        Err(r) => return r,
+    };
+    if let Err(r) = signed_in(&pod).await {
+        return r;
+    }
+    let state = match pod.blocking(db::state).await {
+        Ok(st) => st.map(|(s, _)| s).unwrap_or_default(),
+        Err(e) => return e.into_response(),
+    };
+    let Some(run) = state.runs.get(&run_id).cloned() else {
+        return refuse(
+            StatusCode::NOT_FOUND,
+            "not_found",
+            "the runner lists no such run",
+        );
+    };
+    if !bundle::needs_review(&run.state, &run.end_reason, &run.outcome) {
+        return refuse(
+            StatusCode::CONFLICT,
+            "not_needing_review",
+            "only an ended run that needs review can be marked reviewed",
+        );
+    }
+    let (id, now) = (run_id.clone(), follower::now_ms());
+    if let Err(e) = pod.blocking(move |s| db::set_reviewed(s, &id, now)).await {
+        return e.into_response();
+    }
+    let task_done = tasks::reviewed(&pod, &state, &run).await;
+    pod.publish_data_all(NAME);
+    Json(json!({"ok": true, "run_id": run_id, "task_done": task_done})).into_response()
 }
 
 #[derive(serde::Deserialize)]
