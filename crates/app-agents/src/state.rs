@@ -5,7 +5,7 @@
 //! the [`Effect`]s (notifications) owed by comparing each record before and
 //! after, so the rules are tested without a runner.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -39,6 +39,11 @@ pub struct State {
     /// `ended:<run>`, `check:<id>:<version>`), newest last and at most
     /// [`MAX_NOTIFIED`], so nothing is notified twice across restarts.
     pub notified: Vec<String>,
+    /// Runs marked reviewed on this pod: kept in their own table
+    /// (`agents_reviewed`), not with the runner's records, so the follower's
+    /// saves don't overwrite them.
+    #[serde(skip)]
+    pub reviewed: BTreeSet<String>,
 }
 
 /// One attempt at one piece of work on one Sprite, as the runner sent it

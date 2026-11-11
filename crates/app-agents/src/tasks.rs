@@ -511,6 +511,41 @@ async fn follow(
     }
 }
 
+/// Run `run` was marked reviewed: its row, when it is a linked task's and
+/// this is the row's current run, goes from `review` to `done`. Whether it
+/// did.
+pub async fn reviewed(pod: &Pod, state: &State, run: &Run) -> bool {
+    if run.task_id.is_empty() || st::schedule_of_task(&run.task_id).is_some() {
+        return false;
+    }
+    let Some(link) = pod.blocking(link).await.ok().flatten() else {
+        return false;
+    };
+    let (coll, rid) = (link.collection.clone(), run.task_id.clone());
+    let Some(row) = pod
+        .blocking(move |s| Ok(rows(s, &coll)?.into_iter().find(|(r, _)| *r == rid)))
+        .await
+        .ok()
+        .flatten()
+        .map(|(_, r)| r)
+    else {
+        return false;
+    };
+    let current = state.current_run(&run.task_id, &text(&row, "run_id"));
+    if current.is_none_or(|c| c.id != run.id) || text(&row, "status") != REVIEW {
+        return false;
+    }
+    let mut values = Map::new();
+    values.insert("status".into(), json!(DONE));
+    match app_collections::update_row(pod, &link.collection, &run.task_id, values).await {
+        Ok(_) => true,
+        Err(e) => {
+            tracing::warn!(error = %e["error"], detail = %e["detail"], "a reviewed task row could not be set done");
+            false
+        }
+    }
+}
+
 /// Why Reopen was refused: the status, error and detail for the route.
 pub type Refusal = (u16, &'static str, String);
 
