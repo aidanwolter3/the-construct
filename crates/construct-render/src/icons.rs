@@ -1,8 +1,9 @@
 //! The icons the app draws (`protocol::ICONS`): Material 24 × 24 path data
 //! (first generated from the Compose UI's `ConstructIcons.kt`, now the only
-//! copy), rasterized with zeno. A smooth curve (`s`) right
-//! after a line is written as the equal `c` with its first control point at
-//! the current point, which zeno draws wrongly otherwise.
+//! copy), rasterized with zeno. zeno draws some smooth curves (`s`) wrongly,
+//! so two kinds are written as the equal `c`: one right after a line (its first
+//! control point at the current point), and every repeat of an `s` that takes
+//! more than one curve (`s a b c d e f g h`), which zeno bends out of shape.
 
 /// The SVG path data of a named icon (one or more paths, 24 × 24 units).
 pub fn paths(name: &str) -> Option<&'static [&'static str]> {
@@ -31,7 +32,7 @@ pub fn paths(name: &str) -> Option<&'static [&'static str]> {
             "M13.5 0.67c0,0 0.74,2.65 0.74,4.8c0 2.06 -1.35 3.73 -3.41 3.73 -2.07 0 -3.63 -1.67 -3.63 -3.73l0.03 -0.36C5.21 7.51 4 10.62 4 14c0 4.42 3.58 8 8 8s8 -3.58 8 -8C20 8.61 17.41 3.8 13.5 0.67zM11.71 19c-1.78 0 -3.22 -1.4 -3.22 -3.14 0 -1.62 1.05 -2.76 2.81 -3.12 1.77 -0.36 3.6 -1.21 4.62 -2.58 0.39 1.29 0.59 2.65 0.59 4.04 0 2.65 -2.15 4.8 -4.8 4.8z",
         ],
         "timer" => &[
-            "M15 1H9v2h6V1zM11 14h2V8h-2v6zM19.03 7.39l1.42 -1.42c-0.43 -0.51 -0.9 -0.99 -1.41 -1.41l-1.42 1.42C16.07 4.74 14.12 4 12 4c-4.97 0 -9 4.03 -9 9s4.02 9 9 9 9 -4.03 9 -9c0 -2.12 -0.74 -4.07 -1.97 -5.61zM12 20c-3.87 0 -7 -3.13 -7 -7s3.13 -7 7 -7 7 3.13 7 7 -3.13 7 -7 7z",
+            "M15 1H9v2h6V1zM11 14h2V8h-2v6zM19.03 7.39l1.42 -1.42c-0.43 -0.51 -0.9 -0.99 -1.41 -1.41l-1.42 1.42C16.07 4.74 14.12 4 12 4c-4.97 0 -9 4.03 -9 9c0 4.97 4.02 9 9 9c4.97 0 9 -4.03 9 -9c0 -2.12 -0.74 -4.07 -1.97 -5.61zM12 20c-3.87 0 -7 -3.13 -7 -7c0 -3.87 3.13 -7 7 -7c3.87 0 7 3.13 7 7c0 3.87 -3.13 7 -7 7z",
         ],
         "add_photo" => &[
             "M19 7v2.99c0,0 -1.99,0.01 -2,0V7h-3c0,0 0.01,-1.99 0,-2h3V2h2v3h3v2h-3zM16 11V8h-3V5H5c-1.1 0 -2 0.9 -2 2v12c0 1.1 0.9 2 2 2h12c1.1 0 2 -0.9 2 -2v-8h-3zM5 19l3 -4 2 3 3 -4 4 5H5z",
@@ -57,7 +58,7 @@ pub fn paths(name: &str) -> Option<&'static [&'static str]> {
             "M12 22c1.1 0 2 -0.9 2 -2h-4c0 1.1 0.89 2 2 2zM18 16v-5c0 -3.07 -1.64 -5.64 -4.5 -6.32V4c0 -0.83 -0.67 -1.5 -1.5 -1.5s-1.5 0.67 -1.5 1.5v0.68C7.63 5.36 6 7.92 6 11v5l-2 2v1h16v-1l-2 -2z",
         ],
         "shopping_cart" => &[
-            "M7,18c-1.1,0 -1.99,0.9 -1.99,2S5.9,22 7,22s2,-0.9 2,-2 -0.9,-2 -2,-2zM1,2v2h2l3.6,7.59 -1.35,2.45c-0.16,0.28 -0.25,0.61 -0.25,0.96 0,1.1 0.9,2 2,2h12v-2H7.42c-0.14,0 -0.25,-0.11 -0.25,-0.25l0.03,-0.12 0.9,-1.63h7.45c0.75,0 1.41,-0.41 1.75,-1.03l3.58,-6.49C21.25,4.82 21.08,4.43 20.82,4.22 20.65,4.08 20.43,4 20.2,4H5.21l-0.94,-2H1zM17,18c-1.1,0 -1.99,0.9 -1.99,2s0.89,2 1.99,2 2,-0.9 2,-2 -0.9,-2 -2,-2z",
+            "M7,18c-1.1,0 -1.99,0.9 -1.99,2S5.9,22 7,22c1.1,0 2,-0.9 2,-2c0,-1.1 -0.9,-2 -2,-2zM1,2v2h2l3.6,7.59 -1.35,2.45c-0.16,0.28 -0.25,0.61 -0.25,0.96 0,1.1 0.9,2 2,2h12v-2H7.42c-0.14,0 -0.25,-0.11 -0.25,-0.25l0.03,-0.12 0.9,-1.63h7.45c0.75,0 1.41,-0.41 1.75,-1.03l3.58,-6.49C21.25,4.82 21.08,4.43 20.82,4.22 20.65,4.08 20.43,4 20.2,4H5.21l-0.94,-2H1zM17,18c-1.1,0 -1.99,0.9 -1.99,2c0,1.1 0.89,2 1.99,2c1.1,0 2,-0.9 2,-2c0,-1.1 -0.9,-2 -2,-2z",
         ],
         // A stapler from the side (drawn for this app, not Material).
         "stapler" => &[
@@ -120,6 +121,28 @@ mod tests {
             let ink = m.iter().filter(|a| **a > 128).count();
             assert!(ink > 48 && ink < 48 * 48, "{name}: {ink} pixels");
             assert_eq!(super::name(super::id(name).unwrap()), Some(name));
+        }
+    }
+
+    /// A repeated smooth curve (`s` with more than one curve's numbers) is
+    /// drawn out of shape by zeno (the timer's ring came out flattened), so
+    /// none is written: each repeat is spelled out as `c`.
+    #[test]
+    fn no_icon_repeats_a_smooth_curve() {
+        for name in protocol::ICONS {
+            for path in super::paths(name).unwrap() {
+                for (i, c) in path.char_indices().filter(|(_, c)| *c == 's' || *c == 'S') {
+                    let args = &path[i + 1..];
+                    let end = args
+                        .find(|c: char| c.is_ascii_alphabetic())
+                        .unwrap_or(args.len());
+                    let numbers = args[..end]
+                        .split(|c: char| c == ',' || c.is_whitespace() || c == '-')
+                        .filter(|n| !n.is_empty())
+                        .count();
+                    assert!(numbers <= 4, "{name}: `{c}` repeats a curve at {i}");
+                }
+            }
         }
     }
 
