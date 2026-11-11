@@ -2651,9 +2651,17 @@ impl Session {
                 out.push(Effect::Nothing);
             }
             "form.clear" => {
-                // The session's own step after a field's Send.
+                // The session's own step after a field's Send, and a field's
+                // clear button (`focus`: typing goes on in the emptied field).
                 if let Some(f) = intent["field"].as_str() {
                     self.form.remove(f);
+                    if intent["focus"] == true {
+                        self.focused = Some(f.to_owned());
+                        self.edit = None;
+                        out.push(Effect::Focused {
+                            field: f.to_owned(),
+                        });
+                    }
                 }
             }
             "action.mutation.optimistic" => self.optimistic(intent, out),

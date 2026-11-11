@@ -1484,7 +1484,26 @@ impl<'i> Build<'_, 'i> {
                 let text = self.text_leaf(tstyle, shown, type_for(TextStyle::Body), color, None);
                 // The session draws the caret, selection and handles over it.
                 self.elems[text].field = Some((field.clone(), max_length.map(|m| m as usize)));
-                let kids = vec![text];
+                let mut kids = vec![text];
+                if !value.is_empty() {
+                    // Empties the field and keeps typing in it.
+                    let glyph = self.icon("close", theme.muted_text, 20.0);
+                    let mut cstyle = column(0, pad(0, 0), AlignItems::CENTER);
+                    cstyle.justify_content = JustifyContent::CENTER;
+                    cstyle.size = Size {
+                        width: length(40.0),
+                        height: length(40.0),
+                    };
+                    cstyle.flex_shrink = 0.0;
+                    // Into the field's padding: the glyph sits 10 from its edge.
+                    cstyle.margin.right = length(-6.0);
+                    let tap = Tap::Intent {
+                        intent: json!({ "intent": "form.clear", "field": field, "focus": true }),
+                    };
+                    let mut csem = self.sem(b, n, Some("Clear".into()), Some(tap));
+                    csem.id = format!("clear:{field}");
+                    kids.push(self.push(cstyle, vec![glyph], Paint::None, Some(csem), false));
+                }
                 let blank = value.trim().is_empty();
                 let focused = self.input.focused == Some(field.as_str());
                 let mut style = row(8, pad(16, 0), AlignItems::CENTER);

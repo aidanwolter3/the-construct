@@ -59,7 +59,7 @@ subset the font with fontTools' `pyftsubset` and keep its license next to it.
 
 What agents and tests address: a node's `tag` (bound, e.g. `task_$item.id`); `<field>=<value>` for a
 `core://ChoiceChips` option or a `core://Dock` tab (`filter=started`, `filter=` for the empty value);
-`field:<name>` for a `core://TextField`; `list:<query_key>`, `chips:<field>`, `layout:<id>`; otherwise the node's
+`field:<name>` for a `core://TextField` (`clear:<name>` its x, `send:<name>` its Send); `list:<query_key>`, `chips:<field>`, `layout:<id>`; otherwise the node's
 path from the root (`root/0/2/i3/0`, `i3` being a list's fourth item). Bounds are logical points.
 
 ## Screen readers
