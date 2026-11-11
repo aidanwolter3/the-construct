@@ -689,9 +689,10 @@ fn stale_session_is_cleared_by_the_pods_401_on_fetch() {
         .unwrap();
     assert_eq!(revoked.status().as_u16(), 200);
 
-    // Restart with the stale session in the store.
+    // Restart with the stale session in the store (`stored_token` read it).
+    // Don't assert it starts signed in: its first fetch can be rejected
+    // before a snapshot is taken.
     let engine = engine(&env.pod, &store, None, RedirectMode::Loopback);
-    assert_eq!(auth(&engine.snapshot())["state"], "signed_in");
     wait_signed_out_bundle(&engine);
     assert_eq!(auth(&engine.snapshot())["state"], "signed_out");
     assert!(store.get(&session_key(&env.pod)).is_none());
