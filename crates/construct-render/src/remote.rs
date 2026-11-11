@@ -200,7 +200,7 @@ impl PodClient {
         data.queries.extend(device.queries);
         let mut s = Session::new(layout, spec.workspace, data, viewport);
         s.loader = Some(Box::new(self.clone()));
-        fetch_images(&s.images);
+        fetch_images(&s.images, None);
         Ok(s)
     }
 }
@@ -297,13 +297,16 @@ const IMAGE_WORKERS: usize = 4;
 
 /// Makes `store` download what it is asked for, on background threads.
 /// Images are fetched without the session (the pod serves media from public
-/// paths); one that fails keeps its placeholder.
-pub fn fetch_images(store: &ImageStore) {
+/// paths); one that fails keeps its placeholder. A `file://` image is read
+/// only from `staged`, the engine's staged attachments.
+pub fn fetch_images(store: &ImageStore, staged: Option<&std::path::Path>) {
     // Newest first: what is on screen now goes before what scrolled past.
     let queue: Arc<(Mutex<Vec<String>>, std::sync::Condvar)> = Arc::default();
+    let staged = staged.map(std::path::Path::to_path_buf);
     for _ in 0..IMAGE_WORKERS {
         let queue = queue.clone();
         let store = store.clone();
+        let staged = staged.clone();
         std::thread::spawn(move || {
             let http = client();
             loop {
@@ -319,9 +322,7 @@ pub fn fetch_images(store: &ImageStore) {
                 };
                 // A staged photo (`construct://attachments/<id>`) is a local file.
                 let bytes = match reqwest::Url::parse(&url) {
-                    Ok(u) if u.scheme() == "file" => {
-                        u.to_file_path().ok().and_then(|p| std::fs::read(p).ok())
-                    }
+                    Ok(u) if u.scheme() == "file" => read_staged(&u, staged.as_deref()),
                     _ => http
                         .get(&url)
                         .send()
@@ -349,4 +350,53 @@ pub fn fetch_images(store: &ImageStore) {
         lock.lock().unwrap_or_else(|p| p.into_inner()).push(url);
         ready.notify_one();
     });
+}
+
+/// The bytes of a `file://` image, when the file is inside `staged` (links
+/// and `..` resolved). A layout or a pod's data can name any `file://` URL,
+/// and must not draw the device's other files.
+fn read_staged(url: &reqwest::Url, staged: Option<&std::path::Path>) -> Option<Vec<u8>> {
+    let dir = std::fs::canonicalize(staged?).ok()?;
+    let path = std::fs::canonicalize(url.to_file_path().ok()?).ok()?;
+    if !path.starts_with(&dir) {
+        eprintln!("construct-render: not drawing a local file outside the staged photos");
+        return None;
+    }
+    std::fs::read(path).ok()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn only_staged_files_are_read() {
+        let root = std::env::temp_dir().join(format!("construct-staged-{}", std::process::id()));
+        let staged = root.join("attachments");
+        std::fs::create_dir_all(&staged).unwrap();
+        std::fs::write(staged.join("a.jpg"), b"photo").unwrap();
+        std::fs::write(root.join("private.db"), b"secret").unwrap();
+        let url = |p: &std::path::Path| reqwest::Url::from_file_path(p).unwrap();
+        assert_eq!(
+            read_staged(&url(&staged.join("a.jpg")), Some(&staged)).as_deref(),
+            Some(&b"photo"[..])
+        );
+        assert_eq!(
+            read_staged(&url(&root.join("private.db")), Some(&staged)),
+            None
+        );
+        let dotdot = reqwest::Url::parse(&format!("{}/../private.db", url(&staged))).unwrap();
+        assert_eq!(read_staged(&dotdot, Some(&staged)), None);
+        // A plain URL for the file outside the staged folder, written with `..`
+        // the parser doesn't fold.
+        let raw = reqwest::Url::parse(&format!(
+            "file://{}/attachments/%2E%2E/private.db",
+            root.display()
+        ))
+        .unwrap();
+        assert_eq!(read_staged(&raw, Some(&staged)), None);
+        // No staged folder (a preview without an engine): no local files.
+        assert_eq!(read_staged(&url(&staged.join("a.jpg")), None), None);
+        std::fs::remove_dir_all(&root).unwrap();
+    }
 }

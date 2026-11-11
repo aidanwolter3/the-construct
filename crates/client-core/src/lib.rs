@@ -1951,6 +1951,12 @@ impl ConstructEngine {
         self.inner.stage_attachment(path)
     }
 
+    /// Where staged attachments are: the only local files an image may be
+    /// drawn from.
+    pub fn attachments_dir(&self) -> &Path {
+        &self.inner.attachments_dir
+    }
+
     /// Forget a staged attachment the user removed before sending it.
     pub fn discard_attachment(&self, id: &str) {
         self.inner.discard_attachment(id);

@@ -426,7 +426,7 @@ impl PodEngine {
         }
         *lock(&self.shared.images) = Some(s.images.clone());
         s.loader = Some(Box::new(self.clone()));
-        remote::fetch_images(&s.images);
+        remote::fetch_images(&s.images, Some(self.engine.attachments_dir()));
         self.reload_device();
         s
     }

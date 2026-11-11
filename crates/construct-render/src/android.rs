@@ -522,9 +522,15 @@ fn set_clipboard_text(app: &AndroidApp, text: &str) -> Result<(), String> {
 }
 
 /// Opens `url` in the browser: an `ACTION_VIEW` intent from the activity.
-pub(crate) fn view_url(app: &AndroidApp, url: &str) -> jni::errors::Result<()> {
+/// Only an http(s) or mailto link ([`crate::platform::openable`]): the
+/// sign-in page's address comes from the pod, and another scheme would hand
+/// it to whichever app claims it (`content:`, `file:`, another app's links).
+pub(crate) fn view_url(app: &AndroidApp, url: &str) -> Result<(), String> {
     use jni::objects::{JObject, JValue};
     use jni::{jni_sig, jni_str};
+    if !crate::platform::openable(url) {
+        return Err("not an http(s) or mailto link".to_owned());
+    }
     // SAFETY: the VM pointer is valid for the life of the process.
     let vm = unsafe { jni::JavaVM::from_raw(app.vm_as_ptr().cast()) };
     let activity = app.activity_as_ptr() as jni::sys::jobject;
@@ -554,6 +560,7 @@ pub(crate) fn view_url(app: &AndroidApp, url: &str) -> jni::errors::Result<()> {
         )?;
         Ok(())
     })
+    .map_err(|e| e.to_string())
 }
 
 /// The window's insets in pixels (left, top, right, bottom):
