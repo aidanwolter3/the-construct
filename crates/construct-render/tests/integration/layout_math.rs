@@ -66,7 +66,7 @@ fn flexbox_expansion() {
 #[test]
 fn wrapped_text_leaves_a_trailing_control_inside_the_row() {
     // A recipe line: a fixed quantity, a name that wraps, a spacer and a
-    // fixed-width chip. The chip ends at the right padding whether or not
+    // chip in a horizontal container. The chip ends at the right padding whether or not
     // the name wraps, so every line's chip sits in one column.
     let line = |tag: &str, name: &str| {
         json!({ "type": "core://Row", "align": "Start", "padding_h_dp": 16, "spacing_dp": 14, "children": [
@@ -76,9 +76,9 @@ fn wrapped_text_leaves_a_trailing_control_inside_the_row() {
                 { "type": "core://Text", "value_expr": name, "style": "Body" },
                 { "type": "core://Text", "value_expr": "plus more for thinning", "style": "Secondary" } ] },
             { "type": "core://Spacer" },
-            { "type": "core://Tappable", "tag": tag, "on_click": { "intent": "action.navigation.back" },
-              "content": { "type": "core://Box", "width_dp": 72,
-                "content": { "type": "core://Chip", "text": "Staple", "icon": "favorite" } } } ] })
+            { "type": "core://Container", "orientation": "Horizontal", "padding_dp": 0, "children": [
+              { "type": "core://Tappable", "tag": tag, "on_click": { "intent": "action.navigation.back" },
+                "content": { "type": "core://Chip", "text": "Staple", "icon": "favorite" } } ] } ] })
     };
     let spec = json!({ "type": "core://Column", "children": [
         line("short", "salt"), line("long", "low-sodium chicken stock, homemade if you have it") ] });
@@ -88,13 +88,19 @@ fn wrapped_text_leaves_a_trailing_control_inside_the_row() {
         scene.find_node("long").unwrap().bounds,
     );
     assert!(close(short[0] + short[2], 390.0 - 16.0), "{short:?}");
-    assert!(close(long[0], short[0]), "same column: {long:?} vs {short:?}");
+    assert!(
+        close(long[0], short[0]),
+        "same column: {long:?} vs {short:?}"
+    );
     let name = scene
         .find_text("low-sodium chicken stock, homemade if you have it")
         .unwrap()
         .bounds;
     assert!(name[3] >= 40.0, "wraps: {name:?}");
-    assert!(name[0] + name[2] <= long[0] - 14.0 + 0.01, "{name:?} {long:?}");
+    assert!(
+        name[0] + name[2] <= long[0] - 14.0 + 0.01,
+        "{name:?} {long:?}"
+    );
 }
 
 #[test]
