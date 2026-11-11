@@ -93,6 +93,37 @@ impl Inner {
         self.reload(keys);
     }
 
+    /// The events stream reconnected after a gap: `event: data` sent while
+    /// it was down never arrived, so treat the gap as one unscoped event
+    /// that respects what's on screen. Reload the data on screen (and the
+    /// workspace) now, and mark the rest of the cached data stale, to be
+    /// reloaded once it is shown again. Blocks until the reloads are done.
+    pub(crate) fn catch_up_data(&self) {
+        let (now, stale, cached) = {
+            let mut st = lock(&self.state);
+            let mut all = vec![self.workspace_key()];
+            all.extend(st.data.keys().cloned());
+            let cached = all.len();
+            let now: Vec<String> = match &st.visible {
+                None => all.clone(),
+                Some(visible) => visible
+                    .iter()
+                    .filter(|k| all.contains(k))
+                    .cloned()
+                    .collect(),
+            };
+            let stale: Vec<String> = all.into_iter().filter(|k| !now.contains(k)).collect();
+            st.stale.extend(stale.iter().cloned());
+            (now, stale.len(), cached)
+        };
+        println!(
+            "[ConstructEngine] events: reconnected; catching up on data changes missed meanwhile \
+             (reloading {} of {cached} cached, {stale} marked stale)",
+            now.len()
+        );
+        self.reload(now);
+    }
+
     /// An `event: data` saying what changed: reload the matching data on
     /// screen now, and mark the rest of the matching data stale.
     pub(crate) fn reload_scoped(&self, scope: &Scope) {
