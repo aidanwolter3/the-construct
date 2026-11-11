@@ -177,8 +177,9 @@ and porcelain: components the pod expands, used with {\"type\": \"core://Use\", 
 \"children\"} (list_components; core: ones ship with the server, pod: ones are the user's own). Prefer a component \
 over repeating nodes, and define a pod: component (define_component, or copy_component to change a core: one) when a \
 piece repeats across layouts. expand shows what any layout or component becomes; render_layout_preview shows \
-what it looks like (an image and every node's bounds, with the user's data), and dispatch_virtual_interaction taps \
-or scrolls that preview, so look at a layout after changing it. A layout whose root is a \
+what it looks like (an image and every node's bounds, with the user's data, as their device shows it; target_uri \
+opens a screen, item tries a row with one entity, full_height draws a long screen whole), and \
+dispatch_virtual_interaction taps or scrolls that preview, so look at a layout after changing it. A layout whose root is a \
 core://Page gets no chrome from the app: it draws its own header (a title with actions on one line) and Back \
 (core:back_button); core://Workspace is drawn as core:workspace. Use ${local://theme#<token>} for colours \
 (set_theme). A button whose step can't be undone (action.device leave_pod or sign_out, a delete) asks first: wrap \

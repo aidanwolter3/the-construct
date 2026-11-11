@@ -334,8 +334,35 @@ bundles or a live pod and writes PNGs drawn on the CPU.
 `viewport`, `form`, `dark`) answers an image (`image/webp`, lossless) and a text: a summary line, then JSON with
 `preview_id`, `state`, timing and the nodes (id, type, bounds, text, tap, selected). `dispatch_virtual_interaction`
 (`preview_id`, `action` tap / scroll / type / back, with `node_id`, `text` or `x`/`y`, `dy`) changes that preview's
-device state and answers the same, with the interaction's effects; a tap that would reach the pod is reported as
-`not sent`. Layouts the previewed one embeds inline or opens are loaded with it (up to 8). What is drawn is held to
+device state and answers the same, with the interaction's effects.
+
+A preview behaves as a device with the user's data, minus anything that writes (decision
+`previews-read-like-a-device`). Its session has a read-only `Loader` that asks the pod's own router as the owner:
+
+- **Device data** is built as the clients build it (`construct_render::device_data`): `local:layouts`,
+  `local:all_layouts`, `local:apps` and their `local://layouts/<id>` rows, `local://connection` (online),
+  `local://session`, `local://servers/current`, `local://inbox`, and, when a layout binds them, the notifications,
+  channels and sign-ins. Device-only facts get defaults: `local://device` is an Android phone with notifications
+  allowed.
+- **Data paths**: a screen's `data` and `action.data.load` are read when the path matches a data path a data
+  source declares (`SourceManifest::data_paths`, what `list_data_sources` lists); any other path is refused
+  (`couldn't load …: not a data path`). Layouts a tap opens, and a layout's versions (`show_versions`,
+  `pin_version`, `follow_latest`, which stay in the preview), are read too.
+- **Writes are not sent**: mutations, creates, sign-ins, `action.auth.*` and every device command that changes
+  the pod come back in `effects` as `not sent`.
+
+Arguments for real screens: `target_uri` opens the layout's screen whose route matches (as a tap with that
+`target_uri` does, loading its data; no match answers `no_screen` with the layout's routes), and `params` sets
+the layout's own `$route.<name>`. `item` binds `$item` to an entity URI, or to an object of made-up fields
+(stored as `preview://item`), and `entities` (`{uri: {field: value}}`) and `queries` (`{key: [uri]}`) add or
+replace data, so a row template or a `pod:` component can be drawn against one entity. `full_height` grows the
+frame until the screen's scrolling content fits (up to 10,000 points; the scale drops to stay within the pixel
+budget), and `scroll_to` scrolls a node into view first. `nodes` is `text` (the default: id, type, bounds, text
+and a short tap summary such as `action.navigation.open layout=inbox presentation=Sheet`), `full` (each tap's whole
+intent) or `none`; `dispatch_virtual_interaction` takes `nodes` and `full_height` too, for that preview from then
+on.
+
+Layouts the previewed one embeds inline or opens are loaded with it (up to 8), and others when a tap opens them. What is drawn is held to
 the value checks a saved layout gets (sizes, icons, tints; `validate::check_node_values`), a draft's and a saved
 layout's alike, since a component updated after a layout was saved isn't checked against it: a preview that fails
 them answers `invalid_layout`, and a linked layout that fails them isn't loaded. The renderer also draws no icon

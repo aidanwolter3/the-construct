@@ -102,7 +102,9 @@ Tools: `list_layouts`, `list_data_sources`, `describe_vocabulary`, `get_layout`,
 the component tools `list_components`, `get_component`, `expand` (what a layout or component becomes, as plumbing),
 `define_component`, `update_component`, `copy_component`, `restore_component`, `delete_component`, and `set_theme`,
 plus the Collections tools below. `render_layout_preview` and `dispatch_virtual_interaction` draw a layout with the
-user's data and answer an image with every node's bounds, then tap, scroll or type into it (device state only;
+user's data (feeds, device data such as `local:layouts`, screens' data paths) and answer an image with every
+node's bounds, then tap, scroll or type into it (nothing is written; `target_uri` opens a screen directly, `item`
+and `entities` try a row with made-up data, `full_height` draws a long screen whole:
 [rendering.md](rendering.md#agent-previews-mcp)). `get_layout` takes `expanded: true`. Layouts are named `id` (`app` is still accepted, and the app-era tool names still answer).
 The server's MCP instructions tell Claude how to use them. After a change to the tools, the Claude connector needs
 "Refresh tools list" in its settings.

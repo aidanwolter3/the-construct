@@ -2374,6 +2374,26 @@ impl Session {
         self.invalidate();
     }
 
+    /// The first layout's `$route` parameters and `$item` entity (a
+    /// preview drawing a screen or a row on its own).
+    pub fn set_root(&mut self, route: BTreeMap<String, String>, item: Option<String>) {
+        self.stack[0].route = route;
+        self.stack[0].item = item;
+        self.invalidate();
+    }
+
+    /// How far each scrolling view of the top layout or screen can scroll
+    /// (points), by id.
+    pub fn scroll_extents(&mut self) -> Result<BTreeMap<String, f32>, RenderError> {
+        self.scene()?;
+        let top = &self.stack[self.top_index()];
+        Ok(top
+            .laid
+            .as_ref()
+            .map(|(l, _)| l.scroll_max.clone())
+            .unwrap_or_default())
+    }
+
     fn find(&mut self, target: &Target) -> Result<Option<SemanticNode>, String> {
         let scene = self.scene().map_err(|e| e.to_string())?;
         let found = match target {

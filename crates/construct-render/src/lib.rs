@@ -14,6 +14,7 @@ pub mod bind;
 pub mod cpu;
 pub mod dates;
 pub mod demo;
+pub mod device_data;
 pub mod encode;
 pub mod icons;
 pub mod images;
