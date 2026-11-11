@@ -261,6 +261,7 @@ The server components:
 | `core:page_header` | `title`, `style`, paddings; children: actions | A `core://Page`'s header on one line: Back (while it can go back), the title, and icon buttons on the right. |
 | `core:section_header` | `text`, `style`, `padding_v`, `divider` | A section's padded heading, optionally under a divider. |
 | `core:list_row` | `title`, `trailing`, `padding_v` | A row with a title and a quiet trailing text. |
+| `core:divided_item` | `inset`; children | A list item set off from the next: its children in a column with a divider under them, edge to edge or inset by `inset`. |
 | `core:card` | `spacing`, `border`; children | A bordered, rounded card of its children in a column. |
 | `core:filled_card` | `background`, `color`, `spacing`, paddings; children | A filled, rounded card of its children in a column, its text in one colour (an item's heading, a status at a glance). |
 | `core:pill` | `text`, `background`, `color`, `style`, `corner` | A small tinted tag (a date, a status, a count); `corner` defaults to 8. |
