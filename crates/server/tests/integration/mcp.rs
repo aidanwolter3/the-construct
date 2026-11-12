@@ -1189,7 +1189,7 @@ async fn components_are_defined_used_and_expanded() {
         .tool(&access, "get_component", json!({"name": "pod:card"}))
         .await;
     assert!(!err);
-    assert_eq!(got["history"][0]["note"], "Copied from core:card v2");
+    assert_eq!(got["history"][0]["note"], "Copied from core:card v3");
     let (err, d) = env
         .tool(&access, "delete_component", json!({"name": "pod:card"}))
         .await;
