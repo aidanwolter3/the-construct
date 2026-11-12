@@ -96,7 +96,8 @@ edge scroll sideways under a finger, a sideways wheel or trackpad, or Shift and 
 given), Carousel (pages side by side, an "n/N" badge and dots; a sideways drag pages it, snapping to a page), and
 every named icon (`icons.rs`: Material path data, rasterized with zeno; on the GPU they are glyphon
 custom glyphs). Images draw once loaded (over a placeholder in the blurhash's colour; only live sessions load them;
-in a window they are cut to their box on a background thread; `file://` ones, staged photos, are read from disk).
+in a window they are cut to their box on a background thread; `file://` ones, staged photos, are read from disk, only
+from the engine's attachments folder: another local file a layout or a pod's data names draws its placeholder).
 MediaPicker as the Compose UI drew it: a thumbnail per staged photo with a remove button, then the add tile while there is
 room, wrapping. Its tile opens the platform's photo picker (Android's, through the bridge) or the desktop's file
 dialog (`osascript` on macOS, `zenity` or `kdialog` on Linux); each photo is staged with the engine
