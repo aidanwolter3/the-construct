@@ -92,8 +92,9 @@ impl PodClient {
             .http
             .get(&url)
             .header(protocol::FEATURES_HEADER, protocol::features_header());
-        // No session: the pod answers its sign-in screen.
-        if !self.token.is_empty() {
+        // No session: the pod answers its sign-in screen. A layout may name
+        // an absolute URL: the token goes only to the pod's own origin.
+        if !self.token.is_empty() && same_origin(&self.base, &url) {
             req = req.bearer_auth(&self.token);
         }
         let resp = req.send().map_err(|e| format!("{path}: {e}"))?;
@@ -365,9 +366,72 @@ fn read_staged(url: &reqwest::Url, staged: Option<&std::path::Path>) -> Option<V
     std::fs::read(path).ok()
 }
 
+/// Whether `url` is on the pod at `base` (scheme, host and port), so it may
+/// carry the pod's token.
+fn same_origin(base: &str, url: &str) -> bool {
+    match (reqwest::Url::parse(base), reqwest::Url::parse(url)) {
+        (Ok(a), Ok(b)) => a.origin() == b.origin() && a.origin().is_tuple(),
+        _ => false,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_token_goes_only_to_the_pod() {
+        let base = "https://pod.example";
+        assert!(same_origin(base, "https://pod.example/v1/apps"));
+        assert!(same_origin(
+            "http://127.0.0.1:8080",
+            "http://127.0.0.1:8080/v1/x"
+        ));
+        for url in [
+            "https://elsewhere.example/v1/apps",
+            "http://pod.example/v1/apps",
+            "https://pod.example:8443/v1/apps",
+            "https://pod.example.elsewhere.example/v1/apps",
+            "https://pod.example@elsewhere.example/v1/apps",
+            "not a url",
+        ] {
+            assert!(!same_origin(base, url), "{url}");
+        }
+    }
+
+    /// A data path that is an absolute URL off the pod is fetched without
+    /// the pod's token.
+    #[test]
+    fn absolute_urls_off_the_pod_get_no_token() {
+        use std::io::{Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let other = format!("http://{}", listener.local_addr().unwrap());
+        let seen = std::thread::spawn(move || {
+            let (mut s, _) = listener.accept().unwrap();
+            let mut buf = vec![0; 8192];
+            let n = s.read(&mut buf).unwrap();
+            let req = String::from_utf8_lossy(&buf[..n]).to_ascii_lowercase();
+            let body = "{}";
+            write!(
+                s,
+                "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+                body.len()
+            )
+            .unwrap();
+            req
+        });
+        let pod = PodClient {
+            base: "http://pod.example".into(),
+            token: "session-secret".into(),
+            http: client(),
+            titles: Arc::default(),
+            pins: Arc::default(),
+        };
+        pod.get(&format!("{other}/x")).unwrap();
+        let req = seen.join().unwrap();
+        assert!(!req.contains("authorization"), "{req}");
+        assert!(!req.contains("session-secret"), "{req}");
+    }
 
     #[test]
     fn only_staged_files_are_read() {

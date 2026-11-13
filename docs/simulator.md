@@ -40,7 +40,8 @@ test fails when one is stale); edit the source and rerun it.
 
 **Live mode** (`--base-url <pod>`) runs a live session (`remote::PodClient`) on a pod, starting on `home`. The session
 token or pod code comes from `CONSTRUCT_POD_TOKEN` (never a flag or a file); unset, the pod answers its sign-in
-screen. Signing in (`action.auth.session`, e.g. `click Try a temporary pod` on staging) and Leave pod reopen the
+screen. The token goes only to the pod's own origin: a data path a layout writes as an absolute URL elsewhere is
+fetched without it. Signing in (`action.auth.session`, e.g. `click Try a temporary pod` on staging) and Leave pod reopen the
 session as a client does:
 
 ```bash
