@@ -1,0 +1,104 @@
+{
+  "note": "First version: the bar under a page's list (a count and a button, under a divider) that list layouts repeat",
+  "component": {
+    "doc": "A bar along the bottom of a page: a divider, then its children on one centred row (a count or a status, a Spacer, a button). Put it after the page's scrolling content.",
+    "params": [
+      {
+        "name": "padding_h",
+        "type": "number",
+        "doc": "Side padding.",
+        "default": 16
+      },
+      {
+        "name": "padding_v",
+        "type": "number",
+        "doc": "Top and bottom padding.",
+        "default": 10
+      }
+    ],
+    "children": true,
+    "template": {
+      "type": "core://Fragment",
+      "children": [
+        {
+          "type": "core://Divider"
+        },
+        {
+          "type": "core://Row",
+          "align": "Center",
+          "spacing_dp": 8,
+          "padding_h_dp": "$arg.padding_h",
+          "padding_v_dp": "$arg.padding_v",
+          "children": [
+            {
+              "type": "core://Children"
+            }
+          ]
+        }
+      ]
+    },
+    "examples": [
+      {
+        "args": {},
+        "children": [
+          {
+            "type": "core://Text",
+            "value_expr": "$count done",
+            "style": "Secondary",
+            "count": {
+              "query_key": "collection:chores",
+              "where": [
+                {
+                  "field": "done",
+                  "equals": "true"
+                }
+              ],
+              "zero_text": "Tap a chore when it's done"
+            }
+          },
+          {
+            "type": "core://Spacer"
+          },
+          {
+            "type": "core://Button",
+            "label": "Clear done",
+            "on_click": {
+              "intent": "action.mutation.optimistic",
+              "endpoint": "/v1/collections/chores/actions/clear_done",
+              "entity_uri": "collections://chores/settings",
+              "field": "busy",
+              "value_expr": "true",
+              "payload": {
+                "client_id": "clear-$nonce"
+              }
+            }
+          }
+        ],
+        "note": "a list's count and a button that clears what is done"
+      },
+      {
+        "args": {
+          "padding_v": 6
+        },
+        "children": [
+          {
+            "type": "core://Text",
+            "value_expr": "Drafts are kept on this device",
+            "style": "Caption"
+          },
+          {
+            "type": "core://Spacer"
+          },
+          {
+            "type": "core://Button",
+            "label": "Send",
+            "on_click": {
+              "intent": "action.navigation.back"
+            }
+          }
+        ],
+        "note": "a compose page's status and its send button, a tighter bar"
+      }
+    ]
+  }
+}

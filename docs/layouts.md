@@ -262,6 +262,7 @@ The server components:
 | `core:section_header` | `text`, `style`, `padding_v`, `divider` | A section's padded heading, optionally under a divider. |
 | `core:list_row` | `title`, `trailing`, `padding_v` | A row with a title and a quiet trailing text. |
 | `core:divided_item` | `inset`; children | A list item set off from the next: its children in a column with a divider under them, edge to edge or inset by `inset`. |
+| `core:footer_bar` | paddings; children | A bar along the bottom of a page: a divider, then its children on one centred row (a count, a Spacer, a button). |
 | `core:card` | `spacing`, `border`, `background`, `corner`; children | A bordered, rounded card of its children in a column; `corner` defaults to 14. |
 | `core:filled_card` | `background`, `color`, `spacing`, paddings; children | A filled, rounded card of its children in a column, its text in one colour (an item's heading, a status at a glance). |
 | `core:pill` | `text`, `background`, `color`, `style`, `corner` | A small tinted tag (a date, a status, a count); `corner` defaults to 8. |
