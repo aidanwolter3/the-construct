@@ -2959,7 +2959,7 @@ impl Laid {
                     clip,
                 }));
             }
-            Paint::Icon { name, color, .. } if crate::icons::paths(name).is_some() => {
+            Paint::Icon { name, color, .. } if crate::icons::drawn(name) => {
                 let s = w.min(h);
                 scene.draws.push(Draw::Icon(IconRun {
                     name: name.clone(),

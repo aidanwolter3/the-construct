@@ -82,6 +82,24 @@ pub const ICONS: [&str; 23] = [
     "stapler",
 ];
 
+/// An icon given as its drawing instead of a name (feature `icon_paths`):
+/// `path:` and then SVG path data in a 24 × 24 box, filled.
+pub const ICON_PATH_PREFIX: &str = "path:";
+
+/// The longest path data a `path:` icon carries, in bytes.
+pub const MAX_ICON_PATH: usize = 2048;
+
+/// The path data of a `path:` icon, or `None` for a named icon or path data
+/// that isn't well formed: it starts with a move (`M`/`m`), is at most
+/// [`MAX_ICON_PATH`] bytes, and holds only path commands and numbers.
+pub fn icon_path(icon: &str) -> Option<&str> {
+    let d = icon.strip_prefix(ICON_PATH_PREFIX)?.trim();
+    let allowed = |c: char| {
+        c.is_ascii_digit() || c.is_ascii_whitespace() || ",.-+MmZzLlHhVvCcSsQqTtAaEe".contains(c)
+    };
+    (d.len() <= MAX_ICON_PATH && d.starts_with(['M', 'm']) && d.chars().all(allowed)).then_some(d)
+}
+
 fn one() -> f64 {
     1.0
 }
