@@ -4,6 +4,10 @@
 //! so two kinds are written as the equal `c`: one right after a line (its first
 //! control point at the current point), and every repeat of an `s` that takes
 //! more than one curve (`s a b c d e f g h`), which zeno bends out of shape.
+//! A layout can also give an icon as its own path data (`path:`, feature
+//! `icon_paths`), drawn the same way.
+
+use std::sync::Mutex;
 
 /// The SVG path data of a named icon (one or more paths, 24 × 24 units).
 pub fn paths(name: &str) -> Option<&'static [&'static str]> {
@@ -72,16 +76,31 @@ pub fn paths(name: &str) -> Option<&'static [&'static str]> {
 /// at 3× (1536), and small enough that a mask stays a few MB.
 pub const MAX_MASK_PX: u32 = 2048;
 
+/// Whether the app draws the icon: a name it knows ([`paths`]) or a
+/// well-formed `path:` icon (feature `icon_paths`).
+pub fn drawn(name: &str) -> bool {
+    paths(name).is_some() || protocol::icon_path(name).is_some()
+}
+
 /// The icon's coverage mask, `size` × `size` pixels (alpha, row-major), or
-/// `None` for a name the app doesn't draw or a size past [`MAX_MASK_PX`].
+/// `None` for an icon the app doesn't draw ([`drawn`]) or a size past
+/// [`MAX_MASK_PX`].
 pub fn mask(name: &str, size: u32) -> Option<Vec<u8>> {
     let size = size.max(1);
     if size > MAX_MASK_PX {
         return None;
     }
+    let drawing;
+    let paths = match paths(name) {
+        Some(p) => p,
+        None => {
+            drawing = [protocol::icon_path(name)?];
+            &drawing[..]
+        }
+    };
     let s = size as f32 / 24.0;
     let mut out = vec![0u8; size as usize * size as usize];
-    for p in paths(name)? {
+    for p in paths {
         let (data, at) = zeno::Mask::new(*p)
             .transform(Some(zeno::Transform::scale(s, s)))
             .render();
@@ -100,16 +119,41 @@ pub fn mask(name: &str, size: u32) -> Option<Vec<u8>> {
     Some(out)
 }
 
-/// A stable small id per icon name (glyphon's custom glyph ids).
-pub fn id(name: &str) -> Option<u16> {
-    protocol::ICONS
-        .iter()
-        .position(|i| *i == name)
-        .map(|i| i as u16)
+/// The `path:` icons given ids so far, in order: their ids follow the named
+/// icons'.
+static DRAWN: Mutex<Vec<String>> = Mutex::new(Vec::new());
+
+fn drawn_ids() -> std::sync::MutexGuard<'static, Vec<String>> {
+    DRAWN.lock().unwrap_or_else(|p| p.into_inner())
 }
 
-pub fn name(id: u16) -> Option<&'static str> {
-    protocol::ICONS.get(id as usize).copied()
+/// A stable small id per icon (glyphon's custom glyph ids): a named icon's
+/// place in [`protocol::ICONS`], then each `path:` icon in the order first
+/// drawn, below [`crate::images::FIRST_GLYPH_ID`]. `None` for an icon the app
+/// doesn't draw, or a `path:` icon past the last free id.
+pub fn id(name: &str) -> Option<u16> {
+    if let Some(i) = protocol::ICONS.iter().position(|i| *i == name) {
+        return Some(i as u16);
+    }
+    protocol::icon_path(name)?;
+    let mut ids = drawn_ids();
+    let at = match ids.iter().position(|d| d == name) {
+        Some(at) => at,
+        None if protocol::ICONS.len() + ids.len() < crate::images::FIRST_GLYPH_ID as usize => {
+            ids.push(name.to_owned());
+            ids.len() - 1
+        }
+        None => return None,
+    };
+    Some((protocol::ICONS.len() + at) as u16)
+}
+
+pub fn name(id: u16) -> Option<String> {
+    let id = id as usize;
+    match protocol::ICONS.get(id) {
+        Some(n) => Some((*n).to_owned()),
+        None => drawn_ids().get(id - protocol::ICONS.len()).cloned(),
+    }
 }
 
 #[cfg(test)]
@@ -120,7 +164,7 @@ mod tests {
             let m = super::mask(name, 48).unwrap_or_else(|| panic!("{name} has no paths"));
             let ink = m.iter().filter(|a| **a > 128).count();
             assert!(ink > 48 && ink < 48 * 48, "{name}: {ink} pixels");
-            assert_eq!(super::name(super::id(name).unwrap()), Some(name));
+            assert_eq!(super::name(super::id(name).unwrap()).as_deref(), Some(name));
         }
     }
 
@@ -143,6 +187,26 @@ mod tests {
                     assert!(numbers <= 4, "{name}: `{c}` repeats a curve at {i}");
                 }
             }
+        }
+    }
+
+    /// A `path:` icon is drawn from its own path data, with an id after the
+    /// named icons' that maps back to it; path data that isn't well formed
+    /// isn't drawn.
+    #[test]
+    fn a_path_icon_is_drawn_from_its_data() {
+        let plus = "path:M19,13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z";
+        assert!(super::drawn(plus));
+        assert_eq!(super::mask(plus, 48), super::mask("add", 48));
+        let id = super::id(plus).unwrap();
+        assert!(id as usize >= protocol::ICONS.len());
+        assert!(id < crate::images::FIRST_GLYPH_ID);
+        assert_eq!(super::id(plus), Some(id));
+        assert_eq!(super::name(id).as_deref(), Some(plus));
+        for bad in ["path:", "path:L1,1z", "plus"] {
+            assert!(!super::drawn(bad), "{bad}");
+            assert!(super::mask(bad, 48).is_none(), "{bad}");
+            assert!(super::id(bad).is_none(), "{bad}");
         }
     }
 

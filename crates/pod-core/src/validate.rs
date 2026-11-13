@@ -279,11 +279,16 @@ fn check_dp(what: &str, v: u16, max: u16) -> Result<(), String> {
 }
 
 fn check_icon(icon: &str) -> Result<(), String> {
-    if ICONS.contains(&icon) {
+    if ICONS.contains(&icon) || protocol::icon_path(icon).is_some() {
         Ok(())
+    } else if icon.starts_with(protocol::ICON_PATH_PREFIX) {
+        Err(format!(
+            "icon path data must start with M or m, be at most {} bytes and hold only SVG path commands and numbers",
+            protocol::MAX_ICON_PATH
+        ))
     } else {
         Err(format!(
-            "unknown icon '{icon}' (known: {})",
+            "unknown icon '{icon}' (known: {}; or draw one with path:<SVG path data, 24 x 24>)",
             ICONS.join(", ")
         ))
     }

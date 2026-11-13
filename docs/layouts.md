@@ -143,7 +143,7 @@ evaluated against the entity before the change: a JSON literal, `entity.<field>`
 | `core://List` | `query_key`, `item_template`, `empty_text`, `indent`, `filter`, `where`, `group_by`, `columns`, `spacing_dp`, `padding_h_dp`, `focus` | The entities of a query. `filter` searches as you type (every word in one of `fields`, ignoring case and accents); `where: {field, equals}` keeps exact matches, and a list of such conditions keeps items matching all of them (feature `list_where_all`, the same shape as `count`'s `where`); `group_by` draws a header where a field changes (`headers_only`, feature `list_group_headers`: only the headers, one per distinct value); `columns` (2–6) makes a grid; `focus` scrolls to one item and tints it. |
 | `core://Conditional` | `value`, `content`, `equals` | `content` only when `value` is truthy, or, with `equals`, when it equals that text. Works with `$form` values to switch views. |
 | `core://Button` | `label`, `on_click` | A text button. |
-| `core://IconButton` | `icon`, `content_description`, `on_click`, `active`, `active_icon`, `active_tint`, `active_content_description`, `size_dp`, `tag` | `active` binds a bool (`$item.is_liked`) to switch icon and tint. Icon names are `protocol::ICONS` (`describe_vocabulary` lists them); the newest, `stapler` (a stapler from the side), needs a build with feature `icons_stapler`. |
+| `core://IconButton` | `icon`, `content_description`, `on_click`, `active`, `active_icon`, `active_tint`, `active_content_description`, `size_dp`, `tag` | `active` binds a bool (`$item.is_liked`) to switch icon and tint. Icon names are `protocol::ICONS` (`describe_vocabulary` lists them); the newest, `stapler` (a stapler from the side), needs a build with feature `icons_stapler`. Any icon can instead be its drawing, `path:<SVG path data>` (below). |
 | `core://Tappable` | `on_click`, `content`, `content_description`, `tag` | Makes any node tappable; buttons inside keep their own taps. Drawn pressed (slightly darker) while held. |
 | `core://Gesture` | `content`, `on_tap`, `on_long_press`, `on_swipe_up`, `on_swipe_down`, `on_swipe_left`, `on_swipe_right`, `content_description` | `content` with gestures, each running its intent; at least one is set (feature `gesture`, decision `edge-overlays-and-gestures`). A swipe is a drag of at least 48 dp mostly one way (left and right on screen), run when the finger lifts. A pull the content can't scroll for counts, so a page inside still scrolls and pulling it down at its top is a swipe down; a drag an outer scroll takes doesn't, so put the gesture around what scrolls. Buttons inside keep their own taps. As a workspace's one slot around a filling node, it fills the screen too. |
 | `core://Chip` | `text`, `icon`, `tone` | A small label; `tone` `Neutral` or `Warning`. |
@@ -157,7 +157,14 @@ evaluated against the entity before the change: a JSON literal, `entity.<field>`
 
 Icons (`protocol::ICONS`): `favorite`, `favorite_border`, `chat_bubble`, `bookmark`, `bookmark_border`, `repeat`,
 `warning`, `send`, `arrow_back`, `close`, `flame`, `timer`, `add_photo`, `add`, `refresh`, `check`, `check_box`,
-`check_box_outline_blank`, `delete`, `settings`, `notifications`.
+`check_box_outline_blank`, `delete`, `settings`, `notifications`, `shopping_cart`, `stapler`.
+
+An icon no name covers is given as its drawing (feature `icon_paths`, decision `icon-paths`): `"icon":
+"path:<SVG path data>"` on `core://IconButton` (and `active_icon`), `core://Chip` and `core://Badge`. The data is
+drawn filled in a 24 × 24 box, tinted like a named icon, and must start with a move (`M`/`m`), hold only path
+commands and numbers, and be at most 2048 bytes. Write a smooth curve that repeats (`s` with more than four
+numbers) as `c`: the rasterizer bends a repeated `s` out of shape. To use one drawing in several places, put it in a
+`pod:` component.
 
 A node type the client doesn't know is skipped, and its JSON kept, so old versions still parse.
 

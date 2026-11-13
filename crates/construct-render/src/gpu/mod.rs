@@ -202,7 +202,7 @@ fn rasterize(
     }
     let name = crate::icons::name(req.id)?;
     let size = req.width.min(req.height) as u32;
-    let mask = crate::icons::mask(name, size)?;
+    let mask = crate::icons::mask(&name, size)?;
     // A square mask in a request that isn't square: pad it.
     let (w, h) = (req.width as usize, req.height as usize);
     let mut data = vec![0u8; w * h];
@@ -267,11 +267,15 @@ fn layers(scene: &Scene, images: Option<&crate::images::ImageStore>) -> Layers {
             // Icons and images go with text: after the quads of their layer.
             Draw::Icon(_) | Draw::Image(_) => {
                 let run = match d {
-                    Draw::Icon(i) => GlyphRun {
-                        id: crate::icons::id(&i.name).unwrap_or(0),
-                        rect: i.rect,
-                        color: Some(i.color),
-                        clip: i.clip,
+                    Draw::Icon(i) => match crate::icons::id(&i.name) {
+                        Some(id) => GlyphRun {
+                            id,
+                            rect: i.rect,
+                            color: Some(i.color),
+                            clip: i.clip,
+                        },
+                        // Past the last free id: not drawn.
+                        None => continue,
                     },
                     Draw::Image(i) => match images.filter(|st| {
                         st.prepare(

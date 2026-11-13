@@ -860,6 +860,28 @@ fn the_stapler_icon_needs_its_feature() {
     assert!(protocol::ICONS.contains(&"stapler"));
 }
 
+#[test]
+fn a_drawn_icon_needs_icon_paths() {
+    let plus = "path:M19,13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z";
+    let button = json!({"type": "core://IconButton", "icon": plus,
+        "content_description": "Add", "on_click": {"intent": "action.navigation.back"}});
+    let n: UiNode = serde_json::from_value(button).unwrap();
+    assert_eq!(additive_features(&n), ["icon_paths"]);
+    let chip: UiNode =
+        serde_json::from_value(json!({"type": "core://Chip", "text": "Hot", "icon": plus}))
+            .unwrap();
+    assert_eq!(additive_features(&chip), ["icon_paths"]);
+    assert!(protocol::FEATURES.contains(&"icon_paths"));
+    assert_eq!(protocol::icon_path(plus), Some(&plus[5..]));
+    // Named icons, and path data that isn't well formed, are not drawings.
+    assert_eq!(protocol::icon_path("add"), None);
+    assert_eq!(protocol::icon_path("path:"), None);
+    assert_eq!(protocol::icon_path("path:L1,1z"), None);
+    assert_eq!(protocol::icon_path("path:M1,1<script>"), None);
+    let long = format!("path:M{}z", "1,1 ".repeat(protocol::MAX_ICON_PATH / 4));
+    assert_eq!(protocol::icon_path(&long), None);
+}
+
 /// The features a node needs beyond the vocabulary of the numbered schemas
 /// (1-12, named since decision `named-vocabulary`): what these tests check.
 fn additive_features(node: &protocol::UiNode) -> Vec<&'static str> {

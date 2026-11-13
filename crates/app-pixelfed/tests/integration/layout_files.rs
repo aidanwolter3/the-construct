@@ -264,6 +264,16 @@ fn unknown_node_types_are_refused() {
     let icon = leak(feed.text.replacen("\"chat_bubble\"", "\"chat_bubbles\"", 1));
     let err = parse_file(&catalog(), &src("pixelfed", feed.name, icon)).unwrap_err();
     assert!(err.contains("unknown icon 'chat_bubbles'"), "{err}");
+    // An icon given as its drawing is taken, path data that isn't is refused.
+    let drawn = leak(feed.text.replacen(
+        "\"chat_bubble\"",
+        "\"path:M20,2H4c-1.1,0 -2,0.9 -2,2v18l4,-4h14c1.1,0 2,-0.9 2,-2V4c0,-1.1 -0.9,-2 -2,-2z\"",
+        1,
+    ));
+    parse_file(&catalog(), &src("pixelfed", feed.name, drawn)).unwrap();
+    let bad = leak(feed.text.replacen("\"chat_bubble\"", "\"path:<svg/>\"", 1));
+    let err = parse_file(&catalog(), &src("pixelfed", feed.name, bad)).unwrap_err();
+    assert!(err.contains("icon path data must start with M"), "{err}");
 }
 
 fn leak(s: String) -> &'static str {

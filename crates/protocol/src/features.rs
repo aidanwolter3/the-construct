@@ -300,7 +300,9 @@ fn node_features(node: &UiNode, out: &mut BTreeSet<&'static str>) {
         _ => [None, None],
     };
     for i in icons.into_iter().flatten() {
-        if TODO_ICONS.contains(&i) {
+        if i.starts_with(crate::ICON_PATH_PREFIX) {
+            add(feature::ICON_PATHS);
+        } else if TODO_ICONS.contains(&i) {
             add(feature::TODO_ICONS);
         } else if SHELL_ICONS.contains(&i) {
             add(feature::ICONS_SHELL);
