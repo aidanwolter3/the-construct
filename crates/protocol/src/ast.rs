@@ -323,12 +323,20 @@ pub enum UiNode {
     /// 8 (D48): `value` may be a form value (`$form.<field>`, "" while unset),
     /// and with `equals` the content shows only when the value, as text,
     /// equals it (`"equals": ""` shows it while the value is unset or empty).
+    /// With `date` (feature `conditional_date`), the value is a date or a
+    /// date and time, compared with the device's clock ([`DateTest`]);
+    /// `time` (a binding such as `$item.ends`) adds a wall-clock time to a
+    /// bare date.
     #[serde(rename = "core://Conditional")]
     Conditional {
         value: String,
         content: Box<UiNode>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         equals: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        date: Option<DateTest>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        time: Option<String>,
     },
     /// A swipeable pager over entities: `items` is a binding to a list of
     /// entity URIs (`"$item.media_uris"`) or a literal list; each is drawn with
@@ -978,6 +986,23 @@ pub enum DateFormat {
     Relative,
     /// "Nov 5", with the year when it is not this year ("Nov 5, 2027").
     Short,
+}
+
+/// `core://Conditional` `date` (feature `conditional_date`,
+/// docs/decisions/date-conditions.md): how the bound moment compares with
+/// now on the viewer's own clock and time zone. The value is `YYYY-MM-DD`
+/// (with the Conditional's `time`, that day at that time), a local
+/// `YYYY-MM-DDTHH:MM[:SS]`, or an instant with an offset (RFC 3339). A
+/// value that reads as none of these shows nothing.
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DateTest {
+    /// The moment has come (a bare date: the day is over, it was before
+    /// today).
+    Past,
+    /// It falls on today.
+    Today,
+    /// The moment hasn't come yet (a bare date: it is after today).
+    Future,
 }
 
 /// `core://Text` `count` (feature `count`,

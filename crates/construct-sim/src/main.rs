@@ -18,7 +18,7 @@ use construct_sim::script;
 const USAGE: &str =
     "usage: construct-sim [--workspace <id>] [--screen phone|tablet|desktop|WxH] [--density <n>]
   [--script <script> | --script-file <file>] [--fixture <bundle.json>] [--base-url <pod>]
-  [--timeout-ms <ms>] [--out <dir>]
+  [--timeout-ms <ms>] [--now <YYYY-MM-DDTHH:MM>] [--out <dir>]
 Live mode (--base-url) reads the pod's session token or pod code from CONSTRUCT_POD_TOKEN
 (unset: the pod's sign-in screen). See docs/simulator.md.";
 
@@ -31,6 +31,7 @@ const FLAGS: &[&str] = &[
     "--fixture",
     "--base-url",
     "--timeout-ms",
+    "--now",
     "--out",
 ];
 
@@ -141,6 +142,10 @@ fn main() {
         density,
         out: out.clone(),
         timeout,
+        now: flag("--now").map(|n| {
+            construct_render::dates::wall_time(&n)
+                .unwrap_or_else(|| usage("--now needs a time YYYY-MM-DDTHH:MM"))
+        }),
     };
     let mut runner = match Runner::new(source, opts) {
         Ok(r) => r,

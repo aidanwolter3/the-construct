@@ -28,6 +28,7 @@ pub fn run(workspace: &str, script: &str, out: &Path) -> (Runner, Vec<StepResult
             density: Some(1.0),
             out: out.to_path_buf(),
             timeout: Duration::from_secs(10),
+            now: None,
         },
     )
     .expect("a session");

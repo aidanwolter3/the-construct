@@ -44,6 +44,9 @@ pub struct Options {
     pub out: PathBuf,
     /// Live mode: how long the first load may take.
     pub timeout: Duration,
+    /// The device's wall clock, fixed (seconds since the epoch); `None`:
+    /// this machine's.
+    pub now: Option<i64>,
 }
 
 /// One step's result, as `steps.json` records it.
@@ -327,6 +330,11 @@ impl Runner {
             }
             Step::Dark(dark) => {
                 self.session.set_dark(*dark);
+                done("")
+            }
+            Step::Clock(at) => {
+                self.opts.now = Some(*at);
+                self.session.set_clock(clock(&self.opts));
                 done("")
             }
             Step::Offline | Step::Online => {
@@ -723,8 +731,24 @@ impl Runner {
     }
 }
 
+/// The clock a run's session reads.
+fn clock(opts: &Options) -> construct_render::dates::Clock {
+    construct_render::dates::Clock {
+        fixed: opts.now,
+        zone: None,
+    }
+}
+
 /// A session on the start layout.
 fn open(source: &Source, opts: &Options) -> Result<Session, String> {
+    let mut s = open_session(source, opts)?;
+    if opts.now.is_some() {
+        s.set_clock(clock(opts));
+    }
+    Ok(s)
+}
+
+fn open_session(source: &Source, opts: &Options) -> Result<Session, String> {
     let vp = opts.screen.viewport(opts.density);
     match source {
         Source::Fixture { pod, bundle } => {

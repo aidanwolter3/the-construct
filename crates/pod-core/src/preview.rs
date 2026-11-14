@@ -917,6 +917,11 @@ pub(crate) async fn render_layout_preview(pod: &Pod, headers: &HeaderMap, args: 
         full_height: args["full_height"].as_bool().unwrap_or(false),
         viewport: viewport(args),
     };
+    // Dates read as the owner's devices read them: in the pod's zone.
+    let zone = crate::blocking(pod, |s| Ok(crate::tz::time_zone(s)))
+        .await
+        .ok()
+        .and_then(Result::ok);
     let reader = Reader::new(pod, headers, tokio::runtime::Handle::current());
     let pod = pod.clone();
     let args = args.clone();
@@ -936,6 +941,7 @@ pub(crate) async fn render_layout_preview(pod: &Pod, headers: &HeaderMap, args: 
 
         let routes = screen_routes(&root);
         let mut session = Session::new(&id, root, data, options.viewport);
+        session.set_clock(construct_render::dates::Clock { fixed: None, zone });
         session.layouts = layouts;
         session.dark = args["dark"].as_bool().unwrap_or(false);
         session.loader = Some(Box::new(reader));

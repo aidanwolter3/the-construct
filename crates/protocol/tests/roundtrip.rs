@@ -101,6 +101,8 @@ fn post_template(author_tag: Option<String>, items: ListBinding) -> UiNode {
             },
             UiNode::Conditional {
                 equals: None,
+                date: None,
+                time: None,
                 value: "$item.content_warning".into(),
                 content: Box::new(UiNode::Chip {
                     text: "$item.content_warning_label".into(),
@@ -110,6 +112,8 @@ fn post_template(author_tag: Option<String>, items: ListBinding) -> UiNode {
             },
             UiNode::Conditional {
                 equals: None,
+                date: None,
+                time: None,
                 value: "$item.reblogged_by_name".into(),
                 content: Box::new(UiNode::Badge {
                     text: "$item.reblogged_by_name boosted".into(),

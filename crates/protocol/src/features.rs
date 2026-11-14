@@ -254,10 +254,18 @@ fn node_features(node: &UiNode, out: &mut BTreeSet<&'static str>) {
         }
         UiNode::Spacer { .. } => add(feature::SPACER),
         UiNode::Divider {} => add(feature::DIVIDER),
-        UiNode::Conditional { value, equals, .. } => {
+        UiNode::Conditional {
+            value,
+            equals,
+            date,
+            ..
+        } => {
             add(feature::CONDITIONAL);
             if equals.is_some() || value.starts_with("$form.") {
                 add(feature::CONDITIONAL_FORM);
+            }
+            if date.is_some() {
+                add(feature::CONDITIONAL_DATE);
             }
         }
         UiNode::Carousel { .. } => add(feature::CAROUSEL),
@@ -852,6 +860,26 @@ mod tests {
             let f = required_features(&n);
             assert!(!f.contains(&feature::OVERLAY_EDGE), "{p}: {f:?}");
         }
+    }
+
+    #[test]
+    fn date_conditionals_need_their_feature() {
+        let n = node(json!({"type": "core://Conditional", "value": "$item.date",
+            "date": "Past", "time": "$item.ends", "content": {"type": "core://Divider"}}));
+        assert!(required_features(&n).contains(&feature::CONDITIONAL_DATE));
+        assert!(matches!(
+            n,
+            UiNode::Conditional {
+                date: Some(crate::DateTest::Past),
+                ..
+            }
+        ));
+        let plain = node(json!({"type": "core://Conditional", "value": "$item.date",
+            "content": {"type": "core://Divider"}}));
+        assert!(!required_features(&plain).contains(&feature::CONDITIONAL_DATE));
+        let bad: Result<UiNode, _> = serde_json::from_value(json!({"type": "core://Conditional",
+            "value": "$item.date", "date": "Yesterday", "content": {"type": "core://Divider"}}));
+        assert!(bad.is_err() || matches!(bad, Ok(UiNode::Unknown(_))));
     }
 
     #[test]

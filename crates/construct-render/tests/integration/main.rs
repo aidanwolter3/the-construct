@@ -2,6 +2,7 @@
 
 mod accessibility;
 mod common;
+mod dates;
 mod device;
 #[cfg(feature = "remote")]
 mod engine;

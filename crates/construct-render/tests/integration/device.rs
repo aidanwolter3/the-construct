@@ -367,7 +367,7 @@ fn dark_mode_draws_the_dark_theme() {
 
 fn draw(root: Value, d: Value, today: &str) -> construct_render::Scene {
     let mut b = SceneBuilder::new();
-    b.today = construct_render::dates::iso_date(today);
+    b.clock.fixed = construct_render::dates::iso_date(today).map(|d| d * 86_400 + 12 * 3_600);
     b.build(&Input {
         root: &node(root),
         data: &data(d),
