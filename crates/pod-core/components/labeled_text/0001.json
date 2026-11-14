@@ -1,0 +1,84 @@
+{
+  "note": "First version: the label over a text (an item's Description, About) that detail screens repeat",
+  "component": {
+    "doc": "A small label above a text, shown only while the text is set: one field of an item on its screen (Description, About, Notes).",
+    "params": [
+      {
+        "name": "label",
+        "type": "text",
+        "doc": "The label (About).",
+        "required": true
+      },
+      {
+        "name": "text",
+        "type": "binding",
+        "doc": "The text (a binding such as $item.description); the block is left out while it is empty.",
+        "required": true
+      },
+      {
+        "name": "padding_h",
+        "type": "number",
+        "doc": "Side padding.",
+        "default": 0
+      }
+    ],
+    "template": {
+      "type": "core://Conditional",
+      "value": "$arg.text",
+      "content": {
+        "type": "core://IfArg",
+        "arg": "padding_h",
+        "then": {
+          "type": "core://Column",
+          "padding_h_dp": "$arg.padding_h",
+          "spacing_dp": 6,
+          "children": [
+            {
+              "type": "core://Text",
+              "value_expr": "$arg.label",
+              "style": "Label"
+            },
+            {
+              "type": "core://Text",
+              "value_expr": "$arg.text",
+              "style": "Body"
+            }
+          ]
+        },
+        "else": {
+          "type": "core://Column",
+          "spacing_dp": 6,
+          "children": [
+            {
+              "type": "core://Text",
+              "value_expr": "$arg.label",
+              "style": "Label"
+            },
+            {
+              "type": "core://Text",
+              "value_expr": "$arg.text",
+              "style": "Body"
+            }
+          ]
+        }
+      }
+    },
+    "examples": [
+      {
+        "args": {
+          "label": "About",
+          "text": "$item.description"
+        },
+        "note": "an event's description on its screen"
+      },
+      {
+        "args": {
+          "label": "Description",
+          "text": "$item.notes",
+          "padding_h": 4
+        },
+        "note": "a task's notes, inset to line up with its card"
+      }
+    ]
+  }
+}
