@@ -58,6 +58,12 @@ pub enum Step {
         points: u32,
         target: String,
     },
+    /// A swipe card moved sideways by `points` (negative: left) and held
+    /// there until `release`.
+    DragCard {
+        points: i32,
+        target: String,
+    },
     ScrollTo(String),
     Back,
     Wait(u64),
@@ -109,6 +115,7 @@ impl Step {
             Step::Swipe(Direction::Up, _) => "swipe-up",
             Step::Swipe(Direction::Down, _) => "swipe-down",
             Step::DragDown { .. } => "drag-down",
+            Step::DragCard { .. } => "drag-card",
             Step::ScrollTo(_) => "scroll-to",
             Step::Back => "back",
             Step::Wait(_) => "wait",
@@ -150,7 +157,7 @@ pub struct Line {
 }
 
 const COMMANDS: &str = "shot, click, type, pick, swipe-left, swipe-right, swipe-down, swipe-up, drag-down, \
-    scroll-to, back, wait, idle, assert-text, assert-no-text, wait-text, assert-link, wait-images, screen, \
+    drag-card, scroll-to, back, wait, idle, assert-text, assert-no-text, wait-text, assert-link, wait-images, screen, \
     offline, online, publish-version, open-layout, open-settings, open-inbox, pin-version, notify, toggle-channel";
 
 /// Parses a script; the error names the entry and what it needs.
@@ -219,6 +226,24 @@ pub fn parse(script: &str) -> Result<Vec<Line>, String> {
                     _ => {
                         return Err(format!(
                             "{}: 'drag-down' needs '<points in 1..{MAX_DRAG}> <target>'",
+                            at()
+                        ));
+                    }
+                }
+            }
+            "drag-card" => {
+                let a = need("a distance and a target")?;
+                let (n, t) = a.split_once(' ').unwrap_or((&a, ""));
+                let max = MAX_DRAG as i32;
+                let points = n.parse::<i32>().ok().filter(|p| (-max..=max).contains(p));
+                match points {
+                    Some(points) if !t.trim().is_empty() => Step::DragCard {
+                        points,
+                        target: t.trim().to_owned(),
+                    },
+                    _ => {
+                        return Err(format!(
+                            "{}: 'drag-card' needs '<points in -{MAX_DRAG}..{MAX_DRAG}> <target>'",
                             at()
                         ));
                     }

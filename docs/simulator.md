@@ -78,9 +78,10 @@ word is the command and the rest of the entry, as written, its argument: `click 
 |---|---|
 | `shot <name>` | Writes `<NN>-<name>.png` (waits up to 5 s for on-screen images first). |
 | `click <target>` | Taps the node's centre, scrolling it into view first. |
-| `press <target>` / `release` | Holds a finger down on the node's centre (a `core://Tappable` there is drawn pressed) until `release` or a `click`. |
+| `press <target>` / `release` | Holds a finger down on the node's centre (a `core://Tappable` there is drawn pressed) until `release` or a `click`; `release` also lets go of a card `drag-card` holds. |
 | `type <target> <text>` | Replaces a text field's text (`field:<name>`, `tag:textfield:<name>`, its placeholder, or the field's name). |
-| `swipe-left <target>` / `swipe-right <target>` | Scrolls a chip row (`tag:chips:<field>`) by 60% of the screen's width, else pages a carousel, else runs the `core://Gesture`'s `on_swipe_left` / `on_swipe_right` there. |
+| `swipe-left <target>` / `swipe-right <target>` | Scrolls a chip row (`tag:chips:<field>`) by 60% of the screen's width, else throws a `core://SwipeCard` off that way (its intent runs), else pages a carousel, else runs the `core://Gesture`'s `on_swipe_left` / `on_swipe_right` there. |
+| `drag-card <points> <target>` | Moves the `core://SwipeCard` there sideways by that much (negative: left) and holds it, for a shot of it mid-drag; `release` lets go (past its threshold it flies off and its intent runs, else it springs back). |
 | `swipe-down <target>` / `swipe-up <target>` | A flick: closes a sheet from its handle (`tag:sheet-handle`), else runs the gesture's `on_swipe_down` / `on_swipe_up`. |
 | `drag-down <points> <target>` | Drags a sheet's handle down and lets go without a fling (it closes past a quarter of its height), else scrolls the view there up by that much. |
 | `scroll-to <target>` | Scrolls until the node is on screen. |

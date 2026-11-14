@@ -200,6 +200,22 @@ const SETTLE: Duration = Duration::from_millis(180);
 /// (points per second).
 const PAGE_SLIDE: Duration = Duration::from_millis(260);
 const PAGE_FLING: f32 = 300.0;
+/// A swipe card flung faster than this (points per second) goes that way
+/// from half its threshold; how long it takes to fly off, and to spring
+/// back.
+const CARD_FLING: f32 = 800.0;
+const CARD_FLY: Duration = Duration::from_millis(200);
+const CARD_SPRING: Duration = Duration::from_millis(320);
+
+/// A released swipe card on its way: off the screen (and then its intent
+/// runs) or back to where it was.
+struct CardAnim {
+    since: Instant,
+    from: f32,
+    to: f32,
+    /// The card and the intent that runs once it is off.
+    commit: Option<(SemanticNode, Value)>,
+}
 
 /// Where [`Session::move_cursor`] moves the cursor.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -215,6 +231,17 @@ pub enum CursorMove {
 pub enum DragAxis {
     Vertical,
     Horizontal,
+}
+
+/// Speeding up as it goes (a card thrown off).
+fn ease_in(t: f32) -> f32 {
+    t * t
+}
+
+/// Past the end a little and back (a card springing into place).
+fn ease_out_back(t: f32) -> f32 {
+    let (c1, u) = (1.4f32, t - 1.0);
+    1.0 + (c1 + 1.0) * u.powi(3) + c1 * u.powi(2)
 }
 
 /// Material's standard easing, `cubic-bezier(0.4, 0, 0.2, 1)`
@@ -577,6 +604,10 @@ pub struct Session {
     /// Carousels sliding to a page after a swipe: since when, from and to
     /// what offset, and the page.
     pager_anims: BTreeMap<String, (Instant, f32, f32, usize)>,
+    /// Swipe cards let go, flying off or springing back (by semantic id).
+    card_anims: BTreeMap<String, CardAnim>,
+    /// Cards that flew off, whose intents run at [`Session::take_swiped`].
+    swiped: Vec<(String, SemanticNode, Value)>,
     /// The text being edited: cursor, selection, handles and menu.
     edit: Option<Edit>,
     /// Whether the caret was drawn in the frame kept (it blinks).
@@ -733,6 +764,8 @@ impl Session {
             frame_offset: 0.0,
             frame_settle: None,
             pager_anims: BTreeMap::new(),
+            card_anims: BTreeMap::new(),
+            swiped: Vec::new(),
             edit: None,
             caret_shown: None,
             pressed: None,
@@ -1320,6 +1353,158 @@ impl Session {
         }
     }
 
+    /// The `core://SwipeCard` under a point (the innermost).
+    pub fn card_at(&mut self, x: f32, y: f32) -> Option<String> {
+        let scene = self.scene().ok()?;
+        let id = scene
+            .semantics
+            .iter()
+            .rev()
+            .find(|n| {
+                let [bx, by, bw, bh] = n.bounds;
+                n.node_type == "core://SwipeCard"
+                    && x >= bx
+                    && x < bx + bw
+                    && y >= by
+                    && y < by + bh
+            })?
+            .id
+            .clone();
+        Some(id)
+    }
+
+    /// How far a swipe card is moved right of its place (points).
+    pub fn card_offset(&self, id: &str) -> f32 {
+        let top = &self.stack[self.top_index()];
+        top.scroll
+            .get(&format!("card:{id}"))
+            .copied()
+            .unwrap_or(0.0)
+    }
+
+    /// Moves a swipe card to `offset` (points right of its place): it
+    /// follows the finger, and stops on its way off or back.
+    pub fn drag_card(&mut self, id: &str, offset: f32) {
+        self.card_anims.remove(id);
+        let ti = self.top_index();
+        self.stack[ti].scroll.insert(format!("card:{id}"), offset);
+        self.scene = None;
+    }
+
+    /// Lets go of a swipe card with its release velocity (points per
+    /// second, positive: right). Past its threshold, or flung that way past
+    /// half of it, toward a side it has an intent for, it flies off and the
+    /// intent runs; else it springs back. Without animations it is there at
+    /// once and the outcome is returned; with them it comes from
+    /// [`Session::take_swiped`] once the card is off.
+    pub fn release_card(&mut self, id: &str, vx: f32) -> Option<Outcome> {
+        let at = self.card_offset(id);
+        let top = &self.stack[self.top_index()];
+        let (threshold, width) = top
+            .laid
+            .as_ref()
+            .and_then(|(l, _)| l.cards.get(id).copied())
+            .unwrap_or((crate::layout::CARD_THRESHOLD, self.viewport.width));
+        let past = at.abs() >= threshold
+            || (at.abs() >= threshold / 2.0 && vx.abs() > CARD_FLING && vx.signum() == at.signum());
+        let kind = if at > 0.0 {
+            "swipe_right"
+        } else {
+            "swipe_left"
+        };
+        let commit = past
+            .then(|| self.scene().ok())
+            .flatten()
+            .and_then(|s| s.semantics.iter().find(|n| n.id == id).cloned())
+            .and_then(|n| {
+                let intent = n.gestures.get(kind)?.clone();
+                Some((n, intent))
+            });
+        // Off past the screen's edge, however far along the card is.
+        let to = match commit {
+            Some(_) => at.signum() * (self.viewport.width + width),
+            None => 0.0,
+        };
+        let since = Instant::now();
+        self.card_anims.insert(
+            id.to_owned(),
+            CardAnim {
+                since,
+                from: at,
+                to,
+                commit,
+            },
+        );
+        self.scene = None;
+        if self.animate {
+            return None;
+        }
+        self.step_cards(since + CARD_SPRING.max(CARD_FLY));
+        self.take_swiped().pop()
+    }
+
+    /// Runs the intents of the cards that flew off since last asked: what
+    /// they did, as a swipe's [`Session::gesture`] says.
+    pub fn take_swiped(&mut self) -> Vec<Outcome> {
+        let swiped = std::mem::take(&mut self.swiped);
+        swiped
+            .into_iter()
+            .map(|(id, node, intent)| {
+                // Back in its place, where the next card of a deck shows.
+                let ti = self.top_index();
+                self.stack[ti].scroll.remove(&format!("card:{id}"));
+                let mut effects = Vec::new();
+                match self.bind_form(&intent) {
+                    Some(bound) => self.run(&bound, &mut effects),
+                    None => effects.push(Effect::Nothing),
+                }
+                self.invalidate();
+                Outcome {
+                    node: Some(node),
+                    effects,
+                }
+            })
+            .collect()
+    }
+
+    /// Moves released swipe cards on. One that is off is put back in its
+    /// place (the card after it in a deck shows there) and its intent is
+    /// due.
+    fn step_cards(&mut self, now: Instant) {
+        if self.card_anims.is_empty() {
+            return;
+        }
+        let ti = self.top_index();
+        let mut done = Vec::new();
+        for (id, a) in &self.card_anims {
+            let (length, ease): (Duration, fn(f32) -> f32) = match a.commit {
+                Some(_) => (CARD_FLY, ease_in),
+                None => (CARD_SPRING, ease_out_back),
+            };
+            let t = (now.duration_since(a.since).as_secs_f32() / length.as_secs_f32()).min(1.0);
+            let key = format!("card:{id}");
+            let e = &mut self.stack[ti];
+            if t >= 1.0 && a.commit.is_none() {
+                e.scroll.remove(&key);
+            } else {
+                // One that flew off stays off until its intent has run.
+                e.scroll.insert(key, a.from + (a.to - a.from) * ease(t));
+            }
+            if t >= 1.0 {
+                done.push(id.clone());
+            }
+        }
+        for id in &done {
+            if let Some(CardAnim {
+                commit: Some(c), ..
+            }) = self.card_anims.remove(id)
+            {
+                self.swiped.push((id.clone(), c.0, c.1));
+            }
+        }
+        self.scene = None;
+    }
+
     /// The sideways-scrolling row (a chip row) under a point, if its
     /// content overflows it.
     pub fn slide_at(&mut self, x: f32, y: f32) -> Option<String> {
@@ -1768,6 +1953,8 @@ impl Session {
         let now = Instant::now();
         if self.spinning
             || !self.pager_anims.is_empty()
+            || !self.card_anims.is_empty()
+            || !self.swiped.is_empty()
             || self
                 .frame_settle
                 .is_some_and(|(at, _)| now.duration_since(at) < SETTLE)
@@ -1913,6 +2100,7 @@ impl Session {
         self.poll();
         let now = Instant::now();
         self.step_pagers(now);
+        self.step_cards(now);
         if self.caret_on() != self.caret_shown {
             self.scene = None;
         }

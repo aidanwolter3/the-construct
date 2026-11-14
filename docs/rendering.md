@@ -306,7 +306,9 @@ engine, which sends it again when the pod is back.
 
 Windows place a laid-out frame again on scroll without laying it out (`Laid::emit`), so dragging is cheap. A drag
 that scrolls flings on release and slows down each frame; one that scrolls nothing, past 48 points, is a swipe that
-runs the `core://Gesture` under its start (`on_swipe_*`). A `core://Progress` spinner is an arc with a fading tail
+runs the `core://Gesture` under its start (`on_swipe_*`). A sideways drag that starts on a `core://SwipeCard` moves
+it instead (`Session::drag_card`, an offset at `card:<id>` that only places the frame again); `release_card` throws
+it off (then its intent runs, from `take_swiped`, which the window calls each frame) or springs it back. A `core://Progress` spinner is an arc with a fading tail
 that turns once a second; a window draws every frame while one is on screen, and previews and the simulator draw it
 still. Text fields are edited by the engine itself, as Android's
 own fields behave, and on Android the keyboard edits them too (below): a tap puts the cursor where

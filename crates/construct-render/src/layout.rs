@@ -180,6 +180,9 @@ struct Elem {
     /// A sideways-scrolling row (a chip row): its children move left by the
     /// offset at `slide:<id>` (points), up to its content's overflow.
     slides: Option<String>,
+    /// A `core://SwipeCard` (by semantic id) and its threshold (points): it
+    /// moves right by the offset at `card:<id>`.
+    card: Option<(String, f32)>,
     /// A text field's text: its field and maximum length.
     field: Option<(String, Option<usize>)>,
 }
@@ -484,6 +487,7 @@ impl SceneBuilder {
             scroll_max: BTreeMap::new(),
             pagers: BTreeMap::new(),
             slides: BTreeMap::new(),
+            cards: BTreeMap::new(),
             follow_end: b.follow_end,
             env,
             parts: b.parts,
@@ -502,6 +506,15 @@ impl SceneBuilder {
                 let id = e.pager.clone()?;
                 let w = laid.tree.layout(e.node).ok()?.size.width;
                 Some((id, (w, e.kids.len())))
+            })
+            .collect();
+        laid.cards = laid
+            .elems
+            .iter()
+            .filter_map(|e| {
+                let (id, threshold) = e.card.clone()?;
+                let w = laid.tree.layout(e.node).ok()?.size.width;
+                Some((id, (threshold, w)))
             })
             .collect();
         Ok(laid)
@@ -565,6 +578,7 @@ fn fills_width(n: &UiNode) -> bool {
         } => *fill || (width_dp.is_none() && fills_width(content)),
         UiNode::Tappable { content, .. }
         | UiNode::Gesture { content, .. }
+        | UiNode::SwipeCard { content, .. }
         | UiNode::Conditional { content, .. }
         | UiNode::Sticky { content } => fills_width(content),
         _ => false,
@@ -590,6 +604,7 @@ fn fills_height(n: &UiNode) -> bool {
         } => true,
         UiNode::Tappable { content, .. }
         | UiNode::Gesture { content, .. }
+        | UiNode::SwipeCard { content, .. }
         | UiNode::Conditional { content, .. } => fills_height(content),
         UiNode::Column { children, .. } | UiNode::Row { children, .. } => {
             children.iter().any(fills_height)
@@ -613,7 +628,8 @@ fn row_flexible(n: &UiNode) -> bool {
         UiNode::Container { .. } => true,
         UiNode::Conditional { content, .. }
         | UiNode::Tappable { content, .. }
-        | UiNode::Gesture { content, .. } => row_flexible(content),
+        | UiNode::Gesture { content, .. }
+        | UiNode::SwipeCard { content, .. } => row_flexible(content),
         _ => false,
     }
 }
@@ -774,6 +790,7 @@ impl<'i> Build<'_, 'i> {
             sticky: false,
             pager: None,
             slides: None,
+            card: None,
             field: None,
         });
         self.elems.len() - 1
@@ -807,6 +824,7 @@ impl<'i> Build<'_, 'i> {
             sticky: false,
             pager: None,
             slides: None,
+            card: None,
             field: None,
         });
         self.elems.len() - 1
@@ -1381,6 +1399,42 @@ impl<'i> Build<'_, 'i> {
                     false,
                 )
             }
+            UiNode::SwipeCard {
+                content,
+                on_swipe_left,
+                on_swipe_right,
+                threshold_dp,
+                content_description,
+            } => {
+                let kid = self.node(content, &b.child(0, Axis::Column));
+                let mut sem = self.sem(
+                    b,
+                    n,
+                    content_description.as_deref().map(|d| ctx.text(d)),
+                    None,
+                );
+                // A swipe that isn't a drag (a screen reader's, the
+                // simulator's `swipe-left`) runs these as a gesture's.
+                for (name, intent) in [
+                    ("swipe_left", on_swipe_left),
+                    ("swipe_right", on_swipe_right),
+                ] {
+                    if let Some(i) = intent {
+                        sem.gestures.insert(name.to_owned(), bind_intent(i, &ctx));
+                    }
+                }
+                let id = sem.id.clone();
+                let i = self.push(
+                    column(0, pad(0, 0), AlignItems::FLEX_START),
+                    kid.into_iter().collect(),
+                    Paint::None,
+                    Some(sem),
+                    false,
+                );
+                let threshold = threshold_dp.map_or(CARD_THRESHOLD, f32::from);
+                self.elems[i].card = Some((id, threshold));
+                i
+            }
             UiNode::Box {
                 content,
                 background,
@@ -1657,6 +1711,7 @@ impl<'i> Build<'_, 'i> {
                 padding_h_dp,
                 focus,
                 indent,
+                stack,
             } => {
                 let Some(all) = ctx.query(query_key) else {
                     // Not loaded yet: nothing, as the app shows while loading.
@@ -1700,7 +1755,8 @@ impl<'i> Build<'_, 'i> {
                         no_match = f.no_match_text.clone();
                     }
                 }
-                uris.truncate(MAX_LIST_ITEMS);
+                // A deck draws its top card and the one behind it.
+                uris.truncate(if *stack { 2 } else { MAX_LIST_ITEMS });
                 let mut kids = Vec::new();
                 if uris.is_empty()
                     && let Some(t) = no_match.as_ref().or(empty_text.as_ref())
@@ -1832,15 +1888,59 @@ impl<'i> Build<'_, 'i> {
                     }
                 }
                 flush(self, &mut row_cells, &mut kids);
+                let style = column(*spacing_dp, pad(*padding_h_dp, 0), AlignItems::STRETCH);
+                if *stack && let [top, behind] = kids[..] {
+                    // Side by side in a row, the top card pulled back over
+                    // the next (drawn first, so under it): the row is as
+                    // tall as the taller, and the next card, a little
+                    // narrower, stretches to peek out below the top one.
+                    let restyle = |this: &mut Self, i: usize, f: &dyn Fn(&mut Style)| {
+                        let node = this.elems[i].node;
+                        let mut s = this.tree.style(node).cloned().unwrap_or_default();
+                        f(&mut s);
+                        this.restyle(node, s);
+                    };
+                    restyle(self, behind, &|s| {
+                        s.flex_basis = percent(1.0);
+                        s.flex_shrink = 1.0;
+                        s.min_size.width = length(0.0);
+                        s.align_self = Some(AlignSelf::STRETCH);
+                        s.margin = Rect {
+                            left: length(STACK_INSET),
+                            right: length(STACK_INSET),
+                            top: length(STACK_PEEK),
+                            bottom: zero(),
+                        };
+                    });
+                    restyle(self, top, &|s| {
+                        s.flex_basis = percent(1.0);
+                        s.flex_shrink = 0.0;
+                        s.align_self = Some(AlignSelf::FLEX_START);
+                        s.margin = Rect {
+                            left: percent(-1.0),
+                            right: zero(),
+                            top: zero(),
+                            bottom: length(STACK_PEEK),
+                        };
+                    });
+                    // Its card (the first thing down it that paints) fills
+                    // that height.
+                    let mut k = behind;
+                    while let [c] = self.elems[k].kids[..] {
+                        restyle(self, c, &|s| s.flex_grow = 1.0);
+                        if !matches!(self.elems[c].paint, Paint::None) {
+                            break;
+                        }
+                        k = c;
+                    }
+                    let mut deck = row(0, pad(0, 0), AlignItems::STRETCH);
+                    deck.align_self = Some(AlignSelf::STRETCH);
+                    deck.flex_shrink = 0.0;
+                    kids = vec![self.push(deck, vec![behind, top], Paint::None, None, false)];
+                }
                 let mut sem = self.sem(b, n, None, None);
                 sem.id = format!("list:{query_key}");
-                self.push(
-                    column(*spacing_dp, pad(*padding_h_dp, 0), AlignItems::STRETCH),
-                    kids,
-                    Paint::None,
-                    Some(sem),
-                    false,
-                )
+                self.push(style, kids, Paint::None, Some(sem), false)
             }
             UiNode::Carousel {
                 items,
@@ -2572,6 +2672,18 @@ pub struct Pressed {
 /// light page and lightens a dark one, as Android's ripple does.
 const PRESSED_ALPHA: f32 = 0.10;
 
+/// How far the card behind a deck's top one (`core://List` `stack`) peeks
+/// out below it, and how much narrower it is each side (points).
+const STACK_PEEK: f32 = 10.0;
+const STACK_INSET: f32 = 10.0;
+
+/// A swipe card's threshold when the layout gives none (points).
+pub const CARD_THRESHOLD: f32 = 96.0;
+/// How much of its side's colour a swipe card is washed with at its
+/// threshold, and past it (the release would commit).
+const CARD_TINT: f32 = 0.10;
+const CARD_TINT_PAST: f32 = 0.22;
+
 /// A sticky node pinned at the top of its scrolling view: drawn after the
 /// view's other content, over the page background.
 struct Pinned {
@@ -2614,6 +2726,8 @@ pub struct Laid {
     /// How far each sideways-scrolling row can scroll (its content past its
     /// width).
     pub slides: BTreeMap<String, f32>,
+    /// Each swipe card (by semantic id): its threshold and width (points).
+    pub cards: BTreeMap<String, (f32, f32)>,
     /// The scrolling views that follow their content to the end after an
     /// action from outside them (`core://Scroll` `follow_end`).
     pub follow_end: Vec<String>,
@@ -2734,7 +2848,13 @@ impl Laid {
     ) {
         let e = &self.elems[i];
         let l = self.tree.layout(e.node).expect("laid out");
-        let x = origin.0 + l.location.x;
+        // A swipe card is drawn where the finger has moved it.
+        let card_dx = e
+            .card
+            .as_ref()
+            .and_then(|(id, _)| scroll.get(&format!("card:{id}")).copied())
+            .unwrap_or(0.0);
+        let x = origin.0 + l.location.x + card_dx;
         let y = origin.1 + l.location.y;
         let (w, h) = (l.size.width, l.size.height);
         if e.sticky
@@ -2884,8 +3004,52 @@ impl Laid {
                 scene,
             );
         }
+        if visible && let Some((_, threshold)) = &e.card {
+            self.paint_card_tint(e, rect, clip, card_dx, *threshold, scene);
+        }
         if visible && let Some(p) = pressed {
             self.paint_pressed(e, rect, clip, p, scene);
+        }
+    }
+
+    /// A swipe card moved aside: a wash of the side it would go to (right:
+    /// `success`, left: `error`), deepening up to the threshold and
+    /// strongest past it, in its box (rounded as its one child is).
+    fn paint_card_tint(
+        &self,
+        e: &Elem,
+        rect: [f32; 4],
+        clip: [f32; 4],
+        dx: f32,
+        threshold: f32,
+        scene: &mut Scene,
+    ) {
+        if dx == 0.0 {
+            return;
+        }
+        let token = if dx > 0.0 { "success" } else { "error" };
+        let Some(color) = self.theme.token(token) else {
+            return;
+        };
+        let f = (dx.abs() / threshold.max(1.0)).min(1.0);
+        let alpha = if f >= 1.0 {
+            CARD_TINT_PAST
+        } else {
+            CARD_TINT * f
+        };
+        let mut q = QuadInstance::fill(rect, color.with_alpha(alpha), self.one_child_radius(e));
+        q.clip = clip;
+        scene.draws.push(Draw::Quad(q));
+    }
+
+    /// The corner radius of an element's one child (a card's), else 0.
+    fn one_child_radius(&self, e: &Elem) -> f32 {
+        match e.kids.as_slice() {
+            [k] => match &self.elems[*k].paint {
+                Paint::Quad { radius, .. } | Paint::Image { radius, .. } => *radius,
+                _ => 0.0,
+            },
+            _ => 0.0,
         }
     }
 
@@ -2905,17 +3069,10 @@ impl Laid {
         if s.id != p.id || s.node_type != "core://Tappable" || !inside {
             return;
         }
-        let radius = match e.kids.as_slice() {
-            [k] => match &self.elems[*k].paint {
-                Paint::Quad { radius, .. } | Paint::Image { radius, .. } => *radius,
-                _ => 0.0,
-            },
-            _ => 0.0,
-        };
         let mut q = QuadInstance::fill(
             rect,
             self.theme.on_background.with_alpha(PRESSED_ALPHA),
-            radius,
+            self.one_child_radius(e),
         );
         q.clip = clip;
         scene.draws.push(Draw::Quad(q));

@@ -164,8 +164,9 @@ feed\" is one layout (create_layout referencing the blueprint that fits: {\"type
 of that layout as the one slot). With more than one layout, home lists them and each row pushes its layout \
 (action.navigation.open {\"layout\": <id>, \"presentation\": \"Push\"}); system Back comes back. A core://Layout \
 can also show a layout in part of the screen, or as a Sheet, Panel or Overlay (from any edge) while a condition \
-holds; core://Gesture runs an intent on a tap, long press or swipe. Home owns every \
-feed: feeds you name when creating a layout are added to home's, and every layout may bind any of home's feeds. \
+holds; core://Gesture runs an intent on a tap, long press or swipe, and core://SwipeCard is a card that \
+follows the finger and runs an intent when swiped off (a core://List with stack: true is a deck of them). Home \
+owns every feed: feeds you name when creating a layout are added to home's, and every layout may bind any of home's feeds. \
 The inbox and Settings are the layouts inbox and settings (open them with presentation Sheet and Panel); \
 describe_vocabulary has small snippets. home can't be deleted. Blueprints are the built-in layouts \
 (list_layouts lists them under blueprints, get_layout reads one, list_parts lists their parts); reference a \
@@ -1504,6 +1505,15 @@ fn snippets() -> Value {
             "node": {"type": "core://Gesture",
                 "on_swipe_down": {"intent": "action.navigation.open", "layout": "inbox", "presentation": "Overlay", "edge": "top"},
                 "content": {"type": "core://Layout", "layout": "<layout id>"}}
+        },
+        "swipe_card_of_a_deck": {
+            "doc": "a card of a deck: the item_template of a core://List with stack: true (one card at a time, the next peeking behind) and where [{field: verdict, equals: Unseen}]; dragged right it likes, left it passes, and the card leaves the list. To save the verdict, make each intent the data source's update action (action.mutation.optimistic on $item.uri, field verdict) instead",
+            "node": {"type": "core://SwipeCard",
+                "on_swipe_right": {"intent": "action.local.set", "entity_uri": "$item.uri", "field": "verdict", "value_expr": "\"Like\""},
+                "on_swipe_left": {"intent": "action.local.set", "entity_uri": "$item.uri", "field": "verdict", "value_expr": "\"Pass\""},
+                "content": {"type": "core://Box", "corner_dp": 18, "padding_h_dp": 16, "padding_v_dp": 16,
+                    "background": "${local://theme#card}", "border_color": "${local://theme#card_border}",
+                    "content": {"type": "core://Text", "style": "Headline", "value_expr": "$item.title"}}}
         },
         "card_of_layout": {
             "doc": "another layout in a card-sized region of the page",

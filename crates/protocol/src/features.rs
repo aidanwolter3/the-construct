@@ -204,6 +204,7 @@ fn node_features(node: &UiNode, out: &mut BTreeSet<&'static str>) {
             spacing_dp,
             padding_h_dp,
             focus,
+            stack,
             ..
         } => {
             add(feature::LIST);
@@ -227,6 +228,9 @@ fn node_features(node: &UiNode, out: &mut BTreeSet<&'static str>) {
             }
             if focus.is_some() {
                 add(feature::LIST_FOCUS);
+            }
+            if *stack {
+                add(feature::LIST_STACK);
             }
         }
         UiNode::Image { .. } => add(feature::IMAGE),
@@ -287,6 +291,7 @@ fn node_features(node: &UiNode, out: &mut BTreeSet<&'static str>) {
             }
         }
         UiNode::Gesture { .. } => add(feature::GESTURE),
+        UiNode::SwipeCard { .. } => add(feature::SWIPE_CARD),
         // A node type this build does not know (the removed `pixelfed://`
         // widgets): no client draws it any more.
         UiNode::Unknown(_) => add(feature::LEGACY_NODES),
@@ -742,6 +747,8 @@ mod tests {
                     "show_when": "$form.inbox", "animation": "sheet_up", "params": {"id": "1"}}),
                 "core://Gesture" => json!({"type": t, "content": {"type": "core://Divider"},
                     "on_swipe_down": {"intent": "action.navigation.back"}}),
+                "core://SwipeCard" => json!({"type": t, "content": {"type": "core://Divider"},
+                    "on_swipe_right": {"intent": "action.navigation.back"}}),
                 other => panic!("no sample for {other}"),
             };
             let n: UiNode = serde_json::from_value(v).unwrap_or_else(|e| panic!("{t}: {e}"));

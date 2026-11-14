@@ -157,3 +157,25 @@ fn dark_mode_draws_the_dark_palette() {
         assert!(out.join(f).is_file(), "{f}");
     }
 }
+
+#[test]
+fn a_deck_of_swipe_cards_goes_one_card_at_a_time() {
+    let (runner, results) = run(
+        "swipe_deck",
+        "assert-no-text All black; drag-card 130 Weekend flannel; release; \
+         drag-card -60 Chore coat layers; release; assert-text Chore coat layers; \
+         drag-card -130 Chore coat layers; release; assert-text All black; \
+         swipe-right All black; assert-text All done",
+        &out_dir("swipe-deck"),
+    );
+    assert_ok(&results);
+    let verdict = |uri: &str| {
+        runner.session.data.entities[uri]
+            .get("verdict")
+            .and_then(|v| v.as_str())
+            .map(str::to_owned)
+    };
+    assert_eq!(verdict("demo://cards/1").as_deref(), Some("Like"));
+    assert_eq!(verdict("demo://cards/2").as_deref(), Some("Pass"));
+    assert_eq!(verdict("demo://cards/3").as_deref(), Some("Like"));
+}

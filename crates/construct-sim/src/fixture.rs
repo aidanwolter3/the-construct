@@ -40,6 +40,7 @@ pub fn default_bundle(workspace: &str) -> Option<&'static str> {
         "pixelfed" => "pixelfed_feed_bundle.json",
         "events" => "events_bundle.json",
         KITCHEN => "custom_kitchen_bundle.json",
+        "swipe_deck" => "swipe_deck_bundle.json",
         _ => return None,
     })
 }

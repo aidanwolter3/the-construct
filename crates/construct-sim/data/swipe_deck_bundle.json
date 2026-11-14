@@ -1,0 +1,86 @@
+{
+  "version": "1.0.0",
+  "workspace": {
+    "type": "core://Page",
+    "id": "swipe_deck",
+    "title": "Outfits",
+    "root": {
+      "type": "core://Box",
+      "fill": true,
+      "background": "${local://theme#page}",
+      "content": {
+        "type": "core://Column",
+        "spacing_dp": 12,
+        "children": [
+          {
+            "type": "core://Row",
+            "padding_h_dp": 16,
+            "padding_v_dp": 12,
+            "children": [{"type": "core://Text", "style": "Title", "value_expr": "Outfits"}]
+          },
+          {
+            "type": "core://Row",
+            "padding_h_dp": 16,
+            "align": "Center",
+            "children": [
+              {"type": "core://Text", "style": "Secondary", "value_expr": "Swipe right if you'd wear it"},
+              {"type": "core://Spacer"},
+              {
+                "type": "core://Text",
+                "style": "Label",
+                "value_expr": "$count left",
+                "count": {"query_key": "cards", "where": [{"field": "verdict", "equals": "Unseen"}], "zero_text": "All done"}
+              }
+            ]
+          },
+          {
+            "type": "core://List",
+            "query_key": "cards",
+            "stack": true,
+            "padding_h_dp": 16,
+            "where": [{"field": "verdict", "equals": "Unseen"}],
+            "empty_text": "That's the whole deck.",
+            "item_template": {
+              "type": "core://SwipeCard",
+              "content_description": "Swipe right to like, left to pass",
+              "on_swipe_right": {"intent": "action.local.set", "entity_uri": "$item.uri", "field": "verdict", "value_expr": "\"Like\""},
+              "on_swipe_left": {"intent": "action.local.set", "entity_uri": "$item.uri", "field": "verdict", "value_expr": "\"Pass\""},
+              "content": {
+                "type": "core://Box",
+                "background": "${local://theme#card}",
+                "border_color": "${local://theme#card_border}",
+                "corner_dp": 18,
+                "padding_h_dp": 16,
+                "padding_v_dp": 16,
+                "content": {
+                  "type": "core://Column",
+                  "spacing_dp": 10,
+                  "children": [
+                    {
+                      "type": "core://Row",
+                      "spacing_dp": 6,
+                      "children": [
+                        {"type": "core://Box", "background": "$item.c1", "corner_dp": 12, "width_dp": 96, "height_dp": 140, "content": {"type": "core://Spacer", "size_dp": 0}},
+                        {"type": "core://Box", "background": "$item.c2", "corner_dp": 12, "width_dp": 96, "height_dp": 140, "content": {"type": "core://Spacer", "size_dp": 0}},
+                        {"type": "core://Box", "background": "$item.c3", "corner_dp": 12, "width_dp": 96, "height_dp": 140, "content": {"type": "core://Spacer", "size_dp": 0}}
+                      ]
+                    },
+                    {"type": "core://Text", "style": "Headline", "value_expr": "$item.title"},
+                    {"type": "core://Text", "style": "Body", "value_expr": "$item.pieces"},
+                    {"type": "core://Chip", "text": "$item.style", "tone": "Neutral"}
+                  ]
+                }
+              }
+            }
+          }
+        ]
+      }
+    }
+  },
+  "entities": {
+    "demo://cards/1": {"title": "Weekend flannel", "pieces": "Olive flannel shirt, white tee, straight jeans, brown boots", "style": "Rugged casual", "c1": "#5B6B3A", "c2": "#F2EFE8", "c3": "#3B5B7A", "verdict": "Unseen"},
+    "demo://cards/2": {"title": "Chore coat layers", "pieces": "Tan chore coat, navy henley, dark denim", "style": "Workwear", "c1": "#C8A26B", "c2": "#24324A", "c3": "#2F3C52", "verdict": "Unseen"},
+    "demo://cards/3": {"title": "All black", "pieces": "Black tee, black jeans, black sneakers", "style": "Minimal", "c1": "#1C1C1E", "c2": "#2A2A2D", "c3": "#111113", "verdict": "Unseen"}
+  },
+  "queries": {"cards": ["demo://cards/1", "demo://cards/2", "demo://cards/3"]}
+}

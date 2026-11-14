@@ -148,6 +148,10 @@ struct Drag {
     /// the drag pages it.
     pager: Option<(String, f32)>,
     paging: bool,
+    /// The swipe card under its start and where it was, and whether the
+    /// drag moves it.
+    card: Option<(String, f32)>,
+    carding: bool,
     /// The chip row under its start and where it was, and whether the drag
     /// scrolls it.
     slide: Option<(String, f32)>,
@@ -637,6 +641,10 @@ impl App {
         let dragging = self.drag.as_ref().is_some_and(|d| d.dragging);
         let mut stats = self.perf.begin(started, dragging);
         self.update_insets();
+        // Swipe cards that flew off since the last frame run their intents.
+        for out in self.controller.session.take_swiped() {
+            self.after(Some(out), false);
+        }
         // The drag's scrolling since the last frame, in one step.
         if let Some(mut d) = self.drag.take() {
             if d.pending != 0.0 {
@@ -1076,6 +1084,11 @@ impl ApplicationHandler for App {
                                 (id, at)
                             }),
                             paging: false,
+                            card: self.controller.session.card_at(p.0, p.1).map(|id| {
+                                let at = self.controller.session.card_offset(&id);
+                                (id, at)
+                            }),
+                            carding: false,
                             slide: self.controller.session.slide_at(p.0, p.1).map(|id| {
                                 let at = self.controller.session.slide_offset(&id);
                                 (id, at)
@@ -1119,13 +1132,23 @@ impl ApplicationHandler for App {
                                 Some(DragAxis::Horizontal) => tx.abs() > ty.abs(),
                                 None => false,
                             };
-                            d.paging = !d.moving_frame && d.pager.is_some() && tx.abs() > ty.abs();
+                            // A card in a deck moves before a carousel on it pages.
+                            d.carding = !d.moving_frame && d.card.is_some() && tx.abs() > ty.abs();
+                            d.paging = !d.moving_frame
+                                && !d.carding
+                                && d.pager.is_some()
+                                && tx.abs() > ty.abs();
                             d.sliding = !d.moving_frame
+                                && !d.carding
                                 && !d.paging
                                 && d.slide.is_some()
                                 && tx.abs() > ty.abs();
                         }
-                        if d.sliding
+                        if d.carding
+                            && let Some((id, at)) = &d.card
+                        {
+                            self.controller.session.drag_card(id, at + tx);
+                        } else if d.sliding
                             && let Some((id, at)) = &d.slide
                         {
                             self.controller.session.drag_slide(id, at - tx);
@@ -1174,7 +1197,15 @@ impl ApplicationHandler for App {
                         // the finger was held still before lifting.
                         let secs = self.secs(now);
                         let (vx, vy) = (d.vx.velocity(secs), d.vy.velocity(secs));
-                        if d.paging
+                        if d.carding
+                            && let Some((id, _)) = &d.card
+                        {
+                            let out = self.controller.session.release_card(id, vx);
+                            self.after(out, false);
+                            if let Some(s) = &self.surface {
+                                s.window.request_redraw();
+                            }
+                        } else if d.paging
                             && let Some((id, _)) = &d.pager
                         {
                             self.controller.session.release_pager(id, vx);
@@ -1240,6 +1271,13 @@ impl ApplicationHandler for App {
                                 && let Some((id, _)) = &d.pager
                             {
                                 self.controller.session.release_pager(id, 0.0);
+                            }
+                            // A cancelled drag commits nothing.
+                            if d.carding
+                                && let Some((id, at)) = &d.card
+                            {
+                                self.controller.session.drag_card(id, *at);
+                                self.controller.session.release_card(id, 0.0);
                             }
                         }
                     }

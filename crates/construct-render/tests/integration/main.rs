@@ -12,4 +12,5 @@ mod interaction;
 mod layout_math;
 mod media;
 mod reuse;
+mod swipe_cards;
 mod writes;

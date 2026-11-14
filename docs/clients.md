@@ -113,6 +113,10 @@ The client opens the pod's `home` layout (the default) and draws everything from
   content can't scroll for counts as a swipe, so a home that opens the inbox from the top on a swipe down still
   scrolls. The swipe feel and Android's own edge gestures (Back from the sides, the notification shade from the top)
   are checked on a phone.
+- **Swipe cards** (decision `swipe-cards`): a `core://SwipeCard` follows a finger dragged sideways on it, tinted
+  toward the side it would go past its threshold; let go there it flies off and runs that side's intent, else it
+  springs back. In a deck (`core://List` `stack`) it moves before a carousel on it pages. The mouse doesn't drag
+  it on desktop (as with carousels).
 - **Screens inside a sheet or panel** (decision `screens-inside-frames`): a screen of the sheet's or panel's own layout
   opens inside that frame, not over the whole screen. The frame's content slides left as the screen slides in from the
   end, with a Back arrow and the screen's title at its top; Back (the arrow or system Back) slides it out again, and
