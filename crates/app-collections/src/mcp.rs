@@ -64,7 +64,13 @@ results; it fills each row once (refresh once) and an empty or blocked search ne
 (on_empty keep). It needs the web_search jack plugged (list_jacks; plug_jack web_search) and the model jack. \
 every_minutes schedules fills; on_open_minutes fills when the app opens and the data is older; upcoming \
 (a date field) drops past items; zone places times without an offset; details reads each new row's own \
-page. A datetime field (2026-11-06T19:30-07:00) is also served as <name>_date, <name>_time and \
+page. A page whose content a script builds (the raw HTML has no items) or that answers a plain fetch with \
+a bot check takes render: true (or {wait_for: <CSS selector>, timeout_seconds?: 5..=45}) on a url or url_field \
+filler (and on collections_preview): the server's headless browser loads it, waits for the network to go quiet \
+or the selector to appear, and the extractors read the rendered HTML. Rendering is slow and capped (one browser \
+at a time, 100 pages a pod a day, every_minutes and on_open_minutes at least 360, no headers): use it only when \
+a preview without it finds nothing. A site that still refuses is reported as blocked in collections_status and \
+the pod backs off; it never solves a captcha. A datetime field (2026-11-06T19:30-07:00) is also served as <name>_date, <name>_time and \
 <name>_text. Alerts (apply_change {op: add_alert, any?, all?, none?, filler?, days?, within_days?}) notify \
 once when a row matches, e.g. a show listing a team. collections_status shows each filler's health: say so \
 when one is failing or finds nothing. An API key goes in with collections_set_secret (with the host it is for) and is sent as a \
@@ -211,12 +217,13 @@ pub fn tools() -> Vec<Value> {
         ),
         tool(
             "collections_preview",
-            "Try a fetch recipe now and store nothing: fetch the page, extract and map, and answer the rows (or, without map, sample items to write the paths from). Pass the recipe's {url, extract, items?, types?, script?, zone?, map?, headers?}, or collection (and filler, an id; default its first) to try that filler (a url_field filler tries its first row's page). Use it before set_filler, and when collections_status says a filler finds nothing.",
+            "Try a fetch recipe now and store nothing: fetch the page, extract and map, and answer the rows (or, without map, sample items to write the paths from). Pass the recipe's {url, extract, items?, types?, script?, zone?, map?, headers?, render?}, or collection (and filler, an id; default its first) to try that filler (a url_field filler tries its first row's page). Use it before set_filler, and when collections_status says a filler finds nothing.",
             json!({ "collection": collection, "filler": { "type": "string" }, "url": { "type": "string" },
                     "extract": { "type": "string", "enum": web_extract::items::Kind::ALL }, "zone": { "type": "string" },
                     "items": { "type": "string" }, "types": { "type": "array", "items": { "type": "string" } },
                     "script": { "type": "string" }, "map": { "type": "object", "description": "{name: path}" },
-                    "headers": { "type": "object" } }),
+                    "headers": { "type": "object" },
+                    "render": { "description": "true or {wait_for?: CSS selector, timeout_seconds?}: load the page in the server's headless browser first" } }),
             &[],
         ),
         tool(
@@ -838,7 +845,7 @@ async fn preview(pod: &Pod, adapter: &CollectionsAdapter, args: &Value) -> Resul
         ));
     }
     // The recipe: a collection's filler, or the arguments.
-    let (url, spec, map, headers, def) = if let Some(name) = args["collection"].as_str() {
+    let (url, spec, map, headers, def, render) = if let Some(name) = args["collection"].as_str() {
         let (_, def) = current(pod, name).await?;
         let f = match args["filler"].as_str() {
             Some(id) => crate::filler::find(&def, id).cloned(),
@@ -888,7 +895,15 @@ async fn preview(pod: &Pod, adapter: &CollectionsAdapter, args: &Value) -> Resul
             .iter()
             .map(|(id, p)| (def.name_of(id), p.clone()))
             .collect();
-        (url, f.extract_spec(), map, headers.clone(), Some(def))
+        let render = f.render().cloned();
+        (
+            url,
+            f.extract_spec(),
+            map,
+            headers.clone(),
+            Some(def),
+            render,
+        )
     } else {
         let url = str_arg(args, "url")?.to_owned();
         let kind = web_extract::items::Kind::parse(args["extract"].as_str().unwrap_or(""))
@@ -921,7 +936,7 @@ async fn preview(pod: &Pod, adapter: &CollectionsAdapter, args: &Value) -> Resul
                     .collect()
             })
             .unwrap_or_default();
-        let headers = args["headers"]
+        let headers: std::collections::BTreeMap<String, String> = args["headers"]
             .as_object()
             .map(|h| {
                 h.iter()
@@ -929,7 +944,13 @@ async fn preview(pod: &Pod, adapter: &CollectionsAdapter, args: &Value) -> Resul
                     .collect()
             })
             .unwrap_or_default();
-        (url, Some(spec), map, headers, None)
+        let render = crate::filler::Render::parse(args.get("render"), "render").map_err(bad)?;
+        if render.is_some() && !headers.is_empty() {
+            return Err(bad(
+                "a rendered page is fetched without headers: the browser would send them to every site the page loads from",
+            ));
+        }
+        (url, Some(spec), map, headers, None, render)
     };
     let Some(spec) = spec else {
         return Err(bad("unknown extractor"));
@@ -945,22 +966,32 @@ async fn preview(pod: &Pod, adapter: &CollectionsAdapter, args: &Value) -> Resul
     for (k, v) in headers {
         sent.insert(k, v);
     }
-    let resolved = crate::fill::resolve_headers_for(pod, adapter, &sent, &url).map_err(bad)?;
-    let client = if resolved.has_secret {
-        adapter.secret_fetch_client()
+    let fetched = if let Some(r) = &render {
+        crate::fill::render_page(pod, adapter, &url, r).await
     } else {
-        adapter.fetch_client()
-    };
-    let fetched = web_extract::hosts::fetch(
-        &pod.local::<web_extract::hosts::Hosts>(),
-        client,
-        &url,
-        None,
-        None,
-        &resolved.headers,
-    )
-    .await
-    .map_err(|e| fail(StatusCode::BAD_GATEWAY, "fetch_failed", e.message))?;
+        let resolved = crate::fill::resolve_headers_for(pod, adapter, &sent, &url).map_err(bad)?;
+        let client = if resolved.has_secret {
+            adapter.secret_fetch_client()
+        } else {
+            adapter.fetch_client()
+        };
+        web_extract::hosts::fetch(
+            &pod.local::<web_extract::hosts::Hosts>(),
+            client,
+            &url,
+            None,
+            None,
+            &resolved.headers,
+        )
+        .await
+    }
+    .map_err(|e| {
+        let mut v = fail(StatusCode::BAD_GATEWAY, "fetch_failed", e.message);
+        if e.blocked {
+            v["blocked"] = json!(true);
+        }
+        v
+    })?;
     let web_extract::fetch::Fetched::Body { bytes, .. } = fetched else {
         return Err(fail(
             StatusCode::BAD_GATEWAY,
@@ -970,6 +1001,9 @@ async fn preview(pod: &Pod, adapter: &CollectionsAdapter, args: &Value) -> Resul
     };
     let body = String::from_utf8_lossy(&bytes);
     let mut out = json!({ "url": url, "extract": spec.kind.name(), "bytes": bytes.len() });
+    if render.is_some() {
+        out["rendered"] = json!(true);
+    }
     if map.is_empty() {
         // Sample items to write the paths from.
         let items = crate::fill::sample_items(&spec, &body).map_err(bad)?;

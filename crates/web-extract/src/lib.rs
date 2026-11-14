@@ -12,6 +12,8 @@
 //!
 //! It is also the pod's **web module** (decision `web-and-agent-modules`):
 //!
+//! - [`render`]: a page rendered in a headless browser first (one at a
+//!   time, through a proxy that keeps it on public websites).
 //! - [`hosts`]: one policy per host, pod-wide (spacing, a daily cap, a
 //!   shared backoff after a site blocks the pod).
 //! - [`search`]: web search behind the `web_search` jack's providers.
@@ -26,6 +28,7 @@ pub mod hosts;
 pub mod html;
 pub mod items;
 pub mod path;
+pub mod render;
 pub mod search;
 pub mod tasks;
 pub mod tools;

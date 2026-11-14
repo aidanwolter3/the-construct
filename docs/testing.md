@@ -28,6 +28,10 @@ The Rust rendering engine (`crates/construct-render`) has golden frames: CPU fra
 `tests/data/goldens/`, and GPU frames with the same files when a wgpu adapter exists (CI's image has lavapipe,
 `mesa-vulkan-drivers`, and CI sets `CONSTRUCT_REQUIRE_GPU=1`). See [rendering.md](rendering.md#tests).
 
+Rendered fillers' tests (`web-extract`'s and `app-collections`' `render::`, decision `rendered-fetches`) drive a
+real headless Chromium against local pages: CI's image has Debian's `chromium`; elsewhere they skip unless
+`CONSTRUCT_BROWSER` names a browser (on Ubuntu, `npx playwright install chromium` downloads one without the snap).
+
 There are no on-device tests: UI is checked with the [headless simulator](simulator.md), which draws with the same
 renderer as the apps. The Android build checks that every Java class the Rust code names in a JNI signature exists;
 other Android-only runtime failures (JNI calls, permissions, push with the app closed) show only when the app runs

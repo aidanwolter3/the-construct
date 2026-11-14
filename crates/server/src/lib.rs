@@ -41,12 +41,14 @@ pub fn adapters(pixelfed: PixelfedConfig) -> Vec<Arc<dyn AppAdapter>> {
         app_shell::adapter(),
         app_shell::settings_adapter(),
         app_shell::inbox_adapter(),
-        Arc::new(
+        Arc::new({
+            let private = std::env::var(FILL_PRIVATE_HOSTS_VAR).as_deref() == Ok("1");
             app_collections::CollectionsAdapter::with_caps(collections_caps_from_env())
                 .with_model(app_collections::compute::PodModel::from_env())
                 .with_agent(app_collections::agent::PodAgent::from_env())
-                .with_private_hosts(std::env::var(FILL_PRIVATE_HOSTS_VAR).as_deref() == Ok("1")),
-        ),
+                .with_private_hosts(private)
+                .with_browser(web_extract::render::Browser::from_env(private))
+        }),
         Arc::new(app_monitor::MonitorAdapter::new(
             app_monitor::MonitorConfig::from_env(),
         )),

@@ -8,6 +8,9 @@
 //!   jsonld, rss, ics, selectors; or `llm`, a model reading the page's
 //!   text) and a map from fields to paths in each item. `details` fetches
 //!   each new row's own page for more (an event's full description).
+//!   `render` loads the page (and the details pages) in the server's
+//!   headless browser first ([`web_extract::render`]), for pages built by
+//!   JavaScript or behind a bot check.
 //! - `agent`: a model with web search and fetch, a prompt and a budget,
 //!   answering rows that fit the collection's fields.
 //!
@@ -55,6 +58,90 @@ pub const DEFAULT_FETCHES: u32 = 10;
 pub const DEFAULT_FILLS_PER_DAY: u32 = 4;
 /// The extractor name of a model reading the page's text.
 pub const LLM: &str = "llm";
+/// A rendered filler's shortest interval (and `on_open_minutes`), minutes:
+/// a render starts a browser.
+pub const MIN_RENDER_EVERY: u32 = 6 * 60;
+
+/// How a rendered page is waited for (decision `rendered-fetches`).
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct Render {
+    /// A CSS selector the page must show; empty: until the network goes
+    /// quiet.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub wait_for: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timeout_seconds: Option<u32>,
+}
+
+impl Render {
+    /// Parse `render`: `true`, or `{wait_for?, timeout_seconds?}`; `None`
+    /// for absent, `null` or `false`. `at` names it in errors.
+    pub fn parse(v: Option<&Value>, at: &str) -> Result<Option<Render>, String> {
+        let o = match v {
+            None | Some(Value::Null) | Some(Value::Bool(false)) => return Ok(None),
+            Some(Value::Bool(true)) => return Ok(Some(Render::default())),
+            Some(Value::Object(o)) => o,
+            Some(_) => {
+                return Err(format!(
+                    "{at} is true or {{wait_for?: CSS selector, timeout_seconds?}}"
+                ));
+            }
+        };
+        if let Some(k) = o
+            .keys()
+            .find(|k| !["wait_for", "timeout_seconds"].contains(&k.as_str()))
+        {
+            return Err(format!(
+                "{at}.{k} is not a render option (wait_for, timeout_seconds)"
+            ));
+        }
+        let wait_for = text(o, "wait_for").to_owned();
+        if !wait_for.is_empty() && !web_extract::items::is_selector(&wait_for) {
+            return Err(format!("{at}.wait_for '{wait_for}' is not a CSS selector"));
+        }
+        let (lo, hi) = (
+            web_extract::render::MIN_TIMEOUT_SECS,
+            web_extract::render::MAX_TIMEOUT_SECS,
+        );
+        let timeout_seconds = match o.get("timeout_seconds") {
+            None | Some(Value::Null) => None,
+            Some(t) => match t.as_u64().and_then(|n| u32::try_from(n).ok()) {
+                Some(n) if (lo..=hi).contains(&n) => Some(n),
+                _ => return Err(format!("{at}.timeout_seconds is {lo}..={hi}")),
+            },
+        };
+        Ok(Some(Render {
+            wait_for,
+            timeout_seconds,
+        }))
+    }
+
+    /// The browser's options.
+    pub fn options(&self) -> web_extract::render::Options {
+        web_extract::render::Options {
+            wait_for: self.wait_for.clone(),
+            timeout: std::time::Duration::from_secs(u64::from(
+                self.timeout_seconds
+                    .unwrap_or(web_extract::render::DEFAULT_TIMEOUT_SECS),
+            )),
+        }
+    }
+
+    /// As Claude writes it.
+    pub fn describe(&self) -> Value {
+        if *self == Render::default() {
+            return json!(true);
+        }
+        let mut v = json!({});
+        if !self.wait_for.is_empty() {
+            v["wait_for"] = json!(self.wait_for);
+        }
+        if let Some(t) = self.timeout_seconds {
+            v["timeout_seconds"] = json!(t);
+        }
+        v
+    }
+}
 
 /// Each new row's own page, read for more of its fields.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -129,6 +216,10 @@ pub enum Source {
         map: BTreeMap<String, String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         details: Option<Box<Details>>,
+        /// Load the page (and the details pages) in the server's headless
+        /// browser first.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        render: Option<Render>,
     },
     /// A model with web tools answers the rows.
     Agent {
@@ -314,6 +405,14 @@ impl Filler {
         })
     }
 
+    /// How its pages are rendered (`fetch` with `render`).
+    pub fn render(&self) -> Option<&Render> {
+        match &self.source {
+            Source::Fetch { render, .. } => render.as_ref(),
+            Source::Agent { .. } => None,
+        }
+    }
+
     /// The page it reads (`fetch` with `url`).
     pub fn url(&self) -> Option<&str> {
         match &self.source {
@@ -415,8 +514,12 @@ impl Filler {
                 hint,
                 map,
                 details,
+                render,
             } => {
                 let mut v = json!({ "kind": "fetch", "extract": extract });
+                if let Some(r) = render {
+                    v["render"] = r.describe();
+                }
                 if let Some(u) = url {
                     v["url"] = json!(u);
                 }
@@ -854,6 +957,13 @@ pub fn parse(
                     );
                 }
             };
+            let render = Render::parse(o.get("render"), "filler.render")?;
+            if render.is_some() && query_field.is_some() {
+                return Err("a query_field filler reads search results, which aren't rendered: render is for url and url_field fillers".into());
+            }
+            if render.is_some() && !headers.is_empty() {
+                return Err("a rendered filler sends no headers: the browser would send them to every site the page loads from".into());
+            }
             Source::Fetch {
                 url,
                 url_field,
@@ -867,6 +977,7 @@ pub fn parse(
                 hint,
                 map,
                 details,
+                render,
             }
         }
         "agent" => {
@@ -1132,6 +1243,16 @@ fn check_one(def: &Definition, f: &Filler, max_fills_per_day: u32) -> Result<(),
     {
         return Err(format!("on_open_minutes is {MIN_ON_OPEN}..={MAX_ON_OPEN}"));
     }
+    if f.render().is_some()
+        && [f.every_minutes, f.on_open_minutes]
+            .into_iter()
+            .flatten()
+            .any(|m| m < MIN_RENDER_EVERY)
+    {
+        return Err(format!(
+            "a rendered page starts the server's browser: every_minutes and on_open_minutes are at least {MIN_RENDER_EVERY} (six hours)"
+        ));
+    }
     if let Source::Agent { fills_per_day, .. } = &f.source
         && *fills_per_day > max_fills_per_day
     {
@@ -1284,6 +1405,59 @@ mod tests {
             parse(&def, &json!({"kind": "fetch", "url": "http://127.0.0.1/x", "extract": "json", "map": {"name": "a"}}), "s2".into(), true)
                 .is_ok()
         );
+    }
+
+    #[test]
+    fn rendered_pages_wait_are_capped_and_send_no_headers() {
+        let def = products();
+        let with = |spec: Value| {
+            let mut d = def.clone();
+            d.fillers = vec![one(&d, spec)?];
+            check(&d, 20).map(|_| d.fillers[0].clone())
+        };
+        let page = |render: Value| {
+            json!({"kind": "fetch", "url_field": "url", "extract": "jsonld", "types": ["Product"],
+                   "map": {"price": "offers.price"}, "render": render})
+        };
+        let f = with(page(json!(true))).unwrap();
+        assert_eq!(f.render(), Some(&Render::default()));
+        assert_eq!(f.describe(&def)["render"], json!(true));
+        assert_eq!(f.render().unwrap().options().timeout.as_secs(), 20);
+        let f = with(page(
+            json!({"wait_for": "script[type='application/ld+json']", "timeout_seconds": 30}),
+        ))
+        .unwrap();
+        assert_eq!(
+            f.describe(&def)["render"],
+            json!({"wait_for": "script[type='application/ld+json']", "timeout_seconds": 30})
+        );
+        // Stored fillers without it read as before.
+        let old: Filler =
+            serde_json::from_value(json!({"id": "s1", "title": "Shop", "kind": "fetch",
+            "url": "https://a.example", "extract": "json", "map": {"f1": "a"}}))
+            .unwrap();
+        assert_eq!(old.render(), None);
+        assert!(with(page(json!(false))).unwrap().render().is_none());
+        for bad in [
+            page(json!("yes")),
+            page(json!({"wait_for": "a[["})),
+            page(json!({"timeout_seconds": 300})),
+            page(json!({"wait": "a"})),
+        ] {
+            assert!(with(bad.clone()).is_err(), "{bad}");
+        }
+        // At most every six hours; no headers; not for searches.
+        let mut often = page(json!(true));
+        often["every_minutes"] = json!(60);
+        assert!(with(often.clone()).unwrap_err().contains("360"));
+        often["every_minutes"] = json!(720);
+        assert!(with(often.clone()).is_ok());
+        often["on_open_minutes"] = json!(30);
+        assert!(with(often).is_err());
+        let mut headed = page(json!(true));
+        headed["headers"] = json!({"Accept": "text/html"});
+        assert!(with(headed).unwrap_err().contains("headers"));
+        assert!(with(json!({"kind": "fetch", "query_field": "name", "extract": "llm", "fields": ["price"], "render": true})).is_err());
     }
 
     #[test]

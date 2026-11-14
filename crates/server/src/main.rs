@@ -9,7 +9,7 @@
 //! - `pods adopt <name> <path/to/server.db>`: make a pre-D46 single-pod
 //!   database a pod (copied and checked first; the original is renamed).
 //! - `pods remove-adopted [dir]`: delete those renamed originals (default: the
-//!   data dir) once the pod works. The image has no shell, so no `rm`.
+//!   data dir) once the pod works, without a shell on the machine.
 //! - `pods rotate <name>`: a new token; the old one stops working.
 //! - `pods delete <name>`: stop a pod now; its files go at the next sweep.
 //! - `pods notify-test <name>`: send the pod a test notification (stored in

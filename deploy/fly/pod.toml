@@ -91,4 +91,6 @@ primary_region = "dfw"
 
 [[vm]]
   size = "shared-cpu-1x"
-  memory = "512mb"
+  # Room for the headless browser of rendered fillers (a few hundred MB while
+  # one renders; one at a time, decision `rendered-fetches`).
+  memory = "1gb"

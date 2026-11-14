@@ -10,8 +10,10 @@
 
 # Base images are pinned by digest (reproducible builds); bump the digest to take updates.
 ARG RUST_IMAGE=rust:1-slim-bookworm@sha256:24707e70a4f1e23d9a7b25202ec43126d28a52294b96aad5c670df1fd1f1d400
-# Runs as root on purpose: Fly volumes mount root-owned at /data.
-ARG RUNTIME_IMAGE=gcr.io/distroless/cc-debian12@sha256:e5d81ddde149641e2a9ba55be4545bc125c67de07508b03ba4c22e6eb0ded5aa
+# Runs as root on purpose: Fly volumes mount root-owned at /data. Debian slim (the CI image's base, decision
+# `ci-container-image`) rather than distroless: it carries Chromium, the headless browser of rendered fillers
+# (decision `rendered-fetches`). A bookworm-built binary runs on trixie's newer glibc.
+ARG RUNTIME_IMAGE=debian:trixie-slim@sha256:a72b4433de1cf7d6bae0c4cee74d0547f58601a643b3375f070c51600d63b6b2
 
 FROM ${RUST_IMAGE} AS chef
 RUN cargo install cargo-chef --locked --version 0.1.78
@@ -38,9 +40,15 @@ RUN cargo build --release --locked -p server \
     && cp target/release/server /server
 
 FROM ${RUNTIME_IMAGE}
+# Chromium (and fonts, so pages lay out as they do for people) for rendered fillers; CA certificates for it.
+RUN apt-get update \
+    && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+        chromium ca-certificates fonts-liberation \
+    && rm -rf /var/lib/apt/lists/*
 COPY --from=build /server /server
 ENV CONSTRUCT_ADDR=0.0.0.0:8080 \
     CONSTRUCT_DATA_DIR=/data \
+    CONSTRUCT_BROWSER=/usr/bin/chromium \
     RUST_LOG=info
 EXPOSE 8080
 ENTRYPOINT ["/server"]

@@ -21,6 +21,7 @@ app-pixelfed = { path = "../app-pixelfed" }
 app-recipes = { path = "../app-recipes" }
 app-shell = { path = "../app-shell" }
 app-collections = { path = "../app-collections" }
+web-extract = { path = "../web-extract" }
 app-events = { path = "../app-events" }
 app-monitor = { path = "../app-monitor" }
 app-agents = { path = "../app-agents" }
