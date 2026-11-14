@@ -403,7 +403,8 @@ Layouts the previewed one embeds inline or opens are loaded with it (up to 8), a
 the value checks a saved layout gets (sizes, icons, tints; `validate::check_node_values`), a draft's and a saved
 layout's alike, since a component updated after a layout was saved isn't checked against it: a preview that fails
 them answers `invalid_layout`, and a linked layout that fails them isn't loaded. The renderer also draws no icon
-mask past 2048 px a side. An `id`, `data_from` or linked layout that isn't shaped like a layout id (lowercase
+mask past 2048 px a side, and draws each icon into its own box: a `path:` icon's coordinates past its 24 × 24 box
+are cut off, not drawn into a mask the size of its bounds. An `id`, `data_from` or linked layout that isn't shaped like a layout id (lowercase
 letters, digits, `_` and `-`, at most 64) answers `unknown_layout` before any request is built. Code:
 `pod_core::preview`.
 

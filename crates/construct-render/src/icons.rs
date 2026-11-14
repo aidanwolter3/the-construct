@@ -101,19 +101,16 @@ pub fn mask(name: &str, size: u32) -> Option<Vec<u8>> {
     let s = size as f32 / 24.0;
     let mut out = vec![0u8; size as usize * size as usize];
     for p in paths {
-        let (data, at) = zeno::Mask::new(*p)
+        // Drawn into the icon's own box: a mask sized to the path's bounds
+        // would let a `path:` icon's coordinates (M0,0H1000000…) ask for
+        // gigabytes.
+        let (data, _) = zeno::Mask::new(*p)
             .transform(Some(zeno::Transform::scale(s, s)))
+            .size(size, size)
             .render();
-        for row in 0..at.height as i32 {
-            for col in 0..at.width as i32 {
-                let (x, y) = (at.left + col, at.top + row);
-                if x < 0 || y < 0 || x >= size as i32 || y >= size as i32 {
-                    continue;
-                }
-                let a = data[(row * at.width as i32 + col) as usize] as u32;
-                let d = &mut out[(y as u32 * size + x as u32) as usize];
-                *d = (a + *d as u32 * (255 - a) / 255).min(255) as u8;
-            }
+        for (d, a) in out.iter_mut().zip(data) {
+            let a = a as u32;
+            *d = (a + *d as u32 * (255 - a) / 255).min(255) as u8;
         }
     }
     Some(out)
@@ -208,6 +205,17 @@ mod tests {
             assert!(super::mask(bad, 48).is_none(), "{bad}");
             assert!(super::id(bad).is_none(), "{bad}");
         }
+    }
+
+    /// A `path:` icon whose coordinates reach far past its 24 x 24 box is
+    /// drawn into that box, not into a mask the size of its bounds (2000000
+    /// units a side would be terabytes at 48 px).
+    #[test]
+    fn a_path_icon_far_past_its_box_is_drawn_in_the_box() {
+        let huge = "path:M-1000000,-1000000H1000000V1000000H-1000000z";
+        let m = super::mask(huge, 48).expect("drawn");
+        assert_eq!(m.len(), 48 * 48);
+        assert!(m.iter().all(|a| *a == 255));
     }
 
     /// An icon too big for any screen gets no mask, rather than one of
