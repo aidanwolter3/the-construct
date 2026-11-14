@@ -1507,7 +1507,7 @@ fn snippets() -> Value {
                 "content": {"type": "core://Layout", "layout": "<layout id>"}}
         },
         "swipe_card_of_a_deck": {
-            "doc": "a card of a deck: the item_template of a core://List with stack: true (one card at a time, the next peeking behind) and where [{field: verdict, equals: Unseen}]; dragged right it likes, left it passes, and the card leaves the list. To save the verdict in a collection, make each intent its update action (action.mutation.optimistic, endpoint /v1/collections/<id>/update, entity_uri $item.uri, field verdict, value_expr \"Like\", payload {id: $item.id, verdict: $value})",
+            "doc": "a card of a deck: the item_template of a core://List with stack: true (one card at a time, the next peeking behind) and where [{field: verdict, equals: Unseen}]; dragged right it likes, left it passes, and the card leaves the list. To save the verdict, make each intent the data source's update action (action.mutation.optimistic on $item.uri, field verdict) instead",
             "node": {"type": "core://SwipeCard",
                 "on_swipe_right": {"intent": "action.local.set", "entity_uri": "$item.uri", "field": "verdict", "value_expr": "\"Like\""},
                 "on_swipe_left": {"intent": "action.local.set", "entity_uri": "$item.uri", "field": "verdict", "value_expr": "\"Pass\""},
