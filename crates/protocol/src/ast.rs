@@ -16,7 +16,7 @@ use std::collections::BTreeMap;
 use crate::intent::{ActionIntent, Animation, Edge};
 
 /// Node types this build knows (an other type is [`UiNode::Unknown`]).
-pub const NODE_TYPES: [&str; 30] = [
+pub const NODE_TYPES: [&str; 31] = [
     "core://Workspace",
     "core://Page",
     "core://Scroll",
@@ -47,6 +47,7 @@ pub const NODE_TYPES: [&str; 30] = [
     "core://Drawer",
     "core://Layout",
     "core://Gesture",
+    "core://SwipeCard",
 ];
 
 /// Icon names clients draw (`core://IconButton`, `core://Chip`).
@@ -231,6 +232,11 @@ pub enum UiNode {
         /// Schema 12: one item to scroll to and tint ([`ListFocus`]).
         #[serde(default, skip_serializing_if = "Option::is_none")]
         focus: Option<ListFocus>,
+        /// Feature `list_stack`: a deck. Only the first item is drawn, with
+        /// the second peeking out behind it, so swiping the top card away
+        /// (`core://SwipeCard`) shows the next.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        stack: bool,
     },
     /// An image from a URL (a literal or a binding such as
     /// `"$item.avatar_url"`). `size_dp` makes it a square of that size;
@@ -616,6 +622,24 @@ pub enum UiNode {
         content_description: Option<String>,
     },
 
+    // Feature `swipe_card` (crates/protocol/features/swipe_card.md)
+    /// `content` that follows the finger sideways (decision `swipe-cards`):
+    /// past `threshold_dp` (default 96) it tints toward the side it would
+    /// go, and let go there it flies off and runs that side's intent; let
+    /// go before, it springs back. At least one side is set.
+    #[serde(rename = "core://SwipeCard")]
+    SwipeCard {
+        content: Box<UiNode>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        on_swipe_left: Option<ActionIntent>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        on_swipe_right: Option<ActionIntent>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        threshold_dp: Option<u16>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        content_description: Option<String>,
+    },
+
     /// A node of a type this build does not know: its JSON, kept as is.
     #[serde(skip)]
     Unknown(Value),
@@ -691,6 +715,7 @@ impl UiNode {
             UiNode::Conditional { content, .. }
             | UiNode::Tappable { content, .. }
             | UiNode::Gesture { content, .. }
+            | UiNode::SwipeCard { content, .. }
             | UiNode::Box { content, .. }
             | UiNode::Sticky { content }
             | UiNode::Scroll { content, .. } => {
@@ -750,6 +775,11 @@ impl UiNode {
             | UiNode::Switch { on_click, .. } => vec![on_click],
             UiNode::TextField { on_submit, .. } => on_submit.iter().collect(),
             UiNode::Gesture { .. } => self.gesture_handlers().into_iter().flatten().collect(),
+            UiNode::SwipeCard {
+                on_swipe_left,
+                on_swipe_right,
+                ..
+            } => on_swipe_left.iter().chain(on_swipe_right).collect(),
             _ => Vec::new(),
         };
         // The steps of an `action.sequence` count as the node's intents too,

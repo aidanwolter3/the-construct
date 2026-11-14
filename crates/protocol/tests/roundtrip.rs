@@ -170,6 +170,7 @@ fn full_workspace() -> UiNode {
                             spacing_dp: 0,
                             padding_h_dp: 0,
                             focus: None,
+                            stack: false,
                         },
                         UiNode::List {
                             query_key: "timeline:pinned".into(),
@@ -208,6 +209,7 @@ fn full_workspace() -> UiNode {
                             spacing_dp: 12,
                             padding_h_dp: 12,
                             focus: None,
+                            stack: false,
                         },
                     ],
                 },

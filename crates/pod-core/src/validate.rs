@@ -18,6 +18,9 @@ pub const ASPECT_RATIO_RANGE: std::ops::RangeInclusive<f32> = 0.2..=5.0;
 pub const MAX_PADDING_DP: u16 = 64;
 /// Largest image / icon size.
 pub const MAX_SIZE_DP: u16 = 512;
+/// Smallest `core://SwipeCard` threshold (a smaller one commits on a
+/// slip of the finger).
+pub const MIN_SWIPE_THRESHOLD_DP: u16 = 24;
 /// Most options in one `core://ChoiceChips`.
 pub const MAX_CHOICES: usize = 50;
 /// Most columns of a `core://List` grid.
@@ -448,6 +451,22 @@ fn check_values(node: &UiNode) -> Result<(), String> {
             }
             Ok(())
         }
+        UiNode::SwipeCard {
+            on_swipe_left,
+            on_swipe_right,
+            threshold_dp,
+            ..
+        } => {
+            if on_swipe_left.is_none() && on_swipe_right.is_none() {
+                return Err("a swipe card needs on_swipe_left or on_swipe_right".into());
+            }
+            match threshold_dp {
+                Some(t) if !(MIN_SWIPE_THRESHOLD_DP..=MAX_SIZE_DP).contains(t) => Err(format!(
+                    "swipe card threshold_dp {t} (allowed {MIN_SWIPE_THRESHOLD_DP}..={MAX_SIZE_DP})"
+                )),
+                _ => Ok(()),
+            }
+        }
         UiNode::AppFrame { app } => {
             if app.trim().is_empty() {
                 Err("an app frame needs an app".into())
@@ -488,8 +507,12 @@ fn check_values(node: &UiNode) -> Result<(), String> {
             spacing_dp,
             padding_h_dp,
             focus,
+            stack,
             ..
         } => {
+            if *stack && (*columns > 1 || group_by.is_some()) {
+                return Err("a stacked list (a deck) has no columns or group_by".into());
+            }
             if let Some(f) = focus {
                 if f.uri.trim().is_empty() {
                     return Err("list focus needs a uri".into());
@@ -1414,6 +1437,39 @@ mod tests {
         let dated = json!({"type": "core://Text", "style": "Body", "value_expr": "Due $item.due",
             "format": {"date": "Relative", "past": "Overdue"}});
         assert_eq!(check_values(&node(dated)), Ok(()));
+    }
+
+    #[test]
+    fn swipe_cards_need_a_side_and_decks_are_one_column() {
+        let card = |extra: Value| {
+            let mut v = json!({"type": "core://SwipeCard", "content": {"type": "core://Divider"}});
+            v.as_object_mut()
+                .unwrap()
+                .extend(extra.as_object().unwrap().clone());
+            node(v)
+        };
+        let back = json!({"intent": "action.navigation.back"});
+        assert_eq!(check_values(&card(json!({"on_swipe_left": back}))), Ok(()));
+        assert_eq!(
+            check_values(&card(json!({"on_swipe_right": back, "threshold_dp": 120}))),
+            Ok(())
+        );
+        assert!(check_values(&card(json!({}))).is_err(), "no side");
+        assert!(
+            check_values(&card(json!({"on_swipe_left": back, "threshold_dp": 4}))).is_err(),
+            "too small a threshold"
+        );
+
+        let list = |extra: Value| {
+            let mut v = json!({"type": "core://List", "query_key": "q", "stack": true,
+                "item_template": {"type": "core://Divider"}});
+            v.as_object_mut()
+                .unwrap()
+                .extend(extra.as_object().unwrap().clone());
+            node(v)
+        };
+        assert_eq!(check_values(&list(json!({"padding_h_dp": 16}))), Ok(()));
+        assert!(check_values(&list(json!({"columns": 2}))).is_err());
     }
 
     #[test]

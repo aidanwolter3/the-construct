@@ -27,6 +27,10 @@ scenario notifications pixelfed \
   "notify pixelfed likes Bob liked your post; open-inbox; assert-text Bob liked your post; shot inbox; click @bob commented on your post; scroll-to Number 3 for me; shot thread"
 scenario dark pixelfed \
   "mode dark; shot feed; open-inbox; shot inbox; back; open-settings; click Leave pod on this device; shot dialog"
+scenario swipe-deck swipe_deck \
+  "shot deck; drag-card 130 Weekend flannel; shot like; release; drag-card -60 Chore coat layers; shot short; \
+release; drag-card -130 Chore coat layers; release; assert-text All black; swipe-right All black; \
+assert-text All done; shot done"
 for page in home groceries log; do
   echo "== theme-$page"
   for mode in light dark; do

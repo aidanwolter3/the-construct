@@ -89,6 +89,8 @@ pub struct Runner {
     pub links: Vec<String>,
     /// Files `pick` queued for the next media picker tap.
     picks: Vec<std::path::PathBuf>,
+    /// The swipe card `drag-card` holds, until `release`.
+    held_card: Option<String>,
 }
 
 /// A file name part from a shot's name.
@@ -118,6 +120,7 @@ impl Runner {
             opts,
             links: Vec::new(),
             picks: Vec::new(),
+            held_card: None,
         };
         if matches!(r.source, Source::Live { .. }) {
             let timeout = r.opts.timeout;
@@ -233,7 +236,13 @@ impl Runner {
             }
             Step::Release => {
                 self.session.release_press();
-                done("")
+                match self.held_card.take() {
+                    Some(id) => match self.session.release_card(&id, 0.0) {
+                        Some(o) => self.effects(o),
+                        None => done("sprang back"),
+                    },
+                    None => done(""),
+                }
             }
             Step::Type { target, text } => {
                 let field = self.field(target)?;
@@ -258,6 +267,16 @@ impl Runner {
                     let o = self.session.scroll_by(Some(&Target::Point(x, y)), -(*points as f32))?;
                     self.effects(o)
                 }
+            }
+            Step::DragCard { points, target } => {
+                let (x, y) = self.drag_point(target)?;
+                let Some(id) = self.session.card_at(x, y) else {
+                    return Err(format!("no core://SwipeCard at '{target}'"));
+                };
+                let at = self.session.card_offset(&id);
+                self.session.drag_card(&id, at + *points as f32);
+                self.held_card = Some(id);
+                done("held")
             }
             Step::ScrollTo(target) => {
                 self.reveal(target)?;
@@ -570,6 +589,21 @@ impl Runner {
                     let dx = if dir == Direction::Left { step } else { -step };
                     let moved = self.session.drag_slide(&id, at + dx);
                     return Ok((if moved { "scrolled" } else { "at its end" }.into(), None));
+                }
+                if let Some(id) = self.session.card_at(x, y) {
+                    // A swipe card is thrown off that way.
+                    let dx = self.session.viewport.width / 2.0;
+                    let (dx, v) = if dir == Direction::Left {
+                        (-dx, -FLICK)
+                    } else {
+                        (dx, FLICK)
+                    };
+                    let at = self.session.card_offset(&id);
+                    self.session.drag_card(&id, at + dx);
+                    return match self.session.release_card(&id, v) {
+                        Some(o) => self.effects(o),
+                        None => Ok(("sprang back".into(), None)),
+                    };
                 }
                 if let Some(id) = self.session.pager_at(x, y) {
                     let at = self.session.pager_offset(&id);
