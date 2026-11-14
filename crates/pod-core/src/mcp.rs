@@ -1538,6 +1538,14 @@ fn snippets() -> Value {
                         {"type": "core://Text", "style": "Body", "value_expr": "$item.title"},
                         {"type": "core://Text", "style": "Caption", "value_expr": "$item.app_title · $item.when"}]}}}
         },
+        "once_it_has_happened": {
+            "doc": "in a row's template: one thing once its session is over (date + time on the device's clock), another before then; the device redraws it at that minute by itself, so no scheduled job has to flip a flag. Put the row's check-off button in the Past branch. date: Past (the moment has come; a bare date: the day is over), Today or Future; time binds a wall-clock time (15:45, 9:00 AM) to a bare date, or the value may be a datetime",
+            "node": {"type": "core://Column", "children": [
+                {"type": "core://Conditional", "value": "$item.date", "time": "$item.ends", "date": "Past",
+                 "content": {"type": "core://Text", "style": "Label", "value_expr": "Over: tap to check off"}},
+                {"type": "core://Conditional", "value": "$item.date", "time": "$item.ends", "date": "Future",
+                 "content": {"type": "core://Text", "style": "Secondary", "value_expr": "Opens at $item.ends"}}]}
+        },
         "load_older_notifications": {
             "doc": "under a local:notifications list: a button that loads the next page, shown only while there is more",
             "node": {"type": "core://Conditional", "value": "${local://inbox#has_older}", "content": {"type": "core://Button",

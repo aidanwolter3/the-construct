@@ -63,6 +63,7 @@ cargo run -p construct-sim -- --base-url https://the-construct-pod.fly.dev --out
 | `--fixture` | per workspace | Fixture mode: the start layout's bundle (`{workspace, entities, queries}`). |
 | `--base-url` | | Live mode against this pod. |
 | `--timeout-ms` | `10000` | Live mode: how long to wait for the first load. |
+| `--now` | this machine's clock | The device's wall clock, stopped at `YYYY-MM-DDTHH:MM`, for dates (`format`, `date` conditionals) that don't change from run to run. |
 | `--out` | `target/sim/<timestamp>` | Output directory. |
 
 Flags take `--flag value` or `--flag=value`. Relative paths resolve against the working directory, else the
@@ -93,6 +94,7 @@ word is the command and the rest of the entry, as written, its argument: `click 
 | `wait-images [ms]` | Waits until no on-screen image is loading (default 10 s). |
 | `screen <WxH or preset>` | A new screen size; the session carries over. |
 | `mode dark` / `mode light` | The system's light or dark mode (light at start); `mode dark; shot dark` shows a screen in dark mode. |
+| `clock <YYYY-MM-DDTHH:MM>` | Stops the device's wall clock there (as `--now`), to show a screen before and after a `date` conditional changes: `clock 2026-11-16T08:59; shot before; clock 2026-11-16T09:00; shot after`. |
 | `offline` / `online` | Fixture mode: the fake pod becomes unreachable / reachable. |
 | `open-layout <id> [push\|sheet\|panel]` | Presents a layout (`action.navigation.open {layout}`) and waits for its data. |
 | `open-settings` | Presents the Settings layout as a side panel. |

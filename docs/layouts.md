@@ -141,7 +141,7 @@ evaluated against the entity before the change: a JSON literal, `entity.<field>`
 | `core://Image` | `url`, `shape`, `size_dp`, `aspect_ratio`, `content_description`, `blurhash` | `shape`: `Square`, `Rounded`, `Circle`. A square of `size_dp`, or full width at `aspect_ratio`. |
 | `core://Carousel` | `items`, `item_template`, `aspect_ratio`, `aspect_field`, `min_aspect`, `max_aspect`, `tag` | A swipeable pager over entity URIs, with page dots. |
 | `core://List` | `query_key`, `item_template`, `empty_text`, `indent`, `filter`, `where`, `group_by`, `columns`, `spacing_dp`, `padding_h_dp`, `focus`, `stack` | The entities of a query. `filter` searches as you type (every word in one of `fields`, ignoring case and accents); `where: {field, equals}` keeps exact matches, and a list of such conditions keeps items matching all of them (feature `list_where_all`, the same shape as `count`'s `where`); `group_by` draws a header where a field changes (`headers_only`, feature `list_group_headers`: only the headers, one per distinct value); `columns` (2–6) makes a grid; `focus` scrolls to one item and tints it. `stack: true` makes it a deck (feature `list_stack`, decision `swipe-cards`): only the first item is drawn, with the next one behind it, as tall as it and a little narrower, peeking out 10 dp below; a deck has no `columns` or `group_by`. |
-| `core://Conditional` | `value`, `content`, `equals` | `content` only when `value` is truthy, or, with `equals`, when it equals that text. Works with `$form` values to switch views. |
+| `core://Conditional` | `value`, `content`, `equals`, `date`, `time` | `content` only when `value` is truthy, or, with `equals`, when it equals that text. Works with `$form` values to switch views. With `date: Past\|Today\|Future`, `value` is a date compared with the device's clock: see [Dates and times](#dates-and-times). |
 | `core://Button` | `label`, `on_click` | A text button. |
 | `core://IconButton` | `icon`, `content_description`, `on_click`, `active`, `active_icon`, `active_tint`, `active_content_description`, `size_dp`, `tag` | `active` binds a bool (`$item.is_liked`) to switch icon and tint. Icon names are `protocol::ICONS` (`describe_vocabulary` lists them); the newest, `stapler` (a stapler from the side), needs a build with feature `icons_stapler`. Any icon can instead be its drawing, `path:<SVG path data>` (below). |
 | `core://Tappable` | `on_click`, `content`, `content_description`, `tag` | Makes any node tappable; buttons inside keep their own taps. Drawn pressed (slightly darker) while held. |
@@ -228,6 +228,30 @@ request. Any layout may bind them; a custom app needs no feed for them.
 | `local://session` | `open`, `server`, `error`, `message`: the pod sign-in; `status`: an upstream sign-in in progress or failed |
 
 A `core://Conditional` `equals` may bind the item (`"equals": "$item.id"`). A `core://Conditional` value may be such a binding: `{"value": "${local://layouts#count}", "equals": "0", ...}`.
+
+### Dates and times
+
+Dates are compared and drawn by the device, from its own clock and time zone, so a screen stays right on the next
+day and needs no job on the pod to flip a flag (decisions `text-dates-and-counts`, `date-conditions`):
+
+- `core://Text` `format` draws bound `YYYY-MM-DD` values as "tomorrow" or "Nov 5" (see the table above).
+- `core://Conditional` `date` (feature `conditional_date`) shows its content while the bound moment has come
+  (`Past`), falls on today (`Today`), or is still ahead (`Future`). The value is a `YYYY-MM-DD` date, a local
+  `YYYY-MM-DDTHH:MM[:SS]`, or an instant with an offset (`2026-11-16T16:00:00Z`, as a `datetime` field holds).
+  `time` binds a wall-clock time to a bare date (`15:45`, `9:00`, `9:00 AM`, `3:45pm`); a value that isn't a time
+  ("Bonus", empty) leaves the bare date. A bare date is `Past` once its day is over and `Future` until it begins,
+  so on the day itself only `Today` holds; with a time, `Past` holds from that minute on and `Future` until it.
+  A value that isn't a date shows nothing. `equals` may go with it (both must hold); `time` needs `date`.
+- The device draws the screen again by itself at the minute an answer changes (the bound time, or midnight), also
+  when nobody touches it.
+
+```json
+{"type": "core://Conditional", "value": "$item.date", "time": "$item.ends", "date": "Past",
+ "content": {"type": "core://Text", "style": "Label", "value_expr": "Tap to check off"}}
+```
+
+A pod's MCP previews read the clock in the pod's time zone (`set_time_zone`); the simulator's `--now` and `clock`
+pin it.
 
 ## Porcelain: components
 

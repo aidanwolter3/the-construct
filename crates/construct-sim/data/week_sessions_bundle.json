@@ -1,0 +1,517 @@
+{
+  "version": "1.0.0",
+  "workspace": {
+    "type": "core://Page",
+    "title": "Week",
+    "background": "${local://theme#page}",
+    "root": {
+      "type": "core://Column",
+      "spacing_dp": 0,
+      "children": [
+        {
+          "type": "core://Column",
+          "padding_h_dp": 16,
+          "padding_v_dp": 12,
+          "children": [
+            {
+              "type": "core://Text",
+              "style": "Title",
+              "value_expr": "This week"
+            },
+            {
+              "type": "core://Text",
+              "style": "Secondary",
+              "value_expr": "A day unlocks once its session is over; tap it to check it off."
+            }
+          ]
+        },
+        {
+          "type": "core://List",
+          "query_key": "collection:workouts",
+          "columns": 5,
+          "spacing_dp": 6,
+          "padding_h_dp": 12,
+          "item_template": {
+            "type": "core://Column",
+            "children": [
+              {
+                "type": "core://Conditional",
+                "value": "$item.done",
+                "content": {
+                  "type": "core://Tappable",
+                  "content_description": "$item.day $item.kind done, tap to undo",
+                  "on_click": {
+                    "intent": "action.mutation.optimistic",
+                    "endpoint": "/v1/collections/workouts/update",
+                    "entity_uri": "$item.uri",
+                    "field": "done",
+                    "value_expr": "!entity.done",
+                    "payload": {
+                      "id": "$item.id",
+                      "done": "$value"
+                    }
+                  },
+                  "content": {
+                    "type": "core://Box",
+                    "align": "Center",
+                    "background": "${local://theme#accent}",
+                    "border_color": "${local://theme#accent}",
+                    "content_color": "${local://theme#card}",
+                    "corner_dp": 12,
+                    "height_dp": 100,
+                    "width_dp": 64,
+                    "content": {
+                      "type": "core://Column",
+                      "align": "Center",
+                      "spacing_dp": 2,
+                      "children": [
+                        {
+                          "type": "core://Text",
+                          "style": "Caption",
+                          "value_expr": "$item.day"
+                        },
+                        {
+                          "type": "core://Text",
+                          "style": "Title",
+                          "value_expr": "$item.daynum"
+                        },
+                        {
+                          "type": "core://Text",
+                          "style": "Label",
+                          "value_expr": "✓"
+                        },
+                        {
+                          "type": "core://Text",
+                          "style": "Caption",
+                          "value_expr": "$item.short"
+                        }
+                      ]
+                    }
+                  }
+                }
+              },
+              {
+                "type": "core://Conditional",
+                "value": "$item.done",
+                "equals": "false",
+                "content": {
+                  "type": "core://Column",
+                  "children": [
+                    {
+                      "type": "core://Conditional",
+                      "value": "$item.date",
+                      "time": "$item.ends",
+                      "date": "Past",
+                      "content": {
+                        "type": "core://Tappable",
+                        "content_description": "Mark $item.day $item.kind done",
+                        "on_click": {
+                          "intent": "action.mutation.optimistic",
+                          "endpoint": "/v1/collections/workouts/update",
+                          "entity_uri": "$item.uri",
+                          "field": "done",
+                          "value_expr": "!entity.done",
+                          "payload": {
+                            "id": "$item.id",
+                            "done": "$value"
+                          }
+                        },
+                        "content": {
+                          "type": "core://Box",
+                          "align": "Center",
+                          "background": "${local://theme#card}",
+                          "border_color": "${local://theme#accent}",
+                          "corner_dp": 12,
+                          "height_dp": 100,
+                          "width_dp": 64,
+                          "content": {
+                            "type": "core://Column",
+                            "align": "Center",
+                            "spacing_dp": 2,
+                            "children": [
+                              {
+                                "type": "core://Text",
+                                "style": "Caption",
+                                "value_expr": "$item.day"
+                              },
+                              {
+                                "type": "core://Text",
+                                "style": "Title",
+                                "value_expr": "$item.daynum"
+                              },
+                              {
+                                "type": "core://Text",
+                                "style": "Label",
+                                "value_expr": "Tap"
+                              },
+                              {
+                                "type": "core://Text",
+                                "style": "Caption",
+                                "value_expr": "$item.short"
+                              }
+                            ]
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "type": "core://Conditional",
+                      "value": "$item.date",
+                      "time": "$item.ends",
+                      "date": "Future",
+                      "content": {
+                        "type": "core://Box",
+                        "align": "Center",
+                        "background": "${local://theme#page}",
+                        "border_color": "${local://theme#card_border}",
+                        "content_color": "${local://theme#muted_text}",
+                        "corner_dp": 12,
+                        "height_dp": 100,
+                        "width_dp": 64,
+                        "content": {
+                          "type": "core://Column",
+                          "align": "Center",
+                          "spacing_dp": 2,
+                          "children": [
+                            {
+                              "type": "core://Text",
+                              "style": "Caption",
+                              "value_expr": "$item.day"
+                            },
+                            {
+                              "type": "core://Text",
+                              "style": "Title",
+                              "value_expr": "$item.daynum"
+                            },
+                            {
+                              "type": "core://Text",
+                              "style": "Label",
+                              "value_expr": "·"
+                            },
+                            {
+                              "type": "core://Text",
+                              "style": "Caption",
+                              "value_expr": "$item.short"
+                            }
+                          ]
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            ]
+          },
+          "where": [
+            {
+              "field": "deleted",
+              "equals": "false"
+            },
+            {
+              "field": "optional",
+              "equals": "false"
+            }
+          ]
+        },
+        {
+          "type": "core://Column",
+          "padding_h_dp": 16,
+          "padding_v_dp": 8,
+          "children": [
+            {
+              "type": "core://Text",
+              "style": "Label",
+              "value_expr": "Weekend bonus"
+            }
+          ]
+        },
+        {
+          "type": "core://List",
+          "query_key": "collection:workouts",
+          "columns": 2,
+          "spacing_dp": 6,
+          "padding_h_dp": 12,
+          "item_template": {
+            "type": "core://Column",
+            "children": [
+              {
+                "type": "core://Conditional",
+                "value": "$item.done",
+                "content": {
+                  "type": "core://Tappable",
+                  "content_description": "$item.day $item.kind done, tap to undo",
+                  "on_click": {
+                    "intent": "action.mutation.optimistic",
+                    "endpoint": "/v1/collections/workouts/update",
+                    "entity_uri": "$item.uri",
+                    "field": "done",
+                    "value_expr": "!entity.done",
+                    "payload": {
+                      "id": "$item.id",
+                      "done": "$value"
+                    }
+                  },
+                  "content": {
+                    "type": "core://Box",
+                    "align": "Center",
+                    "background": "${local://theme#accent}",
+                    "border_color": "${local://theme#accent}",
+                    "content_color": "${local://theme#card}",
+                    "corner_dp": 12,
+                    "height_dp": 100,
+                    "width_dp": 172,
+                    "content": {
+                      "type": "core://Column",
+                      "align": "Center",
+                      "spacing_dp": 2,
+                      "children": [
+                        {
+                          "type": "core://Text",
+                          "style": "Caption",
+                          "value_expr": "$item.day"
+                        },
+                        {
+                          "type": "core://Text",
+                          "style": "Title",
+                          "value_expr": "$item.daynum"
+                        },
+                        {
+                          "type": "core://Text",
+                          "style": "Label",
+                          "value_expr": "✓"
+                        },
+                        {
+                          "type": "core://Text",
+                          "style": "Caption",
+                          "value_expr": "$item.short"
+                        }
+                      ]
+                    }
+                  }
+                }
+              },
+              {
+                "type": "core://Conditional",
+                "value": "$item.done",
+                "equals": "false",
+                "content": {
+                  "type": "core://Column",
+                  "children": [
+                    {
+                      "type": "core://Conditional",
+                      "value": "$item.date",
+                      "time": "$item.ends",
+                      "date": "Past",
+                      "content": {
+                        "type": "core://Tappable",
+                        "content_description": "Mark $item.day $item.kind done",
+                        "on_click": {
+                          "intent": "action.mutation.optimistic",
+                          "endpoint": "/v1/collections/workouts/update",
+                          "entity_uri": "$item.uri",
+                          "field": "done",
+                          "value_expr": "!entity.done",
+                          "payload": {
+                            "id": "$item.id",
+                            "done": "$value"
+                          }
+                        },
+                        "content": {
+                          "type": "core://Box",
+                          "align": "Center",
+                          "background": "${local://theme#card}",
+                          "border_color": "${local://theme#accent}",
+                          "corner_dp": 12,
+                          "height_dp": 100,
+                          "width_dp": 172,
+                          "content": {
+                            "type": "core://Column",
+                            "align": "Center",
+                            "spacing_dp": 2,
+                            "children": [
+                              {
+                                "type": "core://Text",
+                                "style": "Caption",
+                                "value_expr": "$item.day"
+                              },
+                              {
+                                "type": "core://Text",
+                                "style": "Title",
+                                "value_expr": "$item.daynum"
+                              },
+                              {
+                                "type": "core://Text",
+                                "style": "Label",
+                                "value_expr": "Tap"
+                              },
+                              {
+                                "type": "core://Text",
+                                "style": "Caption",
+                                "value_expr": "$item.short"
+                              }
+                            ]
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "type": "core://Conditional",
+                      "value": "$item.date",
+                      "time": "$item.ends",
+                      "date": "Future",
+                      "content": {
+                        "type": "core://Box",
+                        "align": "Center",
+                        "background": "${local://theme#page}",
+                        "border_color": "${local://theme#card_border}",
+                        "content_color": "${local://theme#muted_text}",
+                        "corner_dp": 12,
+                        "height_dp": 100,
+                        "width_dp": 172,
+                        "content": {
+                          "type": "core://Column",
+                          "align": "Center",
+                          "spacing_dp": 2,
+                          "children": [
+                            {
+                              "type": "core://Text",
+                              "style": "Caption",
+                              "value_expr": "$item.day"
+                            },
+                            {
+                              "type": "core://Text",
+                              "style": "Title",
+                              "value_expr": "$item.daynum"
+                            },
+                            {
+                              "type": "core://Text",
+                              "style": "Label",
+                              "value_expr": "·"
+                            },
+                            {
+                              "type": "core://Text",
+                              "style": "Caption",
+                              "value_expr": "$item.short"
+                            }
+                          ]
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            ]
+          },
+          "where": [
+            {
+              "field": "deleted",
+              "equals": "false"
+            },
+            {
+              "field": "optional",
+              "equals": "true"
+            }
+          ]
+        }
+      ]
+    },
+    "id": "week_sessions"
+  },
+  "entities": {
+    "collections://workouts/w1": {
+      "id": "w1",
+      "date": "2026-11-16",
+      "day": "Mon",
+      "daynum": "16",
+      "kind": "Group class",
+      "short": "Class",
+      "ends": "09:00",
+      "optional": false,
+      "done": false,
+      "deleted": false
+    },
+    "collections://workouts/w2": {
+      "id": "w2",
+      "date": "2026-11-17",
+      "day": "Tue",
+      "daynum": "17",
+      "kind": "Swim",
+      "short": "Swim",
+      "ends": "15:45",
+      "optional": false,
+      "done": false,
+      "deleted": false
+    },
+    "collections://workouts/w3": {
+      "id": "w3",
+      "date": "2026-11-18",
+      "day": "Wed",
+      "daynum": "18",
+      "kind": "Group class",
+      "short": "Class",
+      "ends": "09:00",
+      "optional": false,
+      "done": false,
+      "deleted": false
+    },
+    "collections://workouts/w4": {
+      "id": "w4",
+      "date": "2026-11-19",
+      "day": "Thu",
+      "daynum": "19",
+      "kind": "Swim",
+      "short": "Swim",
+      "ends": "15:45",
+      "optional": false,
+      "done": false,
+      "deleted": false
+    },
+    "collections://workouts/w5": {
+      "id": "w5",
+      "date": "2026-11-20",
+      "day": "Fri",
+      "daynum": "20",
+      "kind": "Group class",
+      "short": "Class",
+      "ends": "09:00",
+      "optional": false,
+      "done": false,
+      "deleted": false
+    },
+    "collections://workouts/w6": {
+      "id": "w6",
+      "date": "2026-11-21",
+      "day": "Sat",
+      "daynum": "21",
+      "kind": "Hike",
+      "short": "Hike",
+      "ends": "09:00",
+      "optional": true,
+      "done": false,
+      "deleted": false
+    },
+    "collections://workouts/w7": {
+      "id": "w7",
+      "date": "2026-11-22",
+      "day": "Sun",
+      "daynum": "22",
+      "kind": "Hike",
+      "short": "Hike",
+      "ends": "09:00",
+      "optional": true,
+      "done": false,
+      "deleted": false
+    }
+  },
+  "queries": {
+    "collection:workouts": [
+      "collections://workouts/w1",
+      "collections://workouts/w2",
+      "collections://workouts/w3",
+      "collections://workouts/w4",
+      "collections://workouts/w5",
+      "collections://workouts/w6",
+      "collections://workouts/w7"
+    ]
+  }
+}

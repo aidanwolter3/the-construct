@@ -179,3 +179,16 @@ fn a_deck_of_swipe_cards_goes_one_card_at_a_time() {
     assert_eq!(verdict("demo://cards/2").as_deref(), Some("Pass"));
     assert_eq!(verdict("demo://cards/3").as_deref(), Some("Like"));
 }
+
+#[test]
+fn a_session_unlocks_at_the_minute_it_is_over() {
+    let (_, results) = run(
+        "week_sessions",
+        "clock 2026-11-16T08:59; assert-no-text Mark Mon; clock 2026-11-16T09:00; \
+         assert-text Mark Mon Group class done; assert-no-text Mark Tue; \
+         clock 2026-11-17T15:44; assert-no-text Mark Tue Swim done; \
+         clock 2026-11-17T15:45; assert-text Mark Tue Swim done; assert-no-text Mark Wed",
+        &out_dir("date-unlock"),
+    );
+    assert_ok(&results);
+}

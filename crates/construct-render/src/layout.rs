@@ -223,18 +223,33 @@ type DockEntry<'n> = (
     Option<(String, &'n EntityRecord)>,
 );
 
+/// The earlier of two optional minutes.
+fn earliest(a: Option<i64>, b: Option<i64>) -> Option<i64> {
+    match (a, b) {
+        (Some(a), Some(b)) => Some(a.min(b)),
+        (a, b) => a.or(b),
+    }
+}
+
 /// Lays out frames. Holds the fonts and the measurement cache, so reuse one
 /// builder for many frames.
 #[derive(Default)]
 pub struct SceneBuilder {
     pub text: TextEngine,
-    /// The viewer's day (an epoch day) that `format` dates read against;
-    /// `None`: today on this device.
-    pub today: Option<i64>,
+    /// The clock that `format` dates and `date` conditionals read (this
+    /// device's, unless set).
+    pub clock: crate::dates::Clock,
 }
 
 struct Build<'t, 'i> {
     today: i64,
+    /// Now on the clock, in local minutes since the epoch.
+    now: i64,
+    /// The zone the clock reads in (`None`: this device's).
+    zone: Option<jiff::tz::TimeZone>,
+    /// The next minute at which a `date` conditional built so far changes
+    /// its answer.
+    changes_at: Option<i64>,
     /// The scrolling views with `follow_end`, by semantic id.
     follow_end: Vec<String>,
     tree: TaffyTree<Leaf>,
@@ -314,6 +329,8 @@ struct Part {
     entities: Vec<(String, Option<EntityRecord>)>,
     queries: Vec<(String, Option<Vec<String>>)>,
     follow_end: Vec<String>,
+    /// When a `date` conditional in it next changes its answer.
+    changes_at: Option<i64>,
 }
 
 impl Part {
@@ -399,10 +416,11 @@ impl SceneBuilder {
     /// they are (their nodes, bindings and measured layout), so a change to
     /// one row of a long list builds and measures that row only.
     pub fn relayout(&mut self, input: &Input, prev: Option<Laid>) -> Result<Laid, RenderError> {
-        let today = self.today.unwrap_or_else(crate::dates::today);
+        let now = self.clock.minute();
+        let today = now.div_euclid(1_440);
         let env = Env::of(input, today);
         let (tree, prev) = match prev {
-            Some(p) if p.env == env => (
+            Some(p) if p.env == env && p.changes_at.is_none_or(|c| c > now) => (
                 p.tree,
                 Some(Prev {
                     elems: p.elems.into_iter().map(Some).collect(),
@@ -415,6 +433,9 @@ impl SceneBuilder {
         let log = ReadLog::default();
         let mut b = Build {
             today,
+            now,
+            zone: self.clock.zone.clone(),
+            changes_at: None,
             follow_end: Vec::new(),
             tree,
             elems: Vec::new(),
@@ -489,6 +510,7 @@ impl SceneBuilder {
             slides: BTreeMap::new(),
             cards: BTreeMap::new(),
             follow_end: b.follow_end,
+            changes_at: b.changes_at,
             env,
             parts: b.parts,
             reuse: b.reuse,
@@ -854,13 +876,17 @@ impl<'i> Build<'_, 'i> {
                 r.queries.extend(reads.queries.iter().cloned());
             }
             self.follow_end.extend(part.follow_end.iter().cloned());
+            self.changes_at = earliest(self.changes_at, part.changes_at);
             self.reuse.reused += 1;
             self.parts.insert(key, Part { root, ..part });
             return root;
         }
         self.log.borrow_mut().push(Reads::default());
         let follows = self.follow_end.len();
+        let changes_before = self.changes_at.take();
         let root = self.node(n, b);
+        let changes_at = self.changes_at;
+        self.changes_at = earliest(changes_before, changes_at);
         let mut reads = self.log.borrow_mut().pop().unwrap_or_default();
         reads.entities.insert(uri.to_owned());
         for r in self.log.borrow_mut().iter_mut() {
@@ -889,6 +915,7 @@ impl<'i> Build<'_, 'i> {
                 })
                 .collect(),
             follow_end: self.follow_end[follows..].to_vec(),
+            changes_at,
         };
         self.reuse.built += 1;
         self.parts.insert(key, part);
@@ -1315,6 +1342,27 @@ impl<'i> Build<'_, 'i> {
                 value,
                 content,
                 equals,
+                date: Some(test),
+                time,
+            } => {
+                let time = time.as_deref().map(|t| ctx.text(t)).unwrap_or_default();
+                let at = crate::dates::moment(&ctx.text(value), &time, self.zone.as_ref())?;
+                let (shows, next) = crate::dates::passes(*test, at, self.now);
+                self.changes_at = earliest(self.changes_at, next);
+                if !shows
+                    || equals
+                        .as_deref()
+                        .is_some_and(|e| !ctx.shows(value, Some(e)))
+                {
+                    return None;
+                }
+                return self.node(content, b);
+            }
+            UiNode::Conditional {
+                value,
+                content,
+                equals,
+                ..
             } => {
                 if !ctx.shows(value, equals.as_deref()) {
                     return None;
@@ -2731,6 +2779,10 @@ pub struct Laid {
     /// The scrolling views that follow their content to the end after an
     /// action from outside them (`core://Scroll` `follow_end`).
     pub follow_end: Vec<String>,
+    /// The next minute (local, since the epoch) at which a `date`
+    /// conditional of this frame changes its answer: the frame is stale
+    /// from then on.
+    pub changes_at: Option<i64>,
     env: Env,
     parts: HashMap<PartKey, Part>,
     /// How many list items were built and how many taken over.

@@ -89,16 +89,177 @@ pub fn format_date(day: i64, today: i64, format: DateFormat) -> String {
     }
 }
 
-/// Today's epoch day on this device, in its time zone (UTC when the zone
-/// can't be read).
-pub fn today() -> i64 {
-    let now = jiff::Zoned::now();
-    let d = now.date();
+/// Seconds since 1970-01-01 00:00 on the wall clock of `zone` (this
+/// device's zone when `None`; UTC when that can't be read).
+pub fn local_seconds(zone: Option<&jiff::tz::TimeZone>) -> i64 {
+    let now = match zone {
+        Some(z) => jiff::Timestamp::now().to_zoned(z.clone()),
+        None => jiff::Zoned::now(),
+    };
+    wall_seconds(now.datetime())
+}
+
+fn wall_seconds(dt: jiff::civil::DateTime) -> i64 {
     epoch_day(
-        i64::from(d.year()),
-        i64::from(d.month()),
-        i64::from(d.day()),
-    )
+        i64::from(dt.year()),
+        i64::from(dt.month()),
+        i64::from(dt.day()),
+    ) * 86_400
+        + i64::from(dt.hour()) * 3_600
+        + i64::from(dt.minute()) * 60
+        + i64::from(dt.second())
+}
+
+/// A bound moment (`core://Conditional` `date`): its local epoch day, and
+/// its minute of that day when it has a time.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Moment {
+    pub day: i64,
+    pub minute: Option<i64>,
+}
+
+/// Reads `value` as a moment on the wall clock of `zone`: `YYYY-MM-DD`
+/// (at `time`, when that reads as a time of day), a local
+/// `YYYY-MM-DDTHH:MM[:SS]`, or an instant with an offset or `Z`.
+pub fn moment(value: &str, time: &str, zone: Option<&jiff::tz::TimeZone>) -> Option<Moment> {
+    let value = value.trim();
+    if let Some(day) = iso_date(value) {
+        return Some(Moment {
+            day,
+            minute: time_of_day(time),
+        });
+    }
+    let day = iso_date(value.get(..10)?)?;
+    let rest = value.get(10..)?;
+    let local = rest
+        .strip_prefix(['T', ' '])
+        .filter(|t| {
+            t.len() >= 5
+                && t[5..]
+                    .bytes()
+                    .all(|c| c.is_ascii_digit() || b":.".contains(&c))
+        })
+        .and_then(|t| hh_mm(&t[..5]));
+    if let Some(minute) = local {
+        return Some(Moment {
+            day,
+            minute: Some(minute),
+        });
+    }
+    let at: jiff::Timestamp = value.parse().ok()?;
+    let dt = match zone {
+        Some(z) => at.to_zoned(z.clone()),
+        None => at.to_zoned(jiff::tz::TimeZone::system()),
+    }
+    .datetime();
+    let secs = wall_seconds(dt);
+    Some(Moment {
+        day: secs.div_euclid(86_400),
+        minute: Some(secs.rem_euclid(86_400) / 60),
+    })
+}
+
+/// `HH:MM` (24-hour) as minutes of the day.
+fn hh_mm(s: &str) -> Option<i64> {
+    let (h, m) = s.split_once(':')?;
+    let (h, m): (i64, i64) = (h.parse().ok()?, m.parse().ok()?);
+    ((0..24).contains(&h) && (0..60).contains(&m) && s.len() == 5).then_some(h * 60 + m)
+}
+
+/// A time of day as people write it: `15:45`, `9:00`, `9:00 AM`, `3:45pm`,
+/// `9 AM` (seconds are dropped). Anything else is no time.
+pub fn time_of_day(s: &str) -> Option<i64> {
+    let s = s.trim().to_ascii_lowercase();
+    let (clock, pm) = match s.strip_suffix("am").or_else(|| s.strip_suffix("a.m.")) {
+        Some(c) => (c.trim_end(), Some(false)),
+        None => match s.strip_suffix("pm").or_else(|| s.strip_suffix("p.m.")) {
+            Some(c) => (c.trim_end(), Some(true)),
+            None => (s.as_str(), None),
+        },
+    };
+    let mut parts = clock.split(':');
+    let h = parts.next()?;
+    let m = parts.next().unwrap_or(if pm.is_some() { "00" } else { "" });
+    let s_part = parts.next();
+    let digits = |p: &str, n: std::ops::RangeInclusive<usize>| {
+        n.contains(&p.len()) && p.bytes().all(|c| c.is_ascii_digit())
+    };
+    if !digits(h, 1..=2) || !digits(m, 2..=2) || s_part.is_some_and(|x| !digits(x, 2..=2)) {
+        return None;
+    }
+    if parts.next().is_some() {
+        return None;
+    }
+    let (mut h, m): (i64, i64) = (h.parse().ok()?, m.parse().ok()?);
+    match pm {
+        Some(pm) => {
+            if !(1..=12).contains(&h) {
+                return None;
+            }
+            h = h % 12 + if pm { 12 } else { 0 };
+        }
+        None if h > 23 => return None,
+        None => {}
+    }
+    (m < 60).then_some(h * 60 + m)
+}
+
+/// Whether `at` passes `test` at `now` (local minutes since the epoch), and
+/// the next minute after `now` at which the answer changes, if it ever
+/// does.
+pub fn passes(test: protocol::DateTest, at: Moment, now: i64) -> (bool, Option<i64>) {
+    use protocol::DateTest;
+    let start = at.day * 1_440;
+    let shows = |from: i64, until: i64| {
+        let next = [from, until].into_iter().find(|&b| b > now && b < i64::MAX);
+        (from <= now && now < until, next)
+    };
+    match test {
+        DateTest::Today => shows(start, start + 1_440),
+        DateTest::Past => shows(at.minute.map_or(start + 1_440, |m| start + m), i64::MAX),
+        DateTest::Future => shows(i64::MIN, at.minute.map_or(start, |m| start + m)),
+    }
+}
+
+/// What frames read the time from.
+#[derive(Debug, Clone, Default)]
+pub struct Clock {
+    /// A fixed wall-clock time, in seconds since the epoch (tests, the
+    /// simulator's `--now`); `None`: the live clock.
+    pub fixed: Option<i64>,
+    /// The zone the live clock reads in (a pod's preview reads in the pod's
+    /// zone); `None`: this device's.
+    pub zone: Option<jiff::tz::TimeZone>,
+}
+
+impl Clock {
+    /// Seconds since 1970-01-01 00:00 on this clock's wall.
+    pub fn seconds(&self) -> i64 {
+        self.fixed
+            .unwrap_or_else(|| local_seconds(self.zone.as_ref()))
+    }
+
+    /// Minutes since 1970-01-01 00:00 on this clock's wall.
+    pub fn minute(&self) -> i64 {
+        self.seconds().div_euclid(60)
+    }
+
+    /// How long until local minute `minute` begins; `None` for a fixed
+    /// clock (it never gets there).
+    pub fn until(&self, minute: i64) -> Option<std::time::Duration> {
+        if self.fixed.is_some() {
+            return None;
+        }
+        let secs = (minute * 60 - self.seconds()).max(0);
+        Some(std::time::Duration::from_secs(secs.unsigned_abs()))
+    }
+}
+
+/// A wall-clock time written `YYYY-MM-DDTHH:MM` (the simulator's `--now`),
+/// in seconds since the epoch.
+pub fn wall_time(s: &str) -> Option<i64> {
+    let m = moment(s, "", None).filter(|_| s.trim().len() == 16)?;
+    Some((m.day * 1_440 + m.minute?) * 60)
 }
 
 #[cfg(test)]
@@ -122,5 +283,109 @@ mod tests {
         assert_eq!(iso_date("1970-01-01"), Some(0));
         assert_eq!(iso_date("not a date"), None);
         assert_eq!(iso_date("2026-11-07T10:00"), None);
+    }
+
+    #[test]
+    fn times_read_as_people_write_them() {
+        for (s, m) in [
+            ("15:45", 945),
+            ("09:00", 540),
+            ("9:00", 540),
+            ("9:00 AM", 540),
+            ("3:45pm", 945),
+            ("3:45 p.m.", 945),
+            ("9 AM", 540),
+            ("12:30 AM", 30),
+            ("12:00 PM", 720),
+            ("08:15:30", 495),
+            (" 0:00 ", 0),
+        ] {
+            assert_eq!(time_of_day(s), Some(m), "{s}");
+        }
+        for s in [
+            "",
+            "Bonus",
+            "25:00",
+            "9",
+            "13:00 PM",
+            "9:5",
+            "9:00:00:00",
+            "0 AM",
+        ] {
+            assert_eq!(time_of_day(s), None, "{s}");
+        }
+    }
+
+    #[test]
+    fn moments_read_dates_local_times_and_instants() {
+        let day = iso_date("2026-11-16").unwrap();
+        let at = |minute| Some(Moment { day, minute });
+        assert_eq!(moment("2026-11-16", "", None), at(None));
+        assert_eq!(moment("2026-11-16", "Bonus", None), at(None));
+        assert_eq!(moment("2026-11-16", "3:45 PM", None), at(Some(945)));
+        assert_eq!(moment("2026-11-16T09:00", "", None), at(Some(540)));
+        assert_eq!(moment("2026-11-16 09:00:00", "15:00", None), at(Some(540)));
+        let denver = jiff::tz::TimeZone::get("America/Denver").unwrap();
+        assert_eq!(
+            moment("2026-11-16T16:00:00Z", "", Some(&denver)),
+            at(Some(540))
+        );
+        assert_eq!(
+            moment("2026-11-17T03:30:00+00:00", "", Some(&denver)),
+            at(Some(20 * 60 + 30))
+        );
+        assert_eq!(moment("next Monday", "", None), None);
+        assert_eq!(moment("", "9:00", None), None);
+    }
+
+    #[test]
+    fn tests_answer_now_and_when_they_change() {
+        use protocol::DateTest::{Future, Past, Today};
+        let day = iso_date("2026-11-16").unwrap();
+        let start = day * 1_440;
+        let bare = Moment { day, minute: None };
+        let nine = Moment {
+            day,
+            minute: Some(540),
+        };
+        // The day before, at noon.
+        let before = start - 720;
+        assert_eq!(passes(Past, bare, before), (false, Some(start + 1_440)));
+        assert_eq!(passes(Today, bare, before), (false, Some(start)));
+        assert_eq!(passes(Future, bare, before), (true, Some(start)));
+        assert_eq!(passes(Past, nine, before), (false, Some(start + 540)));
+        assert_eq!(passes(Future, nine, before), (true, Some(start + 540)));
+        // That day, 08:59 and 09:00.
+        assert_eq!(passes(Past, nine, start + 539), (false, Some(start + 540)));
+        assert_eq!(passes(Past, nine, start + 540), (true, None));
+        assert_eq!(passes(Future, nine, start + 540), (false, None));
+        assert_eq!(
+            passes(Today, nine, start + 540),
+            (true, Some(start + 1_440))
+        );
+        assert_eq!(
+            passes(Past, bare, start + 540),
+            (false, Some(start + 1_440))
+        );
+        assert_eq!(passes(Future, bare, start + 540), (false, None));
+        // The day after.
+        assert_eq!(passes(Past, bare, start + 1_440), (true, None));
+        assert_eq!(passes(Today, bare, start + 1_440), (false, None));
+    }
+
+    #[test]
+    fn a_fixed_clock_reads_its_time_and_never_wakes() {
+        let at = wall_time("2026-11-16T09:30").unwrap();
+        let clock = Clock {
+            fixed: Some(at),
+            zone: None,
+        };
+        assert_eq!(
+            clock.minute(),
+            iso_date("2026-11-16").unwrap() * 1_440 + 570
+        );
+        assert_eq!(clock.until(clock.minute() + 5), None);
+        assert_eq!(wall_time("2026-11-16"), None);
+        assert_eq!(wall_time("2026-11-16T09:30:00"), None);
     }
 }

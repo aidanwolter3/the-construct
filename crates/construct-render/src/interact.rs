@@ -1262,14 +1262,61 @@ impl Session {
         self.scene = None;
     }
 
-    /// When the caret next blinks, for a window to draw then.
+    /// When the caret next blinks, or a `date` conditional on screen next
+    /// changes its answer, for a window to draw then.
     pub fn next_wake(&self) -> Option<Instant> {
-        let e = self.edit.as_ref()?;
-        if self.focused.as_ref() != Some(&e.field) || e.selected() {
-            return None;
+        let clock = self.changes_at().and_then(|m| self.builder.clock.until(m));
+        let clock = clock.map(|d| Instant::now() + d);
+        let caret = self.edit.as_ref().and_then(|e| {
+            if self.focused.as_ref() != Some(&e.field) || e.selected() {
+                return None;
+            }
+            let since = e.blink.elapsed().as_millis() / BLINK.as_millis();
+            Some(e.blink + BLINK * (since as u32 + 1))
+        });
+        match (clock, caret) {
+            (Some(a), Some(b)) => Some(a.min(b)),
+            (a, b) => a.or(b),
         }
-        let since = e.blink.elapsed().as_millis() / BLINK.as_millis();
-        Some(e.blink + BLINK * (since as u32 + 1))
+    }
+
+    /// The clock frames read (`format` dates, `date` conditionals): this
+    /// device's unless set, e.g. fixed for a simulator run or in a pod's
+    /// zone for its previews.
+    pub fn set_clock(&mut self, clock: crate::dates::Clock) {
+        self.builder.clock = clock;
+        for e in &mut self.stack {
+            e.laid = None;
+            e.stale = None;
+        }
+        self.scene = None;
+    }
+
+    /// The first minute at which a laid-out layout's `date` conditional
+    /// changes its answer.
+    fn changes_at(&self) -> Option<i64> {
+        self.stack
+            .iter()
+            .filter_map(|e| e.laid.as_ref()?.0.changes_at)
+            .min()
+    }
+
+    /// Lays out again the layouts whose `date` conditionals changed their
+    /// answer since they were laid out.
+    fn follow_clock(&mut self) {
+        if self.changes_at().is_none() {
+            return;
+        }
+        let now = self.builder.clock.minute();
+        for e in &mut self.stack {
+            if e.laid
+                .as_ref()
+                .is_some_and(|(l, _)| l.changes_at.is_some_and(|c| c <= now))
+            {
+                e.relay();
+                self.scene = None;
+            }
+        }
     }
 
     /// Whether the caret shows now (it blinks).
@@ -2098,6 +2145,7 @@ impl Session {
     /// their scrim; only the top one's nodes can be tapped.
     pub fn scene(&mut self) -> Result<&Scene, RenderError> {
         self.poll();
+        self.follow_clock();
         let now = Instant::now();
         self.step_pagers(now);
         self.step_cards(now);

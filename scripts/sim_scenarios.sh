@@ -31,6 +31,9 @@ scenario swipe-deck swipe_deck \
   "shot deck; drag-card 130 Weekend flannel; shot like; release; drag-card -60 Chore coat layers; shot short; \
 release; drag-card -130 Chore coat layers; release; assert-text All black; swipe-right All black; \
 assert-text All done; shot done"
+scenario date-unlock week_sessions \
+  "clock 2026-11-16T08:59; assert-no-text Mark Mon; shot before-class; clock 2026-11-16T09:00; assert-text Mark Mon Group class done; shot class-over; \
+clock 2026-11-17T15:45; shot swim-over"
 for page in home groceries log; do
   echo "== theme-$page"
   for mode in light dark; do

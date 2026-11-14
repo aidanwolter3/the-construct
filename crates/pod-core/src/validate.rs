@@ -560,6 +560,17 @@ fn check_values(node: &UiNode) -> Result<(), String> {
             }
             Ok(())
         }
+        UiNode::Conditional {
+            value, date, time, ..
+        } => {
+            if time.is_some() && date.is_none() {
+                return Err("a conditional's time goes with a date (Past, Today or Future)".into());
+            }
+            if date.is_some() && value.trim().is_empty() {
+                return Err("a date conditional needs a value: the date it compares".into());
+            }
+            Ok(())
+        }
         UiNode::Box {
             background,
             content_color,
@@ -1550,6 +1561,23 @@ mod tests {
         assert_eq!(w.len(), 2, "{w:?}");
         assert!(w[0].starts_with("/background: #ffffff") && w[0].ends_with("theme#card}"));
         assert!(w[1].starts_with("/content/args/background: #123456"));
+    }
+
+    #[test]
+    fn date_conditionals_are_checked() {
+        let cond = |extra: Value| {
+            let mut v = json!({"type": "core://Conditional", "value": "$item.date",
+                "content": {"type": "core://Divider"}});
+            v.as_object_mut()
+                .unwrap()
+                .extend(extra.as_object().unwrap().clone());
+            node(v)
+        };
+        assert_eq!(check_values(&cond(json!({"date": "Past"}))), Ok(()));
+        let timed = cond(json!({"date": "Future", "time": "$item.ends"}));
+        assert_eq!(check_values(&timed), Ok(()));
+        assert!(check_values(&cond(json!({"time": "$item.ends"}))).is_err());
+        assert!(check_values(&cond(json!({"date": "Today", "value": " "}))).is_err());
     }
 
     #[test]

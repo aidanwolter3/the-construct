@@ -79,6 +79,9 @@ pub enum Step {
     Screen(Screen),
     /// `mode dark` or `mode light`: the system's mode (light at start).
     Dark(bool),
+    /// `clock YYYY-MM-DDTHH:MM`: the device's wall clock stops there (in
+    /// seconds since the epoch).
+    Clock(i64),
     Offline,
     Online,
     PublishVersion(String),
@@ -127,6 +130,7 @@ impl Step {
             Step::WaitImages(_) => "wait-images",
             Step::Screen(_) => "screen",
             Step::Dark(_) => "mode",
+            Step::Clock(_) => "clock",
             Step::Offline => "offline",
             Step::Online => "online",
             Step::PublishVersion(_) => "publish-version",
@@ -297,6 +301,10 @@ pub fn parse(script: &str) -> Result<Vec<Line>, String> {
                 "light" => Step::Dark(false),
                 _ => return Err(format!("{}: 'mode' takes dark or light", at())),
             },
+            "clock" => Step::Clock(
+                construct_render::dates::wall_time(&need("a time YYYY-MM-DDTHH:MM")?)
+                    .ok_or_else(|| format!("{}: 'clock' takes a time YYYY-MM-DDTHH:MM", at()))?,
+            ),
             "offline" => none(Step::Offline)?,
             "online" => none(Step::Online)?,
             "publish-version" => Step::PublishVersion(need("a note (the changelog line)")?),
