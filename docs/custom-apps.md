@@ -231,6 +231,12 @@ A collection can keep itself current from the web (decision
   fills a row when its URL or query is new or changed (the default for `query_field`); `"every"` (the default
   for `url_field`) fills on each run but skips the model when the page's text didn't change (decision
   [`web-and-agent-modules`](decisions/web-and-agent-modules.md)).
+- **Rendered pages:** `render: true` (or `{wait_for: <CSS selector>, timeout_seconds: 5..=45}`) on a `url` or
+  `url_field` filler, or on `collections_preview`, loads the page (and its `details` pages) in the server's headless
+  browser first, for pages a script builds or that answer a plain fetch with a bot check; the extractors read the
+  rendered HTML. One browser at a time per server, 100 renders a pod a day, `every_minutes` and `on_open_minutes` at
+  least 360, no headers. A site that still refuses is a block in `collections_status` (decision
+  [`rendered-fetches`](decisions/rendered-fetches.md)).
 - **`agent`** (costs model calls): a prompt; a model with web search answers rows that fit the fields, within a
   daily budget. With the `web_search` jack plugged it searches and reads pages with the pod's own tools.
 - **The web module:** every request goes through the pod's host policy (`web-extract`'s `hosts`: 1 s spacing, a

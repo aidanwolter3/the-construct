@@ -8,16 +8,22 @@ publish.workspace = true
 # Collections' fetch fillers (decision
 # `collection-fillers`): a conditional GET with size caps, the readable text
 # and JSON-LD of a page, and the generic item extractors (json, jsonld, rss,
-# ics, embedded-json, CSS selectors) with a small path language.
+# ics, embedded-json, CSS selectors) with a small path language; and a
+# page rendered in a headless browser first (`render`).
 
 [dependencies]
 pod-core = { path = "../pod-core" }
 construct-agent = { path = "../agent" }
-tokio = { version = "1", features = ["sync", "time"] }
+tokio = { version = "1", features = ["sync", "time", "net", "process", "io-util", "rt", "macros"] }
 serde_json.workspace = true
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 # CSS selectors over parsed HTML (the `selectors` extractor).
 scraper = "0.29"
+# The `render` option: the DevTools protocol of a headless browser, over a
+# websocket on the loopback interface (no TLS).
+tokio-tungstenite = { version = "0.30", default-features = false, features = ["connect"] }
+futures-util = { version = "0.3", default-features = false, features = ["sink"] }
+tracing = "0.1"
 
 [dev-dependencies]
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "net"] }

@@ -852,6 +852,31 @@ fn hosts(pod: &Pod) -> std::sync::Arc<web_extract::hosts::Hosts> {
     pod.local::<web_extract::hosts::Hosts>()
 }
 
+/// What a rendered filler reports on a server without a browser.
+pub const NO_BROWSER: &str =
+    "this server has no headless browser for rendered pages (CONSTRUCT_BROWSER)";
+
+/// `url` rendered in the server's headless browser (decision
+/// `rendered-fetches`), through the pod's host policy and render cap.
+pub(crate) async fn render_page(
+    pod: &Pod,
+    adapter: &CollectionsAdapter,
+    url: &str,
+    render: &crate::filler::Render,
+) -> Result<web_extract::fetch::Fetched, web_extract::fetch::FetchError> {
+    let Some(browser) = adapter.browser() else {
+        return Err(web_extract::fetch::FetchError::new(NO_BROWSER));
+    };
+    web_extract::render::render(
+        browser,
+        &hosts(pod),
+        &pod.local::<web_extract::render::Renders>(),
+        url,
+        &render.options(),
+    )
+    .await
+}
+
 /// How a fill went.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Outcome {
@@ -1067,6 +1092,9 @@ async fn run_fetch(
     let caps = adapter.caps();
     let zone = filler.zone();
     let get = |u: String, etag: Option<String>, lm: Option<String>| async move {
+        if let Some(r) = filler.render() {
+            return render_page(pod, adapter, &u, r).await;
+        }
         // Per URL: a secret goes only to its own host.
         let resolved = resolve_headers(pod.store(), headers, &u, adapter.allow_private_hosts())
             .map_err(web_extract::fetch::FetchError::new)?;
@@ -1528,10 +1556,21 @@ async fn fill_details(
             tracing::warn!("a details page was not fetched: not a public website");
             continue;
         };
-        let Ok(web_extract::fetch::Fetched::Body { bytes, .. }) =
-            web_extract::hosts::fetch(&hosts(pod), adapter.fetch_client(), &link, None, None, &[])
+        let fetched = match filler.render() {
+            Some(r) => render_page(pod, adapter, &link, r).await,
+            None => {
+                web_extract::hosts::fetch(
+                    &hosts(pod),
+                    adapter.fetch_client(),
+                    &link,
+                    None,
+                    None,
+                    &[],
+                )
                 .await
-        else {
+            }
+        };
+        let Ok(web_extract::fetch::Fetched::Body { bytes, .. }) = fetched else {
             continue;
         };
         let page = String::from_utf8_lossy(&bytes);

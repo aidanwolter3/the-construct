@@ -110,7 +110,7 @@ Habits that avoid known traps:
 **Staging** needs a pod token: make a temporary one with
 `curl -fsS -X POST https://the-construct-pod.fly.dev/v1/pods/temporary | jq -r .session_token` and send it as
 `Authorization: Bearer <token>`; in the simulator, click "Try a temporary pod". Never put pod codes in git or files.
-Staging's image has no shell (distroless): `fly ssh console -C` can't run `rm` or scripts there. Use the
+Staging's image is Debian slim (it carries Chromium for rendered fillers), but manage pods with the
 `server pods …` subcommands ([docs/server.md](docs/server.md)).
 
 **Secrets** are set on staging by the developer with `flyctl secrets set` (list in [docs/server.md](docs/server.md)).

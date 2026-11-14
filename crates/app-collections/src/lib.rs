@@ -246,6 +246,9 @@ pub struct CollectionsAdapter {
     /// For fetches that carry a secret: redirects stay on the same host,
     /// since a custom header (unlike `Authorization`) would follow them.
     secret_fetch_client: reqwest::Client,
+    /// The server's headless browser for rendered fillers (none: they
+    /// report it).
+    browser: Option<Arc<web_extract::render::Browser>>,
 }
 
 impl Default for CollectionsAdapter {
@@ -257,6 +260,7 @@ impl Default for CollectionsAdapter {
             allow_private_hosts: false,
             fetch_client: fetch_client(false, false),
             secret_fetch_client: fetch_client(false, true),
+            browser: None,
         }
     }
 }
@@ -311,6 +315,17 @@ impl CollectionsAdapter {
         self.fetch_client = fetch_client(allow, false);
         self.secret_fetch_client = fetch_client(allow, true);
         self
+    }
+
+    /// With `browser` rendering fillers' pages (`render`;
+    /// [`web_extract::render::Browser::from_env`] in the server).
+    pub fn with_browser(mut self, browser: Option<web_extract::render::Browser>) -> Self {
+        self.browser = browser.map(Arc::new);
+        self
+    }
+
+    pub fn browser(&self) -> Option<&web_extract::render::Browser> {
+        self.browser.as_deref()
     }
 
     pub fn allow_private_hosts(&self) -> bool {

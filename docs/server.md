@@ -86,6 +86,7 @@ settings are logged at startup.
 | `CONSTRUCT_FILL_MODEL` | `claude-opus-5-5` | The agent module's capable model: `agent`, `extract: llm` and `query_field` fillers (same key and endpoint). Without a key those fillers report themselves unavailable. Each pod's model calls have daily budgets per feature (`agent_usage`). |
 | `CONSTRUCT_FILL_AGENT_DAILY` | `20` | Agent filler runs per pod per day. |
 | `CONSTRUCT_FILL_PRIVATE_HOSTS` | unset | `1`: fetch fillers may read private addresses (local development only). |
+| `CONSTRUCT_BROWSER` | the first `chromium`, `chromium-browser`, `headless_shell`, `chrome-headless-shell` or `google-chrome` on `PATH` | The headless browser of rendered fillers (`render`, decision `rendered-fetches`); `off`: none, and rendered fillers say so. The image sets `/usr/bin/chromium`. |
 
 ### Monitoring and development
 
@@ -188,7 +189,8 @@ Counts live in memory and restart from zero.
 ## Deploying
 
 The repository deploys a staging server to [Fly.io](https://fly.io): `deploy/pod.Dockerfile` builds the server image,
-and `deploy/fly/pod.toml` configures the app (`the-construct-pod`), its volume, health check and metrics. CI deploys
+and `deploy/fly/pod.toml` configures the app (`the-construct-pod`), its volume, health check and metrics. The image
+is Debian slim with Chromium for rendered fillers (decision `rendered-fetches`), on a 1 GB machine. CI deploys
 it on every push to `main` once the Rust job passes, when the repository secret `FLY_API_TOKEN_POD` is set. By hand,
 from the repository root:
 

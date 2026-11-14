@@ -10,5 +10,6 @@ mod follow;
 mod lookup;
 mod primitives;
 mod reminders;
+mod render;
 mod row_id;
 mod web;

@@ -563,6 +563,11 @@ fn css(s: &str) -> Result<scraper::Selector, String> {
     scraper::Selector::parse(s.trim()).map_err(|e| format!("'{s}' is not a CSS selector ({e})"))
 }
 
+/// Whether `s` is a CSS selector (a rendered page's `wait_for`).
+pub fn is_selector(s: &str) -> bool {
+    css(s).is_ok()
+}
+
 /// `"a.title@href"` -> (`"a.title"`, `Some("href")`); `"@href"` ->
 /// (`""`, `Some("href")`).
 fn split_attr(spec: &str) -> (&str, Option<&str>) {
