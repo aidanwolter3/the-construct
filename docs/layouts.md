@@ -276,6 +276,7 @@ The server components:
 | `core:dot` | `color`, `size`, `corner` | A small coloured dot. |
 | `core:warning_chip` | `text` | A warning chip. |
 | `core:link_button` | `label`, `url` | A button opening a link, shown while the link is set. |
+| `core:labeled_text` | `label`, `text`, `padding_h` | A small label above a text (an item's About or Description on its screen), shown while the text is set. |
 | `core:author_header` | `avatar`, `name`, `handle`, `size`, paddings | A round avatar beside the name and handle. |
 | `core:toggle_action` | `field`, `icon`, `active_icon`, `label`, `active_label`, `endpoint`, `payload_field`, `tint`, `count_field`, `tag` | An icon button that flips a boolean field at once and tells an endpoint, optionally moving a count with it. |
 | `core:stat` | `value`, `label` | A number with a label under it. |
