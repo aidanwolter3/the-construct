@@ -688,6 +688,16 @@ fn check_values(node: &UiNode) -> Result<(), String> {
         UiNode::TextField { lines: Some(l), .. } if *l == 0 || *l > MAX_TEXT_LINES => {
             Err(format!("text field lines {l} (1..={MAX_TEXT_LINES})"))
         }
+        UiNode::TextField {
+            secret: true,
+            lines: Some(_),
+            ..
+        } => Err("a secret text field is one line: leave out lines".into()),
+        UiNode::TextField {
+            secret: true,
+            on_submit: Some(_),
+            ..
+        } => Err("a secret text field has no on_submit: send it with a button".into()),
         _ => Ok(()),
     }
 }
@@ -1333,6 +1343,29 @@ pub fn intents(node: &UiNode) -> Vec<&ActionIntent> {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn a_secret_field_is_one_line_without_a_send() {
+        let field = |extra: Value| -> UiNode {
+            let mut v = json!({"type": "core://TextField", "field": "key", "secret": true});
+            for (k, x) in extra.as_object().unwrap() {
+                v[k] = x.clone();
+            }
+            serde_json::from_value(v).unwrap()
+        };
+        assert_eq!(check_values(&field(json!({}))), Ok(()));
+        assert!(
+            check_values(&field(json!({"lines": 3})))
+                .unwrap_err()
+                .contains("one line")
+        );
+        let send = json!({"on_submit": {"intent": "action.navigation.back"}});
+        assert!(
+            check_values(&field(send))
+                .unwrap_err()
+                .contains("on_submit")
+        );
+    }
     use super::*;
     use serde_json::json;
 

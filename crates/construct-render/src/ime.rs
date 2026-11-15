@@ -27,6 +27,9 @@ pub struct TextState {
     pub cursor: usize,
     pub anchor: usize,
     pub composing: Option<(usize, usize)>,
+    /// A secret field (`core://TextField` `secret`): the keyboard is a
+    /// password one ([`SECRET_INPUT_TYPE`]).
+    pub secret: bool,
 }
 
 /// What the keyboard did since the window last asked.
@@ -85,6 +88,21 @@ const CAP_SENTENCES: i32 = 0x4000;
 /// editor (`IME_FLAG_NO_FULLSCREEN | IME_FLAG_NO_EXTRACT_UI`).
 pub const INPUT_TYPE: i32 = 0x0001 | 0x4000 | 0x8000;
 pub const IME_OPTIONS: i32 = 6 | 0x0200_0000 | 0x1000_0000;
+/// A secret field's kind: a password (`TYPE_CLASS_TEXT |
+/// TYPE_TEXT_VARIATION_PASSWORD`), so the keyboard suggests and learns
+/// nothing from it, and the same Done key without learning what is typed
+/// (`IME_FLAG_NO_PERSONALIZED_LEARNING`).
+pub const SECRET_INPUT_TYPE: i32 = 0x0001 | 0x0080;
+pub const SECRET_IME_OPTIONS: i32 = IME_OPTIONS | 0x0100_0000;
+
+/// The keyboard's input type and IME options for a field.
+pub fn editor_kind(secret: bool) -> (i32, i32) {
+    if secret {
+        (SECRET_INPUT_TYPE, SECRET_IME_OPTIONS)
+    } else {
+        (INPUT_TYPE, IME_OPTIONS)
+    }
+}
 
 /// The byte at UTF-16 offset `u` of `s` (clamped; inside a surrogate pair,
 /// the character's start).
@@ -562,9 +580,11 @@ pub(crate) mod android {
     // `NativeText.editorInfo()`: the field's kind and selection for
     // `EditorInfo` (input type, IME options, selection start and end).
     native!(Java_org_theconstruct_android_NativeText_editorInfo(env) -> JIntArray<'l> {
-        let [anchor, cursor, ..] = with(|c| c.state().map(TextState::utf16)).unwrap_or([0; 4]);
+        let ([anchor, cursor, ..], secret) = with(|c| c.state().map(|s| (s.utf16(), s.secret)))
+            .unwrap_or(([0; 4], false));
+        let (input_type, ime_options) = super::editor_kind(secret);
         let a = env.new_int_array(4)?;
-        a.set_region(env, 0, &[super::INPUT_TYPE, super::IME_OPTIONS, anchor, cursor])?;
+        a.set_region(env, 0, &[input_type, ime_options, anchor, cursor])?;
         Ok(a)
     });
 
@@ -638,6 +658,7 @@ mod tests {
             cursor: at,
             anchor: at,
             composing: None,
+            secret: false,
         }
     }
 

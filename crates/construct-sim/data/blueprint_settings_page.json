@@ -309,6 +309,56 @@
                     {
                       "style": "Label",
                       "type": "core://Text",
+                      "value_expr": "Jacks"
+                    }
+                  ],
+                  "padding_h_dp": 16,
+                  "padding_v_dp": 8,
+                  "type": "core://Column"
+                },
+                {
+                  "content": {
+                    "children": [
+                      {
+                        "style": "Body",
+                        "type": "core://Text",
+                        "value_expr": "Model, web, search and accounts"
+                      },
+                      {
+                        "type": "core://Spacer"
+                      },
+                      {
+                        "style": "Secondary",
+                        "type": "core://Text",
+                        "value_expr": "›"
+                      }
+                    ],
+                    "padding_h_dp": 16,
+                    "padding_v_dp": 10,
+                    "spacing_dp": 8,
+                    "type": "core://Row"
+                  },
+                  "content_description": "Jacks: what this pod is plugged into",
+                  "on_click": {
+                    "intent": "action.navigation.open",
+                    "presentation": "Push",
+                    "target_uri": "settings://jacks"
+                  },
+                  "type": "core://Tappable"
+                }
+              ],
+              "type": "core://Column"
+            },
+            {
+              "children": [
+                {
+                  "type": "core://Divider"
+                },
+                {
+                  "children": [
+                    {
+                      "style": "Label",
+                      "type": "core://Text",
                       "value_expr": "Notifications"
                     }
                   ],
@@ -742,6 +792,572 @@
       },
       "route": "settings://notifications/{app}",
       "title": "Notifications"
+    },
+    {
+      "data": "/v1/jacks/screen",
+      "id": "jacks",
+      "root": {
+        "children": [
+          {
+            "children": [
+              {
+                "content_description": "Back",
+                "icon": "arrow_back",
+                "on_click": {
+                  "intent": "action.navigation.back"
+                },
+                "tag": "screen-back",
+                "type": "core://IconButton"
+              },
+              {
+                "style": "Title",
+                "type": "core://Text",
+                "value_expr": "Jacks"
+              },
+              {
+                "content": {
+                  "size_dp": 16,
+                  "type": "core://Progress"
+                },
+                "type": "core://Conditional",
+                "value": "${local://screen#loading}"
+              },
+              {
+                "size_dp": 12,
+                "type": "core://Spacer"
+              }
+            ],
+            "padding_v_dp": 4,
+            "spacing_dp": 0,
+            "type": "core://Row"
+          },
+          {
+            "type": "core://Divider"
+          },
+          {
+            "content": {
+              "children": [
+                {
+                  "content": {
+                    "style": "Caption",
+                    "type": "core://Text",
+                    "value_expr": "${local://screen#error}"
+                  },
+                  "content_color": "${local://theme#error}",
+                  "type": "core://Box"
+                },
+                {
+                  "type": "core://Spacer"
+                },
+                {
+                  "label": "Try again",
+                  "on_click": {
+                    "intent": "action.data.load",
+                    "path": "/v1/jacks/screen"
+                  },
+                  "type": "core://Button"
+                }
+              ],
+              "padding_h_dp": 16,
+              "padding_v_dp": 4,
+              "spacing_dp": 8,
+              "type": "core://Row"
+            },
+            "type": "core://Conditional",
+            "value": "${local://screen#error}"
+          },
+          {
+            "content": {
+              "children": [
+                {
+                  "children": [
+                    {
+                      "style": "Secondary",
+                      "type": "core://Text",
+                      "value_expr": "The abilities this pod is plugged into. Tap one to plug it in, give it a key, or unplug it."
+                    }
+                  ],
+                  "padding_h_dp": 16,
+                  "padding_v_dp": 8,
+                  "spacing_dp": 8,
+                  "type": "core://Column"
+                },
+                {
+                  "empty_text": "Loading jacks…",
+                  "item_template": {
+                    "children": [
+                      {
+                        "content": {
+                          "children": [
+                            {
+                              "children": [
+                                {
+                                  "style": "Body",
+                                  "type": "core://Text",
+                                  "value_expr": "$item.title"
+                                },
+                                {
+                                  "type": "core://Spacer"
+                                },
+                                {
+                                  "style": "Secondary",
+                                  "type": "core://Text",
+                                  "value_expr": "›"
+                                }
+                              ],
+                              "spacing_dp": 8,
+                              "type": "core://Row"
+                            },
+                            {
+                              "style": "Secondary",
+                              "type": "core://Text",
+                              "value_expr": "$item.state_label"
+                            }
+                          ],
+                          "padding_h_dp": 16,
+                          "padding_v_dp": 10,
+                          "spacing_dp": 2,
+                          "type": "core://Column"
+                        },
+                        "content_description": "$item.title: $item.state_label",
+                        "on_click": {
+                          "intent": "action.navigation.open",
+                          "presentation": "Push",
+                          "target_uri": "settings://jacks/$item.id"
+                        },
+                        "type": "core://Tappable"
+                      },
+                      {
+                        "type": "core://Divider"
+                      }
+                    ],
+                    "type": "core://Column"
+                  },
+                  "query_key": "jacks",
+                  "type": "core://List"
+                }
+              ],
+              "type": "core://Column"
+            },
+            "follow_end": true,
+            "type": "core://Scroll"
+          }
+        ],
+        "type": "core://Column"
+      },
+      "route": "settings://jacks",
+      "title": "Jacks"
+    },
+    {
+      "data": "/v1/jacks/screen?id=$route.id",
+      "id": "jack",
+      "root": {
+        "children": [
+          {
+            "children": [
+              {
+                "content_description": "Back",
+                "icon": "arrow_back",
+                "on_click": {
+                  "intent": "action.navigation.back"
+                },
+                "tag": "screen-back",
+                "type": "core://IconButton"
+              },
+              {
+                "style": "Title",
+                "type": "core://Text",
+                "value_expr": "${jacks://$route.id#title}"
+              },
+              {
+                "content": {
+                  "size_dp": 16,
+                  "type": "core://Progress"
+                },
+                "type": "core://Conditional",
+                "value": "${local://screen#loading}"
+              },
+              {
+                "size_dp": 12,
+                "type": "core://Spacer"
+              }
+            ],
+            "padding_v_dp": 4,
+            "spacing_dp": 0,
+            "type": "core://Row"
+          },
+          {
+            "type": "core://Divider"
+          },
+          {
+            "content": {
+              "children": [
+                {
+                  "content": {
+                    "style": "Caption",
+                    "type": "core://Text",
+                    "value_expr": "${local://screen#error}"
+                  },
+                  "content_color": "${local://theme#error}",
+                  "type": "core://Box"
+                },
+                {
+                  "type": "core://Spacer"
+                },
+                {
+                  "label": "Try again",
+                  "on_click": {
+                    "intent": "action.data.load",
+                    "path": "/v1/jacks/screen?id=$route.id"
+                  },
+                  "type": "core://Button"
+                }
+              ],
+              "padding_h_dp": 16,
+              "padding_v_dp": 4,
+              "spacing_dp": 8,
+              "type": "core://Row"
+            },
+            "type": "core://Conditional",
+            "value": "${local://screen#error}"
+          },
+          {
+            "content": {
+              "children": [
+                {
+                  "children": [
+                    {
+                      "style": "Body",
+                      "type": "core://Text",
+                      "value_expr": "${jacks://$route.id#summary}"
+                    },
+                    {
+                      "style": "Secondary",
+                      "type": "core://Text",
+                      "value_expr": "${jacks://$route.id#state_label}"
+                    }
+                  ],
+                  "padding_h_dp": 16,
+                  "spacing_dp": 8,
+                  "type": "core://Column"
+                },
+                {
+                  "content": {
+                    "children": [
+                      {
+                        "style": "Secondary",
+                        "type": "core://Text",
+                        "value_expr": "${jacks://$route.id#how}"
+                      }
+                    ],
+                    "padding_h_dp": 16,
+                    "spacing_dp": 8,
+                    "type": "core://Column"
+                  },
+                  "type": "core://Conditional",
+                  "value": "${jacks://$route.id#is_account}"
+                },
+                {
+                  "content": {
+                    "content": {
+                      "children": [
+                        {
+                          "type": "core://Spacer"
+                        },
+                        {
+                          "label": "Plug in",
+                          "on_click": {
+                            "intent": "action.sequence",
+                            "steps": [
+                              {
+                                "also": [
+                                  {
+                                    "field": "plugged",
+                                    "value_expr": "true"
+                                  },
+                                  {
+                                    "field": "can_plug",
+                                    "value_expr": "false"
+                                  },
+                                  {
+                                    "field": "can_unplug",
+                                    "value_expr": "true"
+                                  },
+                                  {
+                                    "field": "state_label",
+                                    "value_expr": "\"Plugged in\""
+                                  }
+                                ],
+                                "endpoint": "/v1/jacks/plug",
+                                "entity_uri": "jacks://$route.id",
+                                "field": "state",
+                                "intent": "action.mutation.optimistic",
+                                "payload": {
+                                  "id": "$route.id"
+                                },
+                                "rollback_value": null,
+                                "value_expr": "\"plugged\""
+                              },
+                              {
+                                "intent": "action.navigation.back"
+                              }
+                            ]
+                          },
+                          "type": "core://Button"
+                        }
+                      ],
+                      "padding_h_dp": 16,
+                      "type": "core://Row"
+                    },
+                    "type": "core://Conditional",
+                    "value": "${jacks://$route.id#can_plug}"
+                  },
+                  "type": "core://Conditional",
+                  "value": "${jacks://$route.id#is_switch}"
+                },
+                {
+                  "content": {
+                    "children": [
+                      {
+                        "content": {
+                          "children": [
+                            {
+                              "style": "Label",
+                              "type": "core://Text",
+                              "value_expr": "Provider"
+                            },
+                            {
+                              "field": "provider",
+                              "options": [
+                                {
+                                  "label": "Brave",
+                                  "value": "brave"
+                                },
+                                {
+                                  "label": "SearXNG",
+                                  "value": "searxng"
+                                },
+                                {
+                                  "label": "DuckDuckGo",
+                                  "value": "duckduckgo"
+                                }
+                              ],
+                              "type": "core://ChoiceChips"
+                            },
+                            {
+                              "content": {
+                                "style": "Secondary",
+                                "type": "core://Text",
+                                "value_expr": "Now: ${jacks://$route.id#provider}"
+                              },
+                              "type": "core://Conditional",
+                              "value": "${jacks://$route.id#provider}"
+                            }
+                          ],
+                          "spacing_dp": 4,
+                          "type": "core://Column"
+                        },
+                        "type": "core://Conditional",
+                        "value": "${jacks://$route.id#has_provider}"
+                      },
+                      {
+                        "content": {
+                          "children": [
+                            {
+                              "style": "Label",
+                              "type": "core://Text",
+                              "value_expr": "API key (Brave)"
+                            },
+                            {
+                              "style": "Secondary",
+                              "type": "core://Text",
+                              "value_expr": "${jacks://$route.id#api_key_hint}"
+                            },
+                            {
+                              "field": "api_key",
+                              "max_length": 2000,
+                              "placeholder": "Paste the key",
+                              "secret": true,
+                              "type": "core://TextField"
+                            }
+                          ],
+                          "spacing_dp": 4,
+                          "type": "core://Column"
+                        },
+                        "type": "core://Conditional",
+                        "value": "${jacks://$route.id#has_api_key}"
+                      },
+                      {
+                        "content": {
+                          "children": [
+                            {
+                              "style": "Label",
+                              "type": "core://Text",
+                              "value_expr": "Server address (SearXNG)"
+                            },
+                            {
+                              "content": {
+                                "style": "Secondary",
+                                "type": "core://Text",
+                                "value_expr": "Now: ${jacks://$route.id#base_url}"
+                              },
+                              "type": "core://Conditional",
+                              "value": "${jacks://$route.id#base_url}"
+                            },
+                            {
+                              "field": "base_url",
+                              "max_length": 500,
+                              "placeholder": "https://search.example",
+                              "type": "core://TextField"
+                            }
+                          ],
+                          "spacing_dp": 4,
+                          "type": "core://Column"
+                        },
+                        "type": "core://Conditional",
+                        "value": "${jacks://$route.id#has_base_url}"
+                      },
+                      {
+                        "style": "Secondary",
+                        "type": "core://Text",
+                        "value_expr": "The key goes straight to your pod, sealed, and is never shown again. Brave needs a key; SearXNG needs its address; DuckDuckGo needs neither."
+                      },
+                      {
+                        "children": [
+                          {
+                            "type": "core://Spacer"
+                          },
+                          {
+                            "label": "Save and plug in",
+                            "on_click": {
+                              "intent": "action.sequence",
+                              "steps": [
+                                {
+                                  "also": [
+                                    {
+                                      "field": "plugged",
+                                      "value_expr": "true"
+                                    },
+                                    {
+                                      "field": "can_plug",
+                                      "value_expr": "false"
+                                    },
+                                    {
+                                      "field": "can_unplug",
+                                      "value_expr": "true"
+                                    },
+                                    {
+                                      "field": "state_label",
+                                      "value_expr": "\"Plugged in\""
+                                    }
+                                  ],
+                                  "endpoint": "/v1/jacks/plug",
+                                  "entity_uri": "jacks://$route.id",
+                                  "field": "state",
+                                  "intent": "action.mutation.optimistic",
+                                  "payload": {
+                                    "config": {
+                                      "api_key": "$form?.api_key",
+                                      "base_url": "$form?.base_url",
+                                      "provider": "$form?.provider"
+                                    },
+                                    "id": "$route.id"
+                                  },
+                                  "rollback_value": null,
+                                  "value_expr": "\"plugged\""
+                                },
+                                {
+                                  "intent": "action.navigation.back"
+                                }
+                              ]
+                            },
+                            "type": "core://Button"
+                          }
+                        ],
+                        "type": "core://Row"
+                      }
+                    ],
+                    "padding_h_dp": 16,
+                    "padding_v_dp": 8,
+                    "spacing_dp": 16,
+                    "type": "core://Column"
+                  },
+                  "type": "core://Conditional",
+                  "value": "${jacks://$route.id#is_config}"
+                },
+                {
+                  "content": {
+                    "children": [
+                      {
+                        "type": "core://Spacer"
+                      },
+                      {
+                        "label": "Unplug",
+                        "on_click": {
+                          "confirm_label": "Unplug",
+                          "intent": "action.confirm",
+                          "message": "What needs it stops working until you plug it in again. A key is forgotten.",
+                          "then": {
+                            "intent": "action.sequence",
+                            "steps": [
+                              {
+                                "also": [
+                                  {
+                                    "field": "plugged",
+                                    "value_expr": "false"
+                                  },
+                                  {
+                                    "field": "can_plug",
+                                    "value_expr": "true"
+                                  },
+                                  {
+                                    "field": "can_unplug",
+                                    "value_expr": "false"
+                                  },
+                                  {
+                                    "field": "state_label",
+                                    "value_expr": "\"Unplugged\""
+                                  }
+                                ],
+                                "endpoint": "/v1/jacks/unplug",
+                                "entity_uri": "jacks://$route.id",
+                                "field": "state",
+                                "intent": "action.mutation.optimistic",
+                                "payload": {
+                                  "id": "$route.id"
+                                },
+                                "rollback_value": null,
+                                "value_expr": "\"unplugged\""
+                              },
+                              {
+                                "intent": "action.navigation.back"
+                              }
+                            ]
+                          },
+                          "title": "Unplug ${jacks://$route.id#title}?"
+                        },
+                        "type": "core://Button"
+                      }
+                    ],
+                    "padding_h_dp": 16,
+                    "type": "core://Row"
+                  },
+                  "type": "core://Conditional",
+                  "value": "${jacks://$route.id#can_unplug}"
+                }
+              ],
+              "padding_v_dp": 8,
+              "spacing_dp": 8,
+              "type": "core://Column"
+            },
+            "follow_end": true,
+            "type": "core://Scroll"
+          }
+        ],
+        "type": "core://Column"
+      },
+      "route": "settings://jacks/{id}",
+      "title": "${jacks://$route.id#title}"
     }
   ],
   "title": "Settings",

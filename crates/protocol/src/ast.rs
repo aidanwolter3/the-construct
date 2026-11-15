@@ -275,6 +275,11 @@ pub enum UiNode {
         on_submit: Option<ActionIntent>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         lines: Option<u32>,
+        /// Hides what is typed (feature `text_field_secret`): drawn as dots,
+        /// no Copy or Cut, a password keyboard, never read out. For an API
+        /// key or a password; one line.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        secret: bool,
     },
 
     // Schema 3 (docs/DECISIONS.md D36)

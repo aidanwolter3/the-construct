@@ -646,6 +646,9 @@ pub fn app(state: Pod) -> Router {
         .merge(custom::router())
         .merge(mcp::router())
         .route("/v1/jacks", get(get_jacks))
+        .route("/v1/jacks/screen", get(get_jacks_screen))
+        .route("/v1/jacks/plug", post(post_jack_plug))
+        .route("/v1/jacks/unplug", post(post_jack_unplug))
         .merge(uploads::router(state.upload_max_bytes));
     for a in state.catalog.adapters() {
         router = router.merge(a.router());
@@ -658,18 +661,79 @@ pub fn app(state: Pod) -> Router {
         .with_state(state)
 }
 
+/// `None` for a session of the pod (jacks are its owner's: any device
+/// that opened the pod with its code), else the answer to send instead.
+async fn refuse_unless_signed(pod: &Pod, headers: &HeaderMap) -> Option<Response> {
+    match pod.caller(headers).await {
+        Ok(Caller::Signed(_)) => None,
+        Ok(_) => Some(json_error(
+            StatusCode::UNAUTHORIZED,
+            json!({ "error": "unauthorized", "detail": "open your pod first" }),
+        )),
+        Err(e) => Some(e.into_response()),
+    }
+}
+
+/// A jack call's answer: its JSON, or its refusal as a 400 (404 for an
+/// unknown jack).
+fn jack_answer(r: Result<Value, Value>) -> Response {
+    match r {
+        Ok(v) => axum::Json(v).into_response(),
+        Err(e) if e["error"] == "unknown_jack" => json_error(StatusCode::NOT_FOUND, e),
+        Err(e) if e["error"] == "store_error" => json_error(StatusCode::INTERNAL_SERVER_ERROR, e),
+        Err(e) => json_error(StatusCode::BAD_REQUEST, e),
+    }
+}
+
+/// `GET /v1/jacks/screen[?id=]`: the jacks as Settings' jacks screens bind
+/// them ([`jacks::screen`]).
+async fn get_jacks_screen(
+    State(pod): State<Pod>,
+    headers: HeaderMap,
+    axum::extract::Query(q): axum::extract::Query<HashMap<String, String>>,
+) -> Response {
+    if let Some(r) = refuse_unless_signed(&pod, &headers).await {
+        return r;
+    }
+    jack_answer(jacks::screen(&pod, q.get("id").map(String::as_str)).await)
+}
+
+/// `POST /v1/jacks/plug {id, config?}`: plug a switch or config jack from
+/// the app's Settings ([`jacks::plug_from_app`]); a secret goes from the
+/// device straight to the pod, sealed, and is never shown back.
+async fn post_jack_plug(State(pod): State<Pod>, headers: HeaderMap, body: Bytes) -> Response {
+    if let Some(r) = refuse_unless_signed(&pod, &headers).await {
+        return r;
+    }
+    let Ok(body) = serde_json::from_slice::<Value>(&body) else {
+        return json_error(
+            StatusCode::BAD_REQUEST,
+            json!({ "error": "invalid_json", "detail": "the body is {id, config?}" }),
+        );
+    };
+    jack_answer(jacks::plug_from_app(&pod, &body).await)
+}
+
+/// `POST /v1/jacks/unplug {id}`: unplug a switch or config jack from the
+/// app's Settings (an account is signed out under Sign-ins).
+async fn post_jack_unplug(State(pod): State<Pod>, headers: HeaderMap, body: Bytes) -> Response {
+    if let Some(r) = refuse_unless_signed(&pod, &headers).await {
+        return r;
+    }
+    let Ok(body) = serde_json::from_slice::<Value>(&body) else {
+        return json_error(
+            StatusCode::BAD_REQUEST,
+            json!({ "error": "invalid_json", "detail": "the body is {id}" }),
+        );
+    };
+    jack_answer(jacks::unplug_tool(&pod, &json!({ "id": body["id"] })).await)
+}
+
 /// `GET /v1/jacks`: every jack of the pod and its state (decision `jacks`),
 /// for the pod's owner.
 async fn get_jacks(State(pod): State<Pod>, headers: HeaderMap) -> Response {
-    match pod.caller(&headers).await {
-        Ok(Caller::Signed(_)) => {}
-        Ok(_) => {
-            return json_error(
-                StatusCode::UNAUTHORIZED,
-                json!({ "error": "unauthorized", "detail": "open your pod first" }),
-            );
-        }
-        Err(e) => return e.into_response(),
+    if let Some(r) = refuse_unless_signed(&pod, &headers).await {
+        return r;
     }
     axum::Json(json!({ "jacks": jacks::list(&pod).await })).into_response()
 }

@@ -125,7 +125,8 @@ The client opens the pod's `home` layout (the default) and draws everything from
 - **Settings and the inbox are layouts** (the `settings` and `inbox` blueprints), presented as a side panel and a
   sheet. Settings shows the connection, the pod's layouts (a tap lists a layout's versions and offers Hide; picking one
   shows it on this device only, and the pin is kept across restarts until Show latest or leaving the pod), the
-  hidden layouts with a Show button, sign-ins, notifications (one row per layout that sends them; a tap opens that layout's
+  hidden layouts with a Show button, sign-ins, the pod's jacks (a list with each one's state; a jack's screen plugs it in,
+  takes a search provider and its key in a hidden field, or unplugs it; decision `jacks-in-settings`), notifications (one row per layout that sends them; a tap opens that layout's
   switches inside the panel), and **Leave pod**. On Android the notification permission row sits above it. The
   blueprint no longer lists servers: the platform still offers them in `local:servers` (Staging, Local, or its
   others; each server has its own cache and outbox), so a layout can add a picker with `set_server`; the desktop
