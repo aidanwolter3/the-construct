@@ -50,6 +50,10 @@ pub const FILL_SETTING: &str = "collections.fill";
 pub const MCP_OFF: &str = "the pod's mcp jack is unplugged, so this filler can't call its MCP server (plug_jack mcp, if the server allows it)";
 /// The error a fill records when the pod's `web` jack is unplugged.
 pub const FILL_OFF: &str = "the pod's web jack is unplugged, so fillers can't fetch websites (plug_jack web, if the server allows it)";
+/// How many image results an `images` filler tries, in order, for one that
+/// loads.
+const IMAGE_CANDIDATES: usize = 5;
+
 /// The error of a `query_field` fill without a search provider.
 pub const NO_SEARCH: &str = "this filler searches the web for each row: plug the pod's web_search jack (plug_jack web_search with a provider and its key)";
 /// The error of a model fill without a model.
@@ -1326,7 +1330,17 @@ async fn run_fetch(
     let mut new_marks = Vec::new();
     let (mut items, mut skipped, mut failed) = (0, 0, Vec::new());
     let mut budget_taken = day.is_some();
-    for r in rows
+    // When there are more rows than one fill takes, the rows never filled
+    // from their current source come first, then the ones filled longest
+    // ago, so repeated fills reach every row.
+    let src_of = |r: &db::Row| r.values[field].as_str().unwrap_or("").trim().to_owned();
+    let filled_at = |r: &db::Row| {
+        marks
+            .get(&r.id)
+            .filter(|(s, _, _)| *s == src_of(r))
+            .map(|(_, _, at)| *at)
+    };
+    let mut rows: Vec<db::Row> = rows
         .into_iter()
         .filter(|r| {
             r.values
@@ -1336,18 +1350,16 @@ async fn run_fetch(
         })
         .filter(|r| {
             // `once`: only rows whose source is new or changed.
-            let src = r.values[field].as_str().unwrap_or("").trim().to_owned();
-            force_all
-                || refresh == crate::filler::Refresh::Every
-                || marks.get(&r.id).is_none_or(|(s, _)| *s != src)
+            force_all || refresh == crate::filler::Refresh::Every || filled_at(r).is_none()
         })
-        .take(caps.fill_urls)
-    {
-        let src = r.values[field].as_str().unwrap_or("").trim().to_owned();
+        .collect();
+    rows.sort_by_key(|r| filled_at(r).map_or((0, 0), |at| (1, at)));
+    for r in rows.into_iter().take(caps.fill_urls) {
+        let src = src_of(&r);
         let prev_key = marks
             .get(&r.id)
-            .filter(|(s, _)| *s == src)
-            .map(|(_, k)| k.clone());
+            .filter(|(s, _, _)| *s == src)
+            .map(|(_, k, _)| k.clone());
         // What the model reads, and its content key.
         let (found, key) = if let (Some(web), true) = (&web, filler.is_images()) {
             // The first image result fills the mapped fields; no model
@@ -1358,7 +1370,7 @@ async fn run_fetch(
                 &web.client,
                 &web.provider,
                 &src,
-                1,
+                IMAGE_CANDIDATES,
             )
             .await
             {
@@ -1377,9 +1389,20 @@ async fn run_fetch(
                     continue;
                 }
             };
+            // The first result whose picture loads: an index keeps pictures
+            // a shop has since removed.
+            let mut chosen = None;
+            for img in images {
+                if web_extract::fetch::check_url(&img.image, web.allow_private).is_ok()
+                    && web_extract::search::image_loads(&web.hosts, &web.client, &img.image).await
+                {
+                    chosen = Some(img);
+                    break;
+                }
+            }
             let key = hash_of(
-                images
-                    .first()
+                chosen
+                    .as_ref()
                     .map(|i| i.image.as_str())
                     .unwrap_or("")
                     .as_bytes(),
@@ -1387,8 +1410,7 @@ async fn run_fetch(
             if !force_all && prev_key.as_deref() == Some(key.as_str()) {
                 continue;
             }
-            let found: Vec<Map<String, Value>> = images
-                .first()
+            let found: Vec<Map<String, Value>> = chosen
                 .map(|img| {
                     pairs
                         .iter()
@@ -1537,18 +1559,18 @@ async fn run_fetch(
 }
 
 /// What each row of a per-row filler was last filled from: `row id ->
-/// (source, content key)`.
+/// (source, content key, when)`.
 fn row_marks(
     conn: &Connection,
     collection: &str,
     filler: &str,
-) -> rusqlite::Result<HashMap<String, (String, String)>> {
+) -> rusqlite::Result<HashMap<String, (String, String, i64)>> {
     let mut stmt = conn.prepare_cached(
-        "SELECT row_id, source, content_key FROM collections_row_fills
+        "SELECT row_id, source, content_key, filled_at FROM collections_row_fills
          WHERE collection = ?1 AND filler = ?2",
     )?;
     let rows = stmt.query_map(params![collection, filler], |r| {
-        Ok((r.get::<_, String>(0)?, (r.get(1)?, r.get(2)?)))
+        Ok((r.get::<_, String>(0)?, (r.get(1)?, r.get(2)?, r.get(3)?)))
     })?;
     rows.collect()
 }
