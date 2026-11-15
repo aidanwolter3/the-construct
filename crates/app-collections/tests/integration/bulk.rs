@@ -338,6 +338,21 @@ async fn a_posted_csv_file_previews_and_its_token_applies_it() {
         (status, e["error"].as_str()),
         (StatusCode::UNPROCESSABLE_ENTITY, Some("invalid_file"))
     );
+    // A file of more rows than one edit takes is refused while it is read.
+    let many = format!("text\n{}", "Salt\n".repeat(5_001));
+    let (status, e) = import(&pod, "lines", "", "text/csv", &many).await;
+    assert_eq!(
+        (status, e["error"].as_str()),
+        (StatusCode::UNPROCESSABLE_ENTITY, Some("invalid_file")),
+        "{e}"
+    );
+    assert!(
+        e["detail"]
+            .as_str()
+            .unwrap_or("")
+            .contains("over 5000 edits"),
+        "{e}"
+    );
 }
 
 #[tokio::test]
