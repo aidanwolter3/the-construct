@@ -694,7 +694,7 @@ fn a_pressed_row_lays_out_what_it_opens_before_the_tap() {
     assert!(s.press(x, y));
     s.take_work();
     // Laid out while the finger is down, out of sight.
-    assert!(s.prepare_press());
+    assert!(s.prepare_at(x, y));
     assert_eq!(s.take_work().laid_out, 1);
     assert_eq!(s.showing(), "home");
     assert!(s.scene().unwrap().find_node("open_notes").is_some());
@@ -717,7 +717,7 @@ fn a_press_that_becomes_a_scroll_opens_nothing() {
     let mut s = home_with_a_row();
     let (x, y) = row_center(&mut s);
     s.press(x, y);
-    assert!(s.prepare_press());
+    assert!(s.prepare_at(x, y));
     // The touch turned into a drag: what was prepared is dropped.
     s.release_press();
     assert_eq!(s.showing(), "home");
@@ -727,4 +727,42 @@ fn a_press_that_becomes_a_scroll_opens_nothing() {
     assert_eq!(s.showing(), "notes");
     s.scene().unwrap();
     assert_eq!(s.take_work().laid_out, 1);
+}
+
+#[test]
+fn an_icon_button_prepares_its_open_and_a_screen_that_loads_data_does_not() {
+    let root: protocol::UiNode = serde_json::from_value(json!({
+        "type": "core://Page", "id": "home", "title": "Home",
+        "screens": [{ "id": "note", "route": "demo://notes/{id}", "data": "/v1/notes/$route.id",
+            "root": { "type": "core://Text", "style": "Body", "value_expr": "A note" } }],
+        "root": { "type": "core://Column", "children": [
+            { "type": "core://IconButton", "icon": "settings", "content_description": "Settings",
+              "tag": "settings",
+              "on_click": { "intent": "action.navigation.open", "layout": "notes", "presentation": "Panel" } },
+            { "type": "core://Tappable", "tag": "note", "content_description": "A note",
+              "on_click": { "intent": "action.navigation.open", "target_uri": "demo://notes/n1", "presentation": "Push" },
+              "content": { "type": "core://Text", "style": "Body", "value_expr": "A note" } } ] } }))
+    .unwrap();
+    let notes: protocol::UiNode = serde_json::from_value(json!({
+        "type": "core://Column", "children": [
+            { "type": "core://Text", "style": "Body", "value_expr": "A made-up note" } ] }))
+    .unwrap();
+    let mut s = Session::new("home", root, Default::default(), Viewport::PHONE);
+    s.layouts.insert("notes".into(), notes);
+    s.animate = true;
+    let center = |s: &mut Session, id: &str| {
+        let b = s.scene().unwrap().find_node(id).unwrap().bounds;
+        (b[0] + b[2] / 2.0, b[1] + b[3] / 2.0)
+    };
+    // Not a core://Tappable, so nothing is drawn pressed, but its open is
+    // prepared all the same.
+    let (x, y) = center(&mut s, "settings");
+    s.press(x, y);
+    assert!(s.prepare_at(x, y));
+    // A screen that loads its data isn't laid out ahead: nothing is done.
+    let (x, y) = center(&mut s, "note");
+    s.press(x, y);
+    s.take_work();
+    assert!(!s.prepare_at(x, y));
+    assert_eq!(s.take_work().laid_out, 0);
 }

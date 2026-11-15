@@ -625,7 +625,7 @@ pub struct Session {
     /// The `core://Tappable` held down, drawn pressed until it is let go.
     pressed: Option<Pressed>,
     /// What the pressed row opens, opened out of sight and laid out while
-    /// the finger is down ([`Session::prepare_press`]).
+    /// the finger is down ([`Session::prepare_at`]).
     prepared: Option<Prepared>,
     /// Data merged in so far (a count), to tell whether an open brought
     /// any: one that didn't leaves what is laid out as it is.
@@ -1197,30 +1197,30 @@ impl Session {
                 id: n.id,
                 at: (x, y),
             });
+        // A new touch: what an earlier one prepared is dropped.
+        self.prepared = None;
         let changed = pressed != self.pressed;
         if changed {
             self.pressed = pressed;
-            self.prepared = None;
             self.scene = None;
         }
         self.pressed.is_some()
     }
 
-    /// While a finger rests on a row that opens a layout or a screen
-    /// (`action.navigation.open`), opens it out of sight and lays it out,
-    /// so when the finger lifts the slide starts with nothing left to lay
-    /// out. Between the press and the lift (typically 50–100 ms) nothing
-    /// moves, so the time it takes doesn't show. A release that isn't a
-    /// tap, another press or new data throws it away. True when one was
+    /// While a finger rests still at a point whose tap opens a layout or a
+    /// screen (`action.navigation.open`: a row, a button, an icon button),
+    /// opens it out of sight and lays it out, so when the finger lifts the
+    /// slide starts with nothing left to lay out. Between the press and the
+    /// lift (typically 50–100 ms) nothing moves, so the time it takes
+    /// doesn't show. A release that isn't a tap, another touch or new data
+    /// throws it away. A screen whose data loads in the background isn't
+    /// prepared (its answer is matched to the stack). True when one was
     /// prepared.
-    pub fn prepare_press(&mut self) -> bool {
+    pub fn prepare_at(&mut self, x: f32, y: f32) -> bool {
         if self.prepared.is_some() || !self.animate {
             return false;
         }
-        let Some(p) = self.pressed.clone() else {
-            return false;
-        };
-        let Some(node) = self.find(&Target::Point(p.at.0, p.at.1)).ok().flatten() else {
+        let Some(node) = self.find(&Target::Point(x, y)).ok().flatten() else {
             return false;
         };
         let Some(Tap::Intent { intent }) = node.tap.clone() else {
@@ -1229,7 +1229,7 @@ impl Session {
         let Some(bound) = self.bind_form(&intent) else {
             return false;
         };
-        if bound["intent"] != "action.navigation.open" {
+        if bound["intent"] != "action.navigation.open" || self.loads_screen_data(&bound) {
             return false;
         }
         let before = self.stack.len();
@@ -1256,6 +1256,23 @@ impl Session {
             });
         }
         ok
+    }
+
+    /// Whether an open goes to a screen (`target_uri`) that loads data:
+    /// not worth preparing. A layout opened with a screen of its own is
+    /// counted as one (its screens aren't known before it opens).
+    fn loads_screen_data(&self, open: &Value) -> bool {
+        let Some(uri) = open["target_uri"].as_str().filter(|t| !t.is_empty()) else {
+            return false;
+        };
+        if open["layout"].as_str().is_some_and(|l| !l.is_empty()) {
+            return true;
+        }
+        let top = &self.stack[self.top_index()];
+        top.screens
+            .iter()
+            .find(|s| match_route(&s.route, uri).is_some())
+            .is_none_or(|s| s.data.is_some())
     }
 
     /// The finger lifted, or the touch became a scroll or a swipe: nothing
