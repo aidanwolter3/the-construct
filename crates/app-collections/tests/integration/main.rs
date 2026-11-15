@@ -8,6 +8,7 @@ mod computed;
 mod fillers;
 mod follow;
 mod lookup;
+mod mcp_fillers;
 mod primitives;
 mod reminders;
 mod render;

@@ -306,6 +306,24 @@ const MIGRATIONS: &[Step] = &[
             PRIMARY KEY (day, feature)
         ) WITHOUT ROWID;",
     ),
+    // The MCP servers the pod is connected to (decision `mcp-jack`):
+    // `config` holds OAuth endpoints, the client id and expiry; `secrets`
+    // sealed tokens by field.
+    Step::sql(
+        "mcp_servers",
+        "CREATE TABLE mcp_servers (
+            name       TEXT PRIMARY KEY NOT NULL,
+            url        TEXT NOT NULL,
+            auth       TEXT NOT NULL,
+            config     TEXT NOT NULL DEFAULT '{}',
+            secrets    TEXT NOT NULL DEFAULT '{}',
+            state      TEXT NOT NULL,
+            last_error TEXT,
+            tools      TEXT NOT NULL DEFAULT '[]',
+            created_at INTEGER NOT NULL,
+            updated_at INTEGER NOT NULL
+        );",
+    ),
 ];
 
 /// A pod setting inside a transaction (an adapter migration reads its

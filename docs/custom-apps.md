@@ -243,6 +243,13 @@ A collection can keep itself current from the web (decision
   rendered HTML. One browser at a time per server, 100 renders a pod a day, `every_minutes` and `on_open_minutes` at
   least 360, no headers. A site that still refuses is a block in `collections_status` (decision
   [`rendered-fetches`](decisions/rendered-fetches.md)).
+- **`mcp`** (no model call): a tool of an MCP server the pod is connected to (decision
+  [`mcp-jack`](decisions/mcp-jack.md)): `{kind: "mcp", server, tool, arguments, items, zone, map}`. The tool's answer
+  (its structured content, else its text read as JSON) is read like a JSON page: `items` is the path to the list,
+  `map` the fields. Text arguments may hold `{today}`, `{today+N}` or `{today-N}` (days), the date in the pod's zone
+  when the fill runs (e.g. `{"from": "{today}", "to": "{today+180}"}`). The default title is `<server> · <tool>`.
+  An answer like the last one writes nothing. `collections_preview {collection, filler}` calls the tool and shows
+  the rows; `mcp_call_tool` shows a tool's raw answer to write `items` and `map` from.
 - **`agent`** (costs model calls): a prompt; a model with web search answers rows that fit the fields, within a
   daily budget. With the `web_search` jack plugged it searches and reads pages with the pod's own tools.
 - **The web module:** every request goes through the pod's host policy (`web-extract`'s `hosts`: 1 s spacing, a
@@ -261,19 +268,35 @@ A collection can keep itself current from the web (decision
 
 MCP tools: `collections_preview` (try a recipe without storing anything), `collections_status`,
 `collections_refresh`, `collections_set_secret`; `apply_change` ops `set_filler`, `remove_filler`, `add_alert`,
-`update_alert`, `remove_alert`. Fillers need the pod's `web` jack and model work its `model` jack (decision
-[`jacks`](decisions/jacks.md)); both are locked off on temporary pods.
+`update_alert`, `remove_alert`. Fillers need the pod's `web` jack (`mcp` fillers its `mcp` jack instead) and model
+work its `model` jack (decision [`jacks`](decisions/jacks.md)); all are locked off on temporary pods.
 
 ### Jacks
 
 A pod's **jacks** are the abilities it is plugged into (decision [`jacks`](decisions/jacks.md)): `model` and `web`
 (switches, on by default), `web_search` (config: `provider` `brave` with the pod's own `api_key`, `searxng` with a
 `base_url` (`https://` on a public host name, never an IP address or an internal name), or `duckduckgo`), and
+`mcp` (a switch, on by default: calling the MCP servers the pod is connected to), and
 accounts adapters declare: `pixelfed` and `agent_runner` (plugged by their own sign-in). Claude uses `list_jacks`, `plug_jack` and `unplug_jack`; `GET /v1/jacks` lists them. People plug them in the app
 too: Settings → Jacks lists each with its state, and a config jack's screen takes its provider and its key in a hidden
 field, sent straight to the pod (`GET /v1/jacks/screen`, `POST /v1/jacks/plug` and `/unplug`; decision
 [`jacks-in-settings`](decisions/jacks-in-settings.md)). Secrets are sealed and
 never shown back. The host can lock a jack off for a pod (`jack.<id> = locked` in `pod_settings`).
+
+### MCP servers
+
+The pod can call the tools of remote MCP servers (decision [`mcp-jack`](decisions/mcp-jack.md), `pod_core::mcp_servers`),
+for `mcp` fillers. Claude connects one with `mcp_connect {name, url}` (an `https://` endpoint on a public host
+name): a server that needs nothing connects at once, one that takes an API key with `token` (sealed, never shown
+back), and one that uses OAuth answers a `sign_in_url` for the user to open in a browser. The pod finds the
+server's authorization server (protected resource metadata, then OAuth metadata), registers itself as a public
+client and signs in with PKCE; the browser comes back to the pod's public callback
+(`/v1/p/<pod>/v1/mcp-servers/callback` on a host), which trades the code for tokens. Access tokens refresh on
+their own; when a refresh is refused the server reads `needs_sign_in` and `mcp_connect {name}` gives a new link.
+The server must accept the pod's redirect URI (proton-mcp: add the pod's host to `ALLOWED_REDIRECT_HOSTS`).
+`mcp_servers` lists the servers with their state and tools (with `name`: each tool's input schema),
+`mcp_call_tool` calls one now, `mcp_disconnect` forgets one. At most 20 servers a pod; each call opens its own
+session over Streamable HTTP, with no redirects, a minute per request and 8 MB per answer.
 
 ## The Events app
 

@@ -46,6 +46,8 @@ use crate::{Caps, CollectionsAdapter, NAME};
 /// The pod setting that turned fillers off before jacks (decision `jacks`):
 /// `0` became a lock on the `web` jack (a migration, [`crate::db`]).
 pub const FILL_SETTING: &str = "collections.fill";
+/// The error an `mcp` fill records when the pod's `mcp` jack is unplugged.
+pub const MCP_OFF: &str = "the pod's mcp jack is unplugged, so this filler can't call its MCP server (plug_jack mcp, if the server allows it)";
 /// The error a fill records when the pod's `web` jack is unplugged.
 pub const FILL_OFF: &str = "the pod's web jack is unplugged, so fillers can't fetch websites (plug_jack web, if the server allows it)";
 /// The error of a `query_field` fill without a search provider.
@@ -935,6 +937,36 @@ pub async fn allowed(pod: &Pod) -> bool {
     pod_core::jacks::core_plugged(pod.store(), pod_core::jacks::WEB)
 }
 
+/// Which jacks fillers need are unplugged: `web` (fetch and agent
+/// fillers) and `mcp` (`mcp` fillers).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Off {
+    pub web: bool,
+    pub mcp: bool,
+}
+
+impl Off {
+    /// Whether `f` can't run for want of its jack.
+    pub fn stops(self, f: &Filler) -> bool {
+        if f.is_mcp() { self.mcp } else { self.web }
+    }
+}
+
+/// [`Off`] inside a connection.
+pub fn off_on(conn: &Connection) -> rusqlite::Result<Off> {
+    Ok(Off {
+        web: !pod_core::jacks::core_plugged_on(conn, pod_core::jacks::WEB)?,
+        mcp: !pod_core::jacks::core_plugged_on(conn, pod_core::jacks::MCP)?,
+    })
+}
+
+/// [`Off`] of this pod.
+pub async fn off(pod: &Pod) -> Off {
+    pod.blocking(|s| s.with_conn(off_on))
+        .await
+        .unwrap_or_default()
+}
+
 /// What a source answered before storing.
 enum Fetch {
     Items {
@@ -1055,6 +1087,76 @@ async fn take_model_budget(
         }
     }
     Ok(day)
+}
+
+/// Call an `mcp` filler's tool and read its answer: the tool's value as a
+/// JSON page for the filler's `items` and `map`, with `{today±N}` in the
+/// arguments resolved in the pod's zone. An answer like the last one ends
+/// the fill with no work (unless the recipe changed).
+async fn run_mcp(
+    pod: &Pod,
+    adapter: &CollectionsAdapter,
+    def: &Definition,
+    filler: &Filler,
+    state: &State,
+    force: bool,
+    now: i64,
+) -> Fetch {
+    let (rows, hash) = match mcp_rows(pod, filler, now).await {
+        Ok(r) => r,
+        Err(e) => return Fetch::Failed(e, None),
+    };
+    let fresh = force || state.fingerprint != filler.fingerprint();
+    if !fresh && state.content_hash.as_deref() == Some(hash.as_str()) {
+        return Fetch::Unchanged;
+    }
+    let caps = adapter.caps();
+    let (items, skipped) = coerce_all(
+        def,
+        rows,
+        caps.fill_items,
+        caps.text_chars,
+        filler.zone().as_ref(),
+    );
+    Fetch::Items {
+        items,
+        skipped,
+        etag: None,
+        last_modified: None,
+        hash: Some(hash),
+    }
+}
+
+/// An `mcp` filler's rows (by field id, before coercion) and its answer's
+/// hash.
+pub(crate) async fn mcp_rows(
+    pod: &Pod,
+    filler: &Filler,
+    now: i64,
+) -> Result<(Vec<Map<String, Value>>, String), String> {
+    let Source::Mcp {
+        server,
+        tool,
+        arguments,
+        map,
+        ..
+    } = &filler.source
+    else {
+        return Err("not an mcp filler".into());
+    };
+    let Some(spec) = filler.extract_spec() else {
+        return Err("the filler's recipe is incomplete".into());
+    };
+    let args =
+        crate::filler::resolve_dates(&Value::Object(arguments.clone()), &today(pod.store(), now));
+    let value = pod_core::mcp_servers::call_tool(pod, server, tool, &args)
+        .await
+        .map_err(|e| e.message)?;
+    let body = value.to_string();
+    let hash = hash_of(body.as_bytes());
+    let pairs: Vec<(String, String)> = map.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+    let rows = web_extract::items::extract(&spec, &body, "", &pairs)?;
+    Ok((rows, hash))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1748,8 +1850,22 @@ pub async fn fill(pod: &Pod, collection: &str, filler_id: &str, force: bool) -> 
     };
     let now = pod_core::util::now_secs();
     let mut day = None;
-    let fetched = if !allowed(pod).await {
-        Fetch::Failed(FILL_OFF.into(), Some(86_400))
+    let off = off(pod).await;
+    let fetched = if off.stops(&filler) {
+        Fetch::Failed(
+            if filler.is_mcp() { MCP_OFF } else { FILL_OFF }.into(),
+            Some(86_400),
+        )
+    } else if filler.is_mcp() {
+        match tokio::time::timeout(
+            FETCH_FILL_TIMEOUT,
+            run_mcp(pod, adapter, &def, &filler, &st, force, now),
+        )
+        .await
+        {
+            Ok(f) => f,
+            Err(_) => Fetch::Failed("the fill timed out".into(), None),
+        }
     } else if filler.is_agent() {
         match tokio::time::timeout(
             AGENT_FILL_TIMEOUT,
@@ -2095,11 +2211,14 @@ pub fn health_state(
     f: &Filler,
     st: &State,
     now: i64,
-    off: bool,
+    off: Off,
     agent: bool,
 ) -> (&'static str, String) {
-    if off {
-        ("off", FILL_OFF.to_owned())
+    if off.stops(f) {
+        (
+            "off",
+            if f.is_mcp() { MCP_OFF } else { FILL_OFF }.to_owned(),
+        )
     } else if f.uses_model() && !agent {
         ("unavailable", NO_AGENT.to_owned())
     } else if st.failures > 0 {
@@ -2151,7 +2270,7 @@ pub fn health_state(
 }
 
 /// A filler's health for Claude: state, detail and the times.
-pub fn health(def: &Definition, f: &Filler, st: &State, now: i64, off: bool, agent: bool) -> Value {
+pub fn health(def: &Definition, f: &Filler, st: &State, now: i64, off: Off, agent: bool) -> Value {
     let (state_name, detail) = health_state(f, st, now, off, agent);
     let at = |t: Option<i64>| t.map(pod_core::layouts::rfc3339);
     json!({

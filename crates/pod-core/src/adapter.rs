@@ -756,6 +756,7 @@ impl Catalog {
                 .iter()
                 .flat_map(|a| a.public_paths())
                 .chain(std::iter::once(&crate::uploads::PUBLIC_PATH))
+                .chain(std::iter::once(&crate::mcp_servers::CALLBACK_PATH))
                 .any(|p| path.starts_with(p))
     }
 

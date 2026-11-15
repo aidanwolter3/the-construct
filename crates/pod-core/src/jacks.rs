@@ -41,6 +41,9 @@ pub const MODEL: &str = "model";
 pub const WEB: &str = "web";
 /// The web search jack: searching the web with the pod's own provider key.
 pub const WEB_SEARCH: &str = "web_search";
+/// The MCP jack: calling the tools of remote MCP servers the pod is connected
+/// to (decision `mcp-jack`, [`crate::mcp_servers`]).
+pub const MCP: &str = "mcp";
 
 /// The `pod_settings` value that locks a jack off (`jack.<id>`).
 pub const LOCKED: &str = "locked";
@@ -157,6 +160,15 @@ pub fn core_jacks() -> Vec<JackSpec> {
             kind: JackKind::Config {
                 fields: SEARCH_FIELDS,
             },
+        },
+        JackSpec {
+            id: MCP,
+            title: "MCP servers",
+            summary: "Calling the tools of remote MCP servers the pod is connected to \
+                      (mcp_connect, mcp_servers): collection fillers of kind mcp. Each \
+                      server's sign-in or token is its own; this switch turns them all on \
+                      or off.",
+            kind: JackKind::Switch { default_on: true },
         },
     ]
 }
@@ -564,6 +576,13 @@ pub async fn describe(pod: &Pod, spec: &JackSpec, adapter: Option<usize>) -> Val
     out["state"] = json!(state);
     if let Some(d) = detail {
         out["detail"] = json!(d);
+    }
+    if id == MCP {
+        let servers = pod
+            .store()
+            .with_conn(crate::mcp_servers::summaries)
+            .unwrap_or_default();
+        out["servers"] = json!(servers);
     }
     out
 }

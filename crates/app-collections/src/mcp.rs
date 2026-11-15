@@ -705,7 +705,7 @@ async fn fill_health(
     if def.fillers.is_empty() {
         return Value::Null;
     }
-    let off = !crate::fill::allowed(pod).await;
+    let off = crate::fill::off(pod).await;
     let agent = pod
         .adapter::<CollectionsAdapter>()
         .is_some_and(|a| a.agent().is_some());
@@ -840,6 +840,17 @@ async fn set_secret(pod: &Pod, args: &Value) -> Result<Value, Value> {
 const PREVIEW_ROWS: usize = 10;
 
 async fn preview(pod: &Pod, adapter: &CollectionsAdapter, args: &Value) -> Result<Value, Value> {
+    // An `mcp` filler calls its tool (the mcp jack, not web).
+    if let Some(name) = args["collection"].as_str() {
+        let (_, def) = current(pod, name).await?;
+        let f = match args["filler"].as_str() {
+            Some(id) => crate::filler::find(&def, id).cloned(),
+            None => def.fillers.first().cloned(),
+        };
+        if let Some(f) = f.filter(|f| f.is_mcp()) {
+            return preview_mcp(pod, adapter, &def, &f).await;
+        }
+    }
     if !crate::fill::allowed(pod).await {
         return Err(fail(
             StatusCode::FORBIDDEN,
@@ -1047,6 +1058,32 @@ async fn preview(pod: &Pod, adapter: &CollectionsAdapter, args: &Value) -> Resul
     if out["items"] == 0 {
         out["detail"] =
             json!("no items: check items/types (preview without map shows what the page has)");
+    }
+    Ok(out)
+}
+
+/// Preview an `mcp` filler: call its tool now and show the rows it would
+/// store.
+async fn preview_mcp(
+    pod: &Pod,
+    adapter: &CollectionsAdapter,
+    def: &Definition,
+    f: &crate::filler::Filler,
+) -> Result<Value, Value> {
+    let now = pod_core::util::now_secs();
+    let (rows, _) = crate::fill::mcp_rows(pod, f, now)
+        .await
+        .map_err(|e| fail(StatusCode::BAD_GATEWAY, "mcp_failed", e))?;
+    let n = rows.len();
+    let (vals, skipped) =
+        crate::fill::coerce_preview(def, rows, adapter.caps.text_chars, f.zone().as_ref());
+    let mut out = json!({
+        "filler": f.id, "kind": "mcp", "items": n,
+        "rows": vals.iter().take(PREVIEW_ROWS).map(|v| model::by_name(def, v)).collect::<Vec<_>>(),
+        "values_skipped": skipped,
+    });
+    if n == 0 {
+        out["detail"] = json!("no items: check items (mcp_call_tool shows what the tool answers)");
     }
     Ok(out)
 }
