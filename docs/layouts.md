@@ -298,6 +298,7 @@ The server components:
 | `core:footer_bar` | paddings; children | A bar along the bottom of a page: a divider, then its children on one centred row (a count, a Spacer, a button). |
 | `core:card` | `spacing`, `border`, `background`, `corner`; children | A bordered, rounded card of its children in a column; `corner` defaults to 14. |
 | `core:filled_card` | `background`, `color`, `spacing`, paddings; children | A filled, rounded card of its children in a column, its text in one colour (an item's heading, a status at a glance). |
+| `core:chevron_card` | `background`, `color`, `border`; children | A rounded card that opens something: its children on one centred row and a › at the end; `color` and `border` are left out while empty. Wrap it in `core://Tappable`. |
 | `core:pill` | `text`, `background`, `color`, `style`, `corner` | A small tinted tag (a date, a status, a count); `corner` defaults to 8. |
 | `core:dot` | `color`, `size`, `corner` | A small coloured dot. |
 | `core:warning_chip` | `text` | A warning chip. |

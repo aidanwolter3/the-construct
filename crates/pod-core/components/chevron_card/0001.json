@@ -1,0 +1,123 @@
+{
+  "note": "First version: the rounded card with a row of content and a › at its end that launcher and step layouts repeat",
+  "component": {
+    "doc": "A rounded card that opens something: its children on one centred row, then a › at the end (what's coming up, a priority, a step of a plan). Wrap it in core://Tappable.",
+    "params": [
+      {
+        "name": "background",
+        "type": "text",
+        "doc": "Fill colour (#RRGGBB or a binding such as ${local://theme#accent_surface}).",
+        "default": "${local://theme#card}"
+      },
+      {
+        "name": "color",
+        "type": "text",
+        "doc": "Colour of the text and icons inside (#RRGGBB or a binding); empty keeps their own.",
+        "default": ""
+      },
+      {
+        "name": "border",
+        "type": "text",
+        "doc": "Border colour (#RRGGBB or a binding such as ${local://theme#card_border}); empty for none.",
+        "default": ""
+      }
+    ],
+    "children": true,
+    "template": {
+      "type": "core://Box",
+      "background": "$arg.background",
+      "content_color": {
+        "type": "core://IfArg",
+        "arg": "color",
+        "then": "$arg.color"
+      },
+      "border_color": {
+        "type": "core://IfArg",
+        "arg": "border",
+        "then": "$arg.border"
+      },
+      "corner_dp": 14,
+      "padding_h_dp": 16,
+      "padding_v_dp": 14,
+      "content": {
+        "type": "core://Row",
+        "align": "Center",
+        "spacing_dp": 12,
+        "children": [
+          {
+            "type": "core://Children"
+          },
+          {
+            "type": "core://Spacer"
+          },
+          {
+            "type": "core://Text",
+            "value_expr": "›",
+            "style": "Headline"
+          }
+        ]
+      }
+    },
+    "examples": [
+      {
+        "args": {
+          "background": "${local://theme#accent}",
+          "color": "${local://theme#card}"
+        },
+        "children": [
+          {
+            "type": "core://Column",
+            "spacing_dp": 2,
+            "children": [
+              {
+                "type": "core://Text",
+                "value_expr": "Book club · Thursday",
+                "style": "Title"
+              },
+              {
+                "type": "core://Text",
+                "value_expr": "3 chapters to go",
+                "style": "Secondary"
+              }
+            ]
+          }
+        ],
+        "note": "what's coming up, filled"
+      },
+      {
+        "args": {
+          "border": "${local://theme#card_border}"
+        },
+        "children": [
+          {
+            "type": "core://Box",
+            "width_dp": 28,
+            "align": "Center",
+            "content": {
+              "type": "core://Text",
+              "value_expr": "1",
+              "style": "Headline"
+            }
+          },
+          {
+            "type": "core://Column",
+            "spacing_dp": 2,
+            "children": [
+              {
+                "type": "core://Text",
+                "value_expr": "Pick a route",
+                "style": "Title"
+              },
+              {
+                "type": "core://Text",
+                "value_expr": "$item.routes_left routes to look at",
+                "style": "Secondary"
+              }
+            ]
+          }
+        ],
+        "note": "a numbered step of a plan, bordered"
+      }
+    ]
+  }
+}
