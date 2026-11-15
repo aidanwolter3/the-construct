@@ -745,6 +745,14 @@ pub struct Work {
     /// Layouts or screens laid out again, and the time it took.
     pub laid_out: u16,
     pub layout: Duration,
+    /// The rest of `Session::scene`, by part: taking the loader's changes
+    /// (`poll`); the clock, pagers, cards and closed entries (`tidy`);
+    /// telling the loader what is shown (`shown`); and building the frame
+    /// from what is laid out (`build`).
+    pub poll: Duration,
+    pub tidy: Duration,
+    pub shown: Duration,
+    pub build: Duration,
     /// Data snapshots that changed what is drawn.
     pub data_changes: u16,
 }
@@ -2295,7 +2303,10 @@ impl Session {
     /// full-screen layout, and over it any sheets, panels and overlays with
     /// their scrim; only the top one's nodes can be tapped.
     pub fn scene(&mut self) -> Result<&Scene, RenderError> {
+        let polling = Instant::now();
         self.poll();
+        let tidying = Instant::now();
+        self.work.poll += tidying - polling;
         self.follow_clock();
         let mut now = Instant::now();
         self.step_pagers(now);
@@ -2315,12 +2326,14 @@ impl Session {
         if self.stack.len() != before || self.animating() {
             self.scene = None;
         }
+        self.work.tidy += tidying.elapsed();
         // (`if let` returning the borrow here is refused by today's borrow
         // checker: the scene is built below on the other path.)
         #[allow(clippy::unnecessary_unwrap)]
         if self.scene.is_some() {
             return Ok(self.scene.as_ref().expect("checked"));
         }
+        let showing = Instant::now();
         self.load_inline_layouts();
         // From the top down to the first settled full-screen layout.
         let mut visible = Vec::new();
@@ -2334,6 +2347,7 @@ impl Session {
         visible.reverse();
         self.report_shown(&visible);
         let laying = Instant::now();
+        self.work.shown += laying - showing;
         let laid_before = self.work.laid_out;
         for &i in &visible {
             self.layout_entry(i)?;
@@ -2344,6 +2358,7 @@ impl Session {
             // This frame draws where the slides were before they were held.
             now += took;
         }
+        let building = Instant::now();
         let (w, h) = (self.viewport.width, self.viewport.height);
         let top = self.top_index();
         let top_group = self.group_start(top);
@@ -2559,6 +2574,7 @@ impl Session {
         self.edit_overlay(&mut scene, &theme);
         self.spinning = scene.spinning;
         self.scene = Some(scene);
+        self.work.build += building.elapsed();
         Ok(self.scene.as_ref().expect("just built"))
     }
 

@@ -721,6 +721,10 @@ impl App {
         let work = self.controller.session.take_work();
         stats.laid_out = work.laid_out;
         stats.layout = work.layout;
+        stats.poll = work.poll;
+        stats.tidy = work.tidy;
+        stats.shown = work.shown;
+        stats.build = work.build;
         stats.data_changes = work.data_changes;
         stats.shaped = r.shaped;
         stats.shape = r.shape;
