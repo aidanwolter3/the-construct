@@ -50,3 +50,8 @@ Settings jacks list shows `mcp` like the other switches, and nothing new is draw
 Not yet: connecting a server from the app (Claude connects them; a sign-in link opens in any browser); servers
 whose authorization server has no dynamic registration (a pre-registered client id); resources and prompts
 (tools only); a server pushing changes (fills poll).
+
+Since then: `{midnight}` / `{midnight±N}` arguments, the start of that day in the pod's zone with the offset in effect
+on that date. A bare date is read as midnight UTC by some servers (proton-mcp), which cut a Denver window short by
+seven hours; a fixed `-07:00` would be an hour off after daylight saving starts. Rows also gain `<datetime>_day`
+(`Fri Nov 6`), so a layout can show the day and the time in their own columns.

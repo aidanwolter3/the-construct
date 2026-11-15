@@ -356,6 +356,10 @@ async fn an_oauth_mcp_server_fills_a_collection_and_refreshes_its_token() {
     let titles: Vec<&str> = r.iter().filter_map(|x| x["title"].as_str()).collect();
     assert_eq!(titles, ["Dinner at Juniper", "Hike with Robin"], "{r:?}");
     assert_eq!(r[0]["filler_title"], "cal · calendar_list_events");
+    assert_eq!(
+        (r[0]["start_day"].clone(), r[0]["start_time"].clone()),
+        (json!("Wed Nov 18"), json!("6 PM"))
+    );
     let today = app_collections::fill::today(pod.store(), pod_core::util::now_secs());
     let last = fake.calls.lock().unwrap().last().cloned().unwrap();
     assert_eq!(last["from"], json!(today));

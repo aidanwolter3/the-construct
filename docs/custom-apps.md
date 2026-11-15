@@ -117,7 +117,7 @@ never writes code: it declares typed fields (`text`, `number`, `bool`, `date`, `
 
 | A layout uses (for collection `<c>`) | |
 |---|---|
-| feed `["collections", "<c>"]` | Rows `collections://<c>/<id>` under the query `collection:<c>`, with every field plus `id`, `deleted`, `created_at`, `updated_at`. |
+| feed `["collections", "<c>"]` | Rows `collections://<c>/<id>` under the query `collection:<c>`, with every field plus `id`, `deleted`, `created_at`, `updated_at`. A `datetime` field `<f>` also comes as `<f>_date` (`2026-11-06`), `<f>_time` (`7:30 PM`, empty for a date alone), `<f>_day` (`Fri Nov 6`) and `<f>_text` (`Fri Nov 6 · 7:30 PM`), on the value's own wall clock. |
 | `GET /v1/collections/<c>/rows` | The same, as a screen's data path. |
 | `GET /v1/collections/<c>/row?id=<id>` | One row (`collection:<c>:row:<id>`). |
 | `POST /v1/collections/<c>/create {<field>: …, client_id?}` | For `action.mutation.create`; a repeated `client_id` answers the same row. |
@@ -259,7 +259,10 @@ A collection can keep itself current from the web (decision
   [`mcp-jack`](decisions/mcp-jack.md)): `{kind: "mcp", server, tool, arguments, items, zone, map}`. The tool's answer
   (its structured content, else its text read as JSON) is read like a JSON page: `items` is the path to the list,
   `map` the fields. Text arguments may hold `{today}`, `{today+N}` or `{today-N}` (days), the date in the pod's zone
-  when the fill runs (e.g. `{"from": "{today}", "to": "{today+180}"}`). The default title is `<server> · <tool>`.
+  when the fill runs (e.g. `{"from": "{today}", "to": "{today+180}"}`), or `{midnight}` / `{midnight±N}`, the moment
+  that day starts in the pod's zone with the offset in effect on that date (`2026-11-15T00:00:00-07:00`). Prefer
+  `{midnight±N}` when the tool reads a bare date as UTC: `{"from": "{midnight}", "to": "{midnight+15}"}` is today
+  and the next 14 days, whole days. The default title is `<server> · <tool>`.
   An answer like the last one writes nothing. `collections_preview {collection, filler}` calls the tool and shows
   the rows; `mcp_call_tool` shows a tool's raw answer to write `items` and `map` from.
 - **`agent`** (costs model calls): a prompt; a model with web search answers rows that fit the fields, within a
