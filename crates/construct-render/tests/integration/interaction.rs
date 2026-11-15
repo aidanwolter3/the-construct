@@ -663,3 +663,68 @@ fn a_secret_field_shows_dots_and_never_lets_its_text_out() {
     assert_eq!(p.copy(false).as_deref(), Some("soup"));
     assert!(!p.text_state().unwrap().secret);
 }
+
+/// A home with a row that opens another layout, which is given (no loader).
+fn home_with_a_row() -> Session {
+    let root: protocol::UiNode = serde_json::from_value(json!({
+        "type": "core://Column", "children": [{
+            "type": "core://Tappable", "tag": "open_notes", "content_description": "Notes",
+            "on_click": { "intent": "action.navigation.open", "layout": "notes", "presentation": "Push" },
+            "content": { "type": "core://Text", "style": "Body", "value_expr": "Notes" } }] }))
+    .unwrap();
+    let notes: protocol::UiNode = serde_json::from_value(json!({
+        "type": "core://Column", "children": [
+            { "type": "core://Text", "style": "Body", "value_expr": "A made-up note" } ] }))
+    .unwrap();
+    let mut s = Session::new("home", root, Default::default(), Viewport::PHONE);
+    s.layouts.insert("notes".into(), notes);
+    s.animate = true;
+    s
+}
+
+fn row_center(s: &mut Session) -> (f32, f32) {
+    let b = s.scene().unwrap().find_node("open_notes").unwrap().bounds;
+    (b[0] + b[2] / 2.0, b[1] + b[3] / 2.0)
+}
+
+#[test]
+fn a_pressed_row_lays_out_what_it_opens_before_the_tap() {
+    let mut s = home_with_a_row();
+    let (x, y) = row_center(&mut s);
+    assert!(s.press(x, y));
+    s.take_work();
+    // Laid out while the finger is down, out of sight.
+    assert!(s.prepare_press());
+    assert_eq!(s.take_work().laid_out, 1);
+    assert_eq!(s.showing(), "home");
+    assert!(s.scene().unwrap().find_node("open_notes").is_some());
+    // The tap brings it in with nothing left to lay out.
+    let out = s.tap(&Target::Point(x, y)).unwrap();
+    assert!(
+        out.effects
+            .iter()
+            .any(|e| matches!(e, Effect::Opened { layout } if layout == "notes")),
+        "{:?}",
+        out.effects
+    );
+    assert_eq!(s.showing(), "notes");
+    s.scene().unwrap();
+    assert_eq!(s.take_work().laid_out, 0);
+}
+
+#[test]
+fn a_press_that_becomes_a_scroll_opens_nothing() {
+    let mut s = home_with_a_row();
+    let (x, y) = row_center(&mut s);
+    s.press(x, y);
+    assert!(s.prepare_press());
+    // The touch turned into a drag: what was prepared is dropped.
+    s.release_press();
+    assert_eq!(s.showing(), "home");
+    // A later tap still opens it, laid out then.
+    s.take_work();
+    s.tap(&Target::Point(x, y)).unwrap();
+    assert_eq!(s.showing(), "notes");
+    s.scene().unwrap();
+    assert_eq!(s.take_work().laid_out, 1);
+}

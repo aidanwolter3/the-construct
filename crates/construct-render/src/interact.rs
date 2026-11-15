@@ -563,6 +563,16 @@ fn bind_route(v: &mut Value, route: &BTreeMap<String, String>) {
     }
 }
 
+/// A layout or screen a pressed row opens, laid out before the tap: the
+/// open's intent (bound), the entries it pushes and the effects it had.
+struct Prepared {
+    intent: Value,
+    entries: Vec<Entry>,
+    effects: Vec<Effect>,
+    /// It merged data in (a screen's data loaded in place).
+    merged: bool,
+}
+
 /// A live layout.
 pub struct Session {
     stack: Vec<Entry>,
@@ -614,6 +624,12 @@ pub struct Session {
     caret_shown: Option<bool>,
     /// The `core://Tappable` held down, drawn pressed until it is let go.
     pressed: Option<Pressed>,
+    /// What the pressed row opens, opened out of sight and laid out while
+    /// the finger is down ([`Session::prepare_press`]).
+    prepared: Option<Prepared>,
+    /// Data merged in so far (a count), to tell whether an open brought
+    /// any: one that didn't leaves what is laid out as it is.
+    merges: u64,
     /// Spinners turn from here.
     spin_from: Instant,
     /// Whether the frame kept draws a spinner (it turns).
@@ -769,6 +785,8 @@ impl Session {
             edit: None,
             caret_shown: None,
             pressed: None,
+            prepared: None,
+            merges: 0,
             spin_from: Instant::now(),
             spinning: false,
             handles: Vec::new(),
@@ -1182,14 +1200,68 @@ impl Session {
         let changed = pressed != self.pressed;
         if changed {
             self.pressed = pressed;
+            self.prepared = None;
             self.scene = None;
         }
         self.pressed.is_some()
     }
 
+    /// While a finger rests on a row that opens a layout or a screen
+    /// (`action.navigation.open`), opens it out of sight and lays it out,
+    /// so when the finger lifts the slide starts with nothing left to lay
+    /// out. Between the press and the lift (typically 50–100 ms) nothing
+    /// moves, so the time it takes doesn't show. A release that isn't a
+    /// tap, another press or new data throws it away. True when one was
+    /// prepared.
+    pub fn prepare_press(&mut self) -> bool {
+        if self.prepared.is_some() || !self.animate {
+            return false;
+        }
+        let Some(p) = self.pressed.clone() else {
+            return false;
+        };
+        let Some(node) = self.find(&Target::Point(p.at.0, p.at.1)).ok().flatten() else {
+            return false;
+        };
+        let Some(Tap::Intent { intent }) = node.tap.clone() else {
+            return false;
+        };
+        let Some(bound) = self.bind_form(&intent) else {
+            return false;
+        };
+        if bound["intent"] != "action.navigation.open" {
+            return false;
+        }
+        let before = self.stack.len();
+        let merges = self.merges;
+        let scene = self.scene.take();
+        let mut effects = Vec::new();
+        self.run(&bound, &mut effects);
+        let mut ok = self.stack.len() > before;
+        for i in before..self.stack.len() {
+            ok &= self.layout_entry(i).is_ok();
+        }
+        let entries = self.stack.split_off(before.min(self.stack.len()));
+        // A screen whose data loads in the background is answered on the
+        // stack: it opens on the tap, as before.
+        ok &= entries.iter().all(|e| e.loading.is_none());
+        // What is on screen didn't change.
+        self.scene = scene;
+        if ok {
+            self.prepared = Some(Prepared {
+                intent: bound,
+                entries,
+                effects,
+                merged: self.merges != merges,
+            });
+        }
+        ok
+    }
+
     /// The finger lifted, or the touch became a scroll or a swipe: nothing
     /// is drawn pressed. Returns whether something was.
     pub fn release_press(&mut self) -> bool {
+        self.prepared = None;
         let was = self.pressed.take().is_some();
         if was {
             self.scene = None;
@@ -1834,7 +1906,7 @@ impl Session {
                 Answer::Data { path, result } => {
                     let error = result.as_ref().err().cloned();
                     if let Ok(d) = result {
-                        merge(&mut self.data, d);
+                        self.merge_data(d);
                     }
                     for e in &mut self.stack {
                         if e.loading.as_deref() == Some(path.as_str()) {
@@ -1849,7 +1921,7 @@ impl Session {
             match w.result {
                 Ok(_) => {
                     for d in w.refreshed {
-                        merge(&mut self.data, d);
+                        self.merge_data(d);
                     }
                 }
                 Err(e) => {
@@ -2679,10 +2751,22 @@ impl Session {
         Ok((self.scene.as_ref().expect("built"), &mut self.builder.text))
     }
 
+    /// Merges data in (counted in `merges`).
+    fn merge_data(&mut self, from: DataBundle) {
+        merge(&mut self.data, from);
+        self.merges += 1;
+    }
+
     /// Lays the frame out again next time (data, form or size changed).
     pub fn invalidate(&mut self) {
         for e in &mut self.stack {
             e.relay();
+        }
+        // A prepared open lays out again when the tap brings it in.
+        if let Some(p) = &mut self.prepared {
+            for e in &mut p.entries {
+                e.relay();
+            }
         }
         self.scene = None;
     }
@@ -2770,6 +2854,10 @@ impl Session {
         };
         // A tap ends the touch: nothing stays pressed.
         self.pressed = None;
+        let prepared = self.prepared.take();
+        let (focused, merges) = (self.focused.clone(), self.merges);
+        // Only opened a layout or screen: what is laid out stays.
+        let mut opened_only = false;
         let menu = node.node_type == "menu";
         if !menu {
             self.focused = None;
@@ -2787,14 +2875,37 @@ impl Session {
             Some(Tap::Intent { intent }) => match self.bind_form(&intent) {
                 Some(bound) => {
                     self.mark_follow(px, py);
-                    let mut out = Vec::new();
-                    self.run(&bound, &mut out);
-                    out
+                    match prepared.filter(|p| p.intent == bound) {
+                        // Opened while the finger was down: in it comes,
+                        // its slide starting now.
+                        Some(p) => {
+                            let now = Instant::now();
+                            for mut e in p.entries {
+                                e.opened = now;
+                                self.stack.push(e);
+                            }
+                            opened_only = !p.merged;
+                            p.effects
+                        }
+                        None => {
+                            let depth = self.stack.len();
+                            let mut out = Vec::new();
+                            self.run(&bound, &mut out);
+                            opened_only = bound["intent"] == "action.navigation.open"
+                                && self.stack.len() > depth
+                                && self.merges == merges;
+                            out
+                        }
+                    }
                 }
                 None => vec![Effect::Nothing],
             },
         };
-        self.invalidate();
+        if opened_only && self.focused == focused {
+            self.scene = None;
+        } else {
+            self.invalidate();
+        }
         Ok(Outcome {
             node: Some(node),
             effects,
@@ -3233,7 +3344,7 @@ impl Session {
                     .and_then(|l| l.device(&command, &app, &id))
                 {
                     Some(Ok(d)) => {
-                        merge(&mut self.data, d);
+                        self.merge_data(d);
                         if command == "pin_version" || command == "follow_latest" {
                             self.reload_layout(&app, out);
                         }
@@ -3673,7 +3784,7 @@ impl Session {
                 inbox.set(k, v);
             }
         }
-        merge(&mut self.data, page);
+        self.merge_data(page);
         out.push(Effect::Device {
             command: "load_older_notifications".into(),
         });
@@ -3718,7 +3829,7 @@ impl Session {
     ) {
         match answer {
             Some(Ok(d)) => {
-                merge(&mut self.data, d);
+                self.merge_data(d);
                 out.push(Effect::Device {
                     command: command.to_owned(),
                 });
@@ -3747,7 +3858,7 @@ impl Session {
         };
         match loaded {
             Ok((root, data)) => {
-                merge(&mut self.data, data);
+                self.merge_data(data);
                 let screens = match &root {
                     UiNode::Page { screens, .. } => screens.clone(),
                     _ => Vec::new(),
@@ -3826,7 +3937,7 @@ impl Session {
         let loaded = self.loader.as_ref()?.layout(id);
         match loaded {
             Ok((root, data)) => {
-                merge(&mut self.data, data);
+                self.merge_data(data);
                 self.layouts.insert(id.to_owned(), root.clone());
                 Some(root)
             }
@@ -3927,7 +4038,7 @@ impl Session {
         match result {
             Ok(d) => {
                 top.error = None;
-                merge(&mut self.data, d);
+                self.merge_data(d);
             }
             Err(error) => {
                 top.error = Some(error.clone());

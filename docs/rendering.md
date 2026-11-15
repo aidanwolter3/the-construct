@@ -112,7 +112,13 @@ sideways toward its edge, follows the finger and closes past a quarter of its si
 500 points per second, else settles back. In a window, layouts and screens slide in and out over
 280 ms (`FastOutSlowInEasing`); a frame that lays a layout out (a screen opening lays itself out on its first
 frame) holds the slides under way for as long as that took, so they go on from where it drew them rather than
-jumping ahead (`hold_slides`). Scrolling's physics are `scroll.rs` (decision `scroll-physics`), which reads no
+jumping ahead (`hold_slides`). In a window, a row held down whose tap opens a layout or screen
+(`action.navigation.open`) has it opened out of sight and laid out right after the pressed frame is drawn
+(`Session::prepare_press`, decision `open-while-pressed`): the finger rests 50–100 ms before it lifts, and nothing
+moves meanwhile, so when the tap comes the slide starts with nothing left to lay out. A release that isn't a tap,
+another press or new data drops it; a screen whose data loads in the background isn't prepared. A tap that only
+opened something (no data merged, no field left) lays nothing out again: what is under it stays as it was.
+Scrolling's physics are `scroll.rs` (decision `scroll-physics`), which reads no
 clock, so gestures replay in its unit tests: the release velocity is a least-squares fit over the last 100 ms (at
 least 3 samples; none after a 40 ms pause), counting moves that arrive in one burst as one sample, since Android
 delivers the moves queued during a frame together; a fling follows Android's `OverScroller` curve (Flutter's closed
@@ -378,8 +384,10 @@ On Android each presented frame also goes to the system as two hints (`pacing.rs
 `android-frame-pacing`): the surface asks for the display's highest refresh rate (`ANativeWindow_setFrameRate`,
 Android 11), so adaptive refresh doesn't drop a 120 Hz panel to 60 Hz mid-scroll, and the drawing thread reports
 each frame's work to a performance hint session whose target is one frame at that rate (`APerformanceHint`,
-Android 13), so the scheduler doesn't leave it on a slow core. Both are looked up at run time; logcat says once what
-was set (`adb logcat -s construct-render | grep pacing`).
+Android 13), so the scheduler doesn't leave it on a slow core. When a finger touches down, the session is told its
+work is about to grow (`APerformanceHint_notifyWorkloadIncrease`, Android 16): a touch is often a screen about to
+open, and the clocks the hints keep low while idle come up before its layout runs. All are looked up at run time;
+logcat says once what was set (`adb logcat -s construct-render | grep pacing`).
 
 The renderer's own cost per frame, without a phone: `tests/integration/bench.rs` scrolls a list shaped like the
 Construct Tasks layout and a task's long details through the session and `gpu::Renderer` (lavapipe in a cloud

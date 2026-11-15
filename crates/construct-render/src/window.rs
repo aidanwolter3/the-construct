@@ -725,7 +725,17 @@ impl App {
         stats.submit = r.submit;
         stats.layers = r.layers;
         let gesture = self.drag.is_some();
-        if let Some(summary) = self.perf.end(stats, Instant::now(), wants_next, gesture) {
+        let ended = Instant::now();
+        // A finger resting on a row that opens a screen: it is laid out now,
+        // while nothing moves, so the slide after the lift has nothing to lay
+        // out (counted as input, toward the next frame).
+        if self.drag.as_ref().is_some_and(|d| !d.dragging)
+            && self.controller.session.pressed().is_some()
+        {
+            self.controller.session.prepare_press();
+        }
+        self.perf.handled(ended.elapsed());
+        if let Some(summary) = self.perf.end(stats, ended, wants_next, gesture) {
             let line = summary.line(&self.controller.session.showing(), self.refresh_hz());
             log(&line);
         }
@@ -1065,6 +1075,10 @@ impl ApplicationHandler for App {
                 self.perf.input(now, matches!(t.phase, TouchPhase::Moved));
                 match t.phase {
                     TouchPhase::Started => {
+                        // A touch is often work on its way (a screen opening).
+                        if let Some(p) = &self.platform {
+                            p.input_started();
+                        }
                         // A finger on a moving fling stops it, and is no tap.
                         let secs = self.secs(now);
                         let mut caught = self.fling.take().is_some_and(|(f, _)| f.caught(secs));
