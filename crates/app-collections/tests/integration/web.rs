@@ -41,17 +41,26 @@ async fn page(State(site): State<Arc<Site>>) -> Response {
 
 async fn searx(
     State(site): State<Arc<Site>>,
+    headers: axum::http::HeaderMap,
     axum::extract::Query(q): axum::extract::Query<std::collections::HashMap<String, String>>,
 ) -> Response {
+    let host = headers
+        .get("host")
+        .and_then(|h| h.to_str().ok())
+        .unwrap_or("")
+        .to_owned();
     site.searches
         .lock()
         .unwrap()
         .push(q.get("q").cloned().unwrap_or_default());
     if q.get("categories").map(String::as_str) == Some("images") {
+        // A picture the shop has since removed, then one that loads.
         return json!({"results": [
+            {"title": "Oxford shirt (old)", "url": "https://www.shop.example/p/oxford-old",
+             "img_src": format!("http://{host}/img/gone.jpg")},
             {"title": "Oxford shirt", "url": "https://www.shop.example/p/oxford",
-             "img_src": "https://cdn.shop.example/oxford.jpg",
-             "thumbnail_src": "https://cdn.shop.example/oxford-small.jpg"},
+             "img_src": format!("http://{host}/img/oxford.jpg"),
+             "thumbnail_src": format!("http://{host}/img/oxford-small.jpg")},
         ]})
         .to_string()
         .into_response();
@@ -68,6 +77,14 @@ async fn serve(site: Arc<Site>) -> String {
     let app = Router::new()
         .route("/page", get(page))
         .route("/search", get(searx))
+        .route(
+            "/img/oxford.jpg",
+            get(|| async { ([("content-type", "image/jpeg")], vec![0xFFu8, 0xD8, 0xFF]) }),
+        )
+        .route(
+            "/img/gone.jpg",
+            get(|| async { (StatusCode::NOT_FOUND, "gone") }),
+        )
         .with_state(site);
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
@@ -574,7 +591,8 @@ async fn image_rows_are_filled_from_the_first_picture_with_no_model() {
     let out = fill::fill(&pod, "style", &f, false).await;
     assert!(matches!(out, Outcome::Filled { items: 1, .. }), "{out:?}");
     let r = rows(&pod, "style").await;
-    assert_eq!(r[0]["image_url"], "https://cdn.shop.example/oxford.jpg");
+    // The first picture is gone: the next one that loads fills the row.
+    assert_eq!(r[0]["image_url"], format!("{base}/img/oxford.jpg"));
     assert_eq!(r[0]["shop"], "shop.example");
     assert_eq!(
         site.searches.lock().unwrap().as_slice(),
@@ -589,4 +607,44 @@ async fn image_rows_are_filled_from_the_first_picture_with_no_model() {
     create(&pod, "style", json!({"title": "Chore coat"})).await;
     fill::fill(&pod, "style", &f, false).await;
     assert_eq!(site.searches.lock().unwrap().len(), 2);
+}
+
+#[tokio::test]
+async fn a_capped_fill_takes_the_rows_waiting_longest() {
+    let site = Arc::new(Site::default());
+    let base = serve(site.clone()).await;
+    let caps = Caps {
+        fill_urls: 1,
+        ..Caps::default()
+    };
+    let adapter = CollectionsAdapter::with_caps(caps)
+        .with_private_hosts(true)
+        .with_agent(None);
+    let pod: Pod = Arc::new(AppState::in_memory(vec![Arc::new(adapter)]));
+    pod.store()
+        .create_pinned_session(&session_hash("pod"))
+        .unwrap();
+    pod.store().create_session(&session_hash("phone")).unwrap();
+    plug_search(&pod, json!({"provider": "searxng", "base_url": base}));
+    ok(
+        &pod,
+        "define_collection",
+        json!({"name": "style", "fields": [
+        {"name": "title", "type": "text"},
+        {"name": "image_url", "type": "text", "optional": true}],
+        "fillers": [{"kind": "fetch", "query_field": "title", "extract": "images",
+                     "map": {"image_url": "image"}}]}),
+    )
+    .await;
+    settle(&pod, "style").await;
+    for t in ["Oxford shirt", "Chore coat", "Wool socks"] {
+        create(&pod, "style", json!({"title": t})).await;
+    }
+    let f = filler_of(&pod, "style").await;
+    let filled = |r: &[Value]| r.iter().filter(|x| !x["image_url"].is_null()).count();
+    // One row a fill, even forced: each fill takes a row not filled yet.
+    for n in 1..=3 {
+        fill::fill(&pod, "style", &f, true).await;
+        assert_eq!(filled(&rows(&pod, "style").await), n);
+    }
 }

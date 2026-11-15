@@ -230,10 +230,14 @@ A collection can keep itself current from the web (decision
   search never erases a row's values (`on_empty: "keep"`, the default; `"clear"` empties them). `refresh: "once"`
   fills a row when its URL or query is new or changed (the default for `query_field`); `"every"` (the default
   for `url_field`) fills on each run but skips the model when the page's text didn't change (decision
-  [`web-and-agent-modules`](decisions/web-and-agent-modules.md)).
+  [`web-and-agent-modules`](decisions/web-and-agent-modules.md)). A fill takes at most 20 rows; rows never filled from
+  their current URL or query go first, then the ones filled longest ago, so repeated fills (and refreshes) reach
+  every row.
 - **Image search:** a `query_field` filler with `extract: "images"` searches each row's text for pictures and fills
   `map` from the first image result: `{"image_url": "image"}`, where a field takes `image` (the picture's URL),
-  `thumbnail`, `page` (the page it is on), `title` or `source` (the site). No model, so no model budget; Brave's
+  `thumbnail`, `page` (the page it is on), `title` or `source` (the site); of the first five results, the first
+  whose picture loads (a `HEAD` through the host policy), since a search index keeps pictures a shop has since
+  removed. No model, so no model budget; Brave's
   image search or SearXNG's `images` category (DuckDuckGo has none, and the fill says so). It suits product photos
   from shops that block the pod's fetches. `refresh` and `on_empty` work as for other `query_field` fillers, and
   it can't be previewed (decision [`image-search`](decisions/image-search.md)).
