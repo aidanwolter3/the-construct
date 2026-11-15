@@ -1359,6 +1359,8 @@ pub struct LogCache(
 
 /// How long a run's log is served from [`LogCache`].
 pub const LOG_FRESH: Duration = Duration::from_secs(10);
+/// The most run logs [`LogCache`] holds (the oldest goes first).
+pub const LOG_CACHED: usize = 16;
 
 impl LogCache {
     fn get(&self, id: &str) -> Option<Value> {
@@ -1371,7 +1373,22 @@ impl LogCache {
     fn put(&self, id: &str, log: &Value) {
         let mut m = self.0.lock().unwrap_or_else(|e| e.into_inner());
         m.retain(|_, (at, _)| at.elapsed() < LOG_FRESH);
+        while m.len() >= LOG_CACHED && !m.contains_key(id) {
+            let Some(oldest) = m
+                .iter()
+                .min_by_key(|(_, (at, _))| *at)
+                .map(|(k, _)| k.clone())
+            else {
+                break;
+            };
+            m.remove(&oldest);
+        }
         m.insert(id.to_owned(), (std::time::Instant::now(), log.clone()));
+    }
+
+    #[cfg(test)]
+    fn len(&self) -> usize {
+        self.0.lock().unwrap_or_else(|e| e.into_inner()).len()
     }
 }
 
@@ -1430,4 +1447,21 @@ async fn timeline_route(
 /// The adapter as the server builds it.
 pub fn adapter() -> Arc<dyn AppAdapter> {
     Arc::new(AgentsAdapter::new(AgentsConfig::from_env()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_log_cache_holds_a_few_logs() {
+        let c = LogCache::default();
+        for i in 0..LOG_CACHED * 4 {
+            c.put(&format!("run_{i}"), &json!({"entries": []}));
+        }
+        assert_eq!(c.len(), LOG_CACHED);
+        // The newest stay.
+        assert!(c.get(&format!("run_{}", LOG_CACHED * 4 - 1)).is_some());
+        assert!(c.get("run_0").is_none());
+    }
 }

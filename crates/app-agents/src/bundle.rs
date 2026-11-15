@@ -609,6 +609,27 @@ pub fn timeline(
 /// The most log lines shown.
 pub const LOG_MAX: usize = 500;
 
+/// What the pod keeps of a run's log (up to 4 MiB from the runner): the
+/// first [`LOG_MAX`] entries, each only the time, kind and text it shows,
+/// so a log is kept and cached at a size the timeline needs.
+pub fn kept_log(log: &Value) -> Value {
+    let entries: Vec<Value> = log
+        .get("entries")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .take(LOG_MAX)
+        .map(|e| {
+            json!({
+                "ts": e.get("ts").and_then(Value::as_i64).unwrap_or(0),
+                "kind": text::clean(e.get("kind").and_then(Value::as_str).unwrap_or(""), 40),
+                "text": text::clean(e.get("text").and_then(Value::as_str).unwrap_or(""), 500),
+            })
+        })
+        .collect();
+    json!({ "entries": entries })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -928,5 +949,19 @@ mod tests {
             Some("1 min ago")
         );
         assert!(timeline(None, &[], "run_1", None, 0).queries["agents:timeline:run_1"].is_empty());
+    }
+
+    #[test]
+    fn a_run_log_is_kept_at_what_the_timeline_shows() {
+        let entry =
+            json!({"ts": 1, "kind": "tool", "text": "x".repeat(10_000), "extra": [1, 2, 3]});
+        let log = json!({"entries": vec![entry; LOG_MAX + 100], "other": "y".repeat(10_000)});
+        let kept = kept_log(&log);
+        let entries = kept["entries"].as_array().unwrap();
+        assert_eq!(entries.len(), LOG_MAX);
+        assert_eq!(entries[0]["text"].as_str().unwrap().chars().count(), 500);
+        assert!(entries[0].get("extra").is_none() && kept.get("other").is_none());
+        let b = timeline(None, &[], "run_1", Some(&kept), 0);
+        assert_eq!(b.queries["agents:timeline:run_1"].len(), LOG_MAX);
     }
 }

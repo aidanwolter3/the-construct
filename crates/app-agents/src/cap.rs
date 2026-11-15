@@ -447,7 +447,7 @@ pub async fn run_log(clients: &Clients, runner: &Runner, id: &str) -> Result<Val
     if !v.get("entries").is_some_and(Value::is_array) {
         return Err(CapError::Invalid("not a run log".into()));
     }
-    Ok(v)
+    Ok(crate::bundle::kept_log(&v))
 }
 
 /// `POST /v3/commands`: the runner's answer (`{run}` or `{sprite}`).

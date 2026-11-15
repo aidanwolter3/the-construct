@@ -69,7 +69,7 @@ is plugged and to which URL; `unplug_jack agent_runner` signs out, like `POST /v
   then queued, then ended ones waiting on their outcome, then the rest, each newest first; entity
   `agents://sessions/<run id>`), `sandboxes` (down first, then degraded or suspended, then awake), `checks`,
   `schedules` (the pod's own, below); and `/v1/agents/sessions/timeline?id=<run id>` (`agents:timeline:<id>`), the
-  run's log read from the runner when the screen opens (kept 10 s). `agents:status.summary_text` reads e.g. "1
+  run's log read from the runner when the screen opens (its first 500 lines, kept 10 s, at most 16 logs a pod). `agents:status.summary_text` reads e.g. "1
   working · 1 needs you · 2 queued · 1 waiting" or "Nothing running". A run's `status_text` is one of Queued,
   Starting, Working, Needs you, Parked, Stalled, Restarting, Stopping, Finishing, Waiting on CI, Waiting on review,
   Waiting on deploy, Done, Reviewed, Needs review, CI failed, Closed unmerged, Deploy failed, Blocked, Failed,
