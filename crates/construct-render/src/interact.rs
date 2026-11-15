@@ -2011,6 +2011,22 @@ impl Session {
         i
     }
 
+    /// A frame laid layouts out for `took` (a screen opening lays itself
+    /// out on its first frame): slides under way start that much later, so
+    /// the next frame goes on from where this one draws them instead of
+    /// jumping ahead by the layout's time.
+    fn hold_slides(&mut self, now: Instant, took: Duration) {
+        if !self.animate {
+            return;
+        }
+        for e in self.stack.iter_mut().skip(1) {
+            let stamp = e.closing.as_mut().unwrap_or(&mut e.opened);
+            if now.duration_since(*stamp) < SLIDE {
+                *stamp += took;
+            }
+        }
+    }
+
     /// How far entry `i` has slid in (0 to 1), or out when closing.
     fn progress(&self, i: usize, now: Instant) -> f32 {
         if !self.animate || i == 0 {
@@ -2182,7 +2198,7 @@ impl Session {
     pub fn scene(&mut self) -> Result<&Scene, RenderError> {
         self.poll();
         self.follow_clock();
-        let now = Instant::now();
+        let mut now = Instant::now();
         self.step_pagers(now);
         self.step_cards(now);
         if self.caret_on() != self.caret_shown {
@@ -2218,8 +2234,16 @@ impl Session {
         }
         visible.reverse();
         self.report_shown(&visible);
+        let laying = Instant::now();
+        let laid_before = self.work.laid_out;
         for &i in &visible {
             self.layout_entry(i)?;
+        }
+        if self.work.laid_out != laid_before {
+            let took = laying.elapsed();
+            self.hold_slides(now, took);
+            // This frame draws where the slides were before they were held.
+            now += took;
         }
         let (w, h) = (self.viewport.width, self.viewport.height);
         let top = self.top_index();
@@ -4183,6 +4207,31 @@ fn bind_form_text(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_layout_holds_the_slides_under_way() {
+        let root: UiNode =
+            serde_json::from_value(serde_json::json!({ "type": "core://Spacer" })).unwrap();
+        let mut s = Session::new("home", root.clone(), DataBundle::default(), Viewport::PHONE);
+        s.animate = true;
+        let now = Instant::now();
+        let took = Duration::from_millis(15);
+        let mut sliding = Entry::layout("a", root.clone(), BTreeMap::new());
+        sliding.opened = now - Duration::from_millis(40);
+        let mut settled = Entry::layout("b", root.clone(), BTreeMap::new());
+        settled.opened = now - Duration::from_secs(2);
+        let mut closing = Entry::layout("c", root, BTreeMap::new());
+        closing.closing = Some(now - Duration::from_millis(100));
+        s.stack.extend([sliding, settled, closing]);
+        // The slide at `now + took` is where it was at `now`.
+        let before = s.progress(1, now);
+        s.hold_slides(now, took);
+        assert_eq!(s.progress(1, now + took), before);
+        assert_eq!(s.stack[1].opened, now - Duration::from_millis(25));
+        // A slide that ended stays ended; one closing is held too.
+        assert_eq!(s.stack[2].opened, now - Duration::from_secs(2));
+        assert_eq!(s.stack[3].closing, Some(now - Duration::from_millis(85)));
+    }
 
     #[test]
     fn an_effects_name_is_its_tag_and_carries_no_value() {

@@ -809,9 +809,11 @@ impl App {
     }
 
     fn apply(&mut self, e: Event) {
+        let started = Instant::now();
         let tap = matches!(e, Event::Tap { .. } | Event::LongPress { .. });
         let out = self.controller.handle(e);
         self.after(out, tap);
+        self.perf.handled(started.elapsed());
     }
 
     /// Carries out what an interaction did (links, sign-in, the clipboard,

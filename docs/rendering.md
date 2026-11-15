@@ -110,7 +110,9 @@ Presented layouts are drawn as the Compose UI drew them: a sheet (85% of the hei
 tapped; a screen a sheet or panel opens stays inside it. A sheet dragged by its handle strip, or a panel dragged
 sideways toward its edge, follows the finger and closes past a quarter of its size or on a flick faster than
 500 points per second, else settles back. In a window, layouts and screens slide in and out over
-280 ms (`FastOutSlowInEasing`). Scrolling's physics are `scroll.rs` (decision `scroll-physics`), which reads no
+280 ms (`FastOutSlowInEasing`); a frame that lays a layout out (a screen opening lays itself out on its first
+frame) holds the slides under way for as long as that took, so they go on from where it drew them rather than
+jumping ahead (`hold_slides`). Scrolling's physics are `scroll.rs` (decision `scroll-physics`), which reads no
 clock, so gestures replay in its unit tests: the release velocity is a least-squares fit over the last 100 ms (at
 least 3 samples; none after a 40 ms pause), counting moves that arrive in one burst as one sample, since Android
 delivers the moves queued during a frame together; a fling follows Android's `OverScroller` curve (Flutter's closed
@@ -346,7 +348,7 @@ the pod, only the layout's id (and the page screen's) on top. On Android: `adb l
 ```
 perf agents/task: 96 frames in 1580 ms, 60 fps; display 8.3 ms (120 Hz); slow 31 (worst: interval 48.2 work 41.0 =
 scene 38.1 [layout 37.9 x1, data 1] + render 2.6 [prepare 0.4, submit 0.2, shape 1.9 x14, atlas 0.0 x0] + present
-0.3; acquire 6.1; moves 3); interval 16.6/25.0/48.2; work 1.9/9.8/41.0; ...; runs 47 quads 16 layers 2; moves/frame
+0.3; acquire 6.1; input 0.0; moves 3); interval 16.6/25.0/48.2; work 1.9/9.8/41.0; ...; runs 47 quads 16 layers 2; moves/frame
 0:3 1:60 2:28 3+:4; drag step 21.3 pt ±38%
 ```
 
@@ -366,6 +368,7 @@ An example, wrapped here (it is one line). Spreads are p50/p95/max in millisecon
 | acquire | Waiting for the surface's next image: vsync and the GPU's backlog |
 | present | Handing the image to the compositor |
 | latency | From the first touch a frame shows to the frame starting |
+| input | Handling the touches since the frame before, and what a tap did (opening a layout, a write), before the frame could start; only frames that had some |
 | moves/frame | During a drag, frames by how many touch moves arrived since the one before; uneven counts mean uneven steps |
 | drag step | During a drag, the scroll per frame: mean and variation (standard deviation over mean); a high variation judders |
 | runs, quads, layers | The most text runs (with icons and images), quads and layers (quads under text, then text) a frame drew |
