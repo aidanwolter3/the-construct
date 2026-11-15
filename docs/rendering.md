@@ -117,8 +117,8 @@ jumping ahead (`hold_slides`). In a window, a touch resting still for 30 ms wher
 (`Session::prepare_at`, decision `prepare-after-a-still-touch`): the finger rests 50–100 ms before it lifts, and
 nothing moves meanwhile, so when the tap comes the slide starts with nothing left to lay out. A scroll is usually
 moving within 30 ms, so it pays for nothing. A release that isn't a tap, another touch or new data drops it; a screen
-whose data loads in the background isn't prepared. A tap that only opened something (no data merged, no field left)
-lays nothing out again: what is under it stays as it was.
+whose data loads in the background isn't prepared. A tap or system Back that only opened or closed something (no data
+merged, no field left) lays nothing out again: what is under it stays as it was, so home comes back without a layout.
 Scrolling's physics are `scroll.rs` (decision `scroll-physics`), which reads no
 clock, so gestures replay in its unit tests: the release velocity is a least-squares fit over the last 100 ms (at
 least 3 samples; none after a 40 ms pause), counting moves that arrive in one burst as one sample, since Android
