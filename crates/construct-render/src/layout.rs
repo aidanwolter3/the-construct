@@ -4,8 +4,8 @@
 //! frame drawn here reads like the app's.
 
 use protocol::{
-    ActionIntent, Align, DataBundle, EmbedPresentation, EntityRecord, ImageShape, Orientation,
-    TextStyle, Tone, UiNode,
+    ActionIntent, Align, DataBundle, EmbedPresentation, EntityRecord, ImageShape, Justify,
+    Orientation, TextStyle, Tone, UiNode,
 };
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -202,6 +202,10 @@ struct B<'a> {
     color: Option<Rgba>,
     path: String,
     depth: usize,
+    /// Inside a scrolling view's content, where heights follow the content:
+    /// a child that fills height takes the room short content leaves and is
+    /// as tall as its content otherwise ([`placed`]).
+    in_scroll: bool,
 }
 
 impl<'a> B<'a> {
@@ -472,6 +476,7 @@ impl SceneBuilder {
             color: None,
             path: "root".into(),
             depth: 0,
+            in_scroll: false,
         };
         let content = b.node(input.root, &state);
         let [it, ir, ib, il] = input.insets.map(|v| length(v.max(0.0)));
@@ -628,9 +633,12 @@ fn fills_height(n: &UiNode) -> bool {
         | UiNode::Gesture { content, .. }
         | UiNode::SwipeCard { content, .. }
         | UiNode::Conditional { content, .. } => fills_height(content),
-        UiNode::Column { children, .. } | UiNode::Row { children, .. } => {
-            children.iter().any(fills_height)
-        }
+        // A column placing its children down it (`justify`) takes the
+        // height it is given.
+        UiNode::Column {
+            justify, children, ..
+        } => *justify != Justify::Start || children.iter().any(fills_height),
+        UiNode::Row { children, .. } => children.iter().any(fills_height),
         _ => false,
     }
 }
@@ -656,8 +664,9 @@ fn row_flexible(n: &UiNode) -> bool {
     }
 }
 
-/// `style` adjusted for where the node sits: its parent's axis.
-fn placed(mut style: Style, n: &UiNode, axis: Axis) -> Style {
+/// `style` adjusted for where the node sits: its parent's axis, and whether
+/// that is inside a scrolling view's content.
+fn placed(mut style: Style, n: &UiNode, axis: Axis, in_scroll: bool) -> Style {
     let wide = fills_width(n);
     let tall = fills_height(n);
     match axis {
@@ -666,7 +675,11 @@ fn placed(mut style: Style, n: &UiNode, axis: Axis) -> Style {
             if wide {
                 style.align_self = Some(AlignSelf::STRETCH);
             }
-            if tall {
+            if tall && in_scroll {
+                // No height to share: at least the room left, else its
+                // content's (an inline layout, a filling box).
+                style.flex_grow = 1.0;
+            } else if tall {
                 style.flex_grow = 1.0;
                 style.flex_shrink = 1.0;
                 style.flex_basis = length(0.0);
@@ -1018,7 +1031,9 @@ impl<'i> Build<'_, 'i> {
         let out = self.build_node(n, b)?;
         let node = self.elems[out].node;
         let style = self.tree.style(node).cloned().unwrap_or_default();
-        let _ = self.tree.set_style(node, placed(style, n, b.axis));
+        let _ = self
+            .tree
+            .set_style(node, placed(style, n, b.axis, b.in_scroll));
         Some(out)
     }
 
@@ -1070,7 +1085,11 @@ impl<'i> Build<'_, 'i> {
                 content,
                 follow_end,
             } => {
-                let kid = self.node(content, &b.child(0, Axis::Column));
+                let cb = B {
+                    in_scroll: true,
+                    ..b.child(0, Axis::Column)
+                };
+                let kid = self.node(content, &cb);
                 let mut style = column(0, pad(0, 0), AlignItems::FLEX_START);
                 style.overflow = taffy::Point {
                     x: taffy::Overflow::Hidden,
@@ -1096,8 +1115,10 @@ impl<'i> Build<'_, 'i> {
                 padding_h_dp,
                 padding_v_dp,
                 align,
+                justify,
             } => {
                 let kids = self.children(children, b, Axis::Column);
+                self.justify_children(&kids, *justify, Axis::Column);
                 self.push(
                     column(
                         *spacing_dp,
@@ -1116,8 +1137,10 @@ impl<'i> Build<'_, 'i> {
                 padding_h_dp,
                 padding_v_dp,
                 align,
+                justify,
             } => {
                 let kids = self.children(children, b, Axis::Row);
+                self.justify_children(&kids, *justify, Axis::Row);
                 let a = align.map_or(AlignItems::CENTER, align_items);
                 self.push(
                     row(*spacing_dp, pad(*padding_h_dp, *padding_v_dp), a),
@@ -1497,6 +1520,7 @@ impl<'i> Build<'_, 'i> {
                 fill,
             } => {
                 let mut inner = b.child(0, Axis::Column);
+                inner.in_scroll &= height_dp.is_none();
                 if let Some(c) = content_color.as_deref().and_then(|c| ctx.color(c)) {
                     inner.color = Some(c);
                 }
@@ -2353,6 +2377,7 @@ impl<'i> Build<'_, 'i> {
                     Some(l) => {
                         let lb = B {
                             depth: b.depth + 1,
+                            in_scroll: b.in_scroll && height_dp.is_none(),
                             ..b.child(format!("layout:{id}"), Axis::Column)
                         };
                         self.node(l, &lb)
@@ -2508,6 +2533,41 @@ impl<'i> Build<'_, 'i> {
             }
         };
         Some(out)
+    }
+
+    /// Places a row's or column's children along its axis (`justify`) with
+    /// automatic margins, which take the room left and are nothing when
+    /// there is none: children that don't fit start at the padding rather
+    /// than hang off both ends, as a centred flexbox's would.
+    fn justify_children(&mut self, kids: &[usize], justify: Justify, axis: Axis) {
+        let (Some(&first), Some(&last)) = (kids.first(), kids.last()) else {
+            return;
+        };
+        let mut auto = |k: usize, before: bool| {
+            let node = self.elems[k].node;
+            let mut s = self.tree.style(node).cloned().unwrap_or_default();
+            let m = match (axis, before) {
+                (Axis::Row, true) => &mut s.margin.left,
+                (Axis::Row, false) => &mut s.margin.right,
+                (Axis::Column, true) => &mut s.margin.top,
+                (Axis::Column, false) => &mut s.margin.bottom,
+            };
+            *m = LengthPercentageAuto::auto();
+            let _ = self.tree.set_style(node, s);
+        };
+        match justify {
+            Justify::Start => {}
+            Justify::Center => {
+                auto(first, true);
+                auto(last, false);
+            }
+            Justify::End => auto(first, true),
+            Justify::SpaceBetween => kids[1..].iter().for_each(|&k| auto(k, true)),
+            Justify::SpaceEvenly => {
+                kids.iter().for_each(|&k| auto(k, true));
+                auto(last, false);
+            }
+        }
     }
 
     fn children<'c>(&mut self, children: &'c [UiNode], b: &B<'c>, axis: Axis) -> Vec<usize> {

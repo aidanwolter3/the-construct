@@ -1515,6 +1515,14 @@ fn snippets() -> Value {
                     "background": "${local://theme#card}", "border_color": "${local://theme#card_border}",
                     "content": {"type": "core://Text", "style": "Headline", "value_expr": "$item.title"}}}
         },
+        "centred_tiles": {
+            "doc": "fixed-size tiles centred in a row on any screen width (justify: center, no spacers; space_evenly spreads them); tiles too wide for the row start at its padding",
+            "node": {"type": "core://Row", "justify": "center", "spacing_dp": 8, "padding_h_dp": 16, "children": [
+                {"type": "core://Box", "width_dp": 80, "height_dp": 80, "corner_dp": 14, "align": "Center",
+                    "background": "${local://theme#card}", "content": {"type": "core://Text", "style": "Caption", "value_expr": "One"}},
+                {"type": "core://Box", "width_dp": 80, "height_dp": 80, "corner_dp": 14, "align": "Center",
+                    "background": "${local://theme#card}", "content": {"type": "core://Text", "style": "Caption", "value_expr": "Two"}}]}
+        },
         "card_of_layout": {
             "doc": "another layout in a card-sized region of the page",
             "node": {"type": "core://Box", "corner_dp": 12, "background": "${local://theme#card}", "border_color": "${local://theme#card_border}",

@@ -293,9 +293,14 @@ pub enum UiNode {
         /// bottom (default: centred).
         #[serde(default, skip_serializing_if = "Option::is_none")]
         align: Option<Align>,
+        /// Feature `justify`: where the children sit along the row when
+        /// they leave room ([`Justify`]).
+        #[serde(default, skip_serializing_if = "Justify::is_start")]
+        justify: Justify,
     },
     /// Children stacked, full width. `align` (schema 6, D44) places children
-    /// narrower than the column (default `Start`).
+    /// narrower than the column (default `Start`); `justify` (feature
+    /// `justify`) places them down a column taller than they are.
     #[serde(rename = "core://Column")]
     Column {
         children: Vec<UiNode>,
@@ -307,6 +312,8 @@ pub enum UiNode {
         padding_v_dp: u16,
         #[serde(default, skip_serializing_if = "is_start")]
         align: Align,
+        #[serde(default, skip_serializing_if = "Justify::is_start")]
+        justify: Justify,
     },
     /// Empty space: `size_dp` along the parent's axis, or (no size, in a
     /// `core://Row`) all the remaining width.
@@ -1040,6 +1047,30 @@ pub enum Align {
 
 fn is_start(a: &Align) -> bool {
     *a == Align::Start
+}
+
+/// Where `core://Row` and `core://Column` put their children along their
+/// own axis when the children leave room (feature `justify`). When they
+/// don't fit, every choice starts them at the padding, so nothing hangs off
+/// the start of the screen.
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum Justify {
+    #[default]
+    Start,
+    Center,
+    End,
+    /// The first child at the start, the last at the end, the room
+    /// between the others.
+    SpaceBetween,
+    /// Equal room before, between and after the children.
+    SpaceEvenly,
+}
+
+impl Justify {
+    fn is_start(&self) -> bool {
+        *self == Justify::Start
+    }
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Default)]
