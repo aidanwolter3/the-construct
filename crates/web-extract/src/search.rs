@@ -481,6 +481,43 @@ pub async fn search_images(
     Ok(results.into_iter().take(count).collect())
 }
 
+/// How long [`image_loads`] waits for an answer.
+pub const IMAGE_CHECK_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// Whether `url` serves an image now (decision `image-search`): a `HEAD`
+/// through the host policy, or a `GET` of its first byte where the host
+/// doesn't answer `HEAD`. A search index keeps pictures a shop has since
+/// removed; a row shouldn't get one.
+pub async fn image_loads(hosts: &crate::hosts::Hosts, client: &reqwest::Client, url: &str) -> bool {
+    let is_image = |r: &reqwest::Response| {
+        r.status().is_success()
+            && r.headers()
+                .get(reqwest::header::CONTENT_TYPE)
+                .and_then(|v| v.to_str().ok())
+                .is_some_and(|t| t.trim().to_ascii_lowercase().starts_with("image/"))
+    };
+    if hosts.admit(url).await.is_err() {
+        return false;
+    }
+    let head = client.head(url).timeout(IMAGE_CHECK_TIMEOUT).send().await;
+    match head {
+        Ok(r) if is_image(&r) => return true,
+        Ok(r) if !matches!(r.status().as_u16(), 403 | 405 | 501) => return false,
+        Err(_) => return false,
+        Ok(_) => {}
+    }
+    if hosts.admit(url).await.is_err() {
+        return false;
+    }
+    client
+        .get(url)
+        .header(reqwest::header::RANGE, "bytes=0-0")
+        .timeout(IMAGE_CHECK_TIMEOUT)
+        .send()
+        .await
+        .is_ok_and(|r| is_image(&r))
+}
+
 /// Results as numbered text for a prompt.
 pub fn results_text(results: &[SearchResult]) -> String {
     results
