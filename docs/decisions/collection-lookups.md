@@ -1,6 +1,8 @@
 # Computed fields can look up rules in another collection, and try kinds in order
 
-Its "Dependencies" section is superseded by [live-computed-fields](live-computed-fields.md).
+Its "Dependencies" section is superseded by [live-computed-fields](live-computed-fields.md). Amended by
+[model-field-batches-and-retries](model-field-batches-and-retries.md): a learning lookup's collection is made when it
+doesn't exist yet.
 
 Date: 2026-11-03. Related: [collection-computed-fields](collection-computed-fields.md) (amended here),
 [composable-actions](composable-actions.md), [collections](collections.md), issue #70.

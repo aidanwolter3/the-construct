@@ -137,8 +137,11 @@ never writes code: it declares typed fields (`text`, `number`, `bool`, `date`, `
 - **Computed fields.** A field's `compute` is one kind or a list tried in order: `expr` (a small expression over
   the row; `entity.id` reads the row's own id), `lookup` (the value of the best-matching row of another
   collection, kept as editable rules: the longest key wins, then the oldest row; deleted rows never match), `count`
-  and `model` (a model's answer, in the background). With `[lookup (learn: true), model]` the model is asked only
-  when no rule matches, and its answers and hand edits become rules. `{kind: "count", from, collection, key,
+  and `model` (a model's answer, in the background: the inputs waiting for a field go up to 50 to a call, and one
+  whose answer fails is asked again hourly with backoff, at most 5 times; `describe_collection` counts what is
+  retrying or gave up, and `recompute_field` starts again). With `[lookup (learn: true), model]` the model is asked
+  only when no rule matches, and its answers and hand edits become rules; a learning lookup naming a collection that
+  doesn't exist makes it (its `key` text, its `value` of the field's type). `{kind: "count", from, collection, key,
   where?: [{field, equals}]}` (a number field's only kind) is the number of live rows of `collection` whose `key`
   equals this row's `from` (ignoring case and spacing) and that match every condition (the field's value as text,
   as a layout `where` compares: `"true"`, `"false"`, a number or text). Lookups and counts are **live**: when rows

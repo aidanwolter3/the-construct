@@ -8,7 +8,7 @@
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use app_collections::compute::{FieldModel, Question};
+use app_collections::compute::{Batch, FieldModel, Question};
 use app_collections::{Caps, CollectionsAdapter};
 use axum::{
     body::Body,
@@ -536,4 +536,246 @@ async fn an_expr_field_is_computed_in_the_write_and_again_when_its_sources_chang
     )
     .await;
     assert_eq!(labels(&pod).await[2], ("Bread".into(), "Bread".into()));
+}
+
+/// Answers in batches (issue #230): records each batch's size and each
+/// input asked about alone. A batch leaves out any input in `skip`; asked
+/// alone, an input in `fail_once` fails the first time.
+#[derive(Debug, Default)]
+struct Batcher {
+    batches: Mutex<Vec<usize>>,
+    alone: Mutex<Vec<String>>,
+    skip: Vec<String>,
+    fail_once: Mutex<Vec<String>>,
+}
+
+fn section_for(text: &str) -> &'static str {
+    if text.to_lowercase().contains("bread") {
+        "Bakery"
+    } else {
+        "Produce"
+    }
+}
+
+impl FieldModel for Batcher {
+    fn answer<'a>(&'a self, q: Question<'a>) -> BoxFuture<'a, Option<String>> {
+        Box::pin(async move {
+            let text = q.inputs[0].1.clone();
+            self.alone.lock().unwrap().push(text.clone());
+            let mut fails = self.fail_once.lock().unwrap();
+            if let Some(i) = fails.iter().position(|t| *t == text) {
+                fails.remove(i);
+                return None;
+            }
+            Some(section_for(&text).to_owned())
+        })
+    }
+
+    fn answer_batch<'a>(&'a self, b: Batch<'a>) -> BoxFuture<'a, Option<Vec<Option<String>>>> {
+        Box::pin(async move {
+            assert_eq!(b.q.prompt, PROMPT);
+            assert_eq!(b.q.inputs[0].0, "name");
+            self.batches.lock().unwrap().push(b.items.len());
+            Some(
+                b.items
+                    .iter()
+                    .map(|v| (!self.skip.contains(&v[0])).then(|| section_for(&v[0]).to_owned()))
+                    .collect(),
+            )
+        })
+    }
+}
+
+fn batch_pod(model: Arc<Batcher>) -> Pod {
+    let adapter = CollectionsAdapter::with_caps(Caps::default())
+        .with_model(Some(model as Arc<dyn FieldModel>));
+    let pod: Pod = Arc::new(AppState::in_memory(vec![Arc::new(adapter)]));
+    pod.store()
+        .create_pinned_session(&session_hash("pod"))
+        .unwrap();
+    pod.store().create_session(&session_hash("phone")).unwrap();
+    pod
+}
+
+/// Wait until no row of groceries reads `section` "Other" (the default).
+async fn wait_all_answered(pod: &Pod) -> Vec<(String, String, bool)> {
+    for _ in 0..300 {
+        let r = rows(pod).await;
+        if r.iter().all(|x| x.1 != "Other") {
+            return r;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    panic!("rows never all answered: {:?}", rows(pod).await);
+}
+
+#[tokio::test]
+async fn a_new_model_field_is_answered_in_batches() {
+    let model = Arc::new(Batcher::default());
+    let pod = batch_pod(model.clone());
+    define_groceries(&pod).await;
+    let n = app_collections::compute::BATCH * 2 + 20;
+    for i in 0..n {
+        add(&pod, json!({"name": format!("Item {i}")})).await;
+    }
+    add(&pod, json!({"name": "Rye bread"})).await;
+    let v = ok(
+        &pod,
+        "apply_change",
+        json!({"collection": "groceries", "changes": section_change()}),
+    )
+    .await;
+    assert_eq!(v["computing_rows"], n + 1, "{v}");
+    let r = wait_all_answered(&pod).await;
+    assert_eq!(section_of(&r, "Rye bread"), "Bakery");
+    assert_eq!(section_of(&r, "Item 7"), "Produce");
+    // ⌈(n + 1) / BATCH⌉ calls, none alone.
+    let batch = app_collections::compute::BATCH;
+    assert_eq!(
+        model.batches.lock().unwrap().clone(),
+        vec![batch, batch, n + 1 - 2 * batch]
+    );
+    assert!(model.alone.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn a_failed_answer_is_asked_again_until_it_comes() {
+    let model = Arc::new(Batcher {
+        skip: vec!["Gnocchi".into()],
+        fail_once: Mutex::new(vec!["Gnocchi".into()]),
+        ..Batcher::default()
+    });
+    let pod = batch_pod(model.clone());
+    define_groceries(&pod).await;
+    for name in ["Gnocchi", "Apples", "Bread"] {
+        add(&pod, json!({"name": name})).await;
+    }
+    ok(
+        &pod,
+        "apply_change",
+        json!({"collection": "groceries", "changes": section_change()}),
+    )
+    .await;
+    wait_section(&pod, "Bread", "Bakery").await;
+    // The batch missed Gnocchi; asked alone, it failed: the row keeps its
+    // default, counted as retrying.
+    for _ in 0..200 {
+        if model.alone.lock().unwrap().len() == 1 {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    assert_eq!(model.alone.lock().unwrap().clone(), vec!["Gnocchi"]);
+    assert_eq!(section_of(&rows(&pod).await, "Gnocchi"), "Other");
+    let d = ok(
+        &pod,
+        "describe_collection",
+        json!({"collection": "groceries"}),
+    )
+    .await;
+    assert_eq!(
+        d["computed_answers"][0]["failed"],
+        json!({"retrying": 1, "gave_up": 0}),
+        "{d}"
+    );
+
+    // Not due yet: nothing is asked.
+    let now = pod_core::util::now_secs();
+    app_collections::compute::retry_failed(&pod, now).await;
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    assert_eq!(model.alone.lock().unwrap().len(), 1);
+
+    // Due (the hourly sweep, after the backoff): asked again, answered.
+    app_collections::compute::retry_failed(&pod, now + 3 * 3600).await;
+    wait_section(&pod, "Gnocchi", "Produce").await;
+    assert_eq!(model.alone.lock().unwrap().len(), 2);
+    let d = ok(
+        &pod,
+        "describe_collection",
+        json!({"collection": "groceries"}),
+    )
+    .await;
+    assert!(d["computed_answers"][0].get("failed").is_none(), "{d}");
+}
+
+#[tokio::test]
+async fn a_learning_lookup_makes_its_rules_collection() {
+    let model = Arc::new(Batcher::default());
+    let pod = batch_pod(model.clone());
+    define_groceries(&pod).await;
+    let v = ok(
+        &pod,
+        "apply_change",
+        json!({"collection": "groceries", "changes": [
+            {"op": "add_field", "name": "section", "type": "choice", "options": SECTIONS,
+             "default": "Other", "compute": [
+                {"kind": "lookup", "from": "name", "collection": "section_rules", "key": "pattern",
+                 "value": "section", "match": "contains", "learn": true},
+                {"kind": "model", "from": "name", "prompt": PROMPT}]}]}),
+    )
+    .await;
+    assert_eq!(v["created_rules"], json!(["section_rules"]), "{v}");
+    let d = ok(
+        &pod,
+        "describe_collection",
+        json!({"collection": "section_rules"}),
+    )
+    .await;
+    let fields = &d["definition"]["fields"];
+    assert_eq!(fields[0]["name"], "pattern", "{d}");
+    assert_eq!(fields[1]["name"], "section", "{d}");
+    assert_eq!(fields[1]["options"], json!(SECTIONS), "{d}");
+
+    // The model's answer becomes a visible, editable rule.
+    add(&pod, json!({"name": "Sourdough bread"})).await;
+    wait_section(&pod, "Sourdough bread", "Bakery").await;
+    let (_, b) = call(
+        &pod,
+        "GET",
+        "/v1/collections/section_rules/rows",
+        "phone",
+        None,
+    )
+    .await;
+    let rules: Vec<(String, String)> = b["entities"]
+        .as_object()
+        .unwrap()
+        .values()
+        .map(|e| {
+            (
+                e["pattern"].as_str().unwrap_or("").to_owned(),
+                e["section"].as_str().unwrap_or("").to_owned(),
+            )
+        })
+        .collect();
+    assert_eq!(rules, vec![("sourdough bread".into(), "Bakery".into())]);
+
+    // A rule written up front answers without the model.
+    let (status, _) = call(
+        &pod,
+        "POST",
+        "/v1/collections/section_rules/create",
+        "phone",
+        Some(json!({"pattern": "milk", "section": "Dairy"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let asked = model.alone.lock().unwrap().len();
+    add(&pod, json!({"name": "Oat milk"})).await;
+    assert_eq!(section_of(&rows(&pod).await, "Oat milk"), "Dairy");
+    assert_eq!(model.alone.lock().unwrap().len(), asked);
+
+    // Naming a rules collection that exists uses it as it is.
+    let v = ok(
+        &pod,
+        "apply_change",
+        json!({"collection": "groceries", "changes": [{"op": "update_field", "field": "section",
+            "compute": [
+                {"kind": "lookup", "from": "name", "collection": "section_rules", "key": "pattern",
+                 "value": "section", "match": "contains", "learn": true},
+                {"kind": "model", "from": "name", "prompt": PROMPT}]}]}),
+    )
+    .await;
+    assert_eq!(v["created_rules"], json!([]), "{v}");
 }
