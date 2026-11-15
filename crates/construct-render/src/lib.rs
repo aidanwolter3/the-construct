@@ -51,6 +51,8 @@ mod android;
 #[cfg(all(target_os = "android", feature = "window"))]
 mod bridge;
 #[cfg(all(target_os = "android", feature = "window"))]
+mod pacing;
+#[cfg(all(target_os = "android", feature = "window"))]
 mod picked;
 
 pub use interact::{Effect, Outcome, Session, Target};

@@ -49,9 +49,14 @@ pub struct Frame {
     /// Images and icons rasterized into the atlas, and their bytes.
     pub rasterized: u16,
     pub raster_bytes: u32,
-    /// Text runs, icons and images, and quads drawn.
+    /// Of `render`, glyphon's prepare of the text (glyph vertices and
+    /// atlas lookups), and encoding and submitting the frame to the GPU.
+    pub prepare: Duration,
+    pub submit: Duration,
+    /// Text runs, icons and images, quads and layers drawn.
     pub runs: u32,
     pub quads: u32,
+    pub layers: u16,
     /// Waiting for the surface's next image (vsync and the GPU).
     pub acquire: Duration,
     /// Presenting it.
@@ -240,6 +245,8 @@ pub struct Summary {
     pub work: Option<Spread>,
     pub scene: Option<Spread>,
     pub render: Option<Spread>,
+    pub prepare: Option<Spread>,
+    pub submit: Option<Spread>,
     pub acquire: Option<Spread>,
     pub present: Option<Spread>,
     pub latency: Option<Spread>,
@@ -254,6 +261,7 @@ pub struct Summary {
     pub raster_ms: f64,
     pub runs_max: u32,
     pub quads_max: u32,
+    pub layers_max: u16,
     /// Frames by touch moves since the frame before: 0, 1, 2, 3 or more
     /// (frames during a drag only).
     pub moves: [u32; 4],
@@ -304,6 +312,8 @@ impl Summary {
             work: each(|f| f.work()),
             scene: each(|f| f.scene),
             render: each(|f| f.render),
+            prepare: each(|f| f.prepare),
+            submit: each(|f| f.submit),
             acquire: each(|f| f.acquire),
             present: each(|f| f.present),
             latency: Spread::of(frames.iter().filter_map(|f| f.latency).map(ms).collect()),
@@ -318,6 +328,7 @@ impl Summary {
             raster_ms: frames.iter().map(|f| ms(f.raster)).sum(),
             runs_max: frames.iter().map(|f| f.runs).max().unwrap_or(0),
             quads_max: frames.iter().map(|f| f.quads).max().unwrap_or(0),
+            layers_max: frames.iter().map(|f| f.layers).max().unwrap_or(0),
             moves,
             drag_step,
             quiet_before: quiet,
@@ -395,7 +406,7 @@ impl Summary {
         if let Some(w) = &self.worst {
             let _ = write!(
                 s,
-                " (worst: interval {} work {:.1} = scene {:.1} [layout {:.1} x{}, data {}] + render {:.1} [shape {:.1} x{}, atlas {:.1} x{}] + present {:.1}; acquire {:.1}; moves {})",
+                " (worst: interval {} work {:.1} = scene {:.1} [layout {:.1} x{}, data {}] + render {:.1} [prepare {:.1}, submit {:.1}, shape {:.1} x{}, atlas {:.1} x{}] + present {:.1}; acquire {:.1}; moves {})",
                 w.interval
                     .map_or("-".to_owned(), |i| format!("{:.1}", ms(i))),
                 ms(w.work()),
@@ -404,6 +415,8 @@ impl Summary {
                 w.laid_out,
                 w.data_changes,
                 ms(w.render),
+                ms(w.prepare),
+                ms(w.submit),
                 ms(w.shape),
                 w.shaped,
                 ms(w.raster),
@@ -417,12 +430,14 @@ impl Summary {
         spread(&mut s, "work", &self.work);
         spread(&mut s, "scene", &self.scene);
         spread(&mut s, "render", &self.render);
+        spread(&mut s, "prepare", &self.prepare);
+        spread(&mut s, "submit", &self.submit);
         spread(&mut s, "acquire", &self.acquire);
         spread(&mut s, "present", &self.present);
         spread(&mut s, "latency", &self.latency);
         let _ = write!(
             s,
-            "; layouts {} ({:.1} ms, max {:.1}); data {}; shaped {} ({:.1} ms); atlas {} ({} KB, {:.1} ms); runs {} quads {}",
+            "; layouts {} ({:.1} ms, max {:.1}); data {}; shaped {} ({:.1} ms); atlas {} ({} KB, {:.1} ms); runs {} quads {} layers {}",
             self.laid_out,
             self.layout_ms,
             self.layout_max_ms,
@@ -433,7 +448,8 @@ impl Summary {
             self.raster_bytes / 1024,
             self.raster_ms,
             self.runs_max,
-            self.quads_max
+            self.quads_max,
+            self.layers_max
         );
         if self.moves.iter().any(|m| *m > 0) {
             let m = self.moves;
@@ -488,6 +504,31 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn the_line_splits_render_into_prepare_and_submit() {
+        let t = Instant::now();
+        let mut r = Recorder::default();
+        r.input(t, false);
+        let mut f = r.begin(at(t, 1), false);
+        f.render = Duration::from_millis(3);
+        f.prepare = Duration::from_millis(1);
+        f.submit = Duration::from_millis(2);
+        f.layers = 2;
+        let line = r
+            .end(f, at(t, 5), false, false)
+            .unwrap()
+            .line("tasks", Some(120.0));
+        assert!(
+            line.contains("render 3.0 [prepare 1.0, submit 2.0, shape"),
+            "{line}"
+        );
+        assert!(
+            line.contains("; prepare 1.0/1.0/1.0; submit 2.0/2.0/2.0"),
+            "{line}"
+        );
+        assert!(line.contains("runs 0 quads 0 layers 2"), "{line}");
     }
 
     #[test]
