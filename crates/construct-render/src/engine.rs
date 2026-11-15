@@ -367,11 +367,30 @@ impl PodEngine {
             shared,
             signs_in: sign_in.is_some(),
         };
-        // The observer holds the engine weakly: the engine owns it.
+        // The observer holds the engine weakly: the engine owns it. The
+        // engine calls it on the thread that changed its state, often the
+        // UI thread (a tap's write, a layout opening), so snapshots go to a
+        // thread of their own, the newest first, and parsing them never
+        // holds a frame up. It ends when the engine drops the sender.
         let weak = Arc::downgrade(&pod.engine);
         let (shared, base) = (pod.shared.clone(), pod.base.clone());
+        let (tx, rx) = std::sync::mpsc::channel::<StateSnapshot>();
+        let spawned = std::thread::Builder::new()
+            .name("construct-observe".into())
+            .spawn(move || {
+                while let Ok(mut snap) = rx.recv() {
+                    // Snapshots are whole: only the newest counts.
+                    while let Ok(newer) = rx.try_recv() {
+                        snap = newer;
+                    }
+                    observe(&weak, &shared, &base, &snap);
+                }
+            });
+        if let Err(e) = spawned {
+            eprintln!("construct-render: no observer thread: {e}");
+        }
         pod.engine.subscribe(move |snap| {
-            observe(&weak, &shared, &base, &snap);
+            let _ = tx.send(snap);
         });
         pod
     }
@@ -789,48 +808,39 @@ fn device_data(engine: &ConstructEngine, shared: &Shared) -> DataBundle {
 impl Loader for PodEngine {
     /// The engine's copy at once when it has one (its fetch goes on in the
     /// background and comes in through [`Loader::changes`]); else waits for
-    /// the pod. Only the layout and the device data: the session already
-    /// has the engine's entities (from its first snapshot and every change
-    /// since), and parsing the whole cache again on a tap cost a phone tens
-    /// of milliseconds before the screen could open.
+    /// the pod. Only the layout: the session already has the engine's
+    /// entities and device data (from its first snapshot and every change
+    /// since). Snapshots and the whole cache parsed again on the tap cost a
+    /// phone about 50 ms before the screen could open.
     fn layout(&self, id: &str) -> Result<(UiNode, DataBundle), String> {
-        let key = format!("{}{id}", client_core::LAYOUT_LOAD_PREFIX);
         if id != HOME {
             self.engine.open_layout(id);
         }
-        let got = self.wait_for(LOAD_WAIT, |snap| {
-            if id == HOME {
-                return serde_json::from_str::<UiNode>(&snap.workspace_json)
-                    .ok()
-                    .map(|r| Ok((r, DataBundle::default())));
+        // The layout alone (`layout_now`), not a snapshot: a snapshot
+        // serializes the engine's whole state, and this runs on the tap.
+        let until = Instant::now() + LOAD_WAIT;
+        let got = loop {
+            let now = self.engine.layout_now(id);
+            if let Some(root) = now.root {
+                break Ok(root);
             }
-            let layouts: Value = serde_json::from_str(&snap.layouts_json).unwrap_or_default();
-            let l = &layouts[id];
-            // Not loaded yet (`null`, which would read as an unknown node).
-            if !l["workspace"].is_null()
-                && let Ok(root) = serde_json::from_value::<UiNode>(l["workspace"].clone())
-            {
-                return Some(Ok((root, DataBundle::default())));
+            if now.gone {
+                break Err(client_core::LOAD_NOT_FOUND.to_owned());
             }
-            if l["gone"] == true {
-                return Some(Err(client_core::LOAD_NOT_FOUND.to_owned()));
+            if let Some(e) = now.error {
+                break Err(e);
             }
-            let loads: Value = serde_json::from_str(&snap.loads_json).unwrap_or_default();
-            (loads[&key]["state"] == "error").then(|| {
-                Err(loads[&key]["error"]
-                    .as_str()
-                    .unwrap_or(client_core::LOAD_OFFLINE)
-                    .to_owned())
-            })
-        });
-        let (mut root, mut data) =
-            got.unwrap_or_else(|| Err(client_core::LOAD_OFFLINE.to_owned()))?;
+            if Instant::now() >= until {
+                break Err(client_core::LOAD_OFFLINE.to_owned());
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        };
+        let mut root = got?;
         if let Some(pinned) = self.shared.pinned(id) {
             root = pinned;
         }
         self.needs(id, &root);
-        merge(&mut data, self.device_now(&self.engine.snapshot()));
-        Ok((root, data))
+        Ok((root, DataBundle::default()))
     }
 
     /// Tells the engine what's on screen, as its load keys (decision

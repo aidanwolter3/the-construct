@@ -475,6 +475,11 @@ fn one_engine_on_home_opens_other_layouts_and_follows_them() {
         "ready"
     );
     assert!(parse(&s.layouts_json)[&id]["version"].as_u64().is_some());
+    // The same layout without a snapshot, as a tap opening it reads it.
+    let now = e.layout_now(&id);
+    let root = serde_json::to_value(now.root.expect("loaded")).unwrap();
+    assert_eq!(root["title"], "Mine");
+    assert!(!now.gone && now.error.is_none());
     // Home's stream carries the other layout's new version and its deletion.
     thread::sleep(Duration::from_millis(500));
     let resp = http
@@ -491,6 +496,7 @@ fn one_engine_on_home_opens_other_layouts_and_follows_them() {
     wait_until("gone", || {
         parse(&e.snapshot().layouts_json)[&id]["gone"] == json!(true)
     });
+    assert!(e.layout_now(&id).gone);
     // Home itself is still there.
     assert_ne!(parse(&e.snapshot().layout_json)["gone"], json!(true));
     // A missing layout says so.
@@ -498,6 +504,8 @@ fn one_engine_on_home_opens_other_layouts_and_follows_them() {
     wait_until("not found", || {
         parse(&e.snapshot().layouts_json)["c-aaaaaaaaaa"]["gone"] == json!(true)
     });
+    let missing = e.layout_now("c-aaaaaaaaaa");
+    assert!(missing.gone && missing.root.is_none());
 }
 
 /// Leaving the pod forgets the other layouts the engine opened, on screen

@@ -375,6 +375,17 @@ pub struct StateSnapshot {
 }
 
 /// Another layout the engine holds (see [`StateSnapshot::layouts_json`]).
+/// One layout as the engine has it ([`ConstructEngine::layout_now`]).
+#[derive(Clone, Debug, PartialEq)]
+pub struct LayoutNow {
+    /// Its tree, once loaded (from the cache or the pod).
+    pub root: Option<UiNode>,
+    /// The pod said there is no such layout.
+    pub gone: bool,
+    /// Its load failed, and why.
+    pub error: Option<String>,
+}
+
 #[derive(Clone, Debug, PartialEq, serde::Serialize)]
 struct SubLayout {
     workspace: Option<UiNode>,
@@ -1888,7 +1899,7 @@ impl ConstructEngine {
             self.refresh();
             return;
         }
-        let snap = {
+        let added = {
             let mut st = lock(&self.inner.state);
             if !st.layouts.contains_key(id) {
                 let cached = st
@@ -1905,13 +1916,24 @@ impl ConstructEngine {
                     },
                 );
                 st.seq += 1;
-                Some(st.snapshot())
+                true
             } else {
-                None
+                false
             }
         };
-        if let Some(snap) = snap {
-            self.inner.notify(snap);
+        if added {
+            // Off the caller's thread (a tap, on the UI thread): a snapshot
+            // serializes the whole state.
+            let inner = Arc::clone(&self.inner);
+            let spawned = thread::Builder::new()
+                .name("construct-notify".into())
+                .spawn(move || {
+                    let snap = lock(&inner.state).snapshot();
+                    inner.notify(snap);
+                });
+            if let Err(e) = spawned {
+                eprintln!("[ConstructEngine] cannot start a notify thread: {e}");
+            }
         }
         let path = format!("{LAYOUT_LOAD_PREFIX}{id}");
         if self.inner.begin_load(&path) {
@@ -1923,6 +1945,26 @@ impl ConstructEngine {
                 eprintln!("[ConstructEngine] cannot start a layout load thread: {e}");
             }
         }
+    }
+
+    /// One layout as the engine has it now, without a snapshot (which
+    /// serializes the whole state): its tree once loaded, whether the pod
+    /// said it is gone, and its load's error. For a tap opening a layout.
+    pub fn layout_now(&self, id: &str) -> LayoutNow {
+        let st = lock(&self.inner.state);
+        let (root, gone) = if id == self.inner.workspace_id {
+            (st.workspace.clone(), false)
+        } else {
+            st.layouts
+                .get(id)
+                .map_or((None, false), |l| (l.workspace.clone(), l.gone))
+        };
+        let error = st
+            .loads
+            .get(&format!("{LAYOUT_LOAD_PREFIX}{id}"))
+            .filter(|l| l.state == "error")
+            .map(|l| l.error.clone().unwrap_or_else(|| LOAD_OFFLINE.to_owned()));
+        LayoutNow { root, gone, error }
     }
 
     pub fn handle_auth_redirect(&self, url: &str) -> bool {

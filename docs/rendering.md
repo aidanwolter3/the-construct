@@ -247,10 +247,11 @@ Feature `remote` (on in the viewer and the APK) runs a session over a pod with t
 engine has it, from its cache at once (offline too; "Opening your pod…" with the connection's state on a first
 start, until the pod answers), and the device's list of layouts (`local:layouts`, `local:apps`) comes from
 `GET /v1/apps?all=1`, kept in `apps.json` next to the cache for offline starts. A layout a tap opens is the engine's
-cached copy at once, fetched again behind it (`open_layout`; a layout it never had waits for the pod), and a page
+cached copy at once, fetched again behind it (`open_layout`; a layout it never had waits for the pod), read with
+`layout_now` (that layout alone: a snapshot serializes the engine's whole state, too slow for a tap), and a page
 screen whose route matches a tap's `target_uri` opens with its `$route` bound and its `item`, and slides in at once
 while its `data` path loads through the engine (`action.data.load`, cached; `local://screen#loading`). Every
-snapshot the engine sends reaches the session on its next frame (`Loader::changes`, snapshots since the last frame merged into one; the window is woken). The engine's observer thread sends only the entities and queries that differ from what it sent before (`Sent`; a snapshot's JSON is parsed only when it changed), and nothing at all, without waking the window, when nothing did: comparing the whole cache on the UI thread every snapshot cost a phone about 20 ms a frame. What arrives: data,
+snapshot the engine sends reaches the session on its next frame (`Loader::changes`, snapshots since the last frame merged into one; the window is woken). The engine calls its observer on whichever thread changed its state (often the UI thread: a tap's write), so the observer hands each snapshot to a thread of its own (`construct-observe`, the newest first). That thread sends only the entities and queries that differ from what it sent before (`Sent`; a snapshot's JSON is parsed only when it changed), and nothing at all, without waking the window, when nothing did: comparing the whole cache on the UI thread every snapshot cost a phone about 20 ms a frame. What arrives: data,
 `local://connection` (online, offline or connecting, and how many writes wait), and the new root of every layout
 the event stream announced, so a layout edited over MCP, or a change from another device, shows without opening it
 again. Each new frame tells the engine what it draws, topmost first (`Loader::visible`: every drawn entry's layout and
