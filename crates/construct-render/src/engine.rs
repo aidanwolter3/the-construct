@@ -789,7 +789,10 @@ fn device_data(engine: &ConstructEngine, shared: &Shared) -> DataBundle {
 impl Loader for PodEngine {
     /// The engine's copy at once when it has one (its fetch goes on in the
     /// background and comes in through [`Loader::changes`]); else waits for
-    /// the pod.
+    /// the pod. Only the layout and the device data: the session already
+    /// has the engine's entities (from its first snapshot and every change
+    /// since), and parsing the whole cache again on a tap cost a phone tens
+    /// of milliseconds before the screen could open.
     fn layout(&self, id: &str) -> Result<(UiNode, DataBundle), String> {
         let key = format!("{}{id}", client_core::LAYOUT_LOAD_PREFIX);
         if id != HOME {
@@ -799,7 +802,7 @@ impl Loader for PodEngine {
             if id == HOME {
                 return serde_json::from_str::<UiNode>(&snap.workspace_json)
                     .ok()
-                    .map(|r| Ok((r, bundle(snap))));
+                    .map(|r| Ok((r, DataBundle::default())));
             }
             let layouts: Value = serde_json::from_str(&snap.layouts_json).unwrap_or_default();
             let l = &layouts[id];
@@ -807,7 +810,7 @@ impl Loader for PodEngine {
             if !l["workspace"].is_null()
                 && let Ok(root) = serde_json::from_value::<UiNode>(l["workspace"].clone())
             {
-                return Some(Ok((root, bundle(snap))));
+                return Some(Ok((root, DataBundle::default())));
             }
             if l["gone"] == true {
                 return Some(Err(client_core::LOAD_NOT_FOUND.to_owned()));

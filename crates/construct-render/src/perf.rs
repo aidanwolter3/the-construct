@@ -28,6 +28,9 @@ pub struct Frame {
     pub interval: Option<Duration>,
     /// From the first input it shows (a touch) to the frame starting.
     pub latency: Option<Duration>,
+    /// Handling the input since the frame before: touches, and what a tap
+    /// did (opening a screen, a write), before this frame could start.
+    pub input: Duration,
     /// Building the scene (`Session::scene`): placing a laid-out frame
     /// again, or laying it out.
     pub scene: Duration,
@@ -88,6 +91,8 @@ pub struct Recorder {
     first_input: Option<Instant>,
     inputs: u32,
     moves: u16,
+    /// Time handling input since the last frame began.
+    handling: Duration,
     /// The next frame isn't back to back (a summary ran in between).
     taint: bool,
     /// Windows with nothing to report since the last line.
@@ -107,6 +112,7 @@ impl Default for Recorder {
             first_input: None,
             inputs: 0,
             moves: 0,
+            handling: Duration::ZERO,
             taint: false,
             quiet: 0,
         }
@@ -121,6 +127,12 @@ impl Recorder {
         if moved {
             self.moves = self.moves.saturating_add(1);
         }
+    }
+
+    /// Input was handled for `took` (a touch, a tap's action): it counts
+    /// toward the next frame.
+    pub fn handled(&mut self, took: Duration) {
+        self.handling += took;
     }
 
     /// A frame starts at `at`: its interval, latency and touch moves.
@@ -145,6 +157,7 @@ impl Recorder {
         Frame {
             interval,
             latency: input.map(|i| at.duration_since(i)),
+            input: std::mem::take(&mut self.handling),
             moves: std::mem::take(&mut self.moves),
             dragging,
             ..Frame::default()
@@ -250,6 +263,8 @@ pub struct Summary {
     pub acquire: Option<Spread>,
     pub present: Option<Spread>,
     pub latency: Option<Spread>,
+    /// Input handling before frames (only frames that had some).
+    pub input: Option<Spread>,
     pub laid_out: u32,
     pub layout_ms: f64,
     pub layout_max_ms: f64,
@@ -317,6 +332,13 @@ impl Summary {
             acquire: each(|f| f.acquire),
             present: each(|f| f.present),
             latency: Spread::of(frames.iter().filter_map(|f| f.latency).map(ms).collect()),
+            input: Spread::of(
+                frames
+                    .iter()
+                    .filter(|f| !f.input.is_zero())
+                    .map(|f| ms(f.input))
+                    .collect(),
+            ),
             laid_out: frames.iter().map(|f| u32::from(f.laid_out)).sum(),
             layout_ms: frames.iter().map(|f| ms(f.layout)).sum(),
             layout_max_ms: frames.iter().map(|f| ms(f.layout)).fold(0.0, f64::max),
@@ -406,7 +428,7 @@ impl Summary {
         if let Some(w) = &self.worst {
             let _ = write!(
                 s,
-                " (worst: interval {} work {:.1} = scene {:.1} [layout {:.1} x{}, data {}] + render {:.1} [prepare {:.1}, submit {:.1}, shape {:.1} x{}, atlas {:.1} x{}] + present {:.1}; acquire {:.1}; moves {})",
+                " (worst: interval {} work {:.1} = scene {:.1} [layout {:.1} x{}, data {}] + render {:.1} [prepare {:.1}, submit {:.1}, shape {:.1} x{}, atlas {:.1} x{}] + present {:.1}; acquire {:.1}; input {:.1}; moves {})",
                 w.interval
                     .map_or("-".to_owned(), |i| format!("{:.1}", ms(i))),
                 ms(w.work()),
@@ -423,6 +445,7 @@ impl Summary {
                 w.rasterized,
                 ms(w.present),
                 ms(w.acquire),
+                ms(w.input),
                 w.moves
             );
         }
@@ -435,6 +458,7 @@ impl Summary {
         spread(&mut s, "acquire", &self.acquire);
         spread(&mut s, "present", &self.present);
         spread(&mut s, "latency", &self.latency);
+        spread(&mut s, "input", &self.input);
         let _ = write!(
             s,
             "; layouts {} ({:.1} ms, max {:.1}); data {}; shaped {} ({:.1} ms); atlas {} ({} KB, {:.1} ms); runs {} quads {} layers {}",
@@ -529,6 +553,25 @@ mod tests {
             "{line}"
         );
         assert!(line.contains("runs 0 quads 0 layers 2"), "{line}");
+    }
+
+    #[test]
+    fn input_handled_before_a_frame_counts_toward_it() {
+        let t = Instant::now();
+        let mut r = Recorder::default();
+        r.input(t, false);
+        r.handled(Duration::from_millis(30));
+        r.handled(Duration::from_millis(10));
+        let f = r.begin(at(t, 45), false);
+        assert_eq!(f.input, Duration::from_millis(40));
+        let line = r
+            .end(f, at(t, 50), false, false)
+            .unwrap()
+            .line("tasks", Some(120.0));
+        assert!(line.contains("; input 40.0; moves 0)"), "{line}");
+        assert!(line.contains("; input 40.0/40.0/40.0"), "{line}");
+        // The next frame starts with none.
+        assert_eq!(r.begin(at(t, 60), false).input, Duration::ZERO);
     }
 
     #[test]
