@@ -1,0 +1,250 @@
+{
+  "version": "1.0.0",
+  "workspace": {
+    "type": "core://Page",
+    "id": "tiles_home",
+    "title": "Home",
+    "root": {
+      "type": "core://Box",
+      "fill": true,
+      "background": "${local://theme#page}",
+      "content": {
+        "type": "core://Column",
+        "children": [
+          {
+            "type": "core://Row",
+            "padding_h_dp": 16,
+            "padding_v_dp": 12,
+            "children": [
+              {
+                "type": "core://Text",
+                "style": "Headline",
+                "value_expr": "Home"
+              }
+            ]
+          },
+          {
+            "type": "core://Divider"
+          },
+          {
+            "type": "core://Scroll",
+            "content": {
+              "type": "core://Column",
+              "children": [
+                {
+                  "type": "core://Column",
+                  "padding_h_dp": 16,
+                  "children": [
+                    {
+                      "type": "core://Spacer",
+                      "size_dp": 16
+                    },
+                    {
+                      "type": "core://Text",
+                      "style": "Title",
+                      "value_expr": "Coming up"
+                    },
+                    {
+                      "type": "core://Spacer",
+                      "size_dp": 10
+                    },
+                    {
+                      "type": "core://Box",
+                      "background": "${local://theme#accent}",
+                      "content_color": "${local://theme#card}",
+                      "corner_dp": 14,
+                      "padding_h_dp": 16,
+                      "padding_v_dp": 14,
+                      "content": {
+                        "type": "core://Text",
+                        "style": "Title",
+                        "value_expr": "Picnic · Saturday"
+                      }
+                    },
+                    {
+                      "type": "core://Spacer",
+                      "size_dp": 18
+                    }
+                  ]
+                },
+                {
+                  "type": "core://Layout",
+                  "layout": "tiles_priorities"
+                },
+                {
+                  "type": "core://Column",
+                  "padding_h_dp": 16,
+                  "children": [
+                    {
+                      "type": "core://Spacer",
+                      "size_dp": 18
+                    },
+                    {
+                      "type": "core://Text",
+                      "style": "Title",
+                      "value_expr": "Everything else"
+                    },
+                    {
+                      "type": "core://Spacer",
+                      "size_dp": 6
+                    }
+                  ]
+                },
+                {
+                  "type": "core://Row",
+                  "justify": "center",
+                  "padding_h_dp": 16,
+                  "spacing_dp": 6,
+                  "children": [
+                    {
+                      "type": "core://Tappable",
+                      "content_description": "Calendar",
+                      "tag": "tile:Calendar",
+                      "on_click": {
+                        "intent": "action.navigation.back"
+                      },
+                      "content": {
+                        "type": "core://Box",
+                        "width_dp": 80,
+                        "height_dp": 84,
+                        "corner_dp": 14,
+                        "align": "Center",
+                        "background": "${local://theme#card}",
+                        "border_color": "${local://theme#card_border}",
+                        "content": {
+                          "type": "core://Column",
+                          "align": "Center",
+                          "spacing_dp": 2,
+                          "children": [
+                            {
+                              "type": "core://Text",
+                              "style": "Headline",
+                              "value_expr": "C"
+                            },
+                            {
+                              "type": "core://Text",
+                              "style": "Caption",
+                              "value_expr": "Calendar"
+                            }
+                          ]
+                        }
+                      }
+                    },
+                    {
+                      "type": "core://Tappable",
+                      "content_description": "Meals",
+                      "tag": "tile:Meals",
+                      "on_click": {
+                        "intent": "action.navigation.back"
+                      },
+                      "content": {
+                        "type": "core://Box",
+                        "width_dp": 80,
+                        "height_dp": 84,
+                        "corner_dp": 14,
+                        "align": "Center",
+                        "background": "${local://theme#card}",
+                        "border_color": "${local://theme#card_border}",
+                        "content": {
+                          "type": "core://Column",
+                          "align": "Center",
+                          "spacing_dp": 2,
+                          "children": [
+                            {
+                              "type": "core://Text",
+                              "style": "Headline",
+                              "value_expr": "M"
+                            },
+                            {
+                              "type": "core://Text",
+                              "style": "Caption",
+                              "value_expr": "Meals"
+                            }
+                          ]
+                        }
+                      }
+                    },
+                    {
+                      "type": "core://Tappable",
+                      "content_description": "Shopping",
+                      "tag": "tile:Shopping",
+                      "on_click": {
+                        "intent": "action.navigation.back"
+                      },
+                      "content": {
+                        "type": "core://Box",
+                        "width_dp": 80,
+                        "height_dp": 84,
+                        "corner_dp": 14,
+                        "align": "Center",
+                        "background": "${local://theme#card}",
+                        "border_color": "${local://theme#card_border}",
+                        "content": {
+                          "type": "core://Column",
+                          "align": "Center",
+                          "spacing_dp": 2,
+                          "children": [
+                            {
+                              "type": "core://Text",
+                              "style": "Headline",
+                              "value_expr": "S"
+                            },
+                            {
+                              "type": "core://Text",
+                              "style": "Caption",
+                              "value_expr": "Shopping"
+                            }
+                          ]
+                        }
+                      }
+                    },
+                    {
+                      "type": "core://Tappable",
+                      "content_description": "Photos",
+                      "tag": "tile:Photos",
+                      "on_click": {
+                        "intent": "action.navigation.back"
+                      },
+                      "content": {
+                        "type": "core://Box",
+                        "width_dp": 80,
+                        "height_dp": 84,
+                        "corner_dp": 14,
+                        "align": "Center",
+                        "background": "${local://theme#card}",
+                        "border_color": "${local://theme#card_border}",
+                        "content": {
+                          "type": "core://Column",
+                          "align": "Center",
+                          "spacing_dp": 2,
+                          "children": [
+                            {
+                              "type": "core://Text",
+                              "style": "Headline",
+                              "value_expr": "P"
+                            },
+                            {
+                              "type": "core://Text",
+                              "style": "Caption",
+                              "value_expr": "Photos"
+                            }
+                          ]
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "type": "core://Spacer",
+                  "size_dp": 16
+                }
+              ]
+            }
+          }
+        ]
+      }
+    }
+  },
+  "entities": {},
+  "queries": {}
+}

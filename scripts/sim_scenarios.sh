@@ -34,6 +34,8 @@ assert-text All done; shot done"
 scenario date-unlock week_sessions \
   "clock 2026-11-16T08:59; assert-no-text Mark Mon; shot before-class; clock 2026-11-16T09:00; assert-text Mark Mon Group class done; shot class-over; \
 clock 2026-11-17T15:45; shot swim-over"
+scenario tiles-home tiles_home \
+  "shot top; scroll-to Photos; assert-text Read more; shot tiles"
 for page in home groceries log; do
   echo "== theme-$page"
   for mode in light dark; do

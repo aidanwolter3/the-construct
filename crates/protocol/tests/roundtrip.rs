@@ -1,6 +1,7 @@
 use protocol::{
-    ActionIntent, Align, EntityRecord, FieldUpdate, GroupBy, ImageShape, ListBinding, ListFilter,
-    ListWhere, Orientation, PresentationMode, SlotSpec, TextStyle, Tone, UiNode, WorkspaceSpec,
+    ActionIntent, Align, EntityRecord, FieldUpdate, GroupBy, ImageShape, Justify, ListBinding,
+    ListFilter, ListWhere, Orientation, PresentationMode, SlotSpec, TextStyle, Tone, UiNode,
+    WorkspaceSpec,
 };
 use serde_json::{Value, json};
 
@@ -26,9 +27,11 @@ fn post_template(author_tag: Option<String>, items: ListBinding) -> UiNode {
         padding_h_dp: 0,
         padding_v_dp: 0,
         align: Align::Start,
+        justify: Justify::Start,
         children: vec![
             UiNode::Row {
                 align: None,
+                justify: Justify::Start,
                 spacing_dp: 10,
                 padding_h_dp: 12,
                 padding_v_dp: 10,
@@ -67,6 +70,7 @@ fn post_template(author_tag: Option<String>, items: ListBinding) -> UiNode {
             },
             UiNode::Row {
                 align: Some(Align::Start),
+                justify: Justify::SpaceBetween,
                 spacing_dp: 0,
                 padding_h_dp: 4,
                 padding_v_dp: 0,
