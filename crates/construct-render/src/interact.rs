@@ -532,6 +532,16 @@ fn merge(into: &mut DataBundle, from: DataBundle) {
 /// [`merge`] that keeps the entities and queries `into` already has as they
 /// are: true when any of them is new or different. A loader's news carry
 /// all its data each time (the engine's snapshots), most of it unchanged.
+/// Whether an intent only opens or closes layouts and screens
+/// (`action.navigation.open`, `action.navigation.back`): it changes nothing
+/// already laid out, unless it merges data in.
+fn navigates_only(intent: &Value) -> bool {
+    matches!(
+        intent["intent"].as_str(),
+        Some("action.navigation.open" | "action.navigation.back")
+    )
+}
+
 fn merge_changed(into: &mut DataBundle, from: DataBundle) -> bool {
     let mut changed = false;
     for (uri, e) in from.entities {
@@ -2873,8 +2883,8 @@ impl Session {
         self.pressed = None;
         let prepared = self.prepared.take();
         let (focused, merges) = (self.focused.clone(), self.merges);
-        // Only opened a layout or screen: what is laid out stays.
-        let mut opened_only = false;
+        // Only opened or closed a layout or screen: what is laid out stays.
+        let mut moved_only = false;
         let menu = node.node_type == "menu";
         if !menu {
             self.focused = None;
@@ -2901,16 +2911,13 @@ impl Session {
                                 e.opened = now;
                                 self.stack.push(e);
                             }
-                            opened_only = !p.merged;
+                            moved_only = !p.merged;
                             p.effects
                         }
                         None => {
-                            let depth = self.stack.len();
                             let mut out = Vec::new();
                             self.run(&bound, &mut out);
-                            opened_only = bound["intent"] == "action.navigation.open"
-                                && self.stack.len() > depth
-                                && self.merges == merges;
+                            moved_only = navigates_only(&bound) && self.merges == merges;
                             out
                         }
                     }
@@ -2918,15 +2925,23 @@ impl Session {
                 None => vec![Effect::Nothing],
             },
         };
-        if opened_only && self.focused == focused {
-            self.scene = None;
-        } else {
-            self.invalidate();
-        }
+        self.relay_unless(moved_only && self.focused == focused);
         Ok(Outcome {
             node: Some(node),
             effects,
         })
+    }
+
+    /// After an interaction: what is laid out is laid out again, unless
+    /// all it did was open or close layouts and screens (`moved_only`: no
+    /// data merged, no field left), which changes nothing already laid
+    /// out; home under a screen that opened or closed stays as it was.
+    fn relay_unless(&mut self, moved_only: bool) {
+        if moved_only {
+            self.scene = None;
+        } else {
+            self.invalidate();
+        }
     }
 
     /// A tap at a point outside the top entry's `follow_end` scrolling
@@ -2960,11 +2975,17 @@ impl Session {
     /// Runs an intent as a tap would (system Back, a test).
     pub fn dispatch(&mut self, intent: &Value) -> Result<Outcome, String> {
         let mut effects = Vec::new();
+        let (focused, merges) = (self.focused.clone(), self.merges);
+        let mut moved_only = false;
         match self.bind_form(intent) {
-            Some(bound) => self.run(&bound, &mut effects),
+            Some(bound) => {
+                self.run(&bound, &mut effects);
+                moved_only = navigates_only(&bound) && self.merges == merges;
+            }
             None => effects.push(Effect::Nothing),
         }
-        self.invalidate();
+        // System Back closing a screen: what is under it stays laid out.
+        self.relay_unless(moved_only && self.focused == focused);
         Ok(Outcome {
             node: None,
             effects,

@@ -766,3 +766,23 @@ fn an_icon_button_prepares_its_open_and_a_screen_that_loads_data_does_not() {
     assert!(!s.prepare_at(x, y));
     assert_eq!(s.take_work().laid_out, 0);
 }
+
+#[test]
+fn going_back_leaves_what_is_under_it_laid_out() {
+    let mut s = home_with_a_row();
+    let (x, y) = row_center(&mut s);
+    s.tap(&Target::Point(x, y)).unwrap();
+    assert_eq!(s.showing(), "notes");
+    s.scene().unwrap();
+    s.take_work();
+    // System Back: home comes back as it was laid out.
+    s.dispatch(&json!({ "intent": "action.navigation.back" }))
+        .unwrap();
+    s.scene().unwrap();
+    assert_eq!(s.take_work().laid_out, 0);
+    // A change of data still lays it out again.
+    s.dispatch(&json!({ "intent": "action.local.set", "entity_uri": "local://x", "field": "a", "value": "b" }))
+        .unwrap();
+    s.scene().unwrap();
+    assert!(s.take_work().laid_out > 0);
+}
