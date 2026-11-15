@@ -286,3 +286,52 @@ fn side_by_side_scrolling_columns_get_the_row_s_height() {
     assert!(close(y(&scrolled, "Left 20"), y(&scene, "Left 20") - 300.0));
     assert!(close(y(&scrolled, "Right 0"), y(&scene, "Right 0")));
 }
+
+/// A grocery line: a name that wraps, an amount chip and a delete button. The
+/// chip's holder (a vertical container, a nested row) is as wide as the chip
+/// it draws, so the button sits after it rather than on top of it.
+#[test]
+fn a_long_chip_in_a_container_leaves_room_for_the_button_beside_it() {
+    let amount = "1/4 cup + 1 Tbsp + 4";
+    let chip = json!({ "type": "core://Tappable", "tag": "chip", "on_click": { "intent": "action.navigation.back" },
+        "content": { "type": "core://Chip", "text": amount } });
+    let holders = [
+        json!({ "type": "core://Container", "orientation": "Vertical", "padding_dp": 0, "children": [chip.clone()] }),
+        json!({ "type": "core://Container", "orientation": "Horizontal", "padding_dp": 0, "children": [chip.clone()] }),
+        json!({ "type": "core://Row", "spacing_dp": 4, "children": [chip.clone()] }),
+    ];
+    for holder in holders {
+        for name in [
+            "lemons",
+            "lemons, zested and juiced, plus wedges to serve at the table",
+        ] {
+            let spec = json!({ "type": "core://Row", "padding_h_dp": 16, "spacing_dp": 8, "children": [
+                { "type": "core://Text", "value_expr": name, "style": "Body" },
+                { "type": "core://Spacer" },
+                holder.clone(),
+                { "type": "core://IconButton", "icon": "close", "content_description": "Delete",
+                  "tag": "delete", "on_click": { "intent": "action.navigation.back" } } ] });
+            let scene = SceneBuilder::build_from_spec(&spec, 390.0, 844.0, 1.0).unwrap();
+            let chip = scene.find_node("chip").unwrap().bounds;
+            let delete = scene.find_node("delete").unwrap().bounds;
+            let label = scene.find_text(name).unwrap().bounds;
+            assert!(
+                chip[2] > 100.0,
+                "{holder}: the chip keeps its text on one line: {chip:?}"
+            );
+            assert!(chip[3] < 30.0, "{holder}: one line: {chip:?}");
+            assert!(
+                chip[0] + chip[2] + 8.0 <= delete[0] + 0.01,
+                "{holder}: {chip:?} runs under {delete:?}"
+            );
+            assert!(
+                close(delete[0] + delete[2], 390.0 - 16.0),
+                "{holder}: {delete:?}"
+            );
+            assert!(
+                label[0] + label[2] <= chip[0] - 8.0 + 0.01,
+                "{holder}: {label:?} {chip:?}"
+            );
+        }
+    }
+}
