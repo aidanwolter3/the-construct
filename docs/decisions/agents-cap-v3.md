@@ -31,6 +31,10 @@ Decision:
   `stop_run`, `wake_sprite` (at most 60 min), `repair_sprite`, `mark_reviewed`. The safety limits stay: size caps, no
   redirects, https on public hosts, untrusted text cleaned, and links allow-listed (`outcome.pr_url` and the claim's
   as pull requests, `outcome.deploy_url` as a GitHub Actions run).
+- **The contract's clarifications** (the "Changes during implementation" of `cap-v3.md`): `since = oldest_seq`
+  is a page and only `since < oldest_seq` is 410; `outcome.updated` carries the whole run and `reminder: true` and
+  is kept by version like `run.updated`; event types the pod doesn't know are skipped; a sandbox whose only
+  preflight failure is `memory` stays awake and isn't shown as trouble.
 - **A stored cursor, replayed after any gap.** The cursor has its own column (`agents_state.cursor`). The follower
   takes a snapshot only without a cursor or on 410, else reads the log from the cursor in pages, saving each page with
   its cursor, then follows the stream. Records are kept by version from every source (a snapshot no longer
@@ -44,8 +48,9 @@ Decision:
   days, and a schedule's missed or refused occurrence.
 - **Schedules are the pod's** (`agents_schedules`, `agents_occurrences`). A timer in the follower (every pass,
   connected or not) and in the notification poll records each due occurrence, then sends `start_run` with `origin:
-  schedule`, the schedule's id as `work_item_id`, the local minute as `occurrence` and `<id>_<minute>` as
-  `request_id`, so a resend never duplicates. Not sent within 2 h: `missed`, with a warning. Daylight saving: a
+  schedule`, the schedule's id as `work_item_id`, the time it is for as `occurrence` (RFC 3339
+  with its offset, so the runner can place it and start its 2 h expiry there) and a `request_id` derived from
+  both, so a resend never duplicates. Not sent within 2 h: `missed`, with a warning. Daylight saving: a
   skipped local time runs just after the gap, a repeated one once. The cron is read by a small module on the zone
   database the pod already ships (`pod_core::tz`, jiff): no new dependency. Pause drops what waits; resume and a new
   time start from now. Create, edit, delete, run now, pause and resume are pod actions and the MCP tool
@@ -75,7 +80,6 @@ follower takes a v3 snapshot on its own. The schedules the runner kept as files 
 themselves.
 
 Limits: a schedule changed while one of its occurrences waits to be sent keeps that occurrence as it was taken up.
-The 24 h reminder's flag is read from the event, its record or its record's outcome, as the contract doesn't pin
-where it sits. An undo (`undo_edit`) of a filler's write doesn't change who is recorded as its writer. Not testable
+An undo (`undo_edit`) of a filler's write doesn't change who is recorded as its writer. Not testable
 here: a real runner, real sandboxes sleeping and waking, and GitHub settling outcomes; the fake runner in the tests
 speaks the contract.

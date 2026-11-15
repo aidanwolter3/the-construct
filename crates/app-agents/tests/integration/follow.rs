@@ -298,7 +298,12 @@ async fn a_gap_is_replayed_from_the_cursor() {
             "stage": "deploy", "pr_url": "https://github.com/sample-owner/sample-repo/pull/7",
             "deploy_url": "https://github.com/sample-owner/sample-repo/actions/runs/99"}}),
     );
+    // A type this pod doesn't know is skipped, not a failure.
+    fake.push("lease.updated", json!({"id": "lease_1", "version": 1}));
     let last = fake.last_seq();
+    // The log was pruned up to the pod's cursor: `since = oldest_seq` is
+    // still a page, not a 410.
+    fake.oldest.store(10, Ordering::SeqCst);
     fake.down.store(false, Ordering::SeqCst);
     until("caught up", || async {
         let ws = workspace(&pod, &app).await;

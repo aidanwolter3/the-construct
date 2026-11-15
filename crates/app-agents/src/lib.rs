@@ -346,7 +346,10 @@ pub const MANIFEST: SourceManifest = SourceManifest {
                 ("updated_text", "e.g. 2 min ago"),
                 ("work_item_id", "the Tasks row or schedule it is for"),
                 ("task_id", "the same as work_item_id"),
-                ("occurrence", "a schedule's occurrence, its local minute"),
+                (
+                    "occurrence",
+                    "a schedule's occurrence: the time it is for, RFC 3339 with its offset",
+                ),
                 ("schedule", "the schedule it runs for, or empty"),
                 ("sandbox", "the sandbox it runs in"),
                 ("workspace", "the runner workspace"),

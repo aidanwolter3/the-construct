@@ -377,10 +377,18 @@ pub fn sprite_look(state: &str) -> (&'static str, &'static str) {
 fn sprite_entity(x: &Sprite, now_ms: i64) -> Value {
     let (state_text, color) = sprite_look(&x.state);
     let troubled = matches!(x.state.as_str(), "degraded" | "suspended" | "down");
-    let preflight = if x.preflight_failures.is_empty() {
+    // A launch refused for memory alone leaves an awake sandbox awake (its
+    // run waits for a slot): that isn't trouble to show.
+    let failures: Vec<&str> = x
+        .preflight_failures
+        .iter()
+        .map(String::as_str)
+        .filter(|f| troubled || *f != "memory")
+        .collect();
+    let preflight = if failures.is_empty() {
         String::new()
     } else {
-        format!("Preflight failed: {}", x.preflight_failures.join(", "))
+        format!("Preflight failed: {}", failures.join(", "))
     };
     json!({
         "name": x.name,
@@ -886,6 +894,22 @@ mod tests {
             b.entities["agents://sandboxes/b"].get_str("reason"),
             Some("")
         );
+        // Memory alone on an awake sandbox: not shown as a failure.
+        let mut s = State::default();
+        s.sprites.insert(
+            "m".into(),
+            Sprite {
+                name: "m".into(),
+                state: "awake".into(),
+                preflight_ok: false,
+                preflight_failures: vec!["memory".into()],
+                ..Default::default()
+            },
+        );
+        let b = sandboxes(Some(&(s, Health::default())), 0);
+        let m = &b.entities["agents://sandboxes/m"];
+        assert_eq!(m.get_str("preflight_text"), Some(""));
+        assert_eq!(m.get_str("state_text"), Some("Awake"));
     }
 
     #[test]

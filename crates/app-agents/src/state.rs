@@ -106,7 +106,7 @@ pub struct Run {
     /// The pod's work item: a Tasks row's id or a schedule's id; empty for
     /// phone runs.
     pub work_item_id: String,
-    /// A schedule's occurrence (its local minute).
+    /// A schedule's occurrence (RFC 3339 with its offset).
     pub occurrence: String,
     /// `task`, `schedule` or `phone`.
     pub origin: String,

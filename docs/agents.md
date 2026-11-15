@@ -22,10 +22,11 @@ that goes up on every change; the pod keeps the higher one, so a replay or a lat
 - `GET /v3/snapshot`: `{v: 3, cursor, oldest_seq, runs[], sprites[], checks[]}`. `runs` holds every run that hasn't
   ended, ended ones from the last 7 days, and ended ones whose outcome is still `pending` or `needs_review`.
 - `GET /v3/events?since=<seq>&limit=<n>`: `{events, next, more}`, the event log as pages (kept 30 days). `410
-  {error: "cursor_too_old"}` when `since` is older than the log.
+  {error: "cursor_too_old"}` when `since` is below the snapshot's `oldest_seq` (`since = oldest_seq` is a page).
 - `GET /v3/stream?since=<seq>`: the same events as server-sent events with `id: <seq>`, resumable with
   `Last-Event-ID`. Each is `{v: 3, seq, ts, type, record}`, `type` one of `run.updated`, `sprite.updated`,
-  `check.updated` (an `outcome.updated` with `reminder: true` is read as a run's 24 h review reminder).
+  `check.updated`, and `outcome.updated` (`reminder: true` beside the whole run: the 24 h review reminder, kept by
+  version like `run.updated`). A type the pod doesn't know is skipped.
 - `GET /v3/runs/<id>/log`: `{entries: [{ts, kind, text}]}`, the run's history, oldest first.
 - `POST /v3/commands`, a fixed set, each `{type, ...}`: `start_run {request_id, workspace, work_item_id,
   occurrence?, origin, title, prompt, model?, max_runtime_min?, resume_from?}` (202 `{run}`; the same `request_id`,
@@ -43,7 +44,8 @@ sandbox is suspended or degraded), `interrupted` (its process stopped; it is lau
 `needs_review` (no report and no pull request), with its `pr_url`, `deploy_url`, `claim_mismatch` and `reviewed`.
 What the agent reported (`foreman report`) is its `claim`. A sandbox is `unprovisioned`, `provisioning`, `asleep`,
 `waking`, `awake`, `degraded`, `suspended`, `down` or `updating`, with a `reason`, its slots, its preflight and its
-disk failures in the last 7 days.
+disk failures in the last 7 days. A launch refused for memory alone leaves the run `queued` (`waiting_for_slot`)
+and the sandbox `awake`, with `memory` in its preflight failures; the pod doesn't show that as trouble.
 
 ## In the pod
 
@@ -100,9 +102,10 @@ when none is given), a workspace, a model (empty: the sandbox's default), a max 
 
 - **The timer** runs in the follower on every pass (connected or not) and in the source's notification poll. For
   each due occurrence it records the occurrence first (`agents_occurrences`), then sends `start_run` with `origin:
-  schedule`, `work_item_id` the schedule's id, `occurrence` the local minute (`2026-11-15T03:52`) and `request_id`
-  `<schedule id>_<minute>`, so a resend after a crash or while the runner was away is the same request and never a
-  second run.
+  schedule`, `work_item_id` the schedule's id, `occurrence` the time it is for as RFC 3339 with its offset
+  (`2026-11-15T03:52:00-07:00`, so the runner's 2 h expiry starts there) and `request_id` derived from both
+  (`<schedule id>_20261115T035200m0700`), so a resend after a crash or while the runner was away is the same request
+  and never a second run.
 - **Missed:** an occurrence not sent within 2 hours of its time (the pod or the runner was down) is skipped as
   `missed`, and a "Missed: <name>" warning says so. A refused one (400, 404, 409) is `refused` and warns too.
 - **Daylight saving:** a local time the clocks skip runs at the first instant after the gap; one they repeat runs

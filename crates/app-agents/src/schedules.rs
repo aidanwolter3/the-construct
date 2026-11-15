@@ -3,7 +3,7 @@
 //! runtime, prompt, on or paused) lives in `agents_schedules`, and the
 //! timer ([`tick`]) sends an ordinary `start_run` for each due occurrence:
 //! `origin: schedule`, `work_item_id` the schedule's id, `occurrence` the
-//! local minute, and a `request_id` made from both ([`request_id`]), so a
+//! time it is for (RFC 3339 with its offset), and a `request_id` made from both ([`request_id`]), so a
 //! resend after a crash or a retry never makes a second run.
 //!
 //! An occurrence is taken up (recorded) before it is sent. One the runner
@@ -36,12 +36,19 @@ pub const MAX_SCHEDULES: usize = 50;
 const PROMPT_MAX: usize = 20_000;
 
 /// The request id of schedule `id`'s `occurrence` (`manual`: Run now):
-/// the same inputs always give the same id.
+/// the same inputs always give the same id, e.g. `sch_ab_20261115T035200m0700`
+/// for `2026-11-15T03:52:00-07:00` (the offset's sign kept as `p` or `m`).
 pub fn request_id(id: &str, occurrence: &str, manual: bool) -> String {
-    let compact: String = occurrence
-        .chars()
-        .filter(|c| c.is_ascii_alphanumeric())
-        .collect();
+    let (when, offset) = occurrence.split_at(occurrence.len().min(19));
+    let mut compact: String = when.chars().filter(|c| c.is_ascii_alphanumeric()).collect();
+    for c in offset.chars() {
+        match c {
+            '+' => compact.push('p'),
+            '-' => compact.push('m'),
+            c if c.is_ascii_alphanumeric() => compact.push(c),
+            _ => {}
+        }
+    }
     format!("{id}_{compact}{}", if manual { "_now" } else { "" })
 }
 
@@ -50,7 +57,7 @@ pub fn zone(s: &Schedule) -> TimeZone {
     pod_core::tz::parse(&s.timezone).unwrap_or(TimeZone::UTC)
 }
 
-/// The next occurrence of `s` after `now` (ms): its local minute and
+/// The next occurrence of `s` after `now` (ms): its name ([`cron::name`]) and
 /// instant, `None` when paused or its cron is unreadable.
 pub fn next_run(s: &Schedule, now: i64) -> Option<(String, i64)> {
     if !s.enabled {
@@ -258,7 +265,7 @@ pub async fn tick(pod: &Pod, clients: &Clients, runner: Option<&Runner>, now: i6
     pass
 }
 
-/// Run schedule `s` now: an occurrence named by this local minute, sent at
+/// Run schedule `s` now: an occurrence named by this minute, sent at
 /// once (a second tap in the same minute answers the same run). The run's
 /// answer.
 pub async fn run_now(
@@ -615,12 +622,12 @@ mod tests {
     #[test]
     fn request_ids_are_deterministic() {
         assert_eq!(
-            request_id("sch_ab", "2026-11-15T03:52", false),
-            "sch_ab_20261115T0352"
+            request_id("sch_ab", "2026-11-15T03:52:00-07:00", false),
+            "sch_ab_20261115T035200m0700"
         );
         assert_eq!(
-            request_id("sch_ab", "2026-11-15T03:52", true),
-            "sch_ab_20261115T0352_now"
+            request_id("sch_ab", "2026-11-15T03:52:00+07:00", true),
+            "sch_ab_20261115T035200p0700_now"
         );
     }
 

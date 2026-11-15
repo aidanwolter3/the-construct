@@ -5,11 +5,12 @@
 //! When both day fields are restricted, a day matching either one counts
 //! (as in Vixie cron).
 //!
-//! An occurrence is named by its local minute (`2026-11-15T03:52`), the
-//! schedule's work-item occurrence. Daylight saving: a local time that
-//! doesn't exist (the hour clocks skip) runs at the first instant after the
-//! gap, and one that happens twice (the hour clocks repeat) runs once, at
-//! the first of the two. Built on the zone database the pod already ships
+//! An occurrence is named by the instant it runs, as RFC 3339 with the
+//! zone's offset at that time (`2026-11-15T03:52:00-07:00`): the schedule's
+//! work-item occurrence, which the runner can place in time (its 2 h expiry
+//! starts there). Daylight saving: a local time that doesn't exist (the hour
+//! clocks skip) runs at the first instant after the gap, and one that happens
+//! twice (the hour clocks repeat) runs once, at the first of the two. Built on the zone database the pod already ships
 //! (`pod_core::tz`), so it needs no cron crate.
 
 use pod_core::tz::jiff::{
@@ -141,7 +142,7 @@ impl Cron {
 
     /// The occurrences after `after` up to and including `until`, oldest
     /// first, at most `limit` (the newest kept when there are more): each
-    /// its local minute's name and its instant.
+    /// its name ([`name`]) and its instant.
     pub fn between(
         &self,
         tz: &TimeZone,
@@ -170,7 +171,7 @@ impl Cron {
                             continue;
                         };
                         if at > after && at <= until {
-                            out.push((name(local), at));
+                            out.push((name(tz, at), at));
                         }
                     }
                 }
@@ -181,6 +182,9 @@ impl Cron {
             };
         }
         out.sort_by(|a, b| (a.1, &a.0).cmp(&(b.1, &b.0)));
+        // Two local times can land on one instant (one in a skipped hour):
+        // it runs once.
+        out.dedup_by(|a, b| a.1 == b.1);
         if out.len() > limit {
             out.drain(..out.len() - limit);
         }
@@ -213,14 +217,28 @@ fn instant(tz: &TimeZone, local: DateTime) -> Option<Timestamp> {
         .map(|z| z.timestamp())
 }
 
-/// A local minute's name, e.g. `2026-11-15T03:52`.
-pub fn name(local: DateTime) -> String {
-    local.strftime("%Y-%m-%dT%H:%M").to_string()
+/// An occurrence's name: instant `at` in `tz` as RFC 3339 with its offset,
+/// e.g. `2026-11-15T03:52:00-07:00`.
+pub fn name(tz: &TimeZone, at: Timestamp) -> String {
+    at.to_zoned(tz.clone())
+        .strftime("%Y-%m-%dT%H:%M:%S%:z")
+        .to_string()
 }
 
-/// The local minute of instant `at` in `tz`.
+/// The minute instant `at` falls in, named in `tz` ([`name`]).
 pub fn minute_of(tz: &TimeZone, at: Timestamp) -> String {
-    name(at.to_zoned(tz.clone()).datetime())
+    let ms = at.as_millisecond();
+    let start = Timestamp::from_millisecond(ms - ms.rem_euclid(60_000)).unwrap_or(at);
+    name(tz, start)
+}
+
+/// The local minute of an occurrence's name, for display: `2026-11-15 03:52`.
+pub fn shown(occurrence: &str) -> String {
+    occurrence
+        .chars()
+        .take(16)
+        .collect::<String>()
+        .replacen('T', " ", 1)
 }
 
 #[cfg(test)]
@@ -264,13 +282,16 @@ mod tests {
             10,
         );
         let names: Vec<&str> = got.iter().map(|(n, _)| n.as_str()).collect();
-        assert_eq!(names, ["2026-11-15T03:52", "2026-11-16T03:52"]);
+        assert_eq!(
+            names,
+            ["2026-11-15T03:52:00-07:00", "2026-11-16T03:52:00-07:00"]
+        );
         assert_eq!(got[0].1, ts("2026-11-15T10:52:00Z"));
         let next = c.next_after(&denver, ts("2026-11-15T10:52:00Z")).unwrap();
-        assert_eq!(next.0, "2026-11-16T03:52");
+        assert_eq!(next.0, "2026-11-16T03:52:00-07:00");
         assert_eq!(
             minute_of(&denver, ts("2026-11-15T10:52:30Z")),
-            "2026-11-15T03:52"
+            "2026-11-15T03:52:00-07:00"
         );
     }
 
@@ -286,7 +307,10 @@ mod tests {
             10,
         );
         assert_eq!(got.len(), 1);
-        assert_eq!(got[0].0, "2026-03-08T02:30");
+        assert_eq!(
+            got[0].0, "2026-03-08T03:30:00-04:00",
+            "named by when it runs"
+        );
         assert_eq!(got[0].1, ts("2026-03-08T07:30:00Z"));
         // 2026-11-01: 02:00 → 01:00. 01:30 happens twice: it runs once.
         let c = Cron::parse("30 1 * * *").unwrap();
@@ -310,10 +334,10 @@ mod tests {
         assert_eq!(
             names,
             [
-                "2026-11-01T00:30",
-                "2026-11-01T01:00",
-                "2026-11-01T01:30",
-                "2026-11-01T02:00"
+                "2026-11-01T00:30:00-04:00",
+                "2026-11-01T01:00:00-04:00",
+                "2026-11-01T01:30:00-04:00",
+                "2026-11-01T02:00:00-05:00"
             ]
         );
     }
@@ -330,7 +354,15 @@ mod tests {
             10,
         );
         let names: Vec<&str> = got.iter().map(|(n, _)| n.as_str()).collect();
-        assert_eq!(names, ["2026-11-06T09:00", "2026-11-13T09:00"]);
+        assert_eq!(
+            names,
+            ["2026-11-06T09:00:00+00:00", "2026-11-13T09:00:00+00:00"]
+        );
+        assert_eq!(shown("2026-11-06T09:00:00+00:00"), "2026-11-06 09:00");
+        assert_eq!(
+            minute_of(&utc, ts("2026-11-15T10:52:30Z")),
+            "2026-11-15T10:52:00+00:00"
+        );
         assert_eq!(
             c.between(
                 &utc,

@@ -18,13 +18,13 @@ fn now() -> Timestamp {
 }
 
 /// A daily cron (UTC) at the minute `ago` before now, and that minute's
-/// name.
+/// name (its occurrence: RFC 3339 with its offset).
 fn daily_at(ago: pod_core::tz::jiff::Span) -> (String, String, Timestamp) {
     let at = now().checked_sub(ago).unwrap();
     let z = at.to_zoned(pod_core::tz::jiff::tz::TimeZone::UTC);
     (
         format!("{} {} * * *", z.minute(), z.hour()),
-        z.strftime("%Y-%m-%dT%H:%M").to_string(),
+        z.strftime("%Y-%m-%dT%H:%M:00+00:00").to_string(),
         at,
     )
 }
@@ -236,7 +236,10 @@ async fn an_occurrence_not_sent_in_two_hours_is_missed() {
     let missed = n.iter().find(|n| n["title"] == "Missed: late").unwrap();
     assert_eq!(missed["channel"], "warnings");
     assert!(
-        missed["body"].as_str().unwrap().contains(&minute),
+        missed["body"]
+            .as_str()
+            .unwrap()
+            .contains(&app_agents::cron::shown(&minute)),
         "{missed}"
     );
     assert!(fake.sent("start_run").is_empty());

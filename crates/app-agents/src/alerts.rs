@@ -232,10 +232,13 @@ pub fn notifications(
                 WARNINGS,
                 key,
                 format!("Missed: {}", text::clean(schedule, 120)),
+                {
+                    let last = crate::cron::shown(last);
                 if *count == 1 {
                     format!("The run due {last} wasn't sent in time, so it was skipped.")
                 } else {
                     format!("{count} runs (the last due {last}) weren't sent in time, so they were skipped.")
+                }
                 },
                 None,
                 false,
@@ -250,7 +253,8 @@ pub fn notifications(
                 key,
                 format!("Didn't start: {}", text::clean(schedule, 120)),
                 format!(
-                    "The runner refused the run due {occurrence}: {}",
+                    "The runner refused the run due {}: {}",
+                    crate::cron::shown(occurrence),
                     text::clean(reason, 200)
                 ),
                 None,

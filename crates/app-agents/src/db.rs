@@ -506,7 +506,7 @@ pub const OCC_REFUSED: &str = "refused";
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Occurrence {
     pub schedule_id: String,
-    /// Its local minute, e.g. `2026-11-15T03:52`.
+    /// Its time, RFC 3339 with its offset ([`crate::cron::name`]).
     pub occurrence: String,
     /// Milliseconds.
     pub due_at: i64,

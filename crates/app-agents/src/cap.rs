@@ -99,7 +99,8 @@ pub struct StartRun {
     pub workspace: String,
     /// The pod's work item: a task row's id or a schedule's id.
     pub work_item_id: String,
-    /// A schedule's occurrence, its local minute (`2026-11-15T03:52`).
+    /// A schedule's occurrence: the time it is for, RFC 3339 with its
+    /// offset (`2026-11-15T03:52:00-07:00`), so the runner can place it.
     pub occurrence: Option<String>,
     /// [`ORIGIN_TASK`] or [`ORIGIN_SCHEDULE`].
     pub origin: String,
@@ -667,7 +668,7 @@ mod tests {
                 "work_item_id": "r1", "origin": "task", "title": "t", "prompt": "p"})
         );
         let scheduled = Command::StartRun(StartRun {
-            occurrence: Some("2026-11-15T03:52".into()),
+            occurrence: Some("2026-11-15T03:52:00-07:00".into()),
             model: Some("m".into()),
             max_runtime_min: Some(30),
             resume_from: Some("run_1".into()),
@@ -682,7 +683,7 @@ mod tests {
                 &b["resume_from"]
             ),
             (
-                &json!("2026-11-15T03:52"),
+                &json!("2026-11-15T03:52:00-07:00"),
                 &json!("m"),
                 &json!(30),
                 &json!("run_1")
