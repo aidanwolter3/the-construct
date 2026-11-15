@@ -648,3 +648,103 @@ async fn a_capped_fill_takes_the_rows_waiting_longest() {
         assert_eq!(filled(&rows(&pod, "style").await), n);
     }
 }
+
+async fn get_json(pod: &Pod, path: &str) -> (StatusCode, Value) {
+    let req = Request::builder()
+        .uri(path)
+        .header(protocol::FEATURES_HEADER, protocol::features_header())
+        .header("authorization", "Bearer phone")
+        .body(Body::empty())
+        .unwrap();
+    let resp = pod_core::app(pod.clone()).oneshot(req).await.unwrap();
+    let status = resp.status();
+    let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+    (
+        status,
+        serde_json::from_slice(&bytes).unwrap_or(Value::Null),
+    )
+}
+
+#[tokio::test]
+async fn a_rows_image_results_are_listed_to_pick_from() {
+    let site = Arc::new(Site::default());
+    let base = serve(site.clone()).await;
+    let pod = pod_with(Arc::new(Fake::default()));
+    ok(
+        &pod,
+        "define_collection",
+        json!({"name": "style", "fields": [
+        {"name": "title", "type": "text"},
+        {"name": "found_photo", "type": "text", "optional": true},
+        {"name": "my_photo", "type": "text", "optional": true}],
+        "fillers": [{"kind": "fetch", "query_field": "title", "extract": "images",
+                     "map": {"found_photo": "image"}}]}),
+    )
+    .await;
+    settle(&pod, "style").await;
+    create(&pod, "style", json!({"title": "Oxford shirt"})).await;
+    let id = rows(&pod, "style").await[0]["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+
+    // Without the web_search jack: an empty list, not an error.
+    let (s, b) = get_json(&pod, &format!("/v1/collections/style/images?id={id}")).await;
+    assert_eq!(s, StatusCode::OK, "{b}");
+    assert_eq!(
+        b["queries"][format!("collection:style:images:{id}")],
+        json!([])
+    );
+
+    plug_search(&pod, json!({"provider": "searxng", "base_url": base}));
+    let (s, b) = get_json(&pod, &format!("/v1/collections/style/images?id={id}")).await;
+    assert_eq!(s, StatusCode::OK, "{b}");
+    let uris = b["queries"][format!("collection:style:images:{id}")]
+        .as_array()
+        .unwrap()
+        .clone();
+    assert_eq!(uris.len(), 2);
+    let first = &b["entities"][uris[0].as_str().unwrap()];
+    assert_eq!(first["n"], 1);
+    assert_eq!(first["row_id"], id.as_str());
+    assert_eq!(first["image"], format!("{base}/img/gone.jpg"));
+    let second = &b["entities"][uris[1].as_str().unwrap()];
+    assert_eq!(second["title"], "Oxford shirt");
+    assert_eq!(second["source"], "shop.example");
+
+    // Picking one is an ordinary update of the row.
+    let req = Request::builder()
+        .method("POST")
+        .uri("/v1/collections/style/update")
+        .header(protocol::FEATURES_HEADER, protocol::features_header())
+        .header("authorization", "Bearer phone")
+        .header("content-type", "application/json")
+        .body(Body::from(
+            json!({"id": id, "my_photo": second["image"]}).to_string(),
+        ))
+        .unwrap();
+    let resp = pod_core::app(pod.clone()).oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    assert_eq!(rows(&pod, "style").await[0]["my_photo"], second["image"]);
+
+    // A missing row, and a collection without an images filler.
+    let (s, _) = get_json(&pod, "/v1/collections/style/images?id=nope").await;
+    assert_eq!(s, StatusCode::NOT_FOUND);
+    ok(
+        &pod,
+        "define_collection",
+        json!({"name": "plain", "fields": [
+        {"name": "title", "type": "text"}]}),
+    )
+    .await;
+    create(&pod, "plain", json!({"title": "x"})).await;
+    let pid = rows(&pod, "plain").await[0]["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let (s, b) = get_json(&pod, &format!("/v1/collections/plain/images?id={pid}")).await;
+    assert_eq!(
+        (s, b["error"].as_str()),
+        (StatusCode::NOT_FOUND, Some("no_images_filler"))
+    );
+}

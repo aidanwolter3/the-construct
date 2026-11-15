@@ -64,7 +64,11 @@ results; it fills each row once (refresh once) and an empty or blocked search ne
 (on_empty keep). It needs the web_search jack plugged (list_jacks; plug_jack web_search) and the model jack. \
 For pictures (a product photo for each row, from sites that block fetches), a query_field filler with extract \
 images and map {field: image | thumbnail | page | title | source} fills each row from its first image result, \
-with no model (Brave or SearXNG; DuckDuckGo has no image search). \
+with no model (Brave or SearXNG; DuckDuckGo has no image search). To let people pick a row's picture, a \
+screen with data /v1/collections/<c>/images?id=<row> lists its image results (query \
+collection:<c>:images:<row>, entities {image, thumbnail, page, title, source, n, row_id}); a tap saves one \
+with an ordinary update (payload {id: \"$item.row_id\", <field>: \"$item.image\"}) into a plain field the \
+displayed picture prefers (an expr compute: entity.my_photo ? entity.my_photo : entity.found_photo). \
 every_minutes schedules fills; on_open_minutes fills when the app opens and the data is older; upcoming \
 (a date field) drops past items; zone places times without an offset; details reads each new row's own \
 page. A page whose content a script builds (the raw HTML has no items) or that answers a plain fetch with \
