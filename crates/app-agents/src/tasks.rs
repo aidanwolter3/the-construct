@@ -11,6 +11,7 @@
 //! | ended, outcome done | done |
 //! | ended, outcome review; or reported, exited, stopped without one | review |
 //! | outcome failed or blocked; or lost, start_failed, timed_out, expired | failed |
+//! | ended with an error and no session (crashed at launch) | failed |
 //!
 //! The current run is the one the row's `run_id` names, else the newest run
 //! whose `task_id` is the row's id. When it ends, its outcome (summary and
@@ -20,6 +21,10 @@
 //! its run only adds to `diagnosis`, and a run that hasn't ended gets
 //! `stop_run`, once. Reopen ([`reopen`]) starts a run that resumes the
 //! last one's conversation with your message.
+//!
+//! A run that crashed at launch ([`Run::crashed_at_launch`]) fails its row
+//! with `Crashed at launch: <error>`; [`RETRY_AFTER_MS`] later the row is
+//! queued again with a new run, once (a retry's own crash stays failed).
 //!
 //! The collection is linked with the MCP tool `agents_link_tasks`, which
 //! adds what the wiring needs (the status options and the `run_id`,
@@ -55,6 +60,9 @@ const NEEDED_FIELDS: [&str; 4] = ["run_id", "session_id", "workspace", "diagnosi
 const DIAGNOSIS_MAX: usize = 3_900;
 /// The most of a prompt sent.
 const PROMPT_MAX: usize = 20_000;
+/// How long after a run crashed at launch its row is retried (once), in
+/// milliseconds: these crashes have been transient.
+pub const RETRY_AFTER_MS: i64 = 30_000;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Link {
@@ -240,11 +248,11 @@ pub fn task_status(r: &Run) -> &'static str {
         st::QUEUED => QUEUED,
         st::STARTING | st::WORKING => RUNNING,
         st::NEEDS_YOU => NEEDS_YOU,
-        _ => match (r.outcome.as_str(), r.end_reason.as_str()) {
+        _ => match (r.outcome.as_str(), r.end()) {
             ("done", _) => DONE,
             ("review", _) => REVIEW,
             ("failed" | "blocked", _) => FAILED,
-            (_, "lost" | "start_failed" | "timed_out" | "expired") => FAILED,
+            (_, "lost" | "start_failed" | "timed_out" | "expired" | st::CRASHED) => FAILED,
             _ => REVIEW,
         },
     }
@@ -253,7 +261,10 @@ pub fn task_status(r: &Run) -> &'static str {
 /// What an ended run adds to its row's `diagnosis`: the outcome's summary
 /// and pull request, or why it failed.
 pub fn end_note(r: &Run) -> String {
-    let (word, _) = crate::bundle::run_look(&r.state, &r.end_reason, &r.outcome);
+    if r.crashed_at_launch() {
+        return format!("Crashed at launch: {}", r.error);
+    }
+    let (word, _) = crate::bundle::run_look(&r.state, r.end(), &r.outcome);
     let summary = if r.outcome_summary.is_empty() {
         r.summary.as_str()
     } else {
@@ -349,8 +360,87 @@ pub async fn sync(pod: &Pod, clients: &Clients, runner: &Runner, state: &State) 
         let Some(run) = state.current_run(&id, &run_id) else {
             continue;
         };
+        if sending && retry_due(pod, &row, run).await {
+            sending = retry(pod, clients, runner, &link, &id, &row, run).await;
+            continue;
+        }
         follow(pod, clients, runner, &link.collection, &id, &row, run).await;
     }
+}
+
+/// Whether row `row`'s current run `run` crashed at launch and is owed its
+/// one retry now: its crash is already in the row, [`RETRY_AFTER_MS`] have
+/// passed, the row wasn't set to done or todo, and `run` isn't a retry
+/// itself.
+async fn retry_due(pod: &Pod, row: &Named, run: &Run) -> bool {
+    let ended = if run.ended_at > 0 {
+        run.ended_at
+    } else {
+        run.last_at()
+    };
+    if !run.crashed_at_launch()
+        || is_kept(row)
+        || crate::follower::now_ms() - ended < RETRY_AFTER_MS
+    {
+        return false;
+    }
+    let keys = [
+        format!("noted:{}", run.id),
+        format!("retried:{}", run.id),
+        format!("retry:{}", run.id),
+    ];
+    let Ok([noted, retried, is_retry]) = pod
+        .blocking(move |s| {
+            let mut out = [false; 3];
+            for (o, k) in out.iter_mut().zip(&keys) {
+                *o = db::marked(s, k)?;
+            }
+            Ok(out)
+        })
+        .await
+    else {
+        return false;
+    };
+    noted && !retried && !is_retry
+}
+
+/// Retry row `id`, whose run `crashed` at launch: a new run, remembered as
+/// a retry so its own crash isn't retried. Whether the runner answered.
+async fn retry(
+    pod: &Pod,
+    clients: &Clients,
+    runner: &Runner,
+    link: &Link,
+    id: &str,
+    row: &Named,
+    crashed: &Run,
+) -> bool {
+    match start_run(pod, clients, runner, link, id, row, None, None).await {
+        Ok(new) => {
+            let now = pod_core::util::now_secs();
+            let key = format!("retry:{new}");
+            let _ = pod.blocking(move |s| db::mark(s, &key, now)).await;
+        }
+        Err(e) => match refusal(&e) {
+            Some(reason) => {
+                let diagnosis = append(
+                    &text(row, "diagnosis"),
+                    &format!("Couldn't retry: {reason}"),
+                );
+                update(pod, &link.collection, id, json!({"diagnosis": diagnosis})).await;
+            }
+            None => {
+                tracing::info!(error = %e, "a crashed task's retry waits for the runner");
+                return false;
+            }
+        },
+    }
+    let (now, key) = (
+        pod_core::util::now_secs(),
+        format!("retried:{}", crashed.id),
+    );
+    let _ = pod.blocking(move |s| db::mark(s, &key, now)).await;
+    true
 }
 
 /// Send `start_run` for row `id` (`resume_from` and `prompt` for Reopen),
@@ -695,6 +785,27 @@ mod tests {
         r.error = "The sandbox didn't wake".into();
         assert_eq!(end_note(&r), "Didn't start: The sandbox didn't wake");
         assert_eq!(end_note(&run("ended", "reported", "done")), "Done.");
+    }
+
+    #[test]
+    fn a_crash_at_launch_fails() {
+        let mut r = run("ended", "exited", "");
+        r.error = "foreman: claude exited with code 1".into();
+        assert_eq!(task_status(&r), FAILED);
+        assert_eq!(
+            end_note(&r),
+            "Crashed at launch: foreman: claude exited with code 1"
+        );
+        // Once Claude started (a session), it is an ordinary ending.
+        r.session_id = "session_01Abc".into();
+        assert_eq!(task_status(&r), REVIEW);
+        r.session_id.clear();
+        // Stopped by a person, or with a report: not a crash.
+        r.end_reason = "stopped".into();
+        assert_eq!(task_status(&r), REVIEW);
+        r.end_reason = "reported".into();
+        r.outcome = "done".into();
+        assert_eq!(task_status(&r), DONE);
     }
 
     #[test]

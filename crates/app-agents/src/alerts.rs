@@ -109,10 +109,10 @@ pub fn notifications(effects: &[Effect], app: &str, now: i64) -> Vec<NewNotifica
                 target(run_id),
             ),
             Effect::Ended { run } => {
-                let (word, _) = bundle::run_look(&run.state, &run.end_reason, &run.outcome);
+                let (word, _) = bundle::run_look(&run.state, run.end(), &run.outcome);
                 let bad = matches!(
-                    run.end_reason.as_str(),
-                    "lost" | "start_failed" | "timed_out" | "expired"
+                    run.end(),
+                    "lost" | "start_failed" | "timed_out" | "expired" | crate::state::CRASHED
                 ) && run.outcome.is_empty();
                 if bad {
                     n(
@@ -120,7 +120,7 @@ pub fn notifications(effects: &[Effect], app: &str, now: i64) -> Vec<NewNotifica
                         format!("agents:ended:{}", run.id),
                         format!("{word}: {}", named(&run.title)),
                         if run.error.is_empty() {
-                            end_reason_text(&run.end_reason).to_owned()
+                            end_reason_text(run.end()).to_owned()
                         } else {
                             text::clean(&run.error, 300)
                         },
@@ -176,6 +176,7 @@ pub fn end_reason_text(reason: &str) -> &'static str {
         "expired" => "The run wasn't started in time.",
         "stopped" => "The run was stopped.",
         "exited" => "The run ended without a report.",
+        "crashed" => "The run crashed at launch.",
         _ => "The run ended.",
     }
 }

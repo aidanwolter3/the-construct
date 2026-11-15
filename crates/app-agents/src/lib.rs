@@ -337,7 +337,7 @@ pub const MANIFEST: SourceManifest = SourceManifest {
                 ("ran", "true once it has a last run"),
                 (
                     "last_status",
-                    "the last run's state, end reason or outcome, e.g. done or expired",
+                    "the last run's state, end reason or outcome, e.g. done or expired (crashed for a run that crashed at launch)",
                 ),
                 ("last_status_text", "e.g. Done, Expired"),
                 ("last_status_color", "#RRGGBB"),
@@ -1053,7 +1053,7 @@ async fn review_route(State(pod): State<Pod>, headers: HeaderMap, body: Bytes) -
             "the runner lists no such run",
         );
     };
-    if !bundle::needs_review(&run.state, &run.end_reason, &run.outcome) {
+    if !bundle::needs_review(&run.state, run.end(), &run.outcome) {
         return refuse(
             StatusCode::CONFLICT,
             "not_needing_review",
