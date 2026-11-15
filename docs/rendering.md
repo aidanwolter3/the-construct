@@ -345,8 +345,9 @@ the pod, only the layout's id (and the page screen's) on top. On Android: `adb l
 
 ```
 perf agents/task: 96 frames in 1580 ms, 60 fps; display 8.3 ms (120 Hz); slow 31 (worst: interval 48.2 work 41.0 =
-scene 38.1 [layout 37.9 x1, data 1] + render 2.6 [shape 1.9 x14, atlas 0.0 x0] + present 0.3; acquire 6.1; moves 3);
-interval 16.6/25.0/48.2; work 1.9/9.8/41.0; ...; moves/frame 0:3 1:60 2:28 3+:4; drag step 21.3 pt ±38%
+scene 38.1 [layout 37.9 x1, data 1] + render 2.6 [prepare 0.4, submit 0.2, shape 1.9 x14, atlas 0.0 x0] + present
+0.3; acquire 6.1; moves 3); interval 16.6/25.0/48.2; work 1.9/9.8/41.0; ...; runs 47 quads 16 layers 2; moves/frame
+0:3 1:60 2:28 3+:4; drag step 21.3 pt ±38%
 ```
 
 An example, wrapped here (it is one line). Spreads are p50/p95/max in milliseconds.
@@ -360,12 +361,30 @@ An example, wrapped here (it is one line). Spreads are p50/p95/max in millisecon
 | work | The frame's own time: scene + render + present (not waiting for the surface) |
 | scene | `Session::scene`: placing the laid-out frame again (a scroll), or laying it out (`layouts`: how many, how long; `data`: engine snapshots that changed what is drawn) |
 | render | The GPU renderer's CPU side; `shaped` text runs not kept from earlier frames, `atlas` images and icons drawn into the glyph atlas (count, KB) |
+| prepare | Of render, glyphon's prepare of the text: every glyph's vertex and atlas lookup, per layer |
+| submit | Of render, encoding the frame's draws and submitting them to the GPU (driver time) |
 | acquire | Waiting for the surface's next image: vsync and the GPU's backlog |
 | present | Handing the image to the compositor |
 | latency | From the first touch a frame shows to the frame starting |
 | moves/frame | During a drag, frames by how many touch moves arrived since the one before; uneven counts mean uneven steps |
 | drag step | During a drag, the scroll per frame: mean and variation (standard deviation over mean); a high variation judders |
-| runs, quads | The most text runs (with icons and images) and quads a frame drew |
+| runs, quads, layers | The most text runs (with icons and images), quads and layers (quads under text, then text) a frame drew |
+
+On Android each presented frame also goes to the system as two hints (`pacing.rs`, decision
+`android-frame-pacing`): the surface asks for the display's highest refresh rate (`ANativeWindow_setFrameRate`,
+Android 11), so adaptive refresh doesn't drop a 120 Hz panel to 60 Hz mid-scroll, and the drawing thread reports
+each frame's work to a performance hint session whose target is one frame at that rate (`APerformanceHint`,
+Android 13), so the scheduler doesn't leave it on a slow core. Both are looked up at run time; logcat says once what
+was set (`adb logcat -s construct-render | grep pacing`).
+
+The renderer's own cost per frame, without a phone: `tests/integration/bench.rs` scrolls a list shaped like the
+Construct Tasks layout and a task's long details through the session and `gpu::Renderer` (lavapipe in a cloud
+session) and prints the same stages. A software adapter's milliseconds aren't a phone's, but the split between
+stages is:
+
+```bash
+cargo test --release -p construct-render --test integration bench -- --ignored --nocapture --test-threads 1
+```
 
 ## Agent previews (MCP)
 

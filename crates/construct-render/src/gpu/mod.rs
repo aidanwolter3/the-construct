@@ -148,6 +148,12 @@ pub struct RenderStats {
     /// Text runs, icons and images, and quads drawn.
     pub runs: u32,
     pub quads: u32,
+    /// Layers drawn (quads under text, then text), and glyphon's prepare
+    /// of their text (glyph vertices and atlas lookups) and the encoding
+    /// and submitting of the frame.
+    pub layers: u16,
+    pub prepare: std::time::Duration,
+    pub submit: std::time::Duration,
 }
 
 /// A text run's shape: its text, face, size, line height, wrap width and
@@ -523,6 +529,7 @@ impl Renderer {
             self.shaped
                 .retain(|_, (_, f)| frame_no - *f < SHAPED_IDLE_FRAMES);
         }
+        let prepare_started = std::time::Instant::now();
         for (li, runs) in text_layers.iter().enumerate() {
             let buffers: Vec<&glyphon::Buffer> =
                 runs.iter().map(|t| &self.shaped[&key(t)].0).collect();
@@ -606,6 +613,9 @@ impl Renderer {
                 )
                 .map_err(|e| GpuError(format!("text: {e}")))?;
         }
+        stats.prepare = prepare_started.elapsed();
+        stats.layers = plan.len() as u16;
+        let submit_started = std::time::Instant::now();
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("frame"),
         });
@@ -650,6 +660,7 @@ impl Renderer {
         }
         queue.submit(Some(encoder.finish()));
         self.atlas.trim();
+        stats.submit = submit_started.elapsed();
         self.stats = stats;
         Ok(())
     }
