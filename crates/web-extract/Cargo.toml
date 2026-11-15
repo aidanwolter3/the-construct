@@ -24,6 +24,8 @@ scraper = "0.29"
 tokio-tungstenite = { version = "0.30", default-features = false, features = ["connect"] }
 futures-util = { version = "0.3", default-features = false, features = ["sink"] }
 tracing = "0.1"
+# geteuid: a root server starts the browser as an unprivileged user.
+libc = "0.2"
 
 [dev-dependencies]
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "net"] }
