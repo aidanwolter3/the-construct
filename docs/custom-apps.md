@@ -231,6 +231,12 @@ A collection can keep itself current from the web (decision
   fills a row when its URL or query is new or changed (the default for `query_field`); `"every"` (the default
   for `url_field`) fills on each run but skips the model when the page's text didn't change (decision
   [`web-and-agent-modules`](decisions/web-and-agent-modules.md)).
+- **Image search:** a `query_field` filler with `extract: "images"` searches each row's text for pictures and fills
+  `map` from the first image result: `{"image_url": "image"}`, where a field takes `image` (the picture's URL),
+  `thumbnail`, `page` (the page it is on), `title` or `source` (the site). No model, so no model budget; Brave's
+  image search or SearXNG's `images` category (DuckDuckGo has none, and the fill says so). It suits product photos
+  from shops that block the pod's fetches. `refresh` and `on_empty` work as for other `query_field` fillers, and
+  it can't be previewed (decision [`image-search`](decisions/image-search.md)).
 - **Rendered pages:** `render: true` (or `{wait_for: <CSS selector>, timeout_seconds: 5..=45}`) on a `url` or
   `url_field` filler, or on `collections_preview`, loads the page (and its `details` pages) in the server's headless
   browser first, for pages a script builds or that answer a plain fetch with a bot check; the extractors read the

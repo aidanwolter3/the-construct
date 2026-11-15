@@ -58,6 +58,10 @@ pub const DEFAULT_FETCHES: u32 = 10;
 pub const DEFAULT_FILLS_PER_DAY: u32 = 4;
 /// The extractor name of a model reading the page's text.
 pub const LLM: &str = "llm";
+/// The extractor of a `query_field` filler that searches for images
+/// (decision `image-search`): each row's `map` fields come from its first
+/// image result ([`web_extract::search::IMAGE_FIELDS`]), with no model.
+pub const IMAGES: &str = "images";
 /// A rendered filler's shortest interval (and `on_open_minutes`), minutes:
 /// a render starts a browser.
 pub const MIN_RENDER_EVERY: u32 = 6 * 60;
@@ -191,7 +195,8 @@ pub enum Source {
         /// The field (id) holding each row's search query (decision
         /// `web-and-agent-modules`): the row's item is searched with the
         /// pod's `web_search` jack and a model fills the row's fields from
-        /// the results (extract [`LLM`] only).
+        /// the results (extract [`LLM`]), or the first image result fills
+        /// them (extract [`IMAGES`], decision `image-search`).
         #[serde(default, skip_serializing_if = "Option::is_none")]
         query_field: Option<String>,
         /// Request headers; values may name a secret, `{secret:<name>}`.
@@ -343,6 +348,11 @@ impl Filler {
     /// Whether a model reads each changed page (`extract: llm`).
     pub fn is_llm(&self) -> bool {
         matches!(&self.source, Source::Fetch { extract, .. } if extract == LLM)
+    }
+
+    /// Whether each row's query is an image search (`extract: images`).
+    pub fn is_images(&self) -> bool {
+        matches!(&self.source, Source::Fetch { extract, .. } if extract == IMAGES)
     }
 
     /// Whether running it costs model calls.
@@ -754,8 +764,14 @@ pub fn parse(
             {
                 return Err("a fetch filler has one of \"url\" (one page), \"url_field\" (each row's own page) or \"query_field\" (each row's own web search)".into());
             }
-            if query_field.is_some() && text(o, "extract") != LLM {
-                return Err("a query_field filler has extract \"llm\": a model picks each row's fields from its search results".into());
+            if query_field.is_some() && ![LLM, IMAGES].contains(&text(o, "extract")) {
+                return Err("a query_field filler has extract \"llm\" (a model picks each row's fields from its search results) or \"images\" (its first image result fills them)".into());
+            }
+            if query_field.is_none() && text(o, "extract") == IMAGES {
+                return Err(
+                    "extract \"images\" is for query_field fillers: each row's own image search"
+                        .into(),
+                );
             }
             let mut headers = BTreeMap::new();
             match o.get("headers") {
@@ -803,7 +819,28 @@ pub fn parse(
                 ));
             }
             let zone = text(o, "zone").to_owned();
-            let (map, extract, items, types, script) = if extract == LLM {
+            let (map, extract, items, types, script) = if extract == IMAGES {
+                // The first image result's parts, by name; no model.
+                let (map, _) = parse_map(def, o.get("map"), "filler")?;
+                let fields = web_extract::search::IMAGE_FIELDS;
+                if let Some((id, p)) = map.iter().find(|(_, p)| !fields.contains(&p.as_str())) {
+                    return Err(format!(
+                        "filler.map.{}: '{p}' is not part of an image result ({})",
+                        def.name_of(id),
+                        fields.join(", ")
+                    ));
+                }
+                if query_field.as_ref().is_some_and(|q| map.contains_key(q)) {
+                    return Err("filler.map can't fill the query_field itself".into());
+                }
+                (
+                    map,
+                    IMAGES.to_owned(),
+                    String::new(),
+                    Vec::new(),
+                    String::new(),
+                )
+            } else if extract == LLM {
                 // A model answers the fields; no paths.
                 let fields: Vec<String> = match o.get("fields") {
                     None | Some(Value::Null) => def
