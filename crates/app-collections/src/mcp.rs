@@ -1705,10 +1705,10 @@ pub(crate) async fn import_file(
     format: crate::import::Format,
     note: Option<String>,
 ) -> Result<Value, Value> {
-    let edits = crate::import::parse(bytes, format)
+    let caps = crate::adapter(pod).caps;
+    let edits = crate::import::parse(bytes, format, caps.edit_rows)
         .map_err(|d| fail(StatusCode::UNPROCESSABLE_ENTITY, "invalid_file", d))?;
     let note = note_arg(&json!({ "note": note }), "Imported rows");
-    let caps = crate::adapter(pod).caps;
     edit(pod, caps, collection, edits, note, Confirm::Token(None)).await
 }
 
@@ -1752,7 +1752,7 @@ async fn fetch_edits(
     let format = format
         .or_else(|| crate::import::Format::of_url(&url))
         .unwrap_or_else(|| crate::import::Format::sniff(&String::from_utf8_lossy(&bytes)));
-    crate::import::parse(&bytes, format)
+    crate::import::parse(&bytes, format, adapter.caps().edit_rows)
         .map_err(|d| fail(StatusCode::UNPROCESSABLE_ENTITY, "invalid_file", d))
 }
 

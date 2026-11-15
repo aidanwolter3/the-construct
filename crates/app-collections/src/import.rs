@@ -17,6 +17,8 @@ use serde_json::{Map, Value, json};
 
 /// The largest file an import reads.
 pub const MAX_BYTES: usize = 8 * 1024 * 1024;
+/// The most cells a CSV record holds.
+pub const MAX_CELLS: usize = 1_000;
 
 /// A file's format.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -79,8 +81,10 @@ impl Format {
 /// One edit and where it came from (`line 4`, `item 3`).
 pub type Located = (String, Value);
 
-/// The edits in `bytes`, each with where it came from.
-pub fn parse(bytes: &[u8], format: Format) -> Result<Vec<Located>, String> {
+/// The edits in `bytes`, each with where it came from: at most `max`,
+/// refused as soon as the file holds more, so a file of millions of tiny
+/// rows is never built into edits only for `edit_rows`' cap to refuse them.
+pub fn parse(bytes: &[u8], format: Format, max: usize) -> Result<Vec<Located>, String> {
     if bytes.len() > MAX_BYTES {
         return Err(format!("the file is over {} MiB", MAX_BYTES >> 20));
     }
@@ -93,6 +97,9 @@ pub fn parse(bytes: &[u8], format: Format) -> Result<Vec<Located>, String> {
             let Value::Array(items) = v else {
                 return Err("a JSON file holds an array of edits or rows".into());
             };
+            if items.len() > max {
+                return Err(too_many(max));
+            }
             items
                 .into_iter()
                 .enumerate()
@@ -107,7 +114,11 @@ pub fn parse(bytes: &[u8], format: Format) -> Result<Vec<Located>, String> {
             .lines()
             .enumerate()
             .filter(|(_, l)| !l.trim().is_empty())
-            .map(|(i, l)| {
+            .enumerate()
+            .map(|(n, (i, l))| {
+                if n >= max {
+                    return Err(too_many(max));
+                }
                 let at = format!("line {}", i + 1);
                 serde_json::from_str(l)
                     .map_err(|e| format!("{at}: not JSON: {e}"))
@@ -115,8 +126,12 @@ pub fn parse(bytes: &[u8], format: Format) -> Result<Vec<Located>, String> {
                     .map(|e| (at, e))
             })
             .collect(),
-        Format::Csv => csv_edits(text),
+        Format::Csv => csv_edits(text, max),
     }
+}
+
+fn too_many(max: usize) -> String {
+    format!("the file holds over {max} edits, the most one edit_rows makes")
 }
 
 /// An item as an edit: one with `op` as it is, any other object a create.
@@ -128,8 +143,8 @@ fn edit_of(item: Value) -> Result<Value, String> {
     }
 }
 
-fn csv_edits(text: &str) -> Result<Vec<Located>, String> {
-    let mut records = csv_records(text)?.into_iter();
+fn csv_edits(text: &str, max: usize) -> Result<Vec<Located>, String> {
+    let mut records = csv_records(text, max)?.into_iter();
     let Some((_, header)) = records.next() else {
         return Err("the CSV file is empty".into());
     };
@@ -186,8 +201,9 @@ fn csv_edits(text: &str) -> Result<Vec<Located>, String> {
     Ok(out)
 }
 
-/// RFC 4180 records with the line each starts on.
-fn csv_records(text: &str) -> Result<Vec<(usize, Vec<String>)>, String> {
+/// RFC 4180 records with the line each starts on: the header and at most
+/// `max` others (blank ones aren't kept), each of at most [`MAX_CELLS`].
+fn csv_records(text: &str, max: usize) -> Result<Vec<(usize, Vec<String>)>, String> {
     let mut out = Vec::new();
     let mut cells = Vec::new();
     let mut cell = String::new();
@@ -215,11 +231,16 @@ fn csv_records(text: &str) -> Result<Vec<(usize, Vec<String>)>, String> {
         }
         match c {
             '"' if cell.is_empty() => quoted = true,
-            ',' => cells.push(std::mem::take(&mut cell)),
+            ',' => {
+                cells.push(std::mem::take(&mut cell));
+                if cells.len() >= MAX_CELLS {
+                    return Err(format!("line {start}: over {MAX_CELLS} cells"));
+                }
+            }
             '\r' if chars.peek() == Some(&'\n') => {}
             '\n' => {
                 cells.push(std::mem::take(&mut cell));
-                out.push((start, std::mem::take(&mut cells)));
+                push_record(&mut out, start, std::mem::take(&mut cells), max)?;
                 line += 1;
                 start = line;
                 any = false;
@@ -232,9 +253,27 @@ fn csv_records(text: &str) -> Result<Vec<(usize, Vec<String>)>, String> {
     }
     if any {
         cells.push(cell);
-        out.push((start, cells));
+        push_record(&mut out, start, cells, max)?;
     }
     Ok(out)
+}
+
+/// Keep a record unless it is blank (after the header), refusing more than
+/// the header and `max` others.
+fn push_record(
+    out: &mut Vec<(usize, Vec<String>)>,
+    start: usize,
+    cells: Vec<String>,
+    max: usize,
+) -> Result<(), String> {
+    if !out.is_empty() && cells.iter().all(|c| c.trim().is_empty()) {
+        return Ok(());
+    }
+    if out.len() > max {
+        return Err(too_many(max));
+    }
+    out.push((start, cells));
+    Ok(())
 }
 
 #[cfg(test)]
@@ -244,7 +283,7 @@ mod tests {
     #[test]
     fn csv_reads_quotes_refs_and_ops() {
         let csv = "name,qty,recipe.name,op,id\r\n\"Flour, plain\",\"1 1/2 cups\",Bread,,\n\nSalt,,Bread,update,r1\n\"Say \"\"hi\"\"\nthere\",2,,,\n";
-        let e = parse(csv.as_bytes(), Format::Csv).unwrap();
+        let e = parse(csv.as_bytes(), Format::Csv, 10).unwrap();
         assert_eq!(e.len(), 3);
         assert_eq!(e[0].0, "line 2");
         assert_eq!(
@@ -258,17 +297,37 @@ mod tests {
         assert_eq!(e[2].0, "line 5");
         assert_eq!(e[2].1["values"]["name"], "Say \"hi\"\nthere");
         assert!(
-            parse(b"a,b\n1\n", Format::Csv)
+            parse(b"a,b\n1\n", Format::Csv, 10)
                 .unwrap_err()
                 .starts_with("line 2:")
         );
-        assert!(parse(b"a,a\n1,2\n", Format::Csv).is_err());
+        assert!(parse(b"a,a\n1,2\n", Format::Csv, 10).is_err());
+    }
+
+    #[test]
+    fn a_file_of_more_edits_than_the_cap_is_refused_as_it_is_read() {
+        let msg = too_many(2);
+        let csv = format!("a\n{}", "1\n".repeat(3));
+        assert_eq!(parse(csv.as_bytes(), Format::Csv, 2).unwrap_err(), msg);
+        assert_eq!(parse(b"a\n1\n\n\n1\n", Format::Csv, 2).unwrap().len(), 2);
+        let jsonl = "{}\n".repeat(3);
+        assert_eq!(parse(jsonl.as_bytes(), Format::Jsonl, 2).unwrap_err(), msg);
+        assert_eq!(parse(b"[{}, {}, {}]", Format::Json, 2).unwrap_err(), msg);
+        // Blank records count for nothing, and aren't kept either.
+        let blank = format!("a\n{}1\n", "\n".repeat(100_000));
+        assert_eq!(parse(blank.as_bytes(), Format::Csv, 2).unwrap().len(), 1);
+        let wide = format!("a\n{}\n", ",".repeat(MAX_CELLS));
+        assert!(
+            parse(wide.as_bytes(), Format::Csv, 2)
+                .unwrap_err()
+                .contains("cells")
+        );
     }
 
     #[test]
     fn json_and_jsonl_take_edits_or_rows() {
         let j = br#"[{"title": "A"}, {"op": "delete", "id": "r1"}]"#;
-        let e = parse(j, Format::Json).unwrap();
+        let e = parse(j, Format::Json, 10).unwrap();
         assert_eq!(
             e[0],
             (
@@ -278,10 +337,10 @@ mod tests {
         );
         assert_eq!(e[1].1["op"], "delete");
         let l = b"{\"title\": \"A\"}\n\n{\"title\": \"B\"}\n";
-        let e = parse(l, Format::Jsonl).unwrap();
+        let e = parse(l, Format::Jsonl, 10).unwrap();
         assert_eq!(e[1].0, "line 3");
         assert!(
-            parse(b"[1]", Format::Json)
+            parse(b"[1]", Format::Json, 10)
                 .unwrap_err()
                 .starts_with("item 1")
         );
