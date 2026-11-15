@@ -289,6 +289,8 @@ fn node_features(node: &UiNode, out: &mut BTreeSet<&'static str>) {
             if *fill {
                 add(feature::BOX_FILL);
             }
+            // `border_style` (feature::BOX_BORDER_STYLE) needs nothing: a
+            // client without it ignores the field and draws a solid border.
         }
         UiNode::ChoiceChips { remember, .. } => {
             add(feature::CHOICE_CHIPS);

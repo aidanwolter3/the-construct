@@ -102,7 +102,7 @@ struct Globals {
     _pad: f32,
 }
 
-const QUAD_ATTRS: [wgpu::VertexAttribute; 9] = wgpu::vertex_attr_array![
+const QUAD_ATTRS: [wgpu::VertexAttribute; 10] = wgpu::vertex_attr_array![
     0 => Float32x4, // rect
     1 => Float32x4, // bg_color
     2 => Float32x4, // border_color
@@ -112,6 +112,7 @@ const QUAD_ATTRS: [wgpu::VertexAttribute; 9] = wgpu::vertex_attr_array![
     6 => Float32x2, // shadow_params
     7 => Float32x4, // shadow_color
     8 => Float32x4, // clip
+    9 => Float32x2, // border_dash
 ];
 
 /// Draws scenes into texture views of one format.

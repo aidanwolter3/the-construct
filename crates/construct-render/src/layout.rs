@@ -4,8 +4,8 @@
 //! frame drawn here reads like the app's.
 
 use protocol::{
-    ActionIntent, Align, DataBundle, EmbedPresentation, EntityRecord, ImageShape, Justify,
-    Orientation, TextStyle, Tone, UiNode,
+    ActionIntent, Align, BorderStyle, DataBundle, EmbedPresentation, EntityRecord, ImageShape,
+    Justify, Orientation, TextStyle, Tone, UiNode,
 };
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -121,6 +121,8 @@ enum Paint {
     Quad {
         bg: Rgba,
         border: Option<Rgba>,
+        /// The border in dashes (`core://Box` `border_style: Dashed`).
+        dashed: bool,
         radius: f32,
     },
     Text {
@@ -1243,6 +1245,7 @@ impl<'i> Build<'_, 'i> {
                     Paint::Quad {
                         bg: theme.primary,
                         border: None,
+                        dashed: false,
                         radius: 20.0,
                     },
                     Some(sem),
@@ -1321,6 +1324,7 @@ impl<'i> Build<'_, 'i> {
                     Paint::Quad {
                         bg,
                         border: None,
+                        dashed: false,
                         radius: 6.0,
                     },
                     Some(sem),
@@ -1371,6 +1375,7 @@ impl<'i> Build<'_, 'i> {
                     Paint::Quad {
                         bg: theme.outline,
                         border: None,
+                        dashed: false,
                         radius: 0.0,
                     },
                     None,
@@ -1527,6 +1532,7 @@ impl<'i> Build<'_, 'i> {
                 background,
                 content_color,
                 border_color,
+                border_style,
                 corner_dp,
                 padding_h_dp,
                 padding_v_dp,
@@ -1557,6 +1563,7 @@ impl<'i> Build<'_, 'i> {
                     Paint::Quad {
                         bg: bg.unwrap_or(Rgba::TRANSPARENT),
                         border,
+                        dashed: *border_style == BorderStyle::Dashed,
                         radius: *corner_dp as f32,
                     }
                 } else {
@@ -1708,6 +1715,7 @@ impl<'i> Build<'_, 'i> {
                         } else {
                             theme.outline
                         }),
+                        dashed: false,
                         radius: 4.0,
                     },
                     Some(sem),
@@ -1771,12 +1779,14 @@ impl<'i> Build<'_, 'i> {
                                 .token("accent_surface")
                                 .unwrap_or(theme.surface_variant),
                             border: None,
+                            dashed: false,
                             radius: 8.0,
                         }
                     } else {
                         Paint::Quad {
                             bg: Rgba::TRANSPARENT,
                             border: Some(theme.outline),
+                            dashed: false,
                             radius: 8.0,
                         }
                     };
@@ -1955,6 +1965,7 @@ impl<'i> Build<'_, 'i> {
                                 .and_then(|c| ctx.color(c))
                                 .unwrap_or(theme.surface_variant),
                             border: None,
+                            dashed: false,
                             radius: 0.0,
                         },
                         None => Paint::None,
@@ -2157,6 +2168,7 @@ impl<'i> Build<'_, 'i> {
                         Paint::Quad {
                             bg: Rgba([0.0, 0.0, 0.0, 0.6]),
                             border: None,
+                            dashed: false,
                             radius: 12.0,
                         },
                         None,
@@ -2191,6 +2203,7 @@ impl<'i> Build<'_, 'i> {
                         Paint::Quad {
                             bg: c,
                             border: None,
+                            dashed: false,
                             radius: 3.0,
                         },
                         None,
@@ -2325,6 +2338,7 @@ impl<'i> Build<'_, 'i> {
                         Paint::Quad {
                             bg: Rgba([0.0, 0.0, 0.0, 0.6]),
                             border: None,
+                            dashed: false,
                             radius: 12.0,
                         },
                         Some(rsem),
@@ -2368,6 +2382,7 @@ impl<'i> Build<'_, 'i> {
                         Paint::Quad {
                             bg: Rgba::TRANSPARENT,
                             border: Some(theme.outline),
+                            dashed: false,
                             radius: 8.0,
                         },
                         Some(sem),
@@ -2543,6 +2558,7 @@ impl<'i> Build<'_, 'i> {
                     Paint::Quad {
                         bg: theme.surface_variant,
                         border: None,
+                        dashed: false,
                         radius: 0.0,
                     },
                     None,
@@ -2669,6 +2685,7 @@ impl<'i> Build<'_, 'i> {
             Paint::Quad {
                 bg: Rgba::TRANSPARENT,
                 border: Some(self.theme.outline),
+                dashed: false,
                 radius: 8.0,
             },
             None,
@@ -2812,6 +2829,11 @@ pub struct Pressed {
 /// How much of the text colour a pressed row is washed with: it darkens a
 /// light page and lightens a dark one, as Android's ripple does.
 const PRESSED_ALPHA: f32 = 0.10;
+
+/// A dashed border's dashes and gaps (points), before they are stretched
+/// to fit the box (`core://Box` `border_style: Dashed`).
+const BORDER_DASH: f32 = 4.0;
+const BORDER_GAP: f32 = 3.0;
 
 /// How far the card behind a deck's top one (`core://List` `stack`) peeks
 /// out below it, and how much narrower it is each side (points).
@@ -3235,11 +3257,19 @@ impl Laid {
         let [x, y, w, h] = rect;
         match &e.paint {
             Paint::None => {}
-            Paint::Quad { bg, border, radius } => {
+            Paint::Quad {
+                bg,
+                border,
+                dashed,
+                radius,
+            } => {
                 let r = radius.min(w.min(h) / 2.0);
                 let mut q = QuadInstance::fill(rect, *bg, r);
                 if let Some(b) = border {
                     q = q.border(*b, 1.0);
+                    if *dashed {
+                        q = q.dashed(BORDER_DASH, BORDER_GAP);
+                    }
                 }
                 q.clip = clip;
                 scene.draws.push(Draw::Quad(q));
