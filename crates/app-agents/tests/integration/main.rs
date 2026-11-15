@@ -3,6 +3,7 @@
 
 mod actions;
 mod always_on;
+mod continue_run;
 mod follow;
 mod layouts;
 mod notify;

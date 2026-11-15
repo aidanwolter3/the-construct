@@ -91,6 +91,7 @@ pub const CREATE_SCHEDULE_PATH: &str = "/v1/agents/schedules/create";
 pub const UPDATE_SCHEDULE_PATH: &str = "/v1/agents/schedules/update";
 pub const DELETE_SCHEDULE_PATH: &str = "/v1/agents/schedules/delete";
 pub const REOPEN_PATH: &str = "/v1/agents/tasks/reopen";
+pub const CONTINUE_PATH: &str = "/v1/agents/sessions/continue";
 pub const REVIEW_PATH: &str = "/v1/agents/sessions/review";
 pub const TIMELINE_PATH: &str = "/v1/agents/sessions/timeline";
 
@@ -182,9 +183,18 @@ pub const MANIFEST: SourceManifest = SourceManifest {
         PathSpec {
             pattern: REOPEN_PATH,
             query_keys: &[],
-            doc: "Reopen a linked task whose run has ended: {id (the row) or run_id (a run of \
-                  it), message}. A new run resumes the last one's conversation with the message \
-                  as the next prompt; the row goes back to queued.",
+            doc: "Reopen an ended run: {id (a linked task's row) or run_id (any ended run, a \
+                  task's or a schedule's), message}. A new run resumes the last one's \
+                  conversation with the message as the next prompt; a task's row goes back to \
+                  queued.",
+        },
+        PathSpec {
+            pattern: CONTINUE_PATH,
+            query_keys: &[],
+            doc: "Continue a run that timed out: {run_id}. A new run resumes its conversation, \
+                  told it ran out of time, with its schedule's (or its own) time limit; once per \
+                  run (a second press answers the same run). 409 not_timed_out otherwise; show \
+                  it where can_continue is true.",
         },
         PathSpec {
             pattern: RUN_SCHEDULE_PATH,
@@ -359,7 +369,15 @@ pub const MANIFEST: SourceManifest = SourceManifest {
                 ("session_id", "Claude Code's session id"),
                 (
                     "resumed_from",
-                    "the run this one continues (Reopen), or empty",
+                    "the run this one continues (Reopen or Continue), or empty",
+                ),
+                (
+                    "continued_by",
+                    "the newest run that continues this one, or empty",
+                ),
+                (
+                    "can_continue",
+                    "true when it timed out and hasn't been continued: Continue (/v1/agents/sessions/continue {run_id}) carries it on",
                 ),
                 ("claude_url", "opens it in the Claude app, or empty"),
             ],
@@ -583,6 +601,7 @@ impl AppAdapter for AgentsAdapter {
             .route(PAUSE_SCHEDULE_PATH, post(pause_schedule_route))
             .route(RESUME_SCHEDULE_PATH, post(resume_schedule_route))
             .route(REOPEN_PATH, post(reopen_route))
+            .route(CONTINUE_PATH, post(continue_route))
             .route(REVIEW_PATH, post(review_route))
             .route(TIMELINE_PATH, get(timeline_route))
     }
@@ -1253,20 +1272,17 @@ async fn reopen_route(State(pod): State<Pod>, headers: HeaderMap, body: Bytes) -
         Err(e) => return e.into_response(),
     };
     let id = if by_run {
-        match state
-            .runs
-            .get(&id)
-            .filter(|r| r.origin == cap::ORIGIN_TASK)
-            .map(|r| r.work_item_id.clone())
-        {
-            Some(t) if !t.is_empty() => t,
-            _ => {
-                return refuse(
-                    StatusCode::NOT_FOUND,
-                    "not_found",
-                    "that run is not a task's",
-                );
+        match state.runs.get(&id) {
+            Some(r) if r.origin == cap::ORIGIN_TASK && !r.work_item_id.is_empty() => {
+                r.work_item_id.clone()
             }
+            // A schedule's run (or one the phone started): no row to follow,
+            // so the new run is sent as it is.
+            Some(r) => {
+                let request_id = format!("reopen_{}_{}", r.id, follower::now_ms());
+                return resume(&pod, a, &runner, r, &message, request_id).await;
+            }
+            None => return refuse(StatusCode::NOT_FOUND, "not_found", "no such run"),
         }
     } else {
         id
@@ -1279,6 +1295,151 @@ async fn reopen_route(State(pod): State<Pod>, headers: HeaderMap, body: Bytes) -
             detail,
         ),
     }
+}
+
+/// What Continue tells the run that carries on a timed-out one.
+pub const CONTINUE_MESSAGE: &str = "You reached your time limit and were stopped before you finished. \
+Continue the task from where you left off: check what is already done (branches, pull requests, CI) \
+before repeating anything, then finish the rest and report as the task asks.";
+
+/// Continue a run that timed out: a new run resumes its conversation with
+/// [`CONTINUE_MESSAGE`]. One per run (the request id is the run's), and
+/// only for a run that timed out and hasn't been continued.
+async fn continue_route(State(pod): State<Pod>, headers: HeaderMap, body: Bytes) -> Response {
+    let body = match body_of(&pod, &headers, &body).await {
+        Ok(b) => b,
+        Err(r) => return r,
+    };
+    let run_id = match field(&body, "run_id", 120) {
+        Ok(id) if cap::valid_id(&id) => id,
+        Ok(_) => {
+            return refuse(
+                StatusCode::BAD_REQUEST,
+                "invalid_request",
+                "\"run_id\" names a run",
+            );
+        }
+        Err(r) => return r,
+    };
+    let (a, runner) = match signed_in(&pod).await {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    let state = match pod.blocking(db::state).await {
+        Ok(st) => st.map(|(s, _)| s).unwrap_or_default(),
+        Err(e) => return e.into_response(),
+    };
+    let Some(r) = state.runs.get(&run_id) else {
+        return refuse(StatusCode::NOT_FOUND, "not_found", "no such run");
+    };
+    if let Some(next) = state.continuation_of(&r.id) {
+        return Json(json!({"ok": true, "run_id": next.id})).into_response();
+    }
+    if !r.timed_out() {
+        return refuse(
+            StatusCode::CONFLICT,
+            "not_timed_out",
+            "only a run that timed out can be continued; use Reopen to follow up another",
+        );
+    }
+    if r.origin == cap::ORIGIN_TASK && !r.work_item_id.is_empty() {
+        // A task's run: Reopen keeps its row in step with the new run.
+        return match tasks::reopen(
+            &pod,
+            &a.clients,
+            &runner,
+            &state,
+            &r.work_item_id,
+            CONTINUE_MESSAGE,
+        )
+        .await
+        {
+            Ok(run_id) => Json(json!({"ok": true, "run_id": run_id})).into_response(),
+            Err((status, error, detail)) => refuse(
+                StatusCode::from_u16(status).unwrap_or(StatusCode::BAD_GATEWAY),
+                error,
+                detail,
+            ),
+        };
+    }
+    let request_id = format!("continue_{}", r.id);
+    resume(&pod, a, &runner, r, CONTINUE_MESSAGE, request_id).await
+}
+
+/// Start a run that resumes ended run `r`'s conversation with `message`,
+/// for the same work item. A schedule's run takes the schedule's model
+/// and time limit as they are now (so a raised limit applies), else the
+/// run's own. The answer's run goes into the mirror at once.
+async fn resume(
+    pod: &Pod,
+    a: &AgentsAdapter,
+    runner: &Runner,
+    r: &state::Run,
+    message: &str,
+    request_id: String,
+) -> Response {
+    if r.is_active() {
+        return refuse(
+            StatusCode::CONFLICT,
+            "run_not_ended",
+            "the run hasn't ended; answer it in the Claude app or stop it first",
+        );
+    }
+    let schedule = if r.origin == cap::ORIGIN_SCHEDULE {
+        let item = r.work_item_id.clone();
+        pod.blocking(move |s| Ok(db::schedules(s)?.into_iter().find(|sc| sc.id == item)))
+            .await
+            .ok()
+            .flatten()
+    } else {
+        None
+    };
+    let (model, max_runtime_min) = match &schedule {
+        Some(sc) => (sc.model.clone(), sc.max_runtime_min),
+        None => (r.model.clone(), r.max_runtime_min),
+    };
+    let cmd = Command::StartRun(cap::StartRun {
+        request_id,
+        workspace: r.workspace.clone(),
+        work_item_id: r.work_item_id.clone(),
+        occurrence: None,
+        origin: if r.origin == cap::ORIGIN_SCHEDULE {
+            cap::ORIGIN_SCHEDULE
+        } else {
+            cap::ORIGIN_TASK
+        }
+        .into(),
+        title: if r.title.is_empty() {
+            "Untitled run".to_owned()
+        } else {
+            r.title.chars().take(200).collect()
+        },
+        prompt: message.to_owned(),
+        model: (!model.is_empty()).then_some(model),
+        max_runtime_min: (max_runtime_min > 0)
+            .then(|| max_runtime_min.min(cap::MAX_RUNTIME_MIN as i64) as u32),
+        resume_from: Some(r.id.clone()),
+    });
+    let answer = match cap::command(&a.clients, runner, &cmd).await {
+        Ok(v) => v,
+        Err(e) => return runner_error(e),
+    };
+    if let Some(record) = answer.get("run").filter(|r| r.is_object()).cloned() {
+        let saved = pod
+            .blocking(move |s| {
+                if let Some((mut st, _)) = db::state(s)? {
+                    st.apply_run(&record);
+                    db::save(s, &st, follower::now_ms())?;
+                }
+                Ok(())
+            })
+            .await;
+        if saved.is_err() {
+            tracing::warn!("a continued run could not be stored");
+        }
+        pod.publish_data_all(NAME);
+    }
+    Json(json!({"ok": true, "run_id": cap::run_id_of(&answer)})).into_response()
 }
 
 async fn review_route(State(pod): State<Pod>, headers: HeaderMap, body: Bytes) -> Response {

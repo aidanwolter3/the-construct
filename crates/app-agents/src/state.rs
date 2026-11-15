@@ -454,6 +454,14 @@ impl Run {
         !self.is_active() && self.outcome_state() == OUTCOME_NEEDS_REVIEW
     }
 
+    /// Ended at its time limit, with no outcome that settles it (no
+    /// outcome, or one that needs review): its work may be unfinished.
+    pub fn timed_out(&self) -> bool {
+        !self.is_active()
+            && self.end_reason == "timed_out"
+            && matches!(self.outcome_state(), OUTCOME_NONE | OUTCOME_NEEDS_REVIEW)
+    }
+
     /// Went wrong: its outcome failed, or it ended lost, unstarted, timed
     /// out or expired with no outcome that says otherwise.
     pub fn failed(&self) -> bool {
@@ -795,6 +803,30 @@ impl State {
             .values()
             .filter(|r| r.work_item_id == item_id)
             .max_by_key(|r| (r.queued_at, r.last_at(), r.id.clone()))
+    }
+
+    /// The newest run that continues run `id` (`resumed_from`: Reopen or
+    /// Continue).
+    pub fn continuation_of(&self, id: &str) -> Option<&Run> {
+        self.runs
+            .values()
+            .filter(|r| r.resumed_from == id)
+            .max_by_key(|r| (r.queued_at, r.last_at(), r.id.clone()))
+    }
+
+    /// Run `r`, or the last run of the chain that continues it: the run
+    /// that carries its work on now.
+    pub fn latest_of<'a>(&'a self, r: &'a Run) -> &'a Run {
+        let mut at = r;
+        // A chain can't loop (a run resumes one that ended before it was
+        // made), but a runner's bad records could: stop after a few.
+        for _ in 0..32 {
+            match self.continuation_of(&at.id) {
+                Some(next) if next.id != at.id => at = next,
+                _ => break,
+            }
+        }
+        at
     }
 }
 

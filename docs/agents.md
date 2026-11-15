@@ -73,16 +73,27 @@ is plugged and to which URL; `unplug_jack agent_runner` signs out, like `POST /v
   working · 1 needs you · 2 queued · 1 waiting" or "Nothing running". A run's `status_text` is one of Queued,
   Starting, Working, Needs you, Parked, Stalled, Restarting, Stopping, Finishing, Waiting on CI, Waiting on review,
   Waiting on deploy, Done, Reviewed, Needs review, CI failed, Closed unmerged, Deploy failed, Blocked, Failed,
-  Stopped, Lost, Didn't start, Timed out, Expired or Ended; `queue_text`, `explain_text`, `stage_text`,
+  Stopped, Lost, Didn't start, Timed out, Expired or Ended. A run that ended at its time limit reads Timed out
+  unless its outcome settled otherwise (done, failed or pending): a timed-out run the runner marks `needs_review`
+  still reads Timed out, and keeps `needs_review` for Mark reviewed. `queue_text`, `explain_text`, `stage_text`,
   `attempt_text` and `claim_mismatch_text` say more. A sandbox has `reason`, `slots_text`, `preflight_text` and
   `disk_text`. The entities and their fields are in the source's manifest (`describe_vocabulary`,
   `list_data_sources`).
 - **Actions:** `/v1/agents/sessions/stop {run_id}` (`session_id` is read the same way, for older layouts),
   `/v1/agents/sandboxes/wake {workspace, minutes?}`, `/v1/agents/sandboxes/repair {workspace}` (asks first),
-  `/v1/agents/tasks/start {workspace, title, prompt, task_id?, model?, max_runtime_min?}`, `/v1/agents/tasks/reopen`,
-  `/v1/agents/sessions/review {run_id}`, and the schedule actions below. They need a valid pod session; runner
-  refusals come back as 400, 404 or 409 `runner_refused`, and 502 otherwise (never 401, which would sign the device
-  out).
+  `/v1/agents/tasks/start {workspace, title, prompt, task_id?, model?, max_runtime_min?}`, `/v1/agents/tasks/reopen`
+  (`{id, message}` for a linked task's row; `{run_id, message}` for any ended run, a task's or a schedule's),
+  `/v1/agents/sessions/continue {run_id}`, `/v1/agents/sessions/review {run_id}`, and the schedule actions below.
+  They need a valid pod session; runner refusals come back as 400, 404 or 409 `runner_refused`, and 502 otherwise
+  (never 401, which would sign the device out).
+- **Continue** (`/v1/agents/sessions/continue {run_id}`) carries on a run that timed out: a new run resumes its
+  conversation (`resume_from`) with a message saying it ran out of time and should pick up where it stopped,
+  checking what is already done first. A schedule's run takes the schedule's model and max runtime as they are
+  now (so a raised limit applies; no `occurrence`, so the runner's 2 h expiry counts from the press), any other
+  run its own; a task's run goes through Reopen, so its row follows. The request id is the run's
+  (`continue_<run id>`), and a run already continued answers its continuation, so a second press starts nothing.
+  Another run is 409 `not_timed_out`. A run's `can_continue` is true while it timed out, has a Claude session and
+  hasn't been continued; `continued_by` names the newest run that continues it (Reopen or Continue).
 - **Mark reviewed** sends `mark_reviewed`: the runner, which owns the outcome, sets it `done` with `reviewed`, and
   the run reads Reviewed. The answer's record goes into the mirror at once. A run that doesn't need review is 409
   `not_needing_review`. (Before CAP v3 this was a pod-only mark in `agents_reviewed`; that table is gone.)
@@ -119,7 +130,8 @@ when none is given), a workspace, a model (empty: the sandbox's default), a max 
   update | delete | pause | resume | run, …}` does the same for Claude.
 - The `schedules` feed (`agents://schedules/<name>`) has the definition, `next_run_text` (e.g. "in 3 h · Sun 03:52",
   in the schedule's zone), and the last run's state and outcome (`last_status_text` e.g. Waiting on CI, Done,
-  Missed), from its newest occurrence and the run that answered it.
+  Missed), from its newest occurrence and the run that answered it, or the last run that continues that one
+  (Reopen or Continue).
 
 Schedule definitions were files in the runner's repository before CAP v3; they move to the pod at cutover (see the
 decision). A schedule's prompt runs unattended with its workspace's access, so only a signed-in pod session or the
@@ -133,11 +145,12 @@ form, and Sign out (asks first). A run's card shows its status (Parked, Stalled,
 (the queue reason, the background task), what it needs from you, its tool or what it did. A run's screen adds what
 Parked, Stalled or Restarting means, the attempt, a warning when the report disagrees with GitHub, **Open in
 Claude**, **Pull request**, **Deploy run**, **Stop** (on active runs, asks first), **Mark reviewed** on a run that
-needs review, a **Follow up** form (Reopen) on an ended task run, and its log. Schedules have **Run now**, **Pause**
-(asks first), **Resume** and **Edit** (a screen with the schedule, an editor whose fields show the current values
-and keep them when left blank, and **Delete schedule**, which asks first), and a **New schedule** form. Sandboxes
-show why one is degraded, suspended or down, its preflight, slots and a repeat-disk warning; an asleep or suspended
-one has **Wake**, a down one **Repair** (asks first). It uses existing vocabulary only.
+needs review, **Continue** on a run that timed out, a **Follow up** form (Reopen) on an ended run, and its log.
+Schedules have **Run now**, **Pause** (asks first), **Resume** and **Edit** (a screen with the schedule, an editor
+whose fields show the current values and keep them when left blank, and **Delete schedule**, which asks first), and
+a **New schedule** form. Sandboxes show why one is degraded, suspended or down, its preflight, slots and a
+repeat-disk warning; an asleep or suspended one has **Wake**, a down one **Repair** (asks first). It uses existing
+vocabulary only.
 
 A layout made from it (`{"type": "core://Ref", "app": "agents", "part": "layout"}`) is linked from home; home can
 show `${agents://runner/status#summary_text}` as its one-line summary.
@@ -199,6 +212,8 @@ and optional text fields `run_id`, `session_id`, `workspace`, `stage` and `diagn
 - **Reopen:** `POST /v1/agents/tasks/reopen {id, message}` (or `{run_id, message}` from a run's screen) needs the
   row's last run to have ended. It sends `start_run` with `resume_from` the last run and `message` as the prompt; the
   new run continues the conversation in its worktree, and the row goes back to `queued` with the new `run_id`.
+  `{run_id, message}` also reopens a run that isn't a linked task's (a schedule's): the new run is sent for the same
+  work item, with the schedule's current model and max runtime.
 - **Mark reviewed** on the row's current run turns its outcome `done`, and the row follows it to `done`.
 
 ## Setting it up in a pod

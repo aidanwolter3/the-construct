@@ -73,6 +73,9 @@ pub fn run_look(r: &Run) -> (&'static str, &'static str) {
         state::INTERRUPTED => ("Restarting", ORANGE),
         state::STOPPING => ("Stopping", GRAY),
         state::CLOSING => ("Finishing", BLUE),
+        // Timed out reads as such even when its outcome needs review: the
+        // limit, not the review, is what happened.
+        state::ENDED if r.timed_out() => ("Timed out", RED),
         state::ENDED => match r.outcome_state() {
             state::OUTCOME_DONE if r.outcome.reviewed => ("Reviewed", GREEN),
             state::OUTCOME_DONE => ("Done", GREEN),
@@ -218,8 +221,9 @@ pub fn status(st: Option<&(State, Health)>, host: &str, now_ms: i64) -> EntityRe
 }
 
 /// One run's entity (`agents://sessions/<run id>`). `schedule`: the name of
-/// the pod's schedule it runs for, if any.
-pub fn session(r: &Run, schedule: &str, now_ms: i64) -> EntityRecord {
+/// the pod's schedule it runs for, if any; `continued_by`: the run that
+/// continues it (Reopen or Continue), if any.
+pub fn session(r: &Run, schedule: &str, continued_by: &str, now_ms: i64) -> EntityRecord {
     let (status_text, color) = run_look(r);
     let active = r.is_active();
     let elapsed = match (r.started_at, r.ended_at) {
@@ -305,6 +309,10 @@ pub fn session(r: &Run, schedule: &str, now_ms: i64) -> EntityRecord {
         "origin": r.origin,
         "session_id": r.session_id,
         "resumed_from": r.resumed_from,
+        "continued_by": continued_by,
+        // Continue: a run that timed out, never continued, whose Claude
+        // session the runner can resume.
+        "can_continue": r.timed_out() && continued_by.is_empty() && !r.session_id.is_empty(),
         // The runner's link, else one built from a claude.ai session id.
         "claude_url": if r.claude_url.is_empty() {
             text::claude_url(&r.session_id).unwrap_or_default()
@@ -316,6 +324,12 @@ pub fn session(r: &Run, schedule: &str, now_ms: i64) -> EntityRecord {
         a.extend(b);
     }
     record(v)
+}
+
+/// The id of the run that continues `r`, or empty.
+fn next_of<'a>(st: Option<&'a (State, Health)>, r: &Run) -> &'a str {
+    st.and_then(|(s, _)| s.continuation_of(&r.id))
+        .map_or("", |n| n.id.as_str())
 }
 
 /// The schedule name of run `r`, from the pod's schedules.
@@ -350,8 +364,10 @@ pub fn sessions(
     let mut order = Vec::new();
     for r in list {
         let uri = format!("agents://sessions/{}", r.id);
-        b.entities
-            .insert(uri.clone(), session(r, schedule_name(r, schedules), now_ms));
+        b.entities.insert(
+            uri.clone(),
+            session(r, schedule_name(r, schedules), next_of(st, r), now_ms),
+        );
         order.push(uri);
     }
     b.queries.insert(crate::SESSIONS_QUERY.into(), order);
@@ -501,7 +517,10 @@ pub fn schedules(
             .last
             .filter(|o| !o.run_id.is_empty())
             .and_then(|o| mirror.and_then(|m| m.runs.get(&o.run_id)))
-            .or_else(|| mirror.and_then(|m| m.latest_run(&sc.id)));
+            .or_else(|| mirror.and_then(|m| m.latest_run(&sc.id)))
+            // A run continued (Reopen, Continue) is carried on by the last
+            // run of its chain.
+            .map(|r| mirror.map_or(r, |m| m.latest_of(r)));
         let (last_status, last_text, last_color) = match (v.last, run) {
             (Some(o), _) if o.state == db::OCC_MISSED => ("missed".to_owned(), "Missed", ORANGE),
             (Some(o), _) if o.state == db::OCC_REFUSED => ("refused".to_owned(), "Refused", RED),
@@ -577,7 +596,7 @@ pub fn timeline(
     {
         b.entities.insert(
             format!("agents://sessions/{id}"),
-            session(r, schedule_name(r, schedules), now_ms),
+            session(r, schedule_name(r, schedules), next_of(st, r), now_ms),
         );
     }
     let entries: Vec<&Value> = log
@@ -740,6 +759,10 @@ mod tests {
             ("ended", "lost", "", "", "Lost"),
             ("ended", "start_failed", "", "", "Didn't start"),
             ("ended", "timed_out", "", "", "Timed out"),
+            // Timed out wins over a review, not over a settled outcome.
+            ("ended", "timed_out", "needs_review", "", "Timed out"),
+            ("ended", "timed_out", "done", "", "Done"),
+            ("ended", "timed_out", "pending", "ci", "Waiting on CI"),
             ("ended", "expired", "", "", "Expired"),
         ] {
             assert_eq!(
