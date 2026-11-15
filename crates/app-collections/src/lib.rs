@@ -57,6 +57,7 @@ pub mod expr;
 pub mod fill;
 pub mod filler;
 pub mod follow;
+pub mod images;
 pub mod import;
 pub mod lookup;
 mod mcp;
@@ -177,6 +178,11 @@ pub const MANIFEST: SourceManifest = SourceManifest {
             pattern: "/v1/collections/{collection}/row?id={id}",
             query_keys: &["collection:{collection}:row:{id}"],
             doc: "One row as a one-item list (a row's own screen).",
+        },
+        PathSpec {
+            pattern: "/v1/collections/{collection}/images?id={id}",
+            query_keys: &["collection:{collection}:images:{id}"],
+            doc: "A row's image results (decision pick-a-photo): up to 10 pictures the collection's images filler finds for the row's query, best first, each {image, thumbnail, page, title, source, n, row_id}; a picked one is saved with an ordinary update (e.g. payload {id: \"$item.row_id\", my_photo: \"$item.image\"}). Add &filler=<id> when the collection has more than one images filler.",
         },
     ],
     actions: &[
@@ -398,6 +404,7 @@ impl AppAdapter for CollectionsAdapter {
                 get(filler_route),
             )
             .route("/v1/collections/{collection}/row", get(row_screen_route))
+            .route("/v1/collections/{collection}/images", get(images_route))
             .route(
                 "/v1/collections/{collection}/actions/{action}",
                 post(action_route),
@@ -879,6 +886,7 @@ async fn write_row(
         }
         row.updated_at = now;
         db::save_row(tx, &name, &row)?;
+        db::note_writes(tx, &name, Some(&before_values), &row, None, now)?;
         Ok(Ok((json!({ "ok": true, "id": row.id }), jobs, computed)))
     })
     .await?;
@@ -1122,6 +1130,34 @@ async fn filler_route(
 #[derive(serde::Deserialize)]
 struct IdQuery {
     id: String,
+}
+
+#[derive(serde::Deserialize)]
+struct ImagesQuery {
+    id: String,
+    #[serde(default)]
+    filler: Option<String>,
+}
+
+/// `GET /v1/collections/{collection}/images?id=<row>[&filler=<id>]`: the
+/// row's image results ([`images::results`]).
+async fn images_route(
+    State(pod): State<Pod>,
+    Path(collection): Path<String>,
+    axum::extract::Query(q): axum::extract::Query<ImagesQuery>,
+) -> Response {
+    match images::results(&pod, &collection, &q.id, q.filler.as_deref()).await {
+        Ok(b) => Json(b).into_response(),
+        Err(images::NoResults::NotFound) => pod_core::json_error(
+            StatusCode::NOT_FOUND,
+            json!({ "error": "row_not_found", "collection": collection, "id": q.id }),
+        ),
+        Err(images::NoResults::NoFiller) => pod_core::json_error(
+            StatusCode::NOT_FOUND,
+            json!({ "error": "no_images_filler", "collection": collection,
+                    "detail": "the collection has no query_field filler with extract images" }),
+        ),
+    }
 }
 
 async fn row_screen_route(

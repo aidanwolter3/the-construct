@@ -7,4 +7,5 @@ mod follow;
 mod layouts;
 mod notify;
 mod runner;
+mod schedules;
 mod tasks;

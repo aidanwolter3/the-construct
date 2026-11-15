@@ -655,6 +655,7 @@ pub fn store(
 ) -> rusqlite::Result<Result<StoreResult, String>> {
     let name = &def.name;
     let mapped = filler.mapped();
+    let writer = db::filler_writer(&filler.id);
     let mut out = Stored::default();
     let mut jobs = Vec::new();
     let mut created = Vec::new();
@@ -730,6 +731,7 @@ pub fn store(
                         )?);
                         r.updated_at = now;
                         db::save_row(tx, name, r)?;
+                        db::note_writes(tx, name, Some(&before), r, Some(&writer), now)?;
                         out.updated += 1;
                     } else {
                         out.unchanged += 1;
@@ -746,6 +748,7 @@ pub fn store(
                         tx, def, None, &mut r, &write, now, caps,
                     )?);
                     db::insert_row(tx, name, &r)?;
+                    db::note_writes(tx, name, None, &r, Some(&writer), now)?;
                     created.push(r.id.clone());
                     out.created += 1;
                 }
@@ -797,6 +800,7 @@ pub fn store(
                     tx, def, None, &mut r, &write, now, caps,
                 )?);
                 db::insert_row(tx, name, &r)?;
+                db::note_writes(tx, name, None, &r, Some(&writer), now)?;
                 created.push(r.id.clone());
                 out.created += 1;
             }
@@ -1804,6 +1808,7 @@ async fn fill_details(
         .filter(|f| !mapped.contains(f))
         .collect();
     let d2 = def.clone();
+    let writer = db::filler_writer(&filler.id);
     let now = pod_core::util::now_secs();
     let stored = pod
         .blocking(move |s| {
@@ -1826,6 +1831,7 @@ async fn fill_details(
                             caps,
                         )?);
                         db::save_row(tx, &d2.name, &r)?;
+                        db::note_writes(tx, &d2.name, Some(&before), &r, Some(&writer), now)?;
                     }
                 }
                 Ok((jobs, crate::follow::settle(tx, now, caps)?))
@@ -2038,6 +2044,14 @@ pub async fn fill(pod: &Pod, collection: &str, filler_id: &str, force: bool) -> 
                                 )?);
                                 r.updated_at = now;
                                 db::save_row(tx, &d2.name, &r)?;
+                                db::note_writes(
+                                    tx,
+                                    &d2.name,
+                                    Some(&before),
+                                    &r,
+                                    Some(&db::filler_writer(&f2.id)),
+                                    now,
+                                )?;
                                 out.updated += 1;
                             } else {
                                 out.unchanged += 1;

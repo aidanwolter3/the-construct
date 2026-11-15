@@ -1,5 +1,7 @@
 # The Agents source mirrors the runner's runs over CAP v2
 
+Superseded in part by [agents-cap-v3](agents-cap-v3.md): CAP v3 (a stored cursor and the event log replayed after a gap, notifications from events), the Tasks table, and schedules owned by the pod.
+
 Date: 2026-11-09. Related: [agents-data-source](agents-data-source.md) (superseded in part),
 [notification-owner](notification-owner.md), [named-migrations](named-migrations.md), D50, D52.
 

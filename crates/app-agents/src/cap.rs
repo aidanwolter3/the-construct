@@ -1,16 +1,19 @@
-//! The runner's side of the wire: the Construct Agent Protocol, v2
-//! (decision `agents-runs`).
+//! The runner's side of the wire: the Construct Agent Protocol, v3
+//! (decision `agents-cap-v3`; the contract is the Foreman's `docs/cap-v3.md`).
 //!
 //! The pod connects out to the runner; the runner never calls the pod.
 //! Every request carries the pod's bearer token for the runner. The runner
 //! sends whole records with a `version`; the pod keeps the higher one.
-//! - `GET /v2/snapshot`: `{v: 2, cursor, runs[], sprites[], schedules[],
+//! - `GET /v3/snapshot`: `{v: 3, cursor, oldest_seq, runs[], sprites[],
 //!   checks[]}`, the state now.
-//! - `GET /v2/stream?since=<cursor>`: server-sent events with `id: <seq>`,
-//!   resumable with `Last-Event-ID`; each is `{v: 2, seq, ts, type,
-//!   record}` ([`Event`]).
-//! - `GET /v2/runs/<id>/log`: one run's history, read on demand.
-//! - `POST /v2/commands`: one of a fixed set ([`Command`]). Errors are JSON
+//! - `GET /v3/events?since=<seq>&limit=<n>`: `{events, next, more}`, the
+//!   retained event log as pages ([`events`]); 410 `cursor_too_old` when
+//!   `since` is older than the log ([`CapError::CursorTooOld`]).
+//! - `GET /v3/stream?since=<seq>`: the same events as server-sent events
+//!   with `id: <seq>`, resumable with `Last-Event-ID`; each is `{v: 3, seq,
+//!   ts, type, record}` ([`Event`]).
+//! - `GET /v3/runs/<id>/log`: one run's history, read on demand.
+//! - `POST /v3/commands`: one of a fixed set ([`Command`]). Errors are JSON
 //!   `{error}` with 400, 401, 404, 409 or 502.
 //!
 //! Everything the runner sends is read leniently (unknown fields ignored,
@@ -25,12 +28,12 @@ use serde_json::{Value, json};
 pub enum Kind {
     Run,
     Sprite,
-    Schedule,
     Check,
 }
 
-/// A CAP v2 event: `{v: 2, seq, ts (ms), type, record}`, `type` one of
-/// `run.updated`, `sprite.updated`, `schedule.updated`, `check.updated`.
+/// A CAP v3 event: `{v: 3, seq, ts (ms), type, record}`, `type` one of
+/// `run.updated`, `sprite.updated`, `check.updated` (and `outcome.updated`,
+/// a run's outcome reminder, read as a run).
 #[derive(Debug, Clone, PartialEq)]
 pub struct Event {
     pub seq: i64,
@@ -39,46 +42,91 @@ pub struct Event {
     pub kind: Kind,
     /// The whole record.
     pub record: Value,
+    /// The outcome's 24 h review reminder (`reminder: true` on the event,
+    /// its record or the record's outcome): notified without push.
+    pub reminder: bool,
 }
 
 impl Event {
-    /// The event in `v` (one SSE message's data), or `None` when it is not a
-    /// v2 event with a sequence number, a known type and a record.
+    /// The event in `v` (one SSE message's data, or one item of an events
+    /// page), or `None` when it is not a v3 event with a sequence number, a
+    /// known type and a record.
     pub fn parse(v: &Value) -> Option<Self> {
-        if v.get("v").and_then(Value::as_i64) != Some(2) {
+        if v.get("v").and_then(Value::as_i64) != Some(3) {
             return None;
         }
         let kind = match v.get("type").and_then(Value::as_str)? {
-            "run.updated" => Kind::Run,
+            "run.updated" | "outcome.updated" => Kind::Run,
             "sprite.updated" => Kind::Sprite,
-            "schedule.updated" => Kind::Schedule,
             "check.updated" => Kind::Check,
             _ => return None,
         };
         let record = v.get("record").filter(|r| r.is_object())?.clone();
+        let flag =
+            |x: Option<&Value>| x.and_then(|r| r.get("reminder")) == Some(&Value::Bool(true));
+        let reminder = kind == Kind::Run
+            && (flag(Some(v)) || flag(Some(&record)) || flag(record.get("outcome")));
         Some(Self {
             seq: v.get("seq")?.as_i64()?,
             ts: v.get("ts").and_then(Value::as_i64).unwrap_or(0),
             kind,
             record,
+            reminder,
         })
     }
 }
+
+/// One page of the event log (`GET /v3/events`).
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct Page {
+    pub events: Vec<Event>,
+    /// Where the next page starts (`since` for it).
+    pub next: i64,
+    /// More events after this page.
+    pub more: bool,
+}
+
+/// What a run is for: `task`, `schedule` or `phone` (`start_run`'s
+/// `origin`).
+pub const ORIGIN_TASK: &str = "task";
+pub const ORIGIN_SCHEDULE: &str = "schedule";
+
+/// `start_run`'s fields.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct StartRun {
+    /// The pod's idempotency key: the same key again answers the same run.
+    pub request_id: String,
+    pub workspace: String,
+    /// The pod's work item: a task row's id or a schedule's id.
+    pub work_item_id: String,
+    /// A schedule's occurrence: the time it is for, RFC 3339 with its
+    /// offset (`2026-11-15T03:52:00-07:00`), so the runner can place it.
+    pub occurrence: Option<String>,
+    /// [`ORIGIN_TASK`] or [`ORIGIN_SCHEDULE`].
+    pub origin: String,
+    pub title: String,
+    pub prompt: String,
+    /// `None`: the Sprite's default.
+    pub model: Option<String>,
+    /// `None`: the runner's default (240).
+    pub max_runtime_min: Option<u32>,
+    /// An ended run whose conversation the new run continues, with `prompt`
+    /// as the next message (Reopen).
+    pub resume_from: Option<String>,
+}
+
+/// The longest run the runner takes, in minutes.
+pub const MAX_RUNTIME_MIN: u32 = 480;
+/// The longest Wake the runner takes, in minutes.
+pub const MAX_WAKE_MIN: u32 = 60;
 
 /// The commands the pod may send: a fixed set, so a pod (or a leaked pod
 /// token) can't send arbitrary shell or configuration.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Command {
-    /// Start a run (202), or get the task's run that hasn't ended (200).
-    /// `resume_from`: an ended run whose conversation the new run continues
-    /// with `prompt` as the next message (Reopen).
-    StartRun {
-        workspace: String,
-        task_id: String,
-        title: String,
-        prompt: String,
-        resume_from: Option<String>,
-    },
+    /// Start a run (202), or get the same request's run, or the work
+    /// item's run that hasn't ended (200).
+    StartRun(StartRun),
     StopRun {
         run_id: String,
     },
@@ -86,14 +134,14 @@ pub enum Command {
         workspace: String,
         minutes: u32,
     },
-    RunSchedule {
-        name: String,
+    /// Re-provision a Sprite that is down (202).
+    RepairSprite {
+        workspace: String,
     },
-    PauseSchedule {
-        name: String,
-    },
-    ResumeSchedule {
-        name: String,
+    /// Acknowledge an ended run that needs review; its outcome turns done
+    /// (409 unless its outcome is `needs_review`).
+    MarkReviewed {
+        run_id: String,
     },
 }
 
@@ -101,16 +149,20 @@ impl Command {
     /// The request body.
     pub fn body(&self) -> Value {
         match self {
-            Self::StartRun {
-                workspace,
-                task_id,
-                title,
-                prompt,
-                resume_from,
-            } => {
-                let mut b = json!({"type": "start_run", "workspace": workspace,
-                    "task_id": task_id, "title": title, "prompt": prompt});
-                if let Some(r) = resume_from {
+            Self::StartRun(s) => {
+                let mut b = json!({"type": "start_run", "request_id": s.request_id,
+                    "workspace": s.workspace, "work_item_id": s.work_item_id,
+                    "origin": s.origin, "title": s.title, "prompt": s.prompt});
+                if let Some(o) = &s.occurrence {
+                    b["occurrence"] = json!(o);
+                }
+                if let Some(m) = &s.model {
+                    b["model"] = json!(m);
+                }
+                if let Some(m) = s.max_runtime_min {
+                    b["max_runtime_min"] = json!(m);
+                }
+                if let Some(r) = &s.resume_from {
                     b["resume_from"] = json!(r);
                 }
                 b
@@ -119,9 +171,10 @@ impl Command {
             Self::WakeSprite { workspace, minutes } => {
                 json!({"type": "wake_sprite", "workspace": workspace, "minutes": minutes})
             }
-            Self::RunSchedule { name } => json!({"type": "run_schedule", "name": name}),
-            Self::PauseSchedule { name } => json!({"type": "pause_schedule", "name": name}),
-            Self::ResumeSchedule { name } => json!({"type": "resume_schedule", "name": name}),
+            Self::RepairSprite { workspace } => {
+                json!({"type": "repair_sprite", "workspace": workspace})
+            }
+            Self::MarkReviewed { run_id } => json!({"type": "mark_reviewed", "run_id": run_id}),
         }
     }
 }
@@ -154,9 +207,11 @@ pub enum CapError {
     Unreachable(String),
     /// The runner refused the pod's token (401).
     Unauthorized,
+    /// The cursor is older than the runner's log (410): take a snapshot.
+    CursorTooOld,
     /// Any other error status, with the runner's `error` text.
     Status(u16, String),
-    /// An answer that isn't CAP v2.
+    /// An answer that isn't CAP v3.
     Invalid(String),
 }
 
@@ -165,9 +220,12 @@ impl std::fmt::Display for CapError {
         match self {
             Self::Unreachable(e) => write!(f, "the runner can't be reached ({e})"),
             Self::Unauthorized => f.write_str("the runner refused the pod's token"),
+            Self::CursorTooOld => {
+                f.write_str("the runner's log no longer reaches the pod's cursor")
+            }
             Self::Status(s, e) if e.is_empty() => write!(f, "the runner answered {s}"),
             Self::Status(s, e) => write!(f, "the runner answered {s}: {e}"),
-            Self::Invalid(e) => write!(f, "the runner's answer is not CAP v2 ({e})"),
+            Self::Invalid(e) => write!(f, "the runner's answer is not CAP v3 ({e})"),
         }
     }
 }
@@ -294,6 +352,9 @@ async fn error_of(resp: reqwest::Response) -> CapError {
     if status == 401 {
         return CapError::Unauthorized;
     }
+    if status == 410 {
+        return CapError::CursorTooOld;
+    }
     let body: Value = json_capped(resp, MAX_ERROR_BODY)
         .await
         .unwrap_or(Value::Null);
@@ -305,11 +366,11 @@ async fn error_of(resp: reqwest::Response) -> CapError {
     CapError::Status(status, text)
 }
 
-/// `GET /v2/snapshot`.
+/// `GET /v3/snapshot`.
 pub async fn snapshot(clients: &Clients, runner: &Runner) -> Result<Value, CapError> {
     let resp = clients
         .request
-        .get(format!("{}/v2/snapshot", runner.url))
+        .get(format!("{}/v3/snapshot", runner.url))
         .bearer_auth(&runner.token)
         .send()
         .await
@@ -318,20 +379,63 @@ pub async fn snapshot(clients: &Clients, runner: &Runner) -> Result<Value, CapEr
         return Err(error_of(resp).await);
     }
     let v = json_capped(resp, MAX_BODY).await?;
-    if !v.is_object() || v.get("v").and_then(Value::as_i64) != Some(2) {
-        return Err(CapError::Invalid("not a v2 snapshot".into()));
+    if !v.is_object() || v.get("v").and_then(Value::as_i64) != Some(3) {
+        return Err(CapError::Invalid("not a v3 snapshot".into()));
     }
     Ok(v)
 }
 
-/// `GET /v2/runs/<id>/log`: `{entries: [{ts, kind, text}]}`, oldest first.
+/// The most events asked for per page.
+pub const PAGE_LIMIT: usize = 500;
+
+/// `GET /v3/events?since=<since>&limit=<limit>`: one page of the log.
+pub async fn events(
+    clients: &Clients,
+    runner: &Runner,
+    since: i64,
+    limit: usize,
+) -> Result<Page, CapError> {
+    let resp = clients
+        .request
+        .get(format!("{}/v3/events", runner.url))
+        .query(&[
+            ("since", since.to_string()),
+            ("limit", limit.min(PAGE_LIMIT).to_string()),
+        ])
+        .bearer_auth(&runner.token)
+        .send()
+        .await
+        .map_err(|e| CapError::Unreachable(short(&e)))?;
+    if !resp.status().is_success() {
+        return Err(error_of(resp).await);
+    }
+    let v = json_capped(resp, MAX_BODY).await?;
+    let Some(list) = v.get("events").and_then(Value::as_array) else {
+        return Err(CapError::Invalid("not an events page".into()));
+    };
+    let events: Vec<Event> = list.iter().filter_map(Event::parse).collect();
+    let last = events.iter().map(|e| e.seq).max().unwrap_or(since);
+    let next = v
+        .get("next")
+        .and_then(Value::as_i64)
+        .unwrap_or(last)
+        .max(since);
+    let more = v.get("more").and_then(Value::as_bool).unwrap_or(false);
+    // A page that says there is more but moves nowhere would loop.
+    if more && next <= since {
+        return Err(CapError::Invalid("an events page that doesn't move".into()));
+    }
+    Ok(Page { events, next, more })
+}
+
+/// `GET /v3/runs/<id>/log`: `{entries: [{ts, kind, text}]}`, oldest first.
 pub async fn run_log(clients: &Clients, runner: &Runner, id: &str) -> Result<Value, CapError> {
     if !valid_id(id) {
         return Err(CapError::Status(400, "not a run id".into()));
     }
     let resp = clients
         .request
-        .get(format!("{}/v2/runs/{id}/log", runner.url))
+        .get(format!("{}/v3/runs/{id}/log", runner.url))
         .bearer_auth(&runner.token)
         .send()
         .await
@@ -346,12 +450,11 @@ pub async fn run_log(clients: &Clients, runner: &Runner, id: &str) -> Result<Val
     Ok(v)
 }
 
-/// `POST /v2/commands`: the runner's answer (`{run}`, `{sprite}` or
-/// `{schedule}`).
+/// `POST /v3/commands`: the runner's answer (`{run}` or `{sprite}`).
 pub async fn command(clients: &Clients, runner: &Runner, cmd: &Command) -> Result<Value, CapError> {
     let resp = clients
         .request
-        .post(format!("{}/v2/commands", runner.url))
+        .post(format!("{}/v3/commands", runner.url))
         .bearer_auth(&runner.token)
         .json(&cmd.body())
         .send()
@@ -367,7 +470,7 @@ pub async fn command(clients: &Clients, runner: &Runner, cmd: &Command) -> Resul
     }
 }
 
-/// `GET /v2/stream?since=<cursor>`: the open response, its body still to
+/// `GET /v3/stream?since=<cursor>`: the open response, its body still to
 /// read with [`SseParser`].
 pub async fn open_stream(
     clients: &Clients,
@@ -376,7 +479,7 @@ pub async fn open_stream(
 ) -> Result<reqwest::Response, CapError> {
     let resp = clients
         .stream
-        .get(format!("{}/v2/stream", runner.url))
+        .get(format!("{}/v3/stream", runner.url))
         .query(&[("since", since.to_string())])
         .header("Last-Event-ID", since.to_string())
         .header("Accept", "text/event-stream")
@@ -525,45 +628,80 @@ mod tests {
 
     #[test]
     fn events_parse_leniently() {
-        let e = Event::parse(&json!({"v": 2, "seq": 42, "ts": 5, "type": "run.updated",
+        let e = Event::parse(&json!({"v": 3, "seq": 42, "ts": 5, "type": "run.updated",
             "record": {"id": "run_1", "version": 3}, "extra": true}))
         .unwrap();
-        assert_eq!((e.seq, e.kind), (42, Kind::Run));
+        assert_eq!((e.seq, e.kind, e.reminder), (42, Kind::Run, false));
         assert_eq!(e.record["id"], "run_1");
+        let r = Event::parse(&json!({"v": 3, "seq": 43, "type": "outcome.updated",
+            "reminder": true, "record": {"id": "run_1", "version": 4}}))
+        .unwrap();
+        assert!(r.reminder && r.kind == Kind::Run);
+        let r = Event::parse(&json!({"v": 3, "seq": 44, "type": "run.updated",
+            "record": {"id": "run_1", "version": 5, "outcome": {"reminder": true}}}))
+        .unwrap();
+        assert!(r.reminder);
         for bad in [
-            json!({"v": 1, "seq": 1, "type": "run.updated", "record": {}}),
-            json!({"v": 2, "seq": 1, "type": "session.status", "record": {}}),
-            json!({"v": 2, "seq": 1, "type": "run.updated"}),
-            json!({"v": 2, "type": "run.updated", "record": {}}),
+            json!({"v": 2, "seq": 1, "type": "run.updated", "record": {}}),
+            json!({"v": 3, "seq": 1, "type": "schedule.updated", "record": {}}),
+            json!({"v": 3, "seq": 1, "type": "run.updated"}),
+            json!({"v": 3, "type": "run.updated", "record": {}}),
         ] {
             assert!(Event::parse(&bad).is_none(), "{bad}");
         }
     }
 
     #[test]
-    fn commands_have_their_v2_bodies() {
-        let start = Command::StartRun {
+    fn commands_have_their_v3_bodies() {
+        let start = Command::StartRun(StartRun {
+            request_id: "t_r1_1".into(),
             workspace: "w".into(),
-            task_id: "r1".into(),
+            work_item_id: "r1".into(),
+            origin: ORIGIN_TASK.into(),
             title: "t".into(),
             prompt: "p".into(),
-            resume_from: None,
-        };
-        assert!(start.body().get("resume_from").is_none());
-        let reopen = Command::StartRun {
-            workspace: "w".into(),
-            task_id: "r1".into(),
-            title: "t".into(),
-            prompt: "p".into(),
-            resume_from: Some("run_1".into()),
-        };
-        assert_eq!(reopen.body()["resume_from"], "run_1");
+            ..Default::default()
+        });
         assert_eq!(
-            Command::StopRun {
+            start.body(),
+            json!({"type": "start_run", "request_id": "t_r1_1", "workspace": "w",
+                "work_item_id": "r1", "origin": "task", "title": "t", "prompt": "p"})
+        );
+        let scheduled = Command::StartRun(StartRun {
+            occurrence: Some("2026-11-15T03:52:00-07:00".into()),
+            model: Some("m".into()),
+            max_runtime_min: Some(30),
+            resume_from: Some("run_1".into()),
+            ..Default::default()
+        });
+        let b = scheduled.body();
+        assert_eq!(
+            (
+                &b["occurrence"],
+                &b["model"],
+                &b["max_runtime_min"],
+                &b["resume_from"]
+            ),
+            (
+                &json!("2026-11-15T03:52:00-07:00"),
+                &json!("m"),
+                &json!(30),
+                &json!("run_1")
+            )
+        );
+        assert_eq!(
+            Command::MarkReviewed {
                 run_id: "run_1".into()
             }
             .body(),
-            json!({"type": "stop_run", "run_id": "run_1"})
+            json!({"type": "mark_reviewed", "run_id": "run_1"})
+        );
+        assert_eq!(
+            Command::RepairSprite {
+                workspace: "w".into()
+            }
+            .body(),
+            json!({"type": "repair_sprite", "workspace": "w"})
         );
         assert_eq!(
             run_id_of(&json!({"run": {"id": "run_9"}})).as_deref(),

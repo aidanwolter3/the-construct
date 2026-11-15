@@ -243,7 +243,12 @@ A collection can keep itself current from the web (decision
   removed. No model, so no model budget; Brave's
   image search or SearXNG's `images` category (DuckDuckGo has none, and the fill says so). It suits product photos
   from shops that block the pod's fetches. `refresh` and `on_empty` work as for other `query_field` fillers, and
-  it can't be previewed (decision [`image-search`](decisions/image-search.md)).
+  it can't be previewed (decision [`image-search`](decisions/image-search.md)). To let people pick a row's picture,
+  `GET /v1/collections/<c>/images?id=<row>` (a screen's `data`) lists up to 10 of the row's image results (query
+  `collection:<c>:images:<row>`, entities `{image, thumbnail, page, title, source, n, row_id}`, best first; add
+  `&filler=<id>` with more than one images filler); a tap saves one into a plain field with the ordinary `update`,
+  and an `expr` field shows the picked picture before the found one (decision
+  [`pick-a-photo`](decisions/pick-a-photo.md)).
 - **Rendered pages:** `render: true` (or `{wait_for: <CSS selector>, timeout_seconds: 5..=45}`) on a `url` or
   `url_field` filler, or on `collections_preview`, loads the page (and its `details` pages) in the server's headless
   browser first, for pages a script builds or that answer a plain fetch with a bot check; the extractors read the
@@ -264,6 +269,10 @@ A collection can keep itself current from the web (decision
   through the agent module (`crates/agent`): the `model` jack, daily budgets per feature, retries.
 - **Modes:** `replace` (the filler's rows are its latest answer, kept stable by `key`) or `upsert` by `key`. Filled
   fields can't be edited by hand.
+- **Who wrote a field:** a row a filler made carries its id (`collections_rows.filler`), and every field a filler
+  or a model's computed answer wrote last is recorded in `collections_field_writers` (`filler:<id>` or `model`); a
+  person's (or Claude's) write of the field clears it. The Agents source starts runs only from rows a person wrote
+  (decision [`agents-cap-v3`](decisions/agents-cap-v3.md), issue #243).
 - **Alerts** notify once when a row matches: `any` / `all` / `none` phrases, a filler, days of the week, a window on a
   date field. Rows are served with `alert_matched` and `alert_names`.
 

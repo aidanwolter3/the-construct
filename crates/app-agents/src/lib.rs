@@ -1,20 +1,23 @@
-//! The `agents` data source (decisions `agents-data-source`, `agents-runs`):
-//! Claude Code runs started by an external **agent runner** (the Foreman),
-//! shown and controlled from the pod. The pod is the dashboard and the
-//! "start work" button; the runs themselves are watched and steered in the
-//! Claude app.
+//! The `agents` data source (decisions `agents-data-source`, `agents-runs`,
+//! `agents-cap-v3`): Claude Code runs started by an external **agent
+//! runner** (the Foreman), shown and controlled from the pod. The pod owns
+//! the work items (tasks and schedules) and the notifications; the runner
+//! owns the runs, the Sprites and each run's verified outcome. The runs
+//! themselves are watched and steered in the Claude app.
 //!
-//! The runner speaks CAP v2 ([`cap`]) and alone decides each run's state;
-//! the pod keeps a mirror of its records ([`state`], [`db`]). The pod signs
-//! in with the runner's URL and a token (`POST /v1/agents/sign-in`, from the
-//! Agents layout's form), stored sealed. A background follower per signed-in
-//! pod ([`follower`]) takes a snapshot and follows the stream from its
-//! cursor, so the feeds answer while the runner is away.
+//! The runner speaks CAP v3 ([`cap`]); the pod keeps a mirror of its
+//! records ([`state`], [`db`]). The pod signs in with the runner's URL and a
+//! token (`POST /v1/agents/sign-in`, from the Agents layout's form), stored
+//! sealed. A background follower per signed-in pod ([`follower`]) catches
+//! up from its stored cursor with the event log and follows the stream, so
+//! the feeds answer while the runner is away and nothing is missed.
 //!
 //! - Feeds: `sessions` (`agents:status`, `agents:sessions`: the runs),
-//!   `sandboxes`, `checks`, `schedules`; a data path for one run's log.
-//! - Actions: stop a run, wake a sandbox, start a run, reopen a task, run,
-//!   pause and resume a schedule. Commands are a fixed set ([`cap::Command`]).
+//!   `sandboxes`, `checks`, `schedules` (the pod's own, [`schedules`]); a
+//!   data path for one run's log.
+//! - Actions: stop a run, wake or repair a sandbox, start a run, reopen a
+//!   task, mark a run reviewed; create, edit, delete, run now, pause and
+//!   resume a schedule. Runner commands are a fixed set ([`cap::Command`]).
 //! - Notifications ([`alerts`]) in the layout that shows the source.
 //! - Tasks wiring ([`tasks`]): a linked collection's queued rows start runs,
 //!   and each row's status follows its run through one table.
@@ -26,8 +29,10 @@
 pub mod alerts;
 pub mod bundle;
 pub mod cap;
+pub mod cron;
 pub mod db;
 pub mod follower;
+pub mod schedules;
 pub mod state;
 pub mod tasks;
 pub mod text;
@@ -77,15 +82,20 @@ pub const JACK: &str = "agent_runner";
 pub const SIGN_OUT_PATH: &str = "/v1/agents/sign-out";
 pub const STOP_PATH: &str = "/v1/agents/sessions/stop";
 pub const WAKE_PATH: &str = "/v1/agents/sandboxes/wake";
+pub const REPAIR_PATH: &str = "/v1/agents/sandboxes/repair";
 pub const START_PATH: &str = "/v1/agents/tasks/start";
 pub const RUN_SCHEDULE_PATH: &str = "/v1/agents/schedules/run";
 pub const PAUSE_SCHEDULE_PATH: &str = "/v1/agents/schedules/pause";
 pub const RESUME_SCHEDULE_PATH: &str = "/v1/agents/schedules/resume";
+pub const CREATE_SCHEDULE_PATH: &str = "/v1/agents/schedules/create";
+pub const UPDATE_SCHEDULE_PATH: &str = "/v1/agents/schedules/update";
+pub const DELETE_SCHEDULE_PATH: &str = "/v1/agents/schedules/delete";
 pub const REOPEN_PATH: &str = "/v1/agents/tasks/reopen";
 pub const REVIEW_PATH: &str = "/v1/agents/sessions/review";
 pub const TIMELINE_PATH: &str = "/v1/agents/sessions/timeline";
 
-/// Minutes a Wake keeps a sandbox up unless the request says.
+/// Minutes a Wake keeps a sandbox up unless the request says (the runner
+/// takes at most [`cap::MAX_WAKE_MIN`]).
 pub const WAKE_MINUTES: u32 = 30;
 
 pub const MANIFEST: SourceManifest = SourceManifest {
@@ -97,14 +107,16 @@ pub const MANIFEST: SourceManifest = SourceManifest {
             name: SESSIONS_FEED,
             query_keys: &[STATUS_QUERY, SESSIONS_QUERY],
             doc: "The agent runner's runs (one attempt at one piece of work each): the ones that \
-                  need you, then working, queued and ended ones; and agents:status: whether the \
-                  pod is signed in to a runner and reaches it, with a one-line summary such as \
-                  1 working · 1 needs you · 2 queued.",
+                  need you (or are parked), then running, queued, ended ones waiting on CI, review \
+                  or deploy, and the rest; and agents:status: whether the pod is signed in to a \
+                  runner and reaches it, with a one-line summary such as \
+                  1 working · 1 needs you · 2 queued · 1 waiting.",
         },
         FeedSpec {
             name: SANDBOXES_FEED,
             query_keys: &[SANDBOXES_QUERY],
-            doc: "The runner's sandboxes, awake first; each can be woken.",
+            doc: "The runner's sandboxes: down first, then degraded or suspended (with the \
+                  reason), then awake; an asleep one can be woken, a down one repaired.",
         },
         FeedSpec {
             name: CHECKS_FEED,
@@ -114,8 +126,9 @@ pub const MANIFEST: SourceManifest = SourceManifest {
         FeedSpec {
             name: SCHEDULES_FEED,
             query_keys: &[SCHEDULES_QUERY],
-            doc: "The runner's scheduled tasks with their next run and last result; each can \
-                  be run now, paused or resumed.",
+            doc: "The pod's schedules (it sends their runs), with their next run and their last \
+                  run's state and outcome; each can be run now, paused, resumed, edited or \
+                  deleted, and new ones created (also with the agents_schedules tool).",
         },
     ],
     data_paths: &[PathSpec {
@@ -144,22 +157,27 @@ pub const MANIFEST: SourceManifest = SourceManifest {
         PathSpec {
             pattern: REVIEW_PATH,
             query_keys: &[],
-            doc: "Mark an ended run that needs review reviewed, on this pod only: {run_id}. \
-                  Its status_text reads Reviewed and needs_review turns false (the runner's \
-                  record stays as it is); a linked task row in review whose current run it \
-                  is is set to done. Kept until the run leaves the runner's records.",
+            doc: "Mark an ended run that needs review reviewed: {run_id}. The runner, which \
+                  owns the outcome, sets it done (409 unless it needs review); a linked task \
+                  row follows it to done.",
         },
         PathSpec {
             pattern: WAKE_PATH,
             query_keys: &[],
             doc: "Wake a sandbox: {workspace, minutes?} (workspace: the sandbox's workspace \
-                  field; minutes default 30).",
+                  field; minutes 1 to 60, default 30).",
+        },
+        PathSpec {
+            pattern: REPAIR_PATH,
+            query_keys: &[],
+            doc: "Repair a sandbox that is down: {workspace}. The runner sets it up again (a \
+                  new agent daemon and key). Wrap it in action.confirm.",
         },
         PathSpec {
             pattern: START_PATH,
             query_keys: &[],
-            doc: "Start a run: {workspace, title, prompt, task_id?}. The runner queues it; the \
-                  answer has its run_id.",
+            doc: "Start a run: {workspace, title, prompt, task_id?, model?, max_runtime_min?}. \
+                  The runner queues it; the answer has its run_id.",
         },
         PathSpec {
             pattern: REOPEN_PATH,
@@ -181,7 +199,25 @@ pub const MANIFEST: SourceManifest = SourceManifest {
         PathSpec {
             pattern: RESUME_SCHEDULE_PATH,
             query_keys: &[],
-            doc: "Resume a paused schedule: {name}.",
+            doc: "Resume a paused schedule: {name}. It runs from its next time on.",
+        },
+        PathSpec {
+            pattern: CREATE_SCHEDULE_PATH,
+            query_keys: &[],
+            doc: "Create a schedule: {name, cron (5 fields, e.g. 0 3 * * *), timezone? (IANA; \
+                  default the pod's), workspace, prompt, model?, max_runtime_min? (1-480, \
+                  default 240), enabled?}.",
+        },
+        PathSpec {
+            pattern: UPDATE_SCHEDULE_PATH,
+            query_keys: &[],
+            doc: "Edit a schedule: {name, new_name?, cron?, timezone?, workspace?, prompt?, \
+                  model? (default clears it), max_runtime_min?}; blank fields keep their value.",
+        },
+        PathSpec {
+            pattern: DELETE_SCHEDULE_PATH,
+            query_keys: &[],
+            doc: "Delete a schedule: {name}. Its runs go on. Wrap it in action.confirm.",
         },
     ],
     entities: &[
@@ -217,23 +253,45 @@ pub const MANIFEST: SourceManifest = SourceManifest {
             fields: &[
                 ("id", "the run's id"),
                 ("title", "what it works on"),
-                ("state", "queued, starting, working, needs_you or ended"),
+                (
+                    "state",
+                    "queued, launching, working, needs_you, parked, stalled, interrupted, stopping, closing or ended",
+                ),
                 ("status", "the same as state"),
                 (
                     "status_text",
-                    "e.g. Queued, Working, Needs you, Done, Needs review, Reviewed, Failed, Stopped, Lost",
+                    "e.g. Queued, Working, Needs you, Parked, Stalled, Waiting on CI, Done, Needs review, Reviewed, CI failed, Lost",
                 ),
                 ("status_color", "#RRGGBB"),
+                (
+                    "state_detail",
+                    "e.g. waiting on 1 background task (while active)",
+                ),
+                (
+                    "explain_text",
+                    "what Parked, Stalled or Restarting means, or empty",
+                ),
                 ("active", "true until it ends"),
-                ("needs_you", "true while it waits for you"),
                 (
-                    "needs_review",
-                    "true once ended needing a person's review, until marked reviewed here",
+                    "needs_you",
+                    "true while it waits for you (needs_you or parked)",
                 ),
+                ("parked", "true while parked (its sandbox may sleep)"),
+                ("stalled", "true while its sandbox is suspended or degraded"),
+                ("asleep", "the same as parked (older layouts)"),
                 (
-                    "reviewed",
-                    "true once marked reviewed on this pod (status_text Reviewed)",
+                    "queue_reason",
+                    "when queued: waiting_for_slot, sprite_waking, sprite_degraded or sprite_down",
                 ),
+                ("queue_text", "e.g. Waiting for a free slot"),
+                ("needs_review", "true once ended needing your review"),
+                ("reviewed", "true once marked reviewed"),
+                (
+                    "waiting",
+                    "true once ended while its outcome waits on GitHub",
+                ),
+                ("stage", "what it waits on: ci, review or deploy"),
+                ("stage_text", "e.g. Waiting on deploy"),
                 (
                     "needs_you_reason",
                     "permission, question or stopped (while waiting)",
@@ -245,13 +303,31 @@ pub const MANIFEST: SourceManifest = SourceManifest {
                 ),
                 (
                     "end_reason",
-                    "once ended: reported, exited, stopped, timed_out, lost, start_failed or expired",
+                    "once ended: reported, stopped, timed_out, lost, start_failed or expired",
                 ),
                 (
                     "outcome",
-                    "the agent's report: done, review, blocked or failed, or empty",
+                    "verified against GitHub: none, pending, done, failed or needs_review",
                 ),
-                ("outcome_summary", "the report's summary"),
+                (
+                    "outcome_reason",
+                    "when failed: ci, closed_unmerged, deploy, blocked or failed",
+                ),
+                (
+                    "outcome_text",
+                    "the outcome in words once ended, e.g. Deploy failed",
+                ),
+                ("outcome_summary", "the agent's report's summary"),
+                (
+                    "claim",
+                    "what the agent reported: done, review, blocked or failed",
+                ),
+                (
+                    "claim_mismatch",
+                    "true when the report disagrees with GitHub",
+                ),
+                ("claim_mismatch_text", "says so, or empty"),
+                ("follow_up", "a follow-up the agent suggested"),
                 ("summary", "the last thing Claude said at the end of a turn"),
                 ("error", "why it ended badly"),
                 (
@@ -259,18 +335,26 @@ pub const MANIFEST: SourceManifest = SourceManifest {
                     "its pull request (https://github.com/.../pull/N), or empty",
                 ),
                 (
-                    "asleep",
-                    "true while its sandbox sleeps (the run is frozen, not ended)",
+                    "deploy_url",
+                    "its deploy's workflow run (https://github.com/.../actions/runs/N), or empty",
                 ),
+                ("attempt_text", "e.g. Attempt 2 of 3, after a restart"),
                 ("current_tool", "e.g. Bash: npm test (while active)"),
                 ("cost_text", "e.g. $0.42"),
                 ("tokens_text", "e.g. 12000 tokens"),
                 ("elapsed_text", "how long it has run, e.g. 12 min"),
                 ("updated_text", "e.g. 2 min ago"),
-                ("task_id", "the Tasks row or schedule run it is for"),
+                ("work_item_id", "the Tasks row or schedule it is for"),
+                ("task_id", "the same as work_item_id"),
+                (
+                    "occurrence",
+                    "a schedule's occurrence: the time it is for, RFC 3339 with its offset",
+                ),
                 ("schedule", "the schedule it runs for, or empty"),
                 ("sandbox", "the sandbox it runs in"),
                 ("workspace", "the runner workspace"),
+                ("model", "the model asked for, or empty for the default"),
+                ("branch", "its git branch"),
                 ("origin", "task, schedule or phone"),
                 ("session_id", "Claude Code's session id"),
                 (
@@ -287,17 +371,25 @@ pub const MANIFEST: SourceManifest = SourceManifest {
                 ("name", "its name"),
                 (
                     "state",
-                    "unprovisioned, asleep, waking, awake, unreachable or updating",
+                    "unprovisioned, provisioning, asleep, waking, awake, degraded, suspended, down or updating",
                 ),
                 ("awake", "true while awake"),
                 (
                     "state_text",
-                    "Not set up, Asleep, Waking, Awake, Unreachable or Updating",
+                    "Not set up, Setting up, Asleep, Waking, Awake, Degraded, Suspended, Down or Updating",
                 ),
                 ("color", "#RRGGBB"),
+                ("reason", "why degraded, suspended or down"),
+                ("troubled", "true while degraded, suspended or down"),
+                ("down", "true while down (Repair applies)"),
+                ("can_wake", "asleep or suspended (Wake applies)"),
+                ("slots_text", "e.g. 1 of 2 slots in use"),
+                ("preflight_text", "e.g. Preflight failed: disk, or empty"),
+                ("disk_warning", "true after a second disk failure in 7 days"),
+                ("disk_text", "says it likely needs replacing, or empty"),
                 ("last_seen_text", "its last heartbeat, e.g. 5 min ago"),
                 ("agentd_version", "the version its agent daemon reports"),
-                ("workspace", "what Wake sends"),
+                ("workspace", "what Wake and Repair send"),
             ],
         },
         EntityDoc {
@@ -315,31 +407,33 @@ pub const MANIFEST: SourceManifest = SourceManifest {
         },
         EntityDoc {
             uri: "agents://schedules/{name}",
-            doc: "A scheduled task on the runner (agents:schedules).",
+            doc: "One of the pod's schedules (agents:schedules): the pod sends a run for each \
+                  of its times.",
             fields: &[
+                ("id", "its id (the work item of its runs)"),
                 ("name", "its name"),
                 ("cron", "when it runs, e.g. 0 3 * * *"),
                 ("timezone", "the cron's zone"),
                 ("workspace", "the workspace it runs in"),
-                ("model", "the model it uses"),
-                ("max_runtime_minutes", "its time limit"),
-                (
-                    "enabled",
-                    "false when turned off in the runner's configuration",
-                ),
+                ("model", "the model it asks for, or empty for the default"),
+                ("model_text", "the model, or Default model"),
+                ("max_runtime_min", "its time limit in minutes"),
+                ("max_runtime_minutes", "the same (older layouts)"),
+                ("prompt", "what it asks Claude to do"),
+                ("enabled", "false while paused"),
                 ("paused", "true while paused"),
-                ("can_pause", "enabled and not paused"),
-                ("state_text", "Active, Paused or Off"),
+                ("can_pause", "true while active"),
+                ("state_text", "Active or Paused"),
                 (
                     "next_run_text",
-                    "e.g. in 3 h · Sat 03:00 (in the schedule's timezone, else the pod's), or Paused",
+                    "e.g. in 3 h · Sat 03:00 (in the schedule's timezone), or Paused",
                 ),
                 ("ran", "true once it has a last run"),
                 (
                     "last_status",
-                    "the last run's state, end reason or outcome, e.g. done or expired (crashed for a run that crashed at launch)",
+                    "the last run's state or outcome, e.g. done or pending, or missed, refused or sending",
                 ),
-                ("last_status_text", "e.g. Done, Expired"),
+                ("last_status_text", "e.g. Done, Waiting on CI, Missed"),
                 ("last_status_color", "#RRGGBB"),
                 ("last_summary", "what the last run did"),
                 ("last_error", "why the last run ended badly"),
@@ -440,13 +534,14 @@ impl AgentsAdapter {
 
 const INSTRUCTIONS: &str = "The agents source shows the runs (Claude Code work) an agent runner \
 runs for the user (feeds sessions, sandboxes, checks, schedules), with actions to stop a run, wake \
-a sandbox, start a run, reopen a task and run, pause or resume a schedule. The blueprint layout \
-agents is a whole dashboard: reference it ({type: core://Ref, app: agents, part: layout}) and link \
-it from home, where agents:status's summary_text (e.g. 1 working · 1 needs you) makes a one-line \
-summary. The pod signs in to the runner from that layout's form (the runner's URL and token): never \
-ask for the token in the conversation. agents_link_tasks links a tasks collection (a title and a \
-choice status with the option queued): its rows that become queued start runs, and each row's \
-status follows its run.";
+or repair a sandbox, start a run, reopen a task, mark a run reviewed, and manage schedules. The \
+blueprint layout agents is a whole dashboard: reference it ({type: core://Ref, app: agents, part: \
+layout}) and link it from home, where agents:status's summary_text (e.g. 1 working · 1 needs you) \
+makes a one-line summary. The pod signs in to the runner from that layout's form (the runner's URL \
+and token): never ask for the token in the conversation. agents_link_tasks links a tasks \
+collection (a title and a choice status with the option queued): its rows that you or Claude set to \
+queued start runs (rows a filler wrote can't), and each row's status follows its run. Schedules \
+live in the pod: agents_schedules lists, creates, edits, deletes, pauses, resumes and runs them.";
 
 impl AppAdapter for AgentsAdapter {
     fn name(&self) -> &'static str {
@@ -479,6 +574,10 @@ impl AppAdapter for AgentsAdapter {
             .route(SIGN_OUT_PATH, post(sign_out_route))
             .route(STOP_PATH, post(stop_route))
             .route(WAKE_PATH, post(wake_route))
+            .route(REPAIR_PATH, post(repair_route))
+            .route(CREATE_SCHEDULE_PATH, post(create_schedule_route))
+            .route(UPDATE_SCHEDULE_PATH, post(update_schedule_route))
+            .route(DELETE_SCHEDULE_PATH, post(delete_schedule_route))
             .route(START_PATH, post(start_route))
             .route(RUN_SCHEDULE_PATH, post(run_schedule_route))
             .route(PAUSE_SCHEDULE_PATH, post(pause_schedule_route))
@@ -506,19 +605,34 @@ impl AppAdapter for AgentsAdapter {
                         .map(|r| cap::host_of(&r.url))
                         .unwrap_or_default();
                     let st = st.filter(|_| !host.is_empty());
-                    Ok((st, host, pod_core::tz::time_zone(s)?))
+                    let schedules = db::schedules(s)?;
+                    let mut last = Vec::new();
+                    for sc in &schedules {
+                        last.push(db::last_occurrence(s, &sc.id)?);
+                    }
+                    Ok((st, host, pod_core::tz::time_zone(s)?, schedules, last))
                 })
                 .await;
-            let (st, host, tz) = match read {
+            let (st, host, tz, list, last) = match read {
                 Ok(v) => v,
                 Err(e) => return Hydration::Error(e.into_response()),
             };
             let now = follower::now_ms();
             Hydration::Data(match feed {
-                SESSIONS_FEED => bundle::sessions(st.as_ref(), &host, now),
+                SESSIONS_FEED => bundle::sessions(st.as_ref(), &list, &host, now),
                 SANDBOXES_FEED => bundle::sandboxes(st.as_ref(), now),
                 CHECKS_FEED => bundle::checks(st.as_ref()),
-                _ => bundle::schedules(st.as_ref(), now, &tz),
+                _ => {
+                    let views: Vec<bundle::ScheduleView<'_>> = list
+                        .iter()
+                        .zip(&last)
+                        .map(|(schedule, last)| bundle::ScheduleView {
+                            schedule,
+                            last: last.as_ref(),
+                        })
+                        .collect();
+                    bundle::schedules(st.as_ref(), &views, now, &tz)
+                }
             })
         })
     }
@@ -555,6 +669,13 @@ impl AppAdapter for AgentsAdapter {
     ) -> BoxFuture<'a, PollOutcome> {
         Box::pin(async move {
             follower::spawn(pod);
+            // The timer also runs from the poll, so schedules fire however
+            // the follower is doing (it holds a lock: one pass at a time).
+            if let Ok(Some(runner)) = pod.blocking(db::runner).await {
+                let pass =
+                    schedules::tick(pod, &self.clients, Some(&runner), follower::now_ms()).await;
+                follower::settle(pod, Vec::new(), pass.notices).await;
+            }
             PollOutcome::default()
         })
     }
@@ -576,9 +697,10 @@ impl AppAdapter for AgentsAdapter {
         vec![pod_core::jacks::JackSpec {
             id: JACK,
             title: "Agent runner",
-            summary: "An agent runner (the Foreman): runs, sandboxes, schedules and checks of \
-                      Claude Code work, tasks collections that start runs (agents_link_tasks), \
-                      and their notifications (the agents blueprint and source).",
+            summary: "An agent runner (the Foreman): runs, sandboxes and checks of Claude Code \
+                      work, the pod's schedules and tasks collections that start runs \
+                      (agents_schedules, agents_link_tasks), and their notifications (the agents \
+                      blueprint and source).",
             kind: pod_core::jacks::JackKind::Account {
                 how: "sign in from the Agents layout's form (the runner's https:// URL and its token; \
                       never ask for the token in the conversation)",
@@ -624,23 +746,52 @@ impl AppAdapter for AgentsAdapter {
     }
 
     fn mcp_tools(&self) -> Vec<Value> {
-        vec![json!({
-            "name": "agents_link_tasks",
-            "description": "Link a tasks collection to the agent runner (or unlink it with collection null). \
-        The collection needs a title field and a choice field status with the option queued. Linking adds what \
-        the wiring needs: the status options todo, queued, running, needs_you, review, done and failed, and \
-        optional text fields run_id, session_id, workspace and diagnosis. Then a row whose status becomes queued \
-        starts a run on the runner (prompt: the title and notes; workspace: the row's workspace, else this \
-        default), and the row's status follows its run: running, needs_you, then done, review or failed, with \
-        the outcome's summary and pull request (or why it failed) appended to diagnosis. A row set to done or \
-        todo keeps that status (its run is stopped). The action /v1/agents/tasks/reopen continues an ended \
-        run with a follow-up message; /v1/agents/sessions/review marks a run reviewed and sets its row in \
-        review to done.",
-            "inputSchema": {"type": "object", "properties": {
-                "collection": {"type": ["string", "null"], "description": "The collection's name, or null to unlink"},
-                "workspace": {"type": "string", "description": "The runner workspace tasks start in by default"}},
-                "required": ["collection"]},
-        })]
+        vec![
+            json!({
+                "name": "agents_link_tasks",
+                "description": "Link a tasks collection to the agent runner (or unlink it with collection null). \
+            The collection needs a title field and a choice field status with the option queued. Linking adds what \
+            the wiring needs: the status options todo, queued, running, needs_you, waiting, review, done and failed, \
+            and optional text fields run_id, session_id, workspace, stage and diagnosis. Then a row that the user or \
+            Claude sets to queued starts a run on the runner (prompt: the title and notes; workspace: the row's \
+            workspace, else this default; model and max_runtime_min: the row's fields of those names, else these \
+            defaults). A row a filler made, or whose status, title, notes or workspace a filler or a model wrote, \
+            does not start: it fails with the reason. The row's status follows its run: running, needs_you, then \
+            waiting (stage ci, review or deploy) while GitHub settles its outcome, and done, review or failed, with \
+            what it did and its pull request (or why it failed) appended to diagnosis. A row set to done or todo \
+            keeps that status (its run is stopped). The action /v1/agents/tasks/reopen continues an ended run with a \
+            follow-up message; /v1/agents/sessions/review marks a run reviewed (its row follows it to done).",
+                "inputSchema": {"type": "object", "properties": {
+                    "collection": {"type": ["string", "null"], "description": "The collection's name, or null to unlink"},
+                    "workspace": {"type": "string", "description": "The runner workspace tasks start in by default"},
+                    "model": {"type": "string", "description": "The model tasks ask for by default (omit for the sandbox's default)"},
+                    "max_runtime_min": {"type": "integer", "description": "Tasks' time limit by default, 1 to 480 minutes (omit for the runner's 240)"}},
+                    "required": ["collection"]},
+            }),
+            json!({
+                "name": "agents_schedules",
+                "description": "Manage the pod's schedules for the agent runner: the pod sends one run for each time \
+            a schedule's cron names, in its time zone (daylight saving handled: a skipped time runs just after the \
+            gap, a repeated one once). op list answers every schedule with its next run. op create {name, cron (5 \
+            fields: minute hour day-of-month month day-of-week, e.g. 52 3 * * *), timezone (IANA, default the \
+            pod's), workspace, prompt, model?, max_runtime_min? (1-480, default 240), enabled?}. op update {name, \
+            new_name?, and any of those}: what you leave out keeps its value. op delete, pause, resume and run (now) \
+            take {name}. A time not sent within 2 h (the pod or runner was down) is skipped and the user is told. \
+            Ask before creating or changing a schedule's prompt: it runs unattended with the workspace's access.",
+                "inputSchema": {"type": "object", "properties": {
+                    "op": {"type": "string", "enum": ["list", "create", "update", "delete", "pause", "resume", "run"]},
+                    "name": {"type": "string"},
+                    "new_name": {"type": "string"},
+                    "cron": {"type": "string"},
+                    "timezone": {"type": "string"},
+                    "workspace": {"type": "string"},
+                    "prompt": {"type": "string"},
+                    "model": {"type": "string"},
+                    "max_runtime_min": {"type": "integer"},
+                    "enabled": {"type": "boolean"}},
+                    "required": ["op"]},
+            }),
+        ]
     }
 
     fn mcp_instructions(&self) -> Option<&'static str> {
@@ -655,6 +806,7 @@ impl AppAdapter for AgentsAdapter {
     ) -> Option<BoxFuture<'a, Result<Value, Value>>> {
         match tool {
             "agents_link_tasks" => Some(Box::pin(tasks::set_link(pod, args))),
+            "agents_schedules" => Some(Box::pin(schedules::tool(pod, args))),
             _ => None,
         }
     }
@@ -779,10 +931,10 @@ async fn send(pod: &Pod, cmd: Command) -> Response {
             }
             if let Some(t) = answer
                 .get("run")
-                .and_then(|r| r.get("task_id"))
+                .and_then(|r| r.get("work_item_id"))
                 .and_then(Value::as_str)
             {
-                out["task_id"] = json!(text::clean(t, 200));
+                out["work_item_id"] = json!(text::clean(t, 200));
             }
             Json(out).into_response()
         }
@@ -894,17 +1046,28 @@ async fn wake_route(State(pod): State<Pod>, headers: HeaderMap, body: Bytes) -> 
             .as_u64()
             .or_else(|| v.as_str().and_then(|s| s.trim().parse().ok()))
         {
-            Some(m @ 1..=720) => m as u32,
+            Some(m @ 1..=60) => m as u32,
             _ => {
                 return refuse(
                     StatusCode::BAD_REQUEST,
                     "invalid_request",
-                    "\"minutes\" is 1 to 720",
+                    "\"minutes\" is 1 to 60",
                 );
             }
         },
     };
     send(&pod, Command::WakeSprite { workspace, minutes }).await
+}
+
+async fn repair_route(State(pod): State<Pod>, headers: HeaderMap, body: Bytes) -> Response {
+    let body = match body_of(&pod, &headers, &body).await {
+        Ok(b) => b,
+        Err(r) => return r,
+    };
+    match field(&body, "workspace", 100) {
+        Ok(workspace) => send(&pod, Command::RepairSprite { workspace }).await,
+        Err(r) => r,
+    }
 }
 
 async fn start_route(State(pod): State<Pod>, headers: HeaderMap, body: Bytes) -> Response {
@@ -920,8 +1083,8 @@ async fn start_route(State(pod): State<Pod>, headers: HeaderMap, body: Bytes) ->
         (Ok(w), Ok(t), Ok(p)) => (w, t, p),
         (Err(r), _, _) | (_, Err(r), _) | (_, _, Err(r)) => return r,
     };
-    let task_id = match body.get("task_id").and_then(Value::as_str).map(str::trim) {
-        Some(t) if !t.is_empty() && t.len() <= 200 && !t.starts_with("schedule/") => t.to_owned(),
+    let work_item_id = match body.get("task_id").and_then(Value::as_str).map(str::trim) {
+        Some(t) if !t.is_empty() && t.len() <= 200 && !t.starts_with("sch_") => t.to_owned(),
         Some(t) if !t.is_empty() => {
             return refuse(
                 StatusCode::BAD_REQUEST,
@@ -929,43 +1092,130 @@ async fn start_route(State(pod): State<Pod>, headers: HeaderMap, body: Bytes) ->
                 "\"task_id\" is at most 200 characters and not a schedule's",
             );
         }
-        _ => format!("pod/{}", pod_core::util::now_secs()),
+        _ => format!("pod/{}", follower::now_ms()),
+    };
+    let model = match body.get("model").and_then(Value::as_str).map(str::trim) {
+        Some(m) if m.len() > 100 || !m.chars().all(|c| c.is_ascii_graphic()) => {
+            return refuse(
+                StatusCode::BAD_REQUEST,
+                "invalid_request",
+                "\"model\" is one word of at most 100 characters",
+            );
+        }
+        Some(m) if !m.is_empty() => Some(m.to_owned()),
+        _ => None,
+    };
+    let max_runtime_min = match body.get("max_runtime_min") {
+        None | Some(Value::Null) => None,
+        Some(v) => match v
+            .as_u64()
+            .or_else(|| v.as_str().and_then(|s| s.trim().parse().ok()))
+        {
+            Some(m @ 1..=480) => Some(m as u32),
+            _ => {
+                return refuse(
+                    StatusCode::BAD_REQUEST,
+                    "invalid_request",
+                    "\"max_runtime_min\" is 1 to 480",
+                );
+            }
+        },
+    };
+    // One request per press: a resend of the same press (the outbox) may
+    // carry its own client id.
+    let request_id = match body.get("client_id").and_then(Value::as_str) {
+        Some(c) if cap::valid_id(c) => format!("start_{c}"),
+        _ => format!("start_{}_{}", follower::now_ms(), work_item_id.len()),
     };
     send(
         &pod,
-        Command::StartRun {
+        Command::StartRun(cap::StartRun {
+            request_id,
             workspace,
-            task_id,
+            work_item_id,
+            occurrence: None,
+            origin: cap::ORIGIN_TASK.into(),
             title,
             prompt,
+            model,
+            max_runtime_min,
             resume_from: None,
-        },
+        }),
     )
     .await
 }
 
-async fn schedule_route(
-    pod: Pod,
+/// A schedule operation's answer as the route's response.
+fn schedule_answer(r: Result<Value, schedules::Refusal>) -> Response {
+    match r {
+        Ok(v) => Json(v).into_response(),
+        Err((status, body)) => pod_core::json_error(
+            StatusCode::from_u16(status).unwrap_or(StatusCode::BAD_REQUEST),
+            body,
+        ),
+    }
+}
+
+async fn create_schedule_route(
+    State(pod): State<Pod>,
     headers: HeaderMap,
     body: Bytes,
-    make: fn(String) -> Command,
 ) -> Response {
-    let body = match body_of(&pod, &headers, &body).await {
-        Ok(b) => b,
-        Err(r) => return r,
-    };
-    match field(&body, "name", 100) {
-        Ok(name) => send(&pod, make(name)).await,
+    match body_of(&pod, &headers, &body).await {
+        Ok(b) => schedule_answer(schedules::create(&pod, &b).await),
+        Err(r) => r,
+    }
+}
+
+async fn update_schedule_route(
+    State(pod): State<Pod>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response {
+    match body_of(&pod, &headers, &body).await {
+        Ok(b) => schedule_answer(schedules::update(&pod, &b).await),
+        Err(r) => r,
+    }
+}
+
+async fn delete_schedule_route(
+    State(pod): State<Pod>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response {
+    match body_of(&pod, &headers, &body).await {
+        Ok(b) => schedule_answer(schedules::delete(&pod, &b).await),
         Err(r) => r,
     }
 }
 
 async fn run_schedule_route(State(pod): State<Pod>, headers: HeaderMap, body: Bytes) -> Response {
-    schedule_route(pod, headers, body, |name| Command::RunSchedule { name }).await
+    let body = match body_of(&pod, &headers, &body).await {
+        Ok(b) => b,
+        Err(r) => return r,
+    };
+    let sc = match schedules::find(&pod, &body).await {
+        Ok(s) => s,
+        Err(e) => return schedule_answer(Err(e)),
+    };
+    let (a, runner) = match signed_in(&pod).await {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    match schedules::run_now(&pod, &a.clients, &runner, &sc, follower::now_ms()).await {
+        Ok(answer) => {
+            Json(json!({"ok": true, "run_id": cap::run_id_of(&answer), "work_item_id": sc.id}))
+                .into_response()
+        }
+        Err(e) => runner_error(e),
+    }
 }
 
 async fn pause_schedule_route(State(pod): State<Pod>, headers: HeaderMap, body: Bytes) -> Response {
-    schedule_route(pod, headers, body, |name| Command::PauseSchedule { name }).await
+    match body_of(&pod, &headers, &body).await {
+        Ok(b) => schedule_answer(schedules::set_enabled(&pod, &b, false).await),
+        Err(r) => r,
+    }
 }
 
 async fn resume_schedule_route(
@@ -973,7 +1223,10 @@ async fn resume_schedule_route(
     headers: HeaderMap,
     body: Bytes,
 ) -> Response {
-    schedule_route(pod, headers, body, |name| Command::ResumeSchedule { name }).await
+    match body_of(&pod, &headers, &body).await {
+        Ok(b) => schedule_answer(schedules::set_enabled(&pod, &b, true).await),
+        Err(r) => r,
+    }
 }
 
 async fn reopen_route(State(pod): State<Pod>, headers: HeaderMap, body: Bytes) -> Response {
@@ -1000,8 +1253,13 @@ async fn reopen_route(State(pod): State<Pod>, headers: HeaderMap, body: Bytes) -
         Err(e) => return e.into_response(),
     };
     let id = if by_run {
-        match state.runs.get(&id).map(|r| r.task_id.clone()) {
-            Some(t) if !t.is_empty() && state::schedule_of_task(&t).is_none() => t,
+        match state
+            .runs
+            .get(&id)
+            .filter(|r| r.origin == cap::ORIGIN_TASK)
+            .map(|r| r.work_item_id.clone())
+        {
+            Some(t) if !t.is_empty() => t,
             _ => {
                 return refuse(
                     StatusCode::NOT_FOUND,
@@ -1039,34 +1297,53 @@ async fn review_route(State(pod): State<Pod>, headers: HeaderMap, body: Bytes) -
         }
         Err(r) => return r,
     };
-    if let Err(r) = signed_in(&pod).await {
-        return r;
-    }
-    let state = match pod.blocking(db::state).await {
-        Ok(st) => st.map(|(s, _)| s).unwrap_or_default(),
-        Err(e) => return e.into_response(),
+    let (a, runner) = match signed_in(&pod).await {
+        Ok(v) => v,
+        Err(r) => return r,
     };
-    let Some(run) = state.runs.get(&run_id).cloned() else {
-        return refuse(
-            StatusCode::NOT_FOUND,
-            "not_found",
-            "the runner lists no such run",
-        );
+    // The runner owns the outcome: it sets it done (409 unless the run
+    // needs review).
+    let answer = match cap::command(
+        &a.clients,
+        &runner,
+        &Command::MarkReviewed {
+            run_id: run_id.clone(),
+        },
+    )
+    .await
+    {
+        Ok(v) => v,
+        Err(CapError::Status(409, d)) => {
+            return refuse(
+                StatusCode::CONFLICT,
+                "not_needing_review",
+                if d.is_empty() {
+                    "only an ended run that needs review can be marked reviewed".to_owned()
+                } else {
+                    d
+                },
+            );
+        }
+        Err(e) => return runner_error(e),
     };
-    if !bundle::needs_review(&run.state, run.end(), &run.outcome) {
-        return refuse(
-            StatusCode::CONFLICT,
-            "not_needing_review",
-            "only an ended run that needs review can be marked reviewed",
-        );
+    // Shown at once: the answer's run goes into the mirror (the event that
+    // follows changes nothing more).
+    if let Some(record) = answer.get("run").filter(|r| r.is_object()).cloned() {
+        let saved = pod
+            .blocking(move |s| {
+                if let Some((mut st, _)) = db::state(s)? {
+                    st.apply_run(&record);
+                    db::save(s, &st, follower::now_ms())?;
+                }
+                Ok(())
+            })
+            .await;
+        if saved.is_err() {
+            tracing::warn!("a reviewed run could not be stored");
+        }
     }
-    let (id, now) = (run_id.clone(), follower::now_ms());
-    if let Err(e) = pod.blocking(move |s| db::set_reviewed(s, &id, now)).await {
-        return e.into_response();
-    }
-    let task_done = tasks::reviewed(&pod, &state, &run).await;
     pod.publish_data_all(NAME);
-    Json(json!({"ok": true, "run_id": run_id, "task_done": task_done})).into_response()
+    Json(json!({"ok": true, "run_id": run_id})).into_response()
 }
 
 #[derive(serde::Deserialize)]
@@ -1118,10 +1395,10 @@ async fn timeline_route(
         .blocking(move |s| {
             let runner = db::runner(s)?;
             let st = db::state(s)?.filter(|_| runner.is_some());
-            Ok((runner, st))
+            Ok((runner, st, db::schedules(s)?))
         })
         .await;
-    let (runner, st) = match read {
+    let (runner, st, list) = match read {
         Ok(v) => v,
         Err(e) => return e.into_response(),
     };
@@ -1142,6 +1419,7 @@ async fn timeline_route(
     };
     Json(bundle::timeline(
         st.as_ref(),
+        &list,
         &id,
         log.as_ref(),
         follower::now_ms(),
