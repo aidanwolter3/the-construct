@@ -36,6 +36,13 @@ pub struct Frame {
     pub scene: Duration,
     /// Of `scene`, laying layouts out again (not just placing them).
     pub layout: Duration,
+    /// The rest of `scene` by part (`interact::Work`): the loader's
+    /// changes, tidying the stack, telling the loader what is shown, and
+    /// building the frame.
+    pub poll: Duration,
+    pub tidy: Duration,
+    pub shown: Duration,
+    pub build: Duration,
     /// Layouts or screens laid out again.
     pub laid_out: u16,
     /// Data snapshots from the engine that changed what is drawn.
@@ -289,6 +296,8 @@ pub struct Summary {
     pub timeline: Vec<(Option<f64>, f64)>,
     /// The slowest frame (by interval, or work for a burst's first).
     pub worst: Option<Frame>,
+    /// The frame whose scene took longest, for its breakdown.
+    pub scene_worst: Option<Frame>,
 }
 
 impl Summary {
@@ -358,6 +367,7 @@ impl Summary {
                 .iter()
                 .map(|f| (f.interval.map(ms), ms(f.work())))
                 .collect(),
+            scene_worst: frames.iter().copied().max_by(|a, b| a.scene.cmp(&b.scene)),
             worst: frames.iter().copied().max_by(|a, b| {
                 ms(a.interval.unwrap_or(a.work())).total_cmp(&ms(b.interval.unwrap_or(b.work())))
             }),
@@ -447,6 +457,19 @@ impl Summary {
                 ms(w.acquire),
                 ms(w.input),
                 w.moves
+            );
+        }
+        if let Some(w) = self.scene_worst.filter(|w| !w.scene.is_zero()) {
+            let _ = write!(
+                s,
+                "; slowest scene {:.1} = poll {:.1} + tidy {:.1} + shown {:.1} + layout {:.1} x{} + build {:.1}",
+                ms(w.scene),
+                ms(w.poll),
+                ms(w.tidy),
+                ms(w.shown),
+                ms(w.layout),
+                w.laid_out,
+                ms(w.build)
             );
         }
         spread(&mut s, "interval", &self.interval);
@@ -572,6 +595,26 @@ mod tests {
         assert!(line.contains("; input 40.0/40.0/40.0"), "{line}");
         // The next frame starts with none.
         assert_eq!(r.begin(at(t, 60), false).input, Duration::ZERO);
+    }
+
+    #[test]
+    fn the_slowest_scene_is_broken_down() {
+        let t = Instant::now();
+        let mut r = Recorder::default();
+        r.input(t, false);
+        let mut f = r.begin(at(t, 1), false);
+        f.scene = Duration::from_millis(20);
+        f.poll = Duration::from_millis(1);
+        f.shown = Duration::from_millis(18);
+        f.build = Duration::from_millis(1);
+        let line = r
+            .end(f, at(t, 25), false, false)
+            .unwrap()
+            .line("home", Some(120.0));
+        assert!(
+            line.contains("; slowest scene 20.0 = poll 1.0 + tidy 0.0 + shown 18.0 + layout 0.0 x0 + build 1.0;"),
+            "{line}"
+        );
     }
 
     #[test]

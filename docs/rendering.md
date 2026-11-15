@@ -370,6 +370,7 @@ An example, wrapped here (it is one line). Spreads are p50/p95/max in millisecon
 | interval | Time between back-to-back frame starts |
 | work | The frame's own time: scene + render + present (not waiting for the surface) |
 | scene | `Session::scene`: placing the laid-out frame again (a scroll), or laying it out (`layouts`: how many, how long; `data`: engine snapshots that changed what is drawn) |
+| slowest scene | The frame whose scene took longest, by part: `poll` (taking the engine's changes), `tidy` (the clock, pagers, swipe cards, closed entries leaving the stack), `shown` (inline layouts, and telling the engine what is on screen: `Loader::visible`), `layout`, `build` (the frame from what is laid out). Each part sums every call since the frame before, input handling's included, so they can add up to more than `scene` |
 | render | The GPU renderer's CPU side; `shaped` text runs not kept from earlier frames, `atlas` images and icons drawn into the glyph atlas (count, KB) |
 | prepare | Of render, glyphon's prepare of the text: every glyph's vertex and atlas lookup, per layer |
 | submit | Of render, encoding the frame's draws and submitting them to the GPU (driver time) |

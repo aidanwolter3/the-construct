@@ -86,7 +86,7 @@ settings are logged at startup.
 | `CONSTRUCT_FILL_MODEL` | `claude-opus-5-5` | The agent module's capable model: `agent`, `extract: llm` and `query_field` fillers (same key and endpoint). Without a key those fillers report themselves unavailable. Each pod's model calls have daily budgets per feature (`agent_usage`). |
 | `CONSTRUCT_FILL_AGENT_DAILY` | `20` | Agent filler runs per pod per day. |
 | `CONSTRUCT_FILL_PRIVATE_HOSTS` | unset | `1`: fetch fillers may read private addresses, and MCP servers may be on them (local development only). |
-| `CONSTRUCT_BROWSER` | the first `chromium`, `chromium-browser`, `headless_shell`, `chrome-headless-shell` or `google-chrome` on `PATH` | The headless browser of rendered fillers (`render`, decision `rendered-fetches`); `off`: none, and rendered fillers say so. The image sets `/usr/bin/chromium`. |
+| `CONSTRUCT_BROWSER` | the first `chromium`, `chromium-browser`, `headless_shell`, `chrome-headless-shell` or `google-chrome` on `PATH` | The headless browser of rendered fillers (`render`, decision `rendered-fetches`); `off`: none, and rendered fillers say so. The image sets `/usr/bin/chromium`. It starts with none of the server's environment, and as `nobody` (uid 65534) when the server is root, so a page that takes over the sandbox-less renderer can read neither the keys nor the pods' data. |
 
 ### Monitoring and development
 

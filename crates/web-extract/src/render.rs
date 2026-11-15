@@ -228,7 +228,8 @@ impl Browser {
             .map_err(|e| fail(format!("the browser's proxy could not start: {e}")))?;
         let profile = TempDir::new()
             .map_err(|e| fail(format!("the browser's profile could not be made: {e}")))?;
-        let mut child = Command::new(&self.binary)
+        let mut child = browser_command(&self.binary, &profile.0)
+            .map_err(|e| fail(format!("the browser's profile could not be made: {e}")))?
             .args(flags(proxy.addr, &profile.0))
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::null())
@@ -276,14 +277,40 @@ impl Browser {
     }
 }
 
+/// The uid and gid the browser runs as when the server is root (Debian's
+/// `nobody` and `nogroup`).
+const BROWSER_ID: u32 = 65534;
+
+/// The browser's process, before its flags: none of the server's
+/// environment (its keys and secrets), and, when the server is root, the
+/// unprivileged [`BROWSER_ID`], owning its profile. The browser runs
+/// untrusted pages without Chromium's sandbox, so a page that took over
+/// the renderer gets a user that can read neither the pods' data (`0700`,
+/// `0600`: `pod_core::util`) nor the server's environment.
+fn browser_command(binary: &Path, profile: &Path) -> std::io::Result<Command> {
+    let mut cmd = Command::new(binary);
+    cmd.env_clear()
+        .env("PATH", "/usr/local/bin:/usr/bin:/bin")
+        .env("HOME", profile);
+    // SAFETY: geteuid has no preconditions and can't fail.
+    if unsafe { libc::geteuid() } == 0 {
+        std::os::unix::fs::chown(profile, Some(BROWSER_ID), Some(BROWSER_ID))?;
+        // Dropping to a uid also drops root's supplementary groups.
+        cmd.uid(BROWSER_ID).gid(BROWSER_ID);
+    }
+    Ok(cmd)
+}
+
 /// The browser's command line.
 fn flags(proxy: std::net::SocketAddr, profile: &Path) -> Vec<String> {
     let (w, h) = VIEWPORT;
     let mut out: Vec<String> = [
         "--headless=new",
         // The server runs as root in its container, where Chromium's
-        // sandbox can't start; the proxy keeps the browser on public
-        // websites, and each render's profile is thrown away.
+        // sandbox can't start; the browser runs as an unprivileged user
+        // with none of the server's environment (`browser_command`), the
+        // proxy keeps it on public websites, and each render's profile is
+        // thrown away.
         "--no-sandbox",
         "--disable-gpu",
         "--disable-dev-shm-usage",
@@ -913,6 +940,38 @@ mod tests {
         *r.0.lock().await = Some((Instant::now(), RENDERS_PER_DAY));
         let e = r.take().await.unwrap_err();
         assert!(e.contains("daily limit"), "{e}");
+    }
+
+    /// What `browser_command` starts, with `sh -c <script>` as the browser.
+    async fn run_as_browser(script: &str) -> String {
+        let profile = TempDir::new().unwrap();
+        let out = browser_command(Path::new("/bin/sh"), &profile.0)
+            .unwrap()
+            .args(["-c", script])
+            .output()
+            .await
+            .unwrap();
+        assert!(out.status.success(), "{out:?}");
+        String::from_utf8(out.stdout).unwrap()
+    }
+
+    #[tokio::test]
+    async fn the_browser_gets_none_of_the_servers_environment() {
+        // Cargo sets this for the test process; a server's keys are the same.
+        assert!(std::env::var_os("CARGO_MANIFEST_DIR").is_some());
+        let env = run_as_browser("env").await;
+        assert!(!env.contains("CARGO_MANIFEST_DIR"), "{env}");
+        assert!(env.contains("HOME=") && env.contains("PATH="), "{env}");
+    }
+
+    #[tokio::test]
+    async fn a_root_server_starts_the_browser_unprivileged() {
+        let uid = run_as_browser("id -u; touch \"$HOME/written\" && echo ok").await;
+        // SAFETY: geteuid has no preconditions and can't fail.
+        let me = unsafe { libc::geteuid() };
+        let want = if me == 0 { BROWSER_ID } else { me };
+        // It runs as `want` and can write its profile.
+        assert_eq!(uid, format!("{want}\nok\n"));
     }
 
     #[test]
