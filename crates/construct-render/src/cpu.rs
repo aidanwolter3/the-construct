@@ -28,6 +28,74 @@ pub fn sd_rounded_box(p: [f32; 2], b: [f32; 2], radii: [f32; 4]) -> f32 {
     qx.max(qy).min(0.0) + outside - r
 }
 
+/// How much of a dashed border shows at `p` (relative to the box centre,
+/// as [`sd_rounded_box`]): 1 on a dash, 0 in a gap, a one-pixel ramp
+/// between. Dashes go by arc length clockwise from the top edge's left end,
+/// round the corners, and are stretched so a whole number fit the
+/// perimeter (no short dash where it closes).
+pub fn dash_mask(p: [f32; 2], b: [f32; 2], radii: [f32; 4], dash: [f32; 2]) -> f32 {
+    use std::f32::consts::FRAC_PI_2;
+    let r = radii.map(|r| r.min(b[0]).min(b[1]).max(0.0));
+    let [hx, hy] = b;
+    // The four edges and the corner arcs after each: top, top-right,
+    // right, bottom-right, bottom, bottom-left, left, top-left.
+    let lens = [
+        2.0 * hx - r[0] - r[1],
+        r[1] * FRAC_PI_2,
+        2.0 * hy - r[1] - r[2],
+        r[2] * FRAC_PI_2,
+        2.0 * hx - r[2] - r[3],
+        r[3] * FRAC_PI_2,
+        2.0 * hy - r[3] - r[0],
+        r[0] * FRAC_PI_2,
+    ];
+    let start = |i: usize| lens[..i].iter().sum::<f32>();
+    let perimeter = start(8);
+    let [x, y] = p;
+    let (right, below) = (x >= 0.0, y >= 0.0);
+    let k = match (right, below) {
+        (false, false) => 0,
+        (true, false) => 1,
+        (true, true) => 2,
+        (false, true) => 3,
+    };
+    let rk = r[k];
+    let (cx, cy) = (
+        if right { hx - rk } else { rk - hx },
+        if below { hy - rk } else { rk - hy },
+    );
+    let (dx, dy) = (x - cx, y - cy);
+    let s = if x.abs() > hx - rk && y.abs() > hy - rk {
+        // On a corner: the angle round it from the edge before.
+        let (seg, a) = match k {
+            1 => (1, dx.atan2(-dy)),
+            2 => (3, dy.atan2(dx)),
+            3 => (5, (-dx).atan2(dy)),
+            _ => (7, (-dy).atan2(-dx)),
+        };
+        start(seg) + rk * a.clamp(0.0, FRAC_PI_2)
+    } else if x.abs() - hx > y.abs() - hy {
+        if right {
+            start(2) + y - (r[1] - hy)
+        } else {
+            start(6) + (hy - r[3]) - y
+        }
+    } else if below {
+        start(4) + (hx - r[2]) - x
+    } else {
+        x - (r[0] - hx)
+    };
+    let period = dash[0] + dash[1];
+    if period <= 0.0 || perimeter <= 0.0 {
+        return 1.0;
+    }
+    let n = (perimeter / period).round().max(1.0);
+    let stretch = perimeter / (n * period);
+    let (period, dash) = (period * stretch, dash[0] * stretch);
+    let t = s - period * (s / period).round();
+    coverage(t.abs() - dash / 2.0)
+}
+
 /// Coverage of a pixel at signed distance `d` (pixels): a one-pixel ramp.
 fn coverage(d: f32) -> f32 {
     (0.5 - d).clamp(0.0, 1.0)
@@ -49,13 +117,18 @@ pub fn shade(q: &QuadInstance, p: [f32; 2], scale: f32) -> [f32; 4] {
     let outer = coverage(d);
     let bw = q.border_width * scale;
     let inner = if bw > 0.0 { coverage(d + bw) } else { outer };
+    let mut ring = outer - inner;
+    if bw > 0.0 && q.border_dash[0] > 0.0 {
+        let dash = q.border_dash.map(|v| v * scale);
+        ring *= dash_mask(local, half, radii, dash);
+    }
     let bg = q.bg_color;
     let bc = q.border_color;
     let mut out = [0.0; 4];
     for c in 0..3 {
-        out[c] = bg[c] * bg[3] * inner + bc[c] * bc[3] * (outer - inner);
+        out[c] = bg[c] * bg[3] * inner + bc[c] * bc[3] * ring;
     }
-    out[3] = bg[3] * inner + bc[3] * (outer - inner);
+    out[3] = bg[3] * inner + bc[3] * ring;
     let sc = q.shadow_color;
     if sc[3] > 0.0 {
         let blur = (q.shadow_params[0] * scale).max(0.5);

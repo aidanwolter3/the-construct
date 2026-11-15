@@ -26,6 +26,8 @@ pub struct QuadInstance {
     pub shadow_color: [f32; 4],
     /// x, y, width, height: nothing outside it is drawn (scrolling views).
     pub clip: [f32; 4],
+    /// Dash length and gap along the border; zero draws it solid.
+    pub border_dash: [f32; 2],
 }
 
 impl QuadInstance {
@@ -42,6 +44,13 @@ impl QuadInstance {
     pub fn border(mut self, color: Rgba, width: f32) -> QuadInstance {
         self.border_color = color.0;
         self.border_width = width;
+        self
+    }
+
+    /// The border in dashes of `dash` with gaps of `gap` (roughly: both
+    /// are stretched so a whole number fits around the box).
+    pub fn dashed(mut self, dash: f32, gap: f32) -> QuadInstance {
+        self.border_dash = [dash, gap];
         self
     }
 

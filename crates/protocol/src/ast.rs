@@ -436,6 +436,11 @@ pub enum UiNode {
         content_color: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         border_color: Option<String>,
+        /// Feature `box_border_style`: how the `border_color` outline is
+        /// drawn. A client without the feature ignores it and draws it
+        /// solid, so the feature doesn't gate the layout.
+        #[serde(default, skip_serializing_if = "BorderStyle::is_solid")]
+        border_style: BorderStyle,
         #[serde(default, skip_serializing_if = "is_zero")]
         corner_dp: u16,
         #[serde(default, skip_serializing_if = "is_zero")]
@@ -1052,6 +1057,21 @@ pub enum Align {
 
 fn is_start(a: &Align) -> bool {
     *a == Align::Start
+}
+
+/// How `core://Box` draws its outline (feature `box_border_style`).
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum BorderStyle {
+    #[default]
+    Solid,
+    /// Dashes evenly spaced around the box, following its corners.
+    Dashed,
+}
+
+impl BorderStyle {
+    fn is_solid(&self) -> bool {
+        *self == BorderStyle::Solid
+    }
 }
 
 /// Where `core://Row` and `core://Column` put their children along their

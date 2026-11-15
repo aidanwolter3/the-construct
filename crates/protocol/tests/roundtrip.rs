@@ -779,6 +779,37 @@ fn progress_round_trips_and_needs_its_feature() {
 }
 
 #[test]
+fn a_dashed_box_round_trips_and_still_draws_without_its_feature() {
+    let wire = r#"{"type":"core://Box","content":{"type":"core://Divider"},"border_color":"${local://theme#card_border}","border_style":"Dashed","corner_dp":12}"#;
+    let parsed: UiNode = serde_json::from_str(wire).unwrap();
+    let UiNode::Box { border_style, .. } = &parsed else {
+        panic!("{parsed:?}");
+    };
+    assert_eq!(*border_style, protocol::BorderStyle::Dashed);
+    assert_eq!(serde_json::to_string(&parsed).unwrap(), wire);
+    // Solid is the default and isn't written.
+    let solid: UiNode = serde_json::from_str(&wire.replace("Dashed", "Solid")).unwrap();
+    assert!(
+        !serde_json::to_string(&solid)
+            .unwrap()
+            .contains("border_style")
+    );
+    assert!(protocol::FEATURES.contains(&"box_border_style"));
+    // It doesn't gate the layout: a client without the feature is served it
+    // and, not knowing the field, draws the border solid.
+    assert!(!protocol::required_features(&parsed).contains(&"box_border_style"));
+    let mut old = protocol::ClientCaps::this_build();
+    old.features.remove("box_border_style");
+    assert_eq!(
+        old.can_draw(&protocol::required_features(&parsed)),
+        protocol::Compatibility::Compatible
+    );
+    let unknown: UiNode =
+        serde_json::from_str(&wire.replace("border_style", "border_pattern")).unwrap();
+    assert_eq!(unknown, solid);
+}
+
+#[test]
 fn text_format_and_count_round_trip_and_need_their_features() {
     let wire = r#"{"type":"core://Text","value_expr":"Due $item.due","style":"Secondary","format":{"date":"Relative","past":"Overdue"}}"#;
     let parsed: UiNode = serde_json::from_str(wire).unwrap();

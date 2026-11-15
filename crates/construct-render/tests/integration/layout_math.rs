@@ -125,6 +125,21 @@ fn padding_and_gap_math() {
 }
 
 #[test]
+fn a_dashed_box_draws_a_dashed_border() {
+    let boxed = |style: &str| {
+        json!({ "type": "core://Box", "width_dp": 100, "height_dp": 40, "corner_dp": 12, "border_color": "#000000",
+        "border_style": style, "content": { "type": "core://Spacer" } })
+    };
+    let spec = json!({ "type": "core://Column", "children": [boxed("Dashed"), boxed("Solid")] });
+    let scene = SceneBuilder::build_from_spec(&spec, 300.0, 600.0, 1.0).unwrap();
+    let quads: Vec<_> = scene.quads().collect();
+    assert_eq!(quads.len(), 2);
+    assert!(quads[0].border_dash[0] > 0.0 && quads[0].border_dash[1] > 0.0);
+    assert_eq!(quads[0].radii, [12.0; 4]);
+    assert_eq!(quads[1].border_dash, [0.0, 0.0]);
+}
+
+#[test]
 fn semantic_bounds_match_the_quads() {
     let (root, data) = fixture("task_list");
     let scene = build(&root, &data, &BTreeMap::new(), Viewport::PHONE);

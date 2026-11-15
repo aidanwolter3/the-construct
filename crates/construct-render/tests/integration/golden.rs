@@ -118,6 +118,43 @@ fn quad_sdf_anti_aliasing() {
 }
 
 #[test]
+fn dashed_borders_follow_the_corners() {
+    // A 2pt black outline on a rounded box, at 2x: solid, then dashed.
+    let q = QuadInstance::fill([10.0, 10.0, 80.0, 60.0], Rgba::TRANSPARENT, 12.0)
+        .border(Rgba([0.0, 0.0, 0.0, 1.0]), 2.0);
+    let solid = one_quad(q, 100.0, 90.0, 2.0);
+    let dashed = one_quad(q.dashed(4.0, 3.0), 100.0, 90.0, 2.0);
+    // Along the top edge (the border's middle row) the solid outline is
+    // dark throughout; the dashed one goes dark and light in turn.
+    let top = |img: &RgbaImage| {
+        (50..150)
+            .map(|x| img.get_pixel(x, 21).0[0])
+            .collect::<Vec<_>>()
+    };
+    assert!(top(&solid).iter().all(|v| *v < 16), "{:?}", top(&solid));
+    let row = top(&dashed);
+    let changes = row
+        .windows(2)
+        .filter(|w| (w[0] < 128) != (w[1] < 128))
+        .count();
+    assert!(changes >= 10, "dashes along the top: {row:?}");
+    // Round the top-left corner (centre 22,22 pt, the border at 11pt)
+    // there are dashes and gaps, and nothing outside the curve.
+    let arc: Vec<u8> = (0..=30)
+        .map(|i| {
+            let a = std::f32::consts::FRAC_PI_2 * i as f32 / 30.0;
+            let (x, y) = (22.0 - 11.0 * a.cos(), 22.0 - 11.0 * a.sin());
+            dashed.get_pixel((x * 2.0) as u32, (y * 2.0) as u32).0[0]
+        })
+        .collect();
+    assert!(arc.iter().any(|v| *v < 64), "a dash on the corner: {arc:?}");
+    assert!(arc.iter().any(|v| *v > 192), "a gap on the corner: {arc:?}");
+    assert_eq!(dashed.get_pixel(21, 21).0[0], 255);
+    // Inside the box nothing is drawn.
+    assert_eq!(dashed.get_pixel(100, 80).0[0], 255);
+}
+
+#[test]
 fn drop_shadow_extends_past_the_quad() {
     let q = QuadInstance::fill([30.0, 30.0, 40.0, 40.0], Rgba([1.0, 1.0, 1.0, 1.0]), 8.0).shadow(
         Rgba([0.0, 0.0, 0.0, 0.5]),

@@ -97,12 +97,16 @@ fn gpu_quad_matches_the_cpu_sdf() {
     let q = QuadInstance::fill([10.0, 10.0, 80.0, 60.0], Rgba([0.2, 0.3, 0.8, 1.0]), 18.0)
         .border(Rgba([0.0, 0.0, 0.0, 1.0]), 2.0)
         .shadow(Rgba([0.0, 0.0, 0.0, 0.4]), [0.0, 3.0], 6.0, 1.0);
+    // A dashed outline goes round the corners as the CPU's does.
+    let dashed = QuadInstance::fill([20.0, 20.0, 60.0, 50.0], Rgba([0.9, 0.9, 0.9, 1.0]), 10.0)
+        .border(Rgba([0.8, 0.1, 0.1, 1.0]), 1.5)
+        .dashed(4.0, 3.0);
     let scene = Scene {
         width: 100.0,
         height: 90.0,
         scale: 2.0,
         background: [1.0, 1.0, 1.0, 1.0],
-        draws: vec![Draw::Quad(q)],
+        draws: vec![Draw::Quad(q), Draw::Quad(dashed)],
         ..Default::default()
     };
     let mut text = TextEngine::new();
