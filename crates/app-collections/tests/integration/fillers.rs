@@ -525,6 +525,26 @@ async fn rows_fill_from_their_own_pages_and_secrets_stay_sealed() {
         (json!(1299), json!("InStock"))
     );
     assert_eq!(r[1]["name"], "Item 2");
+    // Who wrote each field is recorded (issue #243): the filler wrote the
+    // filled fields of people's rows; the url is the person's own.
+    let writers = pod
+        .store()
+        .with_conn(|c| app_collections::db::field_writers(c, "wishlist"))
+        .unwrap();
+    assert_eq!(writers.len(), 2);
+    let (_, def) = pod
+        .store()
+        .with_conn(|c| app_collections::db::latest_def(c, "wishlist"))
+        .unwrap()
+        .unwrap();
+    let id_of = |n: &str| def.field(n).unwrap().id.clone();
+    for w in writers.values() {
+        assert_eq!(
+            w.get(&id_of("price")),
+            Some(&app_collections::db::filler_writer(&filler))
+        );
+        assert!(w.get(&id_of("url")).is_none(), "{w:?}");
+    }
     let p = ok(
         &pod,
         "collections_preview",

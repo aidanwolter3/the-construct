@@ -1,6 +1,7 @@
-//! Following the runner: the snapshot, the stream resumed from its cursor,
-//! records kept by version, and the last state served while the runner is
-//! away.
+//! Following the runner: the snapshot, catching up from the cursor with the
+//! event log's pages, the stream resumed from there, a snapshot only when
+//! the cursor is older than the log (410), records kept by version, and the
+//! last state served while the runner is away.
 
 use std::sync::atomic::Ordering;
 
@@ -15,7 +16,7 @@ async fn the_mirror_keeps_the_newest_record() {
     fake.end_streams.store(true, Ordering::SeqCst);
     fake.run(
         "run_new",
-        json!({"task_id": "pod/2", "title": "Add a changelog", "state": "working",
+        json!({"work_item_id": "pod/2", "title": "Add a changelog", "state": "working",
             "current_tool": "Edit: CHANGELOG.md", "session_id": "session_01New"}),
     );
     // A late copy of an older version of a run changes nothing.
@@ -25,15 +26,20 @@ async fn the_mirror_keeps_the_newest_record() {
     );
     fake.push(
         "sprite.updated",
-        json!({"name": "box-2", "version": 2, "state": "waking"}),
+        json!({"name": "box-2", "version": 2, "state": "degraded", "reason": "Storage not ready",
+            "preflight": {"ok": false, "failures": ["storage"]}}),
     );
-    // The first stream starts at the snapshot's cursor and ends after the
-    // backlog; the next one resumes after the last event.
+    // Each stream ends after its backlog; the next connection catches up
+    // from the cursor with a page (no second snapshot) and resumes after the
+    // last event.
     until("a stream resumed after event 13", || async {
         fake.sinces().contains(&13)
     })
     .await;
-    assert_eq!(fake.sinces()[0], 10);
+    // The events came before the stream opened: a page from the cursor
+    // read them, and every connection after resumes from 13.
+    assert_eq!(fake.pages.lock().unwrap()[0], 10);
+    assert_eq!(fake.snapshots.load(Ordering::SeqCst), 1);
     let resumed = fake
         .streams
         .lock()
@@ -65,16 +71,24 @@ async fn the_mirror_keeps_the_newest_record() {
             "agents://sessions/run_old"
         ])
     );
+    let box2 = &e["agents://sandboxes/box-2"];
+    assert_eq!(box2["state_text"], "Degraded");
+    assert_eq!(box2["reason"], "Storage not ready");
+    assert_eq!(box2["preflight_text"], "Preflight failed: storage");
     assert_eq!(
-        ws["queries"]["agents:sandboxes"][0],
-        "agents://sandboxes/box-1"
+        ws["queries"]["agents:sandboxes"][0], "agents://sandboxes/box-2",
+        "troubled sandboxes come first"
     );
-    assert_eq!(e["agents://sandboxes/box-2"]["state_text"], "Waking");
-    let nightly = &e["agents://schedules/nightly-deps"];
-    assert_eq!(nightly["state_text"], "Active");
-    assert_eq!(nightly["last_status_text"], "Done");
-    assert_eq!(nightly["last_cost_text"], "$0.31");
-    assert_eq!(nightly["last_summary"], "Bumped two packages.");
+    assert_eq!(
+        e["agents://sessions/run_work"]["state_detail"],
+        "waiting on 1 background task"
+    );
+    assert_eq!(
+        e["agents://sessions/run_old"]["outcome_summary"],
+        "Bumped two packages."
+    );
+    // The runner keeps no schedules: the pod has none yet.
+    assert_eq!(ws["queries"]["agents:schedules"], json!([]));
     assert_eq!(e["agents://checks/egress"]["status_text"], "OK");
 }
 
@@ -153,8 +167,7 @@ async fn an_unreachable_runner_leaves_its_last_state() {
         .insert("run_work".into(), snapshot_run_work());
     fake.run(
         "run_work",
-        json!({"state": "ended", "end_reason": "reported",
-            "outcome": {"status": "review", "summary": "Tidied.", "pr_url": null}}),
+        json!({"state": "ended", "end_reason": "stopped", "outcome": {"state": "needs_review"}}),
     );
     fake.down.store(false, Ordering::SeqCst);
     until("reconnected with the news", || async {
@@ -189,7 +202,7 @@ async fn a_wrong_token_or_url_is_refused() {
         "POST",
         "/v1/agents/sign-in",
         Some("phone"),
-        Some(json!({"url": format!("{url}/v2"), "token": TOKEN})),
+        Some(json!({"url": format!("{url}/v3"), "token": TOKEN})),
     )
     .await;
     assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
@@ -257,4 +270,83 @@ async fn signing_out_forgets_the_runner() {
     assert_eq!(stored, 0);
     // Nothing keeps a signed-out pod open.
     assert_eq!(pod.poll_due().await, None);
+}
+
+#[tokio::test]
+async fn a_gap_is_replayed_from_the_cursor() {
+    let (pod, fake, _) = signed_in().await;
+    let app = agents_layout(&pod).await;
+    until("following", || async { !fake.sinces().is_empty() }).await;
+    fake.down.store(true, Ordering::SeqCst);
+    until("marked stale", || async {
+        workspace(&pod, &app).await["entities"]["agents://runner/status"]["stale"] == true
+    })
+    .await;
+    // While away: a run's whole life, and more than one page of it.
+    for (n, state) in ["queued", "launching", "working", "closing"]
+        .iter()
+        .enumerate()
+    {
+        fake.run(
+            "run_away",
+            json!({"title": "While you were out", "state": state, "updated_at": n}),
+        );
+    }
+    fake.run(
+        "run_away",
+        json!({"state": "ended", "end_reason": "reported", "outcome": {"state": "pending",
+            "stage": "deploy", "pr_url": "https://github.com/sample-owner/sample-repo/pull/7",
+            "deploy_url": "https://github.com/sample-owner/sample-repo/actions/runs/99"}}),
+    );
+    let last = fake.last_seq();
+    fake.down.store(false, Ordering::SeqCst);
+    until("caught up", || async {
+        let ws = workspace(&pod, &app).await;
+        ws["entities"]["agents://sessions/run_away"]["status_text"] == "Waiting on deploy"
+    })
+    .await;
+    let ws = workspace(&pod, &app).await;
+    let away = &ws["entities"]["agents://sessions/run_away"];
+    assert_eq!(
+        away["deploy_url"],
+        "https://github.com/sample-owner/sample-repo/actions/runs/99"
+    );
+    assert_eq!(away["stage"], "deploy");
+    // Caught up with pages, not a snapshot, and the cursor is stored.
+    assert_eq!(fake.snapshots.load(Ordering::SeqCst), 1);
+    assert!(fake.pages.lock().unwrap().len() >= 2, "more than one page");
+    until("the cursor is stored", || async {
+        app_agents::db::state(pod.store())
+            .unwrap()
+            .unwrap()
+            .0
+            .cursor
+            == last
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn a_cursor_older_than_the_log_takes_a_snapshot() {
+    let (pod, fake, _) = signed_in().await;
+    let app = agents_layout(&pod).await;
+    until("following", || async { !fake.sinces().is_empty() }).await;
+    fake.down.store(true, Ordering::SeqCst);
+    until("marked stale", || async {
+        workspace(&pod, &app).await["entities"]["agents://runner/status"]["stale"] == true
+    })
+    .await;
+    fake.run("run_late", json!({"title": "Late", "state": "working"}));
+    // The log no longer reaches the pod's cursor (10).
+    fake.oldest.store(11, Ordering::SeqCst);
+    fake.down.store(false, Ordering::SeqCst);
+    until("a snapshot after the 410", || async {
+        fake.snapshots.load(Ordering::SeqCst) == 2
+    })
+    .await;
+    until("the run is listed", || async {
+        workspace(&pod, &app).await["entities"]["agents://sessions/run_late"]["status_text"]
+            == "Working"
+    })
+    .await;
 }

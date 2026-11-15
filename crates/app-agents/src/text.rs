@@ -1,6 +1,8 @@
 //! Display text from the runner, which is untrusted: plain text only,
-//! control characters dropped and length capped; the only link kept is a
-//! pull request's, checked to be `https://github.com/<owner>/<repo>/pull/<n>`.
+//! control characters dropped and length capped. The links kept are a pull
+//! request's (`https://github.com/<owner>/<repo>/pull/<n>`), a deploy
+//! workflow run's (`https://github.com/<owner>/<repo>/actions/runs/<n>`) and
+//! a Claude app session's, each checked strictly.
 
 /// `s` as one plain line of at most `max` characters (newlines become
 /// spaces, other control characters go).
@@ -66,6 +68,28 @@ pub fn pr_url(url: &str) -> Option<String> {
         }
         _ => None,
     }
+}
+
+/// `url` when it is a GitHub Actions workflow run's address (a run's
+/// deploy): `https://github.com/<owner>/<repo>/actions/runs/<n>`, optionally
+/// followed by `/job/<n>` or `/attempts/<n>`.
+pub fn deploy_url(url: &str) -> Option<String> {
+    let rest = url.trim().strip_prefix("https://github.com/")?;
+    let parts: Vec<&str> = rest.split('/').collect();
+    let name = |s: &str| {
+        !s.is_empty()
+            && s.bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b"-_.".contains(&b))
+    };
+    let num = |s: &str| !s.is_empty() && s.len() <= 20 && s.bytes().all(|b| b.is_ascii_digit());
+    let ok = match parts.as_slice() {
+        [owner, repo, "actions", "runs", n] => name(owner) && name(repo) && num(n),
+        [owner, repo, "actions", "runs", n, "job" | "attempts", m] => {
+            name(owner) && name(repo) && num(n) && num(m)
+        }
+        _ => false,
+    };
+    ok.then(|| format!("https://github.com/{rest}"))
 }
 
 /// The Claude app's address of session `id`, when the id looks like a
@@ -163,6 +187,27 @@ mod tests {
             "javascript:alert(1)",
         ] {
             assert!(pr_url(bad).is_none(), "{bad}");
+        }
+    }
+
+    #[test]
+    fn only_workflow_run_links_are_kept_as_deploys() {
+        for good in [
+            "https://github.com/o/r/actions/runs/123",
+            "https://github.com/o/r/actions/runs/123/job/456",
+            "https://github.com/o/r/actions/runs/123/attempts/2",
+        ] {
+            assert_eq!(deploy_url(good).as_deref(), Some(good));
+        }
+        for bad in [
+            "http://github.com/o/r/actions/runs/1",
+            "https://github.com/o/r/actions/runs/x",
+            "https://github.com/o/r/actions/runs/1?y=z",
+            "https://github.com.evil.example/o/r/actions/runs/1",
+            "https://github.com/o/r/pull/1",
+            "https://github.com/o/r/actions/runs/1/../../x",
+        ] {
+            assert!(deploy_url(bad).is_none(), "{bad}");
         }
     }
 

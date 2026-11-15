@@ -1,35 +1,41 @@
-//! The Tasks wiring (opt-in per collection, decision `agents-runs`): a row
-//! moving to `queued` sends `start_run` once, with the row's id as the task
-//! id, and the row's `status` then follows its current run through one
-//! fixed table ([`task_status`]):
+//! The Tasks wiring (opt-in per collection, decisions `agents-runs`,
+//! `agents-cap-v3`): a row moving to `queued` sends `start_run` once, with
+//! the row's id as the work item, and the row's `status` then follows its
+//! current run through one fixed table ([`task_status`]):
 //!
 //! | current run | row status |
 //! |---|---|
-//! | queued | queued |
-//! | starting, working | running |
-//! | needs_you | needs_you |
-//! | ended, outcome done | done |
-//! | ended, outcome review; or reported, exited, stopped without one | review |
-//! | outcome failed or blocked; or lost, start_failed, timed_out, expired | failed |
-//! | ended with an error and no session (crashed at launch) | failed |
+//! | queued, launching | queued |
+//! | working, stalled, interrupted, stopping, closing | running |
+//! | needs_you, parked | needs_you |
+//! | ended, outcome pending (or not settled yet) | waiting, `stage` ci, review or deploy |
+//! | outcome done | done |
+//! | outcome failed; or ended lost, start_failed, timed_out, expired | failed |
+//! | outcome needs_review | review |
 //!
 //! The current run is the one the row's `run_id` names, else the newest run
-//! whose `task_id` is the row's id. When it ends, its outcome (summary and
-//! pull request, or why it failed) is appended to `diagnosis`, once.
+//! whose `work_item_id` is the row's id. When its outcome settles, what it
+//! did (summary and pull request, or why it failed) is appended to
+//! `diagnosis`, once.
+//!
+//! **Origin** (issue #243): only a row you (or Claude) queued starts a run.
+//! A row a filler made, or whose status, title, notes, workspace, model or
+//! runtime a filler or a model wrote last (Collections records who wrote
+//! each field: `collections_field_writers`), is failed with the reason
+//! instead; setting those fields yourself makes it startable again.
 //!
 //! A row you set to `done` (or tick `done`) or `todo` keeps that status:
 //! its run only adds to `diagnosis`, and a run that hasn't ended gets
 //! `stop_run`, once. Reopen ([`reopen`]) starts a run that resumes the
-//! last one's conversation with your message.
-//!
-//! A run that crashed at launch ([`Run::crashed_at_launch`]) fails its row
-//! with `Crashed at launch: <error>`; [`RETRY_AFTER_MS`] later the row is
-//! queued again with a new run, once (a retry's own crash stays failed).
+//! last one's conversation with your message (`resume_from`).
 //!
 //! The collection is linked with the MCP tool `agents_link_tasks`, which
 //! adds what the wiring needs (the status options and the `run_id`,
-//! `session_id`, `workspace` and `diagnosis` fields) through Collections'
-//! own `apply_change`.
+//! `session_id`, `workspace`, `stage` and `diagnosis` fields) through
+//! Collections' own `apply_change`; a collection linked before an option or
+//! field was added gets it on the next pass.
+
+use std::collections::BTreeMap;
 
 use pod_core::Pod;
 use pod_core::store::Store;
@@ -38,11 +44,12 @@ use serde_json::{Map, Value, json};
 
 use app_collections::{db as cdb, model};
 
-use crate::cap::{self, CapError, Clients, Command, Runner};
+use crate::cap::{self, CapError, Clients, Command, Runner, StartRun};
 use crate::db;
 use crate::state::{self as st, Run, State};
 
-/// Pod setting: the linked collection (`{collection, workspace}` as JSON).
+/// Pod setting: the linked collection (`{collection, workspace, ...}` as
+/// JSON).
 pub const TASKS_SETTING: &str = "agents.tasks";
 
 /// The `status` options the wiring sets; `queued` starts a run.
@@ -50,25 +57,48 @@ pub const TODO: &str = "todo";
 pub const QUEUED: &str = "queued";
 pub const RUNNING: &str = "running";
 pub const NEEDS_YOU: &str = "needs_you";
+pub const WAITING: &str = "waiting";
 pub const REVIEW: &str = "review";
 pub const DONE: &str = "done";
 pub const FAILED: &str = "failed";
-const NEEDED_OPTIONS: [&str; 7] = [TODO, QUEUED, RUNNING, NEEDS_YOU, REVIEW, DONE, FAILED];
+const NEEDED_OPTIONS: [&str; 8] = [
+    TODO, QUEUED, RUNNING, NEEDS_YOU, WAITING, REVIEW, DONE, FAILED,
+];
 /// The text fields the wiring writes.
-const NEEDED_FIELDS: [&str; 4] = ["run_id", "session_id", "workspace", "diagnosis"];
+const NEEDED_FIELDS: [&str; 5] = ["run_id", "session_id", "workspace", "stage", "diagnosis"];
+/// The fields a run is made from: only a person (or Claude) may have
+/// written them last for a row to start a run (issue #243).
+const TRUSTED_FIELDS: [&str; 8] = [
+    "status",
+    "title",
+    "notes",
+    "description",
+    "details",
+    "workspace",
+    "model",
+    "max_runtime_min",
+];
 /// The most of `diagnosis` kept (the newest text).
 const DIAGNOSIS_MAX: usize = 3_900;
 /// The most of a prompt sent.
 const PROMPT_MAX: usize = 20_000;
-/// How long after a run crashed at launch its row is retried (once), in
-/// milliseconds: these crashes have been transient.
-pub const RETRY_AFTER_MS: i64 = 30_000;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Link {
     pub collection: String,
     /// The runner workspace a row without its own `workspace` starts in.
     pub workspace: String,
+    /// The model a row without its own `model` asks for (empty: the
+    /// Sprite's default).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub model: String,
+    /// The max runtime a row without its own asks for (0: the runner's).
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub max_runtime_min: u32,
+}
+
+fn is_zero(n: &u32) -> bool {
+    *n == 0
 }
 
 /// The linked collection, if any.
@@ -82,9 +112,44 @@ fn bad(detail: impl Into<String>) -> Value {
     json!({"error": "invalid_request", "detail": detail.into()})
 }
 
-/// `agents_link_tasks {collection, workspace}`: link a collection (adding
-/// the options and fields the wiring needs), or unlink with `collection:
-/// null`.
+/// The definition changes `def` needs for the wiring: the status options
+/// and the text fields it lacks.
+fn shape_changes(def: &model::Definition) -> Vec<Value> {
+    let mut changes = Vec::new();
+    if let Some(status) = def.field("status") {
+        let mut options = status.options.clone();
+        for o in NEEDED_OPTIONS {
+            if !options.iter().any(|x| x == o) {
+                options.push(o.to_owned());
+            }
+        }
+        if options != status.options {
+            changes.push(json!({"op": "update_field", "field": "status", "options": options}));
+        }
+    }
+    for f in NEEDED_FIELDS {
+        if def.field(f).is_none() {
+            changes.push(json!({"op": "add_field", "name": f, "type": "text", "optional": true}));
+        }
+    }
+    changes
+}
+
+async fn apply_shape(pod: &Pod, collection: &str, changes: &[Value]) -> Result<(), Value> {
+    let Some((collections, _)) = pod.catalog().source(app_collections::NAME) else {
+        return Err(bad("this pod has no Collections source"));
+    };
+    let args = json!({"collection": collection, "changes": changes,
+        "note": "Linked to the agent runner (agents_link_tasks)"});
+    let Some(call) = collections.mcp_call(pod, "apply_change", &args) else {
+        return Err(bad("Collections can't change definitions here"));
+    };
+    call.await.map(|_| ())
+}
+
+/// `agents_link_tasks {collection, workspace, model?, max_runtime_min?}`:
+/// link a collection (adding the options and fields the wiring needs), or
+/// unlink with `collection: null`.
 pub async fn set_link(pod: &Pod, args: &Value) -> Result<Value, Value> {
     if args.get("collection").is_none_or(Value::is_null) {
         pod.blocking(|s| s.set_pod_setting(TASKS_SETTING, "null"))
@@ -104,6 +169,22 @@ pub async fn set_link(pod: &Pod, args: &Value) -> Result<Value, Value> {
         .filter(|s| !s.is_empty() && s.len() <= 100)
         .ok_or_else(|| bad("\"workspace\" is the runner workspace tasks start in"))?
         .to_owned();
+    let model = args
+        .get("model")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .unwrap_or("")
+        .to_owned();
+    if model.len() > 100 || !model.chars().all(|c| c.is_ascii_graphic()) {
+        return Err(bad("\"model\" is one word of at most 100 characters"));
+    }
+    let max_runtime_min = match args.get("max_runtime_min") {
+        None | Some(Value::Null) => 0,
+        Some(v) => match v.as_u64() {
+            Some(n @ 1..=480) => n as u32,
+            _ => return Err(bad("\"max_runtime_min\" is 1 to 480 minutes")),
+        },
+    };
     let name = collection.clone();
     let def = pod
         .blocking(move |s| s.with_conn(|c| cdb::latest_def(c, &name)))
@@ -126,46 +207,37 @@ pub async fn set_link(pod: &Pod, args: &Value) -> Result<Value, Value> {
             "'{collection}'.status must be a choice with the option queued"
         )));
     }
-    let mut changes = Vec::new();
-    let mut options = status.options.clone();
-    for o in NEEDED_OPTIONS {
-        if !options.iter().any(|x| x == o) {
-            options.push(o.to_owned());
-        }
-    }
-    if options != status.options {
-        changes.push(json!({"op": "update_field", "field": "status", "options": options}));
-    }
-    for f in NEEDED_FIELDS {
-        if def.field(f).is_none() {
-            changes.push(json!({"op": "add_field", "name": f, "type": "text", "optional": true}));
-        }
-    }
+    let changes = shape_changes(&def);
     if !changes.is_empty() {
-        let Some((collections, _)) = pod.catalog().source(app_collections::NAME) else {
-            return Err(bad("this pod has no Collections source"));
-        };
-        let args = json!({"collection": collection, "changes": changes,
-            "note": "Linked to the agent runner (agents_link_tasks)"});
-        let Some(call) = collections.mcp_call(pod, "apply_change", &args) else {
-            return Err(bad("Collections can't change definitions here"));
-        };
-        call.await?;
+        apply_shape(pod, &collection, &changes).await?;
     }
     let link = Link {
         collection: collection.clone(),
         workspace,
+        model,
+        max_runtime_min,
     };
     let v = serde_json::to_string(&link).expect("serializes");
     pod.blocking(move |s| s.set_pod_setting(TASKS_SETTING, &v))
         .await
         .map_err(|_| bad("the pod's settings can't be written"))?;
     Ok(json!({"ok": true, "linked": link, "changes": changes,
-        "next": "Rows whose status becomes queued now start a run on the runner."}))
+        "next": "Rows you or Claude set to queued now start a run on the runner."}))
 }
 
 /// A row's values by field name.
 type Named = Map<String, Value>;
+
+/// One row of the linked collection, with who wrote what.
+#[derive(Debug, Clone)]
+struct Task {
+    id: String,
+    values: Named,
+    /// The filler that made it.
+    filler: Option<String>,
+    /// Field name -> the filler or model that wrote it last.
+    untrusted: BTreeMap<String, String>,
+}
 
 /// Whether a row is marked done: `status = done`, or a `done` box ticked.
 fn is_done(row: &Named) -> bool {
@@ -178,18 +250,35 @@ fn is_kept(row: &Named) -> bool {
     is_done(row) || text(row, "status") == TODO
 }
 
-fn rows(store: &Store, collection: &str) -> rusqlite::Result<Vec<(String, Named)>> {
+/// The linked collection's definition and rows (none when it is gone).
+fn tasks(
+    store: &Store,
+    collection: &str,
+) -> rusqlite::Result<Option<(model::Definition, Vec<Task>)>> {
     store.with_conn(|c| {
         let Some((_, def)) = cdb::latest_def(c, collection)? else {
-            return Ok(Vec::new());
+            return Ok(None);
         };
-        Ok(cdb::rows(c, &def)?
+        let mut writers = cdb::field_writers(c, collection)?;
+        let rows = cdb::rows(c, &def)?
             .into_iter()
             .map(|r| {
-                let e = model::row_entity(&def, &r.id, &r.values, "", "");
-                (r.id, e)
+                let values = model::row_entity(&def, &r.id, &r.values, "", "");
+                let untrusted = writers
+                    .remove(&r.id)
+                    .unwrap_or_default()
+                    .into_iter()
+                    .filter_map(|(fid, w)| def.by_id(&fid).map(|f| (f.name.clone(), w)))
+                    .collect();
+                Task {
+                    id: r.id,
+                    values,
+                    filler: r.filler,
+                    untrusted,
+                }
             })
-            .collect())
+            .collect();
+        Ok(Some((def, rows)))
     })
 }
 
@@ -215,6 +304,37 @@ fn prompt(row: &Named) -> String {
         format!("{title}\n\n{notes}")
     };
     p.chars().take(PROMPT_MAX).collect()
+}
+
+/// Why row `t` may not start a run (issue #243): a filler made it, or a
+/// filler or a model wrote one of the fields a run is made from. `None`:
+/// you (or Claude) wrote it all.
+fn untrusted_origin(def: &model::Definition, t: &Task) -> Option<String> {
+    let who = |w: &str| match w.strip_prefix("filler:") {
+        Some(id) => match app_collections::filler::find(def, id) {
+            Some(f) if !f.title.is_empty() => format!("the filler {}", f.title),
+            _ => format!("the filler {id}"),
+        },
+        None => "a model".to_owned(),
+    };
+    if let Some(f) = &t.filler {
+        return Some(format!(
+            "{} made this row; only rows you or Claude add can start a run",
+            who(&format!("filler:{f}"))
+        ));
+    }
+    let fields: Vec<(&str, &String)> = TRUSTED_FIELDS
+        .iter()
+        .filter_map(|f| t.untrusted.get(*f).map(|w| (*f, w)))
+        .collect();
+    let (_, first) = fields.first()?;
+    let names: Vec<&str> = fields.iter().map(|(f, _)| *f).collect();
+    Some(format!(
+        "{} wrote {} last; set {} yourself to start it",
+        who(first),
+        names.join(", "),
+        if names.len() == 1 { "it" } else { "them" }
+    ))
 }
 
 /// `before` with `more` appended as a new paragraph, keeping the newest
@@ -245,37 +365,47 @@ async fn update(pod: &Pod, collection: &str, id: &str, values: Value) {
 /// The task status run `r` maps to: the one table (module docs).
 pub fn task_status(r: &Run) -> &'static str {
     match r.state.as_str() {
-        st::QUEUED => QUEUED,
-        st::STARTING | st::WORKING => RUNNING,
-        st::NEEDS_YOU => NEEDS_YOU,
-        _ => match (r.outcome.as_str(), r.end()) {
-            ("done", _) => DONE,
-            ("review", _) => REVIEW,
-            ("failed" | "blocked", _) => FAILED,
-            (_, "lost" | "start_failed" | "timed_out" | "expired" | st::CRASHED) => FAILED,
-            _ => REVIEW,
+        st::QUEUED | st::LAUNCHING => QUEUED,
+        st::WORKING | st::STALLED | st::INTERRUPTED | st::STOPPING | st::CLOSING => RUNNING,
+        st::NEEDS_YOU | st::PARKED => NEEDS_YOU,
+        st::ENDED => match r.outcome_state() {
+            st::OUTCOME_DONE => DONE,
+            st::OUTCOME_FAILED => FAILED,
+            st::OUTCOME_NEEDS_REVIEW => REVIEW,
+            st::OUTCOME_PENDING => WAITING,
+            _ if st::BAD_ENDS.contains(&r.end_reason.as_str()) => FAILED,
+            // Ended, its outcome not worked out yet.
+            _ => WAITING,
         },
+        // A state this pod doesn't know yet: still going.
+        _ => RUNNING,
     }
 }
 
-/// What an ended run adds to its row's `diagnosis`: the outcome's summary
-/// and pull request, or why it failed.
-pub fn end_note(r: &Run) -> String {
-    if r.crashed_at_launch() {
-        return format!("Crashed at launch: {}", r.error);
-    }
-    let (word, _) = crate::bundle::run_look(&r.state, r.end(), &r.outcome);
-    let summary = if r.outcome_summary.is_empty() {
-        r.summary.as_str()
+/// What a waiting row waits on: `ci`, `review` or `deploy` (empty
+/// otherwise).
+pub fn stage(r: &Run) -> &str {
+    if task_status(r) == WAITING {
+        &r.outcome.stage
     } else {
-        r.outcome_summary.as_str()
-    };
-    let mut note = match (r.outcome.as_str(), task_status(r)) {
-        ("done" | "review", _) if !summary.is_empty() => summary.to_owned(),
-        ("done" | "review", _) => format!("{word}."),
-        (_, FAILED) => {
-            let why = if !r.outcome.is_empty() && !summary.is_empty() {
-                summary.to_owned()
+        ""
+    }
+}
+
+/// Whether run `r`'s outcome is settled enough to note in `diagnosis`.
+fn settled(r: &Run) -> bool {
+    !r.is_active() && task_status(r) != WAITING
+}
+
+/// What a settled run adds to its row's `diagnosis`: what it did and its
+/// pull request, or why it failed.
+pub fn end_note(r: &Run) -> String {
+    let (word, _) = crate::bundle::run_look(r);
+    let said = r.said();
+    let mut note = match task_status(r) {
+        FAILED => {
+            let why = if !said.is_empty() {
+                said.to_owned()
             } else if !r.error.is_empty() {
                 r.error.clone()
             } else {
@@ -283,7 +413,8 @@ pub fn end_note(r: &Run) -> String {
             };
             format!("{word}: {why}")
         }
-        _ if !summary.is_empty() => summary.to_owned(),
+        _ if !said.is_empty() => said.to_owned(),
+        DONE => format!("{word}."),
         _ => crate::alerts::end_reason_text(&r.end_reason).to_owned(),
     };
     if !r.pr().is_empty() {
@@ -304,149 +435,110 @@ fn refusal(e: &CapError) -> Option<String> {
     }
 }
 
-/// One pass over the linked collection: send `start_run` for queued rows
-/// that need one, then set each row from its current run, note ended runs
-/// in `diagnosis` and stop the runs of rows you set to done or todo.
+/// Whether the definition change for an already-linked collection has been
+/// tried by this process.
+#[derive(Debug, Default)]
+pub struct Shaped(std::sync::atomic::AtomicBool);
+
+/// One pass over the linked collection: give it what the wiring needs,
+/// send `start_run` for queued rows that need one, then set each row from
+/// its current run, note settled runs in `diagnosis` and stop the runs of
+/// rows you set to done or todo.
 pub async fn sync(pod: &Pod, clients: &Clients, runner: &Runner, state: &State) {
     let Ok(Some(link)) = pod.blocking(link).await else {
         return;
     };
     let coll = link.collection.clone();
-    let Ok((rows, launches)) = pod
-        .blocking(move |s| Ok((rows(s, &coll)?, db::launches(s, &coll)?)))
+    let Ok((Some((def, rows)), launches)) = pod
+        .blocking(move |s| Ok((tasks(s, &coll)?, db::launches(s, &coll)?)))
         .await
     else {
         return;
     };
-    let launch_of = |id: &str| {
-        launches
-            .iter()
-            .find(|(t, _, _)| t == id)
-            .map(|(_, r, _)| r.clone())
-    };
+    let shaped = pod.local::<Shaped>();
+    let changes = shape_changes(&def);
+    if !changes.is_empty() && !shaped.0.swap(true, std::sync::atomic::Ordering::SeqCst) {
+        if let Err(e) = apply_shape(pod, &link.collection, &changes).await {
+            tracing::warn!(error = %e, "the linked tasks collection could not be updated");
+        }
+        return;
+    }
+    let launch_of = |id: &str| launches.iter().find(|l| l.task_id == id).cloned();
     // Sends are forgotten once their row moves on.
-    for (id, _, _) in &launches {
+    for l in &launches {
         if !rows
             .iter()
-            .any(|(r, v)| r == id && text(v, "status") == QUEUED)
+            .any(|t| t.id == l.task_id && text(&t.values, "status") == QUEUED)
         {
-            let id = id.clone();
+            let id = l.task_id.clone();
             let _ = pod.blocking(move |s| db::remove_launch(s, &id)).await;
         }
     }
+    let has_stage = def.field("stage").is_some();
     let mut sending = true;
-    for (id, row) in rows {
-        let launched = launch_of(&id);
-        let named = text(&row, "run_id");
+    for t in rows {
+        let row = &t.values;
+        let launched = launch_of(&t.id);
+        let named = text(row, "run_id");
         let run_id = if named.is_empty() {
-            launched.clone().unwrap_or_default()
+            launched
+                .as_ref()
+                .map(|l| l.run_id.clone())
+                .unwrap_or_default()
         } else {
             named.clone()
         };
-        let queued = text(&row, "status") == QUEUED && !is_done(&row);
+        let queued = text(row, "status") == QUEUED && !is_done(row);
         // A queued row needs a run unless it has the one this pod started
         // for it; a row queued again after its run ended (a retry) gets a
-        // new one.
-        let ours = launched.as_deref() == Some(run_id.as_str()) && launched.is_some();
+        // new one. A send not answered yet is sent again, as it was.
+        let unanswered = launched.as_ref().filter(|l| l.run_id.is_empty());
+        let ours = launched
+            .as_ref()
+            .is_some_and(|l| !l.run_id.is_empty() && l.run_id == run_id);
         let needs_run = queued
             && !ours
-            && (run_id.is_empty() || state.runs.get(&run_id).is_none_or(|r| !r.is_active()));
+            && (unanswered.is_some()
+                || run_id.is_empty()
+                || state.runs.get(&run_id).is_none_or(|r| !r.is_active()));
         if needs_run {
+            if let Some(why) = untrusted_origin(&def, &t) {
+                let diagnosis = append(&text(row, "diagnosis"), &format!("Not started: {why}."));
+                update(
+                    pod,
+                    &link.collection,
+                    &t.id,
+                    json!({"status": FAILED, "diagnosis": diagnosis}),
+                )
+                .await;
+                continue;
+            }
             if sending {
-                sending = start(pod, clients, runner, &link, &id, &row, None, None).await;
+                let request = unanswered.map(|l| l.request_id.clone());
+                sending = start(pod, clients, runner, &link, &t.id, row, request).await;
             }
             continue;
         }
-        let Some(run) = state.current_run(&id, &run_id) else {
+        let Some(run) = state.current_run(&t.id, &run_id) else {
             continue;
         };
-        if sending && retry_due(pod, &row, run).await {
-            sending = retry(pod, clients, runner, &link, &id, &row, run).await;
-            continue;
-        }
-        follow(pod, clients, runner, &link.collection, &id, &row, run).await;
+        follow(
+            pod,
+            clients,
+            runner,
+            &link.collection,
+            &t.id,
+            row,
+            run,
+            has_stage,
+        )
+        .await;
     }
 }
 
-/// Whether row `row`'s current run `run` crashed at launch and is owed its
-/// one retry now: its crash is already in the row, [`RETRY_AFTER_MS`] have
-/// passed, the row wasn't set to done or todo, and `run` isn't a retry
-/// itself.
-async fn retry_due(pod: &Pod, row: &Named, run: &Run) -> bool {
-    let ended = if run.ended_at > 0 {
-        run.ended_at
-    } else {
-        run.last_at()
-    };
-    if !run.crashed_at_launch()
-        || is_kept(row)
-        || crate::follower::now_ms() - ended < RETRY_AFTER_MS
-    {
-        return false;
-    }
-    let keys = [
-        format!("noted:{}", run.id),
-        format!("retried:{}", run.id),
-        format!("retry:{}", run.id),
-    ];
-    let Ok([noted, retried, is_retry]) = pod
-        .blocking(move |s| {
-            let mut out = [false; 3];
-            for (o, k) in out.iter_mut().zip(&keys) {
-                *o = db::marked(s, k)?;
-            }
-            Ok(out)
-        })
-        .await
-    else {
-        return false;
-    };
-    noted && !retried && !is_retry
-}
-
-/// Retry row `id`, whose run `crashed` at launch: a new run, remembered as
-/// a retry so its own crash isn't retried. Whether the runner answered.
-async fn retry(
-    pod: &Pod,
-    clients: &Clients,
-    runner: &Runner,
-    link: &Link,
-    id: &str,
-    row: &Named,
-    crashed: &Run,
-) -> bool {
-    match start_run(pod, clients, runner, link, id, row, None, None).await {
-        Ok(new) => {
-            let now = pod_core::util::now_secs();
-            let key = format!("retry:{new}");
-            let _ = pod.blocking(move |s| db::mark(s, &key, now)).await;
-        }
-        Err(e) => match refusal(&e) {
-            Some(reason) => {
-                let diagnosis = append(
-                    &text(row, "diagnosis"),
-                    &format!("Couldn't retry: {reason}"),
-                );
-                update(pod, &link.collection, id, json!({"diagnosis": diagnosis})).await;
-            }
-            None => {
-                tracing::info!(error = %e, "a crashed task's retry waits for the runner");
-                return false;
-            }
-        },
-    }
-    let (now, key) = (
-        pod_core::util::now_secs(),
-        format!("retried:{}", crashed.id),
-    );
-    let _ = pod.blocking(move |s| db::mark(s, &key, now)).await;
-    true
-}
-
-/// Send `start_run` for row `id` (`resume_from` and `prompt` for Reopen),
-/// remember the run it answers and put it in the row. Whether the runner
-/// answered (a refusal for good fails the row).
-#[allow(clippy::too_many_arguments)]
+/// Send `start_run` for row `id` (`request`: the request id of a send not
+/// answered yet), remember the run it answers and put it in the row.
+/// Whether the runner answered (a refusal for good fails the row).
 async fn start(
     pod: &Pod,
     clients: &Clients,
@@ -454,13 +546,14 @@ async fn start(
     link: &Link,
     id: &str,
     row: &Named,
-    resume_from: Option<String>,
-    message: Option<String>,
+    request: Option<String>,
 ) -> bool {
-    match start_run(pod, clients, runner, link, id, row, resume_from, message).await {
+    match start_run(pod, clients, runner, link, id, row, request, None, None).await {
         Ok(_) => true,
         Err(e) => match refusal(&e) {
             Some(reason) => {
+                let task = id.to_owned();
+                let _ = pod.blocking(move |s| db::remove_launch(s, &task)).await;
                 let diagnosis = append(
                     &text(row, "diagnosis"),
                     &format!("Couldn't start: {reason}"),
@@ -474,7 +567,8 @@ async fn start(
                 .await;
                 true
             }
-            // The runner is away: try again on the next pass.
+            // The runner is away: sent again, with the same request id, on
+            // the next pass.
             None => {
                 tracing::info!(error = %e, "a queued task waits for the runner");
                 false
@@ -483,8 +577,26 @@ async fn start(
     }
 }
 
+/// The model and max runtime row `row` asks for: its own fields, else the
+/// link's defaults.
+fn run_settings(link: &Link, row: &Named) -> (Option<String>, Option<u32>) {
+    let model = Some(text(row, "model"))
+        .filter(|m| !m.is_empty() && m.len() <= 100 && m.chars().all(|c| c.is_ascii_graphic()))
+        .or_else(|| (!link.model.is_empty()).then(|| link.model.clone()));
+    let own = match row.get("max_runtime_min") {
+        Some(Value::Number(n)) => n.as_u64(),
+        Some(Value::String(s)) => s.trim().parse().ok(),
+        _ => None,
+    }
+    .filter(|n| (1..=cap::MAX_RUNTIME_MIN as u64).contains(n))
+    .map(|n| n as u32);
+    let runtime = own.or((link.max_runtime_min > 0).then_some(link.max_runtime_min));
+    (model, runtime)
+}
+
 /// `start_run` for row `id`; the new run's id, remembered and put in the
-/// row (with `status = queued`).
+/// row (with `status = queued`). The request id is stored before sending,
+/// so a resend after a crash is the same request.
 #[allow(clippy::too_many_arguments)]
 async fn start_run(
     pod: &Pod,
@@ -493,32 +605,44 @@ async fn start_run(
     link: &Link,
     id: &str,
     row: &Named,
+    request: Option<String>,
     resume_from: Option<String>,
     message: Option<String>,
 ) -> Result<String, CapError> {
+    let now = crate::follower::now_ms();
+    let reopen = resume_from.is_some();
+    let request_id =
+        request.unwrap_or_else(|| format!("{}_{id}_{now}", if reopen { "reopen" } else { "task" }));
     let ws = text(row, "workspace");
-    let cmd = Command::StartRun {
+    let (model, max_runtime_min) = run_settings(link, row);
+    let cmd = Command::StartRun(StartRun {
+        request_id: request_id.clone(),
         workspace: if ws.is_empty() {
             link.workspace.clone()
         } else {
             ws
         },
-        task_id: id.to_owned(),
+        work_item_id: id.to_owned(),
+        occurrence: None,
+        origin: cap::ORIGIN_TASK.into(),
         title: text(row, "title").chars().take(200).collect(),
         prompt: message.unwrap_or_else(|| prompt(row)),
+        model,
+        max_runtime_min,
         resume_from,
-    };
+    });
+    if !reopen {
+        let (coll, task, req) = (link.collection.clone(), id.to_owned(), request_id.clone());
+        let _ = pod
+            .blocking(move |s| db::put_launch(s, &coll, &task, &req, "", now))
+            .await;
+    }
     let answer = cap::command(clients, runner, &cmd).await?;
     let run_id = cap::run_id_of(&answer).unwrap_or_default();
-    let (coll, task, run, now) = (
-        link.collection.clone(),
-        id.to_owned(),
-        run_id.clone(),
-        pod_core::util::now_secs(),
-    );
+    let (coll, task, run) = (link.collection.clone(), id.to_owned(), run_id.clone());
     // Remembered before the row changes: the change wakes another pass.
     let _ = pod
-        .blocking(move |s| db::add_launch(s, &coll, &task, &run, now))
+        .blocking(move |s| db::put_launch(s, &coll, &task, &request_id, &run, now))
         .await;
     update(
         pod,
@@ -531,6 +655,7 @@ async fn start_run(
 }
 
 /// Set row `id` from its current run `run`.
+#[allow(clippy::too_many_arguments)]
 async fn follow(
     pod: &Pod,
     clients: &Clients,
@@ -539,6 +664,7 @@ async fn follow(
     id: &str,
     row: &Named,
     run: &Run,
+    has_stage: bool,
 ) {
     let mut values = Map::new();
     if text(row, "run_id") != run.id {
@@ -551,8 +677,11 @@ async fn follow(
     if !kept && text(row, "status") != task_status(run) {
         values.insert("status".into(), json!(task_status(run)));
     }
+    if has_stage && text(row, "stage") != stage(run) {
+        values.insert("stage".into(), json!(stage(run)));
+    }
     let noted = format!("noted:{}", run.id);
-    let note = !run.is_active() && {
+    let note = settled(run) && {
         let k = noted.clone();
         !pod.blocking(move |s| db::marked(s, &k))
             .await
@@ -601,41 +730,6 @@ async fn follow(
     }
 }
 
-/// Run `run` was marked reviewed: its row, when it is a linked task's and
-/// this is the row's current run, goes from `review` to `done`. Whether it
-/// did.
-pub async fn reviewed(pod: &Pod, state: &State, run: &Run) -> bool {
-    if run.task_id.is_empty() || st::schedule_of_task(&run.task_id).is_some() {
-        return false;
-    }
-    let Some(link) = pod.blocking(link).await.ok().flatten() else {
-        return false;
-    };
-    let (coll, rid) = (link.collection.clone(), run.task_id.clone());
-    let Some(row) = pod
-        .blocking(move |s| Ok(rows(s, &coll)?.into_iter().find(|(r, _)| *r == rid)))
-        .await
-        .ok()
-        .flatten()
-        .map(|(_, r)| r)
-    else {
-        return false;
-    };
-    let current = state.current_run(&run.task_id, &text(&row, "run_id"));
-    if current.is_none_or(|c| c.id != run.id) || text(&row, "status") != REVIEW {
-        return false;
-    }
-    let mut values = Map::new();
-    values.insert("status".into(), json!(DONE));
-    match app_collections::update_row(pod, &link.collection, &run.task_id, values).await {
-        Ok(_) => true,
-        Err(e) => {
-            tracing::warn!(error = %e["error"], detail = %e["detail"], "a reviewed task row could not be set done");
-            false
-        }
-    }
-}
-
 /// Why Reopen was refused: the status, error and detail for the route.
 pub type Refusal = (u16, &'static str, String);
 
@@ -657,11 +751,13 @@ pub async fn reopen(
     ))?;
     let (coll, rid) = (link.collection.clone(), id.to_owned());
     let row = pod
-        .blocking(move |s| Ok(rows(s, &coll)?.into_iter().find(|(r, _)| *r == rid)))
+        .blocking(move |s| {
+            Ok(tasks(s, &coll)?.and_then(|(_, rows)| rows.into_iter().find(|t| t.id == rid)))
+        })
         .await
         .ok()
         .flatten()
-        .map(|(_, r)| r)
+        .map(|t| t.values)
         .ok_or((
             404,
             "not_found",
@@ -691,6 +787,7 @@ pub async fn reopen(
         &link,
         id,
         &row,
+        None,
         Some(last_id),
         Some(message.to_owned()),
     )
@@ -733,31 +830,40 @@ mod tests {
             id: "run_1".into(),
             state: state.into(),
             end_reason: end.into(),
-            outcome: outcome.into(),
+            outcome: st::Outcome {
+                state: outcome.into(),
+                ..Default::default()
+            },
             ..Default::default()
         }
     }
 
     #[test]
-    fn the_mapping_table() {
+    fn the_status_table() {
         for (state, end, outcome, want) in [
             ("queued", "", "", QUEUED),
-            ("starting", "", "", RUNNING),
+            ("launching", "", "", QUEUED),
             ("working", "", "", RUNNING),
+            ("stalled", "", "", RUNNING),
+            ("interrupted", "", "", RUNNING),
+            ("stopping", "", "", RUNNING),
+            ("closing", "", "pending", RUNNING),
             ("needs_you", "", "", NEEDS_YOU),
-            // The outcome survives the run ending, whatever ended it.
-            ("ended", "reported", "done", DONE),
+            ("parked", "", "", NEEDS_YOU),
+            ("ended", "reported", "pending", WAITING),
+            // A PR on a lost run's branch still counts.
+            ("ended", "lost", "pending", WAITING),
             ("ended", "lost", "done", DONE),
-            ("ended", "reported", "review", REVIEW),
-            ("ended", "reported", "", REVIEW),
-            ("ended", "exited", "", REVIEW),
-            ("ended", "stopped", "", REVIEW),
+            ("ended", "reported", "done", DONE),
             ("ended", "reported", "failed", FAILED),
-            ("ended", "reported", "blocked", FAILED),
             ("ended", "lost", "", FAILED),
+            ("ended", "lost", "none", FAILED),
             ("ended", "start_failed", "", FAILED),
             ("ended", "timed_out", "", FAILED),
             ("ended", "expired", "", FAILED),
+            ("ended", "stopped", "needs_review", REVIEW),
+            ("ended", "reported", "needs_review", REVIEW),
+            ("ended", "stopped", "", WAITING),
         ] {
             assert_eq!(
                 task_status(&run(state, end, outcome)),
@@ -765,47 +871,38 @@ mod tests {
                 "{state} {end} {outcome}"
             );
         }
+        let mut r = run("ended", "reported", "pending");
+        r.outcome.stage = "deploy".into();
+        assert_eq!(stage(&r), "deploy");
+        r.outcome.state = "done".into();
+        assert_eq!(stage(&r), "");
     }
 
     #[test]
-    fn ended_runs_note_why() {
-        let mut r = run("ended", "reported", "review");
-        r.outcome_summary = "Opened a PR.".into();
-        r.outcome_pr_url = "https://github.com/o/r/pull/2".into();
+    fn settled_runs_note_why() {
+        let mut r = run("ended", "reported", "done");
+        r.claim = Some(st::Claim {
+            status: "done".into(),
+            summary: "Moved the footer.".into(),
+            ..Default::default()
+        });
+        r.outcome.pr_url = "https://github.com/o/r/pull/2".into();
         assert_eq!(
             end_note(&r),
-            "Opened a PR.\nPR: https://github.com/o/r/pull/2"
+            "Moved the footer.\nPR: https://github.com/o/r/pull/2"
         );
-        let mut r = run("ended", "reported", "blocked");
-        r.outcome_summary = "Needs a key.".into();
-        assert_eq!(end_note(&r), "Blocked: Needs a key.");
+        let mut r = run("ended", "reported", "failed");
+        r.outcome.reason = "ci".into();
+        r.summary = "Tests fail.".into();
+        assert_eq!(end_note(&r), "CI failed: Tests fail.");
         let r = run("ended", "lost", "");
         assert_eq!(end_note(&r), "Lost: The run was lost: its process is gone.");
         let mut r = run("ended", "start_failed", "");
-        r.error = "The sandbox didn't wake".into();
-        assert_eq!(end_note(&r), "Didn't start: The sandbox didn't wake");
+        r.error = "claude: exit 1: no such flag".into();
+        assert_eq!(end_note(&r), "Didn't start: claude: exit 1: no such flag");
         assert_eq!(end_note(&run("ended", "reported", "done")), "Done.");
-    }
-
-    #[test]
-    fn a_crash_at_launch_fails() {
-        let mut r = run("ended", "exited", "");
-        r.error = "foreman: claude exited with code 1".into();
-        assert_eq!(task_status(&r), FAILED);
-        assert_eq!(
-            end_note(&r),
-            "Crashed at launch: foreman: claude exited with code 1"
-        );
-        // Once Claude started (a session), it is an ordinary ending.
-        r.session_id = "session_01Abc".into();
-        assert_eq!(task_status(&r), REVIEW);
-        r.session_id.clear();
-        // Stopped by a person, or with a report: not a crash.
-        r.end_reason = "stopped".into();
-        assert_eq!(task_status(&r), REVIEW);
-        r.end_reason = "reported".into();
-        r.outcome = "done".into();
-        assert_eq!(task_status(&r), DONE);
+        assert!(!settled(&run("ended", "reported", "pending")));
+        assert!(settled(&run("ended", "stopped", "needs_review")));
     }
 
     #[test]
@@ -813,5 +910,15 @@ mod tests {
         let row: Named =
             serde_json::from_value(json!({"title": "Fix login", "notes": "It 500s"})).unwrap();
         assert_eq!(prompt(&row), "Fix login\n\nIt 500s");
+        let link = Link {
+            collection: "tasks".into(),
+            workspace: "w".into(),
+            model: "a-model".into(),
+            max_runtime_min: 0,
+        };
+        assert_eq!(run_settings(&link, &row), (Some("a-model".into()), None));
+        let own: Named =
+            serde_json::from_value(json!({"model": "other", "max_runtime_min": "45"})).unwrap();
+        assert_eq!(run_settings(&link, &own), (Some("other".into()), Some(45)));
     }
 }

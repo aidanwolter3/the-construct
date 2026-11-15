@@ -1,9 +1,9 @@
-//! A fake agent runner speaking CAP v2 on 127.0.0.1, and a pod to point at
+//! A fake agent runner speaking CAP v3 on 127.0.0.1, and a pod to point at
 //! it. Its data is made up.
 
 use std::collections::{HashMap, VecDeque};
 use std::convert::Infallible;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -33,6 +33,14 @@ pub struct Fake {
     pub runs: Mutex<HashMap<String, Value>>,
     /// `(since, Last-Event-ID)` of each stream request.
     pub streams: Mutex<Vec<(i64, Option<String>)>>,
+    /// `since` of each events page asked for.
+    pub pages: Mutex<Vec<i64>>,
+    /// How many snapshots were taken.
+    pub snapshots: AtomicI64,
+    /// The oldest seq the log keeps: a page from before it is 410.
+    pub oldest: AtomicI64,
+    /// The runs each request id answered.
+    pub requests: Mutex<HashMap<String, String>>,
     pub commands: Mutex<Vec<Value>>,
     /// Answers for the next commands; then the runner's usual answer.
     pub answers: Mutex<VecDeque<(u16, Value)>>,
@@ -56,9 +64,22 @@ impl Fake {
                 .as_i64()
                 .unwrap_or(0);
         events.push(
-            json!({"v": 2, "seq": seq, "ts": 1_800_000_000_000_i64 + seq * 1000,
+            json!({"v": 3, "seq": seq, "ts": 1_800_000_000_000_i64 + seq * 1000,
             "type": kind, "record": record}),
         );
+    }
+
+    /// The seq of the last event sent.
+    pub fn last_seq(&self) -> i64 {
+        let events = self.events.lock().unwrap();
+        events
+            .last()
+            .and_then(|e| e["seq"].as_i64())
+            .unwrap_or_else(|| {
+                self.snapshot.lock().unwrap()["cursor"]
+                    .as_i64()
+                    .unwrap_or(0)
+            })
     }
 
     /// Change run `id` (starting from its last record, or a new one) by
@@ -67,11 +88,15 @@ impl Fake {
         let record = {
             let mut runs = self.runs.lock().unwrap();
             let r = runs.entry(id.to_owned()).or_insert_with(|| {
-                json!({"id": id, "version": 0, "task_id": null, "title": "", "origin": "task",
-                    "workspace": "sample-repo", "sprite": "box-1", "state": "queued",
-                    "needs_you": null, "end_reason": null, "outcome": null, "error": null,
-                    "asleep": false, "current_tool": null, "summary": null, "pr_url": null,
-                    "claude_url": null, "session_id": null, "resumed_from": null,
+                json!({"id": id, "version": 0, "request_id": null, "work_item_id": null,
+                    "occurrence": null, "title": "", "origin": "task",
+                    "workspace": "sample-repo", "sprite": "box-1", "model": null,
+                    "max_runtime_min": 240, "state": "queued", "state_detail": null,
+                    "queue_reason": "waiting_for_slot", "needs_you": null, "end_reason": null,
+                    "error": null, "deadline_at": null, "attempt": 1, "max_attempts": 3,
+                    "current_tool": null, "summary": null, "claim": null,
+                    "outcome": {"state": "none"}, "claude_url": null, "session_id": null,
+                    "resumed_from": null, "branch": null,
                     "cost_usd": 0, "input_tokens": 0, "output_tokens": 0,
                     "queued_at": 1_800_000_000_000_i64, "started_at": null,
                     "updated_at": 1_800_000_000_000_i64, "ended_at": null})
@@ -125,9 +150,58 @@ async fn snapshot(State(f): State<Arc<Fake>>, headers: HeaderMap) -> Response {
     if f.down.load(Ordering::SeqCst) {
         return refuse(502, "down");
     }
+    f.snapshots.fetch_add(1, Ordering::SeqCst);
     let mut s = f.snapshot.lock().unwrap().clone();
-    s["v"] = json!(2);
+    s["v"] = json!(3);
+    // The snapshot is the state now: what the events changed since too.
+    let runs = f.runs.lock().unwrap().clone();
+    let mut listed: Vec<Value> = s["runs"].as_array().cloned().unwrap_or_default();
+    for (id, r) in runs {
+        listed.retain(|x| x["id"] != id.as_str());
+        listed.push(r);
+    }
+    s["runs"] = json!(listed);
+    s["cursor"] = json!(f.last_seq());
+    s["oldest_seq"] = json!(f.oldest.load(Ordering::SeqCst));
     Json(s).into_response()
+}
+
+#[derive(serde::Deserialize)]
+struct PageQuery {
+    since: Option<i64>,
+    limit: Option<usize>,
+}
+
+async fn events(
+    State(f): State<Arc<Fake>>,
+    headers: HeaderMap,
+    Query(q): Query<PageQuery>,
+) -> Response {
+    if !authorized(&headers) {
+        return refuse(401, "unauthorized");
+    }
+    if f.down.load(Ordering::SeqCst) {
+        return refuse(502, "down");
+    }
+    let since = q.since.unwrap_or(0);
+    f.pages.lock().unwrap().push(since);
+    if since < f.oldest.load(Ordering::SeqCst) {
+        return refuse(410, "cursor_too_old");
+    }
+    let limit = q.limit.unwrap_or(500).min(500);
+    // Small pages, so catching up reads more than one.
+    let limit = limit.min(3);
+    let all: Vec<Value> = f
+        .events
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|e| e["seq"].as_i64().unwrap() > since)
+        .cloned()
+        .collect();
+    let page: Vec<Value> = all.iter().take(limit).cloned().collect();
+    let next = page.last().and_then(|e| e["seq"].as_i64()).unwrap_or(since);
+    Json(json!({"events": page, "next": next, "more": all.len() > limit})).into_response()
 }
 
 #[derive(serde::Deserialize)]
@@ -201,32 +275,67 @@ async fn command(
     }
     let n = f.commands.lock().unwrap().len();
     match body["type"].as_str().unwrap_or("") {
-        "start_run" | "run_schedule" => {
+        "start_run" => {
+            let request = body["request_id"].as_str().unwrap_or("").to_owned();
+            if let Some(id) = f.requests.lock().unwrap().get(&request).cloned() {
+                // The same request again: the same run (200).
+                let run = f
+                    .runs
+                    .lock()
+                    .unwrap()
+                    .get(&id)
+                    .cloned()
+                    .unwrap_or(json!({"id": id}));
+                return Json(json!({"run": run})).into_response();
+            }
             let id = f
                 .next_runs
                 .lock()
                 .unwrap()
                 .pop_front()
                 .unwrap_or_else(|| format!("run_new{n}"));
-            let task_id = if body["type"] == "run_schedule" {
-                json!(format!(
-                    "schedule/{}/manual-1",
-                    body["name"].as_str().unwrap()
-                ))
-            } else {
-                body["task_id"].clone()
-            };
-            let run = json!({"id": id, "version": 1, "state": "queued", "task_id": task_id,
-                "title": body["title"], "resumed_from": body["resume_from"]});
+            f.requests
+                .lock()
+                .unwrap()
+                .insert(request.clone(), id.clone());
+            let run = json!({"id": id, "version": 1, "state": "queued",
+                "queue_reason": "waiting_for_slot", "request_id": request,
+                "work_item_id": body["work_item_id"], "occurrence": body["occurrence"],
+                "origin": body["origin"], "title": body["title"], "model": body["model"],
+                "max_runtime_min": body["max_runtime_min"], "resumed_from": body["resume_from"],
+                "outcome": {"state": "none"}, "queued_at": 1_800_000_000_000_i64});
+            // Kept as sent, so `Fake::run` changes it from here.
+            f.runs.lock().unwrap().insert(id, run.clone());
             (StatusCode::ACCEPTED, Json(json!({"run": run}))).into_response()
         }
         "stop_run" => {
-            Json(json!({"run": {"id": body["run_id"], "state": "working"}})).into_response()
+            Json(json!({"run": {"id": body["run_id"], "state": "stopping"}})).into_response()
         }
         "wake_sprite" => {
-            Json(json!({"sprite": {"name": body["workspace"], "state": "awake"}})).into_response()
+            Json(json!({"sprite": {"name": body["workspace"], "state": "waking"}})).into_response()
         }
-        _ => Json(json!({"schedule": {"name": body["name"]}})).into_response(),
+        "repair_sprite" => (
+            StatusCode::ACCEPTED,
+            Json(json!({"sprite": {"name": body["workspace"], "state": "provisioning"}})),
+        )
+            .into_response(),
+        "mark_reviewed" => {
+            let id = body["run_id"].as_str().unwrap_or("").to_owned();
+            let current = f.runs.lock().unwrap().get(&id).cloned();
+            match current {
+                Some(r) if r["outcome"]["state"] == "needs_review" => {
+                    let mut outcome = r["outcome"].clone();
+                    outcome["state"] = json!("done");
+                    outcome["reviewed"] = json!(true);
+                    f.run(&id, json!({"outcome": outcome}));
+                    let run = f.runs.lock().unwrap()[&id].clone();
+                    Json(json!({"run": run})).into_response()
+                }
+                Some(_) => refuse(409, "the run doesn't need review"),
+                None => refuse(404, "no such run"),
+            }
+        }
+        _ => refuse(400, "unknown command"),
     }
 }
 
@@ -251,10 +360,11 @@ async fn log(State(f): State<Arc<Fake>>, headers: HeaderMap, Path(id): Path<Stri
 /// Serve `fake`; its base URL.
 pub async fn serve(fake: Arc<Fake>) -> String {
     let app = Router::new()
-        .route("/v2/snapshot", get(snapshot))
-        .route("/v2/stream", get(stream))
-        .route("/v2/commands", post(command))
-        .route("/v2/runs/{id}/log", get(log))
+        .route("/v3/snapshot", get(snapshot))
+        .route("/v3/events", get(events))
+        .route("/v3/stream", get(stream))
+        .route("/v3/commands", post(command))
+        .route("/v3/runs/{id}/log", get(log))
         .with_state(fake);
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
@@ -264,39 +374,37 @@ pub async fn serve(fake: Arc<Fake>) -> String {
 
 pub fn snapshot_data() -> Value {
     json!({
-        "v": 2,
+        "v": 3,
         "cursor": 10,
+        "oldest_seq": 0,
         "runs": [
-            {"id": "run_work", "version": 3, "task_id": "pod/1", "title": "Tidy the readme",
-             "origin": "task", "workspace": "sample-repo", "sprite": "box-1", "state": "working",
-             "needs_you": null, "end_reason": null, "outcome": null, "asleep": false,
+            {"id": "run_work", "version": 3, "request_id": "start_1", "work_item_id": "pod/1",
+             "title": "Tidy the readme", "origin": "task", "workspace": "sample-repo",
+             "sprite": "box-1", "state": "working", "state_detail": "waiting on 1 background task",
+             "needs_you": null, "end_reason": null, "outcome": {"state": "none"},
              "current_tool": "Bash: cargo test", "session_id": "session_01Work",
+             "attempt": 1, "max_attempts": 3,
              "queued_at": 1_800_000_000_000_i64, "started_at": 1_800_000_000_000_i64,
              "updated_at": 1_800_000_000_000_i64},
-            {"id": "run_old", "version": 9, "task_id": "schedule/nightly-deps/2026-11-06T03:00",
+            {"id": "run_old", "version": 9, "request_id": "sch_x_20261106T0300",
+             "work_item_id": "sch_gone", "occurrence": "2026-11-06T03:00",
              "title": "nightly-deps", "origin": "schedule", "workspace": "sample-repo",
              "sprite": "box-1", "state": "ended", "end_reason": "reported",
-             "outcome": {"status": "done", "summary": "Bumped two packages.", "pr_url": null},
+             "claim": {"status": "done", "summary": "Bumped two packages.", "pr_url": null},
+             "outcome": {"state": "done"},
              "cost_usd": 0.31, "queued_at": 1_799_990_000_000_i64,
              "started_at": 1_799_990_000_000_i64, "ended_at": 1_799_990_600_000_i64,
              "updated_at": 1_799_990_600_000_i64}
         ],
         "sprites": [
             {"name": "box-1", "workspace": "sample-repo", "version": 4, "state": "awake",
+             "slots": 2, "slots_used": 1, "preflight": {"ok": true, "failures": []},
              "agentd_version": "a1b2c3d4", "last_heartbeat_at": 1_800_000_000_000_i64},
             {"name": "box-2", "version": 1, "state": "asleep", "agentd_version": null,
              "last_heartbeat_at": 1_799_999_000_000_i64}
         ],
         "checks": [{"id": "egress", "title": "Network egress", "status": "ok",
-            "detail": "Allowlist only", "version": 1}],
-        "schedules": [
-            {"name": "nightly-deps", "version": 2, "cron": "0 3 * * *", "timezone": "UTC",
-             "workspace": "sample-repo", "model": "a-model", "max_runtime_minutes": 30,
-             "enabled": true, "paused": false, "next_run": 1_800_010_000_000_i64,
-             "last_run": {"run_id": "run_old", "due_at": 1_799_990_000_000_i64, "state": "ended",
-                          "end_reason": "reported", "outcome": {"status": "done",
-                          "summary": "Bumped two packages.", "pr_url": null}}}
-        ]
+            "detail": "Allowlist only", "version": 1}]
     })
 }
 

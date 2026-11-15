@@ -819,9 +819,18 @@ pub fn spawn(pod: &Pod, collection: &str, jobs: Vec<Job>) {
                             {
                                 continue;
                             }
+                            let before = r.values.clone();
                             r.values.insert(field.id.clone(), value.clone());
                             r.updated_at = now;
                             db::save_row(tx, &name, &r)?;
+                            db::note_writes(
+                                tx,
+                                &name,
+                                Some(&before),
+                                &r,
+                                Some(db::WRITER_MODEL),
+                                now,
+                            )?;
                             n += 1;
                         }
                         // The rows and rules it changed move what reads them.

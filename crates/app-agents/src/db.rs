@@ -1,21 +1,25 @@
 //! The adapter's tables (decision `named-migrations`):
 //! - `agents_runner`: the runner's URL and the pod's token for it, sealed
 //!   ([`pod_core::secrets`]); one row, or none when signed out.
-//! - `agents_state`: the mirror of the runner's records ([`State`]), and how
-//!   the connection is going, so the feeds answer while the runner is away.
-//! - `agents_launches`: Tasks rows a `start_run` was sent for, with the run
-//!   it answered, so a queued row is sent once.
+//! - `agents_state`: the mirror of the runner's records ([`State`]), the
+//!   event log's cursor (its own column, so the follower resumes from it
+//!   after any gap) and how the connection is going, so the feeds answer
+//!   while the runner is away.
+//! - `agents_launches`: Tasks rows a `start_run` was sent (or is being
+//!   sent) for, with its request id and the run it answered, so a queued row
+//!   is sent once and a resend after a crash reuses the request id.
 //! - `agents_marks`: what the Tasks wiring did once per run (a `stop_run`
 //!   sent, an ended run noted in the row's diagnosis).
-//! - `agents_reviewed`: runs marked reviewed on this pod (decision
-//!   `agents-runs`: the runner's record stays as it is). A run leaves it
-//!   when it leaves the mirror.
+//! - `agents_schedules`: the pod's schedules (decision `agents-cap-v3`), and
+//!   `agents_occurrences`: each occurrence the timer took up (sent, waiting
+//!   to be sent, or skipped as missed).
 //!
-//! Step `cap_v2` (decision `agents-runs`) drops v1's event timeline (a run's
-//! log is read from the runner on demand) and empties the stored state, so
-//! the follower takes a v2 snapshot.
-
-use std::collections::BTreeSet;
+//! Step `cap_v2` (decision `agents-runs`) drops v1's event timeline and
+//! empties the stored state. Step `cap_v3` (decision `agents-cap-v3`) keeps
+//! only the notices already sent, adds the cursor column (0: a v3 snapshot
+//! is taken), gives launches a request id, drops the pod-only reviewed
+//! marks (`agents_reviewed`: the runner owns a run's outcome now) and adds
+//! the schedule tables.
 
 use pod_core::store::{Step, Store};
 use rusqlite::{OptionalExtension, params};
@@ -58,7 +62,66 @@ pub static MIGRATIONS: &[Step] = &[
     Step::sql("schema", SCHEMA),
     Step::sql("cap_v2", CAP_V2),
     Step::sql("reviewed", REVIEWED),
+    Step::rust("cap_v3", cap_v3),
 ];
+
+const CAP_V3: &str = "
+ALTER TABLE agents_state ADD COLUMN cursor INTEGER NOT NULL DEFAULT 0;
+DROP TABLE agents_reviewed;
+DELETE FROM agents_launches;
+ALTER TABLE agents_launches ADD COLUMN request_id TEXT NOT NULL DEFAULT '';
+CREATE TABLE agents_schedules (
+    id              TEXT PRIMARY KEY NOT NULL,
+    name            TEXT NOT NULL UNIQUE,
+    cron            TEXT NOT NULL,
+    timezone        TEXT NOT NULL,
+    workspace       TEXT NOT NULL,
+    model           TEXT NOT NULL DEFAULT '',
+    max_runtime_min INTEGER NOT NULL,
+    enabled         INTEGER NOT NULL DEFAULT 1,
+    prompt          TEXT NOT NULL,
+    looked_until    INTEGER NOT NULL,
+    created_at      INTEGER NOT NULL,
+    updated_at      INTEGER NOT NULL
+);
+CREATE TABLE agents_occurrences (
+    schedule_id TEXT NOT NULL,
+    occurrence  TEXT NOT NULL,
+    due_at      INTEGER NOT NULL,
+    state       TEXT NOT NULL,
+    request_id  TEXT NOT NULL,
+    run_id      TEXT NOT NULL DEFAULT '',
+    manual      INTEGER NOT NULL DEFAULT 0,
+    updated_at  INTEGER NOT NULL,
+    PRIMARY KEY (schedule_id, occurrence, manual)
+) WITHOUT ROWID;
+";
+
+/// v2's records mean nothing to v3: keep only the notices already sent (so
+/// nothing is notified twice), and start from a v3 snapshot.
+fn cap_v3(tx: &rusqlite::Transaction<'_>) -> rusqlite::Result<()> {
+    tx.execute_batch(CAP_V3)?;
+    let old: Option<String> = tx
+        .query_row(
+            "SELECT state_json FROM agents_state WHERE id = 1",
+            [],
+            |r| r.get(0),
+        )
+        .optional()?;
+    if let Some(old) = old {
+        let notified = serde_json::from_str::<serde_json::Value>(&old)
+            .ok()
+            .and_then(|v| v.get("notified").cloned())
+            .filter(serde_json::Value::is_array)
+            .unwrap_or_else(|| serde_json::json!([]));
+        let kept = serde_json::json!({"notified": notified}).to_string();
+        tx.execute(
+            "UPDATE agents_state SET state_json = ?1, cursor = 0, connected = 0, last_ok_at = NULL",
+            [kept],
+        )?;
+    }
+    Ok(())
+}
 
 const REVIEWED: &str = "
 CREATE TABLE agents_reviewed (
@@ -115,9 +178,13 @@ pub fn sign_in(store: &Store, runner: &Runner, state: &State, now: i64) -> rusql
             params![runner.url, sealed, now],
         )?;
         tx.execute(
-            "INSERT INTO agents_state (id, state_json, connected, last_ok_at, updated_at)
-             VALUES (1, ?1, 1, ?2, ?2)",
-            params![serde_json::to_string(state).expect("serializes"), now],
+            "INSERT INTO agents_state (id, state_json, cursor, connected, last_ok_at, updated_at)
+             VALUES (1, ?1, ?2, 1, ?3, ?3)",
+            params![
+                serde_json::to_string(state).expect("serializes"),
+                state.cursor,
+                now
+            ],
         )?;
         Ok(())
     })
@@ -126,7 +193,7 @@ pub fn sign_in(store: &Store, runner: &Runner, state: &State, now: i64) -> rusql
 fn clear_on(tx: &rusqlite::Connection) -> rusqlite::Result<()> {
     tx.execute_batch(
         "DELETE FROM agents_runner; DELETE FROM agents_state; DELETE FROM agents_launches;
-         DELETE FROM agents_marks; DELETE FROM agents_reviewed;",
+         DELETE FROM agents_marks;",
     )
 }
 
@@ -166,17 +233,20 @@ pub struct Health {
     pub last_ok_at: Option<i64>,
 }
 
-/// The stored state and health (`None` when signed out), with the runs
-/// marked reviewed in [`State::reviewed`].
+/// The stored state and health (`None` when signed out), its cursor read
+/// from its column.
 pub fn state(store: &Store) -> rusqlite::Result<Option<(State, Health)>> {
     store.with_conn(|c| {
-        let found = c.query_row(
-            "SELECT state_json, connected, last_error, last_ok_at FROM agents_state WHERE id = 1",
+        c.query_row(
+            "SELECT state_json, connected, last_error, last_ok_at, cursor FROM agents_state
+             WHERE id = 1",
             [],
             |r| {
                 let json: String = r.get(0)?;
+                let mut st = serde_json::from_str::<State>(&json).unwrap_or_default();
+                st.cursor = r.get(4)?;
                 Ok((
-                    serde_json::from_str::<State>(&json).unwrap_or_default(),
+                    st,
                     Health {
                         connected: r.get::<_, i64>(1)? != 0,
                         last_error: r.get(2)?,
@@ -185,46 +255,24 @@ pub fn state(store: &Store) -> rusqlite::Result<Option<(State, Health)>> {
                 ))
             },
         )
-        .optional()?;
-        let Some((mut st, h)) = found else {
-            return Ok(None);
-        };
-        st.reviewed = reviewed_on(c)?;
-        Ok(Some((st, h)))
+        .optional()
     })
 }
 
-fn reviewed_on(c: &rusqlite::Connection) -> rusqlite::Result<BTreeSet<String>> {
-    let mut stmt = c.prepare_cached("SELECT run_id FROM agents_reviewed")?;
-    stmt.query_map([], |r| r.get(0))?.collect()
-}
-
-/// Mark run `run_id` reviewed on this pod.
-pub fn set_reviewed(store: &Store, run_id: &str, now: i64) -> rusqlite::Result<()> {
+/// Save `state` (and its cursor) after a good answer from the runner.
+/// Nothing is saved once signed out.
+pub fn save(store: &Store, state: &State, now: i64) -> rusqlite::Result<()> {
     store.with_conn(|c| {
         c.execute(
-            "INSERT OR IGNORE INTO agents_reviewed (run_id, at) VALUES (?1, ?2)",
-            params![run_id, now],
+            "UPDATE agents_state SET state_json = ?1, cursor = ?2, connected = 1,
+             last_error = NULL, last_ok_at = ?3, updated_at = ?3 WHERE id = 1",
+            params![
+                serde_json::to_string(state).expect("serializes"),
+                state.cursor,
+                now
+            ],
         )
         .map(|_| ())
-    })
-}
-
-/// Save `state` after a good answer from the runner. Nothing is saved once
-/// signed out. Runs no longer in it are no longer marked reviewed.
-pub fn save(store: &Store, state: &State, now: i64) -> rusqlite::Result<()> {
-    store.transaction(|tx| {
-        tx.execute(
-            "UPDATE agents_state SET state_json = ?1, connected = 1, last_error = NULL,
-             last_ok_at = ?2, updated_at = ?2 WHERE id = 1",
-            params![serde_json::to_string(state).expect("serializes"), now],
-        )?;
-        for id in reviewed_on(tx)? {
-            if !state.runs.contains_key(&id) {
-                tx.execute("DELETE FROM agents_reviewed WHERE run_id = ?1", [id])?;
-            }
-        }
-        Ok(())
     })
 }
 
@@ -248,30 +296,50 @@ pub fn mark_unreachable(store: &Store, error: &str, now: i64) -> rusqlite::Resul
     })
 }
 
-/// The launches sent for `collection`'s rows: `(task_id, run_id, at)`.
-pub fn launches(store: &Store, collection: &str) -> rusqlite::Result<Vec<(String, String, i64)>> {
+/// A `start_run` for a Tasks row: its request id, and the run it answered
+/// (empty until answered).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Launch {
+    pub task_id: String,
+    pub request_id: String,
+    pub run_id: String,
+    pub at: i64,
+}
+
+/// The launches sent (or being sent) for `collection`'s rows.
+pub fn launches(store: &Store, collection: &str) -> rusqlite::Result<Vec<Launch>> {
     store.with_conn(|c| {
         let mut stmt = c.prepare_cached(
-            "SELECT task_id, run_id, at FROM agents_launches WHERE collection = ?1",
+            "SELECT task_id, request_id, run_id, at FROM agents_launches WHERE collection = ?1",
         )?;
-        stmt.query_map([collection], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?
-            .collect()
+        stmt.query_map([collection], |r| {
+            Ok(Launch {
+                task_id: r.get(0)?,
+                request_id: r.get(1)?,
+                run_id: r.get(2)?,
+                at: r.get(3)?,
+            })
+        })?
+        .collect()
     })
 }
 
-/// Remember that `start_run` for row `task_id` answered run `run_id`.
-pub fn add_launch(
+/// Remember that `start_run` for row `task_id` is sent with `request_id`
+/// (before it is sent: a resend after a crash reuses it) and, once
+/// answered, the run `run_id` it answered.
+pub fn put_launch(
     store: &Store,
     collection: &str,
     task_id: &str,
+    request_id: &str,
     run_id: &str,
     now: i64,
 ) -> rusqlite::Result<()> {
     store.with_conn(|c| {
         c.execute(
-            "INSERT OR REPLACE INTO agents_launches (task_id, collection, at, run_id)
-             VALUES (?1, ?2, ?3, ?4)",
-            params![task_id, collection, now, run_id],
+            "INSERT OR REPLACE INTO agents_launches (task_id, collection, at, run_id, request_id)
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![task_id, collection, now, run_id, request_id],
         )
         .map(|_| ())
     })
@@ -313,64 +381,368 @@ pub fn marked(store: &Store, key: &str) -> rusqlite::Result<bool> {
     })
 }
 
+// ---------- schedules ----------
+
+/// A schedule the pod owns (decision `agents-cap-v3`).
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct Schedule {
+    /// `sch_` and random letters: the work item id of its runs.
+    pub id: String,
+    pub name: String,
+    pub cron: String,
+    /// An IANA zone name.
+    pub timezone: String,
+    pub workspace: String,
+    /// Empty: the Sprite's default.
+    pub model: String,
+    pub max_runtime_min: i64,
+    pub enabled: bool,
+    pub prompt: String,
+    /// Milliseconds: occurrences up to here were taken up (sent, queued to
+    /// send or skipped).
+    pub looked_until: i64,
+    pub created_at: i64,
+    pub updated_at: i64,
+}
+
+const SCHEDULE_COLS: &str = "id, name, cron, timezone, workspace, model, max_runtime_min, \
+    enabled, prompt, looked_until, created_at, updated_at";
+
+fn schedule_from(r: &rusqlite::Row<'_>) -> rusqlite::Result<Schedule> {
+    Ok(Schedule {
+        id: r.get(0)?,
+        name: r.get(1)?,
+        cron: r.get(2)?,
+        timezone: r.get(3)?,
+        workspace: r.get(4)?,
+        model: r.get(5)?,
+        max_runtime_min: r.get(6)?,
+        enabled: r.get::<_, i64>(7)? != 0,
+        prompt: r.get(8)?,
+        looked_until: r.get(9)?,
+        created_at: r.get(10)?,
+        updated_at: r.get(11)?,
+    })
+}
+
+/// Every schedule, by name.
+pub fn schedules(store: &Store) -> rusqlite::Result<Vec<Schedule>> {
+    store.with_conn(|c| {
+        let mut stmt = c.prepare_cached(&format!(
+            "SELECT {SCHEDULE_COLS} FROM agents_schedules ORDER BY name"
+        ))?;
+        stmt.query_map([], schedule_from)?.collect()
+    })
+}
+
+/// The schedule named `key` (its name, or its id).
+pub fn schedule(store: &Store, key: &str) -> rusqlite::Result<Option<Schedule>> {
+    store.with_conn(|c| {
+        c.query_row(
+            &format!("SELECT {SCHEDULE_COLS} FROM agents_schedules WHERE name = ?1 OR id = ?1"),
+            [key],
+            schedule_from,
+        )
+        .optional()
+    })
+}
+
+/// Insert or replace schedule `s` (by id). `Ok(false)`: another schedule
+/// has its name.
+pub fn put_schedule(store: &Store, s: &Schedule) -> rusqlite::Result<bool> {
+    store.with_conn(|c| {
+        let taken: Option<String> = c
+            .query_row(
+                "SELECT id FROM agents_schedules WHERE name = ?1 AND id != ?2",
+                params![s.name, s.id],
+                |r| r.get(0),
+            )
+            .optional()?;
+        if taken.is_some() {
+            return Ok(false);
+        }
+        c.execute(
+            &format!(
+                "INSERT OR REPLACE INTO agents_schedules ({SCHEDULE_COLS})
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)"
+            ),
+            params![
+                s.id,
+                s.name,
+                s.cron,
+                s.timezone,
+                s.workspace,
+                s.model,
+                s.max_runtime_min,
+                s.enabled as i64,
+                s.prompt,
+                s.looked_until,
+                s.created_at,
+                s.updated_at
+            ],
+        )?;
+        Ok(true)
+    })
+}
+
+/// Delete schedule `id` and its occurrences.
+pub fn delete_schedule(store: &Store, id: &str) -> rusqlite::Result<bool> {
+    store.transaction(|tx| {
+        tx.execute(
+            "DELETE FROM agents_occurrences WHERE schedule_id = ?1",
+            [id],
+        )?;
+        Ok(tx.execute("DELETE FROM agents_schedules WHERE id = ?1", [id])? > 0)
+    })
+}
+
+/// Occurrence states.
+pub const OCC_PENDING: &str = "pending";
+pub const OCC_SENT: &str = "sent";
+pub const OCC_MISSED: &str = "missed";
+pub const OCC_REFUSED: &str = "refused";
+
+/// One occurrence of a schedule the timer (or Run now) took up.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Occurrence {
+    pub schedule_id: String,
+    /// Its local minute, e.g. `2026-11-15T03:52`.
+    pub occurrence: String,
+    /// Milliseconds.
+    pub due_at: i64,
+    /// [`OCC_PENDING`], [`OCC_SENT`] or [`OCC_MISSED`].
+    pub state: String,
+    pub request_id: String,
+    pub run_id: String,
+    /// Run now, not the cron.
+    pub manual: bool,
+    pub updated_at: i64,
+}
+
+fn occurrence_from(r: &rusqlite::Row<'_>) -> rusqlite::Result<Occurrence> {
+    Ok(Occurrence {
+        schedule_id: r.get(0)?,
+        occurrence: r.get(1)?,
+        due_at: r.get(2)?,
+        state: r.get(3)?,
+        request_id: r.get(4)?,
+        run_id: r.get(5)?,
+        manual: r.get::<_, i64>(6)? != 0,
+        updated_at: r.get(7)?,
+    })
+}
+
+const OCC_COLS: &str =
+    "schedule_id, occurrence, due_at, state, request_id, run_id, manual, updated_at";
+
+/// Occurrences still to send, oldest first.
+pub fn pending(store: &Store) -> rusqlite::Result<Vec<Occurrence>> {
+    store.with_conn(|c| {
+        let mut stmt = c.prepare_cached(&format!(
+            "SELECT {OCC_COLS} FROM agents_occurrences WHERE state = 'pending' ORDER BY due_at"
+        ))?;
+        stmt.query_map([], occurrence_from)?.collect()
+    })
+}
+
+/// Schedule `id`'s newest occurrence.
+pub fn last_occurrence(store: &Store, id: &str) -> rusqlite::Result<Option<Occurrence>> {
+    store.with_conn(|c| {
+        c.query_row(
+            &format!(
+                "SELECT {OCC_COLS} FROM agents_occurrences WHERE schedule_id = ?1
+                 ORDER BY due_at DESC, updated_at DESC LIMIT 1"
+            ),
+            [id],
+            occurrence_from,
+        )
+        .optional()
+    })
+}
+
+/// Take up occurrences of schedule `id` and move its `looked_until` to
+/// `until`, in one transaction: an occurrence already taken up is kept as
+/// it is.
+pub fn take_up(
+    store: &Store,
+    id: &str,
+    occurrences: &[Occurrence],
+    until: i64,
+) -> rusqlite::Result<()> {
+    store.transaction(|tx| {
+        for o in occurrences {
+            tx.execute(
+                &format!(
+                    "INSERT OR IGNORE INTO agents_occurrences ({OCC_COLS})
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)"
+                ),
+                params![
+                    o.schedule_id,
+                    o.occurrence,
+                    o.due_at,
+                    o.state,
+                    o.request_id,
+                    o.run_id,
+                    o.manual as i64,
+                    o.updated_at
+                ],
+            )?;
+        }
+        tx.execute(
+            "UPDATE agents_schedules SET looked_until = MAX(looked_until, ?2) WHERE id = ?1",
+            params![id, until],
+        )?;
+        // The newest 200 occurrences of a schedule are kept.
+        tx.execute(
+            "DELETE FROM agents_occurrences WHERE schedule_id = ?1 AND state != 'pending'
+             AND (occurrence, manual) NOT IN (SELECT occurrence, manual FROM agents_occurrences
+             WHERE schedule_id = ?1 ORDER BY due_at DESC LIMIT 200)",
+            [id],
+        )?;
+        Ok(())
+    })
+}
+
+/// Drop schedule `id`'s occurrences still waiting to be sent (paused).
+pub fn drop_pending(store: &Store, id: &str) -> rusqlite::Result<()> {
+    store.with_conn(|c| {
+        c.execute(
+            "DELETE FROM agents_occurrences WHERE schedule_id = ?1 AND state = 'pending'",
+            [id],
+        )
+        .map(|_| ())
+    })
+}
+
+/// Set an occurrence's state (and the run it answered).
+pub fn set_occurrence(
+    store: &Store,
+    o: &Occurrence,
+    state: &str,
+    run_id: &str,
+    now: i64,
+) -> rusqlite::Result<()> {
+    store.with_conn(|c| {
+        c.execute(
+            "UPDATE agents_occurrences SET state = ?1, run_id = ?2, updated_at = ?3
+             WHERE schedule_id = ?4 AND occurrence = ?5 AND manual = ?6",
+            params![
+                state,
+                run_id,
+                now,
+                o.schedule_id,
+                o.occurrence,
+                o.manual as i64
+            ],
+        )
+        .map(|_| ())
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    #[test]
-    fn the_v2_step_upgrades_a_v1_database() {
+    fn migrated_v2() -> Store {
         let store = Store::open_in_memory().unwrap();
         store
             .with_conn(|c| {
                 c.execute_batch(SCHEMA)?;
-                c.execute_batch(
-                    "INSERT INTO agents_state (id, state_json, connected, last_ok_at, updated_at)
-                     VALUES (1, '{\"cursor\": 42, \"sessions\": {}}', 1, 5, 5);
-                     INSERT INTO agents_launches (task_id, collection, at) VALUES ('r1', 'tasks', 1);",
-                )?;
                 c.execute_batch(CAP_V2)?;
                 c.execute_batch(REVIEWED)
             })
             .unwrap();
-        let (st, h) = state(&store).unwrap().unwrap();
-        assert_eq!(st.cursor, 0);
-        assert!(!h.connected && h.last_ok_at.is_none());
-        assert!(launches(&store, "tasks").unwrap().is_empty());
-        assert!(mark(&store, "stop:run_1", 1).unwrap());
-        assert!(!mark(&store, "stop:run_1", 2).unwrap());
-        assert!(marked(&store, "stop:run_1").unwrap());
+        store
     }
 
     #[test]
-    fn a_reviewed_run_is_forgotten_when_it_leaves_the_mirror() {
-        let store = Store::open_in_memory().unwrap();
+    fn the_v3_step_upgrades_a_v2_database() {
+        let store = migrated_v2();
         store
             .with_conn(|c| {
-                c.execute_batch(SCHEMA)?;
-                c.execute_batch(CAP_V2)?;
-                c.execute_batch(REVIEWED)
+                c.execute_batch(
+                    "INSERT INTO agents_runner (id, url, token, signed_in_at)
+                     VALUES (1, 'https://runner.example', 'sealed', 1);
+                     INSERT INTO agents_state (id, state_json, connected, last_ok_at, updated_at)
+                     VALUES (1, '{\"cursor\": 42, \"runs\": {\"run_1\": {\"id\": \"run_1\",
+                       \"state\": \"working\", \"task_id\": \"r1\"}},
+                       \"schedules\": {\"nightly\": {\"name\": \"nightly\"}},
+                       \"notified\": [\"ended:run_0\"]}', 1, 5, 5);
+                     INSERT INTO agents_launches (task_id, collection, at, run_id)
+                     VALUES ('r1', 'tasks', 1, 'run_1');
+                     INSERT INTO agents_reviewed (run_id, at) VALUES ('run_0', 1);",
+                )
+            })
+            .unwrap();
+        store.transaction(cap_v3).unwrap();
+        let (st, h) = state(&store).unwrap().unwrap();
+        assert_eq!(st.cursor, 0, "a v3 snapshot is taken");
+        assert!(st.runs.is_empty());
+        assert_eq!(st.notified, ["ended:run_0"], "sent notices are kept");
+        assert!(!h.connected && h.last_ok_at.is_none());
+        assert!(launches(&store, "tasks").unwrap().is_empty());
+        let reviewed: rusqlite::Result<i64> = store
+            .with_conn(|c| c.query_row("SELECT COUNT(*) FROM agents_reviewed", [], |r| r.get(0)));
+        assert!(reviewed.is_err(), "the pod-only marks are gone");
+        assert!(schedules(&store).unwrap().is_empty());
+        // The cursor is its own column from now on.
+        let mut st = st;
+        st.cursor = 77;
+        save(&store, &st, 9).unwrap();
+        assert_eq!(state(&store).unwrap().unwrap().0.cursor, 77);
+    }
+
+    #[test]
+    fn the_whole_list_runs_on_a_new_database() {
+        let store = Store::open_in_memory().unwrap();
+        pod_core::migrations::check_names("agents", MIGRATIONS).unwrap();
+        store
+            .transaction(|tx| {
+                for step in MIGRATIONS {
+                    match &step.run {
+                        pod_core::migrations::Migration::Sql(sql) => tx.execute_batch(sql)?,
+                        pod_core::migrations::Migration::Rust(f) => f(tx)?,
+                    }
+                }
+                Ok(())
             })
             .unwrap();
         let runner = Runner {
             url: "https://runner.example".into(),
             token: "t".into(),
         };
-        let mut st = State::default();
-        for id in ["run_a", "run_b"] {
-            st.runs.insert(id.into(), crate::state::Run::default());
-        }
+        let st = State {
+            cursor: 5,
+            ..Default::default()
+        };
         sign_in(&store, &runner, &st, 1).unwrap();
-        set_reviewed(&store, "run_a", 2).unwrap();
-        set_reviewed(&store, "run_b", 2).unwrap();
-        // The follower's copy knows nothing of the marks; saving keeps them.
-        save(&store, &st, 3).unwrap();
-        assert_eq!(state(&store).unwrap().unwrap().0.reviewed.len(), 2);
-        st.runs.remove("run_a");
-        save(&store, &st, 4).unwrap();
-        let reviewed = state(&store).unwrap().unwrap().0.reviewed;
-        assert_eq!(reviewed.into_iter().collect::<Vec<_>>(), ["run_b"]);
-        sign_out(&store).unwrap();
-        sign_in(&store, &runner, &st, 5).unwrap();
-        assert!(state(&store).unwrap().unwrap().0.reviewed.is_empty());
+        assert_eq!(state(&store).unwrap().unwrap().0.cursor, 5);
+        assert!(mark(&store, "stop:run_1", 1).unwrap());
+        assert!(!mark(&store, "stop:run_1", 2).unwrap());
+        assert!(marked(&store, "stop:run_1").unwrap());
+        put_launch(&store, "tasks", "r1", "t_r1_1", "", 1).unwrap();
+        put_launch(&store, "tasks", "r1", "t_r1_1", "run_1", 2).unwrap();
+        let l = launches(&store, "tasks").unwrap();
+        assert_eq!((l.len(), l[0].run_id.as_str()), (1, "run_1"));
+        let s = Schedule {
+            id: "sch_a".into(),
+            name: "nightly".into(),
+            cron: "0 3 * * *".into(),
+            timezone: "UTC".into(),
+            workspace: "w".into(),
+            max_runtime_min: 30,
+            enabled: true,
+            prompt: "p".into(),
+            ..Default::default()
+        };
+        assert!(put_schedule(&store, &s).unwrap());
+        let other = Schedule {
+            id: "sch_b".into(),
+            ..s.clone()
+        };
+        assert!(!put_schedule(&store, &other).unwrap(), "names are unique");
+        assert_eq!(schedule(&store, "nightly").unwrap().unwrap().id, "sch_a");
+        assert!(delete_schedule(&store, "sch_a").unwrap());
+        assert!(schedules(&store).unwrap().is_empty());
     }
 }

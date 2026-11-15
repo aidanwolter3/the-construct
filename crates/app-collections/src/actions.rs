@@ -1084,6 +1084,14 @@ impl Run<'_> {
         row.updated_at = self.now;
         self.touch(&def.name, &row.id, Some(before.state()));
         db::save_row(self.tx, &def.name, row)?;
+        db::note_writes(
+            self.tx,
+            &def.name,
+            Some(&before.values),
+            row,
+            None,
+            self.now,
+        )?;
         self.jobs.entry(def.name.clone()).or_default().extend(jobs);
         Ok(Ok(true))
     }

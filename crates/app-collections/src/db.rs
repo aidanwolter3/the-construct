@@ -76,7 +76,92 @@ pub static MIGRATIONS: &[Step] = &[
     // 10: the edits of an edit_rows preview, kept under its confirm token
     // so the confirming call needn't send them again.
     Step::sql("staged_edits", STAGED),
+    // 11: who last wrote each field a filler or a model wrote (issue #243,
+    // decision `agents-cap-v3`): a person's write of the field clears it.
+    Step::sql("field_writers", FIELD_WRITERS),
 ];
+
+const FIELD_WRITERS: &str = "
+CREATE TABLE collections_field_writers (
+    collection TEXT NOT NULL,
+    row_id     TEXT NOT NULL,
+    field_id   TEXT NOT NULL,
+    writer     TEXT NOT NULL,
+    at         INTEGER NOT NULL,
+    PRIMARY KEY (collection, row_id, field_id)
+) WITHOUT ROWID;
+";
+
+/// The writer [`note_writes`] records for a model's computed answer.
+pub const WRITER_MODEL: &str = "model";
+
+/// The writer [`note_writes`] records for filler `id`'s writes.
+pub fn filler_writer(id: &str) -> String {
+    format!("filler:{id}")
+}
+
+/// Record who wrote the fields of `after` that differ from `before` (none:
+/// a new row). `writer` is a filler ([`filler_writer`]) or a model
+/// ([`WRITER_MODEL`]); `None` is a person (or Claude through MCP), whose
+/// write clears the field's record. A field with no record was last written
+/// by a person (decision `agents-cap-v3`).
+pub fn note_writes(
+    tx: &Connection,
+    collection: &str,
+    before: Option<&Map<String, Value>>,
+    after: &Row,
+    writer: Option<&str>,
+    now: i64,
+) -> rusqlite::Result<()> {
+    let empty = Map::new();
+    let before = before.unwrap_or(&empty);
+    let changed = after
+        .values
+        .iter()
+        .filter(|(k, v)| before.get(*k) != Some(*v))
+        .map(|(k, _)| k)
+        .chain(before.keys().filter(|k| !after.values.contains_key(*k)));
+    for field in changed {
+        match writer {
+            Some(w) => tx.execute(
+                "INSERT OR REPLACE INTO collections_field_writers
+                 (collection, row_id, field_id, writer, at) VALUES (?1, ?2, ?3, ?4, ?5)",
+                params![collection, after.id, field, w, now],
+            )?,
+            None => tx.execute(
+                "DELETE FROM collections_field_writers
+                 WHERE collection = ?1 AND row_id = ?2 AND field_id = ?3",
+                params![collection, after.id, field],
+            )?,
+        };
+    }
+    Ok(())
+}
+
+/// The fields of `collection`'s rows that a filler or a model wrote last:
+/// `row id -> (field id -> writer)` ([`note_writes`]).
+pub fn field_writers(
+    conn: &Connection,
+    collection: &str,
+) -> rusqlite::Result<std::collections::HashMap<String, std::collections::BTreeMap<String, String>>>
+{
+    let mut stmt = conn.prepare_cached(
+        "SELECT row_id, field_id, writer FROM collections_field_writers WHERE collection = ?1",
+    )?;
+    let mut out: std::collections::HashMap<String, std::collections::BTreeMap<String, String>> =
+        Default::default();
+    for r in stmt.query_map([collection], |r| {
+        Ok((
+            r.get::<_, String>(0)?,
+            r.get::<_, String>(1)?,
+            r.get::<_, String>(2)?,
+        ))
+    })? {
+        let (row, field, writer) = r?;
+        out.entry(row).or_default().insert(field, writer);
+    }
+    Ok(out)
+}
 
 const STAGED: &str = "
 CREATE TABLE collections_staged (

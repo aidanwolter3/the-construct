@@ -1,5 +1,7 @@
 # A run is marked reviewed on the pod, not on the runner
 
+Superseded by [agents-cap-v3](agents-cap-v3.md): Mark reviewed sends `mark_reviewed` to the runner, which owns the outcome; `agents_reviewed` is dropped.
+
 Date: 2026-11-11. Related: [agents-runs](agents-runs.md), [named-migrations](named-migrations.md).
 
 A run that ends with the outcome `review` (or ends by itself without a report) reads "Needs review" until it leaves
