@@ -164,11 +164,19 @@ struct Drag {
     grabbing: bool,
     /// It was held long enough to be a long press (which already ran).
     long_pressed: bool,
+    /// It rested still long enough for what its tap opens to be prepared
+    /// (tried once: `Session::prepare_at`).
+    prepared: bool,
 }
 
 /// A touch held this long without moving is a long press (Android's
 /// `ViewConfiguration.getLongPressTimeout()`).
 const LONG_PRESS: f32 = 0.5;
+/// A touch still this long is likely a tap: what it opens is prepared
+/// (`Session::prepare_at`). A scroll is usually moving by then, so it
+/// doesn't pay for a layout it throws away, and the finger usually rests
+/// 50–100 ms in all, leaving time for the layout before it lifts.
+const PREPARE_AFTER: std::time::Duration = std::time::Duration::from_millis(30);
 /// Movement for a drag that scrolled nothing to count as a swipe (points).
 const SWIPE_DISTANCE: f32 = 48.0;
 
@@ -726,15 +734,6 @@ impl App {
         stats.layers = r.layers;
         let gesture = self.drag.is_some();
         let ended = Instant::now();
-        // A finger resting on a row that opens a screen: it is laid out now,
-        // while nothing moves, so the slide after the lift has nothing to lay
-        // out (counted as input, toward the next frame).
-        if self.drag.as_ref().is_some_and(|d| !d.dragging)
-            && self.controller.session.pressed().is_some()
-        {
-            self.controller.session.prepare_press();
-        }
-        self.perf.handled(ended.elapsed());
         if let Some(summary) = self.perf.end(stats, ended, wants_next, gesture) {
             let line = summary.line(&self.controller.session.showing(), self.refresh_hz());
             log(&line);
@@ -919,6 +918,25 @@ impl ApplicationHandler for App {
         // A finger held still long enough is a long press, while it is still
         // down; dragging on from a word it selected moves the selection's end.
         let mut wake = self.controller.session.next_wake();
+        // Still a little while: what its tap opens is laid out now, while
+        // nothing moves (counted as input, toward the next frame).
+        let resting = self
+            .drag
+            .as_ref()
+            .filter(|d| !d.dragging && !d.prepared && !d.caught && !d.grabbing)
+            .map(|d| (d.started + PREPARE_AFTER, d.last));
+        if let Some((due, at)) = resting {
+            let now = Instant::now();
+            if now >= due {
+                if let Some(d) = self.drag.as_mut() {
+                    d.prepared = true;
+                }
+                self.controller.session.prepare_at(at.0, at.1);
+                self.perf.handled(now.elapsed());
+            } else {
+                wake = Some(wake.map_or(due, |w| w.min(due)));
+            }
+        }
         let held = self
             .drag
             .as_ref()
@@ -1119,6 +1137,7 @@ impl ApplicationHandler for App {
                             started: now,
                             grabbing: self.controller.session.grab_at(p.0, p.1).is_some(),
                             long_pressed: false,
+                            prepared: false,
                             pending: 0.0,
                         });
                         if !caught {

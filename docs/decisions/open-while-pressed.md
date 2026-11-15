@@ -1,5 +1,7 @@
 # A held row opens what its tap will open, out of sight, before the finger lifts
 
+Superseded by [prepare-after-a-still-touch](prepare-after-a-still-touch.md).
+
 Date: 2026-11-15. Related: [android-frame-pacing](android-frame-pacing.md), [rust-clients](rust-clients.md).
 
 With taps cheap to handle, opening a screen still dropped one or two frames on a phone: the slide's first frame
