@@ -161,6 +161,7 @@ fn describe(
         (!joined.is_empty()).then_some(joined)
     });
     let role = match n.node_type.as_str() {
+        crate::layout::SECRET_FIELD_TYPE if field.is_some() => Role::PasswordInput,
         _ if field.is_some() => Role::TextInput,
         "core://Switch" => Role::Switch,
         "core://ChoiceChips/option" => Role::RadioButton,
@@ -179,9 +180,15 @@ fn describe(
     let mut node = Node::new(role);
     node.set_bounds(rect(n.bounds));
     match role {
-        Role::TextInput => {
+        Role::TextInput | Role::PasswordInput => {
             let field = field.unwrap_or_default();
-            node.set_value(form.get(field).cloned().unwrap_or_default());
+            let value = form.get(field).cloned().unwrap_or_default();
+            // A password's value is only its dots.
+            node.set_value(if role == Role::PasswordInput {
+                crate::text::mask(&value)
+            } else {
+                value
+            });
             if let Some(hint) = n.hint.as_deref().filter(|h| !h.is_empty()) {
                 node.set_placeholder(hint);
                 node.set_label(hint);

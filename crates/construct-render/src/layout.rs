@@ -183,9 +183,21 @@ struct Elem {
     /// A `core://SwipeCard` (by semantic id) and its threshold (points): it
     /// moves right by the offset at `card:<id>`.
     card: Option<(String, f32)>,
-    /// A text field's text: its field and maximum length.
-    field: Option<(String, Option<usize>)>,
+    /// A text field's text.
+    field: Option<FieldText>,
 }
+
+/// What a text field's text element knows of its field.
+#[derive(Clone)]
+struct FieldText {
+    field: String,
+    max_length: Option<usize>,
+    secret: bool,
+}
+
+/// The semantic node type of a secret text field (`core://TextField`
+/// `secret`): screen readers treat it as a password.
+pub const SECRET_FIELD_TYPE: &str = "core://TextField/secret";
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Axis {
@@ -1601,10 +1613,13 @@ impl<'i> Build<'_, 'i> {
                 on_submit,
                 lines,
                 max_length,
+                secret,
             } => {
                 let value = ctx.form.get(field).cloned().unwrap_or_default();
                 let (shown, color) = if value.is_empty() {
                     (ctx.text(placeholder), theme.muted_text)
+                } else if *secret {
+                    (crate::text::mask(&value), self.fg(b))
                 } else {
                     (value.clone(), self.fg(b))
                 };
@@ -1620,7 +1635,11 @@ impl<'i> Build<'_, 'i> {
                 tstyle.flex_basis = length(0.0);
                 let text = self.text_leaf(tstyle, shown, type_for(TextStyle::Body), color, None);
                 // The session draws the caret, selection and handles over it.
-                self.elems[text].field = Some((field.clone(), max_length.map(|m| m as usize)));
+                self.elems[text].field = Some(FieldText {
+                    field: field.clone(),
+                    max_length: max_length.map(|m| m as usize),
+                    secret: *secret,
+                });
                 let mut kids = vec![text];
                 if !value.is_empty() {
                     // Empties the field and keeps typing in it.
@@ -1648,15 +1667,25 @@ impl<'i> Build<'_, 'i> {
                 style.min_size.height = length(56.0 + extra);
                 // Room for a short placeholder ("Qty") on one line.
                 style.min_size.width = length(72.0);
+                // A secret's text is never in the semantics (screen readers,
+                // the simulator's tree): only its dots.
+                let said = if *secret {
+                    crate::text::mask(&value)
+                } else {
+                    value
+                };
                 let mut sem = self.sem(
                     b,
                     n,
-                    Some(value),
+                    Some(said),
                     Some(Tap::Focus {
                         field: field.clone(),
                     }),
                 );
                 sem.id = format!("field:{field}");
+                if *secret {
+                    sem.node_type = SECRET_FIELD_TYPE.into();
+                }
                 sem.hint = Some(ctx.text(placeholder)).filter(|h| !h.is_empty());
                 if on_submit.is_some() {
                     // Next to the field, as the shared UI's Send button.
@@ -3000,15 +3029,16 @@ impl Laid {
         let visible = intersects(rect, clip);
         if visible {
             self.paint(e, rect, l, clip, scene);
-            if let (Some((field, max_length)), Paint::Text { ty, .. }) = (&e.field, &e.paint) {
+            if let (Some(f), Paint::Text { ty, .. }) = (&e.field, &e.paint) {
                 scene.fields.push(crate::scene::FieldBox {
-                    field: field.clone(),
+                    field: f.field.clone(),
                     rect,
                     clip,
                     face: ty.face,
                     size: ty.size,
                     line_height: ty.line_height,
-                    max_length: *max_length,
+                    max_length: f.max_length,
+                    secret: f.secret,
                 });
             }
         }

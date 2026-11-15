@@ -36,6 +36,29 @@ pub struct CaretStop {
     pub height: f32,
 }
 
+/// The dot a secret text field draws for each character it holds.
+pub const MASK: char = '\u{25CF}';
+
+/// What a secret text field shows for `value`: one dot per character.
+pub fn mask(value: &str) -> String {
+    value.chars().map(|_| MASK).collect()
+}
+
+/// Caret stops measured on [`mask`]`(value)`, moved onto `value`'s bytes
+/// (the k-th dot's boundary is the k-th character's).
+pub fn unmask_stops(value: &str, stops: Vec<CaretStop>) -> Vec<CaretStop> {
+    let mut starts: Vec<usize> = value.char_indices().map(|(i, _)| i).collect();
+    starts.push(value.len());
+    stops
+        .into_iter()
+        .map(|mut s| {
+            let k = s.byte / MASK.len_utf8();
+            s.byte = starts.get(k).copied().unwrap_or(value.len());
+            s
+        })
+        .collect()
+}
+
 /// The stop nearest a point (points from the text's top left): on the line
 /// the point is on (the first or last when outside), the closest x.
 pub fn nearest_stop(stops: &[CaretStop], x: f32, y: f32) -> Option<CaretStop> {
@@ -305,5 +328,25 @@ mod tests {
         let regular = t.measure("Cancel", type_for(TextStyle::Body), None, 1.0);
         let bold = t.measure("Cancel", LABEL_LARGE, None, 1.0);
         assert!(bold.width >= regular.width);
+    }
+}
+
+#[cfg(test)]
+mod mask_tests {
+    use super::*;
+
+    #[test]
+    fn dots_stand_for_characters_and_map_back_to_bytes() {
+        let value = "aé€x";
+        assert_eq!(mask(value), "\u{25CF}".repeat(4));
+        let stop = |byte| CaretStop {
+            byte,
+            x: 0.0,
+            top: 0.0,
+            height: 0.0,
+        };
+        let shown: Vec<CaretStop> = (0..=4).map(|k| stop(k * MASK.len_utf8())).collect();
+        let bytes: Vec<usize> = unmask_stops(value, shown).iter().map(|s| s.byte).collect();
+        assert_eq!(bytes, [0, 1, 3, 6, 7]);
     }
 }

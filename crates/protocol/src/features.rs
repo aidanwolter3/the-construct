@@ -236,10 +236,13 @@ fn node_features(node: &UiNode, out: &mut BTreeSet<&'static str>) {
             }
         }
         UiNode::Image { .. } => add(feature::IMAGE),
-        UiNode::TextField { lines, .. } => {
+        UiNode::TextField { lines, secret, .. } => {
             add(feature::TEXT_FIELD);
             if lines.is_some() {
                 add(feature::TEXT_FIELD_LINES);
+            }
+            if *secret {
+                add(feature::TEXT_FIELD_SECRET);
             }
         }
         UiNode::Row { align, justify, .. } => {
@@ -600,6 +603,10 @@ mod tests {
         assert_eq!(schema_of(&picker), 9);
         let caption = node(json!({"type": "core://TextField", "field": "c", "lines": 4}));
         assert_eq!(schema_of(&caption), 9);
+        let key = node(json!({"type": "core://TextField", "field": "k", "secret": true}));
+        assert!(required_features(&key).contains(&feature::TEXT_FIELD_SECRET));
+        let plain = node(json!({"type": "core://TextField", "field": "k"}));
+        assert!(!required_features(&plain).contains(&feature::TEXT_FIELD_SECRET));
         let add = node(json!({"type": "core://IconButton", "icon": "add_photo",
             "content_description": "New post", "on_click": {"intent": "action.navigation.back"}}));
         assert_eq!(schema_of(&add), 9);
