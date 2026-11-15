@@ -266,7 +266,9 @@ A collection can keep itself current from the web (decision
   An answer like the last one writes nothing. `collections_preview {collection, filler}` calls the tool and shows
   the rows; `mcp_call_tool` shows a tool's raw answer to write `items` and `map` from.
 - **`agent`** (costs model calls): a prompt; a model with web search answers rows that fit the fields, within a
-  daily budget. With the `web_search` jack plugged it searches and reads pages with the pod's own tools.
+  daily budget. With the `web_search` jack plugged it searches and reads pages with the pod's own tools; it reads
+  only pages it has seen (a URL in the prompt or the rows, a search result, or a link on a page it read), so a page
+  can't have it send the rows elsewhere in a URL (decision [`web-fetch-provenance`](decisions/web-fetch-provenance.md)).
 - **The web module:** every request goes through the pod's host policy (`web-extract`'s `hosts`: 1 s spacing, a
   daily cap per site, and a shared backoff after a site blocks the pod as an automated visitor). Model work runs
   through the agent module (`crates/agent`): the `model` jack, daily budgets per feature, retries.

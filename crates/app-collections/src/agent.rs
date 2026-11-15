@@ -5,8 +5,9 @@
 //! - **agent fillers** ([`FillAgent::fill`]): a research request answered as
 //!   rows. With the pod's `web_search` jack plugged, the model searches and
 //!   reads pages with the pod's own tools ([`web_extract::tools`]: the pod's
-//!   host policy, cache and search provider); without it, with the API's
-//!   server-side web tools, as before.
+//!   host policy, cache and search provider; `web_fetch` reads only URLs
+//!   the task has seen); without it, with the API's server-side web tools,
+//!   as before (whose `web_fetch` also reads only URLs in the conversation).
 //! - **`llm` pages** ([`FillAgent::read_page`]): a page's text into rows.
 //! - **`query_field` rows** ([`FillAgent::pick`]): one row's fields chosen
 //!   from web search results.
@@ -170,6 +171,7 @@ pub fn pod_web(pod: &Pod) -> Option<web_extract::tools::Web> {
         client: adapter.fetch_client().clone(),
         provider,
         allow_private: adapter.allow_private_hosts(),
+        seen: web_extract::tools::Seen::default(),
     })
 }
 
@@ -221,21 +223,23 @@ impl FillAgent for PodAgent {
     fn fill<'a>(&'a self, req: AgentRequest<'a>) -> BoxFuture<'a, Result<AgentAnswer, String>> {
         Box::pin(async move {
             let fields = row_fields(req.fields);
-            let mut task = tasks::research(
-                &tasks::ResearchInput {
-                    title: req.title,
-                    prompt: req.prompt,
-                    fields: &fields,
-                    today: req.today,
-                    key: req.key,
-                    current: req.current,
-                },
-                MAX_TURNS,
-            );
+            let input = tasks::ResearchInput {
+                title: req.title,
+                prompt: req.prompt,
+                fields: &fields,
+                today: req.today,
+                key: req.key,
+                current: req.current,
+            };
+            let mut task = tasks::research(&input, MAX_TURNS);
             let mut own_tools = false;
             match pod_web(req.pod) {
                 Some(web) => {
                     own_tools = true;
+                    // `web_fetch` reads only what the task has seen: the
+                    // request's own URLs to start with (decision
+                    // `web-fetch-provenance`).
+                    web.seen.add_text(&tasks::research_prompt(&input));
                     if req.max_searches > 0 {
                         task.tools
                             .push(Arc::new(web_extract::tools::SearchTool::new(
