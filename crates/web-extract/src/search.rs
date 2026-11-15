@@ -10,6 +10,10 @@
 //!
 //! Every request goes through the pod's host policy ([`crate::hosts`]), and
 //! answers are cached per provider and query for [`CACHE_TTL`].
+//!
+//! [`search_images`] finds pictures instead (decision `image-search`): Brave's
+//! image search, or SearXNG's `images` category. DuckDuckGo's image results
+//! need a token from its pages, so it has none.
 
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
@@ -24,6 +28,8 @@ pub const MAX_RESULTS: usize = 10;
 pub const MAX_QUERY_CHARS: usize = 300;
 /// Brave's endpoint.
 pub const BRAVE_URL: &str = "https://api.search.brave.com/res/v1/web/search";
+/// Brave's image search endpoint.
+pub const BRAVE_IMAGES_URL: &str = "https://api.search.brave.com/res/v1/images/search";
 /// DuckDuckGo's HTML results page.
 pub const DUCKDUCKGO_URL: &str = "https://html.duckduckgo.com/html/";
 
@@ -38,6 +44,47 @@ pub struct SearchResult {
 impl SearchResult {
     pub fn to_json(&self) -> Value {
         json!({ "title": self.title, "url": self.url, "snippet": self.snippet })
+    }
+}
+
+/// What an image result offers a filler's `map` ([`ImageResult::get`]).
+pub const IMAGE_FIELDS: &[&str] = &["image", "thumbnail", "page", "title", "source"];
+
+/// One image result.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ImageResult {
+    /// What the image shows, as its page titles it.
+    pub title: String,
+    /// The full-size image's URL.
+    pub image: String,
+    /// A small copy's URL (the provider's), else the image's.
+    pub thumbnail: String,
+    /// The page the image is on.
+    pub page: String,
+    /// The site it is from (a host name).
+    pub source: String,
+}
+
+impl ImageResult {
+    /// One of [`IMAGE_FIELDS`].
+    pub fn get(&self, field: &str) -> Option<&str> {
+        Some(match field {
+            "image" => &self.image,
+            "thumbnail" => &self.thumbnail,
+            "page" => &self.page,
+            "title" => &self.title,
+            "source" => &self.source,
+            _ => return None,
+        })
+    }
+}
+
+/// An http(s) URL, else empty.
+fn web_url(u: &str) -> String {
+    let u = u.trim();
+    match reqwest::Url::parse(u) {
+        Ok(p) if matches!(p.scheme(), "http" | "https") => u.to_owned(),
+        _ => String::new(),
     }
 }
 
@@ -119,6 +166,87 @@ impl Provider {
             ),
             Self::DuckDuckGo => (url(DUCKDUCKGO_URL, &[("q", query)])?, Vec::new()),
         })
+    }
+
+    /// The request URL and headers of an image search for `query`.
+    fn image_request(
+        &self,
+        query: &str,
+        count: usize,
+    ) -> Result<(String, Vec<(String, String)>), String> {
+        let n = count.clamp(1, MAX_RESULTS).to_string();
+        let url = |base: &str, params: &[(&str, &str)]| {
+            reqwest::Url::parse_with_params(base, params)
+                .map(|u| u.to_string())
+                .map_err(|e| format!("building the search URL: {e}"))
+        };
+        match self {
+            Self::Brave { key } => Ok((
+                url(
+                    BRAVE_IMAGES_URL,
+                    &[("q", query), ("count", &n), ("safesearch", "strict")],
+                )?,
+                vec![
+                    ("Accept".into(), "application/json".into()),
+                    ("X-Subscription-Token".into(), key.clone()),
+                ],
+            )),
+            Self::Searxng { base_url } => Ok((
+                url(
+                    &format!("{base_url}/search"),
+                    &[("q", query), ("format", "json"), ("categories", "images")],
+                )?,
+                vec![("Accept".into(), "application/json".into())],
+            )),
+            Self::DuckDuckGo => Err(NO_IMAGES.into()),
+        }
+    }
+
+    /// The image results in a provider's answer: those with an http(s)
+    /// image.
+    pub fn parse_images(&self, body: &str, count: usize) -> Result<Vec<ImageResult>, String> {
+        let v: Value = serde_json::from_str(body)
+            .map_err(|_| format!("{}'s image answer is not JSON", self.name()))?;
+        let list = v["results"].as_array().cloned().unwrap_or_default();
+        let mut out: Vec<ImageResult> = list
+            .iter()
+            .map(|r| {
+                let text = |x: &Value| x.as_str().unwrap_or("").to_owned();
+                let (image, thumbnail, page, source) = match self {
+                    Self::Searxng { .. } => (
+                        web_url(&text(&r["img_src"])),
+                        web_url(&text(&r["thumbnail_src"])),
+                        web_url(&text(&r["url"])),
+                        String::new(),
+                    ),
+                    _ => (
+                        web_url(&text(&r["properties"]["url"])),
+                        web_url(&text(&r["thumbnail"]["src"])),
+                        web_url(&text(&r["url"])),
+                        text(&r["source"]),
+                    ),
+                };
+                let source = if source.trim().is_empty() {
+                    crate::fetch::host_of(&page)
+                } else {
+                    source.trim().to_owned()
+                };
+                ImageResult {
+                    title: clean(&text(&r["title"])),
+                    thumbnail: if thumbnail.is_empty() {
+                        image.clone()
+                    } else {
+                        thumbnail
+                    },
+                    image,
+                    page,
+                    source: source.trim_start_matches("www.").to_owned(),
+                }
+            })
+            .filter(|r| !r.image.is_empty())
+            .collect();
+        out.truncate(count);
+        Ok(out)
     }
 
     /// The results in a provider's answer.
@@ -220,36 +348,55 @@ fn duckduckgo_results(body: &str) -> Vec<SearchResult> {
         .collect()
 }
 
-/// A cached answer: when it was fetched, and the results.
-type Cached = (Instant, Vec<SearchResult>);
+/// Why DuckDuckGo can't search for images.
+pub const NO_IMAGES: &str =
+    "duckduckgo has no image search: plug the web_search jack in with brave or searxng";
 
-/// The pod's cache of search answers by `(provider, query)`
-/// (`Pod::local::<SearchCache>()`).
+/// Answers by `(provider, query)`, each with when it was fetched.
+type Answers<T> = HashMap<(String, String), (Instant, Vec<T>)>;
+
+/// The pod's cache of search answers by `(provider, query)`, web and image
+/// searches apart (`Pod::local::<SearchCache>()`).
 #[derive(Debug, Default)]
-pub struct SearchCache(tokio::sync::Mutex<HashMap<(String, String), Cached>>);
+pub struct SearchCache {
+    web: tokio::sync::Mutex<Answers<SearchResult>>,
+    images: tokio::sync::Mutex<Answers<ImageResult>>,
+}
 
 const MAX_CACHED: usize = 500;
 
+async fn cached<T: Clone>(
+    m: &tokio::sync::Mutex<Answers<T>>,
+    provider: &str,
+    query: &str,
+) -> Option<Vec<T>> {
+    let m = m.lock().await;
+    m.get(&(provider.to_owned(), query.to_owned()))
+        .filter(|(at, _)| at.elapsed() < CACHE_TTL)
+        .map(|(_, r)| r.clone())
+}
+
+async fn keep<T>(m: &tokio::sync::Mutex<Answers<T>>, provider: &str, query: &str, results: Vec<T>) {
+    let mut m = m.lock().await;
+    if m.len() >= MAX_CACHED {
+        m.retain(|_, (at, _)| at.elapsed() < CACHE_TTL);
+        if m.len() >= MAX_CACHED {
+            m.clear();
+        }
+    }
+    m.insert(
+        (provider.to_owned(), query.to_owned()),
+        (Instant::now(), results),
+    );
+}
+
 impl SearchCache {
     async fn get(&self, provider: &str, query: &str) -> Option<Vec<SearchResult>> {
-        let m = self.0.lock().await;
-        m.get(&(provider.to_owned(), query.to_owned()))
-            .filter(|(at, _)| at.elapsed() < CACHE_TTL)
-            .map(|(_, r)| r.clone())
+        cached(&self.web, provider, query).await
     }
 
     async fn put(&self, provider: &str, query: &str, results: Vec<SearchResult>) {
-        let mut m = self.0.lock().await;
-        if m.len() >= MAX_CACHED {
-            m.retain(|_, (at, _)| at.elapsed() < CACHE_TTL);
-            if m.len() >= MAX_CACHED {
-                m.clear();
-            }
-        }
-        m.insert(
-            (provider.to_owned(), query.to_owned()),
-            (Instant::now(), results),
-        );
+        keep(&self.web, provider, query, results).await
     }
 }
 
@@ -296,6 +443,41 @@ pub async fn search(
     };
     let results = provider.parse(&String::from_utf8_lossy(&bytes), MAX_RESULTS)?;
     cache.put(provider.name(), &q, results.clone()).await;
+    Ok(results.into_iter().take(count).collect())
+}
+
+/// Search `query` for images with `provider`: at most `count` results,
+/// cached apart from web searches, through the host policy. `Err`: a
+/// sentence for a filler's status (DuckDuckGo, a block, a refused key).
+pub async fn search_images(
+    hosts: &crate::hosts::Hosts,
+    cache: &SearchCache,
+    client: &reqwest::Client,
+    provider: &Provider,
+    query: &str,
+    count: usize,
+) -> Result<Vec<ImageResult>, String> {
+    let q = normalize_query(query);
+    if q.is_empty() {
+        return Err("the search is empty".into());
+    }
+    if let Some(hit) = cached(&cache.images, provider.name(), &q).await {
+        return Ok(hit.into_iter().take(count).collect());
+    }
+    let (url, headers) = provider.image_request(&q, MAX_RESULTS)?;
+    let fetched = crate::hosts::fetch(hosts, client, &url, None, None, &headers)
+        .await
+        .map_err(|e| match provider {
+            Provider::Brave { .. } if e.message.contains("401") || e.message.contains("422") => {
+                "Brave refused the web_search jack's api_key".to_owned()
+            }
+            _ => format!("searching images with {}: {}", provider.name(), e.message),
+        })?;
+    let crate::fetch::Fetched::Body { bytes, .. } = fetched else {
+        return Err("the search answered nothing".into());
+    };
+    let results = provider.parse_images(&String::from_utf8_lossy(&bytes), MAX_RESULTS)?;
+    keep(&cache.images, provider.name(), &q, results.clone()).await;
     Ok(results.into_iter().take(count).collect())
 }
 
@@ -355,6 +537,69 @@ mod tests {
         .parse(sx, 5)
         .unwrap();
         assert_eq!(r[0].url, "https://soap.example/bar");
+    }
+
+    #[test]
+    fn image_answers() {
+        let brave = r#"{"results":[
+            {"title":"Oxford <b>shirt</b>","url":"https://www.shop.example/p/oxford","source":"shop.example",
+             "thumbnail":{"src":"https://imgs.search.example/t1.jpg"},
+             "properties":{"url":"https://cdn.shop.example/oxford.jpg"}},
+            {"title":"no image","url":"https://x.example","properties":{"url":"data:image/png;base64,AA"}}]}"#;
+        let r = Provider::Brave { key: "k".into() }
+            .parse_images(brave, 5)
+            .unwrap();
+        assert_eq!(r.len(), 1);
+        assert_eq!(r[0].title, "Oxford shirt");
+        assert_eq!(
+            r[0].get("image"),
+            Some("https://cdn.shop.example/oxford.jpg")
+        );
+        assert_eq!(
+            r[0].get("thumbnail"),
+            Some("https://imgs.search.example/t1.jpg")
+        );
+        assert_eq!(r[0].get("page"), Some("https://www.shop.example/p/oxford"));
+        assert_eq!(r[0].get("source"), Some("shop.example"));
+        let sx = r#"{"results":[{"title":"Boots","url":"https://www.boots.example/a","img_src":"https://boots.example/a.jpg"}]}"#;
+        let r = Provider::Searxng {
+            base_url: "https://s.example".into(),
+        }
+        .parse_images(sx, 5)
+        .unwrap();
+        assert_eq!(r[0].thumbnail, "https://boots.example/a.jpg");
+        assert_eq!(r[0].source, "boots.example");
+        for f in IMAGE_FIELDS {
+            assert!(r[0].get(f).is_some(), "{f}");
+        }
+    }
+
+    #[test]
+    fn image_requests() {
+        let (u, h) = Provider::Brave { key: "k1".into() }
+            .image_request("oxford shirt", 5)
+            .unwrap();
+        assert!(
+            u.starts_with(BRAVE_IMAGES_URL) && u.contains("q=oxford+shirt"),
+            "{u}"
+        );
+        assert!(
+            h.iter()
+                .any(|(k, v)| k == "X-Subscription-Token" && v == "k1")
+        );
+        let (u, _) = Provider::Searxng {
+            base_url: "https://s.example".into(),
+        }
+        .image_request("boots", 5)
+        .unwrap();
+        assert!(
+            u.contains("categories=images") && u.contains("format=json"),
+            "{u}"
+        );
+        assert_eq!(
+            Provider::DuckDuckGo.image_request("x", 5).unwrap_err(),
+            NO_IMAGES
+        );
     }
 
     #[test]

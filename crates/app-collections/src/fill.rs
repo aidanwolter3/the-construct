@@ -1081,7 +1081,7 @@ async fn run_fetch(
         return Fetch::Failed("not a fetch filler".into(), None);
     };
     let spec = filler.extract_spec();
-    if spec.is_none() && !filler.is_llm() {
+    if spec.is_none() && !filler.is_llm() && !filler.is_images() {
         return Fetch::Failed("the filler's extractor is unknown".into(), None);
     }
     if filler.is_llm() && adapter.agent().is_none() {
@@ -1207,7 +1207,7 @@ async fn run_fetch(
     } else {
         None
     };
-    if searching && adapter.agent().is_none() {
+    if searching && !filler.is_images() && adapter.agent().is_none() {
         return Fetch::Failed(NO_AGENT.into(), None);
     }
     let name = def.name.clone();
@@ -1247,7 +1247,60 @@ async fn run_fetch(
             .filter(|(s, _)| *s == src)
             .map(|(_, k)| k.clone());
         // What the model reads, and its content key.
-        let (found, key) = if let Some(web) = &web {
+        let (found, key) = if let (Some(web), true) = (&web, filler.is_images()) {
+            // The first image result fills the mapped fields; no model
+            // (decision `image-search`).
+            let images = match web_extract::search::search_images(
+                &web.hosts,
+                &web.cache,
+                &web.client,
+                &web.provider,
+                &src,
+                1,
+            )
+            .await
+            {
+                Ok(r) => r,
+                Err(e) => {
+                    failed.push(format!("{src}: {e}"));
+                    // DuckDuckGo, a refusal or a spent cap holds for every
+                    // other row too.
+                    if e.contains("refused")
+                        || e.contains("daily limit")
+                        || e.contains("waits")
+                        || e.contains("no image search")
+                    {
+                        break;
+                    }
+                    continue;
+                }
+            };
+            let key = hash_of(
+                images
+                    .first()
+                    .map(|i| i.image.as_str())
+                    .unwrap_or("")
+                    .as_bytes(),
+            );
+            if !force_all && prev_key.as_deref() == Some(key.as_str()) {
+                continue;
+            }
+            let found: Vec<Map<String, Value>> = images
+                .first()
+                .map(|img| {
+                    pairs
+                        .iter()
+                        .filter_map(|(id, part)| {
+                            let v = img.get(part)?.trim();
+                            (!v.is_empty()).then(|| (id.clone(), json!(v)))
+                        })
+                        .collect::<Map<String, Value>>()
+                })
+                .filter(|m| !m.is_empty())
+                .into_iter()
+                .collect();
+            (Ok(found), key)
+        } else if let Some(web) = &web {
             let results = match web_extract::search::search(
                 &web.hosts,
                 &web.cache,
