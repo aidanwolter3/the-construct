@@ -494,3 +494,51 @@ async fn marking_a_run_reviewed_sets_its_row_done() {
     tokio::time::sleep(Duration::from_millis(300)).await;
     assert_eq!(field(&pod, &id, "status"), "done");
 }
+
+#[tokio::test]
+async fn a_run_that_crashes_at_launch_fails_its_row_and_is_retried_once() {
+    let (pod, fake, _) = signed_in().await;
+    linked(&pod, json!(["todo", "queued"])).await;
+    fake.end_streams.store(false, Ordering::SeqCst);
+    fake.next_runs
+        .lock()
+        .unwrap()
+        .extend(["run_c1".to_owned(), "run_c2".to_owned()]);
+    let id = add(
+        &pod,
+        json!({"title": "Headless rendering", "status": "queued"}),
+    )
+    .await;
+    assert_eq!(started(&pod, &id).await, "run_c1");
+    // Ended with an error and no session: Claude never started.
+    let crash = json!({"task_id": id, "state": "ended", "end_reason": "exited",
+        "error": "foreman: claude exited with code 1", "ended_at": 1_700_000_000_000_i64});
+    fake.run("run_c1", crash.clone());
+    until("noted", || async {
+        field(&pod, &id, "diagnosis") == "Crashed at launch: foreman: claude exited with code 1"
+    })
+    .await;
+    let shown = shown(&pod, "run_c1").await;
+    assert_eq!(shown["status_text"], "Failed", "{shown}");
+    assert_eq!(shown["needs_review"], false, "{shown}");
+
+    // Retried once, with a new run.
+    until("retried", || async {
+        field(&pod, &id, "run_id") == "run_c2"
+    })
+    .await;
+    assert_eq!(fake.sent("start_run").len(), 2);
+    // The retry crashes too: the row stays failed, with both crashes noted.
+    fake.run("run_c2", crash);
+    status_is(&pod, &id, "failed").await;
+    until("noted twice", || async {
+        field(&pod, &id, "diagnosis")
+            .matches("Crashed at launch")
+            .count()
+            == 2
+    })
+    .await;
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert_eq!(fake.sent("start_run").len(), 2);
+    assert_eq!(field(&pod, &id, "status"), "failed");
+}

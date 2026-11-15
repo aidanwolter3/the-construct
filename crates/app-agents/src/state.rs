@@ -25,6 +25,8 @@ pub const STARTING: &str = "starting";
 pub const WORKING: &str = "working";
 pub const NEEDS_YOU: &str = "needs_you";
 pub const ENDED: &str = "ended";
+/// The pod's own end reason ([`Run::end`]) for a run that crashed at launch.
+pub const CRASHED: &str = "crashed";
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
@@ -351,6 +353,27 @@ impl Run {
     /// Not ended.
     pub fn is_active(&self) -> bool {
         self.state != ENDED
+    }
+
+    /// Ended with an error before Claude started (no session, no report):
+    /// the runner's launch failed, which reads as failed, not as a run
+    /// that ended without a report.
+    pub fn crashed_at_launch(&self) -> bool {
+        self.state == ENDED
+            && self.outcome.is_empty()
+            && self.session_id.is_empty()
+            && !self.error.is_empty()
+            && matches!(self.end_reason.as_str(), "exited" | "")
+    }
+
+    /// Why it ended, as the pod reads it: [`CRASHED`] for a run that
+    /// [crashed at launch](Self::crashed_at_launch), else `end_reason`.
+    pub fn end(&self) -> &str {
+        if self.crashed_at_launch() {
+            CRASHED
+        } else {
+            &self.end_reason
+        }
     }
 
     /// The pull request: the outcome's, else the last one seen.

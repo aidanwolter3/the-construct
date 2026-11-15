@@ -59,7 +59,10 @@ is plugged and to which URL; `unplug_jack agent_runner` signs out, like `POST /v
   runner when the screen opens (kept 10 s). `agents:status.summary_text` reads e.g. "1 working · 1 needs you · 2
   queued" or "Nothing running". A run's `status_text` is one of Queued, Starting, Working, Needs you, Done, Needs
   review, Blocked, Failed, Stopped, Lost, Didn't start, Timed out, Expired, or Reviewed for a run that needed review
-  and was marked reviewed on this pod (`needs_review` turns false, `reviewed` true). The entities and their fields are
+  and was marked reviewed on this pod (`needs_review` turns false, `reviewed` true). A run that **crashed at launch**
+  (ended `exited` with an `error` and no `session_id`: Claude never started, e.g. "claude exited with code 1") reads
+  Failed, not Needs review, and warns like a lost run; a schedule whose last run crashed shows Failed too
+  (`last_status` `crashed`). The entities and their fields are
   in the source's manifest (`describe_vocabulary`, `list_data_sources`).
 - **Actions:** `/v1/agents/sessions/stop {run_id}` (`session_id` is read the same way, for older layouts),
   `/v1/agents/sandboxes/wake`, `/v1/agents/tasks/start`, `/v1/agents/tasks/reopen`, `/v1/agents/schedules/run`,
@@ -97,7 +100,7 @@ is signed in:
 |---|---|---|
 | `needs_you` "Needs you" | high | a run enters `needs_you` (the question, the permission, or Claude's last message), once per entry |
 | `sessions` "Finished runs" | default | a run ends with an outcome or a report (its summary and PR link) |
-| `warnings` "Runner warnings" | high | a run ends lost, didn't start, timed out or expired; a security check turns to warn |
+| `warnings` "Runner warnings" | high | a run ends lost, didn't start, crashed at launch, timed out or expired; a security check turns to warn |
 
 Each is worked out by comparing a run's stored record with the new one, and remembered by run and transition (the
 last 200, in the stored state), so a restart or a repeated record notifies nothing twice. A run the pod first sees in
@@ -126,8 +129,13 @@ optional text fields `run_id`, `session_id`, `workspace` and `diagnosis`, throug
   | ended, outcome done | done |
   | ended, outcome review; or reported, exited or stopped without an outcome | review |
   | outcome failed or blocked; or lost, start_failed, timed_out or expired | failed |
+  | ended with an error and no session (crashed at launch) | failed |
 
-  When the run ends, its summary and PR link (or why it failed) are appended to `diagnosis`, once.
+  When the run ends, its summary and PR link (or why it failed) are appended to `diagnosis`, once; a crash at launch
+  adds `Crashed at launch: <error>`.
+- **Crashes at launch are retried once:** 30 s after the crash (on the next pass) the row is queued again with a new
+  run, as a retry by hand would be. A retry that crashes too leaves the row `failed`; a row you set to `done` or
+  `todo` meanwhile isn't retried.
 - a row you set to `done` (or whose `done` box you tick) or `todo` keeps that status: its run only adds to
   `diagnosis`, and a run that hasn't ended gets `stop_run`, once.
 - **Reopen:** `POST /v1/agents/tasks/reopen {id, message}` (or `{run_id, message}` from a run's screen) needs the

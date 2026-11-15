@@ -42,6 +42,7 @@ pub fn run_look(state: &str, end_reason: &str, outcome: &str) -> (&'static str, 
             (_, "stopped") => ("Stopped", GRAY),
             (_, "lost") => ("Lost", RED),
             (_, "start_failed") => ("Didn't start", RED),
+            (_, state::CRASHED) => ("Failed", RED),
             (_, "timed_out") => ("Timed out", RED),
             (_, "expired") => ("Expired", GRAY),
             // Ended by itself without a report: a person should look.
@@ -181,9 +182,9 @@ pub fn status(st: Option<&(State, Health)>, host: &str, now_ms: i64) -> EntityRe
 /// One run's entity (`agents://sessions/<run id>`). `reviewed`: marked
 /// reviewed on this pod.
 pub fn session(r: &Run, reviewed: bool, now_ms: i64) -> EntityRecord {
-    let waits = needs_review(&r.state, &r.end_reason, &r.outcome);
+    let waits = needs_review(&r.state, r.end(), &r.outcome);
     let reviewed = reviewed && waits;
-    let (status_text, color) = shown_look(&r.state, &r.end_reason, &r.outcome, reviewed);
+    let (status_text, color) = shown_look(&r.state, r.end(), &r.outcome, reviewed);
     let active = r.is_active();
     let elapsed = match (r.started_at, r.ended_at) {
         (s, _) if s <= 0 => String::new(),
@@ -360,8 +361,9 @@ pub fn schedules(st: Option<&(State, Health)>, now_ms: i64, tz: &TimeZone) -> Da
         let last = sc.last_run.clone().unwrap_or_default();
         let run = st.and_then(|(s, _)| s.runs.get(&last.run_id));
         let reviewed = st.is_some_and(|(s, _)| s.reviewed.contains(&last.run_id));
-        let (last_text, last_color) =
-            shown_look(&last.state, &last.end_reason, &last.outcome, reviewed);
+        // The run itself, when listed, knows whether it crashed at launch.
+        let last_end = run.map_or(last.end_reason.as_str(), Run::end);
+        let (last_text, last_color) = shown_look(&last.state, last_end, &last.outcome, reviewed);
         let last_summary = if !last.outcome_summary.is_empty() {
             last.outcome_summary.clone()
         } else {
@@ -382,7 +384,7 @@ pub fn schedules(st: Option<&(State, Health)>, now_ms: i64, tz: &TimeZone) -> Da
                 "state_text": state_text,
                 "next_run_text": next,
                 "ran": sc.last_run.is_some(),
-                "last_status": if last.state == state::ENDED && !last.outcome.is_empty() { &last.outcome } else if last.state == state::ENDED { &last.end_reason } else { &last.state },
+                "last_status": if last.state == state::ENDED && !last.outcome.is_empty() { &last.outcome } else if last.state == state::ENDED { last_end } else { &last.state },
                 "last_status_text": last_text,
                 "last_status_color": last_color,
                 "last_summary": last_summary,
@@ -547,6 +549,7 @@ mod tests {
             ("ended", "start_failed", "", "Didn't start"),
             ("ended", "timed_out", "", "Timed out"),
             ("ended", "expired", "", "Expired"),
+            ("ended", state::CRASHED, "", "Failed"),
         ] {
             assert_eq!(
                 run_look(state, end, outcome).0,
@@ -644,13 +647,35 @@ mod tests {
             },
         );
         let h = Health::default();
-        let b = schedules(Some(&(s, h)), 1_800_000_000_000, &TimeZone::UTC);
+        let b = schedules(
+            Some(&(s.clone(), h.clone())),
+            1_800_000_000_000,
+            &TimeZone::UTC,
+        );
         let e = &b.entities["agents://schedules/nightly"];
         assert_eq!(e.get_str("next_run_text"), Some("in 3 h · Fri 11:00"));
         assert_eq!(e.get_str("state_text"), Some("Active"));
         assert_eq!(e.get("can_pause"), Some(&json!(true)));
         assert_eq!(e.get_str("last_status_text"), Some("Expired"));
         assert_eq!(e.get_str("last_run_id"), Some("run_9"));
+
+        // A last run that crashed at launch reads Failed, not Needs review.
+        let last = s.schedules.get_mut("nightly").unwrap().last_run.as_mut();
+        last.unwrap().end_reason = "exited".into();
+        s.runs.insert(
+            "run_9".into(),
+            Run {
+                id: "run_9".into(),
+                state: "ended".into(),
+                end_reason: "exited".into(),
+                error: "foreman: claude exited with code 1".into(),
+                ..Default::default()
+            },
+        );
+        let b = schedules(Some(&(s, h)), 1_800_000_000_000, &TimeZone::UTC);
+        let e = &b.entities["agents://schedules/nightly"];
+        assert_eq!(e.get_str("last_status_text"), Some("Failed"));
+        assert_eq!(e.get_str("last_status"), Some("crashed"));
     }
 
     #[test]
