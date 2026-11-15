@@ -20,6 +20,7 @@ pub mod disk;
 pub mod jacks;
 pub mod layouts;
 pub mod mcp;
+pub mod mcp_servers;
 pub mod metrics;
 pub mod migrations;
 pub mod net;
@@ -149,6 +150,11 @@ pub struct AppState {
     /// This pod's public path prefix, set by the host (D46), for work done
     /// outside a request (notification polls).
     public_prefix: std::sync::OnceLock<String>,
+    /// The server's public base URL (`CONSTRUCT_PUBLIC_URL`), set by the
+    /// host, for links the pod hands out (an MCP server's sign-in redirect).
+    public_base: std::sync::OnceLock<String>,
+    /// MCP servers may be on private hosts (tests; decision `mcp-jack`).
+    mcp_private_hosts: bool,
     /// Custom apps: caps and the write-rate window.
     pub(crate) custom: custom::CustomState,
     /// Layout previews agents are looking at (MCP, `preview`).
@@ -259,6 +265,8 @@ impl AppState {
             notifier: notify::Notifier::default(),
             push: None,
             public_prefix: std::sync::OnceLock::new(),
+            public_base: std::sync::OnceLock::new(),
+            mcp_private_hosts: false,
             custom: custom::CustomState::default(),
             previews: preview::Previews::default(),
             hosted: std::sync::atomic::AtomicBool::new(false),
@@ -348,6 +356,29 @@ impl AppState {
     /// See [`Self::set_public_prefix`]; `""` when unset.
     pub fn public_prefix(&self) -> &str {
         self.public_prefix.get().map_or("", String::as_str)
+    }
+
+    /// The server's public base URL (`https://pod.example`), when the host
+    /// knows it; set once.
+    pub fn set_public_base(&self, base: &str) {
+        let _ = self.public_base.set(base.trim_end_matches('/').to_owned());
+    }
+
+    /// See [`Self::set_public_base`].
+    pub fn public_base(&self) -> Option<&str> {
+        self.public_base.get().map(String::as_str)
+    }
+
+    /// Let MCP servers be on private hosts (a local test setup; the server
+    /// sets it with `CONSTRUCT_FILL_PRIVATE_HOSTS=1`).
+    pub fn with_mcp_private_hosts(mut self, allow: bool) -> Self {
+        self.mcp_private_hosts = allow;
+        self
+    }
+
+    /// See [`Self::with_mcp_private_hosts`].
+    pub fn mcp_private_hosts(&self) -> bool {
+        self.mcp_private_hosts
     }
 
     /// Largest upload accepted (`CONSTRUCT_UPLOAD_MAX_BYTES`, D49).
@@ -649,6 +680,7 @@ pub fn app(state: Pod) -> Router {
         .route("/v1/jacks/screen", get(get_jacks_screen))
         .route("/v1/jacks/plug", post(post_jack_plug))
         .route("/v1/jacks/unplug", post(post_jack_unplug))
+        .route(mcp_servers::CALLBACK_PATH, get(mcp_servers::callback))
         .merge(uploads::router(state.upload_max_bytes));
     for a in state.catalog.adapters() {
         router = router.merge(a.router());

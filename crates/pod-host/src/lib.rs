@@ -967,6 +967,9 @@ impl Host {
             ))
         })?;
         state.set_public_prefix(&format!("/v1/p/{id}"));
+        if let Some(base) = &self.config.public_url {
+            state.set_public_base(base);
+        }
         state.set_hosted();
         let pod: Pod = Arc::new(state);
         let open = Arc::new(OpenPod {

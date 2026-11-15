@@ -220,6 +220,7 @@ fn all_tools(pod: &Pod) -> Vec<Value> {
 fn tools() -> Vec<Value> {
     let mut out = base_tools();
     out.extend(crate::preview::tools());
+    out.extend(crate::mcp_servers::tools());
     out
 }
 
@@ -464,6 +465,9 @@ async fn call_tool(pod: &Pod, headers: &HeaderMap, params: &Value) -> Value {
             return crate::preview::dispatch_virtual_interaction(pod, &args).await;
         }
         _ => {}
+    }
+    if let Some(r) = crate::mcp_servers::call(pod, headers, name, &args).await {
+        return tool_result(r);
     }
     let r = match name {
         "list_jacks" => Ok(json!({ "jacks": crate::jacks::list(pod).await })),

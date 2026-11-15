@@ -62,6 +62,12 @@ pub const LLM: &str = "llm";
 /// (decision `image-search`): each row's `map` fields come from its first
 /// image result ([`web_extract::search::IMAGE_FIELDS`]), with no model.
 pub const IMAGES: &str = "images";
+/// An `mcp` filler's longest tool name.
+pub const MAX_TOOL_CHARS: usize = 128;
+/// An `mcp` filler's arguments, as JSON, at most this long.
+pub const MAX_ARGUMENTS_CHARS: usize = 4_000;
+/// The furthest a `{today+N}` argument reaches, in days.
+pub const MAX_DAY_OFFSET: i64 = 3_660;
 /// A rendered filler's shortest interval (and `on_open_minutes`), minutes:
 /// a render starts a browser.
 pub const MIN_RENDER_EVERY: u32 = 6 * 60;
@@ -226,6 +232,25 @@ pub enum Source {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         render: Option<Render>,
     },
+    /// A tool of an MCP server the pod is connected to (decision
+    /// `mcp-jack`): its answer is read like a JSON page (`items`, `map`).
+    Mcp {
+        /// The server's name in the pod (`mcp_connect`).
+        server: String,
+        tool: String,
+        /// The tool's arguments; text values may hold `{today}` or
+        /// `{today+N}` / `{today-N}` (days), the date in the pod's zone
+        /// when the fill runs.
+        #[serde(default, skip_serializing_if = "Map::is_empty")]
+        arguments: Map<String, Value>,
+        #[serde(default, skip_serializing_if = "String::is_empty")]
+        items: String,
+        /// The zone a time without an offset is in (IANA or `±HH:MM`).
+        #[serde(default, skip_serializing_if = "String::is_empty")]
+        zone: String,
+        /// Field id -> path in each item.
+        map: BTreeMap<String, String>,
+    },
     /// A model with web tools answers the rows.
     Agent {
         prompt: String,
@@ -338,7 +363,13 @@ impl Filler {
         match self.source {
             Source::Fetch { .. } => "fetch",
             Source::Agent { .. } => "agent",
+            Source::Mcp { .. } => "mcp",
         }
+    }
+
+    /// Whether it calls an MCP server's tool.
+    pub fn is_mcp(&self) -> bool {
+        matches!(self.source, Source::Mcp { .. })
     }
 
     pub fn is_agent(&self) -> bool {
@@ -363,7 +394,7 @@ impl Filler {
     /// The field ids each item writes.
     pub fn mapped(&self) -> Vec<String> {
         match &self.source {
-            Source::Fetch { map, .. } => map.keys().cloned().collect(),
+            Source::Fetch { map, .. } | Source::Mcp { map, .. } => map.keys().cloned().collect(),
             Source::Agent { fields, .. } => fields.clone(),
         }
     }
@@ -388,7 +419,7 @@ impl Filler {
     pub fn url_field(&self) -> Option<&str> {
         match &self.source {
             Source::Fetch { url_field, .. } => url_field.as_deref(),
-            Source::Agent { .. } => None,
+            Source::Agent { .. } | Source::Mcp { .. } => None,
         }
     }
 
@@ -396,7 +427,7 @@ impl Filler {
     pub fn query_field(&self) -> Option<&str> {
         match &self.source {
             Source::Fetch { query_field, .. } => query_field.as_deref(),
-            Source::Agent { .. } => None,
+            Source::Agent { .. } | Source::Mcp { .. } => None,
         }
     }
 
@@ -419,7 +450,7 @@ impl Filler {
     pub fn render(&self) -> Option<&Render> {
         match &self.source {
             Source::Fetch { render, .. } => render.as_ref(),
-            Source::Agent { .. } => None,
+            Source::Agent { .. } | Source::Mcp { .. } => None,
         }
     }
 
@@ -427,7 +458,7 @@ impl Filler {
     pub fn url(&self) -> Option<&str> {
         match &self.source {
             Source::Fetch { url, .. } => url.as_deref(),
-            Source::Agent { .. } => None,
+            Source::Agent { .. } | Source::Mcp { .. } => None,
         }
     }
 
@@ -459,7 +490,7 @@ impl Filler {
                 }
                 out
             }
-            Source::Agent { .. } => Vec::new(),
+            Source::Agent { .. } | Source::Mcp { .. } => Vec::new(),
         }
     }
 
@@ -481,6 +512,13 @@ impl Filler {
                 script: script.clone(),
                 zone: zone.clone(),
             }),
+            Source::Mcp { items, zone, .. } => Some(web_extract::items::Spec {
+                kind: web_extract::items::Kind::Json,
+                items: items.clone(),
+                types: Vec::new(),
+                script: String::new(),
+                zone: zone.clone(),
+            }),
             Source::Agent { .. } => None,
         }
     }
@@ -488,14 +526,16 @@ impl Filler {
     /// The zone a time without an offset is placed in.
     pub fn zone(&self) -> Option<web_extract::when::Zone> {
         match &self.source {
-            Source::Fetch { zone, .. } if !zone.is_empty() => web_extract::items::Spec {
-                kind: web_extract::items::Kind::Json,
-                items: String::new(),
-                types: Vec::new(),
-                script: String::new(),
-                zone: zone.clone(),
+            Source::Fetch { zone, .. } | Source::Mcp { zone, .. } if !zone.is_empty() => {
+                web_extract::items::Spec {
+                    kind: web_extract::items::Kind::Json,
+                    items: String::new(),
+                    types: Vec::new(),
+                    script: String::new(),
+                    zone: zone.clone(),
+                }
+                .zone()
             }
-            .zone(),
             _ => None,
         }
     }
@@ -580,6 +620,27 @@ impl Filler {
                         dv["text"] = json!(name(t));
                     }
                     v["details"] = dv;
+                }
+                v
+            }
+            Source::Mcp {
+                server,
+                tool,
+                arguments,
+                items,
+                zone,
+                map,
+            } => {
+                let mut v =
+                    json!({ "kind": "mcp", "server": server, "tool": tool, "map": names(map) });
+                if !arguments.is_empty() {
+                    v["arguments"] = json!(arguments);
+                }
+                if !items.is_empty() {
+                    v["items"] = json!(items);
+                }
+                if !zone.is_empty() {
+                    v["zone"] = json!(zone);
                 }
                 v
             }
@@ -1017,6 +1078,50 @@ pub fn parse(
                 render,
             }
         }
+        "mcp" => {
+            let server = text(o, "server");
+            if !pod_core::mcp_servers::valid_name(server) {
+                return Err(
+                    "filler.server is the name of an MCP server the pod is connected to (mcp_servers lists them)"
+                        .into(),
+                );
+            }
+            let tool = text(o, "tool");
+            if tool.is_empty() || tool.chars().count() > MAX_TOOL_CHARS {
+                return Err(format!(
+                    "filler.tool is the tool's name (1..={MAX_TOOL_CHARS} characters)"
+                ));
+            }
+            let arguments = match o.get("arguments") {
+                None | Some(Value::Null) => Map::new(),
+                Some(Value::Object(m)) => m.clone(),
+                Some(_) => return Err("filler.arguments is an object".into()),
+            };
+            if Value::Object(arguments.clone()).to_string().len() > MAX_ARGUMENTS_CHARS {
+                return Err(format!(
+                    "filler.arguments is at most {MAX_ARGUMENTS_CHARS} characters of JSON"
+                ));
+            }
+            check_dates(&Value::Object(arguments.clone()))?;
+            let zone = text(o, "zone").to_owned();
+            let (map, pairs) = parse_map(def, o.get("map"), "filler")?;
+            let spec = web_extract::items::Spec {
+                kind: web_extract::items::Kind::Json,
+                items: text(o, "items").to_owned(),
+                types: Vec::new(),
+                script: String::new(),
+                zone: zone.clone(),
+            };
+            web_extract::items::check(&spec, &pairs).map_err(|e| format!("filler: {e}"))?;
+            Source::Mcp {
+                server: server.to_owned(),
+                tool: tool.to_owned(),
+                arguments,
+                items: spec.items,
+                zone,
+                map,
+            }
+        }
         "agent" => {
             let prompt = text(o, "prompt");
             if prompt.is_empty() || prompt.chars().count() > MAX_PROMPT_CHARS {
@@ -1066,7 +1171,7 @@ pub fn parse(
         }
         other => {
             return Err(format!(
-                "filler.kind '{other}' is \"fetch\" (a recipe) or \"agent\" (a model with web search)"
+                "filler.kind '{other}' is \"fetch\" (a recipe), \"mcp\" (an MCP server's tool) or \"agent\" (a model with web search)"
             ));
         }
     };
@@ -1085,6 +1190,7 @@ pub fn parse(
         .transpose()?;
     let kind = match source {
         Source::Agent { .. } => "agent",
+        Source::Mcp { .. } => "mcp",
         Source::Fetch {
             query_field: Some(_),
             ..
@@ -1095,14 +1201,15 @@ pub fn parse(
         Source::Fetch { url, .. } => url.clone(),
         _ => None,
     };
-    let title = match text(o, "title") {
-        "" => default_title(url.as_deref(), kind),
-        t if t.chars().count() > MAX_TITLE_CHARS => {
+    let title = match (text(o, "title"), &source) {
+        ("", Source::Mcp { server, tool, .. }) => format!("{server} · {tool}"),
+        ("", _) => default_title(url.as_deref(), kind),
+        (t, _) if t.chars().count() > MAX_TITLE_CHARS => {
             return Err(format!(
                 "filler.title is at most {MAX_TITLE_CHARS} characters"
             ));
         }
-        t => t.to_owned(),
+        (t, _) => t.to_owned(),
     };
     let per_row = matches!(
         &source,
@@ -1143,6 +1250,116 @@ pub fn parse(
         refresh,
         on_empty,
     })
+}
+
+/// The day offset of a `{today}` / `{today+N}` / `{today-N}` token (`N`
+/// days); `None` for anything else.
+fn day_token(t: &str) -> Option<Result<i64, String>> {
+    let inner = t.strip_prefix("today")?;
+    if inner.is_empty() {
+        return Some(Ok(0));
+    }
+    let (sign, n) = match inner.as_bytes()[0] {
+        b'+' => (1, &inner[1..]),
+        b'-' => (-1, &inner[1..]),
+        _ => return None,
+    };
+    let n = n.strip_suffix('d').unwrap_or(n);
+    Some(match n.parse::<i64>() {
+        Ok(n) if n <= MAX_DAY_OFFSET => Ok(sign * n),
+        _ => Err(format!(
+            "{{{t}}}: a day offset is {{today+N}} or {{today-N}}, N at most {MAX_DAY_OFFSET}"
+        )),
+    })
+}
+
+/// Each `{...}` token of `s` that names a date, with its offset.
+fn date_tokens(s: &str) -> Vec<(String, Result<i64, String>)> {
+    let mut out = Vec::new();
+    let mut rest = s;
+    while let Some(start) = rest.find('{') {
+        let after = &rest[start + 1..];
+        let Some(end) = after.find('}') else { break };
+        let t = &after[..end];
+        if let Some(r) = day_token(t) {
+            out.push((format!("{{{t}}}"), r));
+        }
+        rest = &after[end + 1..];
+    }
+    out
+}
+
+/// Refuse a malformed `{today±N}` in `v`'s text values.
+fn check_dates(v: &Value) -> Result<(), String> {
+    match v {
+        Value::String(s) => {
+            for (_, r) in date_tokens(s) {
+                r.map_err(|e| format!("filler.arguments: {e}"))?;
+            }
+            Ok(())
+        }
+        Value::Array(a) => a.iter().try_for_each(check_dates),
+        Value::Object(o) => o.values().try_for_each(check_dates),
+        _ => Ok(()),
+    }
+}
+
+/// Days since 1970-01-01 of a civil date (Howard Hinnant's algorithm).
+fn days_from_civil(y: i64, m: i64, d: i64) -> i64 {
+    let y = if m <= 2 { y - 1 } else { y };
+    let era = if y >= 0 { y } else { y - 399 } / 400;
+    let yoe = y - era * 400;
+    let mp = (m + 9) % 12;
+    let doy = (153 * mp + 2) / 5 + d - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    era * 146_097 + doe - 719_468
+}
+
+/// The civil date of days since 1970-01-01.
+fn civil_from_days(z: i64) -> (i64, i64, i64) {
+    let z = z + 719_468;
+    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = yoe + era * 400 + i64::from(m <= 2);
+    (y, m, d)
+}
+
+/// `today` (`YYYY-MM-DD`) moved by `days`.
+fn add_days(today: &str, days: i64) -> Option<String> {
+    let mut p = today.splitn(3, '-').map(|x| x.parse::<i64>().ok());
+    let (y, m, d) = (p.next()??, p.next()??, p.next()??);
+    let (y, m, d) = civil_from_days(days_from_civil(y, m, d) + days);
+    Some(format!("{y:04}-{m:02}-{d:02}"))
+}
+
+/// An `mcp` filler's arguments with `{today}` and `{today±N}` replaced by
+/// dates counted from `today` (`YYYY-MM-DD`).
+pub fn resolve_dates(v: &Value, today: &str) -> Value {
+    match v {
+        Value::String(s) => {
+            let mut out = s.clone();
+            for (token, r) in date_tokens(s) {
+                if let Ok(n) = r
+                    && let Some(d) = add_days(today, n)
+                {
+                    out = out.replace(&token, &d);
+                }
+            }
+            Value::String(out)
+        }
+        Value::Array(a) => Value::Array(a.iter().map(|x| resolve_dates(x, today)).collect()),
+        Value::Object(o) => Value::Object(
+            o.iter()
+                .map(|(k, x)| (k.clone(), resolve_dates(x, today)))
+                .collect(),
+        ),
+        other => other.clone(),
+    }
 }
 
 /// Check `def`'s fillers against its fields (also after other changes: a
@@ -1580,5 +1797,47 @@ mod tests {
             .is_ok()
         );
         assert!(check_write(&def, &w(json!({"about": "x"})), "create", None).is_err());
+    }
+
+    #[test]
+    fn mcp_arguments_take_dates() {
+        let args = json!({"from": "{today}", "to": "{today+180}", "back": "{today-1d}",
+            "range": ["{today+1}", "no {braces} here"], "n": 5});
+        assert_eq!(
+            resolve_dates(&args, "2026-11-15"),
+            json!({"from": "2026-11-15", "to": "2027-05-14", "back": "2026-11-14",
+                "range": ["2026-11-16", "no {braces} here"], "n": 5})
+        );
+        assert_eq!(add_days("2028-02-28", 1).as_deref(), Some("2028-02-29"));
+        assert_eq!(add_days("2026-12-31", 1).as_deref(), Some("2027-01-01"));
+        assert_eq!(add_days("2026-03-01", -1).as_deref(), Some("2026-02-28"));
+        assert!(check_dates(&json!({"to": "{today+5}"})).is_ok());
+        assert!(check_dates(&json!({"to": "{today+x}"})).is_err());
+        assert!(check_dates(&json!({"to": "{today+99999}"})).is_err());
+    }
+
+    #[test]
+    fn mcp_fillers_parse() {
+        let def = products();
+        let f = parse(
+            &def,
+            &json!({"kind": "mcp", "server": "cal", "tool": "list", "items": "events",
+                "arguments": {"from": "{today}"}, "map": {"name": "title"}}),
+            "s1".into(),
+            false,
+        )
+        .unwrap();
+        assert!(f.is_mcp());
+        assert_eq!(f.title, "cal · list");
+        assert_eq!(f.describe(&def)["arguments"]["from"], "{today}");
+        for bad in [
+            json!({"kind": "mcp", "server": "Cal", "tool": "list", "map": {"name": "t"}}),
+            json!({"kind": "mcp", "server": "cal", "map": {"name": "t"}}),
+            json!({"kind": "mcp", "server": "cal", "tool": "list", "arguments": [1], "map": {"name": "t"}}),
+            json!({"kind": "mcp", "server": "cal", "tool": "list", "arguments": {"to": "{today+q}"}, "map": {"name": "t"}}),
+            json!({"kind": "mcp", "server": "cal", "tool": "list"}),
+        ] {
+            assert!(parse(&def, &bad, "s1".into(), false).is_err(), "{bad}");
+        }
     }
 }

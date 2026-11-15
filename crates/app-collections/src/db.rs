@@ -661,7 +661,7 @@ pub fn filler_record(
     f: &crate::filler::Filler,
     st: &crate::fill::State,
     now: i64,
-    off: bool,
+    off: crate::fill::Off,
 ) -> EntityRecord {
     let (state, detail) = crate::fill::health_state(f, st, now, off, true);
     let names: Vec<String> = crate::alerts::of_filler(def, &f.id)
@@ -707,11 +707,8 @@ pub fn alert_record(def: &Definition, a: &crate::alerts::Alert) -> EntityRecord 
 
 /// Whether fillers are off on this pod: its `web` jack is unplugged
 /// (decision `jacks`).
-fn fills_off(conn: &Connection) -> rusqlite::Result<bool> {
-    Ok(!pod_core::jacks::core_plugged_on(
-        conn,
-        pod_core::jacks::WEB,
-    )?)
+fn fills_off(conn: &Connection) -> rusqlite::Result<crate::fill::Off> {
+    crate::fill::off_on(conn)
 }
 
 /// A collection's list as a `DataBundle`: each live row at
