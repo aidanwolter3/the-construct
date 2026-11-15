@@ -140,7 +140,7 @@ screen's `data` path answers the same `{entities, queries}` shape (`protocol::Da
   secure store; upstream tokens never leave the pod (D17, D19).
 - **One engine for every layout** (decision `layouts-not-apps`). The engine opens on the root layout (`home`);
   `open_layout` loads any other layout into the same store, cached like a data path (`layout:<id>`), and reports it
-  in the snapshot's `layouts_json`.
+  in the snapshot's `layouts_json`; `layout_now` reads one layout as it stands without building a snapshot.
 - **Event stream.** While online, the engine keeps `GET /v1/workspaces/<root>/events` open; home's stream carries
   every layout's events, starting with every layout's current version so a reconnect catches up. `layout` events
   trigger a refetch of that layout when a newer drawable version exists;
