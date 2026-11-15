@@ -1041,6 +1041,12 @@ struct StubPod {
     app_reply: Mutex<Option<(u16, Value)>>,
     token_reply: Mutex<Option<(u16, Value)>>,
     gate_open: std::sync::atomic::AtomicBool,
+    /// Workspace fetches with a bearer that reached the gate, and that were
+    /// answered.
+    held: std::sync::atomic::AtomicUsize,
+    answered: std::sync::atomic::AtomicUsize,
+    /// While true, a workspace fetch without a bearer gets a 503.
+    signed_out_down: AtomicBool,
 }
 
 fn stub_reply(r: &Mutex<Option<(u16, Value)>>, ok: Value) -> axum::response::Response {
@@ -1098,13 +1104,19 @@ fn start_stub_pod(rt: &tokio::runtime::Runtime) -> (String, Arc<StubPod>) {
             get(move |headers: axum::http::HeaderMap| {
                 let pod = Arc::clone(&p3);
                 async move {
+                    use axum::response::IntoResponse;
                     if !headers.contains_key("authorization") {
-                        return axum::Json(stub_bundle("Signed out"));
+                        if pod.signed_out_down.load(Ordering::SeqCst) {
+                            return axum::http::StatusCode::SERVICE_UNAVAILABLE.into_response();
+                        }
+                        return axum::Json(stub_bundle("Signed out")).into_response();
                     }
+                    pod.held.fetch_add(1, Ordering::SeqCst);
                     while !pod.gate_open.load(Ordering::SeqCst) {
                         tokio::time::sleep(Duration::from_millis(10)).await;
                     }
-                    axum::Json(stub_bundle("Feed"))
+                    pod.answered.fetch_add(1, Ordering::SeqCst);
+                    axum::Json(stub_bundle("Feed")).into_response()
                 }
             }),
         );
@@ -1646,4 +1658,75 @@ fn bad_data_paths_are_refused_without_a_request() {
         engine.dispatch(&load_intent(bad));
         assert_eq!(loads(&engine.snapshot())[bad]["state"], "error", "{bad}");
     }
+}
+
+/// Leaving the pod while home is still being fetched with the session: the
+/// answer that arrives afterwards is the account's data, so it is neither
+/// shown nor written back into the cache the forget just cleared. Only what
+/// the pod shows a caller without a session is kept.
+#[test]
+fn forgetting_the_session_drops_a_home_fetch_still_in_flight() {
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
+        .enable_all()
+        .build()
+        .unwrap();
+    let (base, pod) = start_stub_pod(&rt);
+    let dir = tempfile::tempdir().unwrap();
+    let cached_title = || {
+        Store::open(&dir.path().join("cache.db"))
+            .unwrap()
+            .load_workspace("home")
+            .unwrap()
+            .map(|w| serde_json::to_value(&w.layout).unwrap()["title"].clone())
+    };
+    let store = Arc::new(MemoryStore::new());
+    store.set(
+        &session_key(&base),
+        &json!({ "token": "stub-session" }).to_string(),
+    );
+    let engine = ConstructEngine::init_with_options(
+        dir.path().to_str().unwrap(),
+        &base,
+        "home",
+        EngineOptions {
+            config: fast_config(),
+            secure_store: Some(store),
+            url_opener: None,
+            redirect: RedirectMode::Loopback,
+            loopback_port: 0,
+        },
+    );
+    wait_until("home fetched with the session", || {
+        pod.held.load(Ordering::SeqCst) > 0
+    });
+
+    // Nothing may cover up a leak: the refetch without the session fails.
+    pod.signed_out_down.store(true, Ordering::SeqCst);
+    engine.forget_session();
+    assert_eq!(cached_title(), None, "the forget clears the cached home");
+
+    // The account's answer arrives after the forget.
+    let held = pod.held.load(Ordering::SeqCst);
+    pod.gate_open.store(true, Ordering::SeqCst);
+    wait_until("the held fetches answered", || {
+        pod.answered.load(Ordering::SeqCst) >= held
+    });
+    // The engine applies an answer within milliseconds of receiving it.
+    let until = Instant::now() + Duration::from_millis(500);
+    while Instant::now() < until {
+        assert_ne!(
+            workspace_title(&engine.snapshot()),
+            "Feed",
+            "shown after the forget"
+        );
+        assert_eq!(cached_title(), None, "written back after the forget");
+        thread::sleep(Duration::from_millis(20));
+    }
+
+    // What the pod shows a caller without a session is public: kept.
+    pod.signed_out_down.store(false, Ordering::SeqCst);
+    engine.refresh();
+    assert_eq!(workspace_title(&engine.snapshot()), "Signed out");
+    assert_eq!(cached_title(), Some(json!("Signed out")));
 }
