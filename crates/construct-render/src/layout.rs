@@ -660,22 +660,40 @@ fn fills_height_in(n: &UiNode, in_scroll: bool) -> bool {
 }
 
 /// A row child that shrinks and wraps (Compose `RowPart.Flexible`). A
-/// horizontal container of controls only (chips, buttons, sized boxes) is a
-/// control: it keeps its width, so a text beside it that wraps can't squeeze
-/// it and push its chips past the row.
+/// container of controls only (chips, buttons, sized boxes), either way
+/// round, is a control: it keeps its width, so a text beside it that wraps
+/// can't squeeze it and leave its chips drawn past it.
 fn row_flexible(n: &UiNode) -> bool {
     match n {
         UiNode::Text { .. } | UiNode::Column { .. } => true,
-        UiNode::Container {
-            orientation: Orientation::Horizontal,
-            children,
-            ..
-        } => children.iter().any(row_flexible),
-        UiNode::Container { .. } => true,
+        UiNode::Container { children, .. } => children.iter().any(row_flexible),
         UiNode::Conditional { content, .. }
         | UiNode::Tappable { content, .. }
         | UiNode::Gesture { content, .. }
         | UiNode::SwipeCard { content, .. } => row_flexible(content),
+        _ => false,
+    }
+}
+
+/// A row of controls only (no text, nothing that fills, no unsized Spacer)
+/// inside a row: it keeps its content's width like a control, rather than
+/// sharing what the others leave and shrinking under its chips.
+fn controls_row(n: &UiNode) -> bool {
+    match n {
+        UiNode::Row { children, .. } => !children.iter().any(|c| {
+            row_flexible(c) || fills_width(c) || matches!(c, UiNode::Spacer { size_dp: None })
+        }),
+        UiNode::Box {
+            fill: false,
+            width_dp: None,
+            content,
+            ..
+        }
+        | UiNode::Tappable { content, .. }
+        | UiNode::Gesture { content, .. }
+        | UiNode::SwipeCard { content, .. }
+        | UiNode::Conditional { content, .. }
+        | UiNode::Sticky { content } => controls_row(content),
         _ => false,
     }
 }
@@ -712,10 +730,15 @@ fn placed(mut style: Style, n: &UiNode, axis: Axis, in_scroll: bool) -> Style {
                 style.flex_shrink = 1.0;
                 // Text and columns wrap down to nothing; a container keeps
                 // its content's minimum (its widest control, its longest
-                // word), or a chip in it would spill past the row when a
+                // word), or a chip in it would draw past its bounds when a
                 // text beside it wraps.
-                style.min_size.width = length(0.0);
-            } else if wide && !matches!(n, UiNode::Column { .. } | UiNode::Container { .. }) {
+                if !matches!(n, UiNode::Container { .. }) {
+                    style.min_size.width = length(0.0);
+                }
+            } else if wide
+                && !controls_row(n)
+                && !matches!(n, UiNode::Column { .. } | UiNode::Container { .. })
+            {
                 style.flex_grow = 1.0;
                 style.flex_shrink = 1.0;
                 style.flex_basis = length(0.0);
