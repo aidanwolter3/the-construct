@@ -41,12 +41,30 @@ async fn page(State(site): State<Arc<Site>>) -> Response {
 
 async fn searx(
     State(site): State<Arc<Site>>,
+    headers: axum::http::HeaderMap,
     axum::extract::Query(q): axum::extract::Query<std::collections::HashMap<String, String>>,
 ) -> Response {
+    let host = headers
+        .get("host")
+        .and_then(|h| h.to_str().ok())
+        .unwrap_or("")
+        .to_owned();
     site.searches
         .lock()
         .unwrap()
         .push(q.get("q").cloned().unwrap_or_default());
+    if q.get("categories").map(String::as_str) == Some("images") {
+        // A picture the shop has since removed, then one that loads.
+        return json!({"results": [
+            {"title": "Oxford shirt (old)", "url": "https://www.shop.example/p/oxford-old",
+             "img_src": format!("http://{host}/img/gone.jpg")},
+            {"title": "Oxford shirt", "url": "https://www.shop.example/p/oxford",
+             "img_src": format!("http://{host}/img/oxford.jpg"),
+             "thumbnail_src": format!("http://{host}/img/oxford-small.jpg")},
+        ]})
+        .to_string()
+        .into_response();
+    }
     json!({"results": [
         {"title": "Paper Micro-Filters", "url": "https://shop.example/filters", "content": "350 count, official store"},
         {"title": "Filters at Target", "url": "https://target.example/p/filters", "content": "same day pickup"},
@@ -59,6 +77,14 @@ async fn serve(site: Arc<Site>) -> String {
     let app = Router::new()
         .route("/page", get(page))
         .route("/search", get(searx))
+        .route(
+            "/img/oxford.jpg",
+            get(|| async { ([("content-type", "image/jpeg")], vec![0xFFu8, 0xD8, 0xFF]) }),
+        )
+        .route(
+            "/img/gone.jpg",
+            get(|| async { (StatusCode::NOT_FOUND, "gone") }),
+        )
         .with_state(site);
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
@@ -484,4 +510,141 @@ async fn agent_fills_search_with_the_pods_own_tools_when_web_search_is_plugged()
             .contains("https://shop.example/filters"),
         "{result}"
     );
+}
+
+/// Store the web_search jack's config directly (a local http SearXNG, which
+/// plug_jack refuses).
+fn plug_search(pod: &Pod, config: Value) {
+    pod.store()
+        .with_conn(|c| {
+            c.execute(
+                "INSERT INTO jacks (id, plugged, config, secrets, updated_at) VALUES ('web_search', 1, ?1, '{}', 0)
+                 ON CONFLICT (id) DO UPDATE SET plugged = 1, config = excluded.config",
+                [config.to_string()],
+            )
+        })
+        .unwrap();
+}
+
+#[tokio::test]
+async fn image_rows_are_filled_from_the_first_picture_with_no_model() {
+    let site = Arc::new(Site::default());
+    let base = serve(site.clone()).await;
+    let fake = Arc::new(Fake::default());
+    let pod = pod_with(fake.clone());
+    let fields = json!([
+        {"name": "title", "type": "text"},
+        {"name": "image_url", "type": "text", "optional": true},
+        {"name": "shop", "type": "text", "optional": true}]);
+    // The map names parts of an image result, and images needs query_field.
+    let (err, e) = tool(
+        &pod,
+        "define_collection",
+        json!({"name": "style", "fields": fields,
+        "fillers": [{"kind": "fetch", "query_field": "title", "extract": "images",
+                     "map": {"image_url": "src"}}]}),
+    )
+    .await;
+    assert!(
+        err && e.to_string().contains("not part of an image result"),
+        "{e}"
+    );
+    let (err, e) = tool(
+        &pod,
+        "define_collection",
+        json!({"name": "style", "fields": fields,
+        "fillers": [{"kind": "fetch", "url": format!("{base}/page"), "extract": "images",
+                     "map": {"image_url": "image"}}]}),
+    )
+    .await;
+    assert!(err && e.to_string().contains("query_field"), "{e}");
+
+    ok(
+        &pod,
+        "define_collection",
+        json!({"name": "style", "fields": fields,
+        "fillers": [{"kind": "fetch", "query_field": "title", "extract": "images",
+                     "map": {"image_url": "image", "shop": "source"}}]}),
+    )
+    .await;
+    settle(&pod, "style").await;
+    let d = ok(&pod, "describe_collection", json!({"collection": "style"})).await;
+    let filler = &d["definition"]["fillers"][0];
+    assert_eq!(filler["extract"], "images");
+    assert_eq!(filler["map"]["image_url"], "image");
+    create(&pod, "style", json!({"title": "Oxford shirt, blue"})).await;
+    let f = filler_of(&pod, "style").await;
+
+    // Without the web_search jack it says which jack it needs.
+    match fill::fill(&pod, "style", &f, false).await {
+        Outcome::Failed(e) => assert!(e.contains("web_search"), "{e}"),
+        other => panic!("{other:?}"),
+    }
+    // DuckDuckGo has no image search.
+    plug_search(&pod, json!({"provider": "duckduckgo"}));
+    match fill::fill(&pod, "style", &f, false).await {
+        Outcome::Failed(e) => assert!(e.contains("no image search"), "{e}"),
+        other => panic!("{other:?}"),
+    }
+
+    plug_search(&pod, json!({"provider": "searxng", "base_url": base}));
+    let out = fill::fill(&pod, "style", &f, false).await;
+    assert!(matches!(out, Outcome::Filled { items: 1, .. }), "{out:?}");
+    let r = rows(&pod, "style").await;
+    // The first picture is gone: the next one that loads fills the row.
+    assert_eq!(r[0]["image_url"], format!("{base}/img/oxford.jpg"));
+    assert_eq!(r[0]["shop"], "shop.example");
+    assert_eq!(
+        site.searches.lock().unwrap().as_slice(),
+        ["oxford shirt, blue"]
+    );
+    // No model was asked.
+    assert!(fake.picks.lock().unwrap().is_empty());
+    assert_eq!(*fake.pages.lock().unwrap(), 0);
+    // Once: the next fill doesn't search again; a new row is searched.
+    fill::fill(&pod, "style", &f, false).await;
+    assert_eq!(site.searches.lock().unwrap().len(), 1);
+    create(&pod, "style", json!({"title": "Chore coat"})).await;
+    fill::fill(&pod, "style", &f, false).await;
+    assert_eq!(site.searches.lock().unwrap().len(), 2);
+}
+
+#[tokio::test]
+async fn a_capped_fill_takes_the_rows_waiting_longest() {
+    let site = Arc::new(Site::default());
+    let base = serve(site.clone()).await;
+    let caps = Caps {
+        fill_urls: 1,
+        ..Caps::default()
+    };
+    let adapter = CollectionsAdapter::with_caps(caps)
+        .with_private_hosts(true)
+        .with_agent(None);
+    let pod: Pod = Arc::new(AppState::in_memory(vec![Arc::new(adapter)]));
+    pod.store()
+        .create_pinned_session(&session_hash("pod"))
+        .unwrap();
+    pod.store().create_session(&session_hash("phone")).unwrap();
+    plug_search(&pod, json!({"provider": "searxng", "base_url": base}));
+    ok(
+        &pod,
+        "define_collection",
+        json!({"name": "style", "fields": [
+        {"name": "title", "type": "text"},
+        {"name": "image_url", "type": "text", "optional": true}],
+        "fillers": [{"kind": "fetch", "query_field": "title", "extract": "images",
+                     "map": {"image_url": "image"}}]}),
+    )
+    .await;
+    settle(&pod, "style").await;
+    for t in ["Oxford shirt", "Chore coat", "Wool socks"] {
+        create(&pod, "style", json!({"title": t})).await;
+    }
+    let f = filler_of(&pod, "style").await;
+    let filled = |r: &[Value]| r.iter().filter(|x| !x["image_url"].is_null()).count();
+    // One row a fill, even forced: each fill takes a row not filled yet.
+    for n in 1..=3 {
+        fill::fill(&pod, "style", &f, true).await;
+        assert_eq!(filled(&rows(&pod, "style").await), n);
+    }
 }

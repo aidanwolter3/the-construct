@@ -15,7 +15,9 @@
 
 use std::collections::BTreeSet;
 
-use crate::{ActionIntent, Align, Position, PresentationMode, TextStyle, UiNode, WhereClause};
+use crate::{
+    ActionIntent, Align, Justify, Position, PresentationMode, TextStyle, UiNode, WhereClause,
+};
 
 include!(concat!(env!("OUT_DIR"), "/features.rs"));
 
@@ -243,16 +245,22 @@ fn node_features(node: &UiNode, out: &mut BTreeSet<&'static str>) {
                 add(feature::TEXT_FIELD_SECRET);
             }
         }
-        UiNode::Row { align, .. } => {
+        UiNode::Row { align, justify, .. } => {
             add(feature::ROW);
             if align.is_some() {
                 add(feature::ALIGN);
             }
+            if *justify != Justify::Start {
+                add(feature::JUSTIFY);
+            }
         }
-        UiNode::Column { align, .. } => {
+        UiNode::Column { align, justify, .. } => {
             add(feature::COLUMN);
             if *align != Align::Start {
                 add(feature::ALIGN);
+            }
+            if *justify != Justify::Start {
+                add(feature::JUSTIFY);
             }
         }
         UiNode::Spacer { .. } => add(feature::SPACER),

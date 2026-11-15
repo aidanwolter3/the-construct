@@ -42,6 +42,8 @@ pub fn default_bundle(workspace: &str) -> Option<&'static str> {
         KITCHEN => "custom_kitchen_bundle.json",
         "swipe_deck" => "swipe_deck_bundle.json",
         "week_sessions" => "week_sessions_bundle.json",
+        "tiles_home" => "tiles_home_bundle.json",
+        "tiles_priorities" => "tiles_priorities_bundle.json",
         _ => return None,
     })
 }

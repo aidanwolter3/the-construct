@@ -192,3 +192,23 @@ fn a_session_unlocks_at_the_minute_it_is_over() {
     );
     assert_ok(&results);
 }
+
+#[test]
+fn a_home_embeds_a_whole_layout_and_centres_its_tiles() {
+    let (mut runner, results) = run(
+        "tiles_home",
+        "scroll-to Photos; assert-text Read more; assert-text Everything else",
+        &out_dir("tiles-home"),
+    );
+    assert_ok(&results);
+    let scene = runner.session.scene().unwrap();
+    // The embedded layout ran its whole height: its last card sits above
+    // the section after it.
+    let text = |t: &str| scene.find_text(t).unwrap().bounds;
+    assert!(text("Read more")[1] < text("Everything else")[1]);
+    // The tiles are centred on the phone: as much room left as right.
+    let tile = |t: &str| scene.find_node(&format!("tile:{t}")).unwrap().bounds;
+    let (first, last) = (tile("Calendar"), tile("Photos"));
+    let (left, right) = (first[0], 390.0 - (last[0] + last[2]));
+    assert!((left - right).abs() < 0.5, "{left} {right}");
+}
