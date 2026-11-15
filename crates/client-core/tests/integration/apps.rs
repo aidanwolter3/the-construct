@@ -542,6 +542,12 @@ fn leaving_the_pod_forgets_the_other_layouts_it_opened() {
     });
     wait_until("the other layout cached", || cached(&id));
 
+    // Stop the pod first: leaving refetches home without the session, and
+    // this open test pod would answer that with the same home, written to
+    // the cache again (what a pod shows a caller without a session is public:
+    // `auth::forgetting_the_session_drops_a_home_fetch_still_in_flight`
+    // covers that answer).
+    drop(p);
     e.forget_session();
     assert_eq!(parse(&e.snapshot().layouts_json), json!({}));
     assert!(!cached(&id), "its cached copy is gone");
