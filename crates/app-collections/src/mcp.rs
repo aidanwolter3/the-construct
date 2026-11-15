@@ -118,7 +118,7 @@ pub fn tools() -> Vec<Value> {
                     "properties": { "field": { "type": "string" }, "equals": { "type": ["string", "number", "boolean"] } },
                     "required": ["field", "equals"] } }] } }, "required": ["kind"] });
     let compute = json!({
-        "description": "The pod computes the value from the row's other fields (not from its other computed fields; a lookup or count may read computed fields of the collection it reads), again whenever they change; a value written by hand stays until they change (for a lookup or count, also until the rows it reads change). One kind, or a list of kinds tried in order (the first with an answer wins; a model is last). kind \"lookup\": {kind, from: field, collection, key, value, match?: exact (the default; ignores case and spacing) | contains (the key's whole words, ignoring case) | regex (case-insensitive, at most 200 characters; an invalid one is skipped and listed by describe_collection), learn?}: the value field of the row of another collection whose key (a text field) matches this row's from field, the longest matching key winning, then the oldest row (deleted rows never match); value may be \"id\" (the only system name allowed), which answers the matched row's id as text (the field must be text; no learn), so a button can act on that row (e.g. delete it); evaluated in the write, and live: when a row of that collection is added, changed (its key or value), deleted or restored, the rows whose from matched its key before or after are computed again at once. learn: true adds a rule (key: the input, lowercase with spaces collapsed; for match regex, that text escaped and anchored) when a later kind (the model) answers, and a hand edit of the field adds or changes that rule. Example: [{kind: \"lookup\", from: \"name\", collection: \"section_rules\", key: \"pattern\", value: \"section\", match: \"contains\", learn: true}, {kind: \"model\", from: \"name\", prompt: \"...\"}]. A lookup through a ref: {kind: \"lookup\", via: <a ref field of this collection>, value: <a field of the collection it points at, or \"id\">} (no from, collection, key, match or learn): the value of the row the ref points at (empty while the ref is empty or that row is deleted; it comes back on restore); the field's type is the value's type (or text); live: computed again when the ref changes and when that row's value changes, is deleted or restored. Example: recipe_lines.favorite = {kind: \"lookup\", via: \"meal\", value: \"favorite\"}. kind \"rollup\": {kind, collection, via, op, field?, where?: [{field, equals}]}: aggregates the live rows of another collection whose ref field via points at this row and that match every condition (as count's where; conditions may name computed fields of that collection, e.g. a lookup through a ref): op count (a number field: how many), any (a bool field: whether there is one), sum (field: a number field into a number field, or a quantity field into a quantity field; quantities of one dimension convert and add, keeping the units written: one unit stays (4 tbsp + 2 tbsp = 6 tbsp), several make one amount of the largest when a plain fraction (1/2 cup + 2 tbsp = 5/8 cup), else stay apart (1 cup + 3 tbsp); other units stay separate parts, e.g. 2 cups + 3 cloves; text that didn't parse as a quantity is left out), min or max (field: a number field, into a number field), list (field: any field, into a text field: the distinct values as text in row order, joined by \", \"). With no rows: count 0, any false, a number sum 0, the others empty (the field's default). The field's only kind; live (computed again when those rows are added, deleted, restored or change their via, field or a where field). Prefer it to count for new fields. Examples: ingredients.favorite_count = {kind: \"rollup\", collection: \"recipe_lines\", via: \"ingredient\", op: \"count\", where: [{field: \"favorite\", equals: true}]}; groceries.total = {kind: \"rollup\", collection: \"grocery_entries\", via: \"grocery\", op: \"sum\", field: \"quantity\"}. kind \"count\": {kind, from: field, collection, key, where?: [{field, equals}]}: the number of live rows of another collection whose key equals this row's from field (ignoring case and spacing) and that match every condition (a field of that collection, computed ones too, whose value as text equals equals: \"true\", \"false\", a number or text; not blank); a number field's only kind; live like a lookup (computed again when those rows are added, deleted, restored or change their key or a where field, and when from changes). Example: {kind: \"count\", from: \"name\", collection: \"meal_ingredients\", key: \"item\", where: [{field: \"favorite\", equals: true}]}. A change cascades through lookups and counts (a few levels deep; a cycle stops). kind \"expr\": {kind, expr}, e.g. \"entity.quantity ? entity.name + \\\" (\\\" + entity.quantity + \\\")\\\" : entity.name\" (entity.<field>, entity.id: the row's own id, JSON literals, + joins text or adds numbers, -, !, c ? a : b, parentheses; an empty value is \"\" or 0 and false in a condition), evaluated in the write. kind \"model\": {kind, from: field or [fields], prompt}, e.g. {from: \"name\", prompt: \"Which grocery store section is this item in?\"}: a model answers in the background (a choice: one of its options; text: trimmed), each input once; a value set by hand is remembered as the answer for that input. Needs optional or a default (what the row reads until computed). null: stop computing.",
+        "description": "The pod computes the value from the row's other fields (not from its other computed fields; a lookup or count may read computed fields of the collection it reads), again whenever they change; a value written by hand stays until they change (for a lookup or count, also until the rows it reads change). One kind, or a list of kinds tried in order (the first with an answer wins; a model is last). kind \"lookup\": {kind, from: field, collection, key, value, match?: exact (the default; ignores case and spacing) | contains (the key's whole words, ignoring case) | regex (case-insensitive, at most 200 characters; an invalid one is skipped and listed by describe_collection), learn?}: the value field of the row of another collection whose key (a text field) matches this row's from field, the longest matching key winning, then the oldest row (deleted rows never match); value may be \"id\" (the only system name allowed), which answers the matched row's id as text (the field must be text; no learn), so a button can act on that row (e.g. delete it); evaluated in the write, and live: when a row of that collection is added, changed (its key or value), deleted or restored, the rows whose from matched its key before or after are computed again at once. learn: true adds a rule (key: the input, lowercase with spaces collapsed; for match regex, that text escaped and anchored) when a later kind (the model) answers, and a hand edit of the field adds or changes that rule; a collection a learning lookup names that does not exist yet is made (key: a text field, value: of this field's type and options). Example: [{kind: \"lookup\", from: \"name\", collection: \"section_rules\", key: \"pattern\", value: \"section\", match: \"contains\", learn: true}, {kind: \"model\", from: \"name\", prompt: \"...\"}]. A lookup through a ref: {kind: \"lookup\", via: <a ref field of this collection>, value: <a field of the collection it points at, or \"id\">} (no from, collection, key, match or learn): the value of the row the ref points at (empty while the ref is empty or that row is deleted; it comes back on restore); the field's type is the value's type (or text); live: computed again when the ref changes and when that row's value changes, is deleted or restored. Example: recipe_lines.favorite = {kind: \"lookup\", via: \"meal\", value: \"favorite\"}. kind \"rollup\": {kind, collection, via, op, field?, where?: [{field, equals}]}: aggregates the live rows of another collection whose ref field via points at this row and that match every condition (as count's where; conditions may name computed fields of that collection, e.g. a lookup through a ref): op count (a number field: how many), any (a bool field: whether there is one), sum (field: a number field into a number field, or a quantity field into a quantity field; quantities of one dimension convert and add, keeping the units written: one unit stays (4 tbsp + 2 tbsp = 6 tbsp), several make one amount of the largest when a plain fraction (1/2 cup + 2 tbsp = 5/8 cup), else stay apart (1 cup + 3 tbsp); other units stay separate parts, e.g. 2 cups + 3 cloves; text that didn't parse as a quantity is left out), min or max (field: a number field, into a number field), list (field: any field, into a text field: the distinct values as text in row order, joined by \", \"). With no rows: count 0, any false, a number sum 0, the others empty (the field's default). The field's only kind; live (computed again when those rows are added, deleted, restored or change their via, field or a where field). Prefer it to count for new fields. Examples: ingredients.favorite_count = {kind: \"rollup\", collection: \"recipe_lines\", via: \"ingredient\", op: \"count\", where: [{field: \"favorite\", equals: true}]}; groceries.total = {kind: \"rollup\", collection: \"grocery_entries\", via: \"grocery\", op: \"sum\", field: \"quantity\"}. kind \"count\": {kind, from: field, collection, key, where?: [{field, equals}]}: the number of live rows of another collection whose key equals this row's from field (ignoring case and spacing) and that match every condition (a field of that collection, computed ones too, whose value as text equals equals: \"true\", \"false\", a number or text; not blank); a number field's only kind; live like a lookup (computed again when those rows are added, deleted, restored or change their key or a where field, and when from changes). Example: {kind: \"count\", from: \"name\", collection: \"meal_ingredients\", key: \"item\", where: [{field: \"favorite\", equals: true}]}. A change cascades through lookups and counts (a few levels deep; a cycle stops). kind \"expr\": {kind, expr}, e.g. \"entity.quantity ? entity.name + \\\" (\\\" + entity.quantity + \\\")\\\" : entity.name\" (entity.<field>, entity.id: the row's own id, JSON literals, + joins text or adds numbers, -, !, c ? a : b, parentheses; an empty value is \"\" or 0 and false in a condition), evaluated in the write. kind \"model\": {kind, from: field or [fields], prompt}, e.g. {from: \"name\", prompt: \"Which grocery store section is this item in?\"}: a model answers in the background (a choice: one of its options; text: trimmed), each input once, many inputs to a call; an answer that fails is asked again hourly, a few times (describe_collection counts computed_answers[].failed; recompute_field starts again); a value set by hand is remembered as the answer for that input. Needs optional or a default (what the row reads until computed). null: stop computing.",
         "anyOf": [kind, { "type": "array", "items": kind }, { "type": "null" }] });
     let field = json!({ "type": "object", "description": "{name, type: text|number|bool|date|datetime|choice|ref|quantity, options? (choice), collection? (ref), unique?, optional?, default?, compute?}. type \"ref\" with collection: <name>: holds the id of a live row of that collection; a write gives the id (a row's id field) or {\"<a unique field of that collection>\": value} (e.g. {\"name\": \"Chicken broth\"}, matched ignoring case and spacing), and an id that names no live row is refused; a ref has no default; served as the id; a layout reads the row's fields with ${collections://<collection>/$item.<ref>#<field>} (that collection must be one of the layout's feeds); when the row is deleted the ref keeps its id (reading through it shows nothing) and a restore heals it. unique: true (text or ref, not computed): no two live rows share a value (text ignoring case and spacing); a create, update or restore that would is refused, and making a field unique fails while rows share a value (the error lists them). type \"quantity\": an amount and a unit; write text (\"1 1/2 cups\", \"2 tbsp\", \"3\", \"1 (14 oz) can\", \"1/4 cup plus 2 tbsp\", \"a pinch\", \"2-3 cloves\" (the upper end), \"½ cup\"), a number (a count) or {amount, unit} (or a list of those); it is stored as {amount, unit} (unit canonical: tsp, tbsp, fl oz, cup, pint, quart, ml, l, g, kg, oz, lb, clove, can, slice, bunch, large, medium, small, piece, pinch, dash, \"\" for a plain count, or any other single word, singular), or kept as the text when it doesn't parse (\"to taste\": shown as is, left out of sums; describe_collection counts these); served also as <name>_text (\"1 1/2 cups\", \"2 Tbsp\", \"2 cups + 3 cloves\"; one spelling per unit, tablespoons always Tbsp): bind that to show it.",
         "properties": { "name": { "type": "string" }, "type": { "type": "string", "enum": model::Kind::ALL },
@@ -409,16 +409,19 @@ async fn define(pod: &Pod, adapter: &CollectionsAdapter, args: &Value) -> Result
         descending: args["descending"].as_bool().unwrap_or(false),
     };
     // After every field exists: a compute may read a later one.
-    let others = pod
+    let mut others = pod
         .blocking(|s| s.with_conn(db::defs_by_name))
         .await
         .map_err(db_err)?;
+    let mut created = Vec::new();
     for (i, spec) in specs.iter().enumerate() {
-        model::set_compute(
+        model::set_compute_creating(
             &mut def,
             &format!("f{}", i + 1),
             spec.get("compute"),
-            &others,
+            &mut others,
+            &mut created,
+            caps.text_chars,
         )
         .map_err(|e| invalid(i, e))?;
     }
@@ -468,6 +471,7 @@ async fn define(pod: &Pod, adapter: &CollectionsAdapter, args: &Value) -> Result
         .map_err(|e| json!({ "error": "invalid_definition", "detail": e, "status": 400 }))?;
     let note = note_arg(args, "Created");
     let stored = def.clone();
+    let rules = created.clone();
     let version = refusable(pod, move |tx| {
         if db::deleted_at(tx, &stored.name)?.is_some() {
             return Ok(Err(
@@ -488,12 +492,16 @@ async fn define(pod: &Pod, adapter: &CollectionsAdapter, args: &Value) -> Result
                 format!("a pod has at most {} collections", caps.collections),
             )));
         }
+        let now = pod_core::util::now_secs();
+        if let Err(e) = create_rules(tx, &rules, caps, now)? {
+            return Ok(Err(e));
+        }
         Ok(Ok(db::append_def(
             tx,
             &stored,
             &note,
             custom::AUTHOR_CLAUDE,
-            pod_core::util::now_secs(),
+            now,
         )?))
     })
     .await?;
@@ -502,6 +510,9 @@ async fn define(pod: &Pod, adapter: &CollectionsAdapter, args: &Value) -> Result
         "definition": def.describe(pod_core::util::now_secs(), KEEP_SECS, &with_new),
         "next": format!("Make an app with create_app and feeds [[\"collections\", \"{name}\"]]; describe_collection has layout snippets."),
     });
+    if !created.is_empty() {
+        out["created_rules"] = json!(created.iter().map(|d| &d.name).collect::<Vec<_>>());
+    }
     if !def.fillers.is_empty() {
         crate::fill::spawn(pod, &name, None, true);
         out["filling"] = json!("a first fill started; collections_status shows how it went");
@@ -614,10 +625,26 @@ async fn describe(pod: &Pod, args: &Value) -> Result<Value, Value> {
                     .into_iter()
                     .map(|(f, n)| json!({ "field": def.by_id(&f).map_or(f.clone(), |x| x.name.clone()), "values": n }))
                     .collect();
-                let computed: Vec<Value> = db::computed_counts(c, &lookup)?
+                let failures = db::failure_counts(c, &lookup)?;
+                let mut computed: Vec<Value> = db::computed_counts(c, &lookup)?
                     .into_iter()
                     .filter_map(|(f, n)| def.by_id(&f).filter(|x| x.computed()).map(|x| json!({ "field": x.name, "answers": n })))
                     .collect();
+                // Rows whose model answer failed: retried, or given up on.
+                for (f, retrying, gave_up) in failures {
+                    let Some(x) = def.by_id(&f).filter(|x| x.computed()) else { continue };
+                    let entry = match computed.iter_mut().find(|e| e["field"] == x.name.as_str()) {
+                        Some(e) => e,
+                        None => {
+                            computed.push(json!({ "field": x.name, "answers": 0 }));
+                            computed.last_mut().expect("pushed")
+                        }
+                    };
+                    entry["failed"] = json!({ "retrying": retrying, "gave_up": gave_up });
+                    if gave_up > 0 {
+                        entry["fix"] = json!("apply_change {op: recompute_field} asks the model again for every row still empty");
+                    }
+                }
                 let lookups = crate::lookup::report(c, &def)?;
                 let quantities = quantity_report(c, &def)?;
                 let lookups = (lookups, quantities);
@@ -1153,6 +1180,9 @@ async fn commit(
     let mut new_defs: HashMap<String, Definition> =
         defs.into_iter().map(|(_, d)| (d.name.clone(), d)).collect();
     new_defs.insert(name.to_owned(), planned.def.clone());
+    for d in &planned.created {
+        new_defs.insert(d.name.clone(), d.clone());
+    }
     // Every lookup (into this collection too) against the new definitions.
     for d in new_defs.values() {
         model::check_lookups(d, &new_defs)
@@ -1191,6 +1221,7 @@ async fn commit(
     let to_recompute = planned.recompute.clone();
     let coll = name.to_owned();
     let others = new_defs.clone();
+    let created = planned.created.clone();
     let (version, conversions, versions, jobs) = refusable(pod, move |tx| {
         let current = db::latest_def(tx, &coll)?.map(|(v, _)| v);
         if current != Some(base) {
@@ -1219,7 +1250,14 @@ async fn commit(
             return Ok(Err(json!({ "error": "stale_base", "status": 409,
                 "detail": "another collection changed meanwhile; apply the change again" })));
         }
+        if let Err(e) = create_rules(tx, &created, caps, now)? {
+            return Ok(Err(e));
+        }
         let mut jobs = Vec::new();
+        // A new compute, or one asked again, starts its attempts afresh.
+        for id in to_compute.iter().chain(&to_recompute) {
+            db::clear_field_failures(tx, &coll, id)?;
+        }
         for id in &to_compute {
             jobs.extend(crate::compute::backfill(tx, &def, id, false, caps.rows, now, caps)?);
         }
@@ -1251,7 +1289,53 @@ async fn commit(
         "apps": versions.iter().map(|(a, v)| json!({ "app": a, "version": v })).collect::<Vec<_>>(),
         "definition": planned.def.describe(pod_core::util::now_secs(), KEEP_SECS, &new_defs),
         "computing_rows": computing,
+        "created_rules": planned.created.iter().map(|d| &d.name).collect::<Vec<_>>(),
     }))
+}
+
+/// Store the rules collections `created` that a learning lookup named
+/// (each new, unless an identical one exists already), inside `tx`.
+/// `Err`: the refusal body.
+fn create_rules(
+    tx: &rusqlite::Transaction<'_>,
+    created: &[Definition],
+    caps: crate::Caps,
+    now: i64,
+) -> rusqlite::Result<Result<(), Value>> {
+    for d in created {
+        if db::deleted_at(tx, &d.name)?.is_some() {
+            return Ok(Err(
+                json!({ "error": "collection_deleted", "collection": d.name, "status": 409,
+                "detail": format!("a lookup learns into '{}', a deleted collection: restore_collection brings it back, or name another", d.name) }),
+            ));
+        }
+        match db::latest_def(tx, &d.name)? {
+            Some((_, existing)) if existing == *d => continue,
+            Some(_) => {
+                return Ok(Err(json!({ "error": "stale_base", "status": 409,
+                    "detail": format!("collection '{}' was made meanwhile; apply the change again", d.name) })));
+            }
+            None => {}
+        }
+        if db::all_defs(tx)?.len() >= caps.collections {
+            return Ok(Err(fail(
+                StatusCode::CONFLICT,
+                "too_many_collections",
+                format!(
+                    "a pod has at most {} collections (the rules collection '{}' would be one more)",
+                    caps.collections, d.name
+                ),
+            )));
+        }
+        db::append_def(
+            tx,
+            d,
+            "Rules learned for a model field",
+            custom::AUTHOR_CLAUDE,
+            now,
+        )?;
+    }
+    Ok(Ok(()))
 }
 
 async fn current(pod: &Pod, name: &str) -> Result<(i64, Definition), Value> {
