@@ -141,13 +141,15 @@ fn an_inline_layout_in_a_scroll_is_as_tall_as_its_content() {
 }
 
 #[test]
-fn an_inline_layout_in_a_short_scroll_takes_the_room_left() {
+fn an_inline_layout_in_a_short_scroll_leaves_no_gap() {
     let s = embedded(
         json!({ "type": "core://Page", "id": "inner", "root": {
         "type": "core://Column", "children": [card("a")] } }),
         0.0,
     );
-    // Room to spare: the embed fills it, so "After" sits at the bottom.
+    // Room to spare: the embed stays as tall as its card, and "After"
+    // follows it, on any screen height.
+    let a = s.find_node("a").unwrap().bounds;
     let after = s.find_text("After").unwrap().bounds;
-    assert!(close(after[1] + after[3], 400.0), "{after:?}");
+    assert!(close(after[1], a[1] + a[3]), "{a:?} {after:?}");
 }

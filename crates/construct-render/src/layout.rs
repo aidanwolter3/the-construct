@@ -215,8 +215,9 @@ struct B<'a> {
     path: String,
     depth: usize,
     /// Inside a scrolling view's content, where heights follow the content:
-    /// a child that fills height takes the room short content leaves and is
-    /// as tall as its content otherwise ([`placed`]).
+    /// an inline layout is as tall as its content, and another child that
+    /// fills height takes the room short content leaves and is as tall as
+    /// its content otherwise ([`placed`]).
     in_scroll: bool,
 }
 
@@ -625,7 +626,10 @@ fn fills_width(n: &UiNode) -> bool {
 }
 
 /// Whether a node grows to the height its column leaves.
-fn fills_height(n: &UiNode) -> bool {
+/// In a scrolling view's content (`in_scroll`) an inline layout is as tall
+/// as its content and never grows.
+fn fills_height_in(n: &UiNode, in_scroll: bool) -> bool {
+    let fills = |c: &UiNode| fills_height_in(c, in_scroll);
     match n {
         UiNode::Scroll { .. }
         | UiNode::Dock { .. }
@@ -637,20 +641,20 @@ fn fills_height(n: &UiNode) -> bool {
             height_dp,
             content,
             ..
-        } => *fill || (height_dp.is_none() && fills_height(content)),
+        } => *fill || (height_dp.is_none() && fills(content)),
         UiNode::Layout {
             height_dp: None, ..
-        } => true,
+        } => !in_scroll,
         UiNode::Tappable { content, .. }
         | UiNode::Gesture { content, .. }
         | UiNode::SwipeCard { content, .. }
-        | UiNode::Conditional { content, .. } => fills_height(content),
+        | UiNode::Conditional { content, .. } => fills(content),
         // A column placing its children down it (`justify`) takes the
         // height it is given.
         UiNode::Column {
             justify, children, ..
-        } => *justify != Justify::Start || children.iter().any(fills_height),
-        UiNode::Row { children, .. } => children.iter().any(fills_height),
+        } => *justify != Justify::Start || children.iter().any(fills),
+        UiNode::Row { children, .. } => children.iter().any(fills),
         _ => false,
     }
 }
@@ -680,7 +684,7 @@ fn row_flexible(n: &UiNode) -> bool {
 /// that is inside a scrolling view's content.
 fn placed(mut style: Style, n: &UiNode, axis: Axis, in_scroll: bool) -> Style {
     let wide = fills_width(n);
-    let tall = fills_height(n);
+    let tall = fills_height_in(n, in_scroll);
     match axis {
         Axis::Column => {
             style.flex_shrink = 0.0;
@@ -689,7 +693,7 @@ fn placed(mut style: Style, n: &UiNode, axis: Axis, in_scroll: bool) -> Style {
             }
             if tall && in_scroll {
                 // No height to share: at least the room left, else its
-                // content's (an inline layout, a filling box).
+                // content's (a filling box).
                 style.flex_grow = 1.0;
             } else if tall {
                 style.flex_grow = 1.0;

@@ -19,12 +19,13 @@ Decision:
   reach). A column with `justify` fills the height it is given (as a filling child does), since a column only as
   tall as its children has nothing to place them in. An unsized `core://Spacer` in the row still takes the room
   first.
-- **Inside a scroll's content, filling children take at least the room short content leaves and otherwise their
-  content's height.** A scroll's content has no height to share: a child that fills height there (an inline layout
-  without `height_dp`, a filling box, a column with `justify`) grows into what is left when the content is shorter
-  than the view, as before, and is as tall as its own content when it is longer, instead of being squeezed into the
-  room left. A `height_dp` (on a box or a layout) gives its content a fixed height again. Outside a scroll nothing
-  changes: a layout as a workspace's one slot still fills the screen.
+- **Inside a scroll's content, an inline layout is exactly as tall as its content**, on any screen: never squeezed
+  into the room the screen has left (which clipped it on a long page), and never stretched into it either (which
+  left a gap under it on a short one). Other children that fill height there (a filling box, a column with
+  `justify`) have no height to share either: they take at least the room short content leaves, as before, and their
+  own content's height when it is longer, instead of being squeezed. A `height_dp` (on a box or a layout) gives its
+  content a fixed height again. Outside a scroll nothing changes: a layout as a workspace's one slot still fills the
+  screen.
 
 `justify` is new vocabulary, so clients need a new build; a pod serves layouts using it only to clients that list the
 feature. The embed sizing is a renderer change only: older builds keep the old sizing, so a layout should keep its
