@@ -263,7 +263,10 @@ MCP tools: `collections_preview` (try a recipe without storing anything), `colle
 A pod's **jacks** are the abilities it is plugged into (decision [`jacks`](decisions/jacks.md)): `model` and `web`
 (switches, on by default), `web_search` (config: `provider` `brave` with the pod's own `api_key`, `searxng` with a
 `base_url` (`https://` on a public host name, never an IP address or an internal name), or `duckduckgo`), and
-accounts adapters declare: `pixelfed` and `agent_runner` (plugged by their own sign-in). Claude uses `list_jacks`, `plug_jack` and `unplug_jack`; `GET /v1/jacks` lists them. Secrets are sealed and
+accounts adapters declare: `pixelfed` and `agent_runner` (plugged by their own sign-in). Claude uses `list_jacks`, `plug_jack` and `unplug_jack`; `GET /v1/jacks` lists them. People plug them in the app
+too: Settings → Jacks lists each with its state, and a config jack's screen takes its provider and its key in a hidden
+field, sent straight to the pod (`GET /v1/jacks/screen`, `POST /v1/jacks/plug` and `/unplug`; decision
+[`jacks-in-settings`](decisions/jacks-in-settings.md)). Secrets are sealed and
 never shown back. The host can lock a jack off for a pod (`jack.<id> = locked` in `pod_settings`).
 
 ## The Events app

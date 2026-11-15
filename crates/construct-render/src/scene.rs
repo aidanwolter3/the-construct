@@ -184,6 +184,9 @@ pub struct FieldBox {
     pub size: f32,
     pub line_height: f32,
     pub max_length: Option<usize>,
+    /// Drawn as dots ([`crate::text::mask`]): carets and selections are
+    /// measured on the dots, Copy and Cut are off.
+    pub secret: bool,
 }
 
 impl Scene {

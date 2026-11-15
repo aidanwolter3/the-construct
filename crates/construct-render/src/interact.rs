@@ -816,6 +816,17 @@ impl Session {
         Some((v, e))
     }
 
+    /// Whether `field` is a secret text field (in the frame).
+    fn is_secret(&mut self, field: &str) -> bool {
+        if self.scene().is_err() {
+            return false;
+        }
+        self.scene
+            .as_ref()
+            .and_then(|s| s.fields.iter().find(|f| f.field == field))
+            .is_some_and(|f| f.secret)
+    }
+
     /// The field's maximum length (characters), from the frame.
     fn max_length(&mut self, field: &str) -> Option<usize> {
         self.scene().ok()?;
@@ -946,6 +957,10 @@ impl Session {
     /// The selected text (Copy, Ctrl+C); with `cut`, it is removed too.
     pub fn copy(&mut self, cut: bool) -> Option<String> {
         let (value, e) = self.editing()?;
+        // A secret never leaves its field.
+        if self.is_secret(&e.field) {
+            return None;
+        }
         let (lo, hi) = e.range();
         if lo == hi {
             return None;
@@ -977,6 +992,7 @@ impl Session {
     /// its value, selection and the word being composed.
     pub fn text_state(&mut self) -> Option<crate::ime::TextState> {
         let (value, e) = self.editing()?;
+        let field = e.field.clone();
         let composing = e
             .composing
             .filter(|&(a, b)| a < b && b <= value.len())
@@ -987,6 +1003,7 @@ impl Session {
             cursor: e.cursor,
             anchor: e.anchor,
             composing,
+            secret: self.is_secret(&field),
         })
     }
 
@@ -1041,6 +1058,28 @@ impl Session {
         out
     }
 
+    /// The caret stops of `value` drawn in field box `fb`: on its dots
+    /// when the field is secret, with the value's own bytes.
+    fn field_stops(
+        &mut self,
+        fb: &crate::scene::FieldBox,
+        value: &str,
+        ty: crate::style::Type,
+    ) -> Vec<crate::text::CaretStop> {
+        let width = Some(fb.rect[2] + 0.5);
+        if fb.secret {
+            let shown = crate::text::mask(value);
+            let stops = self
+                .builder
+                .text
+                .caret_stops(&shown, ty, width, self.viewport.scale);
+            return crate::text::unmask_stops(value, stops);
+        }
+        self.builder
+            .text
+            .caret_stops(value, ty, width, self.viewport.scale)
+    }
+
     /// The edit's caret stops in the frame, with the field's text box.
     fn caret_stops(
         &mut self,
@@ -1060,10 +1099,7 @@ impl Session {
             size: fb.size,
             line_height: fb.line_height,
         };
-        let stops =
-            self.builder
-                .text
-                .caret_stops(&value, ty, Some(fb.rect[2] + 0.5), self.viewport.scale);
+        let stops = self.field_stops(&fb, &value, ty);
         Some((fb, stops))
     }
 
@@ -2424,10 +2460,7 @@ impl Session {
             size: fb.size,
             line_height: fb.line_height,
         };
-        let stops =
-            self.builder
-                .text
-                .caret_stops(&value, ty, Some(fb.rect[2] + 0.5), self.viewport.scale);
+        let stops = self.field_stops(&fb, &value, ty);
         let (ox, oy) = (fb.rect[0], fb.rect[1]);
         let stop = |b: usize| {
             stops
@@ -2533,7 +2566,7 @@ impl Session {
             return;
         }
         let mut items: Vec<(&str, &str)> = Vec::new();
-        if e.selected() {
+        if e.selected() && !fb.secret {
             items.push(("Cut", "edit.cut"));
             items.push(("Copy", "edit.copy"));
         }

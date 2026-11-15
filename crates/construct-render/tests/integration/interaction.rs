@@ -618,3 +618,48 @@ fn a_fields_clear_button_empties_it_and_keeps_it_focused() {
     s.type_text("q", "bread");
     assert_eq!(s.form["q"], "bread");
 }
+
+#[test]
+fn a_secret_field_shows_dots_and_never_lets_its_text_out() {
+    let field = |secret: bool| -> protocol::UiNode {
+        serde_json::from_value(json!({ "type": "core://TextField", "field": "key",
+            "placeholder": "Paste the key", "secret": secret }))
+        .unwrap()
+    };
+    let mut s = Session::new("keys", field(true), Default::default(), Viewport::PHONE);
+    s.tap(&Target::Id("field:key".into())).unwrap();
+    s.type_text("key", "BSA-1é2");
+    assert_eq!(s.form["key"], "BSA-1é2");
+    let scene = s.scene().unwrap();
+    // Drawn and described as one dot per character, never the text.
+    let dots = construct_render::text::mask("BSA-1é2");
+    assert_eq!(dots.chars().count(), 7);
+    assert!(scene.texts().any(|t| t.text == dots));
+    assert!(!scene.texts().any(|t| t.text.contains("BSA")));
+    let node = scene.find_node("field:key").unwrap();
+    assert_eq!(node.text_content.as_deref(), Some(dots.as_str()));
+    assert_eq!(node.node_type, construct_render::layout::SECRET_FIELD_TYPE);
+    // No Copy or Cut, and the keyboard is a password one.
+    s.select_all();
+    assert_eq!(s.copy(false), None);
+    assert_eq!(s.copy(true), None);
+    assert_eq!(s.form["key"], "BSA-1é2");
+    let st = s.text_state().unwrap();
+    assert!(st.secret);
+    assert_eq!(
+        construct_render::ime::editor_kind(st.secret).0,
+        construct_render::ime::SECRET_INPUT_TYPE
+    );
+    // Typing on carries on at the end, past the non-ASCII character.
+    s.type_text("key", "BSA-1é2x");
+    assert_eq!(s.text_state().unwrap().cursor, "BSA-1é2x".len());
+
+    // The same field not secret shows its text and copies it.
+    let mut p = Session::new("keys", field(false), Default::default(), Viewport::PHONE);
+    p.tap(&Target::Id("field:key".into())).unwrap();
+    p.type_text("key", "soup");
+    assert!(p.scene().unwrap().texts().any(|t| t.text == "soup"));
+    p.select_all();
+    assert_eq!(p.copy(false).as_deref(), Some("soup"));
+    assert!(!p.text_state().unwrap().secret);
+}

@@ -11,7 +11,9 @@ use crate::source::{FeedSpec, SourceManifest};
 /// [`AppInfo::feeds`].
 pub const FEED: &str = "all";
 
-static FEEDS: &[FeedSpec] = &[FeedSpec {
+/// The feeds of a [`StaticAdapter`]'s default manifest (just [`FEED`]),
+/// for a [`StaticAdapter::with_manifest`] that adds to it.
+pub static FEEDS: &[FeedSpec] = &[FeedSpec {
     name: FEED,
     query_keys: &[],
     doc: "The app's fixed data.",

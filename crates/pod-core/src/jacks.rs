@@ -633,6 +633,129 @@ pub async fn unplug_tool(pod: &Pod, args: &Value) -> Result<Value, Value> {
     }
 }
 
+/// The entity URI of jack `id` in Settings' jacks screens.
+pub fn entity_uri(id: &str) -> String {
+    format!("jacks://{id}")
+}
+
+/// The query key of Settings' list of jacks.
+pub const SCREEN_QUERY: &str = "jacks";
+
+/// One jack as Settings draws it (`GET /v1/jacks/screen`): [`describe`]'s
+/// facts flattened into fields a layout can bind and switch on, with no
+/// secret's value, only whether it is set.
+pub fn screen_entity(j: &Value) -> Value {
+    let text = |k: &str| j[k].as_str().unwrap_or_default().to_owned();
+    let (state, kind) = (text("state"), text("kind"));
+    let detail = j["detail"].as_str();
+    let state_label = match (state.as_str(), detail) {
+        ("plugged", Some(d)) => format!("Plugged in · {d}"),
+        ("plugged", None) => "Plugged in".to_owned(),
+        ("locked", _) => "Locked off by the server".to_owned(),
+        _ => "Unplugged".to_owned(),
+    };
+    let mut e = json!({
+        "id": text("id"),
+        "title": text("title"),
+        "summary": text("summary"),
+        "kind": kind,
+        "state": state,
+        "state_label": state_label,
+        "plugged": state == "plugged",
+        "locked": state == "locked",
+        "is_switch": kind == "switch",
+        "is_config": kind == "config",
+        "is_account": kind == "account",
+        "can_plug": kind != "account" && state == "unplugged",
+        "can_unplug": kind != "account" && state == "plugged",
+    });
+    if let Some(how) = j["how"].as_str() {
+        e["how"] = json!(how);
+    }
+    for f in j["fields"].as_array().into_iter().flatten() {
+        let Some(name) = f["name"].as_str() else {
+            continue;
+        };
+        e[format!("has_{name}")] = json!(true);
+        e[format!("{name}_doc")] = f["doc"].clone();
+        if f["secret"] == true {
+            let set = f["set"] == true;
+            e[format!("{name}_set")] = json!(set);
+            e[format!("{name}_hint")] = json!(if set {
+                "Set. Type a new one to replace it"
+            } else {
+                "Not set"
+            });
+        } else if let Some(v) = f["value"].as_str() {
+            e[name] = json!(v);
+        }
+    }
+    e
+}
+
+/// `GET /v1/jacks/screen[?id=]`: the jacks as entities (`jacks://<id>`)
+/// and the `jacks` query, for Settings' jacks screens; with `id`, that one
+/// jack only.
+pub async fn screen(pod: &Pod, id: Option<&str>) -> Result<Value, Value> {
+    let jacks: Vec<Value> = match id {
+        Some(id) => match find(pod, id) {
+            Some((spec, adapter)) => vec![describe(pod, &spec, adapter).await],
+            None => return Err(unknown(pod, id)),
+        },
+        None => list(pod).await,
+    };
+    let mut entities = Map::new();
+    let mut uris = Vec::new();
+    for j in &jacks {
+        let uri = entity_uri(j["id"].as_str().unwrap_or_default());
+        entities.insert(uri.clone(), screen_entity(j));
+        uris.push(json!(uri));
+    }
+    let mut queries = Map::new();
+    if id.is_none() {
+        queries.insert(SCREEN_QUERY.into(), Value::Array(uris));
+    }
+    Ok(json!({ "entities": entities, "queries": queries }))
+}
+
+/// The app's plug (`POST /v1/jacks/plug {id, config?}`, from Settings): a
+/// form sends every field it has, blank or not, so blank values are
+/// dropped (a secret left blank keeps its stored value, a value left blank
+/// keeps the stored one) and so are names the jack doesn't take. Then
+/// [`plug_tool`].
+pub async fn plug_from_app(pod: &Pod, body: &Value) -> Result<Value, Value> {
+    let id = body["id"].as_str().unwrap_or("");
+    let Some((spec, _)) = find(pod, id) else {
+        return Err(unknown(pod, id));
+    };
+    let mut args = json!({ "id": id });
+    if let JackKind::Config { fields } = spec.kind {
+        let stored = config(pod.store(), id).unwrap_or_default();
+        let given = body["config"].as_object().cloned().unwrap_or_default();
+        let mut values = Map::new();
+        for f in fields {
+            let v = given
+                .get(f.name)
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|s| !s.is_empty());
+            match v {
+                Some(v) => {
+                    values.insert(f.name.into(), json!(v));
+                }
+                None if !f.secret => {
+                    if let Some(old) = stored.get(f.name).filter(|v| v.is_string()) {
+                        values.insert(f.name.into(), old.clone());
+                    }
+                }
+                None => {}
+            }
+        }
+        args["config"] = Value::Object(values);
+    }
+    plug_tool(pod, &args).await
+}
+
 fn unknown(pod: &Pod, id: &str) -> Value {
     let ids: Vec<&str> = all(pod).iter().map(|(j, _)| j.id).collect();
     json!({
