@@ -175,7 +175,8 @@ More on running them: [clients.md](clients.md); on the renderer: [rendering.md](
 ## Jacks, the web module and the agent module
 
 A pod's **jacks** (`pod_core::jacks`, decision `jacks`) are the abilities it is plugged into: the core's `model`,
-`web` and `web_search`, and adapters' accounts (`pixelfed`, `agent_runner`). Each is a switch, a config with sealed
+`web`, `web_search` and `mcp` (the MCP servers it is connected to, `pod_core::mcp_servers`, decision `mcp-jack`),
+and adapters' accounts (`pixelfed`, `agent_runner`). Each is a switch, a config with sealed
 secrets, or an account; the host can lock one off (temporary pods). Claude plugs them with MCP tools, people in Settings
 (decision `jacks-in-settings`). Every request to a website goes through the
 **web module** (`crates/web-extract`: block detection, one policy per host, search providers, the prompts for web

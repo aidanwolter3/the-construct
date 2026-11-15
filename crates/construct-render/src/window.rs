@@ -702,6 +702,9 @@ impl App {
         let t = Instant::now();
         s.gpu.queue.present(frame);
         stats.present = t.elapsed();
+        if let Some(p) = &self.platform {
+            p.frame_drawn(stats.work());
+        }
         let wants_next = flinging || self.controller.session.animating();
         if wants_next {
             s.window.request_redraw();
@@ -718,6 +721,9 @@ impl App {
         stats.raster = r.raster;
         stats.runs = r.runs;
         stats.quads = r.quads;
+        stats.prepare = r.prepare;
+        stats.submit = r.submit;
+        stats.layers = r.layers;
         let gesture = self.drag.is_some();
         if let Some(summary) = self.perf.end(stats, Instant::now(), wants_next, gesture) {
             let line = summary.line(&self.controller.session.showing(), self.refresh_hz());

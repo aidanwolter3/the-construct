@@ -1,0 +1,422 @@
+{
+ "note": "A made-up task's details: a header card and long notes in cards, for the scroll benchmark (bench.rs).",
+ "layout": {
+  "type": "core://Column",
+  "children": [
+   {
+    "type": "core://Row",
+    "children": [
+     {
+      "type": "core://Column",
+      "padding_h_dp": 16,
+      "padding_v_dp": 12,
+      "children": [
+       {
+        "style": "Headline",
+        "type": "core://Text",
+        "value_expr": "Task"
+       }
+      ]
+     }
+    ]
+   },
+   {
+    "type": "core://Scroll",
+    "id": "task_scroll",
+    "content": {
+     "type": "core://Column",
+     "padding_h_dp": 16,
+     "padding_v_dp": 8,
+     "spacing_dp": 12,
+     "children": [
+      {
+       "type": "core://Box",
+       "background": "#E1EFFE",
+       "corner_dp": 16,
+       "padding_h_dp": 16,
+       "padding_v_dp": 16,
+       "content": {
+        "type": "core://Column",
+        "spacing_dp": 8,
+        "children": [
+         {
+          "type": "core://Row",
+          "align": "Center",
+          "spacing_dp": 8,
+          "children": [
+           {
+            "type": "core://Box",
+            "background": "#A4CAFE",
+            "corner_dp": 6,
+            "padding_h_dp": 8,
+            "padding_v_dp": 3,
+            "content": {
+             "style": "Caption",
+             "type": "core://Text",
+             "value_expr": "Improvement"
+            }
+           },
+           {
+            "type": "core://Box",
+            "background": "#DBEAFE",
+            "corner_dp": 6,
+            "padding_h_dp": 8,
+            "padding_v_dp": 3,
+            "content": {
+             "style": "Caption",
+             "type": "core://Text",
+             "value_expr": "todo"
+            }
+           }
+          ]
+         },
+         {
+          "style": "Headline",
+          "type": "core://Text",
+          "value_expr": "Catch up on rows changed while the stream was down"
+         }
+        ]
+       }
+      },
+      {
+       "type": "core://Box",
+       "background": "#FFFFFF",
+       "border_color": "#E4E4E7",
+       "corner_dp": 14,
+       "padding_h_dp": 14,
+       "padding_v_dp": 12,
+       "content": {
+        "type": "core://Column",
+        "spacing_dp": 6,
+        "children": [
+         {
+          "style": "Label",
+          "type": "core://Text",
+          "value_expr": "Notes"
+         },
+         {
+          "style": "Body",
+          "type": "core://Text",
+          "value_expr": "It up server a layout the the device every a restart while sends and a within layout event and outbox a a keeps client the the the every a keeps every up a the sends outbox draws so within it the client keeps rows outbox the the every keeps the cache device the outbox layout keeps a until while a."
+         }
+        ]
+       }
+      },
+      {
+       "type": "core://Box",
+       "background": "#FFFFFF",
+       "border_color": "#E4E4E7",
+       "corner_dp": 14,
+       "padding_h_dp": 14,
+       "padding_v_dp": 12,
+       "content": {
+        "type": "core://Column",
+        "spacing_dp": 6,
+        "children": [
+         {
+          "style": "Label",
+          "type": "core://Text",
+          "value_expr": "Diagnosis"
+         },
+         {
+          "style": "Body",
+          "type": "core://Text",
+          "value_expr": "The a added seconds every seconds device rows event the event and keeps rows and a from few so change layout client restart within from from it a within sends answers layout outbox keeps added from another change a every seconds layout and reconnects without answers layout a rows server keeps few so show answers another pod seconds another from until client a a while so draws event up up a and from few up outbox reconnects draws a outbox reconnects within another."
+         }
+        ]
+       }
+      },
+      {
+       "type": "core://Box",
+       "background": "#FFFFFF",
+       "border_color": "#E4E4E7",
+       "corner_dp": 14,
+       "padding_h_dp": 14,
+       "padding_v_dp": 12,
+       "content": {
+        "type": "core://Column",
+        "spacing_dp": 6,
+        "children": [
+         {
+          "style": "Label",
+          "type": "core://Text",
+          "value_expr": "Update 2"
+         },
+         {
+          "style": "Body",
+          "type": "core://Text",
+          "value_expr": "Show the it and the it the answers the the a every the stream so the it within the device until keeps added draws restart until server a seconds outbox up up up up the without the up a cache layout while few from client from change a the the keeps it the the device until pod layout while until show it the stream another change device without client client a seconds without without rows and it the from stream without from and."
+         }
+        ]
+       }
+      },
+      {
+       "type": "core://Box",
+       "background": "#FFFFFF",
+       "border_color": "#E4E4E7",
+       "corner_dp": 14,
+       "padding_h_dp": 14,
+       "padding_v_dp": 12,
+       "content": {
+        "type": "core://Column",
+        "spacing_dp": 6,
+        "children": [
+         {
+          "style": "Label",
+          "type": "core://Text",
+          "value_expr": "Update 3"
+         },
+         {
+          "style": "Body",
+          "type": "core://Text",
+          "value_expr": "While and device it the pod and rows server and stream and device from another the the the restart from the the until cache event up the cache and a another pod pod reconnects without stream cache change another few another."
+         }
+        ]
+       }
+      },
+      {
+       "type": "core://Box",
+       "background": "#FFFFFF",
+       "border_color": "#E4E4E7",
+       "corner_dp": 14,
+       "padding_h_dp": 14,
+       "padding_v_dp": 12,
+       "content": {
+        "type": "core://Column",
+        "spacing_dp": 6,
+        "children": [
+         {
+          "style": "Label",
+          "type": "core://Text",
+          "value_expr": "Update 4"
+         },
+         {
+          "style": "Body",
+          "type": "core://Text",
+          "value_expr": "And the the the without cache from while without until until the without server another server and answers client show cache without the a the from and up seconds up and from from draws pod it every seconds server it until change without answers another it outbox outbox draws pod the server the and draws a cache while pod stream while so restart."
+         }
+        ]
+       }
+      },
+      {
+       "type": "core://Box",
+       "background": "#FFFFFF",
+       "border_color": "#E4E4E7",
+       "corner_dp": 14,
+       "padding_h_dp": 14,
+       "padding_v_dp": 12,
+       "content": {
+        "type": "core://Column",
+        "spacing_dp": 6,
+        "children": [
+         {
+          "style": "Label",
+          "type": "core://Text",
+          "value_expr": "Update 5"
+         },
+         {
+          "style": "Body",
+          "type": "core://Text",
+          "value_expr": "Every added stream the within draws a another seconds answers every and within restart draws the it and restart pod few the change the it the it without until client outbox a added and and outbox without the outbox a event cache reconnects sends the restart few outbox pod layout few added until restart change."
+         }
+        ]
+       }
+      },
+      {
+       "type": "core://Box",
+       "background": "#FFFFFF",
+       "border_color": "#E4E4E7",
+       "corner_dp": 14,
+       "padding_h_dp": 14,
+       "padding_v_dp": 12,
+       "content": {
+        "type": "core://Column",
+        "spacing_dp": 6,
+        "children": [
+         {
+          "style": "Label",
+          "type": "core://Text",
+          "value_expr": "Update 6"
+         },
+         {
+          "style": "Body",
+          "type": "core://Text",
+          "value_expr": "Cache reconnects few restart the without restart event and stream outbox cache few draws within client up few added layout answers event a layout while answers rows client it server answers device it stream draws seconds the the up a from answers the from a restart up from within cache another added and device pod from outbox seconds few pod show from and until so restart layout client the the and stream."
+         }
+        ]
+       }
+      },
+      {
+       "type": "core://Box",
+       "background": "#FFFFFF",
+       "border_color": "#E4E4E7",
+       "corner_dp": 14,
+       "padding_h_dp": 14,
+       "padding_v_dp": 12,
+       "content": {
+        "type": "core://Column",
+        "spacing_dp": 6,
+        "children": [
+         {
+          "style": "Label",
+          "type": "core://Text",
+          "value_expr": "Update 7"
+         },
+         {
+          "style": "Body",
+          "type": "core://Text",
+          "value_expr": "Sends the reconnects draws a stream up it the restart keeps a added and reconnects a the a layout reconnects pod the and stream and change the layout stream client seconds the from outbox within reconnects until draws sends and event client from stream a the cache rows the rows and while so few restart the reconnects."
+         }
+        ]
+       }
+      },
+      {
+       "type": "core://Box",
+       "background": "#FFFFFF",
+       "border_color": "#E4E4E7",
+       "corner_dp": 14,
+       "padding_h_dp": 14,
+       "padding_v_dp": 12,
+       "content": {
+        "type": "core://Column",
+        "spacing_dp": 6,
+        "children": [
+         {
+          "style": "Label",
+          "type": "core://Text",
+          "value_expr": "Update 8"
+         },
+         {
+          "style": "Body",
+          "type": "core://Text",
+          "value_expr": "Pod stream sends the pod restart outbox cache restart without event few the answers server a answers a the up restart rows while the from cache the draws up another a draws the layout the stream a from a and answers show restart answers so change event so sends seconds the from reconnects few the stream device from outbox added event sends."
+         }
+        ]
+       }
+      },
+      {
+       "type": "core://Box",
+       "background": "#FFFFFF",
+       "border_color": "#E4E4E7",
+       "corner_dp": 14,
+       "padding_h_dp": 14,
+       "padding_v_dp": 12,
+       "content": {
+        "type": "core://Column",
+        "spacing_dp": 6,
+        "children": [
+         {
+          "style": "Label",
+          "type": "core://Text",
+          "value_expr": "Update 9"
+         },
+         {
+          "style": "Body",
+          "type": "core://Text",
+          "value_expr": "While another the the from show and without reconnects restart server cache event restart the and stream and it up every sends up pod rows rows the the and every and it answers change show added a it so until server it sends restart the a restart draws and restart keeps pod every server the and pod sends draws."
+         }
+        ]
+       }
+      },
+      {
+       "type": "core://Box",
+       "background": "#FFFFFF",
+       "border_color": "#E4E4E7",
+       "corner_dp": 14,
+       "padding_h_dp": 14,
+       "padding_v_dp": 12,
+       "content": {
+        "type": "core://Column",
+        "spacing_dp": 6,
+        "children": [
+         {
+          "style": "Label",
+          "type": "core://Text",
+          "value_expr": "Update 10"
+         },
+         {
+          "style": "Body",
+          "type": "core://Text",
+          "value_expr": "Device the show few outbox a the pod the the event a stream the seconds layout restart the and answers and layout without stream layout stream event while the server seconds a show layout without so sends until the server cache layout change it from stream server rows until keeps draws the without a a reconnects the while a so and so seconds seconds seconds client outbox cache rows and without pod so seconds layout restart few reconnects show while."
+         }
+        ]
+       }
+      },
+      {
+       "type": "core://Box",
+       "background": "#FFFFFF",
+       "border_color": "#E4E4E7",
+       "corner_dp": 14,
+       "padding_h_dp": 14,
+       "padding_v_dp": 12,
+       "content": {
+        "type": "core://Column",
+        "spacing_dp": 6,
+        "children": [
+         {
+          "style": "Label",
+          "type": "core://Text",
+          "value_expr": "Update 11"
+         },
+         {
+          "style": "Body",
+          "type": "core://Text",
+          "value_expr": "Layout every and it and stream device draws change the restart reconnects client device the a a up pod from the a few up rows it within another show added client from the added from up client cache the so stream device layout up show every layout device a reconnects a reconnects the."
+         }
+        ]
+       }
+      },
+      {
+       "type": "core://Box",
+       "background": "#FFFFFF",
+       "border_color": "#E4E4E7",
+       "corner_dp": 14,
+       "padding_h_dp": 14,
+       "padding_v_dp": 12,
+       "content": {
+        "type": "core://Column",
+        "spacing_dp": 6,
+        "children": [
+         {
+          "style": "Label",
+          "type": "core://Text",
+          "value_expr": "Update 12"
+         },
+         {
+          "style": "Body",
+          "type": "core://Text",
+          "value_expr": "Answers so the it event reconnects a restart added cache device a pod the up outbox outbox while and a within few until draws server so a a outbox draws from without within from so rows stream server stream up server event rows."
+         }
+        ]
+       }
+      },
+      {
+       "type": "core://Box",
+       "background": "#FFFFFF",
+       "border_color": "#E4E4E7",
+       "corner_dp": 14,
+       "padding_h_dp": 14,
+       "padding_v_dp": 12,
+       "content": {
+        "type": "core://Column",
+        "spacing_dp": 6,
+        "children": [
+         {
+          "style": "Label",
+          "type": "core://Text",
+          "value_expr": "Update 13"
+         },
+         {
+          "style": "Body",
+          "type": "core://Text",
+          "value_expr": "Outbox answers up client from server from layout while restart a outbox the few from few a draws outbox cache event and the from outbox and added event device stream keeps cache pod within show within and while show reconnects from a a reconnects keeps device draws restart and the while and reconnects event show up server few a rows pod draws sends a without every a the layout up."
+         }
+        ]
+       }
+      }
+     ]
+    }
+   }
+  ]
+ }
+}

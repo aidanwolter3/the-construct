@@ -189,7 +189,12 @@ fn pod_with(agent: Option<Arc<FakeAgent>>) -> Pod {
     pod
 }
 
-async fn call(pod: &Pod, method: &str, path: &str, body: Option<Value>) -> (StatusCode, Value) {
+pub(crate) async fn call(
+    pod: &Pod,
+    method: &str,
+    path: &str,
+    body: Option<Value>,
+) -> (StatusCode, Value) {
     let mut req = Request::builder()
         .method(method)
         .uri(path)
@@ -214,7 +219,7 @@ async fn call(pod: &Pod, method: &str, path: &str, body: Option<Value>) -> (Stat
     )
 }
 
-async fn tool(pod: &Pod, name: &str, args: Value) -> (bool, Value) {
+pub(crate) async fn tool(pod: &Pod, name: &str, args: Value) -> (bool, Value) {
     let req = Request::builder()
         .method("POST")
         .uri("/v1/mcp")
@@ -234,21 +239,21 @@ async fn tool(pod: &Pod, name: &str, args: Value) -> (bool, Value) {
     (r["isError"] == true, serde_json::from_str(text).unwrap())
 }
 
-async fn ok(pod: &Pod, name: &str, args: Value) -> Value {
+pub(crate) async fn ok(pod: &Pod, name: &str, args: Value) -> Value {
     let (err, v) = tool(pod, name, args).await;
     assert!(!err, "{name}: {v}");
     v
 }
 
 /// The bundle of `path`.
-async fn get_data(pod: &Pod, path: &str) -> Value {
+pub(crate) async fn get_data(pod: &Pod, path: &str) -> Value {
     let (status, b) = call(pod, "GET", path, None).await;
     assert_eq!(status, StatusCode::OK, "{path}: {b}");
     b
 }
 
 /// The entities of `query` in `bundle`.
-fn listed(b: &Value, query: &str) -> Vec<Value> {
+pub(crate) fn listed(b: &Value, query: &str) -> Vec<Value> {
     b["queries"][query]
         .as_array()
         .unwrap_or_else(|| panic!("no query {query}: {b}"))
@@ -258,13 +263,13 @@ fn listed(b: &Value, query: &str) -> Vec<Value> {
 }
 
 /// The rows of `collection`.
-async fn rows(pod: &Pod, collection: &str) -> Vec<Value> {
+pub(crate) async fn rows(pod: &Pod, collection: &str) -> Vec<Value> {
     let b = get_data(pod, &format!("/v1/collections/{collection}/rows")).await;
     listed(&b, &format!("collection:{collection}"))
 }
 
 /// The ids of `collection`'s fillers.
-async fn filler_ids(pod: &Pod, collection: &str) -> Vec<String> {
+pub(crate) async fn filler_ids(pod: &Pod, collection: &str) -> Vec<String> {
     let d = ok(
         pod,
         "describe_collection",
@@ -280,7 +285,7 @@ async fn filler_ids(pod: &Pod, collection: &str) -> Vec<String> {
 }
 
 /// Wait until the fills a define or set_filler started have ended.
-async fn settle(pod: &Pod, collection: &str) {
+pub(crate) async fn settle(pod: &Pod, collection: &str) {
     for _ in 0..500 {
         let c = collection.to_owned();
         let all_filled = pod

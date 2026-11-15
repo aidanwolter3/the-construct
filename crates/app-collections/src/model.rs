@@ -853,6 +853,125 @@ pub fn set_compute(
     Ok(())
 }
 
+/// [`set_compute`], first making the rules collection of a learning lookup
+/// that names one that doesn't exist yet (see [`rules_to_create`]); each
+/// one made is added to `others` and `created`.
+pub fn set_compute_creating(
+    def: &mut Definition,
+    id: &str,
+    v: Option<&Value>,
+    others: &mut Defs,
+    created: &mut Vec<Definition>,
+    max_chars: usize,
+) -> Result<(), String> {
+    for d in rules_to_create(def, id, v, others, max_chars)? {
+        others.insert(d.name.clone(), d.clone());
+        created.retain(|c| c.name != d.name);
+        created.push(d);
+    }
+    set_compute(def, id, v, others)
+}
+
+/// The rules collections field `id`'s compute spec `v` learns into that
+/// don't exist yet (in `others`), so a model field can have editable rules
+/// in front of it without setting them up by hand (issue #230): for a
+/// lookup with `learn: true` naming a new `collection`, a collection of
+/// two fields, `key` (text) and `value` (the field's type and options).
+pub fn rules_to_create(
+    def: &Definition,
+    id: &str,
+    v: Option<&Value>,
+    others: &Defs,
+    max_chars: usize,
+) -> Result<Vec<Definition>, String> {
+    let Some(field) = def.by_id(id) else {
+        return Ok(Vec::new());
+    };
+    let kinds: Vec<&Value> = match v {
+        Some(Value::Array(a)) => a.iter().collect(),
+        Some(one @ Value::Object(_)) => vec![one],
+        _ => return Ok(Vec::new()),
+    };
+    let mut out: Vec<Definition> = Vec::new();
+    for k in kinds {
+        let text = |n: &str| {
+            k.get(n)
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .unwrap_or("")
+        };
+        if text("kind") != "lookup"
+            || k.get("learn") != Some(&Value::Bool(true))
+            || k.get("via").is_some_and(|v| !v.is_null())
+        {
+            continue;
+        }
+        let (collection, key, value) = (text("collection"), text("key"), text("value"));
+        if collection.is_empty()
+            || collection == def.name
+            || others.contains_key(collection)
+            || out.iter().any(|d| d.name == collection)
+        {
+            continue;
+        }
+        let at = format!("field '{}'", field.name);
+        if !valid_name(collection) {
+            return Err(format!(
+                "{at}: '{collection}' is not a collection name for the rules ([a-z][a-z0-9_]*)"
+            ));
+        }
+        if field.kind == Kind::Ref {
+            return Err(format!(
+                "{at}: a ref field's rules collection isn't made for it; define '{collection}' first"
+            ));
+        }
+        for (n, what) in [(key, "key"), (value, "value")] {
+            if !valid_name(n) || SYSTEM_FIELDS.contains(&n) {
+                return Err(format!(
+                    "{at}: the lookup's {what} '{n}' names the new rules collection's field ([a-z][a-z0-9_]*, not a system field)"
+                ));
+            }
+        }
+        if key == value {
+            return Err(format!(
+                "{at}: the lookup's key and value name the same field"
+            ));
+        }
+        let mut v = json!({ "name": value, "type": field.kind.as_str() });
+        if field.kind == Kind::Choice {
+            v["options"] = json!(field.options);
+        }
+        let fields = vec![
+            parse_field(
+                &json!({ "name": key, "type": "text" }),
+                "f1".into(),
+                max_chars,
+            )?,
+            parse_field(&v, "f2".into(), max_chars)?,
+        ];
+        let words = collection.replace('_', " ");
+        let mut c = words.chars();
+        let title = c
+            .next()
+            .map(|f| f.to_uppercase().collect::<String>() + c.as_str())
+            .unwrap_or_default();
+        out.push(Definition {
+            name: collection.to_owned(),
+            title,
+            next_field: 3,
+            fields,
+            reminders: Vec::new(),
+            fillers: Vec::new(),
+            alerts: Vec::new(),
+            system: None,
+            actions: Vec::new(),
+            order_by: Vec::new(),
+            descending: false,
+        });
+    }
+    Ok(out)
+}
+
 /// One kind of a compute spec (see [`set_compute`]).
 fn parse_compute(
     def: &Definition,

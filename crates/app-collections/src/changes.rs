@@ -38,6 +38,9 @@ pub struct Planned {
     pub convert: Vec<String>,
     pub compute: Vec<String>,
     pub recompute: Vec<String>,
+    /// Rules collections a learning lookup named that don't exist yet,
+    /// made with the change ([`model::rules_to_create`]).
+    pub created: Vec<Definition>,
 }
 
 impl Planned {
@@ -89,11 +92,13 @@ pub fn plan(
     let mut def = def.clone();
     let before = def.clone();
     let mut recompute = Vec::new();
+    let mut others = others.clone();
+    let mut created = Vec::new();
     for (i, op) in ops.iter().enumerate() {
         apply_op(
             &mut def,
             op,
-            others,
+            (&mut others, &mut created),
             &mut recompute,
             now,
             max_chars,
@@ -108,6 +113,7 @@ pub fn plan(
         convert: to_convert(&before, &def),
         compute,
         recompute,
+        created,
         def,
     })
 }
@@ -144,7 +150,7 @@ fn to_convert(before: &Definition, after: &Definition) -> Vec<String> {
 fn apply_op(
     def: &mut Definition,
     op: &Value,
-    others: &Defs,
+    (others, created): (&mut Defs, &mut Vec<Definition>),
     recompute: &mut Vec<String>,
     now: i64,
     max_chars: usize,
@@ -182,7 +188,7 @@ fn apply_op(
             def.next_field += 1;
             let id = field.id.clone();
             def.fields.push(field);
-            model::set_compute(def, &id, op.get("compute"), others)?;
+            model::set_compute_creating(def, &id, op.get("compute"), others, created, max_chars)?;
         }
         "rename_field" => {
             let to = arg("to").to_owned();
@@ -263,7 +269,7 @@ fn apply_op(
                 ));
             }
             let id = f.id.clone();
-            model::set_compute(def, &id, op.get("compute"), others)?;
+            model::set_compute_creating(def, &id, op.get("compute"), others, created, max_chars)?;
         }
         "recompute_field" => {
             let f = find(def, arg("field"), false)?;
@@ -463,6 +469,7 @@ pub fn restore(
         convert: to_convert(current, &def),
         compute: to_compute(current, &def),
         recompute: Vec::new(),
+        created: Vec::new(),
         def,
     })
 }

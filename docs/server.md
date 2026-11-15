@@ -26,7 +26,7 @@ settings are logged at startup.
 |---|---|---|
 | `CONSTRUCT_ADDR` | `127.0.0.1:8080` | Listen address. `0.0.0.0:8080` accepts LAN connections. |
 | `CONSTRUCT_DATA_DIR` | `~/.construct-server` | `host.db` (pods, token hashes) and `pods/<id>/server.db` (each pod's data). Created with mode 0700, databases 0600. |
-| `CONSTRUCT_PUBLIC_URL` | from each request's `Host` | The base URL clients reach the server at, for the OAuth metadata Claude reads. `https` is assumed behind Fly or with `X-Forwarded-Proto: https`. |
+| `CONSTRUCT_PUBLIC_URL` | from each request's `Host` | The base URL clients reach the server at, for the OAuth metadata Claude reads and the redirect URI of a pod's MCP server sign-ins. `https` is assumed behind Fly or with `X-Forwarded-Proto: https`. |
 | `CONSTRUCT_OAUTH_CLIENT_ID` | unset | A pre-registered OAuth client for MCP apps that ask for a client ID and secret instead of registering (e.g. Gemini), decision [`oauth-preregistered-client`](decisions/oauth-preregistered-client.md). Any value you choose; set with `_SECRET`. |
 | `CONSTRUCT_OAUTH_CLIENT_SECRET` | unset | That client's secret (a Fly secret, e.g. `openssl rand -hex 32`). The connect page still asks for the pod code. |
 | `CONSTRUCT_OAUTH_CLIENT_REDIRECT_URIS` | empty | That app's OAuth callback URL(s), comma-separated. An unknown one is shown on the connect page so you can add it. |
@@ -85,7 +85,7 @@ settings are logged at startup.
 | `CONSTRUCT_INFER_URL` | `https://api.anthropic.com/v1/messages` | The Messages API endpoint. |
 | `CONSTRUCT_FILL_MODEL` | `claude-opus-5-5` | The agent module's capable model: `agent`, `extract: llm` and `query_field` fillers (same key and endpoint). Without a key those fillers report themselves unavailable. Each pod's model calls have daily budgets per feature (`agent_usage`). |
 | `CONSTRUCT_FILL_AGENT_DAILY` | `20` | Agent filler runs per pod per day. |
-| `CONSTRUCT_FILL_PRIVATE_HOSTS` | unset | `1`: fetch fillers may read private addresses (local development only). |
+| `CONSTRUCT_FILL_PRIVATE_HOSTS` | unset | `1`: fetch fillers may read private addresses, and MCP servers may be on them (local development only). |
 | `CONSTRUCT_BROWSER` | the first `chromium`, `chromium-browser`, `headless_shell`, `chrome-headless-shell` or `google-chrome` on `PATH` | The headless browser of rendered fillers (`render`, decision `rendered-fetches`); `off`: none, and rendered fillers say so. The image sets `/usr/bin/chromium`. |
 
 ### Monitoring and development
@@ -149,8 +149,8 @@ machine only.
 
 With `CONSTRUCT_TEMP_PODS=1`, `POST /v1/pods/temporary` makes a pod that is deleted with everything in it after
 `CONSTRUCT_TEMP_POD_HOURS`. Temporary pods have every app, but Pixelfed only on the default instance (no typed-in
-servers), the `model`, `web` and `web_search` jacks locked (no model calls, no fetch fillers, no searches; decision
-`jacks`), and a smaller upload quota. At most 5 are made per client address an
+servers), the `model`, `web`, `web_search` and `mcp` jacks locked (no model calls, no fetch fillers, no searches, no
+MCP servers; decision `jacks`), and a smaller upload quota. At most 5 are made per client address an
 hour. They are how visitors and automated sessions try a deployed server:
 
 ```bash

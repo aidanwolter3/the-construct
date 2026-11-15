@@ -123,6 +123,7 @@ pub fn temporary_pod_settings() -> Vec<(String, String)> {
         pod_core::jacks::MODEL,
         pod_core::jacks::WEB,
         pod_core::jacks::WEB_SEARCH,
+        pod_core::jacks::MCP,
     ]));
     out
 }
@@ -153,6 +154,7 @@ pub fn pod_factory_with_push(
             .with_test_hooks(test_hooks)
             .with_session_ttl_secs(session_ttl_secs)
             .with_dev_apps(show_dev_apps)
+            .with_mcp_private_hosts(std::env::var(FILL_PRIVATE_HOSTS_VAR).as_deref() == Ok("1"))
             .with_push(push.clone()))
     })
 }

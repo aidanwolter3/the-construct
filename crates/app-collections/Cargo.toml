@@ -30,4 +30,5 @@ app-shell = { path = "../app-shell" }
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "time", "net"] }
 tower = { version = "0.5", features = ["util"] }
 http-body-util = "0.1"
+base64 = "0.22"
 rusqlite.workspace = true

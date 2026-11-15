@@ -103,6 +103,10 @@ How a create carries attachments: [posting.md](posting.md).
 503 `temporarily_unavailable` when the data volume is nearly full), `/oauth/authorize` and `/oauth/token`. The
 credential it issues reaches only `/v1/mcp`. See [custom-apps.md](custom-apps.md#building-apps-with-claude).
 
+The other way round, the pod is a client of remote MCP servers (decision [`mcp-jack`](decisions/mcp-jack.md)):
+`GET /v1/mcp-servers/callback?code&state` *public* is where a server's OAuth sign-in comes back to (on a host,
+under the pod's public prefix); it answers a short HTML page. See [custom-apps.md](custom-apps.md#mcp-servers).
+
 ## Development and test routes
 
 | Call | Answer |

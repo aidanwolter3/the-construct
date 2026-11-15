@@ -451,8 +451,8 @@ impl AppAdapter for CollectionsAdapter {
     }
 
     fn resume<'a>(&'a self, pod: &'a Pod) -> BoxFuture<'a, ()> {
-        // The hourly purge, holding the pod only while it runs (a host
-        // drops temporary pods).
+        // The hourly purge and retry of failed model answers, holding the
+        // pod only while they run (a host drops temporary pods).
         let weak = Arc::downgrade(pod);
         tokio::spawn(async move {
             loop {
@@ -467,6 +467,9 @@ impl AppAdapter for CollectionsAdapter {
                 {
                     tracing::info!(?p, "old collection data purged");
                 }
+                // Model answers that failed, asked again when due (issue
+                // #230): on the pod's start and hourly after.
+                compute::retry_failed(&pod, pod_core::util::now_secs()).await;
                 drop(pod);
                 tokio::time::sleep(std::time::Duration::from_secs(3600)).await;
             }

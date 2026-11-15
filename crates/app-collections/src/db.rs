@@ -27,6 +27,10 @@
 //! - `collections_reminders_sent`: which row a reminder (decision
 //!   `collection-reminders`) already notified about, for which date, so
 //!   each fires once even after the core's notification retention.
+//! - `collections_compute_failures`: inputs of `model`-computed fields
+//!   whose answer failed (an error, or an answer that doesn't fit), the
+//!   rows waiting on each, how often it was tried and when to try again
+//!   (issue #230), so no row keeps its default for good.
 //! - `collections_staged`: the edits of an `edit_rows` preview under its
 //!   confirm token, for [`STAGED_SECS`], so the confirming call can name
 //!   the token alone.
@@ -76,10 +80,25 @@ pub static MIGRATIONS: &[Step] = &[
     // 10: the edits of an edit_rows preview, kept under its confirm token
     // so the confirming call needn't send them again.
     Step::sql("staged_edits", STAGED),
-    // 11: who last wrote each field a filler or a model wrote (issue #243,
+    // 11: model answers that failed, retried with backoff (issue #230).
+    Step::sql("compute_failures", COMPUTE_FAILURES),
+    // 12: who last wrote each field a filler or a model wrote (issue #243,
     // decision `agents-cap-v3`): a person's write of the field clears it.
     Step::sql("field_writers", FIELD_WRITERS),
 ];
+
+const COMPUTE_FAILURES: &str = "
+CREATE TABLE collections_compute_failures (
+    collection  TEXT NOT NULL,
+    field_id    TEXT NOT NULL,
+    key         TEXT NOT NULL,
+    row_ids     TEXT NOT NULL,
+    attempts    INTEGER NOT NULL,
+    next_at     INTEGER NOT NULL,
+    updated_at  INTEGER NOT NULL,
+    PRIMARY KEY (collection, field_id, key)
+) WITHOUT ROWID;
+";
 
 const FIELD_WRITERS: &str = "
 CREATE TABLE collections_field_writers (
@@ -449,6 +468,7 @@ fn drop_collection(tx: &Connection, name: &str) -> rusqlite::Result<()> {
         "collections_aside",
         "collections_edits",
         "collections_computed",
+        "collections_compute_failures",
         "collections_fills",
         "collections_alerts_sent",
         "collections_reminders_sent",
@@ -746,7 +766,7 @@ pub fn filler_record(
     f: &crate::filler::Filler,
     st: &crate::fill::State,
     now: i64,
-    off: bool,
+    off: crate::fill::Off,
 ) -> EntityRecord {
     let (state, detail) = crate::fill::health_state(f, st, now, off, true);
     let names: Vec<String> = crate::alerts::of_filler(def, &f.id)
@@ -792,11 +812,8 @@ pub fn alert_record(def: &Definition, a: &crate::alerts::Alert) -> EntityRecord 
 
 /// Whether fillers are off on this pod: its `web` jack is unplugged
 /// (decision `jacks`).
-fn fills_off(conn: &Connection) -> rusqlite::Result<bool> {
-    Ok(!pod_core::jacks::core_plugged_on(
-        conn,
-        pod_core::jacks::WEB,
-    )?)
+fn fills_off(conn: &Connection) -> rusqlite::Result<crate::fill::Off> {
+    crate::fill::off_on(conn)
 }
 
 /// A collection's list as a `DataBundle`: each live row at
@@ -1106,6 +1123,153 @@ pub fn computed_counts(
     )?;
     stmt.query_map([collection], |r| Ok((r.get(0)?, r.get(1)?)))?
         .collect()
+}
+
+// ---------- failed model answers ----------
+
+/// Model answers tried at most this often (the first try included).
+pub const MAX_COMPUTE_ATTEMPTS: i64 = 5;
+/// The wait before the first retry; it doubles after each failure.
+pub const COMPUTE_RETRY_SECS: i64 = 30 * 60;
+/// Rows remembered per failed input (more wait for a recompute).
+const MAX_FAILED_ROWS: usize = 200;
+
+/// The answer for `key` of field `field_id` failed for `row_ids`: one more
+/// attempt counted, the rows added to those waiting, the next try backed
+/// off.
+pub fn record_compute_failure(
+    conn: &Connection,
+    collection: &str,
+    field_id: &str,
+    key: &str,
+    row_ids: &[String],
+    now: i64,
+) -> rusqlite::Result<()> {
+    let old: Option<(String, i64)> = conn
+        .query_row(
+            "SELECT row_ids, attempts FROM collections_compute_failures
+             WHERE collection = ?1 AND field_id = ?2 AND key = ?3",
+            params![collection, field_id, key],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .optional()?;
+    let (mut rows, attempts) = match old {
+        Some((text, n)) => (
+            serde_json::from_str::<Vec<String>>(&text).unwrap_or_default(),
+            n + 1,
+        ),
+        None => (Vec::new(), 1),
+    };
+    for id in row_ids {
+        if rows.len() < MAX_FAILED_ROWS && !rows.contains(id) {
+            rows.push(id.clone());
+        }
+    }
+    let wait = COMPUTE_RETRY_SECS.saturating_mul(1 << (attempts - 1).clamp(0, 16));
+    conn.execute(
+        "INSERT OR REPLACE INTO collections_compute_failures
+         (collection, field_id, key, row_ids, attempts, next_at, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+        params![
+            collection,
+            field_id,
+            key,
+            json!(rows).to_string(),
+            attempts,
+            now.saturating_add(wait),
+            now
+        ],
+    )?;
+    Ok(())
+}
+
+/// The answer for `key` came (or nothing waits on it any more).
+pub fn clear_compute_failure(
+    conn: &Connection,
+    collection: &str,
+    field_id: &str,
+    key: &str,
+) -> rusqlite::Result<()> {
+    conn.execute(
+        "DELETE FROM collections_compute_failures WHERE collection = ?1 AND field_id = ?2 AND key = ?3",
+        params![collection, field_id, key],
+    )?;
+    Ok(())
+}
+
+/// Forget field `field_id`'s failures (its compute changed or is asked
+/// again from the start).
+pub fn clear_field_failures(
+    conn: &Connection,
+    collection: &str,
+    field_id: &str,
+) -> rusqlite::Result<()> {
+    conn.execute(
+        "DELETE FROM collections_compute_failures WHERE collection = ?1 AND field_id = ?2",
+        params![collection, field_id],
+    )?;
+    Ok(())
+}
+
+/// A failed answer due for another try.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DueFailure {
+    pub collection: String,
+    pub field_id: String,
+    pub key: String,
+    pub row_ids: Vec<String>,
+}
+
+/// The failures due at `now` with attempts left, oldest first.
+pub fn due_compute_failures(conn: &Connection, now: i64) -> rusqlite::Result<Vec<DueFailure>> {
+    let mut stmt = conn.prepare_cached(
+        "SELECT collection, field_id, key, row_ids FROM collections_compute_failures
+         WHERE next_at <= ?1 AND attempts < ?2 ORDER BY updated_at, collection, field_id, key",
+    )?;
+    stmt.query_map(params![now, MAX_COMPUTE_ATTEMPTS], |r| {
+        let rows: String = r.get(3)?;
+        Ok(DueFailure {
+            collection: r.get(0)?,
+            field_id: r.get(1)?,
+            key: r.get(2)?,
+            row_ids: serde_json::from_str(&rows).unwrap_or_default(),
+        })
+    })?
+    .collect()
+}
+
+/// Per field id of `collection`: `(rows waiting for a retry, rows whose
+/// attempts ran out)`.
+pub fn failure_counts(
+    conn: &Connection,
+    collection: &str,
+) -> rusqlite::Result<Vec<(String, usize, usize)>> {
+    let mut stmt = conn.prepare_cached(
+        "SELECT field_id, row_ids, attempts FROM collections_compute_failures
+         WHERE collection = ?1 ORDER BY field_id",
+    )?;
+    let mut out: Vec<(String, usize, usize)> = Vec::new();
+    let rows = stmt.query_map([collection], |r| {
+        Ok((
+            r.get::<_, String>(0)?,
+            r.get::<_, String>(1)?,
+            r.get::<_, i64>(2)?,
+        ))
+    })?;
+    for r in rows {
+        let (field, ids, attempts) = r?;
+        let n = serde_json::from_str::<Vec<String>>(&ids).map_or(0, |v| v.len());
+        if out.last().is_none_or(|(f, _, _)| *f != field) {
+            out.push((field, 0, 0));
+        }
+        let last = out.last_mut().expect("pushed");
+        if attempts < MAX_COMPUTE_ATTEMPTS {
+            last.1 += n;
+        } else {
+            last.2 += n;
+        }
+    }
+    Ok(out)
 }
 
 // ---------- type changes ----------
@@ -1622,4 +1786,52 @@ pub fn unstage(conn: &Connection, token: &str) -> rusqlite::Result<()> {
         params![token],
     )?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn failed_answers_back_off_and_run_out() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(COMPUTE_FAILURES).unwrap();
+        let rows = |ids: &[&str]| ids.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        record_compute_failure(&conn, "g", "f1", "gnocchi", &rows(&["r1"]), 0).unwrap();
+        // Due after the first wait, not before.
+        assert!(
+            due_compute_failures(&conn, COMPUTE_RETRY_SECS - 1)
+                .unwrap()
+                .is_empty()
+        );
+        let due = due_compute_failures(&conn, COMPUTE_RETRY_SECS).unwrap();
+        assert_eq!(due.len(), 1);
+        assert_eq!(due[0].row_ids, rows(&["r1"]));
+        // Another failure adds its rows and doubles the wait.
+        record_compute_failure(&conn, "g", "f1", "gnocchi", &rows(&["r1", "r2"]), 0).unwrap();
+        assert!(
+            due_compute_failures(&conn, 2 * COMPUTE_RETRY_SECS - 1)
+                .unwrap()
+                .is_empty()
+        );
+        assert_eq!(
+            due_compute_failures(&conn, 2 * COMPUTE_RETRY_SECS).unwrap()[0].row_ids,
+            rows(&["r1", "r2"])
+        );
+        assert_eq!(
+            failure_counts(&conn, "g").unwrap(),
+            vec![("f1".into(), 2, 0)]
+        );
+        // Out of attempts: never due, counted as given up.
+        for _ in 2..MAX_COMPUTE_ATTEMPTS {
+            record_compute_failure(&conn, "g", "f1", "gnocchi", &[], 0).unwrap();
+        }
+        assert!(due_compute_failures(&conn, i64::MAX).unwrap().is_empty());
+        assert_eq!(
+            failure_counts(&conn, "g").unwrap(),
+            vec![("f1".into(), 0, 2)]
+        );
+        clear_field_failures(&conn, "g", "f1").unwrap();
+        assert!(failure_counts(&conn, "g").unwrap().is_empty());
+    }
 }

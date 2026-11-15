@@ -78,7 +78,15 @@ async fn the_screen_lists_every_jack_flattened() {
         .iter()
         .map(|u| u.as_str().unwrap())
         .collect();
-    assert_eq!(ids, ["jacks://model", "jacks://web", "jacks://web_search"]);
+    assert_eq!(
+        ids,
+        [
+            "jacks://model",
+            "jacks://web",
+            "jacks://web_search",
+            "jacks://mcp"
+        ]
+    );
     let model = &v["entities"]["jacks://model"];
     assert_eq!(model["is_switch"], true);
     assert_eq!(model["can_unplug"], true);

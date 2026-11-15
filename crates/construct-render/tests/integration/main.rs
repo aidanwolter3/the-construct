@@ -1,6 +1,7 @@
 //! construct-render's integration tests (one binary, docs/testing.md).
 
 mod accessibility;
+mod bench;
 mod common;
 mod dates;
 mod device;

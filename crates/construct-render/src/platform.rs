@@ -45,13 +45,18 @@ pub trait Platform {
     /// `request_notification_permission`: the system's prompt to allow
     /// notifications (or its settings for them); nothing where it has none.
     fn ask_notifications(&self) {}
-    /// Whether the system is in dark mode; `None`: as the window says
-    /// (winit's theme).
     /// The display's refresh rate (Hz), for frame diagnostics; `None` when
     /// the platform doesn't say (the window's monitor is asked instead).
     fn refresh_rate(&self) -> Option<f32> {
         None
     }
+    /// A frame was drawn, with `work` its own time (scene, render,
+    /// present). Android keeps the display at its top rate for the app's
+    /// surface and reports the work to the system's performance hints
+    /// (`pacing.rs`); elsewhere nothing.
+    fn frame_drawn(&self, _work: std::time::Duration) {}
+    /// Whether the system is in dark mode; `None`: as the window says
+    /// (winit's theme).
     fn dark(&self) -> Option<bool> {
         None
     }

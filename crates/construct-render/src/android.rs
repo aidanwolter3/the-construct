@@ -97,7 +97,15 @@ fn frame_for_comparison(dir: &std::path::Path, session: &mut Session) {
 }
 
 /// The soft keyboard and the system bars, for the window; and the pod.
-struct Android(AndroidApp, std::sync::Mutex<[f32; 4]>, crate::pods::PodHome);
+/// Also the frame pacing hints, and the display's top refresh rate (read
+/// once).
+struct Android(
+    AndroidApp,
+    std::sync::Mutex<[f32; 4]>,
+    crate::pods::PodHome,
+    crate::pacing::Pacing,
+    std::sync::OnceLock<Option<f32>>,
+);
 
 impl crate::window::Platform for Android {
     fn show_keyboard(&self, show: bool) {
@@ -200,6 +208,15 @@ impl crate::window::Platform for Android {
 
     fn refresh_rate(&self) -> Option<f32> {
         refresh_rate(&self.0)
+    }
+
+    fn frame_drawn(&self, work: std::time::Duration) {
+        // Read once: a JNI call is too slow for every frame.
+        let top = self
+            .4
+            .get_or_init(|| top_refresh_rate(&self.0).or_else(|| refresh_rate(&self.0)));
+        self.3
+            .frame_drawn(self.0.native_window(), top.unwrap_or(60.0), work);
     }
 
     fn clipboard(&self) -> Option<String> {
@@ -389,6 +406,67 @@ fn refresh_rate(app: &AndroidApp) -> Option<f32> {
             Ok(hz) => Some(hz),
             Err(e) => {
                 log(&format!("refresh rate: {}", java_error(env, e)));
+                None
+            }
+        })
+    })
+    .ok()
+    .flatten()
+}
+
+/// The display's highest refresh rate (`getDefaultDisplay()
+/// .getSupportedModes()`, the largest `getRefreshRate()`), for the frame
+/// rate the surface asks for (`pacing.rs`).
+fn top_refresh_rate(app: &AndroidApp) -> Option<f32> {
+    use jni::objects::{JObject, JObjectArray};
+    use jni::{jni_sig, jni_str};
+    // SAFETY: the VM pointer is valid for the life of the process.
+    let vm = unsafe { jni::JavaVM::from_raw(app.vm_as_ptr().cast()) };
+    let activity = app.activity_as_ptr() as jni::sys::jobject;
+    vm.attach_current_thread(|env| -> jni::errors::Result<Option<f32>> {
+        let run = |env: &mut jni::Env| -> jni::errors::Result<f32> {
+            // SAFETY: android-activity keeps its own reference to the activity.
+            let activity = unsafe { env.as_cast_raw::<JObject>(&activity)? };
+            let wm = env
+                .call_method(
+                    &*activity,
+                    jni_str!("getWindowManager"),
+                    jni_sig!("()Landroid/view/WindowManager;"),
+                    &[],
+                )?
+                .l()?;
+            let display = env
+                .call_method(
+                    &wm,
+                    jni_str!("getDefaultDisplay"),
+                    jni_sig!("()Landroid/view/Display;"),
+                    &[],
+                )?
+                .l()?;
+            let modes = env
+                .call_method(
+                    &display,
+                    jni_str!("getSupportedModes"),
+                    jni_sig!("()[Landroid/view/Display$Mode;"),
+                    &[],
+                )?
+                .l()?;
+            let modes = JObjectArray::<JObject>::cast_local(env, modes)?;
+            let mut top = 0.0f32;
+            for i in 0..modes.len(env)? {
+                let mode = modes.get_element(env, i)?;
+                let hz = env
+                    .call_method(&mode, jni_str!("getRefreshRate"), jni_sig!("()F"), &[])?
+                    .f()?;
+                top = top.max(hz);
+            }
+            Ok(top)
+        };
+        Ok(match run(env) {
+            Ok(hz) if hz > 1.0 => Some(hz),
+            Ok(_) => None,
+            Err(e) => {
+                log(&format!("display modes: {}", java_error(env, e)));
                 None
             }
         })
@@ -1177,8 +1255,15 @@ fn android_main(app: AndroidApp) {
         log(&format!("notification permission: {e}"));
     }
     set_up_push(&app, &home);
-    let window = crate::window::App::new(Controller::new(session), "The Construct")
-        .with_platform(Box::new(Android(app, Default::default(), home)));
+    let window = crate::window::App::new(Controller::new(session), "The Construct").with_platform(
+        Box::new(Android(
+            app,
+            Default::default(),
+            home,
+            crate::pacing::Pacing::new(),
+            Default::default(),
+        )),
+    );
     if let Err(e) = crate::window::run_app(event_loop, window) {
         log(&format!("window: {e}"));
     }

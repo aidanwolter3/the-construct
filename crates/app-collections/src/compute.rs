@@ -21,7 +21,11 @@
 //!   write that sets the field by hand replaces the cached answer for its
 //!   inputs, so the next row with those inputs gets the person's value.
 //!   Without a model configured the field keeps its default (cached answers
-//!   still apply).
+//!   still apply). Inputs waiting for one field are asked about together,
+//!   up to [`BATCH`] in one call ([`FieldModel::answer_batch`]); what a
+//!   batch leaves unanswered is asked about alone. An input whose answer
+//!   still fails is kept in `collections_compute_failures` and asked
+//!   again by [`retry_failed`] with backoff, a few times (issue #230).
 //!
 //! A computed field still takes writes: a value set by hand stays until a
 //! source field changes (or the write clears the field), and then the field
@@ -56,19 +60,49 @@ pub struct Question<'a> {
     pub options: &'a [String],
 }
 
+/// Several inputs of one field asked about in one call: `q.inputs` names
+/// the source fields (their values unused), `items` holds each input's
+/// values in that order.
+#[derive(Clone)]
+pub struct Batch<'a> {
+    pub q: Question<'a>,
+    pub items: &'a [Vec<String>],
+}
+
 /// Answers a [`Question`] with text (coerced to the field's type after).
 /// `None`: no answer (an error); the field keeps its default.
 pub trait FieldModel: Send + Sync + std::fmt::Debug {
     fn answer<'a>(&'a self, q: Question<'a>) -> BoxFuture<'a, Option<String>>;
+
+    /// Answer every item of `b` in one call: one text per item, in order
+    /// (`None` for an item it didn't answer). `None` (the default): this
+    /// model answers one at a time.
+    fn answer_batch<'a>(&'a self, b: Batch<'a>) -> BoxFuture<'a, Option<Vec<Option<String>>>> {
+        let _ = b;
+        Box::pin(async { None })
+    }
+}
+
+/// Most inputs asked about in one call (a text answer: [`TEXT_BATCH`]).
+pub const BATCH: usize = 50;
+/// Most inputs of a text field in one call (longer answers).
+pub const TEXT_BATCH: usize = 10;
+
+/// How many inputs of a `kind` field one call asks about.
+pub fn batch_size(kind: Kind) -> usize {
+    if kind == Kind::Text {
+        TEXT_BATCH
+    } else {
+        BATCH
+    }
 }
 
 /// The `feature` of `model` computes' calls (metrics, budgets).
 const LLM_FEATURE: &str = "collections";
 
-/// The prompt a [`Question`] sends.
-pub fn prompt_text(q: &Question<'_>) -> String {
-    let inputs: Vec<String> = q.inputs.iter().map(|(n, v)| format!("{n}: {v}")).collect();
-    let answer = match q.kind {
+/// What an answer of `kind` is ("exactly one of these options ...").
+fn answer_shape(q: &Question<'_>) -> String {
+    match q.kind {
         Kind::Choice => format!(
             "exactly one of these options and nothing else:\n{}",
             q.options.join("\n")
@@ -79,12 +113,112 @@ pub fn prompt_text(q: &Question<'_>) -> String {
         Kind::Datetime => "a date and time as YYYY-MM-DDTHH:MM and nothing else".into(),
         Kind::Text | Kind::Ref => "the text only, with no preamble".into(),
         Kind::Quantity => "an amount and a unit (such as 1 1/2 cups) and nothing else".into(),
-    };
+    }
+}
+
+/// The prompt a [`Question`] sends.
+pub fn prompt_text(q: &Question<'_>) -> String {
+    let inputs: Vec<String> = q.inputs.iter().map(|(n, v)| format!("{n}: {v}")).collect();
     format!(
-        "{}\n\n{}\n\nAnswer with {answer}.",
+        "{}\n\n{}\n\nAnswer with {}.",
         q.prompt,
-        inputs.join("\n")
+        inputs.join("\n"),
+        answer_shape(q)
     )
+}
+
+/// The prompt a [`Batch`] sends: the question once, then the items
+/// numbered from 1, each as its fields' names and values.
+pub fn batch_prompt_text(b: &Batch<'_>) -> String {
+    let items: Vec<String> = b
+        .items
+        .iter()
+        .enumerate()
+        .map(|(i, values)| {
+            let fields: Map<String, Value> =
+                b.q.inputs
+                    .iter()
+                    .map(|(n, _)| n.clone())
+                    .zip(values.iter().map(|v| json!(v)))
+                    .collect();
+            format!("{}. {}", i + 1, Value::Object(fields))
+        })
+        .collect();
+    format!(
+        "{}\n\nAnswer this for each numbered item below, with {} for each.\n\n{}\n\n\
+         Reply with JSON: {{\"answers\": [{{\"item\": <its number>, \"answer\": <the answer, as text>}}, ...]}}, \
+         one entry per item.",
+        b.q.prompt,
+        answer_shape(&b.q),
+        items.join("\n")
+    )
+}
+
+/// The structured-output schema of a batch answer.
+fn batch_schema() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "answers": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "item": { "type": "integer" },
+                        "answer": { "type": "string" },
+                    },
+                    "required": ["item", "answer"],
+                    "additionalProperties": false,
+                },
+            },
+        },
+        "required": ["answers"],
+        "additionalProperties": false,
+    })
+}
+
+/// A batch answer's text as one answer per item (`n` items, numbered from
+/// 1): `{"answers": [{item, answer}]}`, or a map from number to answer;
+/// the JSON may sit in a code fence. An item it misses (or answers twice)
+/// is `None`.
+pub fn parse_batch(text: &str, n: usize) -> Vec<Option<String>> {
+    let mut out = vec![None; n];
+    let (Some(start), Some(end)) = (text.find('{'), text.rfind('}')) else {
+        return out;
+    };
+    let Ok(Value::Object(o)) = serde_json::from_str::<Value>(&text[start..=end.max(start)]) else {
+        return out;
+    };
+    let as_text = |v: &Value| match v {
+        Value::String(s) if !s.trim().is_empty() => Some(s.clone()),
+        Value::Number(_) | Value::Bool(_) => Some(v.to_string()),
+        _ => None,
+    };
+    let mut seen = vec![0u32; n];
+    let mut put = |i: Option<usize>, v: Option<String>| {
+        if let Some(i) = i.filter(|i| (1..=n).contains(i)) {
+            seen[i - 1] += 1;
+            out[i - 1] = if seen[i - 1] == 1 { v } else { None };
+        }
+    };
+    match o.get("answers") {
+        Some(Value::Array(a)) => {
+            for e in a {
+                let i = match &e["item"] {
+                    Value::Number(x) => x.as_u64().map(|x| x as usize),
+                    Value::String(s) => s.trim().parse().ok(),
+                    _ => None,
+                };
+                put(i, as_text(&e["answer"]));
+            }
+        }
+        _ => {
+            for (k, v) in &o {
+                put(k.trim().trim_end_matches('.').parse().ok(), as_text(v));
+            }
+        }
+    }
+    out
 }
 
 /// The pod's [`FieldModel`]: a cheap-tier task for the agent module
@@ -124,6 +258,27 @@ impl FieldModel for PodModel {
                 }
                 Err(e) => {
                     tracing::warn!(error = %e, "computing a collection field failed");
+                    None
+                }
+            }
+        })
+    }
+
+    fn answer_batch<'a>(&'a self, b: Batch<'a>) -> BoxFuture<'a, Option<Vec<Option<String>>>> {
+        Box::pin(async move {
+            let per = if b.q.kind == Kind::Text { 300 } else { 40 };
+            let tokens = (b.items.len() as u32 * per + 200).min(16_000);
+            let task = construct_agent::Task::new(
+                LLM_FEATURE,
+                construct_agent::Tier::Cheap,
+                batch_prompt_text(&b),
+            )
+            .max_tokens(tokens)
+            .schema(batch_schema());
+            match self.agent.run(b.q.pod.store(), task).await {
+                Ok(out) => Some(parse_batch(&out.text(), b.items.len())),
+                Err(e) => {
+                    tracing::warn!(error = %e, "computing collection fields in a batch failed");
                     None
                 }
             }
@@ -685,9 +840,20 @@ fn learn_cache(
     Ok(())
 }
 
+/// Inputs of one field waiting for the model, with the rows that need them.
+#[derive(Debug, Clone)]
+struct Pending {
+    key: String,
+    texts: Vec<String>,
+    learn_input: Option<String>,
+    row_ids: Vec<String>,
+}
+
 /// Ask the model for `jobs` of `collection` in the background (each
-/// distinct input once), cache the answers and update the rows that still
-/// need them. Without a model, nothing happens.
+/// distinct input once, up to [`batch_size`] inputs of a field per call),
+/// cache the answers and update the rows that still need them. An input
+/// that gets no answer is recorded for [`retry_failed`]. Without a model,
+/// nothing happens.
 pub fn spawn(pod: &Pod, collection: &str, jobs: Vec<Job>) {
     if jobs.is_empty() {
         return;
@@ -699,7 +865,6 @@ pub fn spawn(pod: &Pod, collection: &str, jobs: Vec<Job>) {
         return;
     };
     let caps = adapter.caps();
-    let max_chars = caps.text_chars;
     let weak = Arc::downgrade(pod);
     let collection = collection.to_owned();
     tokio::spawn(async move {
@@ -710,42 +875,103 @@ pub fn spawn(pod: &Pod, collection: &str, jobs: Vec<Job>) {
         if !allowed {
             return;
         }
-        // (field id, key) → (inputs, lookup input, rows), in a stable order.
-        type Group = (Vec<String>, Option<String>, Vec<String>);
-        let mut groups: BTreeMap<(String, String), Group> = BTreeMap::new();
+        // field id → key → its inputs and rows, in a stable order.
+        let mut fields: BTreeMap<String, BTreeMap<String, Pending>> = BTreeMap::new();
         for j in jobs {
-            groups
-                .entry((j.field_id, j.key))
-                .or_insert_with(|| (j.inputs, j.learn_input, Vec::new()))
-                .2
+            fields
+                .entry(j.field_id)
+                .or_default()
+                .entry(j.key.clone())
+                .or_insert_with(|| Pending {
+                    key: j.key,
+                    texts: j.inputs,
+                    learn_input: j.learn_input,
+                    row_ids: Vec::new(),
+                })
+                .row_ids
                 .push(j.row_id);
         }
-        for ((field_id, key), (texts, learn_input, row_ids)) in groups {
-            let Some(pod) = weak.upgrade() else { return };
-            let name = collection.clone();
-            let Ok(Some((_, def))) = pod
-                .blocking(move |s| s.with_conn(|c| db::latest_def(c, &name)))
-                .await
-            else {
+        for (field_id, pending) in fields {
+            let pending: Vec<Pending> = pending.into_values().collect();
+            if !answer_field(&weak, &*field_model, &collection, &field_id, pending, caps).await {
                 return;
+            }
+        }
+    });
+}
+
+/// Ask about `pending` inputs of field `field_id`, a batch at a time, and
+/// store each batch's answers and failures in one transaction. `false`:
+/// the pod is gone.
+async fn answer_field(
+    weak: &std::sync::Weak<pod_core::AppState>,
+    field_model: &dyn FieldModel,
+    collection: &str,
+    field_id: &str,
+    pending: Vec<Pending>,
+    caps: Caps,
+) -> bool {
+    let max_chars = caps.text_chars;
+    let Some(pod) = weak.upgrade() else {
+        return false;
+    };
+    let name = collection.to_owned();
+    let Ok(Some((_, def))) = pod
+        .blocking(move |s| s.with_conn(|c| db::latest_def(c, &name)))
+        .await
+    else {
+        return false;
+    };
+    drop(pod);
+    let Some(field) = def.by_id(field_id).filter(|f| f.live()).cloned() else {
+        return true;
+    };
+    let Some((from, prompt)) = field.model_step().map(|(f, p)| (f.to_vec(), p.to_owned())) else {
+        return true;
+    };
+    let pending: Vec<Pending> = pending
+        .into_iter()
+        .filter(|p| p.texts.len() == from.len())
+        .collect();
+    let names: Vec<String> = from.iter().map(|id| def.name_of(id)).collect();
+    for chunk in pending.chunks(batch_size(field.kind)) {
+        let mut answers: Vec<Option<Value>> = vec![None; chunk.len()];
+        if chunk.len() > 1 {
+            let items: Vec<Vec<String>> = chunk.iter().map(|p| p.texts.clone()).collect();
+            let named: Vec<(String, String)> =
+                names.iter().map(|n| (n.clone(), String::new())).collect();
+            let Some(pod) = weak.upgrade() else {
+                return false;
             };
+            let batch = field_model
+                .answer_batch(Batch {
+                    q: Question {
+                        pod: &pod,
+                        prompt: &prompt,
+                        inputs: &named,
+                        kind: field.kind,
+                        options: &field.options,
+                    },
+                    items: &items,
+                })
+                .await;
             drop(pod);
-            let Some(field) = def.by_id(&field_id).filter(|f| f.live()).cloned() else {
-                continue;
-            };
-            let Some((from, prompt)) = field.model_step().map(|(f, p)| (f.to_vec(), p.to_owned()))
-            else {
-                continue;
-            };
-            if from.len() != texts.len() {
+            if let Some(texts) = batch {
+                for (a, t) in answers.iter_mut().zip(texts) {
+                    *a = t.and_then(|t| coerce_answer(&field, &t, max_chars));
+                }
+            }
+        }
+        // What the batch missed (or a batch of one): asked alone.
+        for (p, a) in chunk.iter().zip(answers.iter_mut()) {
+            if a.is_some() {
                 continue;
             }
-            let named: Vec<(String, String)> = from
-                .iter()
-                .map(|id| def.name_of(id))
-                .zip(texts.iter().cloned())
-                .collect();
-            let Some(pod) = weak.upgrade() else { return };
+            let named: Vec<(String, String)> =
+                names.iter().cloned().zip(p.texts.iter().cloned()).collect();
+            let Some(pod) = weak.upgrade() else {
+                return false;
+            };
             let answer = field_model
                 .answer(Question {
                     pod: &pod,
@@ -756,98 +982,212 @@ pub fn spawn(pod: &Pod, collection: &str, jobs: Vec<Job>) {
                 })
                 .await;
             drop(pod);
-            let Some(value) = answer.and_then(|a| coerce_answer(&field, &a, max_chars)) else {
+            *a = answer.and_then(|t| coerce_answer(&field, &t, max_chars));
+            if a.is_none() {
                 tracing::info!(collection, field = field.name, "no computed value");
-                continue;
-            };
-            let Some(pod) = weak.upgrade() else { return };
-            let name = collection.clone();
-            let updated = pod
-                .blocking(move |s| {
-                    s.transaction(|tx| {
-                        let now = pod_core::util::now_secs();
-                        let Some((_, def)) = db::latest_def(tx, &name)? else {
-                            return Ok((0, crate::follow::Followed::default()));
-                        };
-                        let Some(field) = def.by_id(&field_id).filter(|f| f.live()) else {
-                            return Ok((0, crate::follow::Followed::default()));
-                        };
-                        let Some((from, _)) = field.model_step() else {
-                            return Ok((0, crate::follow::Followed::default()));
-                        };
-                        let mut n = 0;
-                        let value = match (field.learning_lookup(), &learn_input) {
-                            // Learned as a rule; a rule may answer already
-                            // (a person's, which wins).
-                            (Some(c), Some(input)) => {
-                                if lookup::learn(tx, c, input, &value, false, now, caps)? {
-                                    n += 1;
-                                }
-                                Rules::load(tx, c)?
-                                    .find(input)
-                                    .and_then(|v| model::coerce(field, v, max_chars).ok().flatten())
-                                    .unwrap_or(value)
-                            }
-                            (Some(_), None) => value,
-                            (None, _) => {
-                                db::remember_computed(
-                                    tx,
-                                    &name,
-                                    &field.id,
-                                    &key,
-                                    &value,
-                                    db::SOURCE_MODEL,
-                                    now,
-                                )?;
-                                // The cache may hold a person's answer now (it wins).
-                                cached(tx, &def, field, &key, max_chars)?.unwrap_or(value)
-                            }
-                        };
-                        let mut seen = HashSet::new();
-                        for id in row_ids {
-                            if !seen.insert(id.clone()) {
-                                continue;
-                            }
-                            let Some(mut r) = db::row(tx, &name, &id)? else {
-                                continue;
-                            };
-                            // Changed meanwhile: set by hand, or other inputs.
-                            if r.deleted_at.is_some()
-                                || r.values.contains_key(&field.id)
-                                || inputs(&def, from, &r.values).map(|(_, k)| k).as_deref()
-                                    != Some(key.as_str())
-                            {
-                                continue;
-                            }
-                            let before = r.values.clone();
-                            r.values.insert(field.id.clone(), value.clone());
-                            r.updated_at = now;
-                            db::save_row(tx, &name, &r)?;
-                            db::note_writes(
-                                tx,
-                                &name,
-                                Some(&before),
-                                &r,
-                                Some(db::WRITER_MODEL),
-                                now,
-                            )?;
-                            n += 1;
-                        }
-                        // The rows and rules it changed move what reads them.
-                        let followed = crate::follow::settle(tx, now, caps)?;
-                        Ok((n, followed))
-                    })
-                })
-                .await;
-            match updated {
-                Ok((0, followed)) => followed.finish(&pod),
-                // The rows it answered and those that followed, in one
-                // event (decision `scoped-data-events`).
-                Ok((_, followed)) => followed.publish(&pod, None),
-                Err(e) => tracing::warn!(?e, "storing a computed value failed"),
             }
         }
-    });
+        let Some(pod) = weak.upgrade() else {
+            return false;
+        };
+        let (name, fid) = (collection.to_owned(), field_id.to_owned());
+        let done: Vec<(Pending, Option<Value>)> = chunk.iter().cloned().zip(answers).collect();
+        let updated = pod
+            .blocking(move |s| {
+                s.transaction(|tx| {
+                    let now = pod_core::util::now_secs();
+                    let mut n = 0;
+                    for (p, value) in &done {
+                        match value {
+                            Some(v) => {
+                                n += store_answer(tx, &name, &fid, p, v.clone(), now, caps)?;
+                                db::clear_compute_failure(tx, &name, &fid, &p.key)?;
+                            }
+                            None => {
+                                db::record_compute_failure(
+                                    tx, &name, &fid, &p.key, &p.row_ids, now,
+                                )?;
+                            }
+                        }
+                    }
+                    // The rows and rules it changed move what reads them.
+                    let followed = crate::follow::settle(tx, now, caps)?;
+                    Ok((n, followed))
+                })
+            })
+            .await;
+        match updated {
+            Ok((0, followed)) => followed.finish(&pod),
+            // The rows it answered and those that followed, in one
+            // event (decision `scoped-data-events`).
+            Ok((_, followed)) => followed.publish(&pod, None),
+            Err(e) => tracing::warn!(?e, "storing a computed value failed"),
+        }
+    }
+    true
+}
+
+/// Store the model's `value` for `p` (an input of field `field_id`): learned
+/// as a rule or cached, and set on the rows still waiting for it. The rows
+/// and rules it changed.
+fn store_answer(
+    tx: &Connection,
+    name: &str,
+    field_id: &str,
+    p: &Pending,
+    value: Value,
+    now: i64,
+    caps: Caps,
+) -> rusqlite::Result<usize> {
+    let max_chars = caps.text_chars;
+    let Some((_, def)) = db::latest_def(tx, name)? else {
+        return Ok(0);
+    };
+    let Some(field) = def.by_id(field_id).filter(|f| f.live()) else {
+        return Ok(0);
+    };
+    let Some((from, _)) = field.model_step() else {
+        return Ok(0);
+    };
+    let mut n = 0;
+    let value = match (field.learning_lookup(), &p.learn_input) {
+        // Learned as a rule; a rule may answer already (a person's, which
+        // wins).
+        (Some(c), Some(input)) => {
+            if lookup::learn(tx, c, input, &value, false, now, caps)? {
+                n += 1;
+            }
+            Rules::load(tx, c)?
+                .find(input)
+                .and_then(|v| model::coerce(field, v, max_chars).ok().flatten())
+                .unwrap_or(value)
+        }
+        (Some(_), None) => value,
+        (None, _) => {
+            db::remember_computed(tx, name, &field.id, &p.key, &value, db::SOURCE_MODEL, now)?;
+            // The cache may hold a person's answer now (it wins).
+            cached(tx, &def, field, &p.key, max_chars)?.unwrap_or(value)
+        }
+    };
+    let mut seen = HashSet::new();
+    for id in &p.row_ids {
+        if !seen.insert(id.clone()) {
+            continue;
+        }
+        let Some(mut r) = db::row(tx, name, id)? else {
+            continue;
+        };
+        // Changed meanwhile: set by hand, or other inputs.
+        if r.deleted_at.is_some()
+            || r.values.contains_key(&field.id)
+            || inputs(&def, from, &r.values).map(|(_, k)| k).as_deref() != Some(p.key.as_str())
+        {
+            continue;
+        }
+        let before = r.values.clone();
+        r.values.insert(field.id.clone(), value.clone());
+        r.updated_at = now;
+        db::save_row(tx, name, &r)?;
+        db::note_writes(tx, name, Some(&before), &r, Some(db::WRITER_MODEL), now)?;
+        n += 1;
+    }
+    Ok(n)
+}
+
+/// Ask again about the inputs whose answer failed and whose next try is
+/// due at `now` (on the pod's start and hourly after). A row answered
+/// meanwhile (by hand, a new rule or the cache) is set or skipped, and an
+/// input no row waits on any more is forgotten; the rest go to [`spawn`],
+/// which counts another attempt for each that fails again.
+pub async fn retry_failed(pod: &Pod, now: i64) {
+    let Some(adapter) = pod.adapter::<CollectionsAdapter>() else {
+        return;
+    };
+    if adapter.model.is_none() {
+        return;
+    }
+    let caps = adapter.caps();
+    let found = pod
+        .blocking(move |s| {
+            s.transaction(|tx| {
+                let mut jobs: BTreeMap<String, Vec<Job>> = BTreeMap::new();
+                let mut defs: HashMap<String, Option<Definition>> = HashMap::new();
+                let mut lookups: HashMap<String, Lookups> = HashMap::new();
+                for f in db::due_compute_failures(tx, now)? {
+                    if !defs.contains_key(&f.collection) {
+                        let d = db::latest_def(tx, &f.collection)?.map(|(_, d)| d);
+                        defs.insert(f.collection.clone(), d);
+                    }
+                    let def = defs[&f.collection].as_ref();
+                    let Some((def, field)) = def.and_then(|d| {
+                        d.by_id(&f.field_id)
+                            .filter(|x| x.live() && x.model_step().is_some())
+                            .map(|x| (d, x))
+                    }) else {
+                        db::clear_compute_failure(tx, &f.collection, &f.field_id, &f.key)?;
+                        continue;
+                    };
+                    let from = field
+                        .model_step()
+                        .map(|(f, _)| f.to_vec())
+                        .unwrap_or_default();
+                    let lk = lookups.entry(f.collection.clone()).or_default();
+                    let mut waiting = false;
+                    for id in &f.row_ids {
+                        let Some(mut r) = db::row(tx, &f.collection, id)? else {
+                            continue;
+                        };
+                        if r.deleted_at.is_some()
+                            || r.values.contains_key(&field.id)
+                            || inputs(def, &from, &r.values).map(|(_, k)| k).as_deref()
+                                != Some(f.key.as_str())
+                        {
+                            continue;
+                        }
+                        let before = r.values.clone();
+                        match recompute(tx, def, field, &mut r, lk, caps.text_chars)? {
+                            Some(job) => {
+                                waiting = true;
+                                jobs.entry(f.collection.clone()).or_default().push(job);
+                            }
+                            None if r.values.contains_key(&field.id) => {
+                                r.updated_at = now;
+                                db::save_row(tx, &f.collection, &r)?;
+                                // A retried model answer (decision `agents-cap-v3`).
+                                db::note_writes(
+                                    tx,
+                                    &f.collection,
+                                    Some(&before),
+                                    &r,
+                                    Some(db::WRITER_MODEL),
+                                    now,
+                                )?;
+                            }
+                            None => {}
+                        }
+                    }
+                    if !waiting {
+                        db::clear_compute_failure(tx, &f.collection, &f.field_id, &f.key)?;
+                    }
+                }
+                let followed = crate::follow::settle(tx, now, caps)?;
+                Ok((jobs, followed))
+            })
+        })
+        .await;
+    match found {
+        Ok((jobs, followed)) => {
+            if followed.rows.is_empty() {
+                followed.finish(pod);
+            } else {
+                followed.publish(pod, None);
+            }
+            for (c, j) in jobs {
+                spawn(pod, &c, j);
+            }
+        }
+        Err(e) => tracing::warn!(?e, "retrying computed values failed"),
+    }
 }
 
 #[cfg(test)]
@@ -877,6 +1217,53 @@ mod tests {
             ..q.clone()
         };
         assert!(prompt_text(&text).contains("the text only"));
+    }
+
+    #[test]
+    fn a_batch_prompt_numbers_its_items_and_its_answer_is_read_back() {
+        let names = vec![("name".to_owned(), String::new())];
+        let options = vec!["Produce".to_owned(), "Dairy".to_owned()];
+        let pod: Pod = std::sync::Arc::new(pod_core::AppState::in_memory(Vec::new()));
+        let items = vec![vec!["Oat \"milk\"".to_owned()], vec!["Apples".to_owned()]];
+        let b = Batch {
+            q: Question {
+                pod: &pod,
+                prompt: "Which section?",
+                inputs: &names,
+                kind: Kind::Choice,
+                options: &options,
+            },
+            items: &items,
+        };
+        let p = batch_prompt_text(&b);
+        assert!(p.starts_with("Which section?"), "{p}");
+        assert!(p.contains("1. {\"name\":\"Oat \\\"milk\\\"\"}"), "{p}");
+        assert!(
+            p.contains("2. {\"name\":\"Apples\"}") && p.contains("Produce\nDairy"),
+            "{p}"
+        );
+
+        let a =
+            r#"{"answers": [{"item": 2, "answer": "Produce"}, {"item": 1, "answer": "Dairy"}]}"#;
+        assert_eq!(
+            parse_batch(a, 2),
+            vec![Some("Dairy".to_owned()), Some("Produce".to_owned())]
+        );
+        // A map in a code fence; missing, repeated, out of range and empty
+        // items are unanswered.
+        let a = "```json\n{\"1\": \"Dairy\", \"3\": \"Produce\", \"4\": \"\"}\n```";
+        assert_eq!(
+            parse_batch(a, 4),
+            vec![
+                Some("Dairy".to_owned()),
+                None,
+                Some("Produce".to_owned()),
+                None
+            ]
+        );
+        let a = r#"{"answers": [{"item": 1, "answer": "Dairy"}, {"item": 1, "answer": "Produce"}, {"item": 9, "answer": "x"}]}"#;
+        assert_eq!(parse_batch(a, 2), vec![None, None]);
+        assert_eq!(parse_batch("no idea", 2), vec![None, None]);
     }
 
     #[test]
