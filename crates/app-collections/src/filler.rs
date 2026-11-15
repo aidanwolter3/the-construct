@@ -240,7 +240,8 @@ pub enum Source {
         tool: String,
         /// The tool's arguments; text values may hold `{today}` or
         /// `{today+N}` / `{today-N}` (days), the date in the pod's zone
-        /// when the fill runs.
+        /// when the fill runs, or `{midnight±N}`, the moment that day starts
+        /// there (with the offset in effect on that date).
         #[serde(default, skip_serializing_if = "Map::is_empty")]
         arguments: Map<String, Value>,
         #[serde(default, skip_serializing_if = "String::is_empty")]
@@ -1252,12 +1253,29 @@ pub fn parse(
     })
 }
 
-/// The day offset of a `{today}` / `{today+N}` / `{today-N}` token (`N`
-/// days); `None` for anything else.
-fn day_token(t: &str) -> Option<Result<i64, String>> {
-    let inner = t.strip_prefix("today")?;
+/// What a date token of an `mcp` filler's arguments becomes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DayToken {
+    /// `{today±N}`: the date, `YYYY-MM-DD`.
+    Date,
+    /// `{midnight±N}`: the moment that day starts in the pod's zone, with
+    /// the offset in effect then (`2026-11-15T00:00:00-07:00`).
+    Midnight,
+}
+
+/// A day token's kind and its offset in days.
+type DayOffset = (DayToken, i64);
+
+/// A `{today}` / `{today±N}` / `{midnight}` / `{midnight±N}` token (`N`
+/// days, an optional `d` after it): its kind and offset; `None` for
+/// anything else.
+fn day_token(t: &str) -> Option<Result<DayOffset, String>> {
+    let (kind, inner) = match t.strip_prefix("today") {
+        Some(r) => (DayToken::Date, r),
+        None => (DayToken::Midnight, t.strip_prefix("midnight")?),
+    };
     if inner.is_empty() {
-        return Some(Ok(0));
+        return Some(Ok((kind, 0)));
     }
     let (sign, n) = match inner.as_bytes()[0] {
         b'+' => (1, &inner[1..]),
@@ -1266,15 +1284,15 @@ fn day_token(t: &str) -> Option<Result<i64, String>> {
     };
     let n = n.strip_suffix('d').unwrap_or(n);
     Some(match n.parse::<i64>() {
-        Ok(n) if n <= MAX_DAY_OFFSET => Ok(sign * n),
+        Ok(n) if n <= MAX_DAY_OFFSET => Ok((kind, sign * n)),
         _ => Err(format!(
-            "{{{t}}}: a day offset is {{today+N}} or {{today-N}}, N at most {MAX_DAY_OFFSET}"
+            "{{{t}}}: a day offset is {{today+N}} or {{today-N}} (or midnight±N), N at most {MAX_DAY_OFFSET}"
         )),
     })
 }
 
-/// Each `{...}` token of `s` that names a date, with its offset.
-fn date_tokens(s: &str) -> Vec<(String, Result<i64, String>)> {
+/// Each `{...}` token of `s` that names a day, with its kind and offset.
+fn date_tokens(s: &str) -> Vec<(String, Result<DayOffset, String>)> {
     let mut out = Vec::new();
     let mut rest = s;
     while let Some(start) = rest.find('{') {
@@ -1289,7 +1307,7 @@ fn date_tokens(s: &str) -> Vec<(String, Result<i64, String>)> {
     out
 }
 
-/// Refuse a malformed `{today±N}` in `v`'s text values.
+/// Refuse a malformed `{today±N}` or `{midnight±N}` in `v`'s text values.
 fn check_dates(v: &Value) -> Result<(), String> {
     match v {
         Value::String(s) => {
@@ -1337,25 +1355,40 @@ fn add_days(today: &str, days: i64) -> Option<String> {
     Some(format!("{y:04}-{m:02}-{d:02}"))
 }
 
-/// An `mcp` filler's arguments with `{today}` and `{today±N}` replaced by
-/// dates counted from `today` (`YYYY-MM-DD`).
-pub fn resolve_dates(v: &Value, today: &str) -> Value {
+/// The start of day `date` (`YYYY-MM-DD`) in `tz`, as RFC 3339 with the
+/// offset in effect then.
+fn midnight(date: &str, tz: &pod_core::tz::jiff::tz::TimeZone) -> Option<String> {
+    let d: pod_core::tz::jiff::civil::Date = date.parse().ok()?;
+    let z = d.to_zoned(tz.clone()).ok()?;
+    Some(z.strftime("%Y-%m-%dT%H:%M:%S%:z").to_string())
+}
+
+/// An `mcp` filler's arguments with `{today±N}` replaced by dates counted
+/// from `today` (`YYYY-MM-DD`), and `{midnight±N}` by the moment each such
+/// day starts in `tz`.
+pub fn resolve_dates(v: &Value, today: &str, tz: &pod_core::tz::jiff::tz::TimeZone) -> Value {
     match v {
         Value::String(s) => {
             let mut out = s.clone();
             for (token, r) in date_tokens(s) {
-                if let Ok(n) = r
-                    && let Some(d) = add_days(today, n)
-                {
-                    out = out.replace(&token, &d);
+                let Ok((kind, n)) = r else { continue };
+                let Some(d) = add_days(today, n) else {
+                    continue;
+                };
+                let value = match kind {
+                    DayToken::Date => Some(d),
+                    DayToken::Midnight => midnight(&d, tz),
+                };
+                if let Some(v) = value {
+                    out = out.replace(&token, &v);
                 }
             }
             Value::String(out)
         }
-        Value::Array(a) => Value::Array(a.iter().map(|x| resolve_dates(x, today)).collect()),
+        Value::Array(a) => Value::Array(a.iter().map(|x| resolve_dates(x, today, tz)).collect()),
         Value::Object(o) => Value::Object(
             o.iter()
-                .map(|(k, x)| (k.clone(), resolve_dates(x, today)))
+                .map(|(k, x)| (k.clone(), resolve_dates(x, today, tz)))
                 .collect(),
         ),
         other => other.clone(),
@@ -1803,8 +1836,9 @@ mod tests {
     fn mcp_arguments_take_dates() {
         let args = json!({"from": "{today}", "to": "{today+180}", "back": "{today-1d}",
             "range": ["{today+1}", "no {braces} here"], "n": 5});
+        let utc = pod_core::tz::jiff::tz::TimeZone::UTC;
         assert_eq!(
-            resolve_dates(&args, "2026-11-15"),
+            resolve_dates(&args, "2026-11-15", &utc),
             json!({"from": "2026-11-15", "to": "2027-05-14", "back": "2026-11-14",
                 "range": ["2026-11-16", "no {braces} here"], "n": 5})
         );
@@ -1814,6 +1848,20 @@ mod tests {
         assert!(check_dates(&json!({"to": "{today+5}"})).is_ok());
         assert!(check_dates(&json!({"to": "{today+x}"})).is_err());
         assert!(check_dates(&json!({"to": "{today+99999}"})).is_err());
+        assert!(check_dates(&json!({"to": "{midnight+15}"})).is_ok());
+        assert!(check_dates(&json!({"to": "{midnight+}"})).is_err());
+        // Midnight carries the offset of its own date: Denver is -07:00 in
+        // November and -06:00 after daylight saving starts in March.
+        let denver = pod_core::tz::parse("America/Denver").unwrap();
+        assert_eq!(
+            resolve_dates(
+                &json!({"from": "{midnight}", "to": "{midnight+15}", "later": "{midnight+121}"}),
+                "2026-11-14",
+                &denver
+            ),
+            json!({"from": "2026-11-14T00:00:00-07:00", "to": "2026-11-29T00:00:00-07:00",
+                "later": "2027-03-15T00:00:00-06:00"})
+        );
     }
 
     #[test]

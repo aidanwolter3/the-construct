@@ -559,14 +559,14 @@ impl Definition {
     }
 
     /// The keys rows are served with besides their fields: a datetime's
-    /// `<name>_date`, `_time` and `_text`; a quantity's `<name>_text`; with fillers, `filler_id` and
+    /// `<name>_date`, `_time`, `_day` and `_text`; a quantity's `<name>_text`; with fillers, `filler_id` and
     /// `filler_title`; with alerts, `alert_matched` and `alert_names`. A
     /// field of the same name wins.
     pub fn derived_names(&self) -> Vec<String> {
         let mut out = Vec::new();
         for f in self.live_fields().filter(|f| f.kind == Kind::Datetime) {
             for n in std::iter::once(&f.name).chain(&f.aliases) {
-                for suffix in ["_date", "_time", "_text"] {
+                for suffix in ["_date", "_time", "_day", "_text"] {
                     out.push(format!("{n}{suffix}"));
                 }
             }
@@ -2153,9 +2153,14 @@ pub fn row_entity(
             .cloned()
             .unwrap_or_else(|| f.empty_value());
         if f.kind == Kind::Datetime {
-            let (date, time, text) = datetime_parts(&v);
+            let (date, time, day, text) = datetime_parts(&v);
             for n in std::iter::once(&f.name).chain(&f.aliases) {
-                for (suffix, x) in [("_date", &date), ("_time", &time), ("_text", &text)] {
+                for (suffix, x) in [
+                    ("_date", &date),
+                    ("_time", &time),
+                    ("_day", &day),
+                    ("_text", &text),
+                ] {
                     let k = format!("{n}{suffix}");
                     if def.field(&k).is_none() {
                         e.insert(k, json!(x));
@@ -2180,20 +2185,21 @@ pub fn row_entity(
     e
 }
 
-/// A datetime value as `(YYYY-MM-DD, "7:30 PM", "Fri Nov 6 · 7:30 PM")`,
+/// A datetime value as `(YYYY-MM-DD, "7:30 PM", "Fri Nov 6", "Fri Nov 6 · 7:30 PM")`,
 /// on its own wall clock (empty texts when it has none).
-pub fn datetime_parts(v: &Value) -> (String, String, String) {
+pub fn datetime_parts(v: &Value) -> (String, String, String, String) {
     let Some(w) = v.as_str().and_then(web_extract::when::When::parse) else {
         return Default::default();
     };
     let date = w.iso().get(..10).unwrap_or("").to_owned();
     let time = w.time_text().unwrap_or_default();
+    let day = w.date_text();
     let text = if time.is_empty() {
-        w.date_text()
+        day.clone()
     } else {
-        format!("{} · {time}", w.date_text())
+        format!("{day} · {time}")
     };
-    (date, time, text)
+    (date, time, day, text)
 }
 
 /// A date or datetime value as unix seconds (a date: its start, UTC; a

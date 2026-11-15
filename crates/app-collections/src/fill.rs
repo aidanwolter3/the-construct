@@ -1155,8 +1155,12 @@ pub(crate) async fn mcp_rows(
     let Some(spec) = filler.extract_spec() else {
         return Err("the filler's recipe is incomplete".into());
     };
-    let args =
-        crate::filler::resolve_dates(&Value::Object(arguments.clone()), &today(pod.store(), now));
+    let tz = pod_core::tz::time_zone(pod.store()).unwrap_or(pod_core::tz::jiff::tz::TimeZone::UTC);
+    let args = crate::filler::resolve_dates(
+        &Value::Object(arguments.clone()),
+        &today(pod.store(), now),
+        &tz,
+    );
     let value = pod_core::mcp_servers::call_tool(pod, server, tool, &args)
         .await
         .map_err(|e| e.message)?;
