@@ -1961,6 +1961,14 @@ fn write_all(
             db::insert_row(tx, name, after)?;
         } else {
             db::save_row(tx, name, after)?;
+            db::note_writes(
+                tx,
+                name,
+                before.as_ref().map(|b| &b.values),
+                after,
+                None,
+                now,
+            )?;
         }
         records.push((id.clone(), before.as_ref().map(Row::state), after.state()));
     }

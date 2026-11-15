@@ -1,16 +1,21 @@
-//! Following the runner, one task per pod: take a snapshot when the stored
-//! state is missing or old, then follow the event stream from the cursor,
-//! reconnecting with backoff. Each event's record goes into the mirror
-//! ([`crate::state`]), its notifications are sent and the linked task rows
-//! follow their runs ([`tasks::sync`]). While the runner can't be reached,
-//! the last state stays and the feeds say it's stale.
+//! Following the runner, one task per pod (decision `agents-cap-v3`): take
+//! a snapshot only when there is no cursor yet (or the runner says the
+//! cursor is older than its log, 410), else catch up from the stored cursor
+//! with the event log's pages (`/v3/events`), then follow the stream from
+//! there, reconnecting with backoff. Each event's record goes into the
+//! mirror ([`crate::state`]), its notifications are sent, and the cursor is
+//! saved with it, so a gap of any length (within the log's 30 days) is
+//! replayed and notified. The linked task rows follow their runs
+//! ([`tasks::sync`]) and the pod's schedules fire ([`schedules::tick`]) on
+//! every pass, connected or not. While the runner can't be reached, the
+//! last state stays and the feeds say it's stale.
 //!
 //! It starts when the pod opens ([`crate::AgentsAdapter`]'s `resume`), and
 //! a pod signed in to a runner is opened when the server starts and kept
 //! open (`AppAdapter::keeps_open`), so it runs whether or not anyone uses
-//! the pod (decision `agents-runs`). The task holds the pod only while it
-//! works on an answer, so a pod that closes ends it. A sign-in or sign-out
-//! wakes it ([`Ctl::changed`]).
+//! the pod. The task holds the pod only while it works on an answer, so a
+//! pod that closes ends it. A sign-in or sign-out wakes it
+//! ([`Ctl::changed`]).
 
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Weak};
@@ -19,17 +24,19 @@ use std::time::Duration;
 use pod_core::{AppState, Pod};
 use tokio::sync::Notify;
 
-use crate::cap::{self, CapError, Event, SseParser};
-use crate::state::Effect;
+use crate::cap::{self, CapError, Clients, Event, Runner, SseParser};
+use crate::schedules::{self, Notice};
+use crate::state::{Effect, State};
 use crate::{AgentsAdapter, alerts, db, tasks};
 
-/// A snapshot is taken again when the last good answer is older than this.
-pub const SNAPSHOT_AFTER: Duration = Duration::from_secs(600);
 /// Waits between attempts, doubling from the first to the last.
 pub const BACKOFF_MIN: Duration = Duration::from_secs(1);
 pub const BACKOFF_MAX: Duration = Duration::from_secs(60);
 /// While signed out, how often to look again (a sign-in wakes it sooner).
 const IDLE: Duration = Duration::from_secs(300);
+/// The most pages read in one catch-up before following the stream (the
+/// stream carries on from there).
+const MAX_PAGES: usize = 200;
 
 /// One pod's follower state ([`pod_core::AppState::local`]).
 #[derive(Debug, Default)]
@@ -91,11 +98,17 @@ async fn run(weak: Weak<AppState>, ctl: Arc<Ctl>) {
         let Some(pod) = weak.upgrade() else { return };
         let generation = ctl.generation.load(Ordering::SeqCst);
         let runner = pod.blocking(db::runner).await.ok().flatten();
-        drop(pod);
         let Some(runner) = runner else {
+            // No runner: the schedules only move on.
+            if let Some(a) = adapter(&pod) {
+                let clients = a.clients.clone();
+                schedules::tick(&pod, &clients, None, now_ms()).await;
+            }
+            drop(pod);
             wait(&ctl, IDLE).await;
             continue;
         };
+        drop(pod);
         match follow(&weak, &ctl, &runner, generation).await {
             Outcome::Gone => return,
             Outcome::Changed => backoff = BACKOFF_MIN,
@@ -116,10 +129,16 @@ async fn run(weak: Weak<AppState>, ctl: Arc<Ctl>) {
                     }
                     tracing::info!(error = %e, retry_in = ?backoff, "agent runner unreachable");
                 }
-                let wait_for = match adapter(&pod) {
-                    Some(a) => backoff.min(a.config.backoff_max),
-                    None => backoff,
+                let (wait_for, clients) = match adapter(&pod) {
+                    Some(a) => (backoff.min(a.config.backoff_max), Some(a.clients.clone())),
+                    None => (backoff, None),
                 };
+                // The timer runs while the runner is away: occurrences
+                // wait to be sent, and are missed after 2 h.
+                if let Some(clients) = clients {
+                    let pass = schedules::tick(&pod, &clients, Some(&runner), now_ms()).await;
+                    settle(&pod, Vec::new(), pass.notices).await;
+                }
                 drop(pod);
                 wait(&ctl, wait_for).await;
                 backoff = (backoff * 2).min(BACKOFF_MAX);
@@ -135,14 +154,15 @@ pub fn now_ms() -> i64 {
         .unwrap_or(0)
 }
 
-/// Send the notifications an answer owes, in the owner layout.
-pub async fn settle(pod: &Pod, effects: Vec<Effect>) {
-    if effects.is_empty() {
+/// Send the notifications an answer (and the timer) owe, in the owner
+/// layout.
+pub async fn settle(pod: &Pod, effects: Vec<Effect>, notices: Vec<Notice>) {
+    if effects.is_empty() && notices.is_empty() {
         return;
     }
     let p = Arc::clone(pod);
     if let Ok(Some(app)) = pod.blocking(move |s| alerts::owner(s, p.catalog())).await {
-        let items = alerts::notifications(&effects, &app, pod_core::util::now_secs());
+        let items = alerts::notifications(&effects, &notices, &app, pod_core::util::now_secs());
         if !items.is_empty()
             && let Err(e) = pod.notify(items).await
         {
@@ -151,12 +171,86 @@ pub async fn settle(pod: &Pod, effects: Vec<Effect>) {
     }
 }
 
-async fn follow(
+/// Save `state`, tell the clients and send what it owes.
+async fn store(pod: &Pod, state: &State, effects: Vec<Effect>) {
+    let (st, now) = (state.clone(), now_ms());
+    if pod.blocking(move |s| db::save(s, &st, now)).await.is_err() {
+        tracing::error!("the agent runner's state could not be saved");
+    }
+    pod.publish_data_all(crate::NAME);
+    settle(pod, effects, Vec::new()).await;
+}
+
+/// Bring `state` up to the runner's log: a snapshot when there is no cursor
+/// (or it is too old), else the log's pages from the cursor. Each page is
+/// saved (with its cursor) before the next is read.
+async fn catch_up(
     weak: &Weak<AppState>,
-    ctl: &Ctl,
-    runner: &cap::Runner,
-    generation: u64,
-) -> Outcome {
+    clients: &Clients,
+    runner: &Runner,
+    state: &mut State,
+    changed: &(dyn Fn() -> bool + Sync),
+) -> Result<(), Outcome> {
+    let mut snapshot = state.cursor <= 0;
+    for _ in 0..MAX_PAGES {
+        if snapshot {
+            let snap = cap::snapshot(clients, runner)
+                .await
+                .map_err(Outcome::Failed)?;
+            let pod = weak.upgrade().ok_or(Outcome::Gone)?;
+            if changed() {
+                return Err(Outcome::Changed);
+            }
+            let effects = state.apply_snapshot(&snap);
+            store(&pod, state, effects).await;
+            snapshot = false;
+            continue;
+        }
+        let page = match cap::events(clients, runner, state.cursor, cap::PAGE_LIMIT).await {
+            Ok(p) => p,
+            Err(CapError::CursorTooOld) => {
+                tracing::info!("the runner's log no longer reaches the cursor: a snapshot");
+                snapshot = true;
+                continue;
+            }
+            Err(e) => return Err(Outcome::Failed(e)),
+        };
+        let pod = weak.upgrade().ok_or(Outcome::Gone)?;
+        if changed() {
+            return Err(Outcome::Changed);
+        }
+        let events: Vec<Event> = page
+            .events
+            .into_iter()
+            .filter(|e| e.seq > state.cursor)
+            .collect();
+        let effects = state.apply_events(&events, now_ms());
+        state.cursor = state.cursor.max(page.next);
+        store(&pod, state, effects).await;
+        if !page.more {
+            return Ok(());
+        }
+    }
+    Ok(())
+}
+
+/// One pass of the work beside the stream: the linked tasks and the timer.
+async fn pass(pod: &Pod, clients: &Clients, runner: &Runner, state: &mut State) {
+    tasks::sync(pod, clients, runner, state).await;
+    let pass = schedules::tick(pod, clients, Some(runner), now_ms()).await;
+    let mut effects = Vec::new();
+    for r in &pass.runs {
+        effects.extend(state.apply_run(r));
+    }
+    if !pass.runs.is_empty() {
+        let (st, now) = (state.clone(), now_ms());
+        let _ = pod.blocking(move |s| db::save(s, &st, now)).await;
+        pod.publish_data_all(crate::NAME);
+    }
+    settle(pod, effects, pass.notices).await;
+}
+
+async fn follow(weak: &Weak<AppState>, ctl: &Ctl, runner: &Runner, generation: u64) -> Outcome {
     let changed = || ctl.generation.load(Ordering::SeqCst) != generation;
     let Some(pod) = weak.upgrade() else {
         return Outcome::Gone;
@@ -166,33 +260,13 @@ async fn follow(
     };
     let (clients, tasks_every) = (a.clients.clone(), a.config.tasks_every);
     let stored = pod.blocking(db::state).await.ok().flatten();
-    let mut state = stored.as_ref().map(|(s, _)| s.clone()).unwrap_or_default();
-    let fresh = stored.as_ref().is_some_and(|(s, h)| {
-        s.cursor > 0
-            && h.last_ok_at
-                .is_some_and(|t| now_ms() - t < SNAPSHOT_AFTER.as_millis() as i64)
-    });
+    let mut state = stored.map(|(s, _)| s).unwrap_or_default();
     let mut data_rx = pod.subscribe_data();
     drop(pod);
 
-    if !fresh {
-        let snap = match cap::snapshot(&clients, runner).await {
-            Ok(s) => s,
-            Err(e) => return Outcome::Failed(e),
-        };
-        let Some(pod) = weak.upgrade() else {
-            return Outcome::Gone;
-        };
-        if changed() {
-            return Outcome::Changed;
-        }
-        let effects = state.apply_snapshot(&snap);
-        let (st, now) = (state.clone(), now_ms());
-        let _ = pod.blocking(move |s| db::save(s, &st, now)).await;
-        pod.publish_data_all(crate::NAME);
-        settle(&pod, effects).await;
+    if let Err(o) = catch_up(weak, &clients, runner, &mut state, &changed).await {
+        return o;
     }
-
     let mut resp = match cap::open_stream(&clients, runner, state.cursor).await {
         Ok(r) => r,
         Err(e) => return Outcome::Failed(e),
@@ -204,16 +278,14 @@ async fn follow(
         if changed() {
             return Outcome::Changed;
         }
-        let (st, now) = (state.clone(), now_ms());
-        let _ = pod.blocking(move |s| db::save(s, &st, now)).await;
-        pod.publish_data_all(crate::NAME);
-        tasks::sync(&pod, &clients, runner, &state).await;
+        store(&pod, &state, Vec::new()).await;
+        pass(&pod, &clients, runner, &mut state).await;
     }
     let mut parser = SseParser::default();
     let mut tick = tokio::time::interval(tasks_every);
     tick.tick().await;
     loop {
-        let mut launch = false;
+        let mut again = false;
         tokio::select! {
             chunk = resp.chunk() => {
                 let bytes = match chunk {
@@ -244,36 +316,27 @@ async fn follow(
                 if changed() {
                     return Outcome::Changed;
                 }
-                let mut owed = Vec::new();
-                for e in &events {
-                    owed.extend(state.apply(e));
-                }
-                let (st, now) = (state.clone(), now_ms());
-                let saved = pod.blocking(move |s| db::save(s, &st, now)).await;
-                if saved.is_err() {
-                    tracing::error!("the agent runner's state could not be saved");
-                }
-                pod.publish_data_all(crate::NAME);
-                settle(&pod, owed).await;
-                launch = true;
+                let owed = state.apply_events(&events, now_ms());
+                store(&pod, &state, owed).await;
+                again = true;
             }
             _ = ctl.wake.notified() => {
                 if changed() {
                     return Outcome::Changed;
                 }
             }
-            _ = tick.tick() => launch = true,
+            _ = tick.tick() => again = true,
             got = data_rx.recv() => match got {
-                Ok(ev) => launch = ev.source == app_collections::NAME,
-                Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => launch = true,
+                Ok(ev) => again = ev.source == app_collections::NAME,
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => again = true,
                 Err(tokio::sync::broadcast::error::RecvError::Closed) => return Outcome::Gone,
             },
         }
-        if launch {
+        if again {
             let Some(pod) = weak.upgrade() else {
                 return Outcome::Gone;
             };
-            tasks::sync(&pod, &clients, runner, &state).await;
+            pass(&pod, &clients, runner, &mut state).await;
         }
     }
 }

@@ -269,6 +269,10 @@ A collection can keep itself current from the web (decision
   through the agent module (`crates/agent`): the `model` jack, daily budgets per feature, retries.
 - **Modes:** `replace` (the filler's rows are its latest answer, kept stable by `key`) or `upsert` by `key`. Filled
   fields can't be edited by hand.
+- **Who wrote a field:** a row a filler made carries its id (`collections_rows.filler`), and every field a filler
+  or a model's computed answer wrote last is recorded in `collections_field_writers` (`filler:<id>` or `model`); a
+  person's (or Claude's) write of the field clears it. The Agents source starts runs only from rows a person wrote
+  (decision [`agents-cap-v3`](decisions/agents-cap-v3.md), issue #243).
 - **Alerts** notify once when a row matches: `any` / `all` / `none` phrases, a filler, days of the week, a window on a
   date field. Rows are served with `alert_matched` and `alert_names`.
 

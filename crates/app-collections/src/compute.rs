@@ -1084,9 +1084,11 @@ fn store_answer(
         {
             continue;
         }
+        let before = r.values.clone();
         r.values.insert(field.id.clone(), value.clone());
         r.updated_at = now;
         db::save_row(tx, name, &r)?;
+        db::note_writes(tx, name, Some(&before), &r, Some(db::WRITER_MODEL), now)?;
         n += 1;
     }
     Ok(n)
@@ -1142,6 +1144,7 @@ pub async fn retry_failed(pod: &Pod, now: i64) {
                         {
                             continue;
                         }
+                        let before = r.values.clone();
                         match recompute(tx, def, field, &mut r, lk, caps.text_chars)? {
                             Some(job) => {
                                 waiting = true;
@@ -1150,6 +1153,15 @@ pub async fn retry_failed(pod: &Pod, now: i64) {
                             None if r.values.contains_key(&field.id) => {
                                 r.updated_at = now;
                                 db::save_row(tx, &f.collection, &r)?;
+                                // A retried model answer (decision `agents-cap-v3`).
+                                db::note_writes(
+                                    tx,
+                                    &f.collection,
+                                    Some(&before),
+                                    &r,
+                                    Some(db::WRITER_MODEL),
+                                    now,
+                                )?;
                             }
                             None => {}
                         }

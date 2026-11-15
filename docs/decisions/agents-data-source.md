@@ -1,5 +1,7 @@
 # An `agents` data source follows an external agent runner over CAP v1
 
+Superseded in part by [agents-cap-v3](agents-cap-v3.md): schedules are the pod's own (created, edited and fired by the pod), and the follower replays the event log from a stored cursor.
+
 Superseded in part by [agents-runs](agents-runs.md): CAP v2, runs mirrored rather than sessions replayed, the
 Tasks mapping table, and a follower for every signed-in pod.
 

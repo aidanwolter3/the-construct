@@ -886,6 +886,7 @@ async fn write_row(
         }
         row.updated_at = now;
         db::save_row(tx, &name, &row)?;
+        db::note_writes(tx, &name, Some(&before_values), &row, None, now)?;
         Ok(Ok((json!({ "ok": true, "id": row.id }), jobs, computed)))
     })
     .await?;

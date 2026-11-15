@@ -70,7 +70,7 @@ The server binary picks the adapters at compile time (`server::adapters`). Apps 
 | `shell` | Home | `app-shell` | The home blueprint: a blank page with Notifications and Settings, which every pod's `home` references |
 | `settings` | Settings | `app-shell` | Settings as a layout over device data: connection, layouts and versions, sign-ins, channels, server |
 | `inbox` | Notifications | `app-shell` | The notification inbox as a layout over device data |
-| `agents` | Agents | `app-agents` | Claude Code sessions, schedules, sandboxes and checks of an external agent runner ([agents.md](agents.md)) |
+| `agents` | Agents | `app-agents` | Claude Code runs, sandboxes and checks of an external agent runner, and the pod's own schedules for it ([agents.md](agents.md)) |
 
 These are **blueprints** (decision `blueprints-and-home`): served by id and updated by deploys, but not listed.
 There are no apps at runtime (decision `layouts-not-apps`): a pod has **layouts**, starting with `home`, the root
