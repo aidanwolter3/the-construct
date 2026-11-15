@@ -55,6 +55,10 @@ pub trait Platform {
     /// surface and reports the work to the system's performance hints
     /// (`pacing.rs`); elsewhere nothing.
     fn frame_drawn(&self, _work: std::time::Duration) {}
+    /// A finger touched down: work is likely on its way (a screen opening).
+    /// Android tells the system's performance hints, so the clocks are up
+    /// before the work starts (`pacing.rs`); elsewhere nothing.
+    fn input_started(&self) {}
     /// Whether the system is in dark mode; `None`: as the window says
     /// (winit's theme).
     fn dark(&self) -> Option<bool> {

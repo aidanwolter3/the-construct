@@ -13,7 +13,12 @@
 //!   light load and runs the thread on a slow core at a low clock, which
 //!   made a 0.3 ms frame (on a desktop core) take 3–6 ms on a phone.
 //!
-//! Both are looked up in `libandroid.so` when first needed (`dlsym`), so
+//! - **A workload increase** (`APerformanceHint_notifyWorkloadIncrease`,
+//!   Android 16) when a finger touches down: a touch is often a screen about
+//!   to open, and the clocks the hints keep low while idle are up before its
+//!   layout runs, rather than after a slow frame says so.
+//!
+//! All are looked up in `libandroid.so` when first needed (`dlsym`), so
 //! the app still runs on Android versions without them, just without the
 //! hint.
 
@@ -40,6 +45,7 @@ type GetManager = unsafe extern "C" fn() -> *mut c_void;
 type CreateSession = unsafe extern "C" fn(*mut c_void, *const i32, usize, i64) -> *mut c_void;
 type UpdateTarget = unsafe extern "C" fn(*mut c_void, i64) -> c_int;
 type ReportActual = unsafe extern "C" fn(*mut c_void, i64) -> c_int;
+type NotifyIncrease = unsafe extern "C" fn(*mut c_void, bool, bool, *const c_char) -> c_int;
 
 /// The NDK calls found (each `None` where this Android lacks it).
 struct Api {
@@ -48,6 +54,7 @@ struct Api {
     create_session: Option<CreateSession>,
     update_target: Option<UpdateTarget>,
     report_actual: Option<ReportActual>,
+    notify_increase: Option<NotifyIncrease>,
 }
 
 impl Api {
@@ -74,6 +81,8 @@ impl Api {
                     .map(|p| std::mem::transmute::<*mut c_void, UpdateTarget>(p)),
                 report_actual: f(sym(c"APerformanceHint_reportActualWorkDuration"))
                     .map(|p| std::mem::transmute::<*mut c_void, ReportActual>(p)),
+                notify_increase: f(sym(c"APerformanceHint_notifyWorkloadIncrease"))
+                    .map(|p| std::mem::transmute::<*mut c_void, NotifyIncrease>(p)),
             }
         }
     }
@@ -101,6 +110,24 @@ pub(crate) struct Pacing(Mutex<Option<State>>);
 impl Pacing {
     pub(crate) fn new() -> Pacing {
         Pacing(Mutex::new(None))
+    }
+
+    /// A finger touched down: the hint session is told the CPU's work is
+    /// about to grow (Android 16), before the first frame was drawn there
+    /// is no session yet, and nothing is said.
+    pub(crate) fn workload_increase(&self) {
+        let guard = self.0.lock().unwrap_or_else(|p| p.into_inner());
+        let Some(st) = guard.as_ref() else {
+            return;
+        };
+        let (Some(session), Some(notify)) =
+            (st.session.filter(|s| !s.is_null()), st.api.notify_increase)
+        else {
+            return;
+        };
+        // SAFETY: the session came from createSession and is still open;
+        // the name is a NUL-terminated string for the call.
+        unsafe { notify(session, true, false, c"touch".as_ptr()) };
     }
 
     /// A frame was drawn on `window` with `work` (scene, render, present);
@@ -171,13 +198,18 @@ fn create_session(api: &Api, tid: i32, target_ns: i64) -> *mut c_void {
         }
     };
     log(&format!(
-        "pacing: performance hint session {} (target {:.1} ms)",
+        "pacing: performance hint session {} (target {:.1} ms; touch hints {})",
         if session.is_null() {
             "unavailable"
         } else {
             "on"
         },
-        target_ns as f64 / 1.0e6
+        target_ns as f64 / 1.0e6,
+        if api.notify_increase.is_some() {
+            "on"
+        } else {
+            "unavailable (Android 16+)"
+        }
     ));
     session
 }

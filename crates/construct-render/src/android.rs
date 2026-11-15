@@ -210,6 +210,10 @@ impl crate::window::Platform for Android {
         refresh_rate(&self.0)
     }
 
+    fn input_started(&self) {
+        self.3.workload_increase();
+    }
+
     fn frame_drawn(&self, work: std::time::Duration) {
         // Read once: a JNI call is too slow for every frame.
         let top = self
