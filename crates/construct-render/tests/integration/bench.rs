@@ -123,3 +123,35 @@ fn bench_scroll(name: &str) {
         last.layers,
     );
 }
+
+/// What comparing a whole cache costs (the UI thread did this for every
+/// engine snapshot before the engine sent only changes): ~3,000 rows of
+/// 15 fields, compared with an equal copy, then dropped.
+#[test]
+#[ignore = "a benchmark: run with --ignored --nocapture"]
+fn bench_compare_whole_cache() {
+    use protocol::{DataBundle, EntityRecord};
+    let mut b = DataBundle::default();
+    for i in 0..3000 {
+        let mut e = EntityRecord::default();
+        for f in 0..15 {
+            e.set(format!("field_{f}"), format!("a made-up value {i} {f}"));
+        }
+        b.entities.insert(format!("collections://rows/r{i}"), e);
+    }
+    let mut times = Vec::new();
+    for _ in 0..50 {
+        let incoming = b.clone();
+        let t = Instant::now();
+        let mut changed = false;
+        for (uri, e) in incoming.entities {
+            changed |= b.entities.get(&uri) != Some(&e);
+        }
+        times.push(ms(t.elapsed()));
+        assert!(!changed);
+    }
+    eprintln!(
+        "bench compare 3000 rows: {} ms (p50/p95/max)",
+        spread(times)
+    );
+}

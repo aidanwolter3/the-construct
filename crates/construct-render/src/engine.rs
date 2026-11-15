@@ -69,6 +69,10 @@ struct Shared {
     news: Mutex<Option<Changes>>,
     /// What the last snapshot showed, to tell what changed.
     seen: Mutex<Seen>,
+    /// The data the session was last sent (its snapshot JSON too), so a
+    /// snapshot sends only what changed: comparing the whole cache on the
+    /// UI thread cost a phone about 20 ms a snapshot.
+    sent: Mutex<Sent>,
     /// The session's image store: waking it draws the next frame.
     images: Mutex<Option<ImageStore>>,
     /// Layout titles by id, for device data rows.
@@ -91,6 +95,46 @@ struct Shared {
     /// The device data is being loaded again; `again`: once more after.
     loading: AtomicBool,
     again: AtomicBool,
+}
+
+#[derive(Default)]
+struct Sent {
+    entities_json: String,
+    queries_json: String,
+    data: DataBundle,
+}
+
+impl Sent {
+    /// What `now` changes of what was sent (entities and queries that
+    /// differ or are new), and now it is what was sent. Nothing is
+    /// removed, as the session's merge removes nothing.
+    fn changes(&mut self, now: DataBundle) -> DataBundle {
+        let mut out = DataBundle::default();
+        for (uri, e) in now.entities {
+            if self.data.entities.get(&uri) != Some(&e) {
+                out.entities.insert(uri.clone(), e.clone());
+                self.data.entities.insert(uri, e);
+            }
+        }
+        for (key, q) in now.queries {
+            if self.data.queries.get(&key) != Some(&q) {
+                out.queries.insert(key.clone(), q.clone());
+                self.data.queries.insert(key, q);
+            }
+        }
+        out
+    }
+
+    /// The snapshot's own entities and queries that changed; parsed only
+    /// when its JSON did.
+    fn snapshot_changes(&mut self, snap: &StateSnapshot) -> DataBundle {
+        if snap.entities_json == self.entities_json && snap.queries_json == self.queries_json {
+            return DataBundle::default();
+        }
+        self.entities_json.clone_from(&snap.entities_json);
+        self.queries_json.clone_from(&snap.queries_json);
+        self.changes(bundle(snap))
+    }
 }
 
 #[derive(Default)]
@@ -406,6 +450,12 @@ impl PodEngine {
         // What came in before is in the snapshot too.
         lock(&self.shared.news).take();
         let snap = self.engine.snapshot();
+        // The session starts from this snapshot: later ones send changes.
+        {
+            let mut sent = lock(&self.shared.sent);
+            *sent = Sent::default();
+            sent.snapshot_changes(&snap);
+        }
         let root = match self.shared.pinned(HOME) {
             Some(r) => r,
             None => serde_json::from_str::<UiNode>(&snap.workspace_json)
@@ -568,7 +618,7 @@ fn merge(into: &mut DataBundle, from: DataBundle) {
 /// the session.
 fn observe(engine: &Weak<ConstructEngine>, shared: &Arc<Shared>, base: &str, snap: &StateSnapshot) {
     let mut c = Changes {
-        data: bundle(snap),
+        data: lock(&shared.sent).snapshot_changes(snap),
         layouts: Vec::new(),
     };
     let mut reload = false;
@@ -617,12 +667,15 @@ fn observe(engine: &Weak<ConstructEngine>, shared: &Arc<Shared>, base: &str, sna
     }
     let mut device = remote::base_device(base, connection(snap), session_entity(snap, base));
     device.queries.clear();
-    merge(&mut c.data, device);
     // The count at once; the list follows.
-    c.data
+    device
         .entities
         .insert("local://inbox".into(), shared.inbox(unread(snap)));
-    shared.push(c);
+    merge(&mut c.data, lock(&shared.sent).changes(device));
+    // Nothing new: no frame is drawn for it.
+    if !c.data.entities.is_empty() || !c.data.queries.is_empty() || !c.layouts.is_empty() {
+        shared.push(c);
+    }
     if reload {
         reload_device(engine.clone(), shared.clone());
     }
@@ -1108,5 +1161,50 @@ pub fn desktop_store(dir: Option<&Path>) -> Arc<dyn SecureStore> {
     match dir {
         Some(d) => Arc::new(FileStore::new(d.join("secure.json"))),
         None => Arc::new(client_core::MemoryStore::new()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn bundle_of(entities: &[(&str, &str)], queries: &[(&str, &[&str])]) -> DataBundle {
+        let mut b = DataBundle::default();
+        for (uri, title) in entities {
+            let mut e = protocol::EntityRecord::default();
+            e.set("title", *title);
+            b.entities.insert((*uri).to_owned(), e);
+        }
+        for (key, uris) in queries {
+            b.queries.insert(
+                (*key).to_owned(),
+                uris.iter().map(|u| (*u).to_owned()).collect(),
+            );
+        }
+        b
+    }
+
+    #[test]
+    fn a_snapshot_sends_only_what_changed() {
+        let mut sent = Sent::default();
+        let first = bundle_of(
+            &[("t://1", "a"), ("t://2", "b")],
+            &[("q", &["t://1", "t://2"])],
+        );
+        // The first is sent whole.
+        assert_eq!(sent.changes(first.clone()), first);
+        // The same again sends nothing.
+        assert_eq!(sent.changes(first), DataBundle::default());
+        // One row changed, one added, the query grew.
+        let next = bundle_of(
+            &[("t://1", "a"), ("t://2", "B"), ("t://3", "c")],
+            &[("q", &["t://1", "t://2", "t://3"])],
+        );
+        let out = sent.changes(next);
+        assert_eq!(
+            out.entities.keys().collect::<Vec<_>>(),
+            vec!["t://2", "t://3"]
+        );
+        assert_eq!(out.queries["q"].len(), 3);
     }
 }
