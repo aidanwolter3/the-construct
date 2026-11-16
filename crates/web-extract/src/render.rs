@@ -20,11 +20,15 @@
 //!   `Accept-Language`. A site that still answers with a challenge is a
 //!   block ([`FetchError::blocked`]): the pod backs off; it never solves
 //!   one.
+//! - **Chromium's sandbox and site isolation, where they work** ([`SANDBOX`],
+//!   decision `browser-sandbox`): the server's first render tries the
+//!   sandbox; if the browser can't start or draw a page with it, that render
+//!   and the ones after it run without it, with a warning in the log.
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU8, AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 use futures_util::{SinkExt, StreamExt};
@@ -71,6 +75,15 @@ const BINARIES: &[&str] = &[
 
 /// The server's one browser at a time.
 static SLOT: Semaphore = Semaphore::const_new(1);
+
+/// Whether Chromium's sandbox works on this machine: [`UNTRIED`] until the
+/// server's first render finds out ([`Browser::first_start`]), then
+/// [`SANDBOXED`] or [`UNSANDBOXED`] until the server restarts. Only
+/// changed while [`SLOT`] is held.
+static SANDBOX: AtomicU8 = AtomicU8::new(UNTRIED);
+const UNTRIED: u8 = 0;
+const SANDBOXED: u8 = 1;
+const UNSANDBOXED: u8 = 2;
 
 /// How a render waits for its page.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -226,11 +239,63 @@ impl Browser {
         let proxy = proxy::Proxy::start(self.allow_private)
             .await
             .map_err(|e| fail(format!("the browser's proxy could not start: {e}")))?;
+        let running = match SANDBOX.load(Ordering::Relaxed) {
+            SANDBOXED => self.start(proxy.addr, true).await?,
+            UNSANDBOXED => self.start(proxy.addr, false).await?,
+            _ => self.first_start(proxy.addr).await?,
+        };
+        // The page's own timeout, and a little for the calls around it.
+        let r = tokio::time::timeout(
+            opts.timeout + Duration::from_secs(10),
+            drive(&running.cdp, url, opts),
+        )
+        .await
+        .unwrap_or_else(|_| Err(fail("the page took too long to render")));
+        running.close().await;
+        drop(proxy);
+        r
+    }
+
+    /// The server's first browser: with Chromium's sandbox if it starts and
+    /// draws a page with it, else without it, as before the sandbox was on
+    /// (decision `browser-sandbox`). Whichever works is kept in [`SANDBOX`]
+    /// and logged once; if neither starts, the next render tries again.
+    async fn first_start(&self, proxy: std::net::SocketAddr) -> Result<Running, FetchError> {
+        let why = match self.start(proxy, true).await {
+            Ok(running) => match probe(&running.cdp).await {
+                Ok(()) => {
+                    SANDBOX.store(SANDBOXED, Ordering::Relaxed);
+                    tracing::info!(target: "browser", "browser sandbox: on (Chromium's sandbox and site isolation)");
+                    return Ok(running);
+                }
+                Err(e) => {
+                    running.close().await;
+                    e.message
+                }
+            },
+            Err(e) => e.message,
+        };
+        let running = self.start(proxy, false).await?;
+        SANDBOX.store(UNSANDBOXED, Ordering::Relaxed);
+        tracing::warn!(
+            target: "browser",
+            "browser sandbox: off; Chromium's sandbox did not work here ({why}), so pages render without it and without site isolation"
+        );
+        Ok(running)
+    }
+
+    /// Start a browser with a fresh profile, `sandbox`ed or not, and connect
+    /// to it.
+    async fn start(
+        &self,
+        proxy: std::net::SocketAddr,
+        sandbox: bool,
+    ) -> Result<Running, FetchError> {
         let profile = TempDir::new()
             .map_err(|e| fail(format!("the browser's profile could not be made: {e}")))?;
         let mut child = browser_command(&self.binary, &profile.0)
             .map_err(|e| fail(format!("the browser's profile could not be made: {e}")))?
-            .args(flags(proxy.addr, &profile.0))
+            .args(flags(proxy, &profile.0, sandbox))
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::piped())
@@ -248,32 +313,73 @@ impl Browser {
         let ws = match tokio::time::timeout(LAUNCH, rx).await {
             Ok(Ok(Ok(ws))) => ws,
             Ok(Ok(Err(last))) => {
-                tracing::warn!(target: "browser", "the browser exited on start: {last}");
+                tracing::warn!(target: "browser", sandbox, "the browser exited on start: {last}");
                 return Err(fail(format!("the server's browser did not start ({last})")));
             }
             _ => return Err(fail("the server's browser did not start in time")),
         };
-        let r = match Cdp::connect(&ws).await {
-            Ok(cdp) => {
-                // The page's own timeout, and a little for the calls around it.
-                let r = tokio::time::timeout(
-                    opts.timeout + Duration::from_secs(10),
-                    drive(&cdp, url, opts),
-                )
-                .await
-                .unwrap_or_else(|_| Err(fail("the page took too long to render")));
-                let _ = tokio::time::timeout(
-                    Duration::from_secs(2),
-                    cdp.call(None, "Browser.close", json!({})),
-                )
-                .await;
-                r
-            }
-            Err(e) => Err(e),
-        };
-        let _ = child.kill().await;
-        drop(proxy);
-        r
+        let cdp = Cdp::connect(&ws).await?;
+        Ok(Running {
+            cdp,
+            child,
+            _profile: profile,
+        })
+    }
+}
+
+/// A started browser, its DevTools connection and its throwaway profile.
+struct Running {
+    cdp: Cdp,
+    child: tokio::process::Child,
+    /// Removed when dropped, after the browser is gone ([`Running::close`]).
+    _profile: TempDir,
+}
+
+impl Running {
+    /// Close the browser, and kill it if it doesn't close.
+    async fn close(mut self) {
+        let _ = tokio::time::timeout(
+            Duration::from_secs(2),
+            self.cdp.call(None, "Browser.close", json!({})),
+        )
+        .await;
+        let _ = self.child.kill().await;
+    }
+}
+
+/// Whether the browser behind `cdp` can draw a page: a tab of
+/// `about:blank` that runs a line of script. A sandbox that lets the browser
+/// start but not its renderers fails here.
+async fn probe(cdp: &Cdp) -> Result<(), FetchError> {
+    let target = cdp
+        .call(None, "Target.createTarget", json!({ "url": "about:blank" }))
+        .await?;
+    let attached = cdp
+        .call(
+            None,
+            "Target.attachToTarget",
+            json!({ "targetId": target["targetId"], "flatten": true }),
+        )
+        .await?;
+    let session = attached["sessionId"].as_str().unwrap_or("");
+    let v = cdp
+        .call(
+            Some(session),
+            "Runtime.evaluate",
+            json!({ "expression": "6 * 7", "returnByValue": true }),
+        )
+        .await?;
+    let _ = cdp
+        .call(
+            None,
+            "Target.closeTarget",
+            json!({ "targetId": target["targetId"] }),
+        )
+        .await;
+    if v["result"]["value"].as_i64() == Some(42) {
+        Ok(())
+    } else {
+        Err(fail("the browser's page ran no script"))
     }
 }
 
@@ -284,9 +390,10 @@ const BROWSER_ID: u32 = 65534;
 /// The browser's process, before its flags: none of the server's
 /// environment (its keys and secrets), and, when the server is root, the
 /// unprivileged [`BROWSER_ID`], owning its profile. The browser runs
-/// untrusted pages without Chromium's sandbox, so a page that took over
-/// the renderer gets a user that can read neither the pods' data (`0700`,
-/// `0600`: `pod_core::util`) nor the server's environment.
+/// untrusted pages, perhaps without Chromium's sandbox ([`SANDBOX`]), so a
+/// page that took over the renderer gets a user that can read neither the
+/// pods' data (`0700`, `0600`: `pod_core::util`) nor the server's
+/// environment.
 fn browser_command(binary: &Path, profile: &Path) -> std::io::Result<Command> {
     let mut cmd = Command::new(binary);
     cmd.env_clear()
@@ -301,17 +408,12 @@ fn browser_command(binary: &Path, profile: &Path) -> std::io::Result<Command> {
     Ok(cmd)
 }
 
-/// The browser's command line.
-fn flags(proxy: std::net::SocketAddr, profile: &Path) -> Vec<String> {
+/// The browser's command line, with Chromium's sandbox and site isolation
+/// or, where the sandbox doesn't work ([`SANDBOX`]), without both.
+fn flags(proxy: std::net::SocketAddr, profile: &Path, sandbox: bool) -> Vec<String> {
     let (w, h) = VIEWPORT;
     let mut out: Vec<String> = [
         "--headless=new",
-        // The server runs as root in its container, where Chromium's
-        // sandbox can't start; the browser runs as an unprivileged user
-        // with none of the server's environment (`browser_command`), the
-        // proxy keeps it on public websites, and each render's profile is
-        // thrown away.
-        "--no-sandbox",
         "--disable-gpu",
         "--disable-dev-shm-usage",
         "--no-first-run",
@@ -326,8 +428,6 @@ fn flags(proxy: std::net::SocketAddr, profile: &Path) -> Vec<String> {
         "--hide-scrollbars",
         "--metrics-recording-only",
         "--disable-quic",
-        "--disable-site-isolation-trials",
-        "--disable-features=Translate,MediaRouter,OptimizationHints,AutofillServerCommunication,IsolateOrigins,site-per-process",
         // A browser a person drives, not "navigator.webdriver".
         "--disable-blink-features=AutomationControlled",
         // Images are not read: the HTML names them.
@@ -344,6 +444,22 @@ fn flags(proxy: std::net::SocketAddr, profile: &Path) -> Vec<String> {
     .into_iter()
     .map(str::to_owned)
     .collect();
+    const OFF: &str = "Translate,MediaRouter,OptimizationHints,AutofillServerCommunication";
+    if sandbox {
+        out.push(format!("--disable-features={OFF}"));
+    } else {
+        // Without the sandbox (it can't start here), the browser still runs
+        // as an unprivileged user with none of the server's environment
+        // (`browser_command`), the proxy keeps it on public websites, and
+        // each render's profile is thrown away. Site isolation is off too:
+        // without the sandbox it protects little and costs a renderer per
+        // site.
+        out.push("--no-sandbox".into());
+        out.push("--disable-site-isolation-trials".into());
+        out.push(format!(
+            "--disable-features={OFF},IsolateOrigins,site-per-process"
+        ));
+    }
     out.push(format!("--proxy-server=http://{proxy}"));
     out.push(format!("--window-size={w},{h}"));
     out.push(format!("--user-data-dir={}", profile.display()));
@@ -975,8 +1091,26 @@ mod tests {
     }
 
     #[test]
+    fn the_sandbox_and_site_isolation_go_together() {
+        let p = Path::new("/tmp/p");
+        let on = flags("127.0.0.1:9".parse().unwrap(), p, true);
+        assert!(
+            !on.iter()
+                .any(|x| x == "--no-sandbox" || x.contains("site-isolation"))
+        );
+        assert!(!on.iter().any(|x| x.contains("site-per-process")), "{on:?}");
+        let off = flags("127.0.0.1:9".parse().unwrap(), p, false);
+        assert!(off.contains(&"--no-sandbox".to_owned()));
+        assert!(off.contains(&"--disable-site-isolation-trials".to_owned()));
+        assert!(
+            off.iter().any(|x| x.contains("site-per-process")),
+            "{off:?}"
+        );
+    }
+
+    #[test]
     fn the_browser_resolves_nothing_itself() {
-        let f = flags("127.0.0.1:9".parse().unwrap(), Path::new("/tmp/p"));
+        let f = flags("127.0.0.1:9".parse().unwrap(), Path::new("/tmp/p"), true);
         assert!(f.contains(&"--proxy-server=http://127.0.0.1:9".to_owned()));
         assert!(
             f.iter()
