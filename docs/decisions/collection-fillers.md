@@ -73,7 +73,11 @@ collection side by side.
   fake), which also reads pages for `llm`.
 - **Modes:** `replace` (the filler's rows are its latest answer; with a `key` rows keep their ids and unfilled
   fields; rows it no longer lists are deleted for good, not kept 30 days: they were never anyone's) or `upsert` by
-  `key` (rows not in the answer stay; a person's delete sticks).
+  `key` (rows not in the answer stay; a person's delete sticks). Without a `key` (a page read by the model, which
+  has no ids), each item keeps the row it is the same item as: most of the filled values either has are equal
+  (letters and digits, ignoring case) and, with `upcoming`, it falls on the same day. A refill that rewords a
+  title or description, or adds and drops items, so keeps the other rows' ids, unfilled fields, `details` and the
+  alerts already sent for them; next week's show of the same name is a new row.
 - **Locks:** fields a filler writes can't be set by apps or `edit_rows`; a `replace` filler's rows can't be added,
   deleted or restored by hand. Computed fields compute on filled rows as after any write.
 - **When:** `every_minutes` (fetch 15…10080, agent 60…10080) through the adapter's poll; `on_open_minutes`, and an
