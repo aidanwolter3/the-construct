@@ -261,7 +261,10 @@ while its `data` path loads through the engine (`action.data.load`, cached; `loc
 snapshot the engine sends reaches the session on its next frame (`Loader::changes`, snapshots since the last frame merged into one; the window is woken). The engine calls its observer on whichever thread changed its state (often the UI thread: a tap's write), so the observer hands each snapshot to a thread of its own (`construct-observe`, the newest first). That thread sends only the entities and queries that differ from what it sent before (`Sent`; a snapshot's JSON is parsed only when it changed), and nothing at all, without waking the window, when nothing did: comparing the whole cache on the UI thread every snapshot cost a phone about 20 ms a frame. What arrives: data,
 `local://connection` (online, offline or connecting, and how many writes wait), and the new root of every layout
 the event stream announced, so a layout edited over MCP, or a change from another device, shows without opening it
-again. Each new frame tells the engine what it draws, topmost first (`Loader::visible`: every drawn entry's layout and
+again. Nothing on screen changes while a layout or screen slides in or out: `Session::poll` keeps the engine's changes and
+the pod's answers that arrive meanwhile aside and applies them, and lays them out, on the first frame after the slide
+ends (`animating` stays true until then), while the user's own taps, local sets and optimistic writes still show at
+once (decision `hold-changes-during-transitions`). Each new frame tells the engine what it draws, topmost first (`Loader::visible`: every drawn entry's layout and
 data path, and the layouts drawn inline in them), so an `event: data` reloads what's on screen first and leaves the
 rest stale until it's shown again (decision `scoped-data-events`). The simulator's live mode (`construct-sim --base-url`) still fetches straight from the pod (`PodClient`). `local://nav` and
 `local://screen` are set as the Compose UI set them. Images (`core://Image`) download on four background threads, newest request first,
