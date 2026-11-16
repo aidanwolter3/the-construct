@@ -1,26 +1,32 @@
 //! A live session over a pod (feature `remote`): home and every layout it
-//! opens fetched as a client fetches them (`GET /v1/workspaces/<id>`), the
-//! device's list of layouts (`local:layouts`) from `GET /v1/apps`, screen
-//! data from data paths, and images downloaded on background threads.
+//! opens fetched as a client fetches them, from the construct (decision
+//! `one-layout-system`: home's root, the objects it reaches, each element
+//! materialized here and its data from `/v1/construct/data/<element>`),
+//! screen data from data paths, and images downloaded on background threads.
 //!
 //! Read-only: what a tap would change on the pod is reported, not sent
 //! (`crate::interact`). There is no cache, outbox or event stream.
 
+use construct_elements::{Objects, keyed, materialize_with};
 use protocol::{DataBundle, UiNode, WorkspaceSpec};
-use serde_json::{Value, json};
+use serde_json::{Map, Value, json};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use crate::device_data;
 pub use crate::device_data::{
-    base_device, channels_bundle, day_label, inbox_entity, layouts_bundle, needs_channels,
-    needs_notifications, needs_sign_ins, notifications_bundle, now_secs, parse_rfc3339,
-    sign_ins_bundle, time_label, version_time_label, versions_bundle,
+    base_device, channels_bundle, day_label, inbox_entity, needs_channels, needs_notifications,
+    needs_sign_ins, notifications_bundle, now_secs, sign_ins_bundle, time_label,
 };
 use crate::images::ImageStore;
 use crate::interact::{Done, Loaded, Loader, Session, Write, Written};
 use crate::layout::Viewport;
+
+/// The key home has in the construct.
+const HOME: &str = "home";
+/// Rounds of `POST /v1/objects` one layout may take.
+const MAX_OBJECT_ROUNDS: usize = 16;
 
 /// A pod and a session on it.
 #[derive(Clone)]
@@ -28,11 +34,19 @@ pub struct PodClient {
     base: String,
     token: String,
     http: reqwest::blocking::Client,
-    /// Layout titles by id (from `/v1/apps`), for device data rows.
+    /// Layout titles by key (from their elements), for device data rows.
     titles: Arc<Mutex<HashMap<String, String>>>,
-    /// Versions picked on this device (`pin_version`), by layout. Drawn in
-    /// the version list; the layout itself still shows its latest version.
-    pins: Arc<Mutex<HashMap<String, i64>>>,
+    /// The construct's objects fetched so far, by id (immutable).
+    objects: Arc<Mutex<HashMap<String, Arc<Value>>>>,
+}
+
+/// The objects a client has, for materializing.
+struct Have(HashMap<String, Arc<Value>>);
+
+impl Objects for Have {
+    fn object(&self, id: &str) -> Option<Arc<Value>> {
+        self.0.get(id).cloned()
+    }
 }
 
 fn client() -> reqwest::blocking::Client {
@@ -69,7 +83,7 @@ impl PodClient {
             token,
             http,
             titles: Arc::default(),
-            pins: Arc::default(),
+            objects: Arc::default(),
         })
     }
 
@@ -92,8 +106,9 @@ impl PodClient {
             .http
             .get(&url)
             .header(protocol::FEATURES_HEADER, protocol::features_header());
-        // No session: the pod answers its sign-in screen. A layout may name
-        // an absolute URL: the token goes only to the pod's own origin.
+        // No session: the pod answers what it shows a caller without one. A
+        // layout may name an absolute URL: the token goes only to the pod's
+        // own origin.
         if !self.token.is_empty() && same_origin(&self.base, &url) {
             req = req.bearer_auth(&self.token);
         }
@@ -132,19 +147,130 @@ impl PodClient {
         Ok(serde_json::from_str(&text).unwrap_or(Value::Null))
     }
 
-    /// A layout's bundle.
-    pub fn workspace(&self, id: &str) -> Result<WorkspaceSpec, String> {
-        serde_json::from_value(self.get(&format!("/v1/workspaces/{id}"))?)
-            .map_err(|e| format!("layout {id}: {e}"))
+    /// The objects fetched so far.
+    fn have(&self) -> Have {
+        Have(
+            self.objects
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .clone(),
+        )
     }
 
-    /// The device data of the pod's layouts, as the shared UI builds it:
-    /// `local:layouts` (hidden ones left out), `local:all_layouts`,
-    /// `local:apps`, and an entity for each.
-    pub fn layouts(&self) -> Result<DataBundle, String> {
-        let v = self.get(device_data::LAYOUTS_PATH)?;
-        let mut titles = self.titles.lock().unwrap_or_else(|p| p.into_inner());
-        Ok(layouts_bundle(&v, &mut titles))
+    /// Fetches what `want` reaches that this client lacks (`POST
+    /// /v1/objects {have, want}`), until nothing is missing for `check`
+    /// (elements to materialize).
+    fn fetch_objects(&self, mut want: Vec<String>, check: &[String]) -> Result<(), String> {
+        for _ in 0..MAX_OBJECT_ROUNDS {
+            let have: Vec<String> = self
+                .objects
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .keys()
+                .cloned()
+                .collect();
+            let v = self.post("/v1/objects", &json!({ "have": have, "want": want }))?;
+            {
+                let mut objects = self.objects.lock().unwrap_or_else(|p| p.into_inner());
+                for (id, o) in v["objects"].as_object().into_iter().flatten() {
+                    // An object is its hash: one that doesn't match is not taken.
+                    if construct_elements::object_id(o) == *id {
+                        objects.insert(id.clone(), Arc::new(o.clone()));
+                    }
+                }
+            }
+            let have = self.have();
+            let mut missing: Vec<String> = Vec::new();
+            for el in check {
+                if let Ok(m) = materialize_with(&have, el, &Map::new()) {
+                    missing.extend(m.missing);
+                }
+            }
+            if missing.is_empty() && v["more"] != json!(true) {
+                return Ok(());
+            }
+            if !missing.is_empty() {
+                want = missing;
+            }
+        }
+        Err("the pod's objects didn't all come".into())
+    }
+
+    /// Home's root (`GET /v1/construct`), with what it reaches fetched.
+    fn root(&self) -> Result<String, String> {
+        let v = self.get("/v1/construct")?;
+        let root = v["root"]
+            .as_str()
+            .filter(|r| construct_elements::is_object_id(r))
+            .ok_or("/v1/construct: no root")?
+            .to_owned();
+        self.fetch_objects(vec![root.clone()], std::slice::from_ref(&root))?;
+        Ok(root)
+    }
+
+    /// Layout `id`'s element and the inputs its use site binds: by key
+    /// from home's root, else by name (`/v1/construct/names/<id>`).
+    fn element(&self, id: &str) -> Result<(String, Map<String, Value>), String> {
+        let root = self.root()?;
+        let keys = keyed(&self.have(), HOME, &root);
+        {
+            let have = self.have();
+            let mut titles = self.titles.lock().unwrap_or_else(|p| p.into_inner());
+            for (k, kd) in &keys {
+                if let Some(t) = have
+                    .object(&kd.el)
+                    .and_then(|v| v["title"].as_str().map(str::to_owned))
+                {
+                    titles.insert(k.clone(), t);
+                }
+            }
+        }
+        if let Some(k) = keys.get(id) {
+            return Ok((k.el.clone(), k.inputs.clone()));
+        }
+        let v = self.get(&format!("/v1/construct/names/{id}"))?;
+        let el = v["el"]
+            .as_str()
+            .filter(|e| construct_elements::is_object_id(e))
+            .ok_or_else(|| format!("layout {id}: the pod has no such layout"))?
+            .to_owned();
+        self.fetch_objects(vec![el.clone()], std::slice::from_ref(&el))?;
+        if let Some(t) = self
+            .have()
+            .object(&el)
+            .and_then(|v| v["title"].as_str().map(str::to_owned))
+        {
+            self.titles
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .insert(id.to_owned(), t);
+        }
+        Ok((el, Map::new()))
+    }
+
+    /// A layout's bundle: its element materialized here, with its data.
+    pub fn workspace(&self, id: &str) -> Result<WorkspaceSpec, String> {
+        let (el, inputs) = self.element(id)?;
+        let m = materialize_with(&self.have(), &el, &inputs)
+            .map_err(|e| format!("layout {id}: {e}"))?;
+        let workspace: UiNode =
+            serde_json::from_value(m.node).map_err(|e| format!("layout {id}: {e}"))?;
+        let mut path = format!("/v1/construct/data/{el}");
+        if !inputs.is_empty() {
+            let mut url = reqwest::Url::parse("http://x/").map_err(|e| e.to_string())?;
+            url.query_pairs_mut()
+                .append_pair("bind", &Value::Object(inputs).to_string());
+            path.push('?');
+            path.push_str(url.query().unwrap_or(""));
+        }
+        let data: DataBundle =
+            serde_json::from_value(self.get(&path)?).map_err(|e| format!("layout {id}: {e}"))?;
+        Ok(WorkspaceSpec {
+            version: "1.0.0".into(),
+            workspace,
+            entities: data.entities,
+            queries: data.queries,
+        })
     }
 
     /// The rest of the device data the shared UI gives layouts
@@ -156,45 +282,14 @@ impl PodClient {
         device_data::device(&self.base, needs, &titles, |p| self.get(p))
     }
 
-    /// `local://versions` and `local:versions` for a layout, as the shared UI
-    /// builds them (`DeviceData`): its history, newest first.
-    pub fn versions(&self, app: &str) -> Result<DataBundle, String> {
-        let v = self.get(&device_data::versions_path(app))?;
-        let pinned = self.pins.lock().ok().and_then(|p| p.get(app).copied());
-        Ok(versions_bundle(
-            app,
-            &v,
-            pinned,
-            &self.app_title(app),
-            now_secs(),
-        ))
-    }
-
-    /// An app's title for device data rows (its id when unknown).
-    fn app_title(&self, id: &str) -> String {
-        self.titles
-            .lock()
-            .ok()
-            .and_then(|t| t.get(id).cloned())
-            .unwrap_or_else(|| id.to_owned())
-    }
-
-    /// A live session on `layout` (usually `home`): its bundle, the
-    /// device's list of layouts, a loader for what taps open, and images.
+    /// A live session on `layout` (usually `home`): its bundle, a loader
+    /// for what taps open, and images.
     pub fn session(&self, layout: &str, viewport: Viewport) -> Result<Session, String> {
         let spec = self.workspace(layout)?;
         let mut data = DataBundle {
             entities: spec.entities,
             queries: spec.queries,
         };
-        match self.layouts() {
-            Ok(l) => {
-                data.entities.extend(l.entities);
-                data.queries.extend(l.queries);
-            }
-            // Home still draws, with an empty list.
-            Err(e) => eprintln!("construct-render: layouts: {e}"),
-        }
         let root_json = serde_json::to_string(&spec.workspace).unwrap_or_default();
         let device = self.device(&root_json);
         data.entities.extend(device.entities);
@@ -207,26 +302,6 @@ impl PodClient {
 }
 
 impl Loader for PodClient {
-    fn device(&self, command: &str, app: &str, id: &str) -> Option<Result<DataBundle, String>> {
-        match command {
-            "show_versions" => Some(self.versions(app)),
-            "pin_version" => {
-                let n = id.parse::<i64>().ok()?;
-                if let Ok(mut p) = self.pins.lock() {
-                    p.insert(app.to_owned(), n);
-                }
-                Some(self.versions(app))
-            }
-            "follow_latest" => {
-                if let Ok(mut p) = self.pins.lock() {
-                    p.remove(app);
-                }
-                Some(self.versions(app))
-            }
-            _ => None,
-        }
-    }
-
     fn layout(&self, id: &str) -> Result<(UiNode, DataBundle), String> {
         let spec = self.workspace(id)?;
         let mut data = DataBundle {
@@ -382,17 +457,17 @@ mod tests {
     #[test]
     fn the_token_goes_only_to_the_pod() {
         let base = "https://pod.example";
-        assert!(same_origin(base, "https://pod.example/v1/apps"));
+        assert!(same_origin(base, "https://pod.example/v1/construct"));
         assert!(same_origin(
             "http://127.0.0.1:8080",
             "http://127.0.0.1:8080/v1/x"
         ));
         for url in [
-            "https://elsewhere.example/v1/apps",
-            "http://pod.example/v1/apps",
-            "https://pod.example:8443/v1/apps",
-            "https://pod.example.elsewhere.example/v1/apps",
-            "https://pod.example@elsewhere.example/v1/apps",
+            "https://elsewhere.example/v1/construct",
+            "http://pod.example/v1/construct",
+            "https://pod.example:8443/v1/construct",
+            "https://pod.example.elsewhere.example/v1/construct",
+            "https://pod.example@elsewhere.example/v1/construct",
             "not a url",
         ] {
             assert!(!same_origin(base, url), "{url}");
@@ -425,7 +500,7 @@ mod tests {
             token: "session-secret".into(),
             http: client(),
             titles: Arc::default(),
-            pins: Arc::default(),
+            objects: Arc::default(),
         };
         pod.get(&format!("{other}/x")).unwrap();
         let req = seen.join().unwrap();

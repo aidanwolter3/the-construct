@@ -3,6 +3,8 @@
 mod accessibility;
 mod bench;
 mod common;
+#[cfg(feature = "remote")]
+mod construct_stub;
 mod dates;
 mod device;
 #[cfg(feature = "remote")]

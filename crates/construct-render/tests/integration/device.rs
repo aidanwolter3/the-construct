@@ -1,7 +1,8 @@
 //! What the shared UI's device does beyond writes: Settings and the inbox,
-//! notification switches, older notifications, hiding and deleting
-//! layouts, servers, pinned versions, the notice bar, `follow_end`, dark
-//! mode, dates and nodes this build doesn't draw.
+//! notification switches, older notifications, servers, the notice bar,
+//! `follow_end`, dark mode, dates and nodes this build doesn't draw. The
+//! old layout system's commands (hiding, deleting and pinning layouts) are
+//! gone (decision `one-layout-system`).
 
 use construct_render::interact::{Done, Effect, Loader, Session, Target, Write, Written};
 use construct_render::{Input, SceneBuilder, Viewport};
@@ -26,29 +27,15 @@ fn text(s: &str) -> Value {
 #[derive(Default)]
 struct Pod {
     commands: Arc<Mutex<Vec<(String, Value)>>>,
-    pins: Arc<Mutex<BTreeMap<String, i64>>>,
     refuse: bool,
 }
 
 impl Loader for Pod {
     fn layout(&self, id: &str) -> Result<(UiNode, DataBundle), String> {
-        let label = match self.pins.lock().unwrap().get(id) {
-            Some(n) => format!("{id} v{n}"),
-            None => format!("{id} latest"),
-        };
-        Ok((node(text(&label)), DataBundle::default()))
+        Ok((node(text(&format!("{id} latest"))), DataBundle::default()))
     }
     fn data(&self, _path: &str) -> Result<DataBundle, String> {
         Ok(DataBundle::default())
-    }
-    fn device(&self, command: &str, app: &str, id: &str) -> Option<Result<DataBundle, String>> {
-        let mut pins = self.pins.lock().unwrap();
-        match command {
-            "pin_version" => pins.insert(app.to_owned(), id.parse().ok()?),
-            "follow_latest" => pins.remove(app),
-            _ => return None,
-        };
-        Some(Ok(DataBundle::default()))
     }
     fn device_command(&self, command: &str, args: &Value) -> Option<Result<DataBundle, String>> {
         self.commands
@@ -64,7 +51,6 @@ impl Loader for Pod {
                     "local://notifications/old": { "id": "old", "title": "Last week's note" },
                     "local://inbox": { "has_older": false, "next_before": "" } },
                 "queries": { "local:notifications": ["local://notifications/old"] } })),
-            "hide_layout" => data(json!({ "queries": { "local:layouts": [] } })),
             _ => DataBundle::default(),
         }))
     }
@@ -113,9 +99,9 @@ fn channels() -> (Value, Value) {
     let root = json!({ "type": "core://List", "query_key": "local:channels", "item_template": {
         "type": "core://Switch", "checked": "$item.enabled", "content_description": "$item.title",
         "on_click": { "intent": "action.device", "command": "toggle_channel",
-                      "app": "$item.app_id", "id": "$item.id" } } });
+                      "layout": "$item.layout", "id": "$item.id" } } });
     let d = json!({ "entities": { "local://channels/events/match": {
-            "app_id": "events", "id": "match", "title": "Matches", "enabled": true } },
+            "layout": "events", "id": "match", "title": "Matches", "enabled": true } },
         "queries": { "local:channels": ["local://channels/events/match"] } });
     (root, d)
 }
@@ -136,7 +122,7 @@ fn a_channel_switch_flips_and_is_sent() {
         commands.lock().unwrap()[0],
         (
             "toggle_channel".into(),
-            json!({ "app": "events", "id": "match", "enabled": false })
+            json!({ "layout": "events", "id": "match", "enabled": false })
         )
     );
 }
@@ -222,37 +208,29 @@ fn older_notifications_go_under_the_newer_ones() {
     assert_eq!(commands.lock().unwrap().len(), 1);
 }
 
+/// The old layout system's device commands are gone: nothing is sent to
+/// the pod, and what is open stays.
 #[test]
-fn layouts_are_hidden_and_deleted_on_the_pod_but_never_home() {
+fn hiding_deleting_and_pinning_layouts_are_not_sent() {
     let pod = Pod::default();
     let commands = pod.commands.clone();
     let mut s = session(text("Home"), json!({}), pod);
     s.dispatch(&json!({ "intent": "action.navigation.open", "layout": "groceries" }))
         .unwrap();
-    s.dispatch(&device("hide_layout", json!({ "app": "groceries" })))
-        .unwrap();
-    assert_eq!(
-        s.data.queries["local:layouts"],
-        Vec::<String>::new(),
-        "the pod's list comes back"
-    );
-    let out = s
-        .dispatch(&device("delete_layout", json!({ "app": "groceries" })))
-        .unwrap();
-    assert!(out.effects.contains(&Effect::Device {
-        command: "delete_layout".into()
-    }));
-    assert_eq!(s.state()["stack"], json!(["home"]));
-    for c in ["hide_layout", "delete_layout"] {
-        s.dispatch(&device(c, json!({ "app": "home" }))).unwrap();
+    for c in [
+        "hide_layout",
+        "unhide_layout",
+        "delete_layout",
+        "show_versions",
+        "follow_latest",
+    ] {
+        let intent = device(c, json!({ "layout": "groceries", "id": "3" }));
+        let out = s.dispatch(&intent).unwrap();
+        assert_eq!(out.effects, vec![Effect::NotSent { intent }], "{c}");
     }
-    let sent: Vec<String> = commands
-        .lock()
-        .unwrap()
-        .iter()
-        .map(|c| c.0.clone())
-        .collect();
-    assert_eq!(sent, ["hide_layout", "delete_layout"]);
+    assert!(commands.lock().unwrap().is_empty());
+    assert_eq!(s.state()["stack"], json!(["home", "groceries"]));
+    assert!(s.scene().unwrap().find_text("groceries latest").is_some());
 }
 
 #[test]
@@ -277,29 +255,6 @@ fn set_server_asks_the_platform_for_another_server() {
         .dispatch(&device("set_server", json!({ "id": "staging" })))
         .unwrap();
     assert_eq!(out.effects, vec![Effect::Nothing], "already in use");
-}
-
-#[test]
-fn a_pinned_version_is_drawn_until_following_the_latest() {
-    let mut s = session(text("Home"), json!({}), Pod::default());
-    s.dispatch(&json!({ "intent": "action.navigation.open", "layout": "groceries" }))
-        .unwrap();
-    assert!(s.scene().unwrap().find_text("groceries latest").is_some());
-    s.dispatch(&device(
-        "pin_version",
-        json!({ "app": "groceries", "id": "3" }),
-    ))
-    .unwrap();
-    assert!(s.scene().unwrap().find_text("groceries v3").is_some());
-    // Home too, when it is the one pinned.
-    s.dispatch(&device("pin_version", json!({ "app": "home", "id": "2" })))
-        .unwrap();
-    s.dispatch(&json!({ "intent": "action.navigation.back" }))
-        .unwrap();
-    assert!(s.scene().unwrap().find_text("home v2").is_some());
-    s.dispatch(&device("follow_latest", json!({ "app": "home" })))
-        .unwrap();
-    assert!(s.scene().unwrap().find_text("home latest").is_some());
 }
 
 #[test]

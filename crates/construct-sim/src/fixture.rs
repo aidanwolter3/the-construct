@@ -46,7 +46,7 @@ pub fn default_bundle(workspace: &str) -> Option<&'static str> {
         "week_sessions" => "week_sessions_bundle.json",
         "tiles_home" => "tiles_home_bundle.json",
         "tiles_priorities" => "tiles_priorities_bundle.json",
-        // A home on a switched pod, before its first `construct` step
+        // A home on the construct, before its first `construct` step
         // (decision `content-addressed-construct`).
         "home" => "construct_home_bundle.json",
         _ => return None,
@@ -384,7 +384,9 @@ impl Loader for FixturePod {
             .ok_or_else(|| format!("the fixture pod has no data at {path}"))
     }
 
-    fn device(&self, command: &str, app: &str, id: &str) -> Option<Result<DataBundle, String>> {
+    fn device_command(&self, command: &str, args: &Value) -> Option<Result<DataBundle, String>> {
+        let text = |k: &str| args[k].as_str().unwrap_or("").to_owned();
+        let (layout, id) = (text("layout"), text("id"));
         match command {
             "toggle_channel" => {
                 {
@@ -395,10 +397,10 @@ impl Loader for FixturePod {
                     let c = s
                         .channels
                         .iter_mut()
-                        .find(|c| protocol::channel_layout_in(c) == app && c["id"] == id);
+                        .find(|c| protocol::channel_layout_in(c) == layout && c["id"] == id);
                     match c {
                         Some(c) => c["enabled"] = json!(!c["enabled"].as_bool().unwrap_or(false)),
-                        None => return Some(Err(format!("no channel {app}.{id}"))),
+                        None => return Some(Err(format!("no channel {layout}.{id}"))),
                     }
                 }
                 Some(Ok(self.device()))

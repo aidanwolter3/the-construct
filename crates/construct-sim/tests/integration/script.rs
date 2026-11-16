@@ -41,19 +41,6 @@ fn arguments_parse_as_the_compose_simulator_reads_them() {
         }
     );
     assert_eq!(
-        steps("pin-version pixelfed v2; pin-version pixelfed latest"),
-        vec![
-            Step::PinVersion {
-                layout: "pixelfed".into(),
-                version: Some(2)
-            },
-            Step::PinVersion {
-                layout: "pixelfed".into(),
-                version: None
-            }
-        ]
-    );
-    assert_eq!(
         steps("swipe-left tag:carousel:x")[0],
         Step::Swipe(Direction::Left, "tag:carousel:x".into())
     );
@@ -83,6 +70,8 @@ fn bad_scripts_name_the_entry() {
         ("open-layout a drawer", "'open-layout' needs"),
         ("toggle-channel likes", "'toggle-channel' needs"),
         ("fly away", "unknown command 'fly'"),
+        // Gone with the layout versions (decision `one-layout-system`).
+        ("pin-version pixelfed v2", "unknown command 'pin-version'"),
     ] {
         let e = parse(script).unwrap_err();
         assert!(e.contains(needle), "{script}: {e}");

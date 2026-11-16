@@ -39,10 +39,11 @@
 //! the pod clears the session; an outbox row that got a 401 stays PENDING
 //! and flushing pauses until the next sign-in.
 //!
-//! M7 (docs/DECISIONS.md D24, D32): the engine tracks the app's layout
-//! version (`X-Construct-Layout-Version`), and a third background thread
-//! ([`events`]) listens on the workspace's SSE push channel and refetches
-//! when a newer version is announced.
+//! Layouts come from the pod's construct ([`construct`], decision
+//! `one-layout-system`): home's hash, the objects it reaches, each element
+//! materialized on the device and its data. A third background thread
+//! ([`events`]) listens on the construct's SSE push channel and follows
+//! the root when it moves.
 
 pub mod attachments;
 pub mod auth;
@@ -133,9 +134,6 @@ pub const SIGN_IN_BUTTON_OUTDATED: &str =
     "This sign-in button is out of date. Restart the app and try again.";
 /// `auth_json` error when a custom-scheme redirect matches no sign-in.
 pub const SIGN_IN_INTERRUPTED: &str = "Sign-in was interrupted; please try again";
-/// Response header carrying the served layout version (the app's latest
-/// version number).
-pub const LAYOUT_VERSION_HEADER: &str = "X-Construct-Layout-Version";
 
 /// Engine timing knobs. [`EngineConfig::default`] is what `init` uses;
 /// tests shorten the intervals so they do not sleep for seconds.
@@ -340,12 +338,8 @@ enum FetchOutcome {
 ///   account fields when signed in, `error` with a short human message in the
 ///   error state, `message` = [`LOADING_FEED_MESSAGE`] while `pending` after
 ///   the code exchange until the first signed-in fetch is done).
-/// - `layout_json`: the layout on display, `{"app_id": <workspace id>,
-///   "version": n}` (the app version from `X-Construct-Layout-Version` of the
-///   applied fetch); `"{}"` while unknown or when the screen is not versioned
-///   (e.g. the signed-out `pixelfed` screen); `{"app_id", "gone": true}`
-///   when the app no longer exists on the pod (a deleted custom app: SSE
-///   `deleted`, or a 404): the UI leaves it.
+/// - `layout_json`: `"{}"`, or `{"app_id": <workspace id>, "gone": true}`
+///   when the layout no longer exists on the pod (a 404): the UI leaves it.
 /// - `loads_json`: data path loads (`action.data.load`, docs/DECISIONS.md
 ///   D34): `{path: {"state": "loading"|"ready"|"error", "error"?}}` (`error`
 ///   is a short sentence for the UI). The queries of loaded paths are part
@@ -369,15 +363,15 @@ pub struct StateSnapshot {
     pub loads_json: String,
     pub notifications_json: String,
     /// The other layouts opened with [`ConstructEngine::open_layout`]
-    /// (decision `layouts-not-apps`): `{id: {"workspace": {...}, "version":
-    /// n|null, "gone": bool}}`. Their data is in `entities_json` and
+    /// (decision `layouts-not-apps`): `{id: {"workspace": {...}, "gone":
+    /// bool}}`. Their data is in `entities_json` and
     /// `queries_json`; their load state is `loads_json["layout:<id>"]`.
     pub layouts_json: String,
-    /// On a pod switched to the construct (decision
-    /// `content-addressed-construct`): `{"root": "e1-…", "reach": {key:
+    /// The construct (decision `content-addressed-construct`):
+    /// `{"root": "e1-…", "reach": {key:
     /// [keys]}}`, each layout key and the keys it reaches (its links, and
     /// through its embeds theirs); a stack entry resolves while the one below
-    /// it reaches its key. `""` on a pod that isn't switched.
+    /// it reaches its key. `""` until the pod has answered a root.
     pub construct_json: String,
 }
 
@@ -396,7 +390,6 @@ pub struct LayoutNow {
 #[derive(Clone, Debug, PartialEq, serde::Serialize)]
 struct SubLayout {
     workspace: Option<UiNode>,
-    version: Option<u64>,
     gone: bool,
 }
 
@@ -501,10 +494,6 @@ struct State {
     /// An outbox POST got a 401: flushing pauses until the next sign-in
     /// (the row stays PENDING instead of being rolled back).
     auth_blocked: bool,
-    /// Version of the applied layout (`X-Construct-Layout-Version` of the
-    /// last applied fetch); `None` when unknown or the served layout is not
-    /// versioned.
-    layout_version: Option<u64>,
     is_online: bool,
     /// Set by the first [`State::set_online`]: until then `is_online` is
     /// only a default, not an answer from the server.
@@ -538,9 +527,8 @@ struct State {
     /// Staged attachments (D49), by id; each is drawn as the local entity
     /// `construct://attachments/<id>`.
     attachments: BTreeMap<String, Attachment>,
-    /// The app is gone from the pod: a custom app was deleted (SSE
-    /// `deleted`, or the workspace answered 404). Cleared by a successful
-    /// fetch. Reported as `"gone": true` in `layout_json`.
+    /// The engine's layout is gone from the pod (its fetch answered 404).
+    /// Cleared by a successful fetch. Reported as `"gone": true` in `layout_json`.
     gone: bool,
     /// Other layouts, by id ([`StateSnapshot::layouts_json`]).
     layouts: BTreeMap<String, SubLayout>,
@@ -712,10 +700,7 @@ impl State {
         if self.gone {
             return json!({ "app_id": self.workspace_id, "gone": true }).to_string();
         }
-        match self.layout_version {
-            Some(n) => json!({ "app_id": self.workspace_id, "version": n }).to_string(),
-            None => "{}".to_owned(),
-        }
+        "{}".to_owned()
     }
 
     /// Load the cached workspace, its queries, its entities (including every
@@ -758,7 +743,6 @@ impl State {
                             id.to_owned(),
                             SubLayout {
                                 workspace: Some(w.layout),
-                                version: None,
                                 gone: false,
                             },
                         );
@@ -866,9 +850,9 @@ impl State {
         self.workspace_uris = Some(uris);
     }
 
-    /// Keep another layout's fetched workspace and version, cached for the
-    /// next launch (its data is the `layout:<id>` data load).
-    fn apply_layout(&mut self, id: &str, workspace: UiNode, version: Option<u64>) {
+    /// Keep another layout's fetched workspace, cached for the next launch
+    /// (its data is the `layout:<id>` data load).
+    fn apply_layout(&mut self, id: &str, workspace: UiNode) {
         if let Some(store) = self.store.as_mut() {
             let now = unix_now();
             let result = store
@@ -881,7 +865,6 @@ impl State {
             id.to_owned(),
             SubLayout {
                 workspace: Some(workspace),
-                version,
                 gone: false,
             },
         );
@@ -1361,7 +1344,6 @@ struct Inner {
     config: EngineConfig,
     workspace_id: String,
     base_url: String,
-    workspace_url: String,
     health_url: String,
     secure_store: Arc<dyn SecureStore>,
     url_opener: Option<Arc<dyn UrlOpener>>,
@@ -1394,7 +1376,7 @@ struct Inner {
     /// Where staged attachments are written (`<storage>/attachments`, or a
     /// temporary directory for an in-memory store).
     attachments_dir: PathBuf,
-    /// The pod's construct, when it is switched ([`construct`]).
+    /// The pod's construct ([`construct`]).
     construct: Mutex<construct::Construct>,
 }
 
@@ -1643,7 +1625,8 @@ impl ConstructEngine {
         Self::init_with_workspace(storage_path, base_url, DEFAULT_WORKSPACE_ID)
     }
 
-    /// Like [`ConstructEngine::init`], fetching `GET {base_url}/v1/workspaces/{workspace_id}`.
+    /// Like [`ConstructEngine::init`], with `workspace_id` as the engine's own
+    /// layout (its key in the construct, `home` for clients).
     /// Default options: platform secure store, no URL opener, loopback redirect.
     pub fn init_with_workspace(storage_path: &str, base_url: &str, workspace_id: &str) -> Self {
         Self::init_with_options(
@@ -1741,7 +1724,6 @@ impl ConstructEngine {
             config,
             workspace_id: workspace_id.to_string(),
             base_url: base.to_string(),
-            workspace_url: format!("{base}/v1/workspaces/{workspace_id}"),
             health_url: format!("{base}/healthz"),
             secure_store,
             url_opener,
@@ -1810,7 +1792,7 @@ impl ConstructEngine {
         let events: Weak<Inner> = Arc::downgrade(&inner);
         let events_signal = Arc::clone(&inner.signal);
         let events_wake = Arc::clone(&inner.stream_wake);
-        let events_url = format!("{base}/v1/workspaces/{workspace_id}/events");
+        let events_url = format!("{base}/v1/construct/events");
         let spawned = thread::Builder::new()
             .name("construct-engine-events".into())
             .spawn(move || {
@@ -1892,7 +1874,7 @@ impl ConstructEngine {
     /// flow (which then keeps waiting). Never blocks.
     /// Show another layout of the pod with this engine (decision
     /// `layouts-not-apps`): its cached version at once, then
-    /// `GET /v1/workspaces/<id>` in the background, its data merged into the
+    /// fetched from the construct in the background, its data merged into the
     /// shared store. A layout already loading is not fetched twice; one
     /// already loaded is fetched again (e.g. Try again). Reported in
     /// [`StateSnapshot::layouts_json`], its load state under
@@ -1924,7 +1906,6 @@ impl ConstructEngine {
                     id.to_owned(),
                     SubLayout {
                         workspace: cached,
-                        version: None,
                         gone: false,
                     },
                 );
@@ -2032,56 +2013,36 @@ impl ConstructEngine {
     }
 
     /// The construct as this device has it (decision
-    /// `content-addressed-construct`): whether the pod is switched, its root,
-    /// and how many objects each sync fetched.
+    /// `content-addressed-construct`): its root, and how many objects each
+    /// sync fetched.
     pub fn construct_status(&self) -> ConstructStatus {
         let c = lock(&self.inner.construct);
         ConstructStatus {
-            switched: c.mode == construct::Mode::On,
             root: c.root.clone(),
             fetched: c.fetched.clone(),
             objects: c.objects.len(),
         }
     }
+}
 
-    /// The layout versions pinned on this device for this engine's app
-    /// (`action.device` `pin_version`), restored at start: one per layout,
-    /// with the pinned layout JSON as it was fetched. Empty on any error.
-    pub fn pinned_versions(&self) -> Vec<PinnedVersion> {
-        self.inner.pinned_versions()
-    }
-
-    /// Pin `version` of `layout_id` on this device (`spec`: that version's
-    /// layout JSON), or (`None`) follow its latest again. Forgotten when the
-    /// device leaves the pod ([`ConstructEngine::forget_session`]).
-    pub fn set_pinned_version(&self, layout_id: &str, pin: Option<(i64, &str)>) {
-        self.inner.set_pinned_version(layout_id, pin);
+impl ConstructEngine {
+    /// Each layout's title by key, from the elements this device has (the
+    /// root's and those opened by name; decision `one-layout-system`): what
+    /// names a notification's or a channel's layout.
+    pub fn layout_titles(&self) -> BTreeMap<String, String> {
+        lock(&self.inner.construct).titles()
     }
 }
 
 /// [`ConstructEngine::construct_status`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ConstructStatus {
-    pub switched: bool,
     pub root: Option<String>,
     /// Objects fetched by each sync, oldest first.
     pub fetched: Vec<usize>,
     /// Objects the device holds.
     pub objects: usize,
 }
-
-/// A layout version pinned on this device ([`ConstructEngine::pinned_versions`]).
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PinnedVersion {
-    pub layout_id: String,
-    pub version: i64,
-    /// The pinned version's layout JSON, as fetched.
-    pub spec: String,
-}
-
-/// Longest pinned layout JSON the engine keeps (a pin of a bigger one lasts
-/// until the app closes).
-const MAX_PINNED_SPEC: usize = 4 * 1024 * 1024;
 
 /// Longest form scope or field name the engine remembers.
 const MAX_FORM_NAME: usize = 128;
@@ -2118,44 +2079,6 @@ impl Inner {
             .map(|s| s.set_form_value(&self.workspace_id, scope, field, value, unix_now()))
         {
             eprintln!("[ConstructEngine] remembering form value '{field}': {e}");
-        }
-    }
-
-    fn pinned_versions(&self) -> Vec<PinnedVersion> {
-        let st = lock(&self.state);
-        let Some(store) = st.store.as_ref() else {
-            return Vec::new();
-        };
-        match store.pinned_versions(&self.workspace_id) {
-            Ok(rows) => rows
-                .into_iter()
-                .map(|(layout_id, version, spec)| PinnedVersion {
-                    layout_id,
-                    version,
-                    spec,
-                })
-                .collect(),
-            Err(e) => {
-                eprintln!("[ConstructEngine] pinned versions: {e}");
-                Vec::new()
-            }
-        }
-    }
-
-    fn set_pinned_version(&self, layout_id: &str, pin: Option<(i64, &str)>) {
-        if layout_id.is_empty()
-            || layout_id.len() > MAX_FORM_NAME
-            || pin.is_some_and(|(_, spec)| spec.len() > MAX_PINNED_SPEC)
-        {
-            return;
-        }
-        let st = lock(&self.state);
-        if let Some(Err(e)) = st
-            .store
-            .as_ref()
-            .map(|s| s.set_pinned_version(&self.workspace_id, layout_id, pin, unix_now()))
-        {
-            eprintln!("[ConstructEngine] pinning '{layout_id}': {e}");
         }
     }
 
@@ -2402,28 +2325,16 @@ impl Inner {
         }
     }
 
-    /// Layout `id` with its data: from the construct on a switched pod,
-    /// else `GET /v1/workspaces/<id>` (decision
-    /// `content-addressed-construct`). Blocking.
-    fn fetch_layout(
-        &self,
-        id: &str,
-        token: Option<&str>,
-    ) -> Result<(WorkspaceSpec, Option<u64>), FetchError> {
-        if let Some(r) = self.construct_fetch(id, token) {
-            let json = lock(&self.construct).snapshot_json();
-            lock(&self.state).construct_json = json;
-            return r;
+    /// Layout `id` with its data, from the construct ([`construct`]). The
+    /// engine's own layout asks the pod for its root again. Blocking.
+    fn fetch_layout(&self, id: &str, token: Option<&str>) -> Result<WorkspaceSpec, FetchError> {
+        let r = self.construct_fetch(id, token, id == self.workspace_id);
+        let json = lock(&self.construct).snapshot_json();
+        let mut st = lock(&self.state);
+        if st.construct_json != json {
+            st.construct_json = json;
         }
-        if !lock(&self.state).construct_json.is_empty() {
-            lock(&self.state).construct_json.clear();
-        }
-        let url = if id == self.workspace_id {
-            self.workspace_url.clone()
-        } else {
-            format!("{}/v1/workspaces/{id}", self.base_url)
-        };
-        fetch(&url, token, &self.device_id)
+        r
     }
 
     fn refresh(&self) -> FetchOutcome {
@@ -2464,7 +2375,7 @@ impl Inner {
                     st.set_online(true);
                     outcome = FetchOutcome::Fetched;
                 }
-                Ok((mut spec, version)) => {
+                Ok(spec) => {
                     let failures = std::mem::take(&mut st.fetch_failures);
                     st.last_fetch_error = None;
                     let after = if failures > 0 {
@@ -2473,32 +2384,10 @@ impl Inner {
                         String::new()
                     };
                     println!(
-                        "[ConstructEngine] fetched workspace '{}' ({} entities) from {}{after}",
+                        "[ConstructEngine] fetched workspace '{}' ({} entities){after}",
                         self.workspace_id,
                         spec.entities.len(),
-                        self.workspace_url
                     );
-                    match (version, st.layout_version, &st.workspace) {
-                        (Some(v), Some(have), Some(current)) if v < have => {
-                            // A fetch that started before a newer layout was
-                            // applied (by a later fetch): keep the newer
-                            // layout, take the entities.
-                            //
-                            // Trade-off: a pod whose database was reset (its
-                            // versions restart at 1) also lands here, and this
-                            // engine keeps showing its old layout until it is
-                            // recreated (app restart, switching apps/servers).
-                            // Version numbers are monotonic per pod by design
-                            // (D32), so we favour ignoring stale responses over
-                            // detecting resets.
-                            println!(
-                                "[ConstructEngine] fetched layout v{v} is older than the applied \
-                                 v{have}; layout kept"
-                            );
-                            spec.workspace = current.clone();
-                        }
-                        _ => st.layout_version = version,
-                    }
                     st.apply_fetched(&self.workspace_id, spec, stamp);
                     st.stale
                         .remove(&format!("{LAYOUT_LOAD_PREFIX}{}", self.workspace_id));
@@ -2517,8 +2406,8 @@ impl Inner {
                         st.gone = true;
                     } else {
                         eprintln!(
-                            "[ConstructEngine] fetch {} failed: HTTP {code}",
-                            self.workspace_url
+                            "[ConstructEngine] fetch of '{}' failed: HTTP {code}",
+                            self.workspace_id
                         );
                     }
                     st.set_online(true);
@@ -2535,9 +2424,9 @@ impl Inner {
                         || n.is_multiple_of(FETCH_FAILURE_LOG_EVERY)
                     {
                         eprintln!(
-                            "[ConstructEngine] fetch {} failed: {e} (attempt {n}; retrying every \
-                             {} ms, repeats are not logged)",
-                            self.workspace_url,
+                            "[ConstructEngine] fetch of '{}' failed: {e} (attempt {n}; retrying \
+                             every {} ms, repeats are not logged)",
+                            self.workspace_id,
                             self.config.poll_interval.as_millis()
                         );
                     }
@@ -2554,6 +2443,10 @@ impl Inner {
             self.signal.wake();
         }
         self.notify(snap);
+        // The other layouts shown whose element moved with the root.
+        if !self.signal.is_shut_down() {
+            self.construct_redraw();
+        }
         outcome
     }
 
@@ -3269,17 +3162,15 @@ impl Inner {
         let layout_id = path.strip_prefix(LAYOUT_LOAD_PREFIX);
         let (url, result) = match layout_id {
             Some(id) => {
-                let url = format!("{}/v1/workspaces/{id}", self.base_url);
-                let r = self
-                    .fetch_layout(id, token.as_deref())
-                    .map(|(spec, version)| {
-                        let layout = (spec.workspace, version);
-                        let bundle = DataBundle {
-                            entities: spec.entities,
-                            queries: spec.queries,
-                        };
-                        (bundle, Some(layout))
-                    });
+                let url = format!("layout '{id}' on {}", self.base_url);
+                let r = self.fetch_layout(id, token.as_deref()).map(|spec| {
+                    let layout = spec.workspace;
+                    let bundle = DataBundle {
+                        entities: spec.entities,
+                        queries: spec.queries,
+                    };
+                    (bundle, Some(layout))
+                });
                 (url, r)
             }
             None => {
@@ -3305,8 +3196,8 @@ impl Inner {
                     st.loads.remove(path);
                 }
                 Ok((bundle, layout)) => {
-                    if let (Some(id), Some((workspace, version))) = (layout_id, layout) {
-                        st.apply_layout(id, workspace, version);
+                    if let (Some(id), Some(workspace)) = (layout_id, layout) {
+                        st.apply_layout(id, workspace);
                     }
                     st.apply_data(path, bundle, stamp);
                     st.set_online(true);
@@ -3338,7 +3229,6 @@ impl Inner {
                             .entry(id.to_owned())
                             .or_insert(SubLayout {
                                 workspace: None,
-                                version: None,
                                 gone: false,
                             })
                             .gone = true;
@@ -3477,28 +3367,14 @@ impl Inner {
     fn forget_session(self: &Arc<Self>) {
         self.replace_flow(None);
         lock(&self.device).registered_for = None;
-        // Another pod has another construct (a pod on the layout system
-        // keeps its mode, as before).
-        {
-            let mut c = lock(&self.construct);
-            if c.mode == construct::Mode::On {
-                *c = construct::Construct::default();
-            }
-        }
+        // Another pod has another construct.
+        *lock(&self.construct) = construct::Construct::default();
         let (snap, token) = {
             let mut st = lock(&self.state);
             let token = st.session.take().map(|s| s.token);
             st.auth_json = SIGNED_OUT_AUTH_JSON.to_string();
             st.auth_blocked = false;
             st.purge_private(&self.workspace_id, true);
-            // Pins name versions of this pod's layouts; another pod has others.
-            if let Some(Err(e)) = st
-                .store
-                .as_ref()
-                .map(|s| s.clear_pinned_versions(&self.workspace_id))
-            {
-                eprintln!("[ConstructEngine] forgetting pinned versions: {e}");
-            }
             // So are the construct's objects (decision content-addressed-construct).
             if let Some(Err(e)) = st
                 .store
@@ -3932,42 +3808,6 @@ enum FetchError {
     Status(u16),
     /// Transport failure or unusable response body.
     Other(String),
-}
-
-/// `GET url`, with `Authorization: Bearer <token>` when signed in. Returns
-/// the bundle and its [`LAYOUT_VERSION_HEADER`] (`None` when absent, e.g.
-/// the unversioned signed-out `pixelfed` screen).
-fn fetch(
-    url: &str,
-    token: Option<&str>,
-    device: &str,
-) -> Result<(WorkspaceSpec, Option<u64>), FetchError> {
-    let client = reqwest::blocking::Client::builder()
-        .connect_timeout(Duration::from_secs(5))
-        .timeout(Duration::from_secs(5))
-        .build()
-        .map_err(|e| FetchError::Other(format!("client build: {e}")))?;
-    let mut req = client
-        .get(url)
-        .header(protocol::FEATURES_HEADER, protocol::features_header())
-        .header(protocol::DEVICE_HEADER, device);
-    if let Some(t) = token {
-        req = req.bearer_auth(t);
-    }
-    let resp = req.send().map_err(|e| FetchError::Other(e.to_string()))?;
-    let status = resp.status();
-    if !status.is_success() {
-        return Err(FetchError::Status(status.as_u16()));
-    }
-    let version = resp
-        .headers()
-        .get(LAYOUT_VERSION_HEADER)
-        .and_then(|v| v.to_str().ok())
-        .and_then(|v| v.trim().parse().ok());
-    let raw = resp.text().map_err(|e| FetchError::Other(e.to_string()))?;
-    let spec =
-        serde_json::from_str(&raw).map_err(|e| FetchError::Other(format!("bad bundle: {e}")))?;
-    Ok((spec, version))
 }
 
 /// `GET url` for a data path, with the session and the schema header.

@@ -58,6 +58,7 @@ struct StubState {
     /// `POST /v1/notifications/read` answer.
     read_answer: Mutex<Value>,
     read_status: AtomicU16,
+    construct: crate::construct_stub::Construct,
 }
 
 struct Stub {
@@ -86,6 +87,7 @@ impl Stub {
             list_status: AtomicU16::new(200),
             read_answer: Mutex::new(json!({ "unread_total": 0, "unread_by_layout": {} })),
             read_status: AtomicU16::new(200),
+            construct: Default::default(),
         });
         let shared = Arc::clone(&st);
         thread::spawn(move || {
@@ -177,15 +179,14 @@ fn handle(mut stream: TcpStream, st: &StubState) {
     };
     st.reqs.lock().unwrap().push(req.clone());
     let route = path.split('?').next().unwrap_or("");
+    if let Some((code, answer)) = st.construct.answer(&method, &path, &req.body, &mut |id| {
+        (id == "home").then(|| (200, FIXTURE.to_owned()))
+    }) {
+        return respond(&mut stream, code, "", &answer);
+    }
     match (method.as_str(), route) {
         ("GET", "/healthz") => respond(&mut stream, 200, "", "ok"),
-        ("GET", "/v1/workspaces/home") => respond(
-            &mut stream,
-            200,
-            "X-Construct-Layout-Version: 1\r\n",
-            FIXTURE,
-        ),
-        ("GET", "/v1/workspaces/home/events") => serve_events(stream, st),
+        ("GET", crate::construct_stub::EVENTS) => serve_events(stream, st),
         ("GET", "/v1/notifications") => {
             let status = st.list_status.load(Ordering::SeqCst);
             respond(
@@ -345,16 +346,18 @@ fn every_pod_call_carries_the_device_header_and_the_id_persists() {
     wait_until("the outbox POST", || {
         !stub.find("POST", "/v1/counters/").is_empty()
     });
-    let _ = engine.list_apps();
+    let _ = engine.sign_ins();
     let _ = engine.notification_channels();
     let reqs = stub.reqs();
     for path in [
-        "/v1/workspaces/home",
-        "/v1/workspaces/home/events",
+        "/v1/construct",
+        "/v1/objects",
+        "/v1/construct/data/",
+        "/v1/construct/events",
         "/v1/notifications?",
         "/v1/devices/",
         "/v1/counters/home/increment",
-        "/v1/apps",
+        "/v1/auth/sign-ins",
         "/v1/notifications/channels",
     ] {
         assert!(
@@ -595,7 +598,7 @@ fn mark_read_is_optimistic_then_posted_and_resent_after_a_failure() {
             .pop()
             .unwrap()
             .json(),
-        json!({ "all": true, "app": "a" })
+        json!({ "all": true, "layout": "a" })
     );
 }
 

@@ -2,15 +2,16 @@
 //! fake: create a "Kitchen" layout over the Pixelfed home feed and the recipes with the
 //! pod's MCP tools, then through the client engine: open it, see posts and recipes
 //! together, like a post through the outbox (it reaches the upstream), load a recipe
-//! screen, and watch a second engine pick up a new version live. Deleting it ends with
-//! its name gone.
+//! screen, and watch a second engine pick up a new version live (home links it, so the
+//! construct's root moves with it). Deleting it, once home no longer links it, ends
+//! with its name gone.
 
 use std::sync::Arc;
 
 use client_core::MemoryStore;
 use e2e::{
-    Harness, TIMEOUT, entities, fresh_post, like_intent, wait_flushed, wait_signed_in, wait_until,
-    wait_upstream,
+    Harness, TIMEOUT, entities, fresh_post, like_intent, wait_flushed, wait_signed_in,
+    wait_signed_out, wait_until, wait_upstream,
 };
 use serde_json::{Value, json};
 
@@ -77,11 +78,7 @@ fn a_layout_shows_two_sources_and_its_actions_work() {
     // 1. Sign in to Pixelfed through the engine (the session lives in `store`).
     let store = Arc::new(MemoryStore::new());
     let home = h.engine(&store);
-    wait_until("the signed-out bundle", TIMEOUT, || {
-        home.snapshot()
-            .workspace_json
-            .contains("Sign in with Pixelfed")
-    });
+    wait_signed_out(&home);
     home.dispatch(&h.login_intent());
     wait_signed_in(&home);
     drop(home);
@@ -106,6 +103,20 @@ fn a_layout_shows_two_sources_and_its_actions_work() {
             "layout": kitchen("Kitchen"), "note": "Recipes next to my feed"}),
     );
     let id = created["id"].as_str().unwrap().to_owned();
+    // Home links it: the construct's root reaches it.
+    let home_linking = |to: Option<&str>| {
+        let children = match to {
+            Some(id) => json!([{"type": "core://Button", "label": "Kitchen",
+                "on_click": {"intent": "action.navigation.open", "layout": id, "presentation": "Push"}}]),
+            None => json!([]),
+        };
+        tool(
+            "update_layout",
+            json!({"app": "home", "layout": {"type": "core://Page", "title": "Home",
+                "root": {"type": "core://Column", "children": children}}}),
+        );
+    };
+    home_linking(Some(&id));
     let (status, _) = pod(
         reqwest::Method::GET,
         &format!("/v1/construct/names/{id}"),
@@ -161,7 +172,8 @@ fn a_layout_shows_two_sources_and_its_actions_work() {
         other.snapshot().workspace_json.contains("Kitchen v2")
     });
 
-    // 7. Delete: gone for everyone.
+    // 7. Delete (once home no longer links it): gone for everyone.
+    home_linking(None);
     tool("delete_layout", json!({"id": id}));
     let (status, _) = pod(
         reqwest::Method::GET,

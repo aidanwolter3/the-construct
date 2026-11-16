@@ -68,6 +68,21 @@ async fn create(State(pod): State<Shared>, body: Bytes) -> impl IntoResponse {
     (code, axum::Json(json!({"ok": code.is_success()})))
 }
 
+/// Home's construct (elements are content-addressed: one for every server).
+static CONSTRUCT: std::sync::LazyLock<crate::construct_stub::Construct> =
+    std::sync::LazyLock::new(Default::default);
+
+async fn construct(
+    method: axum::http::Method,
+    uri: axum::http::Uri,
+    body: Bytes,
+) -> axum::response::Response {
+    crate::construct_stub::axum_answer(&CONSTRUCT, &method, &uri, &body, &mut |id| {
+        (id == "home").then(|| (200, workspace().to_string()))
+    })
+    .unwrap_or_else(|| StatusCode::NOT_FOUND.into_response())
+}
+
 fn serve(pod: Shared) -> String {
     let (tx, rx) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
@@ -75,12 +90,9 @@ fn serve(pod: Shared) -> String {
         rt.block_on(async move {
             let app = Router::new()
                 .route("/healthz", get(|| async { "ok" }))
-                .route(
-                    "/v1/workspaces/home",
-                    get(|| async { axum::Json(workspace()) }),
-                )
                 .route("/v1/uploads", post(upload))
                 .route("/v1/create", post(create))
+                .fallback(construct)
                 .with_state(pod);
             let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
             tx.send(listener.local_addr().unwrap()).unwrap();

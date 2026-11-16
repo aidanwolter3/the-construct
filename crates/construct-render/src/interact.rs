@@ -422,9 +422,9 @@ fn anchors_of(laid: &Laid, scroll: &BTreeMap<String, f32>) -> BTreeMap<String, A
         .collect()
 }
 
-/// On a pod switched to the construct (decision
-/// `content-addressed-construct`): each layout key and the keys it reaches
-/// ([`Loader::edges`]). A stack entry the one below it no longer reaches is
+/// The construct's edge graph (decision `content-addressed-construct`):
+/// each layout key and the keys it reaches ([`Loader::edges`]), where the
+/// loader follows the construct (the engine). A stack entry the one below it no longer reaches is
 /// closed.
 pub type Edges = BTreeMap<String, std::collections::BTreeSet<String>>;
 
@@ -490,20 +490,15 @@ enum Undo {
 /// data path's answer (`crate::remote` on devices). Calls block, except
 /// [`Loader::send`].
 pub trait Loader: Send {
-    /// A layout's plumbing root and its data (`GET /v1/workspaces/<id>`).
+    /// A layout's plumbing root and its data, by key (from the construct:
+    /// its element materialized, and its data).
     fn layout(&self, id: &str) -> Result<(UiNode, DataBundle), String>;
     /// A data path's answer (a screen's `data`, `action.data.load`).
     fn data(&self, path: &str) -> Result<DataBundle, String>;
-    /// An `action.device` command the device answers with data (a layout's
-    /// versions); `None` when this loader doesn't run it.
-    fn device(&self, _command: &str, _app: &str, _id: &str) -> Option<Result<DataBundle, String>> {
-        None
-    }
-    /// A device command that changes something on the pod (`toggle_channel`,
-    /// `hide_layout`, `unhide_layout`, `delete_layout`) or loads more of
-    /// the device data (`load_older_notifications`), with its arguments
-    /// (`app`, `id`, `enabled`, `before`): the device data to merge after
-    /// it; `None` when this loader doesn't run it.
+    /// A device command that changes something on the pod (`toggle_channel`)
+    /// or loads more of the device data (`load_older_notifications`), with
+    /// its arguments (`layout`, `id`, `enabled`, `before`): the device data
+    /// to merge after it; `None` when this loader doesn't run it.
     fn device_command(&self, _command: &str, _args: &Value) -> Option<Result<DataBundle, String>> {
         None
     }
@@ -564,7 +559,7 @@ pub trait Loader: Send {
     }
     /// The construct's edge graph when it changed since the last call
     /// (decision `content-addressed-construct`); `None`: unchanged, or the
-    /// pod isn't switched. Called every frame: it must not block.
+    /// loader keeps no graph. Called every frame: it must not block.
     fn edges(&self) -> Option<Edges> {
         None
     }
@@ -2497,8 +2492,8 @@ impl Session {
             scale: self.viewport.scale,
         };
         let prev = self.stack[i].stale.take();
-        // On a switched pod each scroll keeps its first visible item where
-        // it was (decision `content-addressed-construct`).
+        // On the construct's edge graph each scroll keeps its first visible
+        // item where it was (decision `content-addressed-construct`).
         let anchors = match (&prev, self.edges.is_some()) {
             (Some(p), true) => anchors_of(p, &self.stack[i].scroll),
             _ => BTreeMap::new(),
@@ -3565,9 +3560,10 @@ impl Session {
             }
             "action.device" => {
                 let command = intent["command"].as_str().unwrap_or("").to_owned();
-                let app = intent["app"]
+                // `app` is the older spelling of `layout`.
+                let layout = intent["layout"]
                     .as_str()
-                    .or(intent["layout"].as_str())
+                    .or(intent["app"].as_str())
                     .unwrap_or("")
                     .to_owned();
                 let id = intent["id"].as_str().unwrap_or("").to_owned();
@@ -3633,35 +3629,13 @@ impl Session {
                         return;
                     }
                     "set_server" => return self.set_server(&id, out),
-                    "toggle_channel" => return self.toggle_channel(&app, &id, out),
+                    "toggle_channel" => return self.toggle_channel(&layout, &id, out),
                     "load_older_notifications" => return self.load_older(out),
-                    "hide_layout" | "unhide_layout" | "delete_layout" => {
-                        // The layout: `app` (or `layout`), else `id`.
-                        let layout = if app.trim().is_empty() { &id } else { &app };
-                        return self.layout_command(&command, layout.trim(), out);
-                    }
                     _ => {}
                 }
-                match self
-                    .loader
-                    .as_ref()
-                    .and_then(|l| l.device(&command, &app, &id))
-                {
-                    Some(Ok(d)) => {
-                        self.merge_data(d);
-                        if command == "pin_version" || command == "follow_latest" {
-                            self.reload_layout(&app, out);
-                        }
-                        out.push(Effect::Device { command });
-                    }
-                    Some(Err(error)) => out.push(Effect::LoadFailed {
-                        what: command,
-                        error,
-                    }),
-                    None => out.push(Effect::NotSent {
-                        intent: intent.clone(),
-                    }),
-                }
+                out.push(Effect::NotSent {
+                    intent: intent.clone(),
+                });
             }
             "action.data.load" => {
                 let path = intent["path"].as_str().unwrap_or("").to_owned();
@@ -4040,15 +4014,15 @@ impl Session {
 
     /// `toggle_channel`: the switch flips at once, then the pod is told; a
     /// refusal flips it back and says why.
-    fn toggle_channel(&mut self, app: &str, id: &str, out: &mut Vec<Effect>) {
-        let uri = format!("local://channels/{app}/{id}");
+    fn toggle_channel(&mut self, layout: &str, id: &str, out: &mut Vec<Effect>) {
+        let uri = format!("local://channels/{layout}/{id}");
         let Some(c) = self.data.entities.get_mut(&uri) else {
             out.push(Effect::Nothing);
             return;
         };
         let on = !c.get("enabled").is_some_and(crate::bind::truthy);
         c.set("enabled", on);
-        let args = json!({ "app": app, "id": id, "enabled": on });
+        let args = json!({ "layout": layout, "id": id, "enabled": on });
         let answer = self
             .loader
             .as_ref()
@@ -4115,34 +4089,6 @@ impl Session {
         });
     }
 
-    /// `hide_layout`, `unhide_layout` and `delete_layout` on the pod; the
-    /// pod's list of layouts comes back. A deleted layout leaves the stack.
-    /// Home can't be hidden or deleted, nor the layout at the root.
-    fn layout_command(&mut self, command: &str, layout: &str, out: &mut Vec<Effect>) {
-        if layout.is_empty()
-            || layout == "home"
-            || (command == "delete_layout" && layout == self.stack[0].id)
-        {
-            out.push(Effect::Nothing);
-            return;
-        }
-        let args = json!({ "app": layout });
-        let answer = self
-            .loader
-            .as_ref()
-            .and_then(|l| l.device_command(command, &args));
-        if command == "delete_layout" && matches!(answer, Some(Ok(_))) {
-            let mut i = 0;
-            self.stack.retain(|e| {
-                i += 1;
-                i == 1 || e.id != layout
-            });
-            self.layouts.remove(layout);
-            self.focused = None;
-        }
-        self.device_answer(command, args, answer, out);
-    }
-
     /// What a device command's answer does: its data merged, or the reason
     /// it failed shown in the notice bar.
     fn device_answer(
@@ -4171,43 +4117,6 @@ impl Session {
                 intent["intent"] = json!("action.device");
                 intent["command"] = json!(command);
                 out.push(Effect::NotSent { intent });
-            }
-        }
-    }
-
-    /// Loads a layout again (another version was pinned, or the latest
-    /// followed) and draws it wherever it shows.
-    fn reload_layout(&mut self, id: &str, out: &mut Vec<Effect>) {
-        let Some(loaded) = self.loader.as_ref().map(|l| l.layout(id)) else {
-            return;
-        };
-        match loaded {
-            Ok((root, data)) => {
-                self.merge_data(data);
-                let screens = match &root {
-                    UiNode::Page { screens, .. } => screens.clone(),
-                    _ => Vec::new(),
-                };
-                let switched = self.edges.is_some();
-                for e in self.stack.iter_mut().filter(|e| e.id == id && !e.screen) {
-                    e.root = root.clone();
-                    e.screens = screens.clone();
-                    if switched {
-                        // Kept for its scroll anchors.
-                        e.relay();
-                    } else {
-                        e.laid = None;
-                        e.stale = None;
-                    }
-                }
-                self.layouts.insert(id.to_owned(), root);
-            }
-            Err(error) => {
-                self.notice = Some(notice_text(&error));
-                out.push(Effect::LoadFailed {
-                    what: format!("layout {id}"),
-                    error,
-                });
             }
         }
     }

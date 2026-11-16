@@ -45,11 +45,13 @@ fn fast_config() -> EngineConfig {
     }
 }
 
-/// Scriptable server: `bundle` for `GET /v1/workspaces/feed`, POST statuses
-/// popped from `statuses` (200 when empty); records POST (path, body, status).
+/// Scriptable server: `bundle` for layout `feed` (by name: home is a
+/// blank page), POST statuses popped from `statuses` (200 when empty);
+/// records POST (path, body, status).
 #[derive(Clone)]
 struct Script {
     bundle: Arc<Mutex<String>>,
+    construct: Arc<crate::construct_stub::Construct>,
     statuses: Arc<Mutex<VecDeque<u16>>>,
     posts: Arc<Mutex<Vec<(String, Value, u16)>>>,
 }
@@ -58,6 +60,7 @@ impl Script {
     fn new(bundle: String, statuses: &[u16]) -> Self {
         Self {
             bundle: Arc::new(Mutex::new(bundle)),
+            construct: Arc::default(),
             statuses: Arc::new(Mutex::new(statuses.iter().copied().collect())),
             posts: Arc::default(),
         }
@@ -99,7 +102,18 @@ impl Script {
                     let _ = reader.read_exact(&mut body);
                     let mut parts = request_line.split_whitespace();
                     let (method, path) = (parts.next().unwrap_or(""), parts.next().unwrap_or(""));
-                    let (status, resp) = if method == "POST" {
+                    let feed = |id: &str| {
+                        (id == "feed").then(|| (200, script.bundle.lock().unwrap().clone()))
+                    };
+                    let construct = script.construct.answer(
+                        method,
+                        path,
+                        &String::from_utf8_lossy(&body),
+                        &mut |id| feed(id),
+                    );
+                    let (status, resp) = if let Some(answer) = construct {
+                        answer
+                    } else if method == "POST" {
                         let status = script.statuses.lock().unwrap().pop_front().unwrap_or(200);
                         let sent = serde_json::from_slice(&body).unwrap_or(Value::Null);
                         script
@@ -108,8 +122,6 @@ impl Script {
                             .unwrap()
                             .push((path.to_string(), sent, status));
                         (status, r#"{"ok":true}"#.to_string())
-                    } else if path == "/v1/workspaces/feed" {
-                        (200, script.bundle.lock().unwrap().clone())
                     } else {
                         (200, "ok".to_string())
                     };

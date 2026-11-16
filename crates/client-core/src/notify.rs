@@ -189,8 +189,8 @@ impl CallError {
                 (401, _) => LayoutApiError::Unauthorized {
                     reason: NOTIFICATIONS_SIGNED_OUT.to_owned(),
                 },
-                (404, "app_not_found") => LayoutApiError::NotFound {
-                    reason: "That app doesn't exist.".to_owned(),
+                (404, "layout_not_found") => LayoutApiError::NotFound {
+                    reason: "That layout doesn't exist.".to_owned(),
                 },
                 (404, _) => LayoutApiError::NotFound {
                     reason: "This pod doesn't support notifications.".to_owned(),

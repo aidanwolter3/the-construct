@@ -8,10 +8,11 @@
 //! [`PodEngine`] is the session's [`Loader`]: every snapshot the engine
 //! sends becomes [`Changes`] the session applies on its next frame (the
 //! window is woken through the session's image store). The device data the
-//! shared UI builds (`DeviceData`: the layouts list, the inbox, channels,
-//! sign-ins and versions) is built from the engine's calls with the same
-//! builders as [`crate::remote::PodClient`]; the layouts list is kept in a
-//! file next to the engine's cache, so it shows offline too.
+//! shared UI builds (`DeviceData`: the inbox, channels and sign-ins) is
+//! built from the engine's calls with the same builders as
+//! [`crate::remote::PodClient`]; the layouts' titles that name their rows
+//! come from the construct's elements the engine has (decision
+//! `one-layout-system`).
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -43,8 +44,6 @@ const LOAD_WAIT: Duration = Duration::from_secs(20);
 const SIGN_IN_WAIT: Duration = Duration::from_secs(25);
 /// Notifications listed for the inbox.
 const INBOX_LIMIT: u32 = 50;
-/// The layouts list kept for offline starts, next to `cache.db`.
-const APPS_FILE: &str = "apps.json";
 
 fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
     m.lock().unwrap_or_else(|p| p.into_inner())
@@ -69,8 +68,6 @@ struct Shared {
     news: Mutex<Option<Changes>>,
     /// The construct's edge graph, when it changed ([`Loader::edges`]).
     edges: Mutex<Option<crate::interact::Edges>>,
-    /// The pod is switched to the construct: no versions on the device.
-    switched: std::sync::atomic::AtomicBool,
     /// What the last snapshot showed, to tell what changed.
     seen: Mutex<Seen>,
     /// The data the session was last sent (its snapshot JSON too), so a
@@ -79,11 +76,6 @@ struct Shared {
     sent: Mutex<Sent>,
     /// The session's image store: waking it draws the next frame.
     images: Mutex<Option<ImageStore>>,
-    /// Layout titles by id, for device data rows.
-    titles: Mutex<HashMap<String, String>>,
-    /// Versions picked on this device (`pin_version`), by layout: the
-    /// version and its layout, drawn in place of the latest.
-    pins: Mutex<HashMap<String, (i64, UiNode)>>,
     /// The servers the platform offers (`local:servers`).
     servers: Mutex<Vec<ServerOption>>,
     /// Where the inbox's next older page starts, and the older pages
@@ -95,7 +87,6 @@ struct Shared {
     /// The layouts opened (their JSON, by id), for the device data they
     /// bind.
     needs: Mutex<HashMap<String, String>>,
-    apps_file: Option<PathBuf>,
     /// The device data is being loaded again; `again`: once more after.
     loading: AtomicBool,
     again: AtomicBool,
@@ -179,16 +170,6 @@ impl Shared {
         e.set("has_older", next.is_some());
         e.set("next_before", next.unwrap_or_default());
         e
-    }
-
-    /// The layout a pin draws in place of `id`'s latest.
-    fn pinned(&self, id: &str) -> Option<UiNode> {
-        // A switched pod has no device pins: a device always draws the
-        // construct's current hash (decision `content-addressed-construct`).
-        if self.switched.load(Ordering::SeqCst) {
-            return None;
-        }
-        lock(&self.pins).get(id).map(|(_, root)| root.clone())
     }
 
     fn push(&self, c: Changes) {
@@ -350,19 +331,7 @@ impl PodEngine {
             "desktop"
         };
         engine.set_device_info(platform, "The Construct (Rust)");
-        let pins = engine
-            .pinned_versions()
-            .into_iter()
-            .filter_map(|p| {
-                let root = serde_json::from_str::<UiNode>(&p.spec).ok()?;
-                Some((p.layout_id, (p.version, root)))
-            })
-            .collect();
-        let shared = Arc::new(Shared {
-            apps_file: dir.map(|d| d.join(APPS_FILE)),
-            pins: Mutex::new(pins),
-            ..Shared::default()
-        });
+        let shared = Arc::new(Shared::default());
         let pod = PodEngine {
             engine,
             base,
@@ -416,8 +385,7 @@ impl PodEngine {
     /// Leaves the pod on this device: the engine forgets its session and
     /// shows the pod's sign-in screen once the pod answers.
     pub fn forget_session(&self) {
-        // The engine forgets its pins too; the inbox starts afresh.
-        lock(&self.shared.pins).clear();
+        // The inbox starts afresh.
         *lock(&self.shared.older) = (None, Vec::new());
         self.engine.forget_session();
     }
@@ -478,14 +446,9 @@ impl PodEngine {
             *sent = Sent::default();
             sent.snapshot_changes(&snap);
         }
-        let root = match self.shared.pinned(HOME) {
-            Some(r) => r,
-            None => serde_json::from_str::<UiNode>(&snap.workspace_json)
-                .unwrap_or_else(|_| opening_page(&self.base)),
-        };
+        let root = serde_json::from_str::<UiNode>(&snap.workspace_json)
+            .unwrap_or_else(|_| opening_page(&self.base));
         let mut data = bundle(&snap);
-        let apps = self.cached_apps();
-        merge(&mut data, apps);
         merge(&mut data, self.device_now(&snap));
         let mut s = Session::new(HOME, root, data, viewport);
         {
@@ -531,53 +494,8 @@ impl PodEngine {
         out
     }
 
-    /// The pod's layouts list now (kept for offline starts).
-    fn apps_now(&self) -> Result<DataBundle, String> {
-        let body = self.engine.list_apps().map_err(|e| e.reason().to_owned())?;
-        if let Some(f) = &self.shared.apps_file {
-            let _ = std::fs::write(f, &body);
-        }
-        let v: Value = serde_json::from_str(&body).map_err(|e| e.to_string())?;
-        Ok(remote::layouts_bundle(&v, &mut lock(&self.shared.titles)))
-    }
-
-    /// Pins version `n` of `app` (its layout fetched from the pod), or
-    /// (`None`) follows its latest again; the engine keeps the pin.
-    fn pin(&self, app: &str, n: Option<i64>) -> Result<(), String> {
-        let Some(n) = n else {
-            lock(&self.shared.pins).remove(app);
-            self.engine.set_pinned_version(app, None);
-            return Ok(());
-        };
-        let v: Value = self
-            .engine
-            .app_version(app, n)
-            .map_err(|e| e.reason().to_owned())
-            .and_then(|b| serde_json::from_str(&b).map_err(|e| e.to_string()))?;
-        let root: UiNode = serde_json::from_value(v["layout"].clone())
-            .map_err(|e| format!("v{n} of {app}: {e}"))?;
-        let spec = v["layout"].to_string();
-        self.engine.set_pinned_version(app, Some((n, &spec)));
-        lock(&self.shared.pins).insert(app.to_owned(), (n, root));
-        Ok(())
-    }
-
-    /// The layouts list kept from the last time the pod gave it.
-    fn cached_apps(&self) -> DataBundle {
-        let Some(v) = self
-            .shared
-            .apps_file
-            .as_ref()
-            .and_then(|f| std::fs::read_to_string(f).ok())
-            .and_then(|t| serde_json::from_str::<Value>(&t).ok())
-        else {
-            return DataBundle::default();
-        };
-        remote::layouts_bundle(&v, &mut lock(&self.shared.titles))
-    }
-
-    /// Loads the device data again in the background: the layouts list,
-    /// and the notifications, channels and sign-ins the open layouts bind.
+    /// Loads the device data again in the background: the notifications,
+    /// channels and sign-ins the open layouts bind.
     fn reload_device(&self) {
         reload_device(Arc::downgrade(&self.engine), self.shared.clone());
     }
@@ -609,26 +527,6 @@ impl PodEngine {
             std::thread::sleep(Duration::from_millis(20));
         }
     }
-
-    fn versions(&self, app: &str) -> Result<DataBundle, String> {
-        let v: Value = self
-            .engine
-            .app_versions(app, None, Some(100))
-            .map_err(|e| e.reason().to_owned())
-            .and_then(|b| serde_json::from_str(&b).map_err(|e| e.to_string()))?;
-        let pinned = lock(&self.shared.pins).get(app).map(|p| p.0);
-        let title = lock(&self.shared.titles)
-            .get(app)
-            .cloned()
-            .unwrap_or_else(|| app.to_owned());
-        Ok(remote::versions_bundle(
-            app,
-            &v,
-            pinned,
-            &title,
-            remote::now_secs(),
-        ))
-    }
 }
 
 fn merge(into: &mut DataBundle, from: DataBundle) {
@@ -649,10 +547,7 @@ fn observe(engine: &Weak<ConstructEngine>, shared: &Arc<Shared>, base: &str, sna
         if snap.workspace_json != seen.workspace {
             seen.workspace = snap.workspace_json.clone();
             if let Ok(root) = serde_json::from_str::<UiNode>(&snap.workspace_json) {
-                // A pinned home keeps drawing its pinned version.
-                if shared.pinned(HOME).is_none() {
-                    c.layouts.push((HOME.to_owned(), root));
-                }
+                c.layouts.push((HOME.to_owned(), root));
                 shared.note(HOME, snap.workspace_json.clone());
                 reload = true;
             }
@@ -670,9 +565,7 @@ fn observe(engine: &Weak<ConstructEngine>, shared: &Arc<Shared>, base: &str, sna
                 continue;
             }
             if let Ok(root) = serde_json::from_value::<UiNode>(l["workspace"].clone()) {
-                if shared.pinned(&id).is_none() {
-                    c.layouts.push((id.clone(), root));
-                }
+                c.layouts.push((id.clone(), root));
                 shared.note(&id, text.clone());
                 reload = true;
             }
@@ -681,9 +574,7 @@ fn observe(engine: &Weak<ConstructEngine>, shared: &Arc<Shared>, base: &str, sna
         // The construct's edge graph (decision `content-addressed-construct`).
         if snap.construct_json != seen.construct {
             seen.construct = snap.construct_json.clone();
-            shared
-                .switched
-                .store(!snap.construct_json.is_empty(), Ordering::SeqCst);
+            // The layouts' titles may have changed.
             reload = true;
             if let Ok(v) = serde_json::from_str::<Value>(&snap.construct_json)
                 && let Ok(reach) = serde_json::from_value(v["reach"].clone())
@@ -719,9 +610,9 @@ fn observe(engine: &Weak<ConstructEngine>, shared: &Arc<Shared>, base: &str, sna
     }
 }
 
-/// The layouts list, and what the open layouts bind of the notifications,
-/// channels and sign-ins, from the engine on a background thread (one at a
-/// time; asked again while it runs, it runs once more after).
+/// What the open layouts bind of the notifications, channels and sign-ins,
+/// from the engine on a background thread (one at a time; asked again while
+/// it runs, it runs once more after).
 fn reload_device(engine: Weak<ConstructEngine>, shared: Arc<Shared>) {
     if shared.loading.swap(true, Ordering::SeqCst) {
         shared.again.store(true, Ordering::SeqCst);
@@ -753,39 +644,8 @@ fn reload_device(engine: Weak<ConstructEngine>, shared: Arc<Shared>) {
 
 fn device_data(engine: &ConstructEngine, shared: &Shared) -> DataBundle {
     let mut out = DataBundle::default();
-    match engine.list_apps() {
-        Ok(body) => {
-            // Whole or not at all: a new start may read it meanwhile.
-            let tmp = shared.apps_file.as_ref().map(|f| f.with_extension("tmp"));
-            if let (Some(f), Some(tmp)) = (&shared.apps_file, tmp)
-                && let Err(e) = std::fs::write(&tmp, &body).and_then(|()| std::fs::rename(&tmp, f))
-            {
-                eprintln!("construct-render: {}: {e}", f.display());
-            }
-            if let Ok(v) = serde_json::from_str::<Value>(&body) {
-                let mut list = remote::layouts_bundle(&v, &mut lock(&shared.titles));
-                // A switched pod lists no layouts on the device: launcher
-                // membership is home's links (decision
-                // `content-addressed-construct`); the titles still name
-                // notifications' layouts.
-                if shared.switched.load(Ordering::SeqCst) {
-                    list.entities
-                        .retain(|k, _| !k.starts_with("local://layouts"));
-                    for q in list.queries.values_mut() {
-                        q.clear();
-                    }
-                    if let Ok(count) = serde_json::from_value(json!({ "count": 0 })) {
-                        list.entities.insert("local://layouts".into(), count);
-                    }
-                }
-                merge(&mut out, list);
-            }
-        }
-        // Offline: the list kept from the last time stays.
-        Err(e) => eprintln!("construct-render: layouts: {e}"),
-    }
     let needs = shared.needs();
-    let titles = lock(&shared.titles).clone();
+    let titles: HashMap<String, String> = engine.layout_titles().into_iter().collect();
     if remote::needs_notifications(&needs) {
         // From the pod, else the engine's cache.
         match engine.list_notifications(None, INBOX_LIMIT, None) {
@@ -866,10 +726,7 @@ impl Loader for PodEngine {
             }
             std::thread::sleep(Duration::from_millis(20));
         };
-        let mut root = got?;
-        if let Some(pinned) = self.shared.pinned(id) {
-            root = pinned;
-        }
+        let root = got?;
         self.needs(id, &root);
         Ok((root, DataBundle::default()))
     }
@@ -918,31 +775,14 @@ impl Loader for PodEngine {
         true
     }
 
-    fn device(&self, command: &str, app: &str, id: &str) -> Option<Result<DataBundle, String>> {
-        if self.shared.switched.load(Ordering::SeqCst)
-            && matches!(command, "show_versions" | "pin_version" | "follow_latest")
-        {
-            return Some(Ok(DataBundle::default()));
-        }
-        match command {
-            "show_versions" => Some(self.versions(app)),
-            "pin_version" => {
-                let n = id.trim().parse::<i64>().ok()?;
-                Some(self.pin(app, Some(n)).and_then(|()| self.versions(app)))
-            }
-            "follow_latest" => Some(self.pin(app, None).and_then(|()| self.versions(app))),
-            _ => None,
-        }
-    }
-
     fn device_command(&self, command: &str, args: &Value) -> Option<Result<DataBundle, String>> {
         let text = |k: &str| args[k].as_str().unwrap_or("").trim().to_owned();
-        let app = text("app");
         let reason = |e: client_core::LayoutApiError| e.reason().to_owned();
         Some(match command {
             "toggle_channel" => {
                 let on = args["enabled"].as_bool().unwrap_or(true);
-                let r = self.engine.set_channel_enabled(&app, &text("id"), on);
+                let layout = text("layout");
+                let r = self.engine.set_channel_enabled(&layout, &text("id"), on);
                 self.reload_device();
                 r.map(|()| DataBundle::default()).map_err(reason)
             }
@@ -952,7 +792,8 @@ impl Loader for PodEngine {
                     .list_notifications(Some(&before), INBOX_LIMIT, None)
                     .map_err(reason)
                     .map(|list| {
-                        let titles = lock(&self.shared.titles).clone();
+                        let titles: HashMap<String, String> =
+                            self.engine.layout_titles().into_iter().collect();
                         let v = serde_json::to_value(&list).unwrap_or_default();
                         let page = remote::notifications_bundle(&v, &titles, remote::now_secs());
                         {
@@ -972,21 +813,6 @@ impl Loader for PodEngine {
                         out
                     })
             }
-            "hide_layout" | "unhide_layout" => self
-                .engine
-                .set_app_hidden(&app, command == "hide_layout")
-                .map_err(reason)
-                .and_then(|()| self.apps_now()),
-            "delete_layout" => self
-                .engine
-                .delete_custom_app(&app)
-                .map_err(reason)
-                .and_then(|()| {
-                    if lock(&self.shared.pins).contains_key(&app) {
-                        let _ = self.pin(&app, None);
-                    }
-                    self.apps_now()
-                }),
             _ => return None,
         })
     }

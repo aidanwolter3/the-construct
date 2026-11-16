@@ -7,8 +7,8 @@ use std::time::Duration;
 
 use client_core::{ConstructEngine, MemoryStore};
 use e2e::{
-    Harness, LIKE_ENDPOINT, TIMEOUT, auth, feed, fresh_post, like_intent, post, wait_flushed,
-    wait_signed_in, wait_until, wait_upstream,
+    Harness, LIKE_ENDPOINT, TIMEOUT, auth, entities, feed, fresh_post, like_intent, post,
+    wait_flushed, wait_signed_in, wait_until, wait_upstream,
 };
 use fake_pixelfed::FaultRule;
 use serde_json::Value;
@@ -236,7 +236,8 @@ fn upstream_reset_between_runs() {
     engine.refresh();
     wait_until("signed out after the upstream wipe", TIMEOUT, || {
         let s = engine.snapshot();
-        auth(&s)["state"] == "signed_out" && s.workspace_json.contains("Sign in with Pixelfed")
+        auth(&s)["state"] == "signed_out"
+            && entities(&s)["core://sources/pixelfed"]["signed_in"] == false
     });
     engine.dispatch(&h.login_intent());
     wait_signed_in(&engine);

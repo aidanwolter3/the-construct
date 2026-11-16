@@ -350,15 +350,6 @@ impl Runner {
             Step::OpenLayout { layout, how } => self.open_layout(layout, *how),
             Step::OpenSettings => self.open_layout("settings", Presentation::Panel),
             Step::OpenInbox => self.open_layout("inbox", Presentation::Sheet),
-            Step::PinVersion { layout, version } => {
-                let intent = match version {
-                    Some(v) => json!({ "intent": "action.device", "command": "pin_version",
-                                       "app": layout, "id": v.to_string() }),
-                    None => json!({ "intent": "action.device", "command": "follow_latest", "app": layout }),
-                };
-                let o = self.session.dispatch(&intent)?;
-                self.effects(o)
-            }
             Step::Notify {
                 app,
                 channel,
@@ -383,7 +374,7 @@ impl Runner {
             Step::ToggleChannel(channel) => {
                 let (app, id) = channel.split_once('.').unwrap_or((channel, ""));
                 let o = self.session.dispatch(&json!({ "intent": "action.device",
-                    "command": "toggle_channel", "app": app, "id": id }))?;
+                    "command": "toggle_channel", "layout": app, "id": id }))?;
                 self.effects(o)
             }
         }

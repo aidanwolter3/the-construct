@@ -1,9 +1,12 @@
 //! Server push channel (M7, docs/DECISIONS.md D24): a `construct-engine-events`
-//! thread keeps `GET /v1/workspaces/<id>/events` (Server-Sent Events) open
-//! while the engine is online and refetches the workspace when a
-//! `layout` event names a version newer than the last applied one. The same
-//! stream carries `notification` / `notifications_read` events for every app
-//! of the pod (D52, handled in [`crate::notify`]); after each (re)connect with
+//! thread keeps `GET /v1/construct/events` (Server-Sent Events) open while
+//! the engine is online. Its first event, and one each time it moves, is
+//! `construct {root}`: the engine follows the root (decision
+//! `one-layout-system`, [`crate::construct`]), so a device that missed a
+//! change while the stream was down catches up when it reconnects. The same
+//! stream carries `data` events for home's sources and `notification` /
+//! `notifications_read` events for every layout of the pod (D52, handled in
+//! [`crate::notify`]); after each (re)connect with
 //! a session the engine fetches recent notifications to catch up. Every
 //! reconnect after the first (same session) also catches up on data: an
 //! `event: data` sent while the stream was down is lost, so the engine
@@ -151,21 +154,6 @@ impl SseParser {
     }
 }
 
-/// A `layout` event's payload: `(workspace_id, version)`. `None` for other
-/// events or unusable data.
-pub fn parse_layout_event(ev: &SseEvent) -> Option<(Option<String>, u64)> {
-    if ev.event != "layout" {
-        return None;
-    }
-    let v: Value = serde_json::from_str(&ev.data).ok()?;
-    let version = v.get("version")?.as_u64()?;
-    let ws = v
-        .get("workspace_id")
-        .and_then(Value::as_str)
-        .map(str::to_owned);
-    Some((ws, version))
-}
-
 /// Sleep up to `d`, returning false as soon as the engine shuts down, and
 /// early when the app came back to the foreground (`wake`).
 fn sleep_unless_shut_down(signal: &WorkerSignal, wake: &AtomicBool, d: Duration) -> bool {
@@ -243,8 +231,8 @@ pub(crate) fn events_thread(
         }
 
         let connected = rt.block_on(async {
-            // The schema header makes the pod announce the newest version this
-            // build can draw, so a version it can't draw causes no refetch.
+            // The schema header makes the pod announce the root this build
+            // can draw.
             let mut req = client
                 .get(&url)
                 .header(reqwest::header::ACCEPT, "text/event-stream")
@@ -277,11 +265,6 @@ pub(crate) fn events_thread(
                     && let Some(inner) = weak.upgrade()
                 {
                     inner.on_stream_connected(t);
-                }
-                // Which system the pod is on is asked again (it may have
-                // been switched or reverted meanwhile).
-                if let Some(inner) = weak.upgrade() {
-                    inner.construct_reprobe(token.as_deref());
                 }
                 // A fresh connection is what a foreground return asks for.
                 wake.store(false, Ordering::SeqCst);
@@ -328,16 +311,6 @@ pub(crate) fn events_thread(
                     inner.refresh();
                 }
                 "HTTP 401".to_string()
-            }
-            Err(ConnectError::Status(404)) => {
-                // The app may be gone (a custom app deleted while this
-                // stream was down): a refetch tells (its 404 marks it gone).
-                if last_error.as_deref() != Some("HTTP 404")
-                    && let Some(inner) = weak.upgrade()
-                {
-                    inner.refresh();
-                }
-                "HTTP 404".to_string()
             }
             Err(ConnectError::Status(code)) => format!("HTTP {code}"),
             Err(ConnectError::Other(e)) => e,
@@ -439,67 +412,28 @@ fn body_error(e: &reqwest::Error) -> String {
 }
 
 impl Inner {
-    /// A pushed event: refetch on a `layout` event for this workspace whose
-    /// version is newer than the last applied one (or when none is known).
-    /// Blocking (the refetch); called on the events thread.
+    /// A pushed event: a notification, the construct's root, or a data
+    /// change. Blocking (what it fetches); called on the events thread.
     fn on_push_event(&self, ev: &SseEvent) {
         if self.on_notification_event(ev) {
             return;
         }
         // The construct (decision `content-addressed-construct`): one root
-        // says whether this device is current; layouts' version events are
-        // for installed clients.
+        // says whether this device is current.
         if ev.event == "construct" {
             if !self.signal.is_shut_down() {
                 self.on_construct_event(&ev.data);
             }
             return;
         }
-        if ev.event == "layout" && crate::lock(&self.construct).mode == crate::construct::Mode::On {
-            return;
-        }
-        if ev.event == "deleted" {
-            // A custom app was deleted (decision
-            // `custom-apps-and-data-sources`): the UI leaves it.
-            let ws = serde_json::from_str::<Value>(&ev.data)
-                .ok()
-                .and_then(|v| v.get("workspace_id")?.as_str().map(str::to_owned));
-            if let Some(other) = ws.as_deref().filter(|w| *w != self.workspace_id) {
-                // Another layout (home's stream carries every layout's,
-                // decision `layouts-not-apps`).
-                let snap = {
-                    let mut st = lock(&self.state);
-                    let Some(l) = st.layouts.get_mut(other) else {
-                        return;
-                    };
-                    l.gone = true;
-                    st.seq += 1;
-                    st.snapshot()
-                };
-                println!("[ConstructEngine] events: layout {other} was deleted");
-                self.notify(snap);
-                return;
-            }
-            if ws.is_none() {
-                return;
-            }
-            println!("[ConstructEngine] events: this app was deleted");
-            let snap = {
-                let mut st = lock(&self.state);
-                st.gone = true;
-                st.seq += 1;
-                st.snapshot()
-            };
-            self.notify(snap);
-            return;
-        }
         if ev.event == "data" {
             // D50: the pod's data changed (e.g. a post finished): reload
             // what it says changed, or everything when it doesn't say
-            // (decision `scoped-data-events`, `crate::reload`).
+            // (decision `scoped-data-events`, `crate::reload`). The stream
+            // is home's: its data events are every engine's.
             let data = serde_json::from_str::<Value>(&ev.data).unwrap_or_default();
             let ws = data.get("workspace_id").and_then(Value::as_str);
-            if ws.is_some_and(|w| w != self.workspace_id) {
+            if ws.is_some_and(|w| w != crate::DEFAULT_WORKSPACE_ID && w != self.workspace_id) {
                 return;
             }
             if !self.signal.is_shut_down() {
@@ -508,49 +442,6 @@ impl Inner {
                     None => self.reload_all(),
                 }
             }
-            return;
-        }
-        let Some((ws, version)) = parse_layout_event(ev) else {
-            if ev.event == "layout" {
-                eprintln!(
-                    "[ConstructEngine] events: unusable layout event ignored: {}",
-                    ev.data
-                );
-            }
-            return;
-        };
-        if let Some(other) = ws.as_deref().filter(|w| *w != self.workspace_id) {
-            // Another layout this engine shows: fetch it again when newer.
-            let newer = lock(&self.state)
-                .layouts
-                .get(other)
-                .is_some_and(|l| l.version.is_none_or(|v| version > v));
-            if newer && !self.signal.is_shut_down() {
-                println!(
-                    "[ConstructEngine] events: layout {other} v{version} pushed; refetching it"
-                );
-                let path = format!("{}{other}", crate::LAYOUT_LOAD_PREFIX);
-                if self.begin_load(&path) {
-                    self.load_data(&path);
-                }
-            }
-            return;
-        }
-        let current = lock(&self.state).layout_version;
-        // A version at or below the applied one is ignored (a duplicate or a
-        // stale event). Trade-off: after a pod database reset (versions
-        // restart at 1) pushes are ignored until the engine is recreated;
-        // versions are monotonic per pod by design (D32); see where lib.rs
-        // applies a fetched layout.
-        if current.is_some_and(|c| version <= c) {
-            return;
-        }
-        println!(
-            "[ConstructEngine] events: layout v{version} pushed (have {}); refetching",
-            current.map_or("none".into(), |c| format!("v{c}"))
-        );
-        if !self.signal.is_shut_down() {
-            self.refresh();
         }
     }
 }
@@ -631,21 +522,6 @@ mod tests {
         let mut p = SseParser::new();
         let big = format!("data: {}\n\n", "z".repeat(MAX_EVENT_BYTES - 10));
         assert_eq!(p.feed(big.as_bytes()).unwrap().len(), 1);
-    }
-
-    #[test]
-    fn layout_event_payload() {
-        assert_eq!(
-            parse_layout_event(&ev("layout", r#"{"workspace_id":"home","version":5}"#)),
-            Some((Some("home".into()), 5))
-        );
-        assert_eq!(
-            parse_layout_event(&ev("layout", r#"{"version":1}"#)),
-            Some((None, 1))
-        );
-        assert_eq!(parse_layout_event(&ev("message", r#"{"version":1}"#)), None);
-        assert_eq!(parse_layout_event(&ev("layout", "garbage")), None);
-        assert_eq!(parse_layout_event(&ev("layout", r#"{"version":-1}"#)), None);
     }
 
     /// The body error a client sees when the pod dies mid-stream (the

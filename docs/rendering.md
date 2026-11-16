@@ -128,11 +128,7 @@ per second stops it without tapping. Past an end, a view whose content scrolls s
 stretches it (pushing back undoes that first), letting go springs it back, and a fling that meets the end bumps it;
 the content draws scaled along the axis from that end (`stretch:<id>` among the scroll offsets, up to about 10%;
 images move but keep their size, since each size is cut anew). A mouse wheel notch glides 64 points over about
-120 ms; trackpad deltas apply as they come (macOS adds its own momentum). A drag's scrolling is applied once per frame, and the GPU renderer keeps shaped text between frames. `action.device` `show_versions` fills `local://versions` and `local:versions` from
-`/v1/apps/<id>/versions`; `pin_version` draws that version (`/v1/apps/<id>/versions/<n>`'s layout over the
-layout's latest data) wherever the layout shows, home included, until `follow_latest`, and new versions published
-meanwhile don't replace it; the engine keeps pins across restarts (`set_pinned_version`) and forgets them on Leave
-pod. The session follows the platform's light or dark mode (`Session::set_dark`). Dark mode draws the theme's dark palette
+120 ms; trackpad deltas apply as they come (macOS adds its own momentum). A drag's scrolling is applied once per frame, and the GPU renderer keeps shaped text between frames. The session follows the platform's light or dark mode (`Session::set_dark`). Dark mode draws the theme's dark palette
 (decision `dark-palette`): the background is the `page` token, dialogs, sheets, panels and the edit bar draw on
 `card`, and each mode takes only its own token values from `core://theme` (`<token>`, `<token>_dark`), any token
 the pod sends included. `core://Sticky` pins at the top of its scrolling view, over the page
@@ -165,7 +161,7 @@ the system clipboard through `pbcopy`/`pbpaste` on macOS and `wl-copy`, `xclip` 
 Metal on macOS and Vulkan (or GL) on Linux; on a headless Linux box, `Xvfb` plus Mesa's `mesa-vulkan-drivers`
 (lavapipe) is enough.
 
-Any workspace bundle (what `GET /v1/workspaces/<id>` answers) can be drawn to PNGs without a window:
+Any workspace bundle (`protocol::WorkspaceSpec`, the shape the simulator's fixtures use) can be drawn to PNGs without a window:
 `cargo run --release -p construct-render --no-default-features --example render_bundle -- a.json b.json --out dir`
 (390 × 844 at 3×, the simulator's phone).
 
@@ -252,8 +248,8 @@ The platform interface (`platform.rs`: `Platform`, `PlatformEvent`, `Reopen`) is
 Feature `remote` (on in the viewer and the APK) runs a session over a pod with the engine
 (`client-core`, decision `rust-clients-on-the-engine`): `PodEngine` is the session's `Loader`. Home shows as the
 engine has it, from its cache at once (offline too; "Opening your pod…" with the connection's state on a first
-start, until the pod answers), and the device's list of layouts (`local:layouts`, `local:apps`) comes from
-`GET /v1/apps?all=1`, kept in `apps.json` next to the cache for offline starts. A layout a tap opens is the engine's
+start, until the pod answers). A layout's title (for `app_title` on notifications and channels) is its element's
+`title`, from the objects the engine has (`layout_titles`). A layout a tap opens is the engine's
 cached copy at once, fetched again behind it (`open_layout`; a layout it never had waits for the pod), read with
 `layout_now` (that layout alone: a snapshot serializes the engine's whole state, too slow for a tap), and a page
 screen whose route matches a tap's `target_uri` opens with its `$route` bound and its `item`, and slides in at once
@@ -293,12 +289,10 @@ notification's layout and `target_uri` screen; `mark_read` and `mark_all_read` m
 `next_before`; older pages stay when the inbox is listed again). `open_settings` and `open_inbox`, retired from new
 layouts, still present the `settings` layout as a panel and `inbox` as a sheet for versions written before.
 `toggle_channel` flips the switch at once and the engine tells
-the pod (registering the device first), flipping it back when refused. `hide_layout`, `unhide_layout` and
-`delete_layout` go to the pod through the engine and load its list of layouts again; a deleted layout leaves the
-stack and its pin is forgotten; home is never hidden or deleted. `set_server` hands the platform another of
+the pod (registering the device first), flipping it back when refused. `set_server` hands the platform another of
 `local:servers` (`Effect::SwitchServer`). A refused write or device command shows a notice bar at the
 bottom (the pod's `detail`, else its error, with Dismiss; tagged `notice` and `notice-dismiss`) until dismissed.
-These commands (`Loader::device_command`) block the session while the pod answers, as `show_versions` does. Left to
+These commands (`Loader::device_command`) block the session while the pod answers. Left to
 its own ticket: `request_notification_permission` (#168).
 `action.link.open` opens an `http(s)` address in the browser (an `ACTION_VIEW` intent on Android, `open` or
 `xdg-open` on desktops, `rundll32 url.dll,FileProtocolHandler` on Windows). Desktops hand the opener only `http`,
@@ -422,15 +416,13 @@ device state and answers the same, with the interaction's effects.
 A preview behaves as a device with the user's data, minus anything that writes (decision
 `previews-read-like-a-device`). Its session has a read-only `Loader` that asks the pod's own router as the owner:
 
-- **Device data** is built as the clients build it (`construct_render::device_data`): `local:layouts`,
-  `local:all_layouts`, `local:apps` and their `local://layouts/<id>` rows, `local://connection` (online),
+- **Device data** is built as the clients build it (`construct_render::device_data`): `local://connection` (online),
   `local://session`, `local://servers/current`, `local://inbox`, and, when a layout binds them, the notifications,
   channels and sign-ins. Device-only facts get defaults: `local://device` is an Android phone with notifications
   allowed.
 - **Data paths**: a screen's `data` and `action.data.load` are read when the path matches a data path a data
   source declares (`SourceManifest::data_paths`, what `list_data_sources` lists); any other path is refused
-  (`couldn't load …: not a data path`). Layouts a tap opens, and a layout's versions (`show_versions`,
-  `pin_version`, `follow_latest`, which stay in the preview), are read too.
+  (`couldn't load …: not a data path`). Layouts a tap opens are read too.
 - **Writes are not sent**: mutations, creates, sign-ins, `action.auth.*` and every device command that changes
   the pod come back in `effects` as `not sent`.
 
@@ -466,10 +458,10 @@ letters, digits, `_` and `-`, at most 64) answers `unknown_layout` before any re
   skip; `CONSTRUCT_REQUIRE_GPU=1` (CI, with lavapipe) fails instead.
 - `interaction`: hit-testing, taps, `action.local.set`, opening and Back, scrolling, resize reflow, window events.
 - `device`: Settings and the inbox presented, notification switches (sent, refused and flipped back), older
-  notifications, hiding and deleting layouts, `set_server`, pinned versions, the notice bar, `follow_end`, dark mode,
+  notifications, `set_server`, the notice bar, `follow_end`, dark mode,
   `format` dates and unsupported nodes. `pods`' own unit test (switching servers) runs with `--features viewer`.
-- `engine` (feature `remote`, against a stub pod): offline starts and the outbox, layout events, a pinned home that
-  stays on its version until `follow_latest`, and hiding a layout.
+- `engine` (feature `remote`, against a stub pod): offline starts and the outbox, and `construct` events
+  (a new root redrawn).
 - `writes`: optimistic changes and creates (sent, refused and undone), form binding, notifications, links, dragging a
   sheet closed, carousel paging, scrolling a chip row, confirm dialogs, signing in, and editing text (cursor, selection, the edit bar,
   `max_length`).

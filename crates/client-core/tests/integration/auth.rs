@@ -26,7 +26,22 @@ use server::{AppState, PixelfedConfig, WithPixelfed};
 const TIMEOUT: Duration = Duration::from_secs(15);
 const SEED: &str = "seed-token";
 const CUSTOM_REDIRECT: &str = "construct://oauth";
-const WORKSPACE: &str = "pixelfed";
+/// The blueprint the tests' layout uses.
+const BLUEPRINT: &str = "pixelfed";
+/// Each pod's layout of the Pixelfed blueprint (its URL → the layout id),
+/// the engines' own layout.
+static WORKSPACES: std::sync::LazyLock<Mutex<std::collections::HashMap<String, String>>> =
+    std::sync::LazyLock::new(Default::default);
+
+/// The layout an engine on the pod at `pod` shows.
+fn workspace(pod: &str) -> String {
+    WORKSPACES
+        .lock()
+        .unwrap()
+        .get(pod)
+        .cloned()
+        .unwrap_or_else(|| BLUEPRINT.to_owned())
+}
 const LIKE_COUNT_EXPR: &str = "entity.is_liked ? entity.like_count - 1 : entity.like_count + 1";
 
 fn fast_config() -> EngineConfig {
@@ -56,6 +71,8 @@ fn bind() -> (TcpListener, SocketAddr) {
 struct Env {
     fake: String,
     pod: String,
+    /// The layout of the Pixelfed blueprint the engines show.
+    workspace: String,
     pod_state: Arc<AppState>,
     /// While true, the pod holds `POST /v1/pixelfed/posts/comment` requests
     /// (so a test can check the optimistic state before the answer lands).
@@ -91,6 +108,9 @@ impl Env {
             ..PixelfedConfig::new(&fake, None)
         };
         let pod_state = Arc::new(server::state_in_memory().with_pixelfed(pixelfed));
+        // A layout of the Pixelfed blueprint, home binding its feeds: what
+        // the engines show.
+        let workspace = rt.block_on(server::testing::use_blueprint(&pod_state, BLUEPRINT));
         let (pl, paddr) = bind();
         let hold_comments = Arc::new(AtomicBool::new(false));
         let hold = Arc::clone(&hold_comments);
@@ -108,9 +128,15 @@ impl Env {
             },
         ));
         spawn_serve(&rt, pl, pod_app);
+        let pod = format!("http://{paddr}");
+        WORKSPACES
+            .lock()
+            .unwrap()
+            .insert(pod.clone(), workspace.clone());
         Self {
             fake,
-            pod: format!("http://{paddr}"),
+            pod,
+            workspace,
             pod_state,
             hold_comments,
             rt: Some(rt),
@@ -218,7 +244,7 @@ fn engine_in(
     ConstructEngine::init_with_options(
         storage,
         env_pod,
-        WORKSPACE,
+        &workspace(env_pod),
         EngineOptions {
             config: fast_config(),
             secure_store: Some(store),
@@ -272,10 +298,14 @@ fn wait_signed_in(engine: &ConstructEngine) {
     });
 }
 
+/// Pixelfed's layout drawn signed out: its data says so
+/// (`core://sources/pixelfed`) and holds no timeline.
 fn wait_signed_out_bundle(engine: &ConstructEngine) {
     wait_until("the signed-out bundle", || {
         let s = engine.snapshot();
-        s.workspace_json.contains("Sign in with Pixelfed") && home_query_len(&s) == 0
+        s.workspace_json != "null"
+            && entities(&s)["core://sources/pixelfed"]["signed_in"] == false
+            && home_query_len(&s) == 0
     });
 }
 
@@ -641,7 +671,7 @@ fn outbox_401_keeps_the_like_pending_until_the_next_sign_in() {
 
 #[test]
 fn fetch_401_clears_the_session() {
-    // A pod that rejects every workspace fetch with 401.
+    // A pod that rejects every construct read with 401.
     let rt = tokio::runtime::Builder::new_multi_thread()
         .worker_threads(1)
         .enable_all()
@@ -650,7 +680,7 @@ fn fetch_401_clears_the_session() {
     let app = axum::Router::new()
         .route("/healthz", axum::routing::get(|| async { "ok" }))
         .route(
-            "/v1/workspaces/{id}",
+            "/v1/construct",
             axum::routing::get(|| async { (axum::http::StatusCode::UNAUTHORIZED, "{}") }),
         );
     let (l, addr) = bind();
@@ -721,7 +751,7 @@ fn loopback_reuses_the_preferred_port_across_sign_ins() {
     let engine = ConstructEngine::init_with_options(
         "",
         &env.pod,
-        WORKSPACE,
+        &env.workspace,
         EngineOptions {
             config: fast_config(),
             secure_store: Some(Arc::clone(&store) as Arc<dyn SecureStore>),
@@ -880,7 +910,7 @@ fn temp_storage(tag: &str) -> std::path::PathBuf {
 }
 
 /// (pixelfed entities, outbox rows, has the workspace row) in cache.db.
-fn cached(dir: &std::path::Path) -> (i64, i64, bool) {
+fn cached(dir: &std::path::Path, workspace: &str) -> (i64, i64, bool) {
     let db = Store::open(&dir.join(client_core::CACHE_DB_FILE)).unwrap();
     let count = |sql: &str| {
         db.conn()
@@ -890,7 +920,7 @@ fn cached(dir: &std::path::Path) -> (i64, i64, bool) {
     (
         count("SELECT COUNT(*) FROM entities WHERE domain = 'pixelfed'"),
         count("SELECT COUNT(*) FROM action_outbox"),
-        db.load_workspace(WORKSPACE).unwrap().is_some_and(|w| {
+        db.load_workspace(workspace).unwrap().is_some_and(|w| {
             w.entity_uris
                 .iter()
                 .chain(w.queries.values().flatten())
@@ -913,7 +943,7 @@ fn sign_out_purges_the_private_feed_from_the_cache() {
     );
     engine.dispatch(&env.login_intent());
     wait_signed_in(&engine);
-    let (ents, _, ws) = cached(&dir);
+    let (ents, _, ws) = cached(&dir, &env.workspace);
     assert!(ents > 1 && ws, "feed cached: {ents} {ws}");
 
     // 401 sign-out (session revoked elsewhere) with a like queued: the liked
@@ -931,7 +961,7 @@ fn sign_out_purges_the_private_feed_from_the_cache() {
         auth(&engine.snapshot())["state"] == "signed_out"
     });
     wait_signed_out_bundle(&engine);
-    assert_eq!(cached(&dir), (1, 1, false));
+    assert_eq!(cached(&dir, &env.workspace), (1, 1, false));
     let snap = engine.snapshot();
     assert_eq!(snap.pending_actions, 1);
     let ents = entities(&snap);
@@ -945,12 +975,12 @@ fn sign_out_purges_the_private_feed_from_the_cache() {
 
     // Explicit logout: the like can never be sent as anyone; dropped too.
     engine.logout();
-    assert_eq!(cached(&dir), (0, 0, false));
+    assert_eq!(cached(&dir, &env.workspace), (0, 0, false));
     let snap = engine.snapshot();
     assert_eq!(snap.pending_actions, 0);
     assert!(!snap.entities_json.contains("pixelfed://posts/"));
     wait_signed_out_bundle(&engine);
-    assert_eq!(cached(&dir).0, 0);
+    assert_eq!(cached(&dir, &env.workspace).0, 0);
     drop(engine);
     let _ = std::fs::remove_dir_all(&dir);
 }
@@ -1032,8 +1062,8 @@ fn secure_store_io_stays_off_the_ui_thread_and_logout_wins_the_race() {
 }
 
 /// A stub pod for the sign-in UX tests: canned `/v1/auth/pixelfed/app` and
-/// `/token` answers, and a workspace fetch that, with a bearer, is held
-/// until the test opens the gate.
+/// `/token` answers, and home's construct, whose data, with a bearer, is
+/// held until the test opens the gate.
 #[derive(Default)]
 struct StubPod {
     app_calls: std::sync::atomic::AtomicUsize,
@@ -1041,12 +1071,13 @@ struct StubPod {
     app_reply: Mutex<Option<(u16, Value)>>,
     token_reply: Mutex<Option<(u16, Value)>>,
     gate_open: std::sync::atomic::AtomicBool,
-    /// Workspace fetches with a bearer that reached the gate, and that were
-    /// answered.
+    /// Home's data loads with a bearer that reached the gate, and that
+    /// were answered.
     held: std::sync::atomic::AtomicUsize,
     answered: std::sync::atomic::AtomicUsize,
-    /// While true, a workspace fetch without a bearer gets a 503.
+    /// While true, a home fetch without a bearer gets a 503.
     signed_out_down: AtomicBool,
+    construct: crate::construct_stub::Construct,
 }
 
 fn stub_reply(r: &Mutex<Option<(u16, Value)>>, ok: Value) -> axum::response::Response {
@@ -1099,26 +1130,39 @@ fn start_stub_pod(rt: &tokio::runtime::Runtime) -> (String, Arc<StubPod>) {
                 }
             }),
         )
-        .route(
-            "/v1/workspaces/home",
-            get(move |headers: axum::http::HeaderMap| {
+        .fallback(
+            move |method: axum::http::Method,
+                  uri: axum::http::Uri,
+                  headers: axum::http::HeaderMap,
+                  body: axum::body::Bytes| {
                 let pod = Arc::clone(&p3);
                 async move {
                     use axum::response::IntoResponse;
-                    if !headers.contains_key("authorization") {
-                        if pod.signed_out_down.load(Ordering::SeqCst) {
-                            return axum::http::StatusCode::SERVICE_UNAVAILABLE.into_response();
+                    let signed_in = headers.contains_key("authorization");
+                    if !signed_in
+                        && uri.path() == "/v1/construct"
+                        && pod.signed_out_down.load(Ordering::SeqCst)
+                    {
+                        return axum::http::StatusCode::SERVICE_UNAVAILABLE.into_response();
+                    }
+                    if signed_in && uri.path().starts_with("/v1/construct/data/") {
+                        pod.held.fetch_add(1, Ordering::SeqCst);
+                        while !pod.gate_open.load(Ordering::SeqCst) {
+                            tokio::time::sleep(Duration::from_millis(10)).await;
                         }
-                        return axum::Json(stub_bundle("Signed out")).into_response();
+                        pod.answered.fetch_add(1, Ordering::SeqCst);
                     }
-                    pod.held.fetch_add(1, Ordering::SeqCst);
-                    while !pod.gate_open.load(Ordering::SeqCst) {
-                        tokio::time::sleep(Duration::from_millis(10)).await;
-                    }
-                    pod.answered.fetch_add(1, Ordering::SeqCst);
-                    axum::Json(stub_bundle("Feed")).into_response()
+                    let title = if signed_in { "Feed" } else { "Signed out" };
+                    crate::construct_stub::axum_answer(
+                        &pod.construct,
+                        &method,
+                        &uri,
+                        &body,
+                        &mut |id| (id == "home").then(|| (200, stub_bundle(title).to_string())),
+                    )
+                    .unwrap_or_else(|| axum::http::StatusCode::NOT_FOUND.into_response())
                 }
-            }),
+            },
         );
     let (l, addr) = bind();
     spawn_serve(rt, l, app);
@@ -1322,18 +1366,15 @@ fn comment_texts(snap: &StateSnapshot, post: &str) -> Vec<String> {
 }
 
 #[test]
-fn the_engine_fetches_the_newest_layout_its_schema_draws() {
+fn the_engine_draws_the_newest_layout_its_features_draw() {
     let env = Env::start();
     let store = Arc::new(MemoryStore::new());
     let engine = loopback_engine(&env, &store);
     engine.dispatch(&env.login_intent());
     wait_signed_in(&engine);
     let snap = engine.snapshot();
-    let layout: Value = serde_json::from_str(&snap.layout_json).unwrap();
-    // The newest file (version 4 on a new pod: 0011, then 0012 and 0013
-    // written with components, 0014 with theme colours) needs feature
-    // `title_scrolls`, which this engine sends.
-    assert_eq!(layout["version"], 4);
+    // The newest file (0014, with theme colours) needs feature
+    // `title_scrolls`, which this engine sends: its screens are drawn.
     let ws: Value = serde_json::from_str(&snap.workspace_json).unwrap();
     let routes: Vec<&str> = ws["screens"]
         .as_array()

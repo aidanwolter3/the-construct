@@ -3,7 +3,8 @@
 //! dispatching): Claude defines `todos` and the app over MCP; one engine adds and
 //! ticks todos through the outbox and a second one sees them live; a todo added
 //! offline under the old field names still arrives after Claude renames `due` and
-//! adds a priority in one change; a delete hides the row everywhere.
+//! adds a priority in one change (and moves the app to the new names); a delete hides
+//! the row everywhere.
 
 use std::sync::Arc;
 
@@ -13,12 +14,17 @@ use serde_json::{Value, json};
 
 const POD_TOKEN: &str = "e2e-collections-pod-token";
 
-fn todo_app() -> Value {
+/// The app, its rows written with `row` (an expression of `$item`).
+fn todo_app_with(row: &str) -> Value {
     json!({"type": "core://Workspace", "id": "x", "title": "Todos", "slots": [
         {"slot_id": "list", "provider_uri": "core://custom", "content": {
             "type": "core://List", "query_key": "collection:todos",
             "where": {"field": "deleted", "equals": "false"},
-            "item_template": {"type": "core://Text", "style": "Body", "value_expr": "$item.title $item.due"}}}]})
+            "item_template": {"type": "core://Text", "style": "Body", "value_expr": row}}}]})
+}
+
+fn todo_app() -> Value {
+    todo_app_with("$item.title $item.due")
 }
 
 /// The `action.mutation.create` of the app's add field, bound as the UI would.
@@ -152,17 +158,23 @@ fn a_todo_app_syncs_live_and_survives_a_change_made_while_offline() {
         json!({"title": "Eggs", "due": "2026-11-06"}),
     ));
     assert!(rows(&phone).iter().any(|(t, _)| t == "Eggs"));
-    // ...while Claude renames `due` and adds a priority, with the app, in one change.
-    let changed = mcp(
+    // ...while Claude renames `due` and adds a priority in one change, taking the
+    // app off `due` first and onto the new names after (a change set no longer edits
+    // layouts).
+    mcp(
+        "update_layout",
+        json!({"app": app, "layout": todo_app_with("$item.title")}),
+    );
+    mcp(
         "apply_change",
         json!({"collection": "todos", "changes": [
             {"op": "add_field", "name": "priority", "type": "choice", "options": ["low", "high"], "default": "low"},
-            {"op": "rename_field", "field": "due", "to": "deadline"}],
-            "apps": [{"app": app, "json_patch": [{"op": "replace",
-                "path": "/slots/0/content/item_template/value_expr",
-                "value": "$item.title $item.deadline ($item.priority)"}]}]}),
+            {"op": "rename_field", "field": "due", "to": "deadline"}]}),
     );
-    assert_eq!(changed["apps"][0]["version"], 2, "{changed}");
+    mcp(
+        "update_layout",
+        json!({"app": app, "layout": todo_app_with("$item.title $item.deadline ($item.priority)")}),
+    );
     h.set_pod_reachable(true);
     wait_flushed(&phone, TIMEOUT);
     wait_until("Eggs on the laptop, under the new name", TIMEOUT, || {

@@ -244,15 +244,10 @@ request. Any layout may bind them; a custom app needs no feed for them.
 |---|---|
 | `local://connection` | `online`, `pending` (unsent changes), `label` ("Offline · 2 pending"), `attention` (offline or changes waiting) |
 | `local://inbox` | `unread`, `label` ("3 unread"), `has_older` (the inbox has more than `local:notifications` holds), `loading` (an older page is loading) |
-| `local://layouts` | `count`: the pod's layouts but `home` |
-| `local:layouts` (query) | `local://layouts/<id>`: `id`, `title`, `icon`, `kind`, `detail`, `unread`, `version` ("v12 · latest", "v10 · pinned"), `hidden`; hidden ones left out. `local:apps` (`local://apps/<id>`) is its old name. |
-| `local:all_layouts` (query) | The same rows with the hidden layouts too (`hidden: true`), e.g. for a "Hidden" list with `unhide_layout` buttons (feature `device_layout_controls`). |
-| `local:notifications` (query) | The newest page, then the older pages `load_older_notifications` loaded: `id`, `channel_layout` (and its old name `app_id`), `app_title`, `title`, `body`, `when` ("5 min"), `day` ("Today"), `unread` |
-| `local:channels` (query) | `layout` (and its old name `app_id`), `app_title`, `id`, `title`, `description`, `enabled` |
+| `local:notifications` (query) | The newest page, then the older pages `load_older_notifications` loaded: `id`, `channel_layout`, `app_title` (its layout's title), `title`, `body`, `when` ("5 min"), `day` ("Today"), `unread` |
+| `local:channels` (query) | `layout`, `app_title`, `id`, `title`, `description`, `enabled` |
 | `local:sign_ins` (query) | `id`, `title`, `detail` ("@dana · pixelfed.example") |
 | `local:providers` (query) | `id`, `title`, `custom_server` (another server may be typed), `server_placeholder`: sign-ins the pod offers that aren't signed in |
-| `local:versions` (query) | the versions of the layout `show_versions` named, newest first: `version`, `label`, `detail`, `when`, `compatible`, `showing` |
-| `local://versions` | `app_id`, `app_title`, `pinned` (or "" while following the latest), `loading` |
 | `local:servers` (query) | `id`, `title`, `url`, `selected`: the servers this device can use |
 | `local://device` | `platform`; `notification_permission`: meant to be `granted` or `denied` on Android (whether notifications can show); `""` today on every client (the Android app doesn't report it yet, decision `rust-clients`), and where it doesn't apply (desktop, simulator) |
 | `local://nav` | Where the layout is drawn (feature `nav_data`): `can_go_back`, `presentation` (`root`, `push`, `sheet`, `panel`, `screen`, `inline`), `pushed`, `inline`, `in_frame` (in a sheet, panel or overlay; an overlay from the top or bottom says `sheet`, from the start or end `panel`) |
@@ -260,7 +255,7 @@ request. Any layout may bind them; a custom app needs no feed for them.
 | `local://theme` | The pod's theme colours for the app's mode (feature `theme`): `page` (a page's background), `card` (cards and rows on it), `card_border`, `muted_text`, `accent`, `accent_surface`, `muted_surface`, `success`, `success_surface`, `error`, `error_surface`, `highlight`, `like`, `unread`, each with a light and a dark value; set with MCP `set_theme`. Bind these instead of fixed `#RRGGBB` colours, which stay the same in dark mode (decision `dark-palette`; layout writes answer `warnings` for each). |
 | `local://session` | `open`, `server`, `error`, `message`: the pod sign-in; `status`: an upstream sign-in in progress or failed |
 
-A `core://Conditional` `equals` may bind the item (`"equals": "$item.id"`). A `core://Conditional` value may be such a binding: `{"value": "${local://layouts#count}", "equals": "0", ...}`.
+A `core://Conditional` `equals` may bind the item (`"equals": "$item.id"`). A `core://Conditional` value may be such a binding: `{"value": "${local://inbox#unread}", "equals": "0", ...}`.
 
 ### Dates and times
 
