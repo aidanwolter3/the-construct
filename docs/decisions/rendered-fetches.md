@@ -1,5 +1,7 @@
 # Fetch fillers can render a page in a headless browser first
 
+Superseded in part by [browser-sandbox](browser-sandbox.md): Chromium runs with its sandbox and site isolation where they work, and its packages are refreshed weekly.
+
 Date: 2026-11-14. Related: [collection-fillers](collection-fillers.md),
 [web-and-agent-modules](web-and-agent-modules.md), [jacks](jacks.md), [ci-container-image](ci-container-image.md).
 

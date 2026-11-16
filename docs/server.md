@@ -86,7 +86,7 @@ settings are logged at startup.
 | `CONSTRUCT_FILL_MODEL` | `claude-opus-5-5` | The agent module's capable model: `agent`, `extract: llm` and `query_field` fillers (same key and endpoint). Without a key those fillers report themselves unavailable. Each pod's model calls have daily budgets per feature (`agent_usage`). |
 | `CONSTRUCT_FILL_AGENT_DAILY` | `20` | Agent filler runs per pod per day. |
 | `CONSTRUCT_FILL_PRIVATE_HOSTS` | unset | `1`: fetch fillers may read private addresses, and MCP servers may be on them (local development only). |
-| `CONSTRUCT_BROWSER` | the first `chromium`, `chromium-browser`, `headless_shell`, `chrome-headless-shell` or `google-chrome` on `PATH` | The headless browser of rendered fillers (`render`, decision `rendered-fetches`); `off`: none, and rendered fillers say so. The image sets `/usr/bin/chromium`. It starts with none of the server's environment, and as `nobody` (uid 65534) when the server is root, so a page that takes over the sandbox-less renderer can read neither the keys nor the pods' data. |
+| `CONSTRUCT_BROWSER` | the first `chromium`, `chromium-browser`, `headless_shell`, `chrome-headless-shell` or `google-chrome` on `PATH` | The headless browser of rendered fillers (`render`, decision `rendered-fetches`); `off`: none, and rendered fillers say so. The image sets `/usr/bin/chromium`. It starts with none of the server's environment, and as `nobody` (uid 65534) when the server is root, so a page that takes over a renderer can read neither the keys nor the pods' data. It runs with Chromium's sandbox and site isolation where they work: the first render after the server starts tries them and logs `browser sandbox: on`, or falls back to `--no-sandbox` and logs a `browser sandbox: off` warning with the reason (decision `browser-sandbox`). |
 
 ### Monitoring and development
 
@@ -199,12 +199,18 @@ Counts live in memory and restart from zero.
 The repository deploys a staging server to [Fly.io](https://fly.io): `deploy/pod.Dockerfile` builds the server image,
 and `deploy/fly/pod.toml` configures the app (`the-construct-pod`), its volume, health check and metrics. The image
 is Debian slim with Chromium for rendered fillers (decision `rendered-fetches`), on a 1 GB machine. CI deploys
-it on every push to `main` once the Rust job passes, when the repository secret `FLY_API_TOKEN_POD` is set. By hand,
-from the repository root:
+it on every push to `main` once the Rust job passes, and every Monday, when the repository secret
+`FLY_API_TOKEN_POD` is set. Each deploy passes the ISO week as `CHROMIUM_REFRESH`, so the image's Chromium and
+Debian packages are reinstalled at least weekly rather than kept in a cached layer (decision `browser-sandbox`). By
+hand, from the repository root:
 
 ```bash
-flyctl deploy . --config deploy/fly/pod.toml --dockerfile deploy/pod.Dockerfile --remote-only
+flyctl deploy . --config deploy/fly/pod.toml --dockerfile deploy/pod.Dockerfile --remote-only \
+  --build-arg CHROMIUM_REFRESH="$(date -u +%G-W%V)"
 ```
+
+Whether staging's browser runs sandboxed shows in its log after the first render since the deploy (a fetch filler
+or `collections_preview` with `render`): `fly logs -a the-construct-pod | grep "browser sandbox"`.
 
 Set secrets with `flyctl secrets set`, never in the file: at least `CONSTRUCT_SECRETS_KEY`, and
 `CONSTRUCT_INFER_API_KEY` for model features. The staging server talks to a fake Pixelfed deployed separately
