@@ -638,6 +638,76 @@ fn missing_required(def: &Definition, fields: &[String], values: &Map<String, Va
     })
 }
 
+/// The day of a date or datetime value as written (`YYYY-MM-DD`).
+fn day_of(v: Option<&Value>) -> Option<&str> {
+    let s = v?.as_str()?.trim();
+    let d = s.get(..10)?;
+    let b = d.as_bytes();
+    (b[4] == b'-' && b[7] == b'-' && d.bytes().filter(u8::is_ascii_digit).count() == 8).then_some(d)
+}
+
+/// A value as [`pair_rows`] compares it: text by its letters and digits,
+/// ignoring case ("Jazz Night!" is the same as "jazz night").
+fn alike_text(v: &Value) -> Option<String> {
+    let t: String = key_text(v)?
+        .chars()
+        .filter(|c| c.is_alphanumeric())
+        .collect();
+    (!t.is_empty()).then_some(t)
+}
+
+/// For a replace without a key: the row of `rows` each item is the same item
+/// as, if any (never a deleted row). An item and a row are the same when most
+/// of the `fields` either has a value for are equal ([`alike_text`]) and,
+/// with `upcoming`, they fall on the same day, so a model rewording a
+/// description or a title keeps the row while next week's show of the same
+/// name is a new one. Most alike first; each row pairs once.
+fn pair_rows(
+    rows: &[Row],
+    items: &[Map<String, Value>],
+    fields: &[String],
+    upcoming: Option<&str>,
+) -> Vec<Option<usize>> {
+    let mut alike: Vec<(usize, usize, usize)> = Vec::new();
+    for (i, item) in items.iter().enumerate() {
+        for (j, r) in rows.iter().enumerate() {
+            if r.deleted_at.is_some() {
+                continue;
+            }
+            if let Some(u) = upcoming
+                && day_of(item.get(u)) != day_of(r.values.get(u))
+            {
+                continue;
+            }
+            let (mut equal, mut either) = (0, 0);
+            for id in fields {
+                let a = item.get(id).and_then(alike_text);
+                let b = r.values.get(id).and_then(alike_text);
+                if a.is_none() && b.is_none() {
+                    continue;
+                }
+                either += 1;
+                if a == b {
+                    equal += 1;
+                }
+            }
+            if equal * 2 > either {
+                alike.push((equal, i, j));
+            }
+        }
+    }
+    alike.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.cmp(&b.1)).then(a.2.cmp(&b.2)));
+    let mut pairs = vec![None; items.len()];
+    let mut taken = vec![false; rows.len()];
+    for (_, i, j) in alike {
+        if pairs[i].is_none() && !taken[j] {
+            pairs[i] = Some(j);
+            taken[j] = true;
+        }
+    }
+    pairs
+}
+
 /// What [`store`] answers: what it did, the compute jobs, and the rows it
 /// created (for `details`).
 pub type StoreResult = (Stored, Vec<crate::compute::Job>, Vec<String>);
@@ -767,7 +837,8 @@ pub fn store(
             }
         }
     } else {
-        // Replace without a key: its rows are the items, in order.
+        // Replace without a key: its rows are the items, each kept on the
+        // row it is the same item as ([`pair_rows`]).
         let mut items: Vec<Map<String, Value>> = items
             .into_iter()
             .filter(|i| {
@@ -787,22 +858,51 @@ pub fn store(
         if same {
             out.unchanged = items.len();
         } else {
-            for r in &existing {
-                hard_delete(tx, name, &r.id)?;
-                out.removed += 1;
-            }
-            // Inserted in the answer's order: rows made in one second list
-            // in insertion order ([`db::all_rows`]).
-            for item in items.drain(..) {
-                let mut r = new_row(item.clone());
+            // Each item keeps the row it is the same item as, so a refill
+            // that rewords, adds or drops items doesn't remake the others:
+            // their ids stay, and with them the alerts already sent for them,
+            // people's own fields and what `details` read.
+            let mut existing = existing;
+            let pairs = pair_rows(&existing, &items, &mapped, filler.upcoming.as_deref());
+            let mut kept = vec![false; existing.len()];
+            for (i, item) in items.drain(..).enumerate() {
+                let Some(j) = pairs[i] else {
+                    let mut r = new_row(item.clone());
+                    let write = write_of(def, &mapped, &item);
+                    jobs.extend(crate::compute::after_write(
+                        tx, def, None, &mut r, &write, now, caps,
+                    )?);
+                    db::insert_row(tx, name, &r)?;
+                    db::note_writes(tx, name, None, &r, Some(&writer), now)?;
+                    created.push(r.id.clone());
+                    out.created += 1;
+                    continue;
+                };
+                kept[j] = true;
+                let r = &mut existing[j];
+                let before = r.values.clone();
+                if !apply_item(r, &mapped, &item) {
+                    out.unchanged += 1;
+                    continue;
+                }
                 let write = write_of(def, &mapped, &item);
                 jobs.extend(crate::compute::after_write(
-                    tx, def, None, &mut r, &write, now, caps,
+                    tx,
+                    def,
+                    Some(&before),
+                    r,
+                    &write,
+                    now,
+                    caps,
                 )?);
-                db::insert_row(tx, name, &r)?;
-                db::note_writes(tx, name, None, &r, Some(&writer), now)?;
-                created.push(r.id.clone());
-                out.created += 1;
+                r.updated_at = now;
+                db::save_row(tx, name, r)?;
+                db::note_writes(tx, name, Some(&before), r, Some(&writer), now)?;
+                out.updated += 1;
+            }
+            for (r, _) in existing.iter().zip(&kept).filter(|(_, k)| !**k) {
+                hard_delete(tx, name, &r.id)?;
+                out.removed += 1;
             }
         }
     }
@@ -2370,6 +2470,62 @@ mod tests {
         assert!(!is_past(Some(&json!("2026-11-06T10:00Z")), now), "slack");
         assert!(!is_past(Some(&json!("2026-11-05")), now), "a day's slack");
         assert!(is_past(Some(&json!("2026-11-03")), now));
+    }
+
+    #[test]
+    fn keyless_items_pair_with_the_rows_they_are() {
+        let fields: Vec<String> = ["t", "s", "v", "d"].map(String::from).to_vec();
+        let item = |t: &str, s: &str, v: &str, d: &str| {
+            json!({"t": t, "s": s, "v": v, "d": d})
+                .as_object()
+                .unwrap()
+                .clone()
+        };
+        let row = |id: &str, values: Map<String, Value>| Row {
+            id: id.into(),
+            client_id: None,
+            values,
+            created_at: 0,
+            updated_at: 0,
+            deleted_at: None,
+            filler: Some("s1".into()),
+        };
+        let mut rows = vec![
+            row(
+                "jazz1",
+                item("Jazz night", "2099-12-04T20:00-07:00", "Bar", "Trio"),
+            ),
+            row(
+                "jazz2",
+                item("Jazz night", "2099-12-11T20:00-07:00", "Bar", "Trio"),
+            ),
+            row("gone", item("Disco", "2099-12-05T21:00-07:00", "Bar", "DJ")),
+        ];
+        let items = vec![
+            // Reworded by the model: still the same show.
+            item(
+                "Jazz Night ",
+                "2099-12-04T20:00-07:00",
+                "bar",
+                "A trio plays standards",
+            ),
+            item("Jazz night", "2099-12-18T20:00-07:00", "Bar", "Trio"),
+            item("Jazz night!", "2099-12-11T20:00-07:00", "Bar", "Quartet"),
+        ];
+        let s = Some("s");
+        assert_eq!(
+            pair_rows(&rows, &items, &fields, s),
+            [Some(0), None, Some(1)],
+            "next week's show of the same name is new; the dropped show pairs with nothing"
+        );
+        rows[0].deleted_at = Some(1);
+        assert_eq!(pair_rows(&rows, &items, &fields, s)[0], None, "deleted");
+        assert_eq!(
+            day_of(Some(&json!("2099-12-04T20:00-07:00"))),
+            Some("2099-12-04")
+        );
+        assert_eq!(day_of(Some(&json!("2099-12-04"))), Some("2099-12-04"));
+        assert_eq!(day_of(Some(&json!("Friday"))), None);
     }
 
     #[test]
