@@ -43,7 +43,15 @@ impl Objects for ConnObjects<'_> {
         if let Some(v) = self.extra.borrow().get(id) {
             return Some(v.clone());
         }
-        cstore::object(self.conn, id).ok().flatten().map(|(v, _)| v)
+        // Objects are immutable (an id is their hash), so one read serves
+        // every later lookup: expanding a layout looks up a component once
+        // per use, and parsing it each time made large layouts slow.
+        let v = cstore::object(self.conn, id)
+            .ok()
+            .flatten()
+            .map(|(v, _)| v)?;
+        self.extra.borrow_mut().insert(id.to_owned(), v.clone());
+        Some(v)
     }
 }
 
@@ -210,17 +218,46 @@ fn walk_object(
     Ok(Value::Object(out))
 }
 
+/// Element `id`'s component definition, if it is one. An id is its
+/// content's hash, so a parsed definition never goes stale: it is kept
+/// (a bounded few per thread), since a layout often uses one large
+/// component many times and each use is checked.
+fn use_def(
+    conn: &Connection,
+    id: &str,
+) -> Result<Option<Arc<construct_elements::def::Def>>, Value> {
+    type Defs = BTreeMap<String, Option<Arc<construct_elements::def::Def>>>;
+    thread_local! {
+        static DEFS: RefCell<Defs> = const { RefCell::new(BTreeMap::new()) };
+    }
+    if let Some(d) = DEFS.with(|m| m.borrow().get(id).cloned()) {
+        return Ok(d);
+    }
+    let Some((el, _)) = cstore::object(conn, id).map_err(store_err)? else {
+        return Ok(None);
+    };
+    let def = construct_elements::materialize::element_def(&el)
+        .ok()
+        .flatten()
+        .map(Arc::new);
+    DEFS.with(|m| {
+        let mut m = m.borrow_mut();
+        if m.len() >= 256 {
+            m.clear();
+        }
+        m.insert(id.to_owned(), def.clone());
+    });
+    Ok(def)
+}
+
 /// A use's arguments against its component's parameters: none it doesn't
 /// have, every required one given (their values may be bindings, so their
 /// types are checked where they are drawn).
 fn check_args(conn: &Connection, r: &Ref, use_: &Map<String, Value>) -> Result<(), Value> {
-    let Some(el) = &r.el else {
+    let Some(id) = &r.el else {
         return Ok(());
     };
-    let Some((el, _)) = cstore::object(conn, el).map_err(store_err)? else {
-        return Ok(());
-    };
-    let Ok(Some(def)) = construct_elements::materialize::element_def(&el) else {
+    let Some(def) = use_def(conn, id)? else {
         return Ok(());
     };
     let args = match use_.get("args") {
