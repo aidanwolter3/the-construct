@@ -111,6 +111,19 @@ rooted at a `core://Page` (any node, no chrome from the app) or a `core://Worksp
 
 How to write one: [layouts.md](layouts.md).
 
+## The construct (opt in per pod)
+
+A pod can be switched from versioned layouts to a **content-addressed construct** (decision
+[`content-addressed-construct`](decisions/content-addressed-construct.md)): every layout and component is an
+immutable **element** identified by the hash of its canonical JSON (`e1-…`), **names** (`home`, `c-…`, `@me/<component>`,
+`@core/<blueprint or component>`) move between elements and keep their history, and every embed and link names its
+target by hash, so home's hash is the whole construct's. A device is current when its root matches the pod's
+(`GET /v1/construct`, `event: construct`), fetches only the objects it lacks (`POST /v1/objects`), and expands
+components itself (`crates/construct-elements`, shared with the pod). The engine keys each reachable layout by its
+edge and hands the renderer the edge graph; the renderer closes the stack entries the one below no longer reaches.
+A pod that isn't switched works exactly as before, and a new client speaks both. Switching, its dry run and the revert
+are `server pods switch` and MCP `switch_construct` ([server.md](server.md#admin-commands)).
+
 ## Wire bundle
 
 `GET /v1/workspaces/<app>` answers a normalized bundle (`protocol::WorkspaceSpec`):
