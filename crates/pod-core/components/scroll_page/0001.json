@@ -1,0 +1,133 @@
+{
+  "note": "First version: the page with its own header and a scrolling column (on the page colour, under a divider) that page layouts repeat",
+  "component": {
+    "doc": "A whole page with its own header: on the page colour, core:page_header (Back while the page can go back, and the title), a divider, then its children in a column that scrolls. The root of a core://Page or of one of its screens.",
+    "params": [
+      {
+        "name": "title",
+        "type": "text",
+        "doc": "The title (bindings allowed).",
+        "required": true
+      },
+      {
+        "name": "spacing",
+        "type": "number",
+        "doc": "Space between the children; 0 for none.",
+        "default": 0
+      },
+      {
+        "name": "padding_h",
+        "type": "number",
+        "doc": "Side padding of the scrolling column; 0 for none.",
+        "default": 0
+      },
+      {
+        "name": "padding_v",
+        "type": "number",
+        "doc": "Top and bottom padding of the scrolling column; 0 for none.",
+        "default": 0
+      }
+    ],
+    "children": true,
+    "template": {
+      "type": "core://Box",
+      "background": "${local://theme#page}",
+      "fill": true,
+      "content": {
+        "type": "core://Column",
+        "children": [
+          {
+            "type": "core://Use",
+            "component": "core:page_header",
+            "args": {
+              "title": "$arg.title"
+            }
+          },
+          {
+            "type": "core://Divider"
+          },
+          {
+            "type": "core://Scroll",
+            "content": {
+              "type": "core://Column",
+              "spacing_dp": {
+                "type": "core://IfArg",
+                "arg": "spacing",
+                "then": "$arg.spacing"
+              },
+              "padding_h_dp": {
+                "type": "core://IfArg",
+                "arg": "padding_h",
+                "then": "$arg.padding_h"
+              },
+              "padding_v_dp": {
+                "type": "core://IfArg",
+                "arg": "padding_v",
+                "then": "$arg.padding_v"
+              },
+              "children": [
+                {
+                  "type": "core://Children"
+                }
+              ]
+            }
+          }
+        ]
+      }
+    },
+    "examples": [
+      {
+        "args": {
+          "title": "Reading list"
+        },
+        "children": [
+          {
+            "type": "core://Spacer",
+            "size_dp": 12
+          },
+          {
+            "type": "core://Use",
+            "component": "core:section_header",
+            "args": {
+              "text": "This month"
+            }
+          },
+          {
+            "type": "core://Text",
+            "value_expr": "The Lighthouse Keeper",
+            "style": "Body"
+          },
+          {
+            "type": "core://Spacer",
+            "size_dp": 24
+          }
+        ],
+        "note": "a list page, its children spaced by themselves"
+      },
+      {
+        "args": {
+          "title": "$item.title",
+          "spacing": 12,
+          "padding_h": 16,
+          "padding_v": 16
+        },
+        "children": [
+          {
+            "type": "core://Text",
+            "value_expr": "$item.notes",
+            "style": "Body"
+          },
+          {
+            "type": "core://Use",
+            "component": "core:link_button",
+            "args": {
+              "label": "Open",
+              "url": "$item.url"
+            }
+          }
+        ],
+        "note": "an item's screen, padded and spaced"
+      }
+    ]
+  }
+}

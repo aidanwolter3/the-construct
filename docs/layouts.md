@@ -316,6 +316,7 @@ The server components:
 | `core:back_button` | | Back, shown while `local://nav#can_go_back`. |
 | `core:header_bar` | `title`, `style`, paddings; children: actions | A title on the left and icon buttons on the right, on one line. |
 | `core:page_header` | `title`, `style`, paddings; children: actions | A `core://Page`'s header on one line: Back (while it can go back), the title, and icon buttons on the right. |
+| `core:scroll_page` | `title`, `spacing`, paddings; children: the content | A whole page with its own header: on the page colour, `core:page_header` and a divider, then its children in a column that scrolls; `spacing` and the paddings are left out while 0. The root of a `core://Page` or of one of its screens. |
 | `core:section_header` | `text`, `style`, `padding_v`, `divider` | A section's padded heading, optionally under a divider. |
 | `core:list_row` | `title`, `trailing`, `padding_v` | A row with a title and a quiet trailing text. |
 | `core:divided_item` | `inset`; children | A list item set off from the next: its children in a column with a divider under them, edge to edge or inset by `inset`. |
