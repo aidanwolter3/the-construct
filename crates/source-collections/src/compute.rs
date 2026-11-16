@@ -469,7 +469,7 @@ fn count_index(conn: &Connection, compute: &Compute) -> rusqlite::Result<HashMap
             .get(&kf.id)
             .cloned()
             .unwrap_or_else(|| kf.empty_value());
-        let Some(k) = lookup::text_of(&k) else {
+        let Some(k) = lookup::count_key(kf.kind, &k) else {
             continue;
         };
         if conditions.iter().all(|c| c.matches(&other, &r.values)) {

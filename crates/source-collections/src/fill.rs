@@ -1057,9 +1057,15 @@ pub struct Off {
 }
 
 impl Off {
-    /// Whether `f` can't run for want of its jack.
+    /// Whether `f` can't run for want of its jack (a `range` needs none).
     pub fn stops(self, f: &Filler) -> bool {
-        if f.is_mcp() { self.mcp } else { self.web }
+        if f.is_range() {
+            false
+        } else if f.is_mcp() {
+            self.mcp
+        } else {
+            self.web
+        }
     }
 }
 
@@ -1268,6 +1274,64 @@ pub(crate) async fn mcp_rows(
         .await
         .map_err(|e| e.message)?;
     let body = value.to_string();
+    let hash = hash_of(body.as_bytes());
+    let pairs: Vec<(String, String)> = map.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+    let rows = web_extract::items::extract(&spec, &body, "", &pairs)?;
+    Ok((rows, hash))
+}
+
+/// Make a `range` filler's items for today in the pod's zone. Items like
+/// the last fill's (the same day) end the fill with no work (unless the
+/// recipe changed).
+fn run_range(
+    pod: &Pod,
+    adapter: &CollectionsAdapter,
+    def: &Definition,
+    filler: &Filler,
+    state: &State,
+    force: bool,
+    now: i64,
+) -> Fetch {
+    let (rows, hash) = match range_rows(pod, filler, now) {
+        Ok(r) => r,
+        Err(e) => return Fetch::Failed(e, None),
+    };
+    let fresh = force || state.fingerprint != filler.fingerprint();
+    if !fresh && state.content_hash.as_deref() == Some(hash.as_str()) {
+        return Fetch::Unchanged;
+    }
+    let caps = adapter.caps();
+    let (items, skipped) = coerce_all(def, rows, caps.fill_items, caps.text_chars, None);
+    Fetch::Items {
+        items,
+        skipped,
+        etag: None,
+        last_modified: None,
+        hash: Some(hash),
+    }
+}
+
+/// A `range` filler's rows (by field id, before coercion) for today in the
+/// pod's zone, and their hash.
+pub(crate) fn range_rows(
+    pod: &Pod,
+    filler: &Filler,
+    now: i64,
+) -> Result<(Vec<Map<String, Value>>, String), String> {
+    let Source::Range {
+        from,
+        to,
+        step,
+        map,
+    } = &filler.source
+    else {
+        return Err("not a range filler".into());
+    };
+    let Some(spec) = filler.extract_spec() else {
+        return Err("the filler's recipe is incomplete".into());
+    };
+    let items = crate::filler::range_items(*from, *to, *step, &today(pod.store(), now))?;
+    let body = Value::Array(items).to_string();
     let hash = hash_of(body.as_bytes());
     let pairs: Vec<(String, String)> = map.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
     let rows = web_extract::items::extract(&spec, &body, "", &pairs)?;
@@ -1991,6 +2055,8 @@ pub async fn fill(pod: &Pod, collection: &str, filler_id: &str, force: bool) -> 
             if filler.is_mcp() { MCP_OFF } else { FILL_OFF }.into(),
             Some(86_400),
         )
+    } else if filler.is_range() {
+        run_range(pod, adapter, &def, &filler, &st, force, now)
     } else if filler.is_mcp() {
         match tokio::time::timeout(
             FETCH_FILL_TIMEOUT,
