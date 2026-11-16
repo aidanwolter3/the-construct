@@ -59,7 +59,7 @@ All need the pod session unless marked *public*.
 |---|---|
 | `POST /v1/auth/pixelfed/app {instance_url, redirect_uri}` | `{client_id, scopes, authorize_endpoint}`; 400 `instance_not_allowed` or `redirect_uri_not_allowed`. |
 | `POST /v1/auth/pixelfed/token {instance_url, code, code_verifier, redirect_uri}` | `{session_token, account}`; 400 `oauth_exchange_failed`, 403 `account_not_owner`. With a valid bearer, the sign-in is added to that session. |
-| `GET /v1/workspaces/pixelfed` | The feed bundle (`queries["timeline:home"]`, posts, users and media). Without a sign-in, a signed-out screen with a sign-in button. |
+| `GET /v1/construct/data/<element>` | For a layout over the Pixelfed blueprint: the feed bundle (`queries["timeline:home"]`, posts, users and media). Without a sign-in, the layout shows a sign-in button. |
 | `POST /v1/pixelfed/posts/like {id, liked}` | `{ok, id, is_liked, like_count, is_bookmarked}`. Works on comments too. |
 | `POST /v1/pixelfed/posts/bookmark {id, bookmarked}` | The same shape. |
 | `POST /v1/pixelfed/posts/comment {id, text, client_id?}` | `{ok, id, comment}`: replies to a post or comment (1–500 characters). `client_id` becomes the upstream `Idempotency-Key`, so an outbox retry doesn't post twice. |

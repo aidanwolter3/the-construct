@@ -43,8 +43,8 @@ source needs source code only.
 
 1. Each notification is stored once per pod, keyed by `(layout, dedupe_key)`, so repeated polls are harmless. The
    newest 500 are kept for 30 days. `layout` is the layout (or blueprint) whose channel it is: on the wire a
-   channel's `layout` and a notification's `channel_layout`, both also sent as `app_id` for clients built before
-   (decision [`source-adapters`](decisions/source-adapters.md)); a notification's `layout` is the layout it opens.
+   channel's `layout` and a notification's `channel_layout` (`app_id` before decision
+   [`one-layout-system`](decisions/one-layout-system.md)); a notification's `layout` is the layout it opens.
 2. It goes out as a `notification` event on every open events stream that has a session.
 3. It is sent by Web Push (RFC 8291 encryption, VAPID) to every registered device that wants its channel and has no
    stream open. Payloads are end-to-end encrypted, so push services see no text.

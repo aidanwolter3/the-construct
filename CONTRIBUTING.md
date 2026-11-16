@@ -91,7 +91,7 @@ To try it from a script, make a temporary pod (24 hours, deleted afterwards):
 
 ```bash
 token=$(curl -fsS -X POST https://the-construct-pod.fly.dev/v1/pods/temporary | jq -r .session_token)
-curl -fsS -H "Authorization: Bearer $token" https://the-construct-pod.fly.dev/v1/apps | jq
+curl -fsS -H "Authorization: Bearer $token" https://the-construct-pod.fly.dev/v1/construct | jq
 ```
 
 Never put pod codes or tokens in git or files.

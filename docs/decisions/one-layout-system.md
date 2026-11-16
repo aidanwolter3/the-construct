@@ -31,8 +31,12 @@ on this build; then the old tables are dropped, and only the construct's paths a
   [content-addressed-construct](content-addressed-construct.md), unchanged), runs the dry run first and logs its
   report: `info` when every layout draws the same both ways, `warn` with each differing layout and its differences
   otherwise. **It switches either way**: the differences are logged, not a reason to stay on a system that is
-  gone. The conversion and the switch are one transaction.
-- A new pod is seeded on the construct directly, with the home a switch of a new pod gave before.
+  gone. The conversion and the switch are one transaction. The dry run draws each layout both ways on empty data.
+- **If the conversion itself fails** (an error, not a difference), the pod doesn't open: the host answers
+  `503 pod_unavailable`, the old tables stay, `construct.switched` stays unset and the next open tries again. This
+  is the conservative case: nothing of the pod is dropped until it has been converted.
+- A new pod is seeded on the construct directly, with the home a switch of a new pod gave before (a blank page on a
+  server with no shell blueprint).
 - Then the named migration that drops the old tables runs, on every pod: switched by the developer, switched at
   this open, or new.
 - The conversion is migration code: it lives under `crates/pod-core/src/migrations/`, reads the old tables with
@@ -53,13 +57,17 @@ on this build; then the old tables are dropped, and only the construct's paths a
 | `PUT /v1/apps/{id}/hidden`, `/v1/custom-apps/*` | the MCP layout tools (they write the construct) |
 | `GET /v1/construct` `409 not_switched` | (every pod is switched) |
 
-- **Tables** `custom_apps`, `app_versions`, `layout_blobs`, `components`, and the pod settings `apps.hidden`,
-  `updates.dismissed` and the old conversion markers, by a named migration. The engine's `pinned_versions` table, by
+- **Tables** `custom_apps`, `app_versions`, `layout_blobs`, `components` (and the older `layouts`,
+  `layout_versions`, `workspace_revisions` where a pod still had them), and the pod settings `apps.hidden`,
+  `updates.dismissed` and the old conversion markers, by the named migration `drop_old_layout_system` (scope
+  `construct`). The engine's `pinned_versions` table, by
   a client store migration.
 - **Pod code**: `pod_core::custom` (custom-app writes, `ref_update`, `updates_from`, `dismiss_update`,
   `rebase_context`, `copied_from`), the old serving and versioning of `layouts` and `parts`, the `components`
-  table's code, the old branches of the MCP tools, and the MCP tools `set_hidden`, `dismiss_update`,
-  `rebase_context` and `switch_construct`.
+  table's code, the old branches of the MCP tools, the MCP tools `set_hidden`, `dismiss_update`, `rebase_context`
+  and `switch_construct`, and `copied_from` on writes (`copy_component` answers `from`). `@core/` components are
+  read-only to `update_component` and `define_component`; a `core://Use`'s arguments are checked when written
+  (`invalid_use`) rather than drawn as a placeholder.
 - **Vocabulary**: `core://Ref {app, part}` is no longer accepted (the startup conversion still reads it). The
   feature `device_layout_controls` (`hide_layout`, `unhide_layout`, `delete_layout`) moves to `features/removed/`;
   the device commands `show_versions`, `pin_version` and `follow_latest`, and the local data `local:layouts`,
@@ -77,6 +85,11 @@ on this build; then the old tables are dropped, and only the construct's paths a
 - **The grep gate** of #187: `scripts/check_old_names.sh` (run in CI) fails when
   `custom_apps|app_versions|core://Ref|pin_version|local:layouts` appears under `crates/` outside migration code and
   `crates/protocol/features/removed/`.
+
+- **Callers without a pod token** on a server with many pods were drawn `/v1/workspaces/home` of the host's open
+  screen; they now get a one-element construct (a page asking for a pod) on the construct's read calls, and
+  `401 pod_required` elsewhere. A stale bearer on the construct's read calls gets `401` with
+  `X-Construct-Session: invalid`, as `/v1/workspaces` did.
 
 ## Consequences
 

@@ -8,13 +8,13 @@ know nothing about any particular source.
                          ┌──────────────── server (crates/server) ─────────────────┐
   Pixelfed, web pages,   │  pod-host: one process, many pods, routed by pod token   │
   the Messages API  ◀───▶│  ┌──────────── pod (crates/pod-core) ────────────────┐   │
-                         │  │ layouts, versions, sessions, sign-ins, SQLite      │   │
+                         │  │ construct, sessions, sign-ins, SQLite              │   │
                          │  │ sources:  source-pixelfed, source-recipes,         │   │
                          │  │           source-collections, source-events,       │   │
                          │  │           source-monitor, source-agents            │   │
                          │  └────────────────────────────────────────────────────┘   │
                          └──────────────▲──────────────────────────▲──────────────────┘
-                     HTTP: layouts +    │                          │  SSE: layout, data,
+                     HTTP: layouts +    │                          │  SSE: construct, data,
                      entities, actions  │                          │  notification events
                          ┌──────────────┴──────────────────────────┴──────────────────┐
                          │ engine (crates/client-core, Rust): SQLite cache, outbox,   │
@@ -68,7 +68,7 @@ The server binary picks the sources at compile time (`server::adapters`). Bluepr
 | `recipes` | Recipes | `source-recipes` | A recipe collection with search, categories and recipe cards (D41) |
 | `events` | Events | `source-events` | Upcoming events from websites the user watches, with alerts (decision `collection-fillers`) |
 | `shell` | Home | `source-shell` | The home blueprint: a blank page with Notifications and Settings, which every pod's `home` references |
-| `settings` | Settings | `source-shell` | Settings as a layout over device data: connection, layouts and versions, sign-ins, channels, server |
+| `settings` | Settings | `source-shell` | Settings as a layout over device data: connection, sign-ins, channels, server |
 | `inbox` | Notifications | `source-shell` | The notification inbox as a layout over device data |
 | `agents` | Agents | `source-agents` | Claude Code runs, sandboxes and checks of an external agent runner, and the pod's own schedules for it ([agents.md](agents.md)) |
 
@@ -100,20 +100,20 @@ rooted at a `core://Page` (any node, no chrome from the app) or a `core://Worksp
   drawing of its own (decision `workspace-drawn-by-the-pod`).
 
 - **Layouts are code.** Blueprints' layouts are files, `crates/source-*/layouts/<blueprint>/NNNN.json`, embedded in
-  the binary and appended to each blueprint's history at startup. Files are append-only: the pod refuses to start if
+  the binary; at startup each `@core/<blueprint>` name moves to this build's element, keeping its history. Files are append-only: the pod refuses to start if
   a deployed one changed (D32).
 - **Every version stays servable.** Each piece of vocabulary is a named **feature**
   (`crates/protocol/features/<name>.md`). A client sends the features it can draw in `X-Construct-Features`, and the
-  pod serves it the newest version that uses only those (decision `named-vocabulary`). Old clients keep working on
+  pod seals it the newest element of each name that uses only those (decision `named-vocabulary`). Old clients keep working on
   the last layout they can draw; new layouts reach them when they update.
-- **Clients only read.** They can view an older version on their own device, but nothing changes a built-in layout
-  over HTTP. Custom apps are the one writable kind, through the pod's API or Claude.
+- **Clients only read.** Nothing changes a layout over HTTP: the pod's own layouts are written through Claude (MCP),
+  and a name's history is how an edit is undone.
 
 How to write one: [layouts.md](layouts.md).
 
-## The construct (opt in per pod)
+## The construct
 
-A pod can be switched from versioned layouts to a **content-addressed construct** (decision
+Every pod's layouts are a **content-addressed construct** (decision
 [`content-addressed-construct`](decisions/content-addressed-construct.md)): every layout and component is an
 immutable **element** identified by the hash of its canonical JSON (`e1-…`), **names** (`home`, `c-…`, `@me/<component>`,
 `@core/<blueprint or component>`) move between elements and keep their history, and every embed and link names its
@@ -124,23 +124,23 @@ edge and hands the renderer the edge graph; the renderer closes the stack entrie
 An edge may bind its target's inputs (`bind`; only home binds the pod's data), the engine keeps the objects it
 fetched in its store (so a restart with the same root fetches nothing), opens a layout home doesn't reach by name
 (`GET /v1/construct/names/<name>`), and the renderer keeps each scroll anchored to its first visible row.
-A pod that isn't switched works exactly as before, and a new client speaks both. Switching, its dry run and the revert
-are `server pods switch` and MCP `switch_construct` ([server.md](server.md#admin-commands)).
+The construct is the only layout system (decision `one-layout-system`): a pod still on the old one is converted when
+it first opens, with a dry run whose differences are logged ([server.md](server.md#admin-commands)).
 
 ## Wire bundle
 
-`GET /v1/workspaces/<app>` answers a normalized bundle (`protocol::WorkspaceSpec`):
+`GET /v1/construct/data/<element>?bind=` answers the data an element needs as a normalized bundle
+(`protocol::DataBundle`):
 
 ```json
 {
-  "workspace": { "type": "core://Workspace", "id": "pixelfed", "title": "Pixelfed", "slots": [], "screens": [] },
   "entities": { "pixelfed://posts/101": { "id": "101", "caption": "Sunrise over Millbrook", "is_liked": false } },
   "queries":  { "timeline:home": ["pixelfed://posts/101"] }
 }
 ```
 
 Entities are keyed by URI and shared across screens; queries are ordered lists of URIs that `core://List` draws. A
-screen's `data` path answers the same `{entities, queries}` shape (`protocol::DataBundle`).
+screen's `data` path answers the same shape.
 
 ## The engine
 
@@ -158,10 +158,9 @@ screen's `data` path answers the same `{entities, queries}` shape (`protocol::Da
 - **One engine for every layout** (decision `layouts-not-apps`). The engine opens on the root layout (`home`);
   `open_layout` loads any other layout into the same store, cached like a data path (`layout:<id>`), and reports it
   in the snapshot's `layouts_json`; `layout_now` reads one layout as it stands without building a snapshot.
-- **Event stream.** While online, the engine keeps `GET /v1/workspaces/<root>/events` open; home's stream carries
-  every layout's events, starting with every layout's current version so a reconnect catches up. `layout` events
-  trigger a refetch of that layout when a newer drawable version exists;
-  `deleted` marks it gone; `data` events say the data changed (D50), and usually what changed: the engine reloads
+- **Event stream.** While online, the engine keeps `GET /v1/construct/events` open. It starts with a `construct`
+  event (the root for the client's features and the generation) and sends another whenever that root changes, so a
+  reconnect catches up and the engine fetches only the objects it lacks; `data` events say the data changed (D50), and usually what changed: the engine reloads
   only the cached data that matches, what's on screen first, at most 4 requests at once, and marks the rest stale
   until it's shown again (decision `scoped-data-events`); `notification` events feed the inbox (D52). A
   `data` event sent while the stream was down is lost, so each reconnect reloads what's on screen and marks the

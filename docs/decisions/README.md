@@ -39,6 +39,9 @@ Names older decisions may still use, and what they are now.
 | crates `app-*` (`app-pixelfed`, `app-recipes`, `app-collections`, `app-events`, `app-monitor`, `app-agents`, `app-shell`), trait `AppAdapter` | crates `source-*` (`source-pixelfed`, ...), trait `Source` | [source-adapters](source-adapters.md) |
 | table `pixelfed_apps` | `pixelfed_clients` | [source-adapters](source-adapters.md) |
 | `app_id` of notifications and channel choices | `layout` (store, channels), `channel_layout` (a notification on the wire) | [source-adapters](source-adapters.md) |
+| `unread_by_app`, `GET /v1/notifications?app=`, `toggle_channel` `app` | `unread_by_layout`, `?layout=`, `toggle_channel` `layout` | [one-layout-system](one-layout-system.md) |
+| `AppInfo`, `Source::apps` | `BlueprintInfo`, `Source::blueprints` | [one-layout-system](one-layout-system.md) |
+| `GET /v1/workspaces/{id}/events` | `GET /v1/construct/events` | [one-layout-system](one-layout-system.md) |
 
 The decision files [watcher](watcher.md) and [watcher-rules-per-site](watcher-rules-per-site.md) keep their names:
 other decisions link to them.

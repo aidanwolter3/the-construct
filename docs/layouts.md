@@ -17,14 +17,15 @@ Adding a file is the only way to change how a blueprint looks.
 1. Copy the newest file of the app to the next number (four digits, no gaps), e.g.
    `crates/source-recipes/layouts/recipes/0005.json` to `.../recipes/0006.json`, and edit it.
 2. The file is `{"note": "<one-line changelog>", "layout": <core://Workspace or core://Page>}`. It may use server
-   components (`core://Use` of `core:<name>`); the pod records the layout they expand to. The note is what the app menu's
-   version history shows. The root's `id` must be the app id. Don't declare features: the pod works them out. Older
+   components (`core://Use` of `core:<name>`); the pod records the layout they expand to. The note is what the
+   blueprint's history shows. The root's `id` must be the blueprint's id. Don't declare features: the pod works them out. Older
    files carry a `"schema"` number; it is ignored.
 3. Run `cargo test` (`-p source-pixelfed`, `-p source-recipes` or `-p source-events` is enough). It validates every file:
    structure, size, slots, routes, endpoints the source declares, and nesting rules.
 4. Check it in the [simulator](simulator.md) and put screenshots in the PR.
-5. Merge to `main`. On start, the pod appends the file as the app's next version. Connected clients get a `layout`
-   event on their stream and refetch; a client that pinned an older version keeps it and is told a newer one exists.
+5. Merge to `main`. When a pod opens, it moves the blueprint's name (`@core/<blueprint>`) to the new file, keeping
+   the older files in its history, and re-seals what follows it. Connected clients get a `construct` event with
+   their new root and fetch the objects they lack; a client too old to draw the new file stays on the newest it can.
 
 There is no list of files to edit: each source crate's `build.rs` embeds its `layouts/<blueprint>/`
 directories.
@@ -34,10 +35,10 @@ the file. To undo a change, add a new file with the old content. Reformatting a 
 layout or note is fine. If another branch took your number first (git reports an add/add conflict), merge both
 layouts into the next number: each file is a whole snapshot.
 
-**Old files can be deleted** once no client needs them, oldest first (decision `retired-layout-files`); each app
-keeps at least its newest file. An app's files then start above `0001`. A pod that recorded the deleted versions
-keeps them in its history and serves them as before; a new pod starts from the oldest file left, as its version 1,
-so a client too old to draw that file gets `409 no_compatible_version` there.
+**Old files can be deleted** once no client needs them, oldest first (decision `retired-layout-files`); each
+blueprint keeps at least its newest file. Its files then start above `0001`. A pod that recorded the deleted files
+keeps them in its name's history; a new pod's history starts from the oldest file left, so a client too old to draw
+that file draws nothing there.
 
 After changing a `pixelfed` layout, regenerate the simulator fixtures:
 `UPDATE_FIXTURES=1 cargo test -p server --test integration fixtures::`.
@@ -118,7 +119,7 @@ may still be written with it; prefer a `core://Page` for a new one.
 | `$nonce` | in intents | a fresh value per dispatch (one per `action.sequence`), for temporary URIs and idempotency keys |
 | `$attachments.<name>` | in a create | staged attachments: local URIs in `entity`, upload ids in `payload` |
 | `$count` | in a Text with `count` | the number of matching entities |
-| `${local://<entity>#<field>}`, `local:layouts` | anywhere | [device data](#device-data), with no feed |
+| `${local://<entity>#<field>}`, `local:notifications` | anywhere | [device data](#device-data), with no feed |
 
 Mutation expressions (`value_expr` of `action.mutation.optimistic` and `action.local.set`) are a small subset
 evaluated against the entity before the change: a JSON literal, `entity.<field>`, `!entity.<field>`,
@@ -187,20 +188,20 @@ A node type the client doesn't know is skipped, and its JSON kept, so old versio
 | `action.confirm` | `title`, `message`, `confirm_label`, `then` | Asks first: the app's own dialog with the layout's wording, a `confirm_label` button and Cancel; runs `then` only on confirm (in a sequence, the later steps wait too). Wrap `leave_pod`, `sign_out` and deletes in it (decision `confirm-intent`). |
 | `action.auth.login` | `instance_url`, `app_path`, `token_path` | Starts an OAuth2 PKCE sign-in to an upstream. |
 | `action.auth.session` | `path`, `payload` | Opens a pod session (the pod code screen). |
-| `action.device` | `command`, `app` (or `layout`), `id`, `value` | Something the device does: `open_notification` (`id`: presents its layout and target), `mark_all_read`, `toggle_channel` (`app`, `id`), `sign_in` (`id` of a provider; `value`: another server, e.g. `$form?.server`), `sign_out`, `set_server` (`id` of a server option), `show_versions` (`app`: a layout; loads its versions into `local:versions`), `pin_version` (`id`: show that version on this device; kept across restarts until `follow_latest` or leaving the pod), `follow_latest`, `load_older_notifications` (the next page into `local:notifications`, feature `device_inbox_paging`), `mark_read` (`id`: one notification), `hide_layout` and `unhide_layout` (`app`: a layout, hidden from every device's `local:layouts`; feature `device_layout_controls`), `delete_layout` (`app`: deletes the layout on the pod; only inside `action.confirm`), `request_notification_permission` (Android's prompt to allow notifications, or the app's notification settings once the prompt can't show again; nothing on desktop; feature `device_notification_permission`), `leave_pod` (forget the pod on this device), `refresh`. Any layout may use any command. `open_app` and `show` were retired with the dock and drawer; `open_settings` and `open_inbox` are retired too: present those layouts with `action.navigation.open` (`settings` as a `Panel`, `inbox` as a `Sheet`). |
+| `action.device` | `command`, `layout`, `id`, `value` | Something the device does: `open_notification` (`id`: presents its layout and target), `mark_all_read`, `toggle_channel` (`layout`, `id`), `sign_in` (`id` of a provider; `value`: another server, e.g. `$form?.server`), `sign_out`, `set_server` (`id` of a server option), `load_older_notifications` (the next page into `local:notifications`, feature `device_inbox_paging`), `mark_read` (`id`: one notification), `request_notification_permission` (Android's prompt to allow notifications, or the app's notification settings once the prompt can't show again; nothing on desktop; feature `device_notification_permission`), `leave_pod` (forget the pod on this device), `refresh`. Any layout may use any command. `open_app` and `show` were retired with the dock and drawer, and `show_versions`, `pin_version`, `follow_latest`, `hide_layout`, `unhide_layout` and `delete_layout` with the old layout system (decision `one-layout-system`); `open_settings` and `open_inbox` are retired too: present those layouts with `action.navigation.open` (`settings` as a `Panel`, `inbox` as a `Sheet`). |
 
-## On a pod switched to the construct
+## Elements and names
 
-A pod switched to the content-addressed construct (decision
-[`content-addressed-construct`](decisions/content-addressed-construct.md)) stores layouts and components as
-immutable elements behind names. Layouts are written the same way, through the same MCP tools; the pod normalizes
-what is written:
+A pod stores layouts and components as immutable elements behind names (decisions
+[`content-addressed-construct`](decisions/content-addressed-construct.md),
+[`one-layout-system`](decisions/one-layout-system.md)). The pod normalizes what is written:
 
 - A **reference** is `"ref"` on a `core://Use` (a component, expanded in place), a `core://Layout` (an embed) or an
   `action.navigation.open` (a link): a name, `"ref": "@core/card"`, or sealed, `{"el": "e1-…", "name", "pin",
   "as"?}`. Names: a layout's id (`home`, `c-…`), `@me/<name>` (a component of the pod's, `pod:<name>` before),
-  `@core/<name>` (a server component or a blueprint), `@core/<blueprint>/<part>`. The old spellings
-  (`component`, `core://Ref`, `layout: <id>`) still work and are written as references. An unpinned reference
+  `@core/<name>` (a server component or a blueprint), `@core/<blueprint>/<part>`. The authoring
+  spellings `component` (on a use) and `layout: <id>` (on an embed or link) still work and are written as
+  references; `core://Ref` is refused. An unpinned reference
   follows its name: when the name moves, every element that follows it is sealed again (`pin: true` keeps it).
 - **Edges**: an embed or a link is keyed by its `as`, else its name (a link to a blueprint keeps its id, `as:
   "settings"`); `local://nav` and `pop_to` use that key.
@@ -217,24 +218,22 @@ what is written:
   `$in.<name>` outside home (`bind_outside_home`). The same layout bound two ways needs two edge keys (`as`); a key
   draws the binding of the first use site that reaches it from home. The device fills the inputs in and loads only
   the data they bind.
-- **No versions on the device**: `local:layouts` and `local:all_layouts` are empty, the versions commands do
-  nothing, and Settings has no Layouts section; the history is the agent's (`restore_version`).
+- **No versions on the device**: a name's history is the agent's (`get_layout`, `restore_version`).
 
 ## Features and compatibility
 
 Every piece of vocabulary above is a named feature, one file in `crates/protocol/features/`, and
 `protocol::required_features` maps a layout to the features it uses. Clients send the features they draw in
-`X-Construct-Features`, and the pod serves each client the newest version it can fully draw. The versions API marks
-each version `compatible` or, for that client, `update_required` (uses something newer) or `retired` (uses something
-removed). See decision [`named-vocabulary`](decisions/named-vocabulary.md).
+`X-Construct-Features`, and the pod seals each client, for every name, the newest element it can fully draw (one
+that uses nothing newer, and nothing removed). See decision [`named-vocabulary`](decisions/named-vocabulary.md).
 
 - **Adding vocabulary** needs a client build: add the type or field to `protocol`, a feature file, an arm in
   `required_features`, drawing it in `crates/construct-render` (and `construct-sim` scripts if it adds
   interaction), and tests. Steps:
   [`crates/protocol/features/README.md`](../crates/protocol/features/README.md). Then layouts can use it; clients
-  without it keep getting the previous version.
+  without it keep getting the previous element.
 - **Removing vocabulary** never edits layout files: move the feature's file to `crates/protocol/features/removed/`,
-  and only the versions that use it are retired.
+  and only the elements that use it are retired.
 
 ## Device data
 
@@ -302,7 +301,7 @@ sees one and changing one needs no app build. Use one anywhere a node goes:
   build script embeds them; `Source::component_files`); names are unique across crates (decision
   `adapter-components`). Every blueprint is one too: `core:<blueprint>` is its whole layout (only as a
   layout's root; the layout keeps its own id) and `core:<blueprint>/<part>` a part (`screen:<id>` in `screens`,
-  `slot:<id>`, or a name from the file's `"parts"`). `{"type": "core://Ref", "app", "part"}` is the older spelling.
+  `slot:<id>`, or a name from the file's `"parts"`).
 - **`pod:` components** are the pod's own, defined by an agent (MCP `define_component`, `copy_component`), versioned
   and deletable while no layout uses them.
 - **A definition** is `{"doc", "params": [{"name", "type": "text|number|bool|uri|binding", "default"?, "required"?,
