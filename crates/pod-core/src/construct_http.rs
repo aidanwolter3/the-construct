@@ -5,7 +5,7 @@
 //! | `GET /v1/construct` | `{root, generation}`: home's element for the client's features |
 //! | `POST /v1/objects {have, want}` | `{objects: {id: object}}`: what `want` reaches that `have` doesn't list, `want`'s order first |
 //! | `GET /v1/objects/{id}` | one object |
-//! | `GET /v1/construct/data/{id}?bind=` | `{entities, queries}`: the home feeds element `id` needs, with a use site's bindings (a JSON object) |
+//! | `GET /v1/construct/data/{id}?bind=` | `{entities, queries}`: the home feeds element `id` binds, with a use site's bindings (a JSON object) |
 //! | `GET /v1/construct/names/{name}` | `{name, el}`: a layout's element for the client's features, by name or key (a notification's layout the root doesn't reach) |
 //! | `GET /v1/construct/events` | SSE: the root, data and notifications ([`super::events`]) |
 //!
@@ -290,22 +290,31 @@ pub fn element_feeds(pod: &Pod, id: &str) -> Vec<(String, String)> {
 }
 
 /// The home feeds element `id` needs drawn with `inputs` bound (a use
-/// site's `bind`): its own `needs.feeds` and those its bound tree binds.
-/// Only home's feeds are ever loaded: a binding reaches no other data.
+/// site's `bind`): its own `needs.feeds` and those of home's feeds its
+/// (bound) tree binds now. The second part is what a built-in element
+/// needs: a blueprint's element (`@core/pixelfed`, opened by its key when
+/// home doesn't reach it) is sealed with the build, before any pod's home
+/// binds a feed, so its `needs.feeds` is empty (issue #306). Only home's
+/// feeds are ever loaded: a binding reaches no other data.
 pub fn bound_element_feeds(
     pod: &Pod,
     id: &str,
     inputs: &Map<String, Value>,
 ) -> Vec<(String, String)> {
     let mut feeds = element_feeds(pod, id);
-    if inputs.is_empty() {
+    let home = pod.store().with_conn(crate::layouts::home_feeds);
+    if home.iter().all(|f| feeds.contains(f)) {
         return feeds;
     }
     let objects = super::seal::objects(pod);
-    let Ok(m) = construct_elements::materialize_with(&objects, id, inputs) else {
+    let m = if inputs.is_empty() {
+        construct_elements::materialize(&objects, id)
+    } else {
+        construct_elements::materialize_with(&objects, id, inputs)
+    };
+    let Ok(m) = m else {
         return feeds;
     };
-    let home = pod.store().with_conn(crate::layouts::home_feeds);
     for f in crate::layouts::bound_feeds(pod.catalog(), &home, &m.node) {
         if !feeds.contains(&f) {
             feeds.push(f);
