@@ -161,6 +161,9 @@ pub struct AppState {
     hosted: std::sync::atomic::AtomicBool,
     /// Per-process secret of internal requests ([`session::INTERNAL_HEADER`]).
     internal_secret: String,
+    /// This pod's id on its host and the host's shelf of publications
+    /// (decision `sharing`); unset: the pod can't share.
+    shelf: std::sync::OnceLock<(String, Arc<dyn construct::share::Shelf>)>,
 }
 
 /// Request header a pod host sets on a request whose bearer was an MCP
@@ -235,6 +238,7 @@ impl AppState {
                 getrandom::fill(&mut buf).expect("OS random number generator");
                 util::hex(&buf)
             },
+            shelf: std::sync::OnceLock::new(),
         })
     }
 
@@ -452,6 +456,17 @@ impl AppState {
     }
 
     /// This pod is served by a pod host, which owns [`CREDENTIAL_HEADER`].
+    /// Plug the pod into its host's shelf of publications as pod `pod_id`
+    /// (decision `sharing`); set once, by the host, when it opens the pod.
+    pub fn set_shelf(&self, pod_id: &str, shelf: Arc<dyn construct::share::Shelf>) {
+        let _ = self.shelf.set((pod_id.to_owned(), shelf));
+    }
+
+    /// This pod's id on its host and the host's shelf, if it has one.
+    pub fn shelf(&self) -> Option<(&str, &Arc<dyn construct::share::Shelf>)> {
+        self.shelf.get().map(|(id, s)| (id.as_str(), s))
+    }
+
     pub fn set_hosted(&self) {
         self.hosted.store(true, std::sync::atomic::Ordering::SeqCst);
     }

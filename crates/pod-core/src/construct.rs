@@ -13,6 +13,8 @@
 //! - [`http`]: `GET /v1/construct`, `/v1/objects`, `/v1/construct/data`,
 //!   `/v1/construct/names`.
 //! - [`events`]: `GET /v1/construct/events`.
+//! - [`share`]: publishing to the host's shelf and adopting from it
+//!   (decision `sharing`).
 
 #[path = "construct_core.rs"]
 pub mod core;
@@ -22,6 +24,8 @@ pub mod events;
 pub mod http;
 #[path = "construct_seal.rs"]
 pub mod seal;
+#[path = "construct_share.rs"]
+pub mod share;
 #[path = "construct_store.rs"]
 pub mod store;
 #[path = "construct_write.rs"]
