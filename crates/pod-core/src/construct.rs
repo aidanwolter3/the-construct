@@ -16,11 +16,17 @@
 //! - [`http`]: `GET /v1/construct`, `/v1/objects`, `/v1/construct/data`.
 //! - [`switch`]: the switch, its dry run and the revert.
 
+#[path = "construct_convert.rs"]
 pub mod convert;
+#[path = "construct_http.rs"]
 pub mod http;
+#[path = "construct_seal.rs"]
 pub mod seal;
+#[path = "construct_store.rs"]
 pub mod store;
+#[path = "construct_switch.rs"]
 pub mod switch;
+#[path = "construct_write.rs"]
 pub mod write;
 
 use std::collections::HashMap;

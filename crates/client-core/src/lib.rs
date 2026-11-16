@@ -47,6 +47,7 @@
 pub mod attachments;
 pub mod auth;
 pub mod catalog;
+pub mod construct;
 pub mod events;
 /// The mutation-expression evaluator, shared with the Rust renderer.
 pub use protocol::expr;
@@ -372,6 +373,12 @@ pub struct StateSnapshot {
     /// n|null, "gone": bool}}`. Their data is in `entities_json` and
     /// `queries_json`; their load state is `loads_json["layout:<id>"]`.
     pub layouts_json: String,
+    /// On a pod switched to the construct (decision
+    /// `content-addressed-construct`): `{"root": "e1-…", "reach": {key:
+    /// [keys]}}`, each layout key and the keys it reaches (its links, and
+    /// through its embeds theirs); a stack entry resolves while the one below
+    /// it reaches its key. `""` on a pod that isn't switched.
+    pub construct_json: String,
 }
 
 /// Another layout the engine holds (see [`StateSnapshot::layouts_json`]).
@@ -537,6 +544,8 @@ struct State {
     gone: bool,
     /// Other layouts, by id ([`StateSnapshot::layouts_json`]).
     layouts: BTreeMap<String, SubLayout>,
+    /// [`StateSnapshot::construct_json`].
+    construct_json: String,
     /// Fields set on this device (`action.local.set`), by entity URI, kept
     /// over loads that can't know of them yet ([`State::hold_local_sets`]).
     local_sets: BTreeMap<String, LocalSet>,
@@ -655,6 +664,7 @@ impl State {
             loads_json,
             notifications_json: self.notifications_json(),
             layouts_json: serde_json::to_string(&self.layouts).unwrap_or_else(|_| "{}".into()),
+            construct_json: self.construct_json.clone(),
         }
     }
 
@@ -1384,6 +1394,8 @@ struct Inner {
     /// Where staged attachments are written (`<storage>/attachments`, or a
     /// temporary directory for an in-memory store).
     attachments_dir: PathBuf,
+    /// The pod's construct, when it is switched ([`construct`]).
+    construct: Mutex<construct::Construct>,
 }
 
 impl Drop for Inner {
@@ -1747,6 +1759,7 @@ impl ConstructEngine {
             pending_reads: Mutex::new(Vec::new()),
             stream_wake: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             attachments_dir,
+            construct: Mutex::new(construct::Construct::default()),
         });
 
         // Both background threads hold only a Weak reference between
@@ -2018,6 +2031,19 @@ impl ConstructEngine {
         self.inner.remember_form_value(scope, field, value);
     }
 
+    /// The construct as this device has it (decision
+    /// `content-addressed-construct`): whether the pod is switched, its root,
+    /// and how many objects each sync fetched.
+    pub fn construct_status(&self) -> ConstructStatus {
+        let c = lock(&self.inner.construct);
+        ConstructStatus {
+            switched: c.mode == construct::Mode::On,
+            root: c.root.clone(),
+            fetched: c.fetched.clone(),
+            objects: c.objects.len(),
+        }
+    }
+
     /// The layout versions pinned on this device for this engine's app
     /// (`action.device` `pin_version`), restored at start: one per layout,
     /// with the pinned layout JSON as it was fetched. Empty on any error.
@@ -2031,6 +2057,17 @@ impl ConstructEngine {
     pub fn set_pinned_version(&self, layout_id: &str, pin: Option<(i64, &str)>) {
         self.inner.set_pinned_version(layout_id, pin);
     }
+}
+
+/// [`ConstructEngine::construct_status`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConstructStatus {
+    pub switched: bool,
+    pub root: Option<String>,
+    /// Objects fetched by each sync, oldest first.
+    pub fetched: Vec<usize>,
+    /// Objects the device holds.
+    pub objects: usize,
 }
 
 /// A layout version pinned on this device ([`ConstructEngine::pinned_versions`]).
@@ -2365,17 +2402,41 @@ impl Inner {
         }
     }
 
+    /// Layout `id` with its data: from the construct on a switched pod,
+    /// else `GET /v1/workspaces/<id>` (decision
+    /// `content-addressed-construct`). Blocking.
+    fn fetch_layout(
+        &self,
+        id: &str,
+        token: Option<&str>,
+    ) -> Result<(WorkspaceSpec, Option<u64>), FetchError> {
+        if let Some(r) = self.construct_fetch(id, token) {
+            let json = lock(&self.construct).snapshot_json();
+            lock(&self.state).construct_json = json;
+            return r;
+        }
+        if !lock(&self.state).construct_json.is_empty() {
+            lock(&self.state).construct_json.clear();
+        }
+        let url = if id == self.workspace_id {
+            self.workspace_url.clone()
+        } else {
+            format!("{}/v1/workspaces/{id}", self.base_url)
+        };
+        fetch(&url, token, &self.device_id)
+    }
+
     fn refresh(&self) -> FetchOutcome {
         let net = read(&self.net);
         let stamp = lock(&self.state).load_stamp();
         let mut token = self.session_token();
-        let mut result = fetch(&self.workspace_url, token.as_deref(), &self.device_id);
+        let mut result = self.fetch_layout(&self.workspace_id, token.as_deref());
         if let (Err(FetchError::Status(401)), Some(t)) = (&result, &token) {
             // The refresh below delivers a newer snapshot than this one.
             let _ = self.expire_session(t, "workspace fetch");
             token = None;
             if !self.signal.is_shut_down() {
-                result = fetch(&self.workspace_url, None, &self.device_id);
+                result = self.fetch_layout(&self.workspace_id, None);
             }
         }
         if self.signal.is_shut_down() {
@@ -3209,14 +3270,16 @@ impl Inner {
         let (url, result) = match layout_id {
             Some(id) => {
                 let url = format!("{}/v1/workspaces/{id}", self.base_url);
-                let r = fetch(&url, token.as_deref(), &self.device_id).map(|(spec, version)| {
-                    let layout = (spec.workspace, version);
-                    let bundle = DataBundle {
-                        entities: spec.entities,
-                        queries: spec.queries,
-                    };
-                    (bundle, Some(layout))
-                });
+                let r = self
+                    .fetch_layout(id, token.as_deref())
+                    .map(|(spec, version)| {
+                        let layout = (spec.workspace, version);
+                        let bundle = DataBundle {
+                            entities: spec.entities,
+                            queries: spec.queries,
+                        };
+                        (bundle, Some(layout))
+                    });
                 (url, r)
             }
             None => {
@@ -3847,6 +3910,7 @@ impl Inner {
     }
 }
 
+#[derive(Debug)]
 enum FetchError {
     /// The server responded with this non-success HTTP status code.
     Status(u16),
