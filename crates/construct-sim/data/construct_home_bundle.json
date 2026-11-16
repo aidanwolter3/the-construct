@@ -1,0 +1,49 @@
+{
+  "version": "1.0.0",
+  "workspace": {
+    "type": "core://Page",
+    "id": "home",
+    "title": "Home",
+    "root": {
+      "type": "core://Column",
+      "padding_v_dp": 12,
+      "spacing_dp": 8,
+      "children": [
+        {
+          "type": "core://Text",
+          "style": "Headline",
+          "value_expr": "Home"
+        },
+        {
+          "type": "core://Tappable",
+          "content_description": "Recipes",
+          "on_click": {
+            "intent": "action.navigation.open",
+            "layout": "c-recipes",
+            "presentation": "Push"
+          },
+          "content": {
+            "type": "core://Column",
+            "padding_h_dp": 16,
+            "padding_v_dp": 12,
+            "children": [
+              {
+                "type": "core://Text",
+                "style": "Title",
+                "value_expr": "Recipes"
+              },
+              {
+                "type": "core://Text",
+                "style": "Secondary",
+                "value_expr": "Open the recipe book"
+              }
+            ]
+          }
+        }
+      ],
+      "padding_h_dp": 16
+    }
+  },
+  "entities": {},
+  "queries": {}
+}

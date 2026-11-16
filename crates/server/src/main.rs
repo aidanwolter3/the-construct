@@ -138,6 +138,7 @@ fn main() -> std::process::ExitCode {
                  server pods create <name>\n       \
                  server pods adopt <name> <path/to/server.db>\n       server pods remove-adopted [dir]\n       \
                  server pods rotate <name>\n       \
+                 server pods switch <name> [--dry-run | --revert]\n       \
                  server pods delete <name>\n       server pods notify-test <name>\n       \
                  server pods mcp <name> [label]\n       server pods revoke-mcp <name>\n       \
                  server pods monitoring <name> on|off\n       server pods list"
@@ -226,6 +227,16 @@ fn pods(args: &[&str]) -> Result<(), String> {
                 println!("Deleted {}", p.display());
             }
         }
+        ["switch", name, flags @ ..] => {
+            let mode = match flags {
+                [] => "switch",
+                ["--dry-run"] => "dry_run",
+                ["--revert"] => "revert",
+                _ => return Err("usage: server pods switch <name> [--dry-run | --revert]".into()),
+            };
+            let report = host.switch_construct(name, mode)?;
+            println!("{report:#}");
+        }
         ["notify-test", name] => {
             let title = host.notify_test(name)?;
             println!("Sent \"{title}\" to pod '{name}'.");
@@ -284,7 +295,7 @@ fn pods(args: &[&str]) -> Result<(), String> {
         }
         _ => {
             return Err(
-                "unknown pods command (create, adopt, remove-adopted, rotate, delete, notify-test, mcp, revoke-mcp, monitoring, list)".into(),
+                "unknown pods command (create, adopt, remove-adopted, rotate, switch, delete, notify-test, mcp, revoke-mcp, monitoring, list)".into(),
             );
         }
     }

@@ -126,7 +126,17 @@ server pods revoke-mcp <name>                  # disconnect every Claude credent
 server pods monitoring <name> on|off           # let this pod's apps read server-wide monitoring data
 server pods adopt <name> <path/to/server.db>   # turn a pre-pods single-user database into a pod
 server pods remove-adopted [dir]               # delete the originals adopt left behind
+server pods switch <name> --dry-run            # render every layout on the old system and the construct, report differences
+server pods switch <name>                      # switch the pod to the construct (old tables kept)
+server pods switch <name> --revert             # back to the old layout system
 ```
+
+`switch` moves a pod to the content-addressed construct (decision
+[`content-addressed-construct`](decisions/content-addressed-construct.md)); Claude can do the same with MCP
+`switch_construct`. Run the dry run first: it converts in memory, draws every layout of the pod both ways with its
+data and lists each difference, changing nothing. The switch writes the construct's tables and leaves the old ones as
+they are; `--revert` puts the pod back on them (edits made while switched stay in the construct's history only). A
+running server sees a switch made with this command within 5 seconds.
 
 Pod codes never go into git or config files; keep yours in a password manager.
 

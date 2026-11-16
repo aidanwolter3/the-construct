@@ -175,34 +175,10 @@ pub fn canonical_hash(v: &Value) -> String {
     crate::store::content_hash(&out)
 }
 
+/// The canonical JSON the hashes use (sorted keys, no whitespace), shared
+/// with the construct's object ids (`construct_elements::canonical`).
 fn write_canonical(v: &Value, out: &mut String) {
-    match v {
-        Value::Object(map) => {
-            let mut keys: Vec<&String> = map.keys().collect();
-            keys.sort();
-            out.push('{');
-            for (i, k) in keys.into_iter().enumerate() {
-                if i > 0 {
-                    out.push(',');
-                }
-                out.push_str(&Value::String(k.clone()).to_string());
-                out.push(':');
-                write_canonical(&map[k], out);
-            }
-            out.push('}');
-        }
-        Value::Array(items) => {
-            out.push('[');
-            for (i, item) in items.iter().enumerate() {
-                if i > 0 {
-                    out.push(',');
-                }
-                write_canonical(item, out);
-            }
-            out.push(']');
-        }
-        scalar => out.push_str(&scalar.to_string()),
-    }
+    construct_elements::canonical::write_canonical(v, out);
 }
 
 /// Whether this build knows the intent tag (an unknown one, and the
@@ -783,6 +759,31 @@ async fn list_apps(
     let client = client_caps(&headers);
     let flag = |k: &str| query.get(k).is_some_and(|v| v == "1" || v == "true");
     let all = flag("all");
+    // A switched pod's layouts are its construct's names (decision
+    // `content-addressed-construct`); none are hidden.
+    if crate::construct_switched(&state).await {
+        let st = state.clone();
+        let blueprints = flag("blueprints");
+        let rows = blocking(&state, move |_| crate::construct::http::app_rows(&st)).await;
+        return match rows {
+            Ok(mut rows) => {
+                if blueprints {
+                    let bp: Vec<Value> = state
+                        .catalog()
+                        .apps()
+                        .filter(|a| !a.dev || state.show_dev_apps())
+                        .map(|a| {
+                            json!({ "id": a.id, "title": a.title, "icon": a.icon,
+                            "kind": "builtin", "hidden": false })
+                        })
+                        .collect();
+                    rows.splice(0..0, bp);
+                }
+                Json(json!({ "apps": rows })).into_response()
+            }
+            Err(e) => e.into_response(),
+        };
+    }
     // Built-in apps are blueprints (decision `blueprints-and-home`): a pod
     // lists only its own apps, and the blueprints with `?blueprints=1`.
     let builtin: Vec<AppInfo> = if flag("blueprints") {
@@ -871,6 +872,21 @@ async fn app_versions(
     Query(query): Query<HashMap<String, String>>,
     headers: HeaderMap,
 ) -> Response {
+    if crate::custom::is_custom_id(&id) && crate::construct_switched(&state).await {
+        let (st, lookup) = (state.clone(), id.clone());
+        return match blocking(&state, move |_| {
+            crate::construct::http::versions(&st, &lookup)
+        })
+        .await
+        {
+            Ok(Some(v)) => Json(v).into_response(),
+            Ok(None) => json_error(
+                StatusCode::NOT_FOUND,
+                json!({ "error": "app_not_found", "id": id }),
+            ),
+            Err(e) => e.into_response(),
+        };
+    }
     let app_id = match known_app(&state, &id).await {
         Ok(a) => a,
         Err(r) => return r,
@@ -931,6 +947,24 @@ async fn app_version(
     Path((id, n)): Path<(String, String)>,
     headers: HeaderMap,
 ) -> Response {
+    if crate::custom::is_custom_id(&id)
+        && crate::construct_switched(&state).await
+        && let Some(n) = n.parse::<i64>().ok().filter(|n| *n >= 1)
+    {
+        let (st, lookup) = (state.clone(), id.clone());
+        return match blocking(&state, move |_| {
+            crate::construct::http::version(&st, &lookup, n)
+        })
+        .await
+        {
+            Ok(Some(v)) => Json(v).into_response(),
+            Ok(None) => json_error(
+                StatusCode::NOT_FOUND,
+                json!({ "error": "version_not_found", "app_id": id, "version": n }),
+            ),
+            Err(e) => e.into_response(),
+        };
+    }
     let app_id = match known_app(&state, &id).await {
         Ok(a) => a,
         Err(r) => return r,
@@ -1178,7 +1212,36 @@ async fn announced_async(
     client: protocol::ClientCaps,
 ) -> Result<Option<i64>, ApiError> {
     let id = app_id.to_owned();
+    // A switched pod's layouts announce their names' history (decision
+    // `content-addressed-construct`).
+    if crate::custom::is_custom_id(&id) && crate::construct_switched(state).await {
+        return blocking(state, move |s| {
+            let seq = s.with_conn(|c| crate::construct::store::last_seq(c, &id))?;
+            Ok((seq > 0).then_some(seq))
+        })
+        .await;
+    }
     blocking(state, move |s| announced_version(s, &id, &client)).await
+}
+
+/// The `construct` event a home stream of a switched pod sends: the root
+/// for this client's features.
+async fn construct_event(state: &Arc<AppState>, client: protocol::ClientCaps) -> Option<Event> {
+    let st = state.clone();
+    let r = tokio::task::spawn_blocking(move || {
+        let root = crate::construct::seal::root_for(&st, &client)?;
+        let g = st.store().with_conn(crate::construct::store::generation)?;
+        Ok::<_, rusqlite::Error>((root, g))
+    })
+    .await
+    .ok()?
+    .ok()?;
+    let (Some(root), g) = r else { return None };
+    Some(
+        Event::default()
+            .event("construct")
+            .data(json!({ "root": root, "generation": g }).to_string()),
+    )
 }
 
 /// Other layouts' `(id, announced version)`s and deleted layouts' ids.
@@ -1215,6 +1278,20 @@ async fn others_async(
     state: &Arc<AppState>,
     client: protocol::ClientCaps,
 ) -> Result<Others, ApiError> {
+    if crate::construct_switched(state).await {
+        return blocking(state, |s| {
+            s.with_conn(|c| {
+                let mut live = Vec::new();
+                for (n, _) in crate::construct::store::names(c)? {
+                    if crate::custom::is_custom_id(&n) && n != crate::HOME_APP {
+                        live.push((n.clone(), crate::construct::store::last_seq(c, &n)?));
+                    }
+                }
+                Ok((live, Vec::new()))
+            })
+        })
+        .await;
+    }
     let st = state.clone();
     blocking(state, move |s| others_now(s, st.catalog(), &client)).await
 }
@@ -1398,6 +1475,11 @@ async fn events(
                         Ok(o) => queue_others(o, &mut s.others, &mut s.queue),
                         Err(e) => tracing::warn!(error = ?e, "events: other layouts not announced"),
                     }
+                    if crate::construct_switched(&s.state).await
+                        && let Some(e) = construct_event(&s.state, s.client.clone()).await
+                    {
+                        s.queue.push_back(e);
+                    }
                 }
                 let e = event(&s);
                 return Some((Ok::<_, std::convert::Infallible>(e), s));
@@ -1466,6 +1548,23 @@ async fn events(
                         continue;
                     }
                 };
+                // The construct (decision `content-addressed-construct`): a
+                // change of system ends every stream (clients ask again which
+                // system the pod is on); a move of a name is a new root on
+                // home's.
+                if let Ok(ev) = &received
+                    && ev.workspace_id == crate::construct::CONSTRUCT_EVENT_ID
+                {
+                    if ev.version == crate::construct::switch::MODE_CHANGED {
+                        return None;
+                    }
+                    if s.id == crate::HOME_APP
+                        && let Some(e) = construct_event(&s.state, s.client.clone()).await
+                    {
+                        return Some((Ok(e), s));
+                    }
+                    continue;
+                }
                 // Home's stream carries every layout's changes (decision
                 // `layouts-not-apps`): one engine shows them all.
                 if s.id == crate::HOME_APP

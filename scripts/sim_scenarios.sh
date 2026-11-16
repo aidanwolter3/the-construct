@@ -34,6 +34,12 @@ assert-text All done; shot done"
 scenario date-unlock week_sessions \
   "clock 2026-11-16T08:59; assert-no-text Mark Mon; shot before-class; clock 2026-11-16T09:00; assert-text Mark Mon Group class done; shot class-over; \
 clock 2026-11-17T15:45; shot swim-over"
+scenario construct home \
+  "construct crates/construct-sim/data/construct_v1.json; click Recipes; type note Hello there; scroll-to Item 30; \
+click Hello there; shot before; construct crates/construct-sim/data/construct_v2.json; assert-no-text Recipes (edited); \
+click Item 30; back; assert-text Recipes (edited); assert-text Item 30; assert-text Hello there; shot edited; \
+click Item 30; construct crates/construct-sim/data/construct_v4.json; wait 600; assert-text Recipes (edited); shot unlinked; \
+construct crates/construct-sim/data/construct_v3.json; wait 600; assert-text Nothing linked here now; shot cut"
 scenario tiles-home tiles_home \
   "shot top; scroll-to Photos; assert-text Read more; shot tiles"
 for page in home groceries log; do

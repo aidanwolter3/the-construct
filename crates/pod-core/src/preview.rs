@@ -253,7 +253,11 @@ fn forwarded(headers: &HeaderMap) -> HeaderMap {
 }
 
 /// A layout's bundle as a client gets it: plumbing, entities, queries.
-async fn fetch(pod: &Pod, headers: &HeaderMap, id: &str) -> Result<WorkspaceSpec, Value> {
+pub(crate) async fn fetch(
+    pod: &Pod,
+    headers: &HeaderMap,
+    id: &str,
+) -> Result<WorkspaceSpec, Value> {
     if !is_layout_id(id) {
         return Err(json!({ "error": "unknown_layout", "id": id,
             "detail": "not a layout id: home, a c-... id from list_layouts, or a blueprint" }));
@@ -464,6 +468,61 @@ fn linked_layouts(root: &UiNode) -> Vec<String> {
     out.sort();
     out.dedup();
     out
+}
+
+/// Layouts a tree embeds (`core://Layout`), by id.
+pub(crate) fn embedded_layouts(root: &UiNode) -> Vec<String> {
+    let mut out: Vec<String> = root
+        .walk()
+        .into_iter()
+        .filter_map(|n| match n {
+            UiNode::Layout { layout, .. } if !layout.contains('$') => Some(layout.clone()),
+            _ => None,
+        })
+        .collect();
+    out.sort();
+    out.dedup();
+    out
+}
+
+/// What a layout draws on a phone-sized frame, to compare two trees of it
+/// (the construct's dry run, decision `content-addressed-construct`): a line
+/// per node (type, bounds, text, what a tap does) and the frame's pixels.
+pub(crate) struct Drawing {
+    pub lines: Vec<String>,
+    pub pixels: Vec<u8>,
+}
+
+/// Draw `root` (with the layouts it embeds) over `data`, settled.
+pub(crate) fn draw(
+    id: &str,
+    root: UiNode,
+    layouts: BTreeMap<String, UiNode>,
+    data: DataBundle,
+    clock: construct_render::dates::Clock,
+) -> Result<Drawing, String> {
+    let mut s = Session::new(id, root, data, viewport(&Value::Null));
+    s.set_clock(clock);
+    s.layouts = layouts;
+    s.animate = false;
+    let scene = s.scene().map_err(|e| e.to_string())?.clone();
+    let lines = nodes(&scene, NodesMode::Text)
+        .into_iter()
+        .map(|n| {
+            format!(
+                "{} {} {}{}",
+                n["type"].as_str().unwrap_or(""),
+                n["bounds"],
+                n["text"]
+                    .as_str()
+                    .map(|t| format!("{t:?} "))
+                    .unwrap_or_default(),
+                n["tap"].as_str().unwrap_or("")
+            )
+        })
+        .collect();
+    let pixels = s.render_cpu().map_err(|e| e.to_string())?.into_raw();
+    Ok(Drawing { lines, pixels })
 }
 
 /// Adds what `into` lacks (what it has stays).
@@ -846,7 +905,21 @@ pub(crate) async fn render_layout_preview(pod: &Pod, headers: &HeaderMap, args: 
     let (id, root, mut data) = if args["layout"].is_object() {
         let node = args["layout"].clone();
         let p = pod.clone();
+        let switched = crate::construct_switched(pod).await;
         let expanded = crate::blocking(pod, move |s| {
+            // A switched pod's draft names elements (decision
+            // `content-addressed-construct`).
+            if switched {
+                return Ok(
+                    crate::construct::write::draft_plumbing(&p, &node).map_err(|e| {
+                        crate::validate::LayoutError {
+                            pointer: String::new(),
+                            message: e["detail"].to_string(),
+                            allowed: Vec::new(),
+                        }
+                    }),
+                );
+            }
             Ok(
                 crate::parts::expand(s, p.catalog(), &node, None, crate::parts::Mode::Strict)
                     .map(|v| crate::porcelain::to_plumbing(s, p.catalog(), &v).unwrap_or(v)),

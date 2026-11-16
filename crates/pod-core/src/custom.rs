@@ -741,6 +741,19 @@ pub fn recorded_features(layout: &protocol::UiNode) -> String {
     protocol::required_features(layout).join(",")
 }
 
+/// 409 `construct_switched` on a switched pod: the old system's writes
+/// stop there (decision `content-addressed-construct`); MCP tools write the
+/// construct instead.
+async fn refuse_if_switched(pod: &Pod) -> Result<(), Refusal> {
+    if crate::construct_switched(pod).await {
+        return Err(refuse(
+            StatusCode::CONFLICT,
+            crate::construct::switched_refusal("This write"),
+        ));
+    }
+    Ok(())
+}
+
 // ---------- validation ----------
 
 /// Why a write was refused: the HTTP status and JSON body.
@@ -1205,6 +1218,7 @@ fn append(
 /// Create a custom app from a request body `{title, icon, feeds, layout,
 /// note?}`.
 pub async fn create(pod: &Pod, body: &Value, by: Writer) -> Result<Written, Refusal> {
+    refuse_if_switched(pod).await?;
     let title = check_title(Some(&body["title"]))?.expect("checked");
     let icon = check_icon(Some(body.get("icon").unwrap_or(&json!("photo"))))?.expect("checked");
     // Feeds named here join home's: every layout binds home's (decision
@@ -1288,7 +1302,14 @@ pub async fn update_layout(
     body: &Value,
     by: Writer,
 ) -> Result<Written, Refusal> {
+    refuse_if_switched(pod).await?;
     let app = load(pod, id).await?;
+    if crate::construct::is_switched(pod) {
+        return Err(refuse(
+            StatusCode::CONFLICT,
+            crate::construct::switched_refusal("Editing a layout along with another change"),
+        ));
+    }
     let note = check_note(body.get("note"), "Edited")?;
     let base =
         match body.get("base_version") {
@@ -1339,6 +1360,7 @@ pub async fn update_layout(
 /// Rename, re-icon or re-feed app `id` (`{title?, icon?, feeds?}`). New
 /// feeds must still fit its latest layout.
 pub async fn patch(pod: &Pod, id: &str, body: &Value) -> Result<Written, Refusal> {
+    refuse_if_switched(pod).await?;
     let app = load(pod, id).await?;
     let title = check_title(body.get("title"))?;
     let icon = check_icon(body.get("icon"))?;
@@ -1403,6 +1425,7 @@ pub async fn patch(pod: &Pod, id: &str, body: &Value) -> Result<Written, Refusal
 /// Append a copy of version `{version}` of app `id`, checked against its
 /// current feeds.
 pub async fn restore(pod: &Pod, id: &str, body: &Value, by: Writer) -> Result<Written, Refusal> {
+    refuse_if_switched(pod).await?;
     let app = load(pod, id).await?;
     let Some(n) = body["version"].as_i64().filter(|n| *n >= 1) else {
         return Err(invalid(
@@ -1452,6 +1475,7 @@ pub async fn restore(pod: &Pod, id: &str, body: &Value, by: Writer) -> Result<Wr
 
 /// Soft-delete app `id`; its open event streams end with `event: deleted`.
 pub async fn delete(pod: &Pod, id: &str) -> Result<(), Refusal> {
+    refuse_if_switched(pod).await?;
     load(pod, id).await?;
     if id == crate::HOME_APP {
         return Err(refuse(
@@ -1475,6 +1499,7 @@ pub async fn delete(pod: &Pod, id: &str) -> Result<(), Refusal> {
 
 /// Hide or show app `id` (any app the pod serves).
 pub async fn set_hidden(pod: &Pod, id: &str, hidden: bool) -> Result<(), Refusal> {
+    refuse_if_switched(pod).await?;
     if pod.app(id).await.map_err(|(s, Json(b))| (s, b))?.is_none() {
         return Err(not_found(id));
     }
@@ -1918,6 +1943,7 @@ pub fn updates_from(
 
 /// Dismiss app `id`'s update notice up to built-in version `version`.
 pub async fn dismiss_update(pod: &Pod, id: &str, version: i64) -> Result<(), Refusal> {
+    refuse_if_switched(pod).await?;
     load(pod, id).await?;
     let app_id = id.to_owned();
     write(pod, move |tx| {

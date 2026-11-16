@@ -264,7 +264,11 @@ the event stream announced, so a layout edited over MCP, or a change from anothe
 again. Nothing on screen changes while a layout or screen slides in or out: `Session::poll` keeps the engine's changes and
 the pod's answers that arrive meanwhile aside and applies them, and lays them out, on the first frame after the slide
 ends (`animating` stays true until then), while the user's own taps, local sets and optimistic writes still show at
-once (decision `hold-changes-during-transitions`). Each new frame tells the engine what it draws, topmost first (`Loader::visible`: every drawn entry's layout and
+once (decision `hold-changes-during-transitions`). On a pod switched to the construct (decision
+`content-addressed-construct`) a new root also waits while a finger is down or a field is focused (data doesn't),
+and the engine's edge graph comes with the roots (`Loader::edges`): an entry the one below it no longer reaches
+closes, back to the deepest entry that still resolves, each with its own transition; `action.navigation.pop_to` and
+`pop_to_root` close entries the same way. Each new frame tells the engine what it draws, topmost first (`Loader::visible`: every drawn entry's layout and
 data path, and the layouts drawn inline in them), so an `event: data` reloads what's on screen first and leaves the
 rest stale until it's shown again (decision `scoped-data-events`). The simulator's live mode (`construct-sim --base-url`) still fetches straight from the pod (`PodClient`). `local://nav` and
 `local://screen` are set as the Compose UI set them. Images (`core://Image`) download on four background threads, newest request first,

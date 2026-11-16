@@ -54,6 +54,24 @@ background, offline, the server restarting) catches up; it ignores layouts it ha
 A `: keepalive` comment comes every 15 s. Streams opened without a session hear only `layout` events. A session's
 stream ends when the session is revoked; one session may hold 8 streams (then 429 `too_many_streams`).
 
+## The construct (decision `content-addressed-construct`)
+
+On a pod switched to the construct (`server pods switch`, MCP `switch_construct`). On a pod that isn't, `GET
+/v1/construct` answers `409 not_switched` and clients use the calls above.
+
+| Call | Answer |
+|---|---|
+| `GET /v1/construct` | `{root, generation}`: home's element for the client's features (`X-Construct-Features`); `409 not_switched`. |
+| `POST /v1/objects {have: [ids], want: [ids]}` | `{objects: {id: object}, more}`: what `want` reaches that `have` doesn't list, `want`'s order first; `more` when one answer couldn't carry all (ask again). |
+| `GET /v1/objects/{id}` | One object (an id is `e1-` and the base32 SHA-256 of its canonical JSON). |
+| `GET /v1/construct/data/{id}` | `{entities, queries}`: the data of the home feeds element `id` needs. |
+
+Home's event stream adds `construct {root, generation}` (on connect and whenever the root moves). On a switched pod
+the calls above keep answering, from the construct, so installed clients still draw it: `GET /v1/workspaces/{id}`
+serves the layout's element expanded, versions are its name's history, and `layout` events announce those numbers.
+`/v1/custom-apps` writes and `PUT /v1/apps/{id}/hidden` are refused with `409 construct_switched`. A switch or a
+revert ends every event stream, so clients ask again which system the pod is on.
+
 ## Custom apps
 
 The pod's own layouts (decision `layouts-not-apps`; the routes keep their app-era names). Home owns the feeds: `feeds`

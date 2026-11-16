@@ -278,6 +278,11 @@ pub(crate) fn events_thread(
                 {
                     inner.on_stream_connected(t);
                 }
+                // Which system the pod is on is asked again (it may have
+                // been switched or reverted meanwhile).
+                if let Some(inner) = weak.upgrade() {
+                    inner.construct_reprobe(token.as_deref());
+                }
                 // A fresh connection is what a foreground return asks for.
                 wake.store(false, Ordering::SeqCst);
                 if connected_with.as_ref() == Some(&token)
@@ -439,6 +444,18 @@ impl Inner {
     /// Blocking (the refetch); called on the events thread.
     fn on_push_event(&self, ev: &SseEvent) {
         if self.on_notification_event(ev) {
+            return;
+        }
+        // The construct (decision `content-addressed-construct`): one root
+        // says whether this device is current; layouts' version events are
+        // for installed clients.
+        if ev.event == "construct" {
+            if !self.signal.is_shut_down() {
+                self.on_construct_event(&ev.data);
+            }
+            return;
+        }
+        if ev.event == "layout" && crate::lock(&self.construct).mode == crate::construct::Mode::On {
             return;
         }
         if ev.event == "deleted" {

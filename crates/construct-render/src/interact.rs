@@ -369,6 +369,12 @@ pub struct Changes {
     pub layouts: Vec<(String, UiNode)>,
 }
 
+/// On a pod switched to the construct (decision
+/// `content-addressed-construct`): each layout key and the keys it reaches
+/// ([`Loader::edges`]). A stack entry the one below it no longer reaches is
+/// closed.
+pub type Edges = BTreeMap<String, std::collections::BTreeSet<String>>;
+
 impl Changes {
     /// Later changes over these: newer entities, queries and layout roots
     /// win.
@@ -379,6 +385,18 @@ impl Changes {
             self.layouts.retain(|(i, _)| *i != id);
             self.layouts.push((id, root));
         }
+    }
+
+    /// The new roots, taken out (what waits for a touch or the keyboard to
+    /// finish).
+    fn take_roots(&mut self) -> Option<Changes> {
+        if self.layouts.is_empty() {
+            return None;
+        }
+        Some(Changes {
+            data: DataBundle::default(),
+            layouts: std::mem::take(&mut self.layouts),
+        })
     }
 }
 
@@ -491,6 +509,12 @@ pub trait Loader: Send {
     fn changes(&self) -> Option<Changes> {
         None
     }
+    /// The construct's edge graph when it changed since the last call
+    /// (decision `content-addressed-construct`); `None`: unchanged, or the
+    /// pod isn't switched. Called every frame: it must not block.
+    fn edges(&self) -> Option<Edges> {
+        None
+    }
     /// What is on screen now, topmost first, whenever it changes: where
     /// the loader reloads changed data (the engine, decision
     /// `scoped-data-events`), it reloads this first. Must not block.
@@ -551,7 +575,12 @@ fn merge(into: &mut DataBundle, from: DataBundle) {
 fn navigates_only(intent: &Value) -> bool {
     matches!(
         intent["intent"].as_str(),
-        Some("action.navigation.open" | "action.navigation.back")
+        Some(
+            "action.navigation.open"
+                | "action.navigation.back"
+                | "action.navigation.pop_to"
+                | "action.navigation.pop_to_root"
+        )
     )
 }
 
@@ -674,6 +703,15 @@ pub struct Session {
     /// (decision `hold-changes-during-transitions`).
     held: Option<Changes>,
     held_answers: Vec<Answer>,
+    /// New roots that came while a finger was down or a field was being
+    /// typed in, swapped in once that ends (decision
+    /// `content-addressed-construct`). Not a reason to keep drawing: the
+    /// touch's end or the keyboard closing draws the next frame.
+    held_roots: Option<Changes>,
+    /// The construct's edge graph, as last applied ([`Loader::edges`]), and
+    /// one waiting to be (with the roots it came with).
+    edges: Option<Edges>,
+    held_edges: Option<Edges>,
 }
 
 /// How long the caret shows, then hides (Android's 500 ms).
@@ -832,6 +870,9 @@ impl Session {
             shown: Vec::new(),
             held: None,
             held_answers: Vec::new(),
+            held_roots: None,
+            edges: None,
+            held_edges: None,
         }
     }
 
@@ -1943,6 +1984,9 @@ impl Session {
     /// user's taps and local writes, which never wait for a poll.
     pub fn poll(&mut self) -> bool {
         let news = self.loader.as_ref().and_then(|l| l.changes());
+        if let Some(g) = self.loader.as_ref().and_then(|l| l.edges()) {
+            self.held_edges = Some(g);
+        }
         let mut arrived: Vec<Answer> = match self.answered.lock() {
             Ok(mut g) => std::mem::take(&mut *g),
             Err(p) => std::mem::take(&mut *p.into_inner()),
@@ -1969,9 +2013,40 @@ impl Session {
             done.append(&mut arrived);
             arrived = done;
         }
-        let changed = changes.is_some();
+        // A new root waits for a touch or the keyboard to finish; data
+        // doesn't (decision `content-addressed-construct`).
+        if self.touching() {
+            if let Some(roots) = changes.as_mut().and_then(Changes::take_roots) {
+                match self.held_roots.as_mut() {
+                    Some(h) => h.absorb(roots),
+                    None => self.held_roots = Some(roots),
+                }
+            }
+        } else if let Some(roots) = self.held_roots.take() {
+            match changes.as_mut() {
+                Some(c) => {
+                    let mut all = roots;
+                    all.absorb(std::mem::take(c));
+                    *c = all;
+                }
+                None => changes = Some(roots),
+            }
+        }
+        let mut changed = changes.is_some();
         if let Some(c) = changes {
             self.apply_changes(c);
+        }
+        // The edge graph goes with the roots: after them, never mid-slide or
+        // mid-touch.
+        if !self.touching()
+            && !self.sliding(Instant::now())
+            && self.held_roots.is_none()
+            && let Some(g) = self.held_edges.take()
+        {
+            let before = self.edges.replace(g);
+            self.cut_back(before.as_ref());
+            self.invalidate();
+            changed = true;
         }
         let done = arrived;
         if done.is_empty() {
@@ -2057,6 +2132,55 @@ impl Session {
         }
         self.work.data_changes = self.work.data_changes.saturating_add(1);
         self.invalidate();
+    }
+
+    /// Whether a finger is down or a field is being typed in.
+    fn touching(&self) -> bool {
+        self.pressed.is_some() || self.grab.is_some() || self.focused.is_some()
+    }
+
+    /// After a new edge graph: at the first entry the one below it reached
+    /// before and doesn't now, the stack is cut back, each entry above
+    /// closing with its own transition (decision
+    /// `content-addressed-construct`). Entries opened some other way (a
+    /// notification) are left alone.
+    fn cut_back(&mut self, before: Option<&Edges>) {
+        let (Some(now), Some(before)) = (self.edges.as_ref(), before) else {
+            return;
+        };
+        let top = self.top_index();
+        let mut presenter = self.stack[0].id.clone();
+        for i in 1..=top {
+            let e = &self.stack[i];
+            if e.closing.is_some() || e.screen {
+                continue;
+            }
+            let reaches = |g: &Edges| g.get(&presenter).is_some_and(|r| r.contains(&e.id));
+            if reaches(before) && !reaches(now) {
+                self.close_from(i);
+                return;
+            }
+            presenter = e.id.clone();
+        }
+    }
+
+    /// Close every entry from `from` up (Back's transitions; at once
+    /// without animation).
+    fn close_from(&mut self, from: usize) {
+        let top = self.top_index();
+        if from == 0 || from > top {
+            return;
+        }
+        let now = Instant::now();
+        self.stack.truncate(top + 1);
+        if self.animate {
+            for e in &mut self.stack[from..] {
+                e.closing.get_or_insert(now);
+            }
+        } else {
+            self.stack.truncate(from.max(1));
+        }
+        self.focused = None;
     }
 
     /// Whether writes or loads are still out (a script waits for them).
@@ -3477,6 +3601,27 @@ impl Session {
             "action.data.load" => {
                 let path = intent["path"].as_str().unwrap_or("").to_owned();
                 self.load_data(&path, out);
+            }
+            "action.navigation.pop_to" | "action.navigation.pop_to_root" => {
+                // Back to the nearest entry with that edge key, or to the
+                // root (feature `navigate_pop_to`).
+                let top = self.top_index();
+                let to = if intent["intent"] == "action.navigation.pop_to_root" {
+                    Some(0)
+                } else {
+                    let edge = intent["edge"].as_str().unwrap_or("");
+                    (0..=top).rev().find(|&i| {
+                        let e = &self.stack[i];
+                        e.closing.is_none() && !e.screen && e.id == edge
+                    })
+                };
+                match to {
+                    Some(i) if i < top => {
+                        self.close_from(i + 1);
+                        out.push(Effect::Back);
+                    }
+                    _ => out.push(Effect::Nothing),
+                }
             }
             "action.navigation.back" => {
                 let top = self.top_index();

@@ -176,6 +176,8 @@ A node type the client doesn't know is skipped, and its JSON kept, so old versio
 |---|---|---|
 | `action.navigation.open` | `target_uri`, `presentation` (`Push`, `Modal`, `Replace`, `Sheet`, `Panel`, `Overlay`), `layout`, `params`, `animation`, `edge`, `size_dp` | Without `layout`: opens the screen of the layout on top (else home's) whose route matches. With `layout` (feature `navigate_layout`): presents that layout on the back stack (Push: the whole screen with Back; Sheet, which the user can drag down to close; Panel; Overlay from `edge`, as for `core://Layout`), `params` as its `$route.<name>`, then its screen matching `target_uri`, if any. A screen opened while a Sheet, Panel or Overlay of the same layout is on top opens inside it: the frame's content slides aside for it, with Back and the screen's title at its top (decision `screens-inside-frames`). |
 | `action.navigation.back` | | Pops the top of the back stack (a screen or a presented layout), as system Back does. |
+| `action.navigation.pop_to` | `edge` | Back to the nearest entry of the back stack with that edge key (a layout id), every entry above closing with its own transition; nothing when none has it (feature `navigate_pop_to`). On a pod switched to the construct, a link back to a layout that leads to this one is written this way: elements only go forward. |
+| `action.navigation.pop_to_root` | | Back to home (feature `navigate_pop_to`). |
 | `action.mutation.optimistic` | `entity_uri`, `field`, `value_expr`, `endpoint`, `payload`, `also`, `rollback_value` | Changes fields at once and sends `payload` to `endpoint` through the outbox; a refusal restores each field's value from before the change. `rollback_value` (optional, `null` when left out) is what `field` gets back when it had no value before; leave it out (decision `optional-rollback-value`). |
 | `action.mutation.create` | `query_key`, `entity_uri`, `entity`, `endpoint`, `payload`, `refresh_workspace`, `attachments`, `position` | Adds `entity` to the list at once, uploads attachments, sends the create, then reloads what lists the query. A refusal removes it. |
 | `action.local.set` | `entity_uri`, `field`, `value_expr`, `also` | Changes fields on this device only (view state), in the engine too. Loads that started before it, or while a write was still on its way to the pod, keep it; the next load after every write is on the pod replaces it with the pod's value. |
@@ -186,6 +188,28 @@ A node type the client doesn't know is skipped, and its JSON kept, so old versio
 | `action.auth.login` | `instance_url`, `app_path`, `token_path` | Starts an OAuth2 PKCE sign-in to an upstream. |
 | `action.auth.session` | `path`, `payload` | Opens a pod session (the pod code screen). |
 | `action.device` | `command`, `app` (or `layout`), `id`, `value` | Something the device does: `open_notification` (`id`: presents its layout and target), `mark_all_read`, `toggle_channel` (`app`, `id`), `sign_in` (`id` of a provider; `value`: another server, e.g. `$form?.server`), `sign_out`, `set_server` (`id` of a server option), `show_versions` (`app`: a layout; loads its versions into `local:versions`), `pin_version` (`id`: show that version on this device; kept across restarts until `follow_latest` or leaving the pod), `follow_latest`, `load_older_notifications` (the next page into `local:notifications`, feature `device_inbox_paging`), `mark_read` (`id`: one notification), `hide_layout` and `unhide_layout` (`app`: a layout, hidden from every device's `local:layouts`; feature `device_layout_controls`), `delete_layout` (`app`: deletes the layout on the pod; only inside `action.confirm`), `request_notification_permission` (Android's prompt to allow notifications, or the app's notification settings once the prompt can't show again; nothing on desktop; feature `device_notification_permission`), `leave_pod` (forget the pod on this device), `refresh`. Any layout may use any command. `open_app` and `show` were retired with the dock and drawer; `open_settings` and `open_inbox` are retired too: present those layouts with `action.navigation.open` (`settings` as a `Panel`, `inbox` as a `Sheet`). |
+
+## On a pod switched to the construct
+
+A pod switched to the content-addressed construct (decision
+[`content-addressed-construct`](decisions/content-addressed-construct.md)) stores layouts and components as
+immutable elements behind names. Layouts are written the same way, through the same MCP tools; the pod normalizes
+what is written:
+
+- A **reference** is `"ref"` on a `core://Use` (a component, expanded in place), a `core://Layout` (an embed) or an
+  `action.navigation.open` (a link): a name, `"ref": "@core/card"`, or sealed, `{"el": "e1-…", "name", "pin",
+  "as"?}`. Names: a layout's id (`home`, `c-…`), `@me/<name>` (a component of the pod's, `pod:<name>` before),
+  `@core/<name>` (a server component or a blueprint), `@core/<blueprint>/<part>`. The old spellings
+  (`component`, `core://Ref`, `layout: <id>`) still work and are written as references. An unpinned reference
+  follows its name: when the name moves, every element that follows it is sealed again (`pin: true` keeps it).
+- **Edges**: an embed or a link is keyed by its `as`, else its name (a link to a blueprint keeps its id, `as:
+  "settings"`); `local://nav` and `pop_to` use that key.
+- **Forward only**: a write that would make a layout reach itself is refused (`cycle`). A way back is
+  `action.navigation.pop_to` or Back.
+- **Inputs**: inside a component's template `$in.<name>` reads an argument as `$arg.<name>` does, and a use may pass
+  them as `bind` instead of `args`. Home's feeds are its `bind`; every layout reads home's feeds as before.
+- **No versions on the device**: `local:layouts` and `local:all_layouts` are empty, the versions commands do
+  nothing, and Settings has no Layouts section; the history is the agent's (`restore_version`).
 
 ## Features and compatibility
 

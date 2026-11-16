@@ -39,14 +39,10 @@ pub const LAYOUT_PART: &str = "layout";
 /// Uses inside parts and components are expanded this deep at most.
 pub const MAX_DEPTH: usize = 8;
 /// Largest expansion served (a write is held to
-/// [`crate::validate::MAX_LAYOUT_BYTES`]).
-pub const MAX_EXPANDED_BYTES: usize = 1024 * 1024;
-/// The most an expansion may build along the way, in approximate JSON
-/// bytes: every value it visits or copies (a component's children, an
-/// argument) counts. Checked as it goes, so a component that repeats its
-/// children or arguments can't multiply a use into gigabytes before
-/// [`MAX_EXPANDED_BYTES`] is checked at the end.
-pub const MAX_EXPANSION_WORK: usize = 4 * MAX_EXPANDED_BYTES;
+/// [`crate::validate::MAX_LAYOUT_BYTES`]) and the most work an expansion may
+/// do: shared with the construct's elements (`construct_elements::template`).
+pub use construct_elements::template::{MAX_EXPANDED_BYTES, MAX_EXPANSION_WORK};
+use construct_elements::template::{Work, as_text, subst, subst_value, truthy, weight};
 
 /// One built-in version's parts by name.
 #[derive(Debug, Clone, Default)]
@@ -262,120 +258,6 @@ fn err(at: &str, message: String) -> LayoutError {
         message,
         allowed: Vec::new(),
     }
-}
-
-fn truthy(v: &Value) -> bool {
-    match v {
-        Value::Null => false,
-        Value::Bool(b) => *b,
-        Value::Number(n) => n.as_f64().is_some_and(|f| f != 0.0),
-        Value::String(s) => !s.is_empty() && s != "0" && s != "false",
-        Value::Array(a) => !a.is_empty(),
-        Value::Object(_) => true,
-    }
-}
-
-fn as_text(v: &Value) -> String {
-    match v {
-        Value::Null => String::new(),
-        Value::String(s) => s.clone(),
-        other => other.to_string(),
-    }
-}
-
-/// The approximate JSON size of `v`, without serializing it.
-fn weight(v: &Value) -> usize {
-    match v {
-        Value::String(s) => s.len() + 2,
-        Value::Array(a) => a.iter().map(weight).sum::<usize>() + 2,
-        Value::Object(m) => {
-            m.iter()
-                .map(|(k, c)| k.len() + 3 + weight(c))
-                .sum::<usize>()
-                + 2
-        }
-        _ => 4,
-    }
-}
-
-/// The work an expansion has done so far ([`MAX_EXPANSION_WORK`]).
-#[derive(Default)]
-struct Work(usize);
-
-impl Work {
-    fn charge(&mut self, n: usize) -> Result<(), LayoutError> {
-        self.0 = self.0.saturating_add(n);
-        if self.0 > MAX_EXPANSION_WORK {
-            return Err(err(
-                "",
-                format!(
-                    "the expansion is too large (over {MAX_EXPANSION_WORK} bytes of work; \
-                     a component repeats its children or arguments too often)"
-                ),
-            ));
-        }
-        Ok(())
-    }
-}
-
-/// `s` with each `$arg.<name>` replaced; a string that is only `$arg.<name>`
-/// becomes the argument itself (its own JSON type).
-fn subst(s: &str, args: &Map<String, Value>, work: &mut Work) -> Result<Value, LayoutError> {
-    if let Some(name) = s.strip_prefix("$arg.")
-        && !name.is_empty()
-        && name.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_')
-    {
-        let arg = args.get(name);
-        work.charge(arg.map_or(4, weight))?;
-        return Ok(arg.cloned().unwrap_or(Value::Null));
-    }
-    work.charge(s.len() + 2)?;
-    if !s.contains("$arg.") {
-        return Ok(Value::String(s.to_owned()));
-    }
-    let mut out = String::new();
-    let mut rest = s;
-    while let Some(i) = rest.find("$arg.") {
-        out.push_str(&rest[..i]);
-        let after = &rest[i + 5..];
-        let end = after
-            .find(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
-            .unwrap_or(after.len());
-        let piece = as_text(args.get(&after[..end]).unwrap_or(&Value::Null));
-        work.charge(piece.len())?;
-        out.push_str(&piece);
-        rest = &after[end..];
-    }
-    out.push_str(rest);
-    Ok(Value::String(out))
-}
-
-fn subst_value(
-    v: &Value,
-    args: &Map<String, Value>,
-    work: &mut Work,
-) -> Result<Value, LayoutError> {
-    Ok(match v {
-        Value::String(s) => subst(s, args, work)?,
-        Value::Array(a) => Value::Array(
-            a.iter()
-                .map(|c| subst_value(c, args, work))
-                .collect::<Result<_, _>>()?,
-        ),
-        Value::Object(m) => {
-            work.charge(2)?;
-            let mut out = Map::new();
-            for (k, c) in m {
-                let key = as_text(&subst(k, args, work)?);
-                out.insert(key, subst_value(c, args, work)?);
-            }
-            Value::Object(out)
-        }
-        other => {
-            work.charge(4)?;
-            other.clone()
-        }
-    })
 }
 
 impl Expander<'_> {

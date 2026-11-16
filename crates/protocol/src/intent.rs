@@ -36,6 +36,16 @@ pub enum ActionIntent {
     },
     #[serde(rename = "action.navigation.back")]
     NavigateBack,
+    /// Back to the nearest entry of the back stack with this edge key
+    /// (feature `navigate_pop_to`, decision `content-addressed-construct`):
+    /// every entry above it closes, each with its own transition. Nothing
+    /// when no entry has that key.
+    #[serde(rename = "action.navigation.pop_to")]
+    NavigatePopTo { edge: String },
+    /// Back to the root (home), every presented entry closing (feature
+    /// `navigate_pop_to`).
+    #[serde(rename = "action.navigation.pop_to_root")]
+    NavigatePopToRoot,
 
     #[serde(rename = "action.mutation.optimistic")]
     OptimisticMutate {

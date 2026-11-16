@@ -3,6 +3,7 @@
 //! scoped credential (only `/v1/mcp`), every tool against a pod with the
 //! made-up test recipes, and that rotation keeps and revocation ends the connection.
 
+mod construct;
 mod previews;
 
 use std::sync::Arc;
