@@ -137,6 +137,8 @@ construct) back to an earlier element.
 - On a switched pod, Collections' `apply_change` can't edit layouts along with a collection (`409
   construct_switched`), and a collection change isn't checked against the construct's layouts as it is against the
   old ones.
+- An installed client from before issue #126 (one that doesn't draw `page`) can't draw a switched pod's layouts: the
+  construct serves plumbing only.
 - A notification that names a layout home doesn't reach can't be opened on a new client of a switched pod (it has no
   edge to resolve).
 - Not yet: `bind` and `$in` on layout edges (a layout still reads home's feeds directly), scroll anchors kept as an
