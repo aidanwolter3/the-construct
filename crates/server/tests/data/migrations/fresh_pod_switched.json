@@ -1,0 +1,487 @@
+{
+  "@core/agents": {
+    "history": [
+      {
+        "author": "pod",
+        "note": "Blueprint agents version 6: A run that timed out has Continue (a new run carries it on); Follow up reopens a schedule's run too",
+        "seq": 5
+      },
+      {
+        "author": "pod",
+        "note": "Blueprint agents version 5: CAP v3: parked, stalled and waiting-on-CI/review/deploy runs, queue reasons, troubled sandboxes with Repair, and the pod's own schedules with an editor",
+        "seq": 4
+      },
+      {
+        "author": "pod",
+        "note": "Blueprint agents version 4: Mark reviewed on a run's screen: a run that needs review reads Reviewed on this pod",
+        "seq": 3
+      },
+      {
+        "author": "pod",
+        "note": "Blueprint agents version 3: Runs (CAP v2): what a run needs from you, its outcome, an asleep sandbox, Stop and a follow-up (Reopen) on a run's screen",
+        "seq": 2
+      },
+      {
+        "author": "pod",
+        "note": "Blueprint agents version 1: First version: sessions, schedules, sandboxes and checks of an agent runner, with its sign-in",
+        "seq": 1
+      }
+    ]
+  },
+  "@core/author_header": {
+    "history": [
+      {
+        "author": "pod",
+        "note": "Converted from core:author_header version 1",
+        "seq": 1
+      }
+    ]
+  },
+  "@core/back_button": {
+    "history": [
+      {
+        "author": "pod",
+        "note": "Converted from core:back_button version 1",
+        "seq": 1
+      }
+    ]
+  },
+  "@core/card": {
+    "history": [
+      {
+        "author": "pod",
+        "note": "Converted from core:card version 3",
+        "seq": 1
+      }
+    ]
+  },
+  "@core/chevron_card": {
+    "history": [
+      {
+        "author": "pod",
+        "note": "Converted from core:chevron_card version 1",
+        "seq": 1
+      }
+    ]
+  },
+  "@core/divided_item": {
+    "history": [
+      {
+        "author": "pod",
+        "note": "Converted from core:divided_item version 1",
+        "seq": 1
+      }
+    ]
+  },
+  "@core/dot": {
+    "history": [
+      {
+        "author": "pod",
+        "note": "Converted from core:dot version 1",
+        "seq": 1
+      }
+    ]
+  },
+  "@core/events": {
+    "history": [
+      {
+        "author": "pod",
+        "note": "Blueprint events version 3: Theme colours instead of fixed ones, so it follows dark mode",
+        "seq": 3
+      },
+      {
+        "author": "pod",
+        "note": "Blueprint events version 2: Same layout, written with components: core:card, core:pill, core:warning_chip, core:section_header, core:link_button",
+        "seq": 2
+      },
+      {
+        "author": "pod",
+        "note": "Blueprint events version 1: The app's new id: events (was watcher)",
+        "seq": 1
+      }
+    ]
+  },
+  "@core/filled_card": {
+    "history": [
+      {
+        "author": "pod",
+        "note": "Converted from core:filled_card version 1",
+        "seq": 1
+      }
+    ]
+  },
+  "@core/footer_bar": {
+    "history": [
+      {
+        "author": "pod",
+        "note": "Converted from core:footer_bar version 1",
+        "seq": 1
+      }
+    ]
+  },
+  "@core/header_bar": {
+    "history": [
+      {
+        "author": "pod",
+        "note": "Converted from core:header_bar version 1",
+        "seq": 1
+      }
+    ]
+  },
+  "@core/inbox": {
+    "history": [
+      {
+        "author": "pod",
+        "note": "Blueprint inbox version 4: Theme colours instead of fixed ones, so it follows dark mode",
+        "seq": 3
+      },
+      {
+        "author": "pod",
+        "note": "Blueprint inbox version 3: Load older (feature device_inbox_paging): a button under the list while the inbox has more",
+        "seq": 2
+      },
+      {
+        "author": "pod",
+        "note": "Blueprint inbox version 1: The inbox as a layout: every notification, newest first, by day",
+        "seq": 1
+      }
+    ]
+  },
+  "@core/labeled_text": {
+    "history": [
+      {
+        "author": "pod",
+        "note": "Converted from core:labeled_text version 1",
+        "seq": 1
+      }
+    ]
+  },
+  "@core/link_button": {
+    "history": [
+      {
+        "author": "pod",
+        "note": "Converted from core:link_button version 1",
+        "seq": 1
+      }
+    ]
+  },
+  "@core/list_row": {
+    "history": [
+      {
+        "author": "pod",
+        "note": "Converted from core:list_row version 1",
+        "seq": 1
+      }
+    ]
+  },
+  "@core/message_page": {
+    "history": [
+      {
+        "author": "pod",
+        "note": "Converted from core:message_page version 2",
+        "seq": 1
+      }
+    ]
+  },
+  "@core/page_header": {
+    "history": [
+      {
+        "author": "pod",
+        "note": "Converted from core:page_header version 1",
+        "seq": 1
+      }
+    ]
+  },
+  "@core/pill": {
+    "history": [
+      {
+        "author": "pod",
+        "note": "Converted from core:pill version 3",
+        "seq": 1
+      }
+    ]
+  },
+  "@core/pixelfed": {
+    "history": [
+      {
+        "author": "pod",
+        "note": "Blueprint pixelfed version 4: Theme colours instead of fixed ones, so it follows dark mode",
+        "seq": 3
+      },
+      {
+        "author": "pod",
+        "note": "Blueprint pixelfed version 3: Same layout: the post, comments and comment_thread screens share core:pixelfed_post and core:pixelfed_comment_box",
+        "seq": 2
+      },
+      {
+        "author": "pod",
+        "note": "Blueprint pixelfed version 1: The app's new id: pixelfed (was pixelfed)",
+        "seq": 1
+      }
+    ]
+  },
+  "@core/pixelfed_comment_box": {
+    "history": [
+      {
+        "author": "pod",
+        "note": "Converted from core:pixelfed_comment_box version 1",
+        "seq": 1
+      }
+    ]
+  },
+  "@core/pixelfed_post": {
+    "history": [
+      {
+        "author": "pod",
+        "note": "Converted from core:pixelfed_post version 2",
+        "seq": 1
+      }
+    ]
+  },
+  "@core/pixelfed_sample_no_login": {
+    "history": [
+      {
+        "author": "pod",
+        "note": "Blueprint pixelfed_sample_no_login version 2: A comments screen for the post's comment button, which linked to a route the sample didn't define",
+        "seq": 2
+      },
+      {
+        "author": "pod",
+        "note": "Blueprint pixelfed_sample_no_login version 1: The app's new id: pixelfed_sample_no_login (was pixelfed_sample_no_login)",
+        "seq": 1
+      }
+    ]
+  },
+  "@core/pixelfed_sign_in": {
+    "history": [
+      {
+        "author": "pod",
+        "note": "Converted from core:pixelfed_sign_in version 1",
+        "seq": 1
+      }
+    ]
+  },
+  "@core/recipes": {
+    "history": [
+      {
+        "author": "pod",
+        "note": "Blueprint recipes version 3: Theme colours instead of fixed ones, so it follows dark mode",
+        "seq": 2
+      },
+      {
+        "author": "pod",
+        "note": "Blueprint recipes version 1: Recipes: the search box and category chips stay pinned at the top while the list scrolls (core://Sticky, schema 11)",
+        "seq": 1
+      }
+    ]
+  },
+  "@core/screen": {
+    "history": [
+      {
+        "author": "pod",
+        "note": "Converted from core:screen version 2",
+        "seq": 1
+      }
+    ]
+  },
+  "@core/scroll_page": {
+    "history": [
+      {
+        "author": "pod",
+        "note": "Converted from core:scroll_page version 1",
+        "seq": 1
+      }
+    ]
+  },
+  "@core/section_header": {
+    "history": [
+      {
+        "author": "pod",
+        "note": "Converted from core:section_header version 1",
+        "seq": 1
+      }
+    ]
+  },
+  "@core/settings": {
+    "history": [
+      {
+        "author": "pod",
+        "note": "Blueprint settings version 7: Jacks: see what the pod is plugged into, plug in a search provider and its key (typed into a hidden field, feature text_field_secret), unplug",
+        "seq": 4
+      },
+      {
+        "author": "pod",
+        "note": "Blueprint settings version 5: Sign out and Leave pod ask first (action.confirm)",
+        "seq": 3
+      },
+      {
+        "author": "pod",
+        "note": "Blueprint settings version 3: Notifications: one row per app, each opening that app's switches; no server picker (Leave pod stays)",
+        "seq": 2
+      },
+      {
+        "author": "pod",
+        "note": "Blueprint settings version 1: Settings as a layout: connection, your layouts and their versions, sign-ins, notifications, server, leaving the pod",
+        "seq": 1
+      }
+    ]
+  },
+  "@core/shell": {
+    "history": [
+      {
+        "author": "pod",
+        "note": "Blueprint shell version 3: Same layout, written with a component: core:message_page",
+        "seq": 3
+      },
+      {
+        "author": "pod",
+        "note": "Blueprint shell version 2: The blank page, with Notifications and Settings at the top right (they are layouts now)",
+        "seq": 2
+      },
+      {
+        "author": "pod",
+        "note": "Blueprint shell version 1: A blank page: the pod owner asks their agent to build everything, the home screen included",
+        "seq": 1
+      }
+    ]
+  },
+  "@core/stat": {
+    "history": [
+      {
+        "author": "pod",
+        "note": "Converted from core:stat version 1",
+        "seq": 1
+      }
+    ]
+  },
+  "@core/toggle_action": {
+    "history": [
+      {
+        "author": "pod",
+        "note": "Converted from core:toggle_action version 1",
+        "seq": 1
+      }
+    ]
+  },
+  "@core/warning_chip": {
+    "history": [
+      {
+        "author": "pod",
+        "note": "Converted from core:warning_chip version 1",
+        "seq": 1
+      }
+    ]
+  },
+  "@core/workspace": {
+    "history": [
+      {
+        "author": "pod",
+        "note": "Converted from core:workspace version 1",
+        "seq": 1
+      }
+    ]
+  },
+  "home": {
+    "edges": [
+      "inbox",
+      "settings"
+    ],
+    "element": {
+      "bind": {
+        "feeds": []
+      },
+      "icon": "dashboard",
+      "kind": "element",
+      "node": {
+        "id": "home",
+        "ref": {
+          "name": "@core/shell",
+          "pin": false
+        },
+        "type": "core://Use"
+      },
+      "title": "Home"
+    },
+    "history": [
+      {
+        "author": "pod",
+        "note": "Converted from layout home version 1",
+        "seq": 1
+      }
+    ],
+    "materialized": {
+      "id": "home",
+      "root": {
+        "children": [
+          {
+            "content": {
+              "content_description": "Back",
+              "icon": "arrow_back",
+              "on_click": {
+                "intent": "action.navigation.back"
+              },
+              "tag": "layout-back",
+              "type": "core://IconButton"
+            },
+            "type": "core://Conditional",
+            "value": "${local://nav#pushed}"
+          },
+          {
+            "align": "Center",
+            "background": "${local://theme#page}",
+            "content": {
+              "align": "Center",
+              "children": [
+                {
+                  "style": "Display",
+                  "type": "core://Text",
+                  "value_expr": "The Construct"
+                },
+                {
+                  "style": "Secondary",
+                  "type": "core://Text",
+                  "value_expr": "Ask your agent to build anything"
+                },
+                {
+                  "align": "Center",
+                  "children": [
+                    {
+                      "content_description": "Notifications",
+                      "icon": "notifications",
+                      "on_click": {
+                        "intent": "action.navigation.open",
+                        "layout": "inbox",
+                        "presentation": "Sheet"
+                      },
+                      "type": "core://IconButton"
+                    },
+                    {
+                      "content_description": "Settings",
+                      "icon": "settings",
+                      "on_click": {
+                        "intent": "action.navigation.open",
+                        "layout": "settings",
+                        "presentation": "Panel"
+                      },
+                      "type": "core://IconButton"
+                    }
+                  ],
+                  "spacing_dp": 8,
+                  "type": "core://Row"
+                }
+              ],
+              "spacing_dp": 8,
+              "type": "core://Column"
+            },
+            "fill": true,
+            "padding_h_dp": 24,
+            "type": "core://Box"
+          }
+        ],
+        "type": "core://Column"
+      },
+      "title": "The Construct",
+      "type": "core://Page"
+    }
+  }
+}

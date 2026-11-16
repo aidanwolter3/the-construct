@@ -15,6 +15,8 @@ use server::{AppState, PixelfedConfig};
 use sha2::{Digest, Sha256};
 use tokio::task::JoinHandle;
 
+mod migrations;
+
 const SEED: &str = "seed-token";
 const REDIRECT: &str = "http://127.0.0.1:9/callback";
 const CAROUSEL: &str = "781254316723458049";
@@ -27,6 +29,10 @@ struct Server {
     handle: JoinHandle<()>,
     /// The fake upstream's state (test hooks); None for the pod.
     fake: Option<Arc<fake_pixelfed::AppState>>,
+    /// The pod's state; None for the fake upstream.
+    pod: Option<Arc<AppState>>,
+    /// The pod's layout of the pixelfed blueprint, made on first use.
+    layout: tokio::sync::OnceCell<String>,
 }
 
 impl Drop for Server {
@@ -45,6 +51,8 @@ async fn serve(router: axum::Router) -> Server {
         url,
         handle,
         fake: None,
+        pod: None,
+        layout: Default::default(),
     }
 }
 
@@ -74,11 +82,16 @@ async fn spawn_fake_with(mastodon_threads: bool) -> Server {
         url,
         handle,
         fake: Some(state),
+        pod: None,
+        layout: Default::default(),
     }
 }
 
 async fn spawn_pod(state: AppState) -> Server {
-    serve(server::app(Arc::new(state))).await
+    let state = Arc::new(state);
+    let mut server = serve(server::app(state.clone())).await;
+    server.pod = Some(state);
+    server
 }
 
 /// A URL nothing listens on.
@@ -125,14 +138,50 @@ async fn post_json(url: &str, bearer: Option<&str>, body: Value) -> (StatusCode,
     (status, resp.json().await.unwrap_or(Value::Null))
 }
 
-async fn get_home(pod: &str, bearer: Option<&str>) -> (StatusCode, Value) {
+async fn get_home(pod: &Server, bearer: Option<&str>) -> (StatusCode, Value) {
     let (status, _, body) = get_home_full(pod, bearer).await;
     (status, body)
 }
 
 /// Like [`get_home`], plus the `X-Construct-Session` response header.
-async fn get_home_full(pod: &str, bearer: Option<&str>) -> (StatusCode, Option<String>, Value) {
-    let mut req = client().get(format!("{pod}/v1/workspaces/pixelfed"));
+async fn get_home_full(pod: &Server, bearer: Option<&str>) -> (StatusCode, Option<String>, Value) {
+    get_layout(pod, bearer, &[]).await
+}
+
+/// The pixelfed blueprint as a layout of the pod (`core://Use` of
+/// `@core/pixelfed`, home binding its feed), drawn as a device of the
+/// construct draws it: its element by name, materialized, and its data
+/// (`GET /v1/construct/data/<element>`) with `bearer` and `headers`.
+/// `{version, workspace, entities, queries}` (the data's own body when it
+/// is refused), plus the `X-Construct-Session` response header.
+async fn get_layout(
+    pod: &Server,
+    bearer: Option<&str>,
+    headers: &[(&str, &str)],
+) -> (StatusCode, Option<String>, Value) {
+    let state = pod.pod.as_ref().expect("a pod");
+    let id = pod
+        .layout
+        .get_or_init(|| pod_core::testing::use_blueprint(state, "pixelfed"))
+        .await;
+    let router = server::app(state.clone());
+    let (status, named) = pod_core::testing::layout_for(&router, id, None).await;
+    assert_eq!(status, StatusCode::OK, "{named}");
+    let name: Value = client()
+        .get(format!("{}/v1/construct/names/{id}", pod.url))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let el = name["el"].as_str().unwrap();
+    let mut req = client()
+        .get(format!("{}/v1/construct/data/{el}", pod.url))
+        .header(protocol::FEATURES_HEADER, protocol::features_header());
+    for (k, v) in headers {
+        req = req.header(*k, *v);
+    }
     if let Some(t) = bearer {
         req = req.bearer_auth(t);
     }
@@ -141,7 +190,29 @@ async fn get_home_full(pod: &str, bearer: Option<&str>) -> (StatusCode, Option<S
         .headers()
         .get("x-construct-session")
         .map(|v| v.to_str().unwrap().to_owned());
-    (resp.status(), session, resp.json().await.unwrap())
+    let status = resp.status();
+    let data: Value = resp.json().await.unwrap();
+    if !status.is_success() {
+        return (status, session, data);
+    }
+    let body = json!({
+        "version": named["version"],
+        "workspace": named["workspace"],
+        "entities": data["entities"],
+        "queries": data["queries"],
+    });
+    (status, session, body)
+}
+
+/// Whether the data says the caller is signed in to Pixelfed
+/// (`core://sources/pixelfed`), and holds no timeline when not.
+fn signed_in(spec: &WorkspaceSpec) -> bool {
+    let source = &spec.entities["core://sources/pixelfed"];
+    let signed_in = source.get_bool("signed_in") == Some(true);
+    if !signed_in {
+        assert!(!spec.queries.contains_key("timeline:home"));
+    }
+    signed_in
 }
 
 /// A real RFC 7636 verifier (64 unreserved chars) and its S256 challenge.
@@ -259,34 +330,6 @@ async fn upstream_status(env: &Env, id: &str) -> Value {
         .unwrap_or_else(|| panic!("status {id} not in the fake timeline"))
 }
 
-fn signed_out_button(spec: &WorkspaceSpec) -> (String, ActionIntent) {
-    let UiNode::Workspace {
-        id, title, slots, ..
-    } = &spec.workspace
-    else {
-        panic!("not a workspace");
-    };
-    assert_eq!(id, "pixelfed");
-    assert_eq!(title, "Pixelfed");
-    let UiNode::Container { children, .. } = &slots[0].content else {
-        panic!("signed-out slot is not a Container");
-    };
-    // The workspace title is the only "Pixelfed" heading (no duplicate Text).
-    assert!(
-        !children
-            .iter()
-            .any(|c| matches!(c, UiNode::Text { value_expr, .. } if value_expr == "Pixelfed")),
-        "duplicate Pixelfed title Text"
-    );
-    children
-        .iter()
-        .find_map(|c| match c {
-            UiNode::Button { label, on_click } => Some((label.clone(), on_click.clone())),
-            _ => None,
-        })
-        .expect("sign-in button")
-}
-
 #[tokio::test]
 async fn pixelfed_full_auth_flow_and_signed_in_feed() {
     let env = env().await;
@@ -300,16 +343,11 @@ async fn pixelfed_full_auth_flow_and_signed_in_feed() {
     assert_eq!(a1["client_id"], a2["client_id"]);
 
     // Feed fetched through a non-local Host (as the emulator does).
-    let resp = client()
-        .get(format!("{}/v1/workspaces/pixelfed", env.pod.url))
-        .header("host", "10.0.2.2:8080")
-        .header(protocol::FEATURES_HEADER, crate::workspace_features())
-        .bearer_auth(&session)
-        .send()
-        .await
-        .unwrap();
-    assert_eq!(resp.status(), StatusCode::OK);
-    let spec: WorkspaceSpec = resp.json().await.unwrap();
+    let (status, _, body) =
+        get_layout(&env.pod, Some(&session), &[("host", "10.0.2.2:8080")]).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert!(signed_in(&serde_json::from_value(body.clone()).unwrap()));
+    let spec: WorkspaceSpec = serde_json::from_value(body).unwrap();
     assert_eq!(spec.version, "1.0.0");
     let order = &spec.queries["timeline:home"];
     assert_eq!(order.len(), 5);
@@ -348,10 +386,11 @@ async fn pixelfed_full_auth_flow_and_signed_in_feed() {
 
     // The layout is generic: core://Lists of posts (one per row, and the
     // two-column cards, D48) whose buttons hold the actions.
-    let UiNode::Workspace { id, .. } = &spec.workspace else {
-        panic!("not a workspace");
+    // The layout's page (the blueprint's, under the layout's id).
+    let UiNode::Page { id, .. } = &spec.workspace else {
+        panic!("not a page: {:?}", spec.workspace);
     };
-    assert_eq!(id, "pixelfed");
+    assert_eq!(Some(id), env.pod.layout.get());
     let feeds: Vec<u16> = spec
         .workspace
         .walk()
@@ -418,35 +457,51 @@ async fn pixelfed_full_auth_flow_and_signed_in_feed() {
     );
 }
 
+/// The Pixelfed sign-in Settings offers (`GET /v1/auth/sign-ins`).
+async fn pixelfed_provider(pod: &Server, bearer: Option<&str>) -> Value {
+    let mut req = client().get(format!("{}/v1/auth/sign-ins", pod.url));
+    if let Some(t) = bearer {
+        req = req.bearer_auth(t);
+    }
+    let body: Value = req.send().await.unwrap().json().await.unwrap();
+    body["providers"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|p| p["id"] == server::pixelfed::SIGN_IN)
+        .unwrap_or_else(|| panic!("no pixelfed provider in {body}"))
+        .clone()
+}
+
 #[tokio::test]
 async fn pixelfed_signed_out_without_valid_session() {
     let env = env().await;
-    // No bearer: 200. A bearer that is not a session: 401 + `X-Construct-Session: invalid`, so the
-    // client learns its session is stale; the body is the same signed-out bundle either way.
-    for (bearer, want_status, want_header) in [
-        (None, StatusCode::OK, None),
-        (
-            Some("not-a-session"),
-            StatusCode::UNAUTHORIZED,
-            Some("invalid"),
-        ),
-    ] {
-        let (status, header, body) = get_home_full(&env.pod.url, bearer).await;
-        assert_eq!(status, want_status);
-        assert_eq!(header.as_deref(), want_header);
-        let spec: WorkspaceSpec = serde_json::from_value(body).unwrap();
-        assert!(spec.entities.is_empty() && spec.queries.is_empty());
-        let (label, intent) = signed_out_button(&spec);
-        assert_eq!(label, "Sign in with Pixelfed");
-        assert_eq!(
-            intent,
-            ActionIntent::AuthLogin {
-                instance_url: env.fake.url.clone(),
-                app_path: "/v1/auth/pixelfed/app".into(),
-                token_path: "/v1/auth/pixelfed/token".into(),
-            }
-        );
-    }
+    // No bearer: the layout's data says Pixelfed is signed out and holds
+    // no timeline.
+    let (status, header, body) = get_home_full(&env.pod, None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(header, None);
+    let spec: WorkspaceSpec = serde_json::from_value(body).unwrap();
+    assert!(!signed_in(&spec));
+    assert!(!spec.entities.keys().any(|k| k.starts_with("pixelfed://")));
+    // A bearer that is not a session: 401 + `X-Construct-Session: invalid`,
+    // so the client learns its session is stale.
+    let (status, header, body) = get_home_full(&env.pod, Some("not-a-session")).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    assert_eq!(header.as_deref(), Some("invalid"));
+    assert_eq!(body["error"], "unauthorized");
+    // Settings offers the sign-in.
+    let provider = pixelfed_provider(&env.pod, None).await;
+    assert_eq!(provider["signed_in"], false);
+    let intent: ActionIntent = serde_json::from_value(provider["intent"].clone()).unwrap();
+    assert_eq!(
+        intent,
+        ActionIntent::AuthLogin {
+            instance_url: env.fake.url.clone(),
+            app_path: "/v1/auth/pixelfed/app".into(),
+            token_path: "/v1/auth/pixelfed/token".into(),
+        }
+    );
 }
 
 #[tokio::test]
@@ -495,7 +550,7 @@ async fn like_and_unlike_reach_the_upstream() {
     assert_eq!(body["like_count"], 319);
 
     // The next feed reflects upstream state.
-    let (_, home) = get_home(&env.pod.url, Some(&session)).await;
+    let (_, home) = get_home(&env.pod, Some(&session)).await;
     assert_eq!(
         home["entities"][format!("pixelfed://posts/{REBLOG_INNER}")]["is_liked"],
         true
@@ -579,15 +634,13 @@ async fn logout_ends_the_session() {
     assert_eq!(body["ok"], true);
     let (status, _) = post_json(&logout, Some(&session), json!({})).await;
     assert_eq!(status, StatusCode::UNAUTHORIZED);
-    let (status, header, home) = get_home_full(&env.pod.url, Some(&session)).await;
+    let (status, header, _) = get_home_full(&env.pod, Some(&session)).await;
     assert_eq!(status, StatusCode::UNAUTHORIZED);
     assert_eq!(header.as_deref(), Some("invalid"));
-    let spec: WorkspaceSpec = serde_json::from_value(home).unwrap();
-    signed_out_button(&spec);
-    // Without the stale bearer: the plain 200 signed-out bundle.
-    let (status, home) = get_home(&env.pod.url, None).await;
+    // Without the stale bearer: Pixelfed signed out, no timeline.
+    let (status, home) = get_home(&env.pod, None).await;
     assert_eq!(status, StatusCode::OK);
-    signed_out_button(&serde_json::from_value(home).unwrap());
+    assert!(!signed_in(&serde_json::from_value(home).unwrap()));
 }
 
 #[tokio::test]
@@ -674,9 +727,14 @@ fn seeded_state(instance: &str, upstream_token: &str) -> AppState {
 async fn upstream_down_is_502() {
     let (dead, _held) = dead_url().await;
     let pod = spawn_pod(seeded_state(&dead, SEED)).await;
-    let (status, body) = get_home(&pod.url, Some("tok")).await;
-    assert_eq!(status, StatusCode::BAD_GATEWAY);
-    assert_eq!(body["error"], "upstream_unreachable");
+    // The layout's data comes without the feed, its source marked failing.
+    let (status, body) = get_home(&pod, Some("tok")).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(
+        body["entities"]["core://sources/pixelfed"]["error"],
+        "error 502"
+    );
+    assert!(body["queries"].get("timeline:home").is_none());
     let (status, _) = post_json(
         &format!("{}/v1/pixelfed/posts/like", pod.url),
         Some("tok"),
@@ -697,11 +755,9 @@ async fn upstream_down_is_502() {
 async fn upstream_401_means_signed_out() {
     let fake = spawn_fake().await;
     let pod = spawn_pod(seeded_state(&fake.url, "revoked-token")).await;
-    let (status, header, body) = get_home_full(&pod.url, Some("tok")).await;
+    let (status, header, _) = get_home_full(&pod, Some("tok")).await;
     assert_eq!(status, StatusCode::UNAUTHORIZED);
     assert_eq!(header.as_deref(), Some("invalid"));
-    let spec: WorkspaceSpec = serde_json::from_value(body).unwrap();
-    signed_out_button(&spec);
     // The dead upstream token was dropped, so actions now need a sign-in:
     // 403 for the (still valid) pod session, which the client keeps (D46).
     let (status, body) = post_json(
@@ -718,7 +774,7 @@ async fn upstream_401_means_signed_out() {
 async fn upstream_seeded_token_serves_feed() {
     let fake = spawn_fake().await;
     let pod = spawn_pod(seeded_state(&fake.url, SEED)).await;
-    let (status, body) = get_home(&pod.url, Some("tok")).await;
+    let (status, body) = get_home(&pod, Some("tok")).await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(
         body["queries"]["timeline:home"].as_array().unwrap().len(),
@@ -727,66 +783,10 @@ async fn upstream_seeded_token_serves_feed() {
 }
 
 #[tokio::test]
-async fn signed_in_feed_layout_is_versioned_signed_out_is_not() {
-    let fake = spawn_fake().await;
-    let state = Arc::new(seeded_state(&fake.url, SEED));
-    let pod = serve(server::app(state.clone())).await;
-    let version = |resp: &reqwest::Response| {
-        resp.headers()
-            .get("x-construct-layout-version")
-            .map(|v| v.to_str().unwrap().to_owned())
-    };
-    let url = format!("{}/v1/workspaces/pixelfed", pod.url);
-    let resp = client().get(&url).bearer_auth("tok").send().await.unwrap();
-    assert_eq!(resp.status(), StatusCode::OK);
-    // No features header (a tool, not a client): the latest version (a new
-    // pod has one per file in the build, decision `retired-layout-files`).
-    let newest = server::layout_files()
-        .iter()
-        .filter(|f| f.app_id == "pixelfed")
-        .count();
-    assert_eq!(version(&resp), Some(newest.to_string()));
-    let resp = client()
-        .get(&url)
-        .bearer_auth("tok")
-        .header(protocol::FEATURES_HEADER, crate::workspace_features())
-        .send()
-        .await
-        .unwrap();
-    // A current client: the same.
-    assert_eq!(version(&resp), Some(newest.to_string()));
-    let spec: WorkspaceSpec = resp.json().await.unwrap();
-    assert!(matches!(&spec.workspace, UiNode::Workspace { screens, .. } if screens.len() == 4));
-    // A newer version replaces the feed layout; entities still come upstream.
-    let mut node = server::layouts::builtin(&server::catalog(), "pixelfed").unwrap();
-    if let UiNode::Workspace { title, .. } = &mut node {
-        *title = "Custom".into();
-    }
-    server::layouts::append_version(state.store(), "pixelfed", &node, None).unwrap();
-    let resp = client().get(&url).bearer_auth("tok").send().await.unwrap();
-    assert_eq!(version(&resp), Some((newest + 1).to_string()));
-    let spec: WorkspaceSpec = resp.json().await.unwrap();
-    assert_eq!(spec.workspace, node);
-    assert_eq!(spec.queries["timeline:home"].len(), 5);
-    // Signed out (no bearer, or a stale one): unversioned.
-    let resp = client().get(&url).send().await.unwrap();
-    assert_eq!(resp.status(), StatusCode::OK);
-    assert_eq!(version(&resp), None);
-    let resp = client()
-        .get(&url)
-        .bearer_auth("stale")
-        .send()
-        .await
-        .unwrap();
-    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
-    assert_eq!(version(&resp), None);
-}
-
-#[tokio::test]
 async fn media_proxy_streams_png() {
     let env = env().await;
     let session = sign_in(&env).await;
-    let (_, home) = get_home(&env.pod.url, Some(&session)).await;
+    let (_, home) = get_home(&env.pod, Some(&session)).await;
     let url = home["entities"]["pixelfed://media/781254316501123073"]["url"]
         .as_str()
         .unwrap()
@@ -917,66 +917,6 @@ async fn session_tokens_are_stored_hashed() {
     );
 }
 
-/// Staging's upgrade (D40): a database from before sign-ins existed (v10, a
-/// signed-in session) keeps its session signed in to Pixelfed after v11.
-#[tokio::test]
-async fn a_session_from_before_v11_stays_signed_in() {
-    let dir = tempfile::tempdir().unwrap();
-    let env = env_with(server::open_dir(dir.path()).unwrap()).await;
-    let session = sign_in(&env).await;
-    env.pod.handle.abort();
-    {
-        // Back to the v10 shape: no sign-in rows, no adapter versions, no
-        // migration names, and none of the tables adapters added later.
-        let conn = rusqlite::Connection::open(dir.path().join("server.db")).unwrap();
-        conn.execute_batch(
-            "DROP TABLE session_sign_ins; DROP TABLE adapter_migrations; DROP TABLE schema_migrations;
-             ALTER TABLE sessions DROP COLUMN pinned; ALTER TABLE app_versions DROP COLUMN features;
-             ALTER TABLE app_versions DROP COLUMN author;
-             ALTER TABLE app_versions DROP COLUMN meta_json;
-             ALTER TABLE pixelfed_clients RENAME TO pixelfed_apps; PRAGMA user_version = 10;",
-        )
-        .unwrap();
-        let later: Vec<String> = conn
-            .prepare(
-                "SELECT name FROM sqlite_master WHERE type = 'table'
-                 AND (name LIKE 'recipes%' OR name LIKE 'collections%' OR name LIKE 'agents%' OR name IN ('pixelfed_session_instance', 'pixelfed_pending_posts'))
-                 OR (type = 'table' AND name IN ('pod_settings', 'uploads', 'notifications',
-                     'notification_polls', 'devices', 'device_channel_prefs',
-                     'pixelfed_notify_cursor', 'custom_apps', 'components', 'jacks', 'agent_usage',
-                     'mcp_servers'))",
-            )
-            .unwrap()
-            .query_map([], |r| r.get(0))
-            .unwrap()
-            .collect::<Result<_, _>>()
-            .unwrap();
-        conn.execute_batch("PRAGMA foreign_keys = OFF").unwrap();
-        for t in later {
-            conn.execute_batch(&format!("DROP TABLE {t}")).unwrap();
-        }
-    }
-    let state = server::open_dir(dir.path())
-        .unwrap()
-        .with_pixelfed(PixelfedConfig::new(&env.fake.url, None));
-    assert_eq!(
-        state
-            .store()
-            .session_sign_ins(&server::session::session_hash(&session))
-            .unwrap(),
-        [server::pixelfed::SIGN_IN]
-    );
-    let pod = spawn_pod(state).await;
-    let (status, body) = get_home(&pod.url, Some(&session)).await;
-    assert_eq!(status, StatusCode::OK, "{body}");
-    assert!(
-        !body["queries"]["timeline:home"]
-            .as_array()
-            .unwrap()
-            .is_empty()
-    );
-}
-
 /// Staging's upgrade to sealed credentials: a sign-in stored in plaintext
 /// (no `CONSTRUCT_SECRETS_KEY`) is sealed when the pod opens with a key and
 /// keeps working; new sign-ins are sealed; the file is private.
@@ -1018,7 +958,7 @@ async fn plaintext_credentials_are_sealed_when_a_key_is_set() {
         .unwrap();
     assert!(Secrets::is_sealed(&secret));
     let pod = spawn_pod(state).await;
-    let (status, body) = get_home(&pod.url, Some(&session)).await;
+    let (status, body) = get_home(&pod, Some(&session)).await;
     assert_eq!(status, StatusCode::OK, "{body}");
     assert!(
         !body["queries"]["timeline:home"]
@@ -1056,7 +996,7 @@ async fn signing_in_with_a_session_keeps_it() {
     let second = sign_in(&env).await;
     assert_ne!(second, first);
     for s in [&first, &second] {
-        assert_eq!(get_home(&env.pod.url, Some(s)).await.0, StatusCode::OK);
+        assert_eq!(get_home(&env.pod, Some(s)).await.0, StatusCode::OK);
     }
 }
 
@@ -1137,17 +1077,10 @@ async fn bad_code_verifier_is_oauth_exchange_failed() {
 #[tokio::test]
 async fn sample_ack_accepts_likes() {
     let pod = spawn_pod(server::state_in_memory()).await;
-    let demo: WorkspaceSpec = client()
-        .get(format!(
-            "{}/v1/workspaces/pixelfed_sample_no_login",
-            pod.url
-        ))
-        .send()
-        .await
-        .unwrap()
-        .json()
-        .await
-        .unwrap();
+    // The sample blueprint's newest element, as clients draw it.
+    let core = pod_core::construct::core::load(&server::catalog()).unwrap();
+    let el = core.current("@core/pixelfed_sample_no_login").unwrap();
+    let demo = construct_elements::materialize(&core, el).unwrap().node;
     let s = serde_json::to_string(&demo).unwrap();
     assert!(
         s.contains("\"endpoint\":\"/v1/pixelfed_sample_no_login/ack\""),
@@ -1180,7 +1113,7 @@ async fn home_feed_asks_upstream_for_reblogs() {
     assert!(plain.iter().all(|s| s["id"] != REBLOG_OUTER));
     // The pod sends include_reblogs=true, so its feed has the boost (as the inner post).
     let session = sign_in(&env).await;
-    let (status, home) = get_home(&env.pod.url, Some(&session)).await;
+    let (status, home) = get_home(&env.pod, Some(&session)).await;
     assert_eq!(status, StatusCode::OK);
     let order = home["queries"]["timeline:home"].as_array().unwrap();
     assert_eq!(order.len(), 5);
@@ -1216,8 +1149,8 @@ async fn expired_upstream_token_is_refreshed() {
     let fake = env.fake.fake.as_ref().unwrap();
     assert!(fake.expire_access_tokens() >= 1);
     let (a, b) = tokio::join!(
-        get_home(&env.pod.url, Some(&session)),
-        get_home(&env.pod.url, Some(&session))
+        get_home(&env.pod, Some(&session)),
+        get_home(&env.pod, Some(&session))
     );
     assert_eq!(a.0, StatusCode::OK, "{}", a.1);
     assert_eq!(b.0, StatusCode::OK, "{}", b.1);
@@ -1293,7 +1226,7 @@ async fn another_account_cannot_take_over_the_pod() {
     assert_eq!(body["error"], "account_not_owner");
     assert!(body.get("session_token").is_none());
     // The owner's stored account (and session) still work.
-    let (status, home) = get_home(&env.pod.url, Some("tok")).await;
+    let (status, home) = get_home(&env.pod, Some("tok")).await;
     assert_eq!(status, StatusCode::OK, "{home}");
     assert_eq!(
         home["queries"]["timeline:home"].as_array().unwrap().len(),
@@ -1308,7 +1241,7 @@ async fn the_owner_may_sign_in_again() {
     let s2 = sign_in(&env).await; // same account: fine
     assert_ne!(s1, s2);
     for s in [&s1, &s2] {
-        assert_eq!(get_home(&env.pod.url, Some(s)).await.0, StatusCode::OK);
+        assert_eq!(get_home(&env.pod, Some(s)).await.0, StatusCode::OK);
     }
 }
 
@@ -1359,10 +1292,7 @@ async fn sessions_expire_after_the_ttl() {
     let dir = tempfile::tempdir().unwrap();
     let env = env_with(server::open_dir(dir.path()).unwrap()).await;
     let session = sign_in(&env).await;
-    assert_eq!(
-        get_home(&env.pod.url, Some(&session)).await.0,
-        StatusCode::OK
-    );
+    assert_eq!(get_home(&env.pod, Some(&session)).await.0, StatusCode::OK);
     // Age the session past the default 90 days.
     let conn = rusqlite::Connection::open(dir.path().join("server.db")).unwrap();
     conn.execute(
@@ -1370,7 +1300,7 @@ async fn sessions_expire_after_the_ttl() {
         [],
     )
     .unwrap();
-    let (status, header, _) = get_home_full(&env.pod.url, Some(&session)).await;
+    let (status, header, _) = get_home_full(&env.pod, Some(&session)).await;
     assert_eq!(status, StatusCode::UNAUTHORIZED);
     assert_eq!(header.as_deref(), Some("invalid"));
     let (status, _) = post_json(
@@ -1498,10 +1428,7 @@ async fn stale_cached_app_is_re_registered() {
     assert_eq!(status, StatusCode::OK, "{a3}");
     assert_ne!(a3["client_id"], a1["client_id"]);
     let session = sign_in(&env).await;
-    assert_eq!(
-        get_home(&env.pod.url, Some(&session)).await.0,
-        StatusCode::OK
-    );
+    assert_eq!(get_home(&env.pod, Some(&session)).await.0, StatusCode::OK);
 }
 
 #[tokio::test]
@@ -1670,8 +1597,9 @@ async fn surviving_401_does_not_delete_a_replaced_account() {
         )
         .with_state(mock.clone());
     let _upstream = tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
-    let pod = serve(server::app(state.clone())).await;
-    let (status, header, _) = get_home_full(&pod.url, Some("tok")).await;
+    let mut pod = serve(server::app(state.clone())).await;
+    pod.pod = Some(state.clone());
+    let (status, header, _) = get_home_full(&pod, Some("tok")).await;
     assert_eq!(status, StatusCode::UNAUTHORIZED);
     assert_eq!(header.as_deref(), Some("invalid"));
     // tok-0 failed, the retry with tok-1 failed, but tok-2 was stored meanwhile: kept.
@@ -2014,7 +1942,7 @@ async fn posting_a_comment_reaches_the_upstream() {
         order.last().unwrap(),
         &json!(format!("pixelfed://comments/{new_id}"))
     );
-    let (_, home) = get_home(&env.pod.url, Some(&session)).await;
+    let (_, home) = get_home(&env.pod, Some(&session)).await;
     assert_eq!(
         home["entities"][format!("pixelfed://posts/{CAROUSEL}")]["reply_count"],
         5
@@ -2109,7 +2037,7 @@ async fn sessions_use_the_instance_they_signed_in_to() {
     let on_a = sign_in_at(&pod.url, &a.url).await;
     let on_b = sign_in_at(&pod.url, &b.url).await;
     for (session, fake) in [(&on_a, &a), (&on_b, &b)] {
-        let (status, feed) = get_home(&pod.url, Some(session)).await;
+        let (status, feed) = get_home(&pod, Some(session)).await;
         assert_eq!(status, StatusCode::OK, "{feed}");
         let url = carousel_url(&feed);
         assert!(url.starts_with(&fake.url), "{url} is not from {}", fake.url);
@@ -2127,43 +2055,30 @@ async fn sessions_use_the_instance_they_signed_in_to() {
 }
 
 #[tokio::test]
-async fn signed_out_screen_offers_a_server_box_only_when_allowed() {
+async fn the_sign_in_offers_a_server_box_only_when_allowed() {
     let fake = spawn_fake().await;
-    let children = |spec: &WorkspaceSpec| -> Vec<UiNode> {
-        let UiNode::Workspace { slots, .. } = &spec.workspace else {
-            panic!("not a workspace");
-        };
-        let UiNode::Container { children, .. } = &slots[0].content else {
-            panic!("signed-out slot is not a Container");
-        };
-        children.clone()
-    };
     let closed =
         spawn_pod(server::state_in_memory().with_pixelfed(PixelfedConfig::new(&fake.url, None)))
             .await;
-    let (_, body) = get_home(&closed.url, None).await;
-    let nodes = children(&serde_json::from_value(body).unwrap());
+    let provider = pixelfed_provider(&closed, None).await;
     assert!(
-        !nodes.iter().any(|c| matches!(c, UiNode::TextField { .. })),
-        "a pod for one instance has no server box"
+        provider.get("server_placeholder").is_none(),
+        "a pod for one instance has no server box: {provider}"
     );
     let open = spawn_pod(server::state_in_memory().with_pixelfed(PixelfedConfig {
         any_instance: true,
         ..PixelfedConfig::new(&fake.url, None)
     }))
     .await;
-    let (_, body) = get_home(&open.url, None).await;
-    let spec: WorkspaceSpec = serde_json::from_value(body).unwrap();
-    // The default button still comes first.
-    let (label, _) = signed_out_button(&spec);
-    assert_eq!(label, "Sign in with Pixelfed");
-    let nodes = children(&spec);
-    assert!(nodes.iter().any(|c| matches!(c,
-        UiNode::TextField { field, placeholder, .. }
-            if field == "instance" && placeholder.contains("pixelfed.social"))));
-    assert!(nodes.iter().any(|c| matches!(c,
-        UiNode::Button { on_click: ActionIntent::AuthLogin { instance_url, .. }, .. }
-            if instance_url == "$form.instance")));
+    let provider = pixelfed_provider(&open, None).await;
+    assert!(
+        provider["server_placeholder"]
+            .as_str()
+            .is_some_and(|p| p.contains("pixelfed.social")),
+        "{provider}"
+    );
+    // The default server is still the one the intent signs in to.
+    assert_eq!(provider["intent"]["instance_url"], fake.url.as_str());
 }
 
 /// D45: under `*` the pod accepts only public HTTPS names; private hosts,
@@ -2298,11 +2213,13 @@ async fn wait_for(what: &str, mut f: impl AsyncFnMut() -> bool) {
     }
 }
 
-/// The workspace's SSE stream, read in the background into a shared string.
-fn listen(pod: &str, session: &str) -> Arc<std::sync::Mutex<String>> {
+/// The construct's SSE stream, read in the background into a shared string
+/// (after the pixelfed layout is made, so home binds its feed).
+async fn listen(pod: &Server, session: &str) -> Arc<std::sync::Mutex<String>> {
+    get_home(pod, Some(session)).await;
     let seen = Arc::new(std::sync::Mutex::new(String::new()));
     let (url, session, out) = (
-        format!("{pod}/v1/workspaces/pixelfed/events"),
+        format!("{}/v1/construct/events", pod.url),
         session.to_owned(),
         seen.clone(),
     );
@@ -2323,7 +2240,7 @@ async fn posting_photos_reaches_pixelfed_and_the_feed() {
     let session = sign_in(&env).await;
     let fake = env.fake.fake.as_ref().unwrap();
     fake.set_media_processing_polls(2);
-    let events = listen(&env.pod.url, &session);
+    let events = listen(&env.pod, &session).await;
     let a = upload_png(&env.pod.url, &session, "photo-a").await;
     let b = upload_png(&env.pod.url, &session, "photo-b").await;
     let url = format!("{}/v1/pixelfed/posts/create", env.pod.url);
@@ -2334,7 +2251,7 @@ async fn posting_photos_reaches_pixelfed_and_the_feed() {
     assert_eq!(answer["id"], "pixelfed://posts/pending-post-nonce-01");
 
     // Right away the feed starts with the placeholder, its photos served by the pod.
-    let (_, home) = get_home(&env.pod.url, Some(&session)).await;
+    let (_, home) = get_home(&env.pod, Some(&session)).await;
     let first = home["queries"]["timeline:home"][0]
         .as_str()
         .unwrap()
@@ -2361,7 +2278,7 @@ async fn posting_photos_reaches_pixelfed_and_the_feed() {
     let upstream = upstream_status(&env, &id).await;
     assert_eq!(upstream["content_text"], "Hello there");
     assert_eq!(upstream["media_attachments"].as_array().unwrap().len(), 2);
-    let (_, home) = get_home(&env.pod.url, Some(&session)).await;
+    let (_, home) = get_home(&env.pod, Some(&session)).await;
     let order = home["queries"]["timeline:home"].as_array().unwrap();
     assert_eq!(order[0], json!(format!("pixelfed://posts/{id}")));
     assert!(
@@ -2437,11 +2354,11 @@ async fn refused_posts_can_be_retried_or_discarded() {
     assert_eq!(status, StatusCode::ACCEPTED);
     let pending = "pixelfed://posts/pending-nonce-0001";
     wait_for("the refusal", async || {
-        let (_, home) = get_home(&env.pod.url, Some(&session)).await;
+        let (_, home) = get_home(&env.pod, Some(&session)).await;
         home["entities"][pending]["failed"] == true
     })
     .await;
-    let (_, home) = get_home(&env.pod.url, Some(&session)).await;
+    let (_, home) = get_home(&env.pod, Some(&session)).await;
     assert!(
         home["entities"][pending]["error"]
             .as_str()
@@ -2450,7 +2367,7 @@ async fn refused_posts_can_be_retried_or_discarded() {
     );
     assert!(home["entities"][pending].get("pending_label").is_none());
     // Not in the other session's feed.
-    let (_, theirs_home) = get_home(&env.pod.url, Some(&other)).await;
+    let (_, theirs_home) = get_home(&env.pod, Some(&other)).await;
     assert!(theirs_home["entities"].get(pending).is_none());
 
     // Retry: posted (Pixelfed kept the uploaded media).
@@ -2474,7 +2391,7 @@ async fn refused_posts_can_be_retried_or_discarded() {
     .await;
     let pending = "pixelfed://posts/pending-nonce-0002";
     wait_for("the second refusal", async || {
-        let (_, home) = get_home(&env.pod.url, Some(&session)).await;
+        let (_, home) = get_home(&env.pod, Some(&session)).await;
         home["entities"][pending]["failed"] == true
     })
     .await;
@@ -2486,7 +2403,7 @@ async fn refused_posts_can_be_retried_or_discarded() {
     )
     .await;
     assert_eq!(status, StatusCode::OK);
-    let (_, home) = get_home(&env.pod.url, Some(&session)).await;
+    let (_, home) = get_home(&env.pod, Some(&session)).await;
     assert!(home["entities"].get(pending).is_none());
     let resp = client()
         .get(format!("{}/v1/uploads/{again}", env.pod.url))
@@ -2503,20 +2420,26 @@ async fn refused_posts_can_be_retried_or_discarded() {
     assert_eq!(status, StatusCode::NOT_FOUND);
 }
 
-/// Issue #135: the signed-out screen is the server component
-/// `core:pixelfed_sign_in` (shipped by the Pixelfed adapter), expanded by the
-/// pod into exactly the tree the adapter used to build in code, for every
-/// client (one that draws plumbing too: the workspace stays a workspace).
-#[tokio::test]
-async fn signed_out_screen_is_the_sign_in_component_expanded() {
-    let fake = spawn_fake().await;
-    let pod = spawn_pod(server::state_in_memory().with_pixelfed(PixelfedConfig {
+/// Issue #135: the signed-out screen (the body of a stale session's 401)
+/// uses the server component `core:pixelfed_sign_in` (shipped by the
+/// Pixelfed adapter), which this build expands into exactly the tree the
+/// adapter used to build in code.
+#[test]
+fn signed_out_screen_is_the_sign_in_component_expanded() {
+    let config = PixelfedConfig {
         any_instance: true,
-        ..PixelfedConfig::new(&fake.url, Some("http://pixelfed.example:8081"))
-    }))
-    .await;
-    let (status, body) = get_home(&pod.url, None).await;
-    assert_eq!(status, StatusCode::OK, "{body}");
+        ..PixelfedConfig::new(
+            "http://pixelfed.example:8081",
+            Some("http://pixelfed.example:8081"),
+        )
+    };
+    let screen = server::pixelfed::layout::signed_out(&config, "pixelfed", "Pixelfed");
+    let core = pod_core::construct::core::load(&server::catalog()).unwrap();
+    let drawn = pod_core::construct::core::plumbing(
+        &core,
+        &serde_json::to_value(&screen.workspace).unwrap(),
+    )
+    .unwrap();
     let login = |instance: &str| {
         json!({
             "intent": "action.auth.login",
@@ -2533,7 +2456,7 @@ async fn signed_out_screen_is_the_sign_in_component_expanded() {
             {"type": "core://Text", "style": "Body", "value_expr":
                 "Sign in to pixelfed.example:8081 to see your home feed. Your Pixelfed token stays on your pod."},
             {"type": "core://Button", "label": "Sign in with Pixelfed",
-             "on_click": login(fake.url.trim_end_matches('/'))},
+             "on_click": login("http://pixelfed.example:8081")},
             {"type": "core://Text", "style": "Body",
              "value_expr": "Or sign in to another Pixelfed server:"},
             {"type": "core://TextField", "field": "instance",
@@ -2542,24 +2465,13 @@ async fn signed_out_screen_is_the_sign_in_component_expanded() {
              "on_click": login("$form.instance")},
         ],
     });
-    assert_eq!(
-        body["workspace"],
-        json!({
-            "type": "core://Workspace",
-            "id": "pixelfed",
-            "title": "Pixelfed",
-            "slots": [{"slot_id": "auth", "provider_uri": "pixelfed://auth", "content": content}],
-        })
-    );
-
-    let resp = client()
-        .get(format!("{}/v1/workspaces/pixelfed", pod.url))
-        .header(protocol::FEATURES_HEADER, protocol::features_header())
-        .send()
-        .await
-        .unwrap();
-    assert_eq!(resp.status(), StatusCode::OK);
-    let body: Value = resp.json().await.unwrap();
-    assert_eq!(body["workspace"]["type"], "core://Workspace");
-    assert_eq!(body["workspace"]["slots"][0]["content"], content);
+    fn holds(v: &Value, want: &Value) -> bool {
+        v == want
+            || match v {
+                Value::Array(a) => a.iter().any(|c| holds(c, want)),
+                Value::Object(o) => o.values().any(|c| holds(c, want)),
+                _ => false,
+            }
+    }
+    assert!(holds(&drawn, &content), "{drawn:#}");
 }

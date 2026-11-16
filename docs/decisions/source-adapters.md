@@ -1,5 +1,7 @@
 # Adapters are sources: `source-*` crates and the `Source` trait
 
+Superseded in part by [one-layout-system](one-layout-system.md): the old names it kept (`app_id` on the wire, `unread_by_app`, `/v1/apps`, the old tables) are gone.
+
 Date: 2026-11-16. Related: D40, [layouts-not-apps](layouts-not-apps.md), [notification-owner](notification-owner.md),
 [named-migrations](named-migrations.md), [rename-apps-and-folders](rename-apps-and-folders.md). Issues #187, #295.
 

@@ -1,48 +1,30 @@
-//! Built-in parts (decision `layout-parts`): pieces of built-in apps that
-//! custom layouts reuse by reference, so they stay current.
-//!
-//! A built-in app's parts, per version: every screen (`screen:<id>`), every
-//! slot's content (`slot:<id>`), and the named parts its layout file declares
-//! (`"parts": {"post_card": <node>}`). A custom layout names one with a
-//! pod-only node, `{"type": "core://Ref", "app": "<built-in app>", "part":
-//! "<name>", "version"?: n}`: in `screens` a screen part, anywhere else a
-//! node part. Without `version` it follows the app: the pod expands it when
-//! serving, from the newest version of that app the client can draw, and a
-//! built-in deploy appends a `ref_update` version to the custom apps that
-//! reference it ([`crate::custom::ref_updates`]). Clients never see a ref;
-//! one that can't be expanded is served as a short "This part isn't
-//! available" text (a screen part is left out).
-//!
-//! The same expansion runs components (decision `plumbing-and-porcelain`,
-//! [`crate::components`]): `core://Use` names a component, `core:<app>`
-//! (a whole blueprint) or `core:<app>/<part>` (a part, as `core://Ref`
-//! does, which stays as an alias), with `args` and `children`.
+//! The old system's expansion of a stored layout (decision
+//! `layout-parts`, decision `plumbing-and-porcelain`), kept only for the
+//! dry run of a conversion: what a pod that wasn't switched drew before.
+//! `core://Use` names a component (`core:<name>`, `pod:<name>`, a version
+//! or the newest), a blueprint (`core:<app>`) or one of its parts
+//! (`core:<app>/<part>`, as `core://Ref {app, part}` does), all read from
+//! the old tables ([`super::tables::Old`]).
 
 use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 
 use serde_json::{Map, Value, json};
 
-use protocol::ClientCaps;
-
+use super::tables::Old;
 use crate::adapter::Catalog;
 use crate::components::{CHILDREN_TYPE, CORE, Def, FRAGMENT_TYPE, IF_ARG_TYPE, POD, USE_TYPE};
-use crate::store::Store;
 use crate::validate::LayoutError;
+use construct_elements::template::{
+    MAX_EXPANDED_BYTES, Work, as_text, subst, subst_value, truthy, weight,
+};
 
-/// The node type of a reference.
+/// The old reference node.
 pub const REF_TYPE: &str = "core://Ref";
-/// The part that is a blueprint's whole layout (decision
-/// `blueprints-and-home`): only a layout's root may reference it, and the
-/// expansion keeps the referencing app's own id.
+/// The part that is a blueprint's whole layout.
 pub const LAYOUT_PART: &str = "layout";
 /// Uses inside parts and components are expanded this deep at most.
 pub const MAX_DEPTH: usize = 8;
-/// Largest expansion served (a write is held to
-/// [`crate::validate::MAX_LAYOUT_BYTES`]) and the most work an expansion may
-/// do: shared with the construct's elements (`construct_elements::template`).
-pub use construct_elements::template::{MAX_EXPANDED_BYTES, MAX_EXPANSION_WORK};
-use construct_elements::template::{Work, as_text, subst, subst_value, truthy, weight};
 
 /// One built-in version's parts by name.
 #[derive(Debug, Clone, Default)]
@@ -102,88 +84,22 @@ fn as_ref(v: &Value) -> Option<PartRef> {
     }
 }
 
-/// A use of a component in a layout: `(name, pinned version)`.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ComponentUse {
-    pub name: String,
-    pub version: Option<i64>,
-}
-
-/// Every `core://Use` of a component in `doc` (blueprint uses included:
-/// `core:<app>` names may be either; see [`refs`]).
-pub fn uses(doc: &Value) -> Vec<ComponentUse> {
-    let mut out = Vec::new();
-    collect_uses(doc, &mut out);
-    out
-}
-
-fn collect_uses(v: &Value, out: &mut Vec<ComponentUse>) {
-    match v {
-        Value::Object(m) => {
-            if m.get("type").and_then(Value::as_str) == Some(USE_TYPE)
-                && let Some(name) = m.get("component").and_then(Value::as_str)
-            {
-                out.push(ComponentUse {
-                    name: name.to_owned(),
-                    version: m.get("version").and_then(Value::as_i64),
-                });
-            }
-            m.values().for_each(|c| collect_uses(c, out));
-        }
-        Value::Array(a) => a.iter().for_each(|c| collect_uses(c, out)),
-        _ => {}
-    }
-}
-
-/// Every reference in `doc`.
-pub fn refs(doc: &Value) -> Vec<PartRef> {
-    let mut out = Vec::new();
-    collect(doc, &mut out);
-    out
-}
-
-fn collect(v: &Value, out: &mut Vec<PartRef>) {
-    if let Some(r) = as_ref(v) {
-        out.push(r);
-        return;
-    }
-    match v {
-        Value::Object(m) => m.values().for_each(|c| collect(c, out)),
-        Value::Array(a) => a.iter().for_each(|c| collect(c, out)),
-        _ => {}
-    }
-}
-
 /// Whether `json` (a stored layout) may hold a reference or a component
 /// use (cheap check).
 pub fn may_hold_refs(json: &str) -> bool {
     json.contains(REF_TYPE) || json.contains(USE_TYPE)
 }
 
-/// A built-in version's parts: version `version`, else the newest one
-/// `client` can draw, else the latest. Blocking.
-pub fn load(
-    store: &Store,
-    app: &str,
-    version: Option<i64>,
-    client: Option<&ClientCaps>,
-) -> rusqlite::Result<Option<Parts>> {
-    let v = match (version, client) {
-        (Some(n), _) => store.app_version(app, n)?.map(|(v, _)| v),
-        (None, Some(s)) => crate::layouts::newest_compatible(store, app, s)?,
-        (None, None) => store.app_latest_meta(app)?,
-    };
-    let Some(v) = v else { return Ok(None) };
-    let Some((meta, json)) = store.app_version(app, v.version)? else {
-        return Ok(None);
-    };
-    let layout: Value = serde_json::from_str(&json).unwrap_or(Value::Null);
-    let declared: Option<Value> = meta
+/// A blueprint version's parts: version `version`, else its newest.
+pub fn parts(old: &Old, app: &str, version: Option<i64>) -> Option<Parts> {
+    let (n, v) = old.version(app, version)?;
+    let layout: Value = serde_json::from_str(&v.json).unwrap_or(Value::Null);
+    let declared: Option<Value> = v
         .meta_json
         .as_deref()
         .and_then(|m| serde_json::from_str::<Value>(m).ok())
         .map(|m| m["parts"].clone());
-    Ok(Some(Parts::of(v.version, &layout, declared.as_ref())))
+    Some(Parts::of(n, &layout, declared.as_ref()))
 }
 
 /// How [`expand`] treats a reference it can't resolve.
@@ -197,24 +113,6 @@ pub enum Mode {
 
 fn placeholder() -> Value {
     json!({ "type": "core://Text", "style": "Caption", "value_expr": "This part isn't available." })
-}
-
-/// Component definitions not stored yet (server files being checked before
-/// they are recorded, a `pod:` definition being written): consulted first.
-#[derive(Debug, Clone, Default)]
-pub struct Pending {
-    /// `(name, version, definition)`.
-    pub defs: Vec<(String, i64, Value)>,
-}
-
-impl Pending {
-    fn get(&self, name: &str, version: Option<i64>) -> Option<Value> {
-        self.defs
-            .iter()
-            .filter(|(n, v, _)| n == name && version.is_none_or(|w| w == *v))
-            .max_by_key(|(_, v, _)| *v)
-            .map(|(_, _, d)| d.clone())
-    }
 }
 
 /// The arguments and children a component's template is expanded with.
@@ -238,16 +136,11 @@ enum Out {
 type Parsed = Result<Arc<Def>, String>;
 
 struct Expander<'a> {
-    /// `None`: layout files, which use only server components (from the
-    /// embedded files) and no parts.
-    store: Option<&'a Store>,
+    old: &'a Old,
     catalog: &'a Catalog,
-    client: Option<&'a ClientCaps>,
     mode: Mode,
-    pending: &'a Pending,
     cache: HashMap<(String, Option<i64>), Option<Parts>>,
-    /// Each definition read and parsed once per expansion: a use costs no
-    /// copy of its definition, which the work budget wouldn't see.
+    /// Each definition read and parsed once per expansion.
     defs: HashMap<(String, Option<i64>), Option<Parsed>>,
     work: Work,
 }
@@ -261,39 +154,32 @@ fn err(at: &str, message: String) -> LayoutError {
 }
 
 impl Expander<'_> {
-    fn part(&mut self, r: &PartRef) -> rusqlite::Result<Option<Value>> {
+    fn part(&mut self, r: &PartRef) -> Option<Value> {
         let key = (r.app.clone(), r.version);
         if !self.cache.contains_key(&key) {
-            let parts = if let Some(store) = self.store
-                && self.catalog.is_app(&r.app)
-            {
-                load(store, &r.app, r.version, self.client)?
+            let parts = if self.catalog.is_blueprint(&r.app) {
+                parts(self.old, &r.app, r.version)
             } else {
                 None
             };
             self.cache.insert(key.clone(), parts);
         }
-        Ok(self.cache[&key]
+        self.cache[&key]
             .as_ref()
-            .and_then(|p| p.parts.get(&r.part).cloned()))
+            .and_then(|p| p.parts.get(&r.part).cloned())
     }
 
     /// A component's definition, parsed (`Err`: why it is invalid).
-    fn def(&mut self, name: &str, version: Option<i64>) -> rusqlite::Result<Option<Parsed>> {
+    fn def(&mut self, name: &str, version: Option<i64>) -> Option<Parsed> {
         let key = (name.to_owned(), version);
         if !self.defs.contains_key(&key) {
-            let found = match (self.pending.get(name, version), self.store) {
-                (Some(d), _) => Some(d),
-                (None, None) => None,
-                (None, Some(store)) => match version {
-                    Some(n) => crate::components::version(store, name, n)?,
-                    None => crate::components::latest(store, name)?.map(|(_, d)| d),
-                },
-            };
-            let parsed = found.map(|raw| Def::parse(&raw).map(Arc::new));
+            let parsed = self
+                .old
+                .component(name, version)
+                .map(|(_, raw)| Def::parse(&raw).map(Arc::new));
             self.defs.insert(key.clone(), parsed);
         }
-        Ok(self.defs[&key].clone())
+        self.defs[&key].clone()
     }
 
     /// A use that can't be expanded: an error (strict) or a placeholder
@@ -491,7 +377,7 @@ impl Expander<'_> {
             (Some(REF_TYPE), _) => as_ref(v),
             (_, Some(n)) => n.strip_prefix(CORE).and_then(|bare| {
                 let app = bare.split('/').next().unwrap_or(bare);
-                (bare.contains('/') || self.catalog.is_app(app))
+                (bare.contains('/') || self.catalog.is_blueprint(app))
                     .then(|| as_ref(v))
                     .flatten()
             }),
@@ -525,9 +411,7 @@ impl Expander<'_> {
             );
         }
         let version = o.get("version").and_then(Value::as_i64);
-        let found = self
-            .def(name, version)
-            .map_err(|e| err(at, format!("reading the component: {e}")))?;
+        let found = self.def(name, version);
         let Some(parsed) = found else {
             let why = match version {
                 Some(n) => format!("no version {n} (list_components lists them)"),
@@ -621,11 +505,9 @@ impl Expander<'_> {
             };
             return self.unresolved(at, label, why, in_screens);
         }
-        let found = self
-            .part(r)
-            .map_err(|e| err(at, format!("reading the built-in part: {e}")))?;
+        let found = self.part(r);
         let Some(part) = found else {
-            let why = if self.catalog.is_app(&r.app) {
+            let why = if self.catalog.is_blueprint(&r.app) {
                 "no such part (list_parts lists them)"
             } else {
                 "only built-in apps' parts can be referenced"
@@ -649,59 +531,13 @@ impl Expander<'_> {
 }
 
 /// `doc` with every reference and component use replaced by what it
-/// expands to (parts from the newest version `client` can draw; `None`:
-/// the latest). Blocking.
-pub fn expand(
-    store: &Store,
-    catalog: &Catalog,
-    doc: &Value,
-    client: Option<&ClientCaps>,
-    mode: Mode,
-) -> Result<Value, LayoutError> {
-    expand_with(store, catalog, doc, client, mode, &Pending::default())
-}
-
-/// [`expand`] with definitions not stored yet ([`Pending`]).
-pub fn expand_with(
-    store: &Store,
-    catalog: &Catalog,
-    doc: &Value,
-    client: Option<&ClientCaps>,
-    mode: Mode,
-    pending: &Pending,
-) -> Result<Value, LayoutError> {
-    expand_in(Some(store), catalog, doc, client, mode, pending)
-}
-
-/// A layout file's `core://Use`s of server components expanded (strict),
-/// from the components embedded in this build: what the pod records.
-pub fn expand_file(catalog: &Catalog, doc: &Value) -> Result<Value, LayoutError> {
-    expand_file_with(catalog, doc, catalog.component_defs())
-}
-
-/// [`expand_file`] from these component definitions.
-pub fn expand_file_with(
-    catalog: &Catalog,
-    doc: &Value,
-    defs: &Pending,
-) -> Result<Value, LayoutError> {
-    expand_in(None, catalog, doc, None, Mode::Strict, defs)
-}
-
-fn expand_in(
-    store: Option<&Store>,
-    catalog: &Catalog,
-    doc: &Value,
-    client: Option<&ClientCaps>,
-    mode: Mode,
-    pending: &Pending,
-) -> Result<Value, LayoutError> {
+/// expands to (parts and components at their newest, or the pinned
+/// version).
+pub fn expand(old: &Old, catalog: &Catalog, doc: &Value, mode: Mode) -> Result<Value, LayoutError> {
     let mut e = Expander {
-        store,
+        old,
         catalog,
-        client,
         mode,
-        pending,
         cache: HashMap::new(),
         defs: HashMap::new(),
         work: Work::default(),
@@ -717,91 +553,22 @@ fn expand_in(
     Ok(out)
 }
 
-/// A component use as a node: `{"type": "core://Use", "component": name,
-/// "version"?, "args", "children"}`.
-pub fn use_node(name: &str, version: Option<i64>, args: &Value, children: &Value) -> Value {
-    let mut v = json!({ "type": USE_TYPE, "component": name });
-    if let Some(n) = version {
-        v["version"] = json!(n);
-    }
-    if !args.is_null() {
-        v["args"] = args.clone();
-    }
-    if !children.is_null() {
-        v["children"] = children.clone();
-    }
-    v
-}
-
-/// Check a definition (`name`, about to be stored as `version`): it parses
-/// and every example expands strictly to plumbing nodes this build knows.
-/// `Err` names the example. Blocking.
-pub fn check_definition(
-    store: &Store,
-    catalog: &Catalog,
-    name: &str,
-    version: i64,
-    def: &Value,
-    pending: &Pending,
-) -> Result<Def, String> {
-    let parsed = Def::parse(def)?;
-    let mut pending = pending.clone();
-    pending.defs.push((name.to_owned(), version, def.clone()));
-    for (i, ex) in parsed.examples.iter().enumerate() {
-        let node = use_node(
-            name,
-            Some(version),
-            &Value::Object(ex.args.clone()),
-            &Value::Array(ex.children.clone()),
-        );
-        let fail = |e: String| format!("examples/{i}: {e}");
-        let out = expand_with(store, catalog, &node, None, Mode::Strict, &pending)
-            .map_err(|e| fail(e.to_string()))?;
-        let parsed: protocol::UiNode = serde_json::from_value(out)
-            .map_err(|e| fail(format!("expands to an invalid node: {e}")))?;
-        if let Some(t) = crate::validate::unknown_node_types(&parsed).first() {
-            return Err(fail(format!("expands to an unknown node type '{t}'")));
-        }
-        if let Some(f) = protocol::required_features(&parsed)
-            .into_iter()
-            .find(|f| protocol::is_retired(f))
-        {
-            return Err(fail(format!(
-                "uses '{f}', which was removed from the vocabulary"
-            )));
-        }
-    }
-    Ok(parsed)
-}
-
-/// A stored layout as served to `client`: refs expanded leniently (a JSON
-/// text in, a JSON text out). Blocking.
-///
-/// A client that draws the plumbing ([`crate::porcelain::draws_plumbing`])
-/// gets a `core://Workspace` as the `core://Page` it stands for (decision
-/// `plumbing-and-porcelain`).
-pub fn serve(store: &Store, catalog: &Catalog, json: &str, client: Option<&ClientCaps>) -> String {
-    let plumbing = client.is_some_and(crate::porcelain::draws_plumbing);
-    if !plumbing && !may_hold_refs(json) {
-        return json.to_owned();
-    }
+/// A stored layout as the old system served it to a client that draws the
+/// plumbing: uses expanded leniently, a `core://Workspace` as the
+/// `core://Page` it stands for.
+pub fn served(old: &Old, catalog: &Catalog, json: &str) -> Value {
     let Ok(doc) = serde_json::from_str::<Value>(json) else {
-        return json.to_owned();
+        return Value::Null;
     };
     let expanded = if may_hold_refs(json) {
-        match expand(store, catalog, &doc, client, Mode::Lenient) {
-            Ok(v) => v,
-            Err(_) => return json.to_owned(),
-        }
+        expand(old, catalog, &doc, Mode::Lenient).unwrap_or(doc)
     } else {
         doc
     };
-    if plumbing && let Some(page) = crate::porcelain::page_of(&expanded) {
-        // A client that draws plumbing draws the porcelain's expansion;
-        // the raw workspace if (unexpectedly) it can't be expanded.
-        if let Ok(v) = expand(store, catalog, &page, client, Mode::Lenient) {
-            return v.to_string();
-        }
+    if let Some(page) = crate::porcelain::page_of(&expanded)
+        && let Ok(v) = expand(old, catalog, &page, Mode::Lenient)
+    {
+        return v;
     }
-    expanded.to_string()
+    expanded
 }

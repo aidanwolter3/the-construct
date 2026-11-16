@@ -2,15 +2,15 @@
 //!
 //! | Call | Answer |
 //! |---|---|
-//! | `GET /v1/construct` | `{root, generation}`: home's element for the client's features; `409 not_switched` on a pod that isn't switched |
+//! | `GET /v1/construct` | `{root, generation}`: home's element for the client's features |
 //! | `POST /v1/objects {have, want}` | `{objects: {id: object}}`: what `want` reaches that `have` doesn't list, `want`'s order first |
 //! | `GET /v1/objects/{id}` | one object |
 //! | `GET /v1/construct/data/{id}?bind=` | `{entities, queries}`: the home feeds element `id` needs, with a use site's bindings (a JSON object) |
 //! | `GET /v1/construct/names/{name}` | `{name, el}`: a layout's element for the client's features, by name or key (a notification's layout the root doesn't reach) |
+//! | `GET /v1/construct/events` | SSE: the root, data and notifications ([`super::events`]) |
 //!
-//! They answer as `GET /v1/workspaces/<id>` does: a request that reaches the
-//! pod is the pod's (a hosted pod is reached only with its token), and a
-//! bearer the pod no longer knows is told so.
+//! A request that reaches the pod is the pod's (a hosted pod is reached
+//! only with its token), and a bearer the pod no longer knows is told so.
 
 use std::collections::{BTreeSet, VecDeque};
 
@@ -25,7 +25,7 @@ use axum::{
 use serde_json::{Map, Value, json};
 
 use super::store as cstore;
-use crate::session::{Caller, unauthorized};
+use crate::session::Caller;
 use crate::{Pod, json_error, parse_json_body};
 
 /// Most objects one answer carries.
@@ -40,25 +40,14 @@ pub(crate) fn router() -> Router<Pod> {
         .route("/v1/objects/{id}", get(get_object))
         .route("/v1/construct/data/{id}", get(crate::get_element_data))
         .route("/v1/construct/names/{name}", get(get_name))
+        .route("/v1/construct/events", get(super::events::events))
 }
 
 /// `None` when the caller may read the construct, else the answer.
 pub(crate) async fn guard(pod: &Pod, headers: &HeaderMap) -> Option<Response> {
     match pod.caller(headers).await {
-        Ok(Caller::Stale) => Some(unauthorized()),
-        Ok(_) => {
-            let p = pod.clone();
-            let on = tokio::task::spawn_blocking(move || super::is_switched(&p))
-                .await
-                .unwrap_or(false);
-            (!on).then(|| {
-                json_error(
-                    StatusCode::CONFLICT,
-                    json!({ "error": "not_switched",
-                            "detail": "this pod is on the layout system: use /v1/workspaces" }),
-                )
-            })
-        }
+        Ok(Caller::Stale) => Some(crate::session::stale_bearer()),
+        Ok(_) => None,
         Err(e) => Some(e.into_response()),
     }
 }
@@ -105,7 +94,7 @@ async fn get_name(
     let found = tokio::task::spawn_blocking(move || {
         let names = if super::is_layout_name(&name) {
             vec![name.clone()]
-        } else if p.catalog().is_app(&name) {
+        } else if p.catalog().is_blueprint(&name) {
             vec![super::blueprint_name(&name)]
         } else {
             Vec::new()
@@ -230,28 +219,32 @@ async fn get_object(
     }
 }
 
-/// What the old endpoint `GET /v1/workspaces/<id>` serves for one of a
-/// switched pod's layouts: its history's `seq` as the version, the element
-/// sealed for the client and materialized, and the home feeds it needs.
+/// A layout as a client draws it: the element its name (or key) points to
+/// for the client, materialized with what the first use site reaching it
+/// from home binds, and the home feeds it needs.
 pub struct Served {
-    pub version: i64,
+    pub element: String,
     pub layout: protocol::UiNode,
     pub feeds: Vec<(String, String)>,
+    /// What its use site binds (`?bind=` of its data).
+    pub inputs: Map<String, Value>,
 }
 
-/// Layout `id` of a switched pod as an installed client gets it. Blocking.
+/// Layout (or blueprint key) `id` as `client` draws it. Blocking.
 pub fn serve_layout(
     pod: &Pod,
     id: &str,
     client: &protocol::ClientCaps,
 ) -> rusqlite::Result<Option<Served>> {
     let store = pod.store();
+    let Some(name) = store.with_conn(|c| super::seal::name_of_key(c, id))? else {
+        return Ok(None);
+    };
     let Some(el) =
-        store.with_conn(|c| super::seal::seal_name(c, id, client, &mut Default::default()))?
+        store.with_conn(|c| super::seal::seal_name(c, &name, client, &mut Default::default()))?
     else {
         return Ok(None);
     };
-    let version = store.with_conn(|c| cstore::last_seq(c, id))?;
     // A layout that reads inputs draws what the first use site reaching it
     // from home binds, as the engine draws it.
     let objects = super::seal::objects(pod);
@@ -282,9 +275,10 @@ pub fn serve_layout(
     };
     let feeds = bound_element_feeds(pod, &el, &inputs);
     Ok(Some(Served {
-        version,
+        element: el,
         layout,
         feeds,
+        inputs,
     }))
 }
 
@@ -311,11 +305,8 @@ pub fn bound_element_feeds(
     let Ok(m) = construct_elements::materialize_with(&objects, id, inputs) else {
         return feeds;
     };
-    let home = pod
-        .store()
-        .with_conn(|c| Ok::<_, rusqlite::Error>(super::write::home_feeds(c)))
-        .unwrap_or_default();
-    for f in crate::custom::bound_feeds(pod.catalog(), &home, &m.node) {
+    let home = pod.store().with_conn(crate::layouts::home_feeds);
+    for f in crate::layouts::bound_feeds(pod.catalog(), &home, &m.node) {
         if !feeds.contains(&f) {
             feeds.push(f);
         }
@@ -329,73 +320,4 @@ pub fn inputs_param(raw: Option<&str>) -> Map<String, Value> {
     raw.and_then(|s| serde_json::from_str::<Value>(s).ok())
         .and_then(|v| v.as_object().cloned())
         .unwrap_or_default()
-}
-
-/// The `/v1/apps` rows of a switched pod: its layouts, by name.
-pub fn app_rows(pod: &Pod) -> rusqlite::Result<Vec<Value>> {
-    pod.store().with_conn(|c| {
-        let mut rows = Vec::new();
-        for (n, h) in cstore::names(c)? {
-            if !super::is_layout_name(&n) {
-                continue;
-            }
-            let el = cstore::object(c, &h)?.map(|(v, _)| v);
-            let hist = cstore::history(c, &n)?;
-            rows.push(json!({
-                "id": n,
-                "title": el.as_ref().map(|e| e["title"].clone()),
-                "icon": el.as_ref().map(|e| e["icon"].clone()),
-                "kind": "custom",
-                "hidden": false,
-                "latest_version": hist.first().map(|e| e.seq),
-                "latest_compatible_version": hist.first().map(|e| e.seq),
-                "updated_at": hist.first().map(|e| crate::layouts::rfc3339(e.at)),
-            }));
-        }
-        rows.sort_by_key(|r| r["id"] != json!(crate::HOME_APP));
-        Ok(rows)
-    })
-}
-
-/// `GET /v1/apps/:id/versions` of a switched pod's layout: its history.
-pub fn versions(pod: &Pod, id: &str) -> rusqlite::Result<Option<Value>> {
-    pod.store().with_conn(|c| {
-        let hist = cstore::history(c, id)?;
-        if hist.is_empty() {
-            return Ok(None);
-        }
-        let latest = hist.first().map(|e| e.seq);
-        let rows: Vec<Value> = hist
-            .iter()
-            .filter(|e| !e.hash.is_empty())
-            .take(crate::layouts::MAX_VERSIONS_LIMIT as usize)
-            .map(|e| {
-                let mut v = json!({ "version": e.seq, "created_at": crate::layouts::rfc3339(e.at),
-                    "source": "construct", "author": e.author, "compatible": true });
-                if let Some(n) = &e.note {
-                    v["note"] = json!(n);
-                }
-                v
-            })
-            .collect();
-        Ok(Some(json!({ "app_id": id, "latest_version": latest,
-            "latest_compatible_version": latest, "versions": rows })))
-    })
-}
-
-/// One history entry of a switched pod's layout, materialized.
-pub fn version(pod: &Pod, id: &str, n: i64) -> rusqlite::Result<Option<Value>> {
-    let entry = pod.store().with_conn(|c| {
-        Ok::<_, rusqlite::Error>(
-            cstore::history(c, id)?
-                .into_iter()
-                .find(|e| e.seq == n && !e.hash.is_empty()),
-        )
-    })?;
-    let Some(e) = entry else { return Ok(None) };
-    let layout = super::seal::materialize(pod, &e.hash).map_or(Value::Null, |m| m.node);
-    Ok(Some(
-        json!({ "app_id": id, "version": e.seq, "created_at": crate::layouts::rfc3339(e.at),
-        "source": "construct", "author": e.author, "note": e.note, "compatible": true, "layout": layout }),
-    ))
 }

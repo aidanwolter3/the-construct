@@ -43,4 +43,5 @@ tower = { version = "0.5", features = ["util"] }
 http-body-util = "0.1"
 tempfile = "3"
 fake-pixelfed = { path = "../../fake-pixelfed" }
+construct-elements = { path = "../construct-elements" }
 source-collections = { path = "../source-collections", features = ["test-seed"] }

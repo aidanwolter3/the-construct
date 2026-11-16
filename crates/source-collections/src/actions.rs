@@ -1473,7 +1473,7 @@ pub fn run(
         .map(str::to_owned)
         .unwrap_or(title)
         .chars()
-        .take(pod_core::custom::MAX_NOTE_CHARS)
+        .take(pod_core::layouts::MAX_NOTE_CHARS)
         .collect();
     let edit = if records.is_empty() {
         None

@@ -1,5 +1,7 @@
 # There are no apps at runtime: one home layout embeds and presents other layouts, on one engine
 
+Superseded in part by [one-layout-system](one-layout-system.md): layouts are names on the construct; `/v1/apps`, `/v1/workspaces` and versions are gone.
+
 Superseded in part by [device-layout-and-inbox-commands](device-layout-and-inbox-commands.md): layouts can hide,
 show and delete layouts, hidden ones are listed in `local:all_layouts`, and pins survive a restart.
 

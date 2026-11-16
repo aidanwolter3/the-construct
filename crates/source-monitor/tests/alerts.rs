@@ -151,8 +151,8 @@ async fn a_warning_notifies_the_monitoring_app_once() {
     pod.store().set_pod_setting(ENABLED_SETTING, "1").unwrap();
     let channels = warning_channels(&pod).await;
     assert_eq!(channels.len(), 1, "{channels:?}");
-    assert_eq!(channels[0]["app_id"], app.as_str());
-    assert_ne!(channels[0]["app_id"], groceries.as_str());
+    assert_eq!(channels[0]["layout"], app.as_str());
+    assert_ne!(channels[0]["layout"], groceries.as_str());
     assert_eq!(channels[0]["enabled"], true);
 
     // Someone tries many tokens: the check warns and notifies.
@@ -160,7 +160,7 @@ async fn a_warning_notifies_the_monitoring_app_once() {
     pod.poll_due().await;
     let got = notifications(&pod).await;
     assert_eq!(got.len(), 1, "{got:?}");
-    assert_eq!(got[0]["app_id"], app.as_str());
+    assert_eq!(got[0]["channel_layout"], app.as_str());
     assert_eq!(
         got[0]["title"],
         "Server: Wrong pod codes and unknown tokens"

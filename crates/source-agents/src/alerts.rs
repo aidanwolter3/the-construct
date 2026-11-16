@@ -23,7 +23,7 @@ pub fn owner(store: &Store, catalog: &Catalog) -> rusqlite::Result<Option<String
     if crate::db::runner(store)?.is_none() {
         return Ok(None);
     }
-    let mut owners = pod_core::custom::feed_owners(store, catalog, crate::NAME)?;
+    let mut owners = pod_core::layouts::feed_owners(store, catalog, crate::NAME)?;
     Ok([
         crate::SESSIONS_FEED,
         crate::SCHEDULES_FEED,

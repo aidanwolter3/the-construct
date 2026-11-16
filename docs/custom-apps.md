@@ -13,81 +13,69 @@ Decisions: [`custom-apps-and-data-sources`](decisions/custom-apps-and-data-sourc
 
 ## Blueprints and the home layout
 
-There are no apps at runtime (decision `layouts-not-apps`): the pod's units are **layouts**, and the HTTP routes keep
-their app-era names (`/v1/apps`, `/v1/custom-apps`) for released clients. Built-in layouts are blueprints: served by
-id, but listed only with `GET /v1/apps?blueprints=1` (MCP `list_layouts` answers `{layouts, blueprints}`). A layout
-can be a whole blueprint by reference, kept current by the pod:
+There are no apps at runtime (decision `layouts-not-apps`): the pod's units are **layouts**, and every layout is a
+name in the pod's content-addressed construct (decisions `content-addressed-construct`, `one-layout-system`).
+Built-in layouts are blueprints, named `@core/<blueprint>` and moved to each deploy's files; MCP `list_layouts`
+answers `{layouts, blueprints}`. A layout can be a whole blueprint by reference, kept current by the pod:
 
 ```json
 {"title": "Events", "icon": "dashboard", "feeds": [["collections", "events"]],
- "layout": {"type": "core://Ref", "app": "events", "part": "layout"}}
+ "layout": {"type": "core://Use", "ref": "@core/events"}}
 ```
 
-Name the blueprint's feeds (`list_layouts` shows them): they join home's. To change a blueprint, copy its layout
-(`get_layout`) and pass `copied_from`. Every pod's **`home`** layout is the screen clients open, and the only one: it
-is the user's whole interface, and it embeds or presents every other layout. It starts as a reference to the `shell`
-blueprint, a blank page with Notifications and Settings buttons, and the agent builds into it only what the user asks
-for: one layout is a `core://Layout` as home's one slot; with more, home lists `local:layouts` and each row pushes
-its layout (`action.navigation.open {"layout": "$item.id", "presentation": "Push"}`); a `core://Layout` can also put
-a layout in a card-sized region, or show it as a sheet or side panel while a condition holds. The `settings` and
-`inbox` blueprints are Settings and the inbox. Snippets for each are in `describe_vocabulary`. Home can't be deleted.
-A pod made before blueprints got a layout referencing each built-in it showed, so nothing disappeared; migration
-`layouts_not_apps` turned a home that used the retired dock or drawer into a list of layouts.
+Name the blueprint's feeds (`list_layouts` shows them): they join home's. To change a blueprint, read it
+(`get_layout`) and write your own. Every pod's **`home`** layout is the screen clients open, and the only one: it
+is the user's whole interface, and it embeds or presents every other layout. It starts as the `shell` blueprint's
+layout, a blank page with Notifications and Settings buttons, and the agent builds into it only what the user asks
+for: one layout is a `core://Layout` as home's one slot; with more, home lists them and each row pushes its layout
+(`action.navigation.open {"ref": "<layout id>", "presentation": "Push"}`); a `core://Layout` can also put a layout in
+a card-sized region, or show it as a sheet or side panel while a condition holds. `@core/settings` and `@core/inbox`
+are Settings and the inbox. Snippets for each are in `describe_vocabulary`. Home can't be deleted.
 
 ## The pod's layouts
 
-A layout of the pod is a title, an icon and a version history. It is served exactly like a blueprint (workspace,
-versions, feature negotiation) and marked `"kind": "custom"` in `GET /v1/apps`. Ids are `c-` and 10 characters,
-except `home`.
+A layout of the pod is a name (`c-` and 10 characters, except `home`) pointing to an element with a title, an icon
+and a node; the name keeps its history, and `restore_version` moves it back. Devices show a layout's `title` and
+`icon` from its element.
 
 **Home owns the feeds** (`["pixelfed", "home"]`, `["collections", "todos"]`, `["collections", "recipes"]`, at most 32): every
 layout may bind any of them, and a layout's request loads only the feeds whose query keys it binds. Feeds named when
-creating a layout (or renaming one) are added to home's. Changing home's own feed list is refused (409
-`feed_in_use`, naming the layout) while another layout still binds a feed it would drop. Home's event stream carries
-every layout's new versions and deletions, and every data change of its feeds, so one engine follows them all.
+creating a layout (or renaming one) are added to home's. Changing home's own feed list is refused (`feed_in_use`,
+naming the layout) while another layout still binds a feed it would drop. Home's event stream carries every change of
+the construct (a new root) and every data change of its feeds, so one engine follows them all.
 When a pod opens, feeds naming a source the server no longer has (such as the removed `recipes` source) are dropped
-from home's and every layout's feeds (on a switched pod, a new home element without them), so home's scope holds no
-feed nothing can fill (decision [`remove-recipes-source`](decisions/remove-recipes-source.md)).
-
-```bash
-pod=http://127.0.0.1:8080; token=cpod_…
-curl -fsS -H "Authorization: Bearer $token" -H 'content-type: application/json' $pod/v1/custom-apps -d '{
-  "title": "Kitchen", "icon": "recipe", "feeds": [["collections", "recipes"], ["pixelfed", "home"]],
-  "note": "Recipes next to my feed", "layout": {"type": "core://Workspace", "title": "Kitchen", "slots": []}}'
-```
+from home's feeds (a new home element without them), so home's scope holds no feed nothing can fill (decision
+[`remove-recipes-source`](decisions/remove-recipes-source.md)).
 
 - **Validation.** Every write is checked against the sources of home's feeds: a layout may only bind query keys
   those feeds fill and call the data paths and endpoints their manifests declare. Errors name a JSON pointer and
-  what is allowed. The routes are in [api.md](api.md#custom-apps).
+  what is allowed. Limits: 50 layouts, 256 KiB per layout.
 - **Source status.** The root gets a `core://sources/<source>` entity per source, `{title, signed_in, error?}`, so a
   layout can say when a source is signed out or failing (`${core://sources/pixelfed#signed_in}`). A layout signs in
   with `action.device` `sign_in` (`id`: a provider from `local:providers`; `value`: another server, e.g.
   `$form?.server`), e.g. a button shown while `signed_in` is false. The raw `action.auth.*` intents stay refused.
-- **Components.** `{"type": "core://Use", "component": "core:card", "args": {...}, "children": [...]}` uses a
-  component: one the server ships (`core:card`, `core:section_header`, `core:workspace`, …), a blueprint or its part
-  (`core:pixelfed/screen:post`; `core://Ref` is the older spelling), or the pod's own (`pod:<name>`), expanded and
-  kept current by the pod ([layouts.md](layouts.md#porcelain-components)). A copy of a blueprint instead says
-  `"copied_from": {app, version}`, and `GET /v1/apps` reports `updates_from` when that built-in moves on.
+- **Components.** `{"type": "core://Use", "ref": "@core/card", "args": {...}, "children": [...]}` uses a component:
+  one the server ships (`@core/card`, `@core/section_header`, `@core/workspace`, …), a blueprint or its part
+  (`@core/pixelfed/screen:post`), or the pod's own (`@me/<name>`), expanded by the app and kept current by its name
+  ([layouts.md](layouts.md#porcelain-components)). `"component": "core:<name>"` is still accepted when written.
+  `@core/` components are read-only: `copy_component` makes one of the user's own to change.
 - **Plumbing.** A layout may be a `core://Page` (any node as its root, its own header and Back) instead of a
   `core://Workspace`; the app then draws nothing around it ([layouts.md](layouts.md#structure-of-a-page)).
 - **Theme.** `${local://theme#card_border}` and the other tokens are the pod's colours for the app's mode; MCP
   `set_theme` changes them. Use a token wherever a colour goes (`page`, `card`, `muted_text`, …): a fixed `#RRGGBB`
   stays the same in dark mode, and layout writes answer `warnings` for each (decision `dark-palette`).
-- **Device data.** `${local://connection#label}`, `${local://inbox#unread}`, the `local:layouts` query and the other
+- **Device data.** `${local://connection#label}`, `${local://inbox#unread}` and the other
   [device data](layouts.md#device-data) need no feed.
-- **Hiding and deleting.** Any layout can be hidden from `local:layouts` on every device (`local:all_layouts` still
-  lists it, with `hidden: true`); the pod's layouts can be deleted (purged after 30 days), except `home`. Both work
-  from the agent (`set_hidden`, `delete_layout`) and from a layout (`action.device` `hide_layout`, `unhide_layout`,
-  `delete_layout`). A deleted layout says so where it was shown.
+- **Deleting.** The pod's layouts can be deleted with MCP `delete_layout`, except `home`.
 
 ## Building apps with Claude
 
 Each pod has an MCP endpoint, `POST /v1/mcp`, so Claude can read the pod's sources and build and edit its layouts.
-Writes go through the same validation as the HTTP API and appear in the version history as written by Claude.
+Writes are validated and appear in each name's history as written by Claude.
 
 - **Claude apps (web, desktop, mobile):** add a custom connector with the URL `https://<server>/v1/mcp`. Claude
   discovers the server's OAuth endpoints, registers itself and opens a page where you type your pod code. The
-  credential it gets reaches only that pod's `/v1/mcp`: no app routes, sign-ins or pod settings.
+  credential it gets reaches only that pod's `/v1/mcp`: no other routes, sign-ins or pod settings.
 - **Apps that ask for a client ID and secret** (e.g. Gemini): set `CONSTRUCT_OAUTH_CLIENT_ID`,
   `CONSTRUCT_OAUTH_CLIENT_SECRET` and the app's callback in `CONSTRUCT_OAUTH_CLIENT_REDIRECT_URIS`
   ([server.md](server.md)), and enter the same ID and secret in the app. You still type your pod code to connect.
@@ -101,11 +89,11 @@ Writes go through the same validation as the HTTP API and appear in the version 
 
 Tools: `list_layouts`, `list_data_sources`, `describe_vocabulary`, `get_layout`, `sample_data`, `validate_layout`,
 `create_layout`, `update_layout` (a whole layout or a JSON Patch, with `base_version`), `restore_version`,
-`rename_layout`, `delete_layout`, `set_hidden`, `list_parts`, `rebase_context`, `dismiss_update`, `set_time_zone`,
+`rename_layout`, `delete_layout`, `list_parts`, `set_time_zone`,
 the component tools `list_components`, `get_component`, `expand` (what a layout or component becomes, as plumbing),
 `define_component`, `update_component`, `copy_component`, `restore_component`, `delete_component`, and `set_theme`,
 plus the Collections tools below. `render_layout_preview` and `dispatch_virtual_interaction` draw a layout with the
-user's data (feeds, device data such as `local:layouts`, screens' data paths) and answer an image with every
+user's data (feeds, device data such as `local:notifications`, screens' data paths) and answer an image with every
 node's bounds, then tap, scroll or type into it (nothing is written; `target_uri` opens a screen directly, `item`
 and `entities` try a row with made-up data, `full_height` draws a long screen whole:
 [rendering.md](rendering.md#agent-previews-mcp)). `get_layout` takes `expanded: true`. Layouts are named `id` (`app` is still accepted).
@@ -131,11 +119,11 @@ never writes code: it declares typed fields (`text`, `number`, `bool`, `date`, `
 
 `describe_collection` gives ready-made layout snippets for all of these.
 
-- **Change sets.** `apply_change` sends a collection change together with the app layouts that go with it. Every
-  custom app using Collections is checked against the new definition; if one would break, nothing applies and the
-  error names the app and binding. On a pod switched to the construct the layouts are the construct's: the edits
-  are written as `update_layout` writes them (`base_version` is the version `get_layout` shows) in the same step,
-  and every layout is checked as clients draw it, bound with what home passes it.
+- **Change sets.** `apply_change` sends a collection change together with the layouts that go with it (`apps:
+  [{app, layout | json_patch, base_version?}]`): the edits are written as `update_layout` writes them
+  (`base_version` is the version `get_layout` shows) in the same step, and every layout is checked as devices draw
+  it, bound with what home passes it. If one would break, nothing applies and `breaks_layout` names the layout and
+  binding.
 - **Safe schema changes.** Fields have permanent ids. A rename keeps the old name as an alias; a removal hides the
   field and keeps its data 30 days (`restore_field`); a type change converts row by row and keeps what doesn't
   convert aside. A write made under an older definition (an offline device) still lands.

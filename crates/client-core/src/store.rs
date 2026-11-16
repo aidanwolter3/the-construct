@@ -152,10 +152,9 @@ CREATE TABLE IF NOT EXISTS form_values (
 );
 ";
 
-/// Layout versions pinned on this device (`action.device` `pin_version`),
-/// per app and layout, with the pinned layout as fetched (`spec`, JSON), so
-/// a pin is drawn at start with no request. Forgotten when the device
-/// leaves the pod.
+/// Layout versions pinned on this device (the old layout system's version
+/// picker), per app and layout. Shipped, so kept as history: the step
+/// `drop_pinned_versions` drops the table (decision `one-layout-system`).
 const MIGRATION_PINNED_VERSIONS: &str = "
 CREATE TABLE IF NOT EXISTS pinned_versions (
     app_id TEXT NOT NULL,
@@ -170,7 +169,7 @@ CREATE TABLE IF NOT EXISTS pinned_versions (
 /// The content-addressed construct's objects this device has fetched
 /// (decision `content-addressed-construct`), per app, by id: immutable, so
 /// never fetched again; kept while the current or previous root reaches them,
-/// and forgotten when the device leaves the pod. Only a switched pod fills it.
+/// and forgotten when the device leaves the pod.
 const MIGRATION_CONSTRUCT_OBJECTS: &str = "
 CREATE TABLE IF NOT EXISTS construct_objects (
     app_id TEXT NOT NULL,
@@ -179,6 +178,10 @@ CREATE TABLE IF NOT EXISTS construct_objects (
     PRIMARY KEY (app_id, id)
 );
 ";
+
+/// The construct is the only layout system (decision `one-layout-system`):
+/// a device draws a layout's current element, and pins are gone.
+const MIGRATION_DROP_PINNED_VERSIONS: &str = "DROP TABLE IF EXISTS pinned_versions;";
 
 /// The store's steps, `(name, sql)`, run in order, each once, in its own
 /// transaction; `schema_migrations` records the names that ran. Add a step at
@@ -194,6 +197,7 @@ const MIGRATIONS: &[(&str, &str)] = &[
     ("remembered_values", MIGRATION_V7),
     ("pinned_versions", MIGRATION_PINNED_VERSIONS),
     ("construct_objects", MIGRATION_CONSTRUCT_OBJECTS),
+    ("drop_pinned_versions", MIGRATION_DROP_PINNED_VERSIONS),
 ];
 
 /// Notifications kept in the cache (the newest ids).
@@ -886,54 +890,6 @@ pub trait StoreOps {
     fn clear_construct_objects(&self, app_id: &str) -> StoreResult<()> {
         self.conn()
             .prepare_cached("DELETE FROM construct_objects WHERE app_id = ?1")?
-            .execute([app_id])?;
-        Ok(())
-    }
-
-    // ---- pinned_versions ----
-
-    /// The versions pinned for one app: `(layout_id, version, spec)`.
-    fn pinned_versions(&self, app_id: &str) -> StoreResult<Vec<(String, i64, String)>> {
-        self.conn()
-            .prepare_cached(
-                "SELECT layout_id, version, spec FROM pinned_versions WHERE app_id = ?1
-                 ORDER BY layout_id",
-            )?
-            .query_map([app_id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?
-            .collect()
-    }
-
-    /// Pin `version` of `layout_id` (its layout JSON `spec`), or (`None`)
-    /// unpin it.
-    fn set_pinned_version(
-        &self,
-        app_id: &str,
-        layout_id: &str,
-        pin: Option<(i64, &str)>,
-        updated_at: i64,
-    ) -> StoreResult<()> {
-        match pin {
-            Some((version, spec)) => self
-                .conn()
-                .prepare_cached(
-                    "INSERT INTO pinned_versions (app_id, layout_id, version, spec, updated_at)
-                     VALUES (?1, ?2, ?3, ?4, ?5)
-                     ON CONFLICT(app_id, layout_id) DO UPDATE SET version = excluded.version,
-                         spec = excluded.spec, updated_at = excluded.updated_at",
-                )?
-                .execute(params![app_id, layout_id, version, spec, updated_at])?,
-            None => self
-                .conn()
-                .prepare_cached("DELETE FROM pinned_versions WHERE app_id = ?1 AND layout_id = ?2")?
-                .execute(params![app_id, layout_id])?,
-        };
-        Ok(())
-    }
-
-    /// Forget every pin of one app (the device left the pod).
-    fn clear_pinned_versions(&self, app_id: &str) -> StoreResult<()> {
-        self.conn()
-            .prepare_cached("DELETE FROM pinned_versions WHERE app_id = ?1")?
             .execute([app_id])?;
         Ok(())
     }
@@ -1932,31 +1888,48 @@ mod tests {
         s.set_form_value("c", "", "x", None, 3).unwrap();
     }
 
+    /// A store that ran the `pinned_versions` step (with pins in it) opens,
+    /// and the table is gone (decision `one-layout-system`).
     #[test]
-    fn pinned_versions_are_kept_per_app_and_cleared() {
-        let s = Store::open_in_memory().unwrap();
-        assert!(s.pinned_versions("home").unwrap().is_empty());
-        s.set_pinned_version("home", "events", Some((3, "{\"a\":1}")), 1)
+    fn an_old_store_with_pins_loses_the_table() {
+        let path = temp_db("pins");
+        {
+            let c = Connection::open(&path).unwrap();
+            c.execute_batch("CREATE TABLE schema_migrations (name TEXT PRIMARY KEY);")
+                .unwrap();
+            for (name, sql) in MIGRATIONS
+                .iter()
+                .take_while(|(n, _)| *n != "drop_pinned_versions")
+            {
+                c.execute_batch(sql).unwrap();
+                c.execute("INSERT INTO schema_migrations (name) VALUES (?1)", [name])
+                    .unwrap();
+            }
+            c.execute(
+                "INSERT INTO pinned_versions (app_id, layout_id, version, spec, updated_at)
+                 VALUES ('home', 'events', 3, '{}', 1)",
+                [],
+            )
             .unwrap();
-        s.set_pinned_version("home", "events", Some((4, "{\"a\":2}")), 2)
-            .unwrap();
-        s.set_pinned_version("home", "home", Some((7, "{}")), 2)
-            .unwrap();
-        s.set_pinned_version("other", "events", Some((1, "{}")), 2)
-            .unwrap();
-        let pins = s.pinned_versions("home").unwrap();
-        assert_eq!(
-            pins,
-            vec![
-                ("events".to_owned(), 4, "{\"a\":2}".to_owned()),
-                ("home".to_owned(), 7, "{}".to_owned())
-            ]
+        }
+        let s = Store::open(&path).unwrap();
+        assert_eq!(s.schema_version().unwrap(), SCHEMA_VERSION);
+        assert!(
+            s.migration_names()
+                .unwrap()
+                .contains("drop_pinned_versions")
         );
-        s.set_pinned_version("home", "home", None, 3).unwrap();
-        assert_eq!(s.pinned_versions("home").unwrap().len(), 1);
-        s.clear_pinned_versions("home").unwrap();
-        assert!(s.pinned_versions("home").unwrap().is_empty());
-        assert_eq!(s.pinned_versions("other").unwrap().len(), 1);
+        let tables: i64 = s
+            .conn()
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE name = 'pinned_versions'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(tables, 0);
+        drop(s);
+        let _ = std::fs::remove_file(&path);
     }
 
     #[test]

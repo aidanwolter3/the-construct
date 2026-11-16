@@ -12,6 +12,9 @@
 //! The counter is kept up to date (the number of leading steps that ran), so
 //! an older build that still counts can open the database too.
 
+pub mod core;
+pub mod layout_system;
+
 use std::collections::HashSet;
 
 use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, params};

@@ -482,7 +482,7 @@ pub async fn agents_layout(pod: &Pod) -> String {
         "create_layout",
         json!({"title": "Agents",
             "feeds": [["agents", "sessions"], ["agents", "sandboxes"], ["agents", "checks"], ["agents", "schedules"]],
-            "layout": {"type": "core://Ref", "app": "agents", "part": "layout"}}),
+            "layout": {"type": "core://Use", "ref": "@core/agents"}}),
     )
     .await;
     app["id"].as_str().unwrap().to_owned()
@@ -523,14 +523,8 @@ where
 
 /// The data of layout `app` (its feeds merged).
 pub async fn workspace(pod: &Pod, app: &str) -> Value {
-    let (status, ws) = call(
-        pod,
-        "GET",
-        &format!("/v1/workspaces/{app}"),
-        Some("phone"),
-        None,
-    )
-    .await;
+    let (status, ws) =
+        pod_core::testing::layout_for(&pod_core::app(pod.clone()), app, Some("phone")).await;
     assert_eq!(status, StatusCode::OK, "{ws}");
     ws
 }

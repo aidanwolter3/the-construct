@@ -10,7 +10,9 @@ use serde_json::{Map, Value};
 
 use crate::ast::UiNode;
 
-/// The full payload served for a workspace (e.g. `GET /v1/workspaces/home`).
+/// A layout with its data: what a stale session's 401 carries, the shape
+/// of the simulator's bundles, and a layout as a test reads it (its
+/// element materialized and `GET /v1/construct/data/<element>`).
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct WorkspaceSpec {
     pub version: String,

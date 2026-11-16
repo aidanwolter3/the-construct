@@ -6,7 +6,7 @@ use std::time::Duration;
 
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
-use protocol::{ActionIntent, UiNode, WorkspaceSpec};
+use protocol::{ActionIntent, UiNode};
 use reqwest::{StatusCode, redirect};
 use serde_json::{Value, json};
 use server::PixelfedConfig;
@@ -147,27 +147,90 @@ async fn post(url: &str, bearer: Option<&str>, body: Value) -> (StatusCode, Valu
     (status, resp.json().await.unwrap_or(Value::Null))
 }
 
-fn children(spec: &WorkspaceSpec) -> Vec<UiNode> {
-    let UiNode::Workspace { slots, .. } = &spec.workspace else {
-        panic!("not a workspace");
-    };
-    let UiNode::Container { children, .. } = &slots[0].content else {
-        panic!("not a Container");
-    };
-    children.clone()
+/// Home's element for `bearer` as a device fetches it: the root
+/// (`GET /v1/construct`) and its object (`POST /v1/objects`).
+async fn home(env: &Env, bearer: Option<&str>) -> Value {
+    let (status, _, root) = get(&env.url("/v1/construct"), bearer).await;
+    assert_eq!(status, StatusCode::OK, "{root}");
+    let root = root["root"].as_str().unwrap().to_owned();
+    let mut req = client()
+        .post(env.url("/v1/objects"))
+        .json(&json!({ "have": [], "want": [root] }));
+    if let Some(t) = bearer {
+        req = req.bearer_auth(t);
+    }
+    let body: Value = req.send().await.unwrap().json().await.unwrap();
+    body["objects"][&root].clone()
 }
 
-fn session_buttons(spec: &WorkspaceSpec) -> Vec<String> {
-    children(spec)
-        .into_iter()
+/// The children of the "Open your pod" page a caller without a pod gets as
+/// its home.
+async fn open_screen(env: &Env) -> Vec<UiNode> {
+    let el = home(env, None).await;
+    let page: UiNode = serde_json::from_value(el["node"].clone()).unwrap();
+    let UiNode::Page { root, .. } = page else {
+        panic!("not a page: {el}");
+    };
+    let UiNode::Container { children, .. } = *root else {
+        panic!("not a Container: {el}");
+    };
+    children
+}
+
+fn session_buttons(children: &[UiNode]) -> Vec<String> {
+    children
+        .iter()
         .filter_map(|c| match c {
             UiNode::Button {
                 on_click: ActionIntent::OpenSession { path, .. },
                 ..
-            } => Some(path),
+            } => Some(path.clone()),
             _ => None,
         })
         .collect()
+}
+
+/// A tool call on the pod of `token` (`POST /v1/mcp`): its result.
+async fn tool(env: &Env, token: &str, name: &str, args: Value) -> Value {
+    let resp = client()
+        .post(env.url("/v1/mcp"))
+        .bearer_auth(token)
+        .header("accept", "application/json, text/event-stream")
+        .json(&json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+                      "params": {"name": name, "arguments": args}}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body: Value = resp.json().await.unwrap();
+    let r = &body["result"];
+    assert_ne!(r["isError"], true, "{name}: {body}");
+    serde_json::from_str(r["content"][0]["text"].as_str().unwrap()).unwrap()
+}
+
+/// The data a layout of blueprint `blueprint` on the pod of `token` draws
+/// (`/v1/construct/data/<element>`; the layout is made with the
+/// blueprint's feeds): status, `X-Construct-Session` and body.
+async fn blueprint_data(
+    env: &Env,
+    token: &str,
+    blueprint: &str,
+) -> (StatusCode, Option<String>, Value) {
+    let info = *server::catalog().blueprint(blueprint).unwrap();
+    let feeds: Vec<[&str; 2]> = info.feeds.iter().map(|(s, f)| [*s, *f]).collect();
+    let made = tool(
+        env,
+        token,
+        "create_layout",
+        json!({ "title": info.title, "feeds": feeds,
+                "layout": { "type": "core://Use", "ref": format!("@core/{blueprint}") } }),
+    )
+    .await;
+    let id = made["id"].as_str().unwrap();
+    let (status, _, name) = get(&env.url(&format!("/v1/construct/names/{id}")), Some(token)).await;
+    assert_eq!(status, StatusCode::OK, "{name}");
+    let el = name["el"].as_str().unwrap();
+    get(&env.url(&format!("/v1/construct/data/{el}")), Some(token)).await
 }
 
 /// Sign the pod of `token` in to the fake Pixelfed through the host (the
@@ -224,27 +287,38 @@ async fn a_caller_without_a_pod_token_gets_only_the_open_screen() {
     let env = env().await;
     let resp = client().get(env.url("/healthz")).send().await.unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
-    let (status, header, body) = get(&env.url("/v1/workspaces/pixelfed"), None).await;
+    // Home is the "Open your pod" screen, a construct of one element.
+    let (status, header, root) = get(&env.url("/v1/construct"), None).await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(header, None);
-    let spec: WorkspaceSpec = serde_json::from_value(body).unwrap();
+    let children = open_screen(&env).await;
     assert!(
-        children(&spec)
+        children
             .iter()
             .any(|c| matches!(c, UiNode::TextField { field, .. } if field == "pod_token"))
     );
     assert_eq!(
-        session_buttons(&spec),
+        session_buttons(&children),
         ["/v1/pods/open"],
         "no temporary pods here"
     );
-    let (status, _, body) = get(&env.url("/v1/apps"), None).await;
-    assert_eq!((status, body), (StatusCode::OK, json!({ "apps": [] })));
+    let (status, _, name) = get(&env.url("/v1/construct/names/home"), None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(name["el"], root["root"]);
+    let el = root["root"].as_str().unwrap();
+    let (status, _, data) = get(&env.url(&format!("/v1/construct/data/{el}")), None).await;
+    assert_eq!(
+        (status, data),
+        (StatusCode::OK, json!({ "entities": {}, "queries": {} }))
+    );
+    let (status, _, body) = get(&env.url("/v1/construct/events"), None).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    assert_eq!(body["error"], "pod_required");
     let (status, body) = post(&env.url("/v1/pixelfed/posts/like"), None, json!({})).await;
     assert_eq!(status, StatusCode::UNAUTHORIZED);
     assert_eq!(body["error"], "pod_required");
     // A token the host does not know is told to go away.
-    let (status, header, _) = get(&env.url("/v1/workspaces/events"), Some("cpod_nope")).await;
+    let (status, header, _) = get(&env.url("/v1/construct"), Some("cpod_nope")).await;
     assert_eq!(status, StatusCode::UNAUTHORIZED);
     assert_eq!(header.as_deref(), Some("invalid"));
     let (status, body) = post(&env.url("/v1/pods/temporary"), None, json!({})).await;
@@ -266,11 +340,15 @@ async fn a_pod_token_opens_its_pod() {
         assert_eq!(body["error"], "pod_not_found");
     }
     for token in [&first, &other] {
-        let (status, _, body) = get(&env.url("/v1/workspaces/events"), Some(token)).await;
-        assert_eq!(status, StatusCode::OK, "{body}");
-        // A new pod lists only its home app (decision `blueprints-and-home`).
-        let (_, _, apps) = get(&env.url("/v1/apps"), Some(token)).await;
-        assert_eq!(apps["apps"][0]["id"], "home", "{apps}");
+        // A new pod has only its home (decision `blueprints-and-home`).
+        let layouts = tool(&env, token, "list_layouts", json!({})).await;
+        let ids: Vec<&str> = layouts["layouts"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|l| l["id"].as_str())
+            .collect();
+        assert_eq!(ids, ["home"], "{layouts}");
     }
 }
 
@@ -280,15 +358,19 @@ async fn pods_keep_their_sign_ins_and_media_apart() {
     let a = env.create("a").await;
     let b = env.create("b").await;
     sign_in(&env, &a).await;
-    let (status, _, feed) = get(&env.url("/v1/workspaces/pixelfed"), Some(&a)).await;
+    let (status, _, feed) = blueprint_data(&env, &a, "pixelfed").await;
     assert_eq!(status, StatusCode::OK, "{feed}");
     assert_eq!(
         feed["queries"]["timeline:home"].as_array().unwrap().len(),
         5
     );
     // Pod b is not signed in to anything, and keeps its token (200, no header).
-    let (status, header, body) = get(&env.url("/v1/workspaces/pixelfed"), Some(&b)).await;
+    let (status, header, body) = blueprint_data(&env, &b, "pixelfed").await;
     assert_eq!((status, header), (StatusCode::OK, None));
+    assert_eq!(
+        body["entities"]["core://sources/pixelfed"]["signed_in"],
+        false
+    );
     assert!(body["queries"]["timeline:home"].is_null());
     let (status, body) = post(
         &env.url("/v1/pixelfed/posts/like"),
@@ -323,9 +405,9 @@ async fn pods_keep_their_sign_ins_and_media_apart() {
     assert_eq!(resp.status(), StatusCode::NOT_FOUND);
     // Only public paths: the feed itself is not reachable that way.
     for path in [
-        format!("/v1/p/{id_a}/v1/workspaces/pixelfed"),
-        format!("/v1/p/{id_a}/v1/workspaces/events"),
-        format!("/v1/p/{id_a}/v1/pixelfed/media/../../workspaces/recipes"),
+        format!("/v1/p/{id_a}/v1/construct"),
+        format!("/v1/p/{id_a}/v1/construct/names/home"),
+        format!("/v1/p/{id_a}/v1/pixelfed/media/../../construct"),
         format!("/v1/p/{}/v1/pixelfed/media/{key}", "0".repeat(32)),
     ] {
         let resp = client().get(env.url(&path)).send().await.unwrap();
@@ -347,7 +429,7 @@ async fn logout_keeps_the_pod_token_and_rotation_replaces_it() {
     // Signed out of Pixelfed, still in the pod: no sign-ins left.
     let (status, _, body) = get(&env.url("/v1/auth/sign-ins"), Some(&token)).await;
     assert_eq!((status, &body["sign_ins"]), (StatusCode::OK, &json!([])));
-    let (status, header, body) = get(&env.url("/v1/workspaces/pixelfed"), Some(&token)).await;
+    let (status, header, body) = blueprint_data(&env, &token, "pixelfed").await;
     assert_eq!((status, header), (StatusCode::OK, None), "{body}");
     assert!(
         body["queries"]["timeline:home"].is_null(),
@@ -358,12 +440,12 @@ async fn logout_keeps_the_pod_token_and_rotation_replaces_it() {
     let new = tokio::task::spawn_blocking(move || host.rotate("me").unwrap())
         .await
         .unwrap();
-    let (status, header, _) = get(&env.url("/v1/workspaces/events"), Some(&token)).await;
+    let (status, header, _) = get(&env.url("/v1/construct"), Some(&token)).await;
     assert_eq!(
         (status, header.as_deref()),
         (StatusCode::UNAUTHORIZED, Some("invalid"))
     );
-    let (status, _, _) = get(&env.url("/v1/workspaces/events"), Some(&new)).await;
+    let (status, _, _) = get(&env.url("/v1/construct"), Some(&new)).await;
     assert_eq!(status, StatusCode::OK);
 }
 
@@ -377,10 +459,8 @@ async fn temporary_pods_are_capped_and_swept() {
         ..HostConfig::default()
     })
     .await;
-    let (_, _, body) = get(&env.url("/v1/workspaces/events"), None).await;
-    let spec: WorkspaceSpec = serde_json::from_value(body).unwrap();
     assert_eq!(
-        session_buttons(&spec),
+        session_buttons(&open_screen(&env).await),
         ["/v1/pods/open", "/v1/pods/temporary"]
     );
     let mut tokens = Vec::new();
@@ -396,7 +476,7 @@ async fn temporary_pods_are_capped_and_swept() {
     assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
     assert_eq!(body["error"], "temporary_pods_full");
     // Full features.
-    let (status, _, _) = get(&env.url("/v1/workspaces/events"), Some(&tokens[0])).await;
+    let (status, _, _) = blueprint_data(&env, &tokens[0], "events").await;
     assert_eq!(status, StatusCode::OK);
     sign_in(&env, &tokens[0]).await;
     // Expired pods are swept: token dead, files gone.
@@ -418,7 +498,7 @@ async fn temporary_pods_are_capped_and_swept() {
     assert!(env.host.store().pod_by_name(&first.name).unwrap().is_none());
     let mut dead = 0;
     for t in &tokens {
-        let (status, _, _) = get(&env.url("/v1/workspaces/events"), Some(t)).await;
+        let (status, _, _) = get(&env.url("/v1/construct"), Some(t)).await;
         if status == StatusCode::UNAUTHORIZED {
             dead += 1;
         }
@@ -480,7 +560,7 @@ async fn adopting_a_single_pod_database_keeps_its_data() {
         [old.path().join(format!("server.db.adopted-{}", pod.id))]
     );
     assert!(stranger.is_file());
-    let (status, _, _) = get(&env.url("/v1/workspaces/events"), Some(&pod.token)).await;
+    let (status, _, _) = get(&env.url("/v1/construct"), Some(&pod.token)).await;
     assert_eq!(status, StatusCode::OK, "the pod is unaffected");
 }
 
@@ -491,12 +571,13 @@ async fn the_open_pod_serves_callers_without_a_token() {
         ..HostConfig::default()
     })
     .await;
-    let (status, _, body) = get(&env.url("/v1/workspaces/pixelfed_sample_no_login"), None).await;
-    assert_eq!(status, StatusCode::OK, "{body}");
-    assert_eq!(body["workspace"]["id"], "pixelfed_sample_no_login");
+    // The open pod's own home, not the "Open your pod" screen.
+    let el = home(&env, None).await;
+    assert_eq!(el["title"], "Home", "{el}");
+    assert!(!el.to_string().contains("pod_token"), "{el}");
     // Admin pods still need their own token.
     let token = env.create("me").await;
-    let (status, _, _) = get(&env.url("/v1/workspaces/events"), Some(&token)).await;
+    let (status, _, _) = get(&env.url("/v1/construct"), Some(&token)).await;
     assert_eq!(status, StatusCode::OK);
     tokio::time::sleep(Duration::from_millis(1)).await;
 }
@@ -514,9 +595,7 @@ async fn the_open_pod_refuses_foreign_host_names() {
     let client = reqwest::Client::new();
     let port = env.server.url.rsplit(':').next().unwrap().to_owned();
     let with_host = |host: String, token: Option<String>| {
-        let mut req = client
-            .get(env.url("/v1/workspaces/pixelfed_sample_no_login"))
-            .header("host", host);
+        let mut req = client.get(env.url("/v1/construct")).header("host", host);
         if let Some(t) = token {
             req = req.bearer_auth(t);
         }
@@ -553,7 +632,7 @@ async fn responses_carry_security_headers() {
             ..HostConfig::default()
         })
         .await;
-        for path in ["/healthz", "/v1/workspaces/events", "/v1/nowhere"] {
+        for path in ["/healthz", "/v1/construct", "/v1/nowhere"] {
             let resp = reqwest::get(env.url(path)).await.unwrap();
             let h = resp.headers();
             assert_eq!(h["x-content-type-options"], "nosniff", "{path}");
@@ -875,9 +954,8 @@ async fn a_local_pod_keeps_the_codes_it_was_given() {
     ensure("cpod_localtest123", Some("cmcp_localtest123"))
         .await
         .unwrap();
-    let (status, _, apps) = get(&env.url("/v1/apps"), Some("cpod_localtest123")).await;
-    assert_eq!(status, StatusCode::OK);
-    assert_eq!(apps["apps"][0]["id"], "home");
+    let el = home(&env, Some("cpod_localtest123")).await;
+    assert_eq!(el["title"], "Home", "{el}");
     let resp = client()
         .post(env.url("/v1/mcp"))
         .bearer_auth("cmcp_localtest123")
@@ -889,9 +967,9 @@ async fn a_local_pod_keeps_the_codes_it_was_given() {
     assert_eq!(resp.status(), StatusCode::OK);
     // A new code replaces the old one.
     ensure("cpod_othertest456", None).await.unwrap();
-    let (status, _, _) = get(&env.url("/v1/apps"), Some("cpod_othertest456")).await;
+    let (status, _, _) = get(&env.url("/v1/construct"), Some("cpod_othertest456")).await;
     assert_eq!(status, StatusCode::OK);
-    let (status, _, _) = get(&env.url("/v1/workspaces/home"), Some("cpod_localtest123")).await;
+    let (status, _, _) = get(&env.url("/v1/construct"), Some("cpod_localtest123")).await;
     assert_eq!(status, StatusCode::UNAUTHORIZED);
     // Codes that don't look like codes, or belong to another pod, are refused.
     assert!(ensure("nope", None).await.is_err());

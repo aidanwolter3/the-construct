@@ -89,6 +89,20 @@ pub fn unauthorized() -> Response {
         .into_response()
 }
 
+/// 401 `unauthorized` with [`SESSION_HEADER`]`: invalid`: a bearer that is
+/// no (longer a) session, so the client clears it.
+pub fn stale_bearer() -> Response {
+    (
+        StatusCode::UNAUTHORIZED,
+        [
+            (header::WWW_AUTHENTICATE, "Bearer"),
+            (header::HeaderName::from_static(SESSION_HEADER), "invalid"),
+        ],
+        Json(json!({ "error": "unauthorized" })),
+    )
+        .into_response()
+}
+
 /// 401 with [`SESSION_HEADER`]`: invalid` and `screen` (a signed-out
 /// screen) as the body.
 pub fn stale_session(screen: WorkspaceSpec) -> Response {
@@ -195,8 +209,8 @@ pub(crate) fn router() -> Router<Pod> {
 /// `GET /v1/auth/sign-ins`: the sign-ins on the caller's session, for
 /// the client's Settings: `{"sign_ins": [{"id", "title", "server"?,
 /// "username"?, "apps": [{"id", "title"}]}], "providers": [...]}` in sign-in
-/// id order. `apps` are the listed apps (`GET /v1/apps`) that require the
-/// sign-in. No bearer: no sign-ins; a stale one: 401. Sign-ins no adapter
+/// id order. `apps` are the blueprints that require the sign-in (the field
+/// keeps its name for clients that read it). No bearer: no sign-ins; a stale one: 401. Sign-ins no adapter
 /// provides any more are left out.
 ///
 /// `providers` lists every sign-in the pod offers, so Settings can start
@@ -227,7 +241,7 @@ async fn sign_ins(State(state): State<Pod>, headers: HeaderMap) -> Response {
             .await
             .unwrap_or_default();
         let apps: Vec<Value> = catalog
-            .apps()
+            .blueprints()
             .filter(|a| a.auth == AuthPolicy::SignIn(provider.id))
             .filter(|a| !a.dev || state.show_dev_apps())
             .map(|a| json!({ "id": a.id, "title": a.title }))

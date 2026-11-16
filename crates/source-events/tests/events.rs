@@ -66,6 +66,22 @@ fn pod() -> Pod {
     pod
 }
 
+/// The events blueprint as a layout of the pod (made once), drawn as the
+/// phone draws it.
+async fn events_layout(pod: &Pod) -> (StatusCode, Value) {
+    let id = match pod
+        .store()
+        .with_conn(pod_core::layouts::pod_layouts)
+        .unwrap()
+        .into_iter()
+        .find(|l| l.title == "Events")
+    {
+        Some(l) => l.id,
+        None => pod_core::testing::use_blueprint(pod, "events").await,
+    };
+    pod_core::testing::layout_for(&pod_core::app(pod.clone()), &id, Some("phone")).await
+}
+
 async fn call(pod: &Pod, method: &str, path: &str, body: Option<Value>) -> (StatusCode, Value) {
     let mut req = Request::builder()
         .method(method)
@@ -195,7 +211,7 @@ async fn events_shows_matches_and_notifies() {
     let pod = pod();
     // A fresh pod: an empty events collection the app shows.
     prepare(pod.store()).unwrap();
-    let (status, ws) = call(&pod, "GET", "/v1/workspaces/events", None).await;
+    let (status, ws) = events_layout(&pod).await;
     assert_eq!(status, StatusCode::OK, "{ws}");
     assert_eq!(ws["workspace"]["title"], "Events", "{ws}");
     assert!(listed(&ws, "collection:events").is_empty());
@@ -209,7 +225,7 @@ async fn events_shows_matches_and_notifies() {
         (sent[0]["title"].clone(), sent[0]["channel"].clone()),
         (json!("Friday Improv"), json!("matches"))
     );
-    let (_, ws) = call(&pod, "GET", "/v1/workspaces/events", None).await;
+    let (_, ws) = events_layout(&pod).await;
     let matches = listed(&ws, "collection:events:alerted");
     assert_eq!(matches.len(), 1);
     assert_eq!(
@@ -325,8 +341,9 @@ async fn events_shows_matches_and_notifies() {
 }
 
 /// A pod saved before the app was renamed (decision
-/// `rename-apps-and-folders`): its history, notifications and `events`
-/// collection move to the new id, and the old Watcher's tables go.
+/// `rename-apps-and-folders`): its notifications and `events` collection
+/// move to the new id, and the old Watcher's tables go (its layout history
+/// went with the old layout system, issue #300).
 #[tokio::test]
 async fn a_pod_from_before_the_rename_moves_to_the_new_id() {
     let dir = tempfile::tempdir().unwrap();
@@ -348,16 +365,11 @@ async fn a_pod_from_before_the_rename_moves_to_the_new_id() {
             .with_conn(|c| {
                 // The pod predates 0005 (decision `plumbing-and-porcelain`).
                 c.execute_batch(
-                    "DELETE FROM app_versions WHERE app_id = 'events' AND file_key IN ('events/0005', 'events/0006');
-                     UPDATE app_versions SET app_id = 'watcher',
-                         file_key = replace(file_key, 'events/0004', 'watcher/0003')
-                         WHERE app_id = 'events';
-                     DELETE FROM adapter_migrations WHERE adapter = 'events';
+                    "DELETE FROM adapter_migrations WHERE adapter = 'events';
                      DELETE FROM schema_migrations WHERE scope = 'events';
                      INSERT INTO adapter_migrations (adapter, version) VALUES ('watcher', 3);
                      CREATE TABLE watcher_targets (id TEXT PRIMARY KEY);
                      INSERT INTO pod_settings (key, value) VALUES ('watcher.imported', '1');
-                     INSERT INTO pod_settings (key, value) VALUES ('apps.hidden', '[\"watcher\"]');
                      INSERT INTO notifications (layout, channel, dedupe_key, title, created_at, inserted_at)
                          VALUES ('watcher', 'matches', 'k1', 'Friday Improv', 1, 1);
                      UPDATE collections_defs SET def_json = replace(def_json, '\"app\":\"events\"', '\"app\":\"watcher\"');",
@@ -374,51 +386,25 @@ async fn a_pod_from_before_the_rename_moves_to_the_new_id() {
         .create_pinned_session(&session_hash("pod"))
         .unwrap();
     pod.store().create_session(&session_hash("phone")).unwrap();
-    let (versions, keys, old_tables, old_rows): (Vec<i64>, Vec<String>, i64, i64) = pod
+    let (old_tables, old_rows): (i64, i64) = pod
         .store()
         .with_conn(|c| {
-            let versions = c
-                .prepare(
-                    "SELECT version FROM app_versions WHERE app_id = 'events' ORDER BY version",
-                )?
-                .query_map([], |r| r.get(0))?
-                .collect::<rusqlite::Result<_>>()?;
-            let keys = c
-                .prepare(
-                    "SELECT file_key FROM app_versions WHERE app_id = 'events' ORDER BY version",
-                )?
-                .query_map([], |r| r.get(0))?
-                .collect::<rusqlite::Result<_>>()?;
             let old_tables = c.query_row(
                 "SELECT count(*) FROM sqlite_master WHERE name LIKE 'watcher%'",
                 [],
                 |r| r.get(0),
             )?;
             let old_rows = c.query_row(
-                "SELECT (SELECT count(*) FROM app_versions WHERE app_id = 'watcher')
-                      + (SELECT count(*) FROM adapter_migrations WHERE adapter = 'watcher')
+                "SELECT (SELECT count(*) FROM adapter_migrations WHERE adapter = 'watcher')
                       + (SELECT count(*) FROM schema_migrations WHERE scope = 'watcher')
                       + (SELECT count(*) FROM pod_settings WHERE key = 'watcher.imported')",
                 [],
                 |r| r.get(0),
             )?;
-            Ok::<_, rusqlite::Error>((versions, keys, old_tables, old_rows))
+            Ok::<_, rusqlite::Error>((old_tables, old_rows))
         })
         .unwrap();
-    assert_eq!(
-        versions,
-        [1, 2, 3, 4],
-        "the history stays, the new files appended"
-    );
-    assert_eq!(
-        keys,
-        ["events/0003", "events/0004", "events/0005", "events/0006"]
-    );
     assert_eq!((old_tables, old_rows), (0, 0));
-    assert_eq!(
-        pod_core::custom::hidden_apps(pod.store()).unwrap(),
-        ["events"]
-    );
     let sent = notifications(&pod).await;
     assert_eq!(sent[0]["title"], "Friday Improv");
     assert_eq!(describe(&pod).await["definition"]["system_app"], "events");
@@ -492,7 +478,7 @@ async fn simulator_fixture() {
         }
         tokio::time::sleep(std::time::Duration::from_millis(10)).await;
     }
-    let (_, ws) = call(&pod, "GET", "/v1/workspaces/events", None).await;
+    let (_, ws) = events_layout(&pod).await;
     let matches = listed(&ws, "collection:events:alerted");
     assert_eq!(matches.len(), 2, "{matches:?}");
     // One seen.
@@ -503,7 +489,7 @@ async fn simulator_fixture() {
         Some(json!({"id": matches[1]["id"], "seen": true})),
     )
     .await;
-    let (_, ws) = call(&pod, "GET", "/v1/workspaces/events", None).await;
+    let (_, ws) = events_layout(&pod).await;
     assert_eq!(listed(&ws, "collection:events:fillers")[1]["failing"], true);
     let mut screens = serde_json::Map::new();
     for f in [&club, &loft] {

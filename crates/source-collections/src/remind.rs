@@ -19,7 +19,6 @@
 use std::collections::HashMap;
 use std::time::Duration;
 
-use pod_core::custom;
 use pod_core::store::Store;
 use pod_core::tz::jiff::{Timestamp, civil, tz::TimeZone};
 use pod_core::{Catalog, NewNotification, Pod};
@@ -226,7 +225,7 @@ fn apply_spec(def: &Definition, r: &mut Reminder, op: &Value) -> Result<(), Stri
         Some(Value::Null) => r.app = None,
         Some(a) => {
             let a = a.as_str().unwrap_or("").trim();
-            if !custom::is_custom_id(a) {
+            if !pod_core::layouts::is_layout_id(a) {
                 return Err(format!("\"app\": '{a}' is not a custom app's id"));
             }
             r.app = Some(a.to_owned());
@@ -436,10 +435,10 @@ pub fn due(
 
 /// The layout reminder `r` of collection `collection` belongs to now: its
 /// own `app` while that layout lives, else the layout that shows the
-/// collection (`owners`, [`custom::feed_owners`]; decision
+/// collection (`owners`, [`pod_core::layouts::feed_owners`]; decision
 /// `notification-owner`).
 pub fn app_for(
-    apps: &[custom::CustomApp],
+    apps: &[pod_core::layouts::PodLayout],
     owners: &HashMap<String, String>,
     collection: &str,
     r: &Reminder,
@@ -454,9 +453,9 @@ pub fn app_for(
 
 /// Every reminder's channel, for the app it belongs to now.
 pub fn channels(store: &Store, catalog: &Catalog) -> Vec<NotificationChannel> {
-    let read = custom::feed_owners(store, catalog, NAME).and_then(|owners| {
+    let read = pod_core::layouts::feed_owners(store, catalog, NAME).and_then(|owners| {
         store.with_conn(|c| -> rusqlite::Result<_> {
-            Ok((db::all_defs(c)?, custom::custom_apps_on(c)?, owners))
+            Ok((db::all_defs(c)?, pod_core::layouts::pod_layouts(c)?, owners))
         })
     });
     let (defs, apps, owners) = match read {
@@ -508,14 +507,14 @@ fn sent(conn: &Connection, key: &[String; 4]) -> rusqlite::Result<bool> {
 }
 
 /// What every reminder owes at `now` and hasn't sent (`owners`:
-/// [`custom::feed_owners`] of Collections).
+/// [`pod_core::layouts::feed_owners`] of Collections).
 pub fn plan(
     conn: &Connection,
     owners: &HashMap<String, String>,
     tz: &TimeZone,
     now: i64,
 ) -> rusqlite::Result<Plan> {
-    let apps = custom::custom_apps_on(conn)?;
+    let apps = pod_core::layouts::pod_layouts(conn)?;
     let mut out = Plan::default();
     for (_, def) in db::all_defs(conn)? {
         if def.reminders.is_empty() {
@@ -564,7 +563,7 @@ pub async fn run(pod: &Pod, now: i64) -> Duration {
     let planned = pod
         .blocking(move |s| {
             let tz = pod_core::tz::time_zone(s)?;
-            let owners = custom::feed_owners(s, p.catalog(), NAME)?;
+            let owners = pod_core::layouts::feed_owners(s, p.catalog(), NAME)?;
             s.with_conn(|c| plan(c, &owners, &tz, now))
         })
         .await;

@@ -152,7 +152,7 @@ a **New schedule** form. Sandboxes show why one is degraded, suspended or down, 
 repeat-disk warning; an asleep or suspended one has **Wake**, a down one **Repair** (asks first). It uses existing
 vocabulary only.
 
-A layout made from it (`{"type": "core://Ref", "app": "agents", "part": "layout"}`) is linked from home; home can
+A layout made from it (`{"type": "core://Use", "ref": "@core/agents"}`) is linked from home; home can
 show `${agents://runner/status#summary_text}` as its one-line summary.
 
 ## Notifications

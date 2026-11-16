@@ -1,7 +1,6 @@
-//! M7 client: layout version tracking (the snapshot's `layout_json`) and the
-//! SSE push channel, against a small hand-rolled stub of the pod (workspace
-//! bundle with `X-Construct-Layout-Version`, `/events` SSE stream that stays
-//! open).
+//! M7 client: the SSE push channel (`/v1/construct/events`) and the
+//! construct's root it carries, against a small hand-rolled stub of the pod
+//! (home's construct, an events stream that stays open).
 
 use std::io::{BufRead, BufReader, Write};
 use std::net::{TcpListener, TcpStream};
@@ -21,7 +20,8 @@ const FIXTURE: &str = include_str!("../../../protocol/tests/data/counter_home_bu
 const TIMEOUT: Duration = Duration::from_secs(10);
 const INCREMENT: &str = r#"{"intent":"action.mutation.optimistic","entity_uri":"core://counters/home","field":"count","value_expr":"entity.count + 1","rollback_value":0,"endpoint":"/v1/counters/home/increment","payload":{}}"#;
 
-/// The fixture's layout for `version`: the title says which one it is.
+/// The fixture's layout for `version`: the title says which one it is (each
+/// version is another element, so another root).
 fn layout(version: u64) -> Value {
     let mut ws: Value = serde_json::from_str::<Value>(FIXTURE).unwrap()["workspace"].clone();
     ws["title"] = json!(format!("Home v{version}"));
@@ -36,7 +36,6 @@ enum StreamCmd {
 #[derive(Default)]
 struct StubState {
     version: Mutex<u64>,
-    fetches: AtomicUsize,
     event_conns: AtomicUsize,
     closed_streams: AtomicUsize,
     streams: Mutex<Vec<mpsc::Sender<StreamCmd>>>,
@@ -44,12 +43,27 @@ struct StubState {
     posts: AtomicUsize,
     /// Authorization header per events connection.
     event_auth: Mutex<Vec<String>>,
-    /// `X-Construct-Schema` header per events connection ("" if absent).
     /// `X-Construct-Features` header per events connection (`None` if absent).
     event_features: Mutex<Vec<Option<String>>>,
-    /// Workspace fetches answer an unversioned "Signed out" screen (no
-    /// version header), like the signed-out `pixelfed`.
-    unversioned: std::sync::atomic::AtomicBool,
+    construct: crate::construct_stub::Construct,
+}
+
+impl StubState {
+    /// Home's bundle now.
+    fn home(&self, id: &str) -> crate::construct_stub::Answer {
+        if id != "home" {
+            return None;
+        }
+        let v = *self.version.lock().unwrap();
+        let mut bundle: Value = serde_json::from_str(FIXTURE).unwrap();
+        bundle["workspace"] = layout(v);
+        Some((200, bundle.to_string()))
+    }
+
+    /// The `construct` event of the root now.
+    fn event(&self) -> String {
+        self.construct.event(&mut |id| self.home(id))
+    }
 }
 
 struct Stub {
@@ -87,21 +101,25 @@ impl Stub {
         }
     }
 
-    /// A `layout` event, with the data split over two `data:` lines.
-    fn push_layout(&self, version: u64) {
-        self.push_raw(&format!(
-            "event: layout\ndata: {{\"workspace_id\":\"home\",\ndata: \"version\":{version}}}\n\n"
-        ));
+    /// The `construct` event of `version`'s root, with the data split over
+    /// two `data:` lines.
+    fn push_root(&self, version: u64) {
+        let now = *self.st.version.lock().unwrap();
+        *self.st.version.lock().unwrap() = version;
+        let event = self.st.event();
+        *self.st.version.lock().unwrap() = now;
+        self.push_raw(&event.replacen("{", "{\ndata: ", 1));
+    }
+
+    /// Home's data loads so far.
+    fn fetches(&self) -> usize {
+        self.st.construct.fetches("home")
     }
 
     fn close_streams(&self) {
         for tx in self.st.streams.lock().unwrap().drain(..) {
             let _ = tx.send(StreamCmd::Close);
         }
-    }
-
-    fn fetches(&self) -> usize {
-        self.st.fetches.load(Ordering::SeqCst)
     }
 
     fn event_conns(&self) -> usize {
@@ -126,6 +144,7 @@ fn handle(mut stream: TcpStream, st: &StubState) {
     }
     let mut auth = String::new();
     let mut features = None;
+    let mut content_length = 0usize;
     loop {
         let mut line = String::new();
         match reader.read_line(&mut line) {
@@ -133,6 +152,10 @@ fn handle(mut stream: TcpStream, st: &StubState) {
             Ok(_) if line == "\r\n" || line == "\n" => break,
             Ok(_) => {
                 if let Some((k, v)) = line.split_once(':')
+                    && k.eq_ignore_ascii_case("content-length")
+                {
+                    content_length = v.trim().parse().unwrap_or(0);
+                } else if let Some((k, v)) = line.split_once(':')
                     && k.eq_ignore_ascii_case("authorization")
                 {
                     auth = v.trim().to_owned();
@@ -150,27 +173,23 @@ fn handle(mut stream: TcpStream, st: &StubState) {
         .unwrap_or("")
         .to_owned();
     let get = request_line.starts_with("GET ");
+    let method = if get { "GET" } else { "POST" };
+    let mut body = vec![0u8; content_length];
+    let _ = std::io::Read::read_exact(&mut reader, &mut body);
+    if let Some((code, body)) =
+        st.construct
+            .answer(method, &path, &String::from_utf8_lossy(&body), &mut |id| {
+                st.home(id)
+            })
+    {
+        let status = format!("{code} {}", crate::construct_stub::reason(code));
+        respond(&mut stream, &status, "", &body);
+        return;
+    }
 
     match (get, path.as_str()) {
         (true, "/healthz") => respond(&mut stream, "200 OK", "", "ok"),
-        (true, "/v1/workspaces/home") => {
-            st.fetches.fetch_add(1, Ordering::SeqCst);
-            let v = *st.version.lock().unwrap();
-            let mut bundle: Value = serde_json::from_str(FIXTURE).unwrap();
-            bundle["workspace"] = layout(v);
-            if st.unversioned.load(Ordering::SeqCst) {
-                bundle["workspace"]["title"] = json!("Signed out");
-                respond(&mut stream, "200 OK", "", &bundle.to_string());
-                return;
-            }
-            respond(
-                &mut stream,
-                "200 OK",
-                &format!("X-Construct-Layout-Version: {v}\r\n"),
-                &bundle.to_string(),
-            );
-        }
-        (true, "/v1/workspaces/home/events") => {
+        (true, crate::construct_stub::EVENTS) => {
             st.event_features.lock().unwrap().push(features);
             serve_events(stream, st, auth)
         }
@@ -183,17 +202,17 @@ fn handle(mut stream: TcpStream, st: &StubState) {
     }
 }
 
-/// Keep an SSE stream open: the current version first, then whatever the
+/// Keep an SSE stream open: the current root first, then whatever the
 /// test pushes, and a `: keepalive` comment every 100 ms (a failed write
 /// means the client closed the connection).
 fn serve_events(mut stream: TcpStream, st: &StubState, auth: String) {
     st.event_auth.lock().unwrap().push(auth);
     let (tx, rx) = mpsc::channel();
     st.streams.lock().unwrap().push(tx);
-    let v = *st.version.lock().unwrap();
     let head = format!(
         "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nCache-Control: no-cache\r\n\
-         Connection: close\r\n\r\n: hello\n\nevent: layout\r\ndata: {{\"workspace_id\":\"home\",\"version\":{v}}}\r\n\r\n"
+         Connection: close\r\n\r\n: hello\n\n{}",
+        st.event().replace('\n', "\r\n")
     );
     if stream.write_all(head.as_bytes()).is_err() {
         return;
@@ -253,10 +272,6 @@ fn title(s: &StateSnapshot) -> String {
     ws["title"].as_str().unwrap_or_default().to_owned()
 }
 
-fn layout_json(s: &StateSnapshot) -> Value {
-    serde_json::from_str(&s.layout_json).unwrap()
-}
-
 fn count(s: &StateSnapshot) -> i64 {
     let entities: Value = serde_json::from_str(&s.entities_json).unwrap();
     entities["core://counters/home"]["count"].as_i64().unwrap()
@@ -269,7 +284,7 @@ fn ready(stub: &Stub, engine: &ConstructEngine) {
 }
 
 #[test]
-fn snapshot_layout_json_names_the_app_and_its_version() {
+fn the_stream_carries_the_session_and_follows_the_root() {
     let stub = Stub::start();
     let store = Arc::new(MemoryStore::new());
     store.set(&client_core::auth::session_key(&stub.base), "tok-1");
@@ -285,36 +300,18 @@ fn snapshot_layout_json_names_the_app_and_its_version() {
     );
     assert_eq!(engine.snapshot().layout_json, "{}", "nothing known yet");
     ready(&stub, &engine);
-    assert_eq!(
-        layout_json(&engine.snapshot()),
-        json!({"app_id": "home", "version": 1})
-    );
+    assert_eq!(engine.snapshot().layout_json, "{}");
     // The events stream carries the session's bearer.
     assert_eq!(stub.st.event_auth.lock().unwrap()[0], "Bearer tok-1");
-    // And the layout features it draws, so the pod announces only versions
-    // this build can draw.
+    // And the layout features it draws, so the pod seals the root for
+    // this build.
     assert_eq!(
         stub.st.event_features.lock().unwrap()[0],
         Some(protocol::features_header())
     );
     stub.set_version(2);
-    stub.push_layout(2);
+    stub.push_root(2);
     wait_until("layout v2", || title(&engine.snapshot()) == "Home v2");
-    assert_eq!(
-        layout_json(&engine.snapshot()),
-        json!({"app_id": "home", "version": 2})
-    );
-}
-
-#[test]
-fn unversioned_screen_has_an_empty_layout_json() {
-    let stub = Stub::start();
-    stub.st.unversioned.store(true, Ordering::SeqCst);
-    let engine = engine(&stub, "");
-    wait_until("signed-out screen", || {
-        title(&engine.snapshot()) == "Signed out"
-    });
-    assert_eq!(engine.snapshot().layout_json, "{}");
 }
 
 #[test]
@@ -347,30 +344,33 @@ fn oversized_sse_line_drops_the_connection_and_reconnects() {
     wait_until("reconnect", || stub.event_conns() >= 2);
     // The new connection works.
     stub.set_version(2);
-    stub.push_layout(2);
+    stub.push_root(2);
     wait_until("layout v2", || title(&engine.snapshot()) == "Home v2");
 }
 
 #[test]
-fn sse_layout_event_triggers_refetch_and_stale_or_equal_versions_are_ignored() {
+fn a_new_root_triggers_one_refetch_and_the_current_root_none() {
     let stub = Stub::start();
     let engine = engine(&stub, "");
     ready(&stub, &engine);
+    wait_until("the first fetch", || stub.fetches() >= 1);
+    thread::sleep(Duration::from_millis(200));
     let fetches = stub.fetches();
 
-    // Equal and older versions (with comments in between): no refetch.
-    stub.push_layout(1);
+    // The current root (with comments in between) and other events: no
+    // refetch.
+    stub.push_root(1);
     stub.push_raw(": keepalive\n\n");
-    stub.push_layout(0);
-    stub.push_raw("event: other\ndata: {\"version\":99}\n\n");
-    // Then a newer one: exactly one refetch, which brings v3.
+    stub.push_raw("event: layout\ndata: {\"version\":99}\n\n");
+    stub.push_raw("event: other\ndata: {\"root\":\"e1-nothing\"}\n\n");
+    // Then a new root: exactly one refetch, which brings v3.
     stub.set_version(3);
-    stub.push_layout(3);
+    stub.push_root(3);
     wait_until("layout v3", || title(&engine.snapshot()) == "Home v3");
     assert_eq!(stub.fetches(), fetches + 1);
 
-    // Repeating the applied version does nothing.
-    stub.push_layout(3);
+    // Repeating the current root does nothing.
+    stub.push_root(3);
     thread::sleep(Duration::from_millis(400));
     assert_eq!(stub.fetches(), fetches + 1);
 }
@@ -383,7 +383,7 @@ fn reconnects_after_the_stream_is_dropped_and_catches_up() {
 
     stub.close_streams();
     // Changed while disconnected: the first message after reconnecting
-    // carries v2, which triggers the refetch.
+    // carries v2's root, which triggers the refetch.
     stub.set_version(2);
     wait_until("reconnect", || stub.event_conns() >= 2);
     wait_until("layout v2", || title(&engine.snapshot()) == "Home v2");
@@ -396,7 +396,7 @@ fn dropping_the_engine_closes_the_stream_and_stops_the_thread() {
     ready(&stub, &engine);
     // The thread is alive and reading.
     stub.set_version(2);
-    stub.push_layout(2);
+    stub.push_root(2);
     wait_until("layout v2", || title(&engine.snapshot()) == "Home v2");
     assert_eq!(stub.st.closed_streams.load(Ordering::SeqCst), 0);
     drop(engine);
@@ -408,7 +408,7 @@ fn dropping_the_engine_closes_the_stream_and_stops_the_thread() {
 }
 
 #[test]
-fn pending_outbox_row_survives_a_pushed_layout_change() {
+fn pending_outbox_row_survives_a_pushed_root() {
     let stub = Stub::start();
     let dir = temp_dir("pending");
     let engine = engine(&stub, dir.to_str().unwrap());
@@ -420,7 +420,7 @@ fn pending_outbox_row_survives_a_pushed_layout_change() {
 
     let fetches = stub.fetches();
     stub.set_version(2);
-    stub.push_layout(2);
+    stub.push_root(2);
     wait_until("layout v2", || title(&engine.snapshot()) == "Home v2");
     assert_eq!(stub.fetches(), fetches + 1);
     let snap = engine.snapshot();

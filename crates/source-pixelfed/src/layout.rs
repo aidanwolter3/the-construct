@@ -71,7 +71,7 @@ fn example_server(config: &PixelfedConfig) -> String {
 pub const SIGN_IN_COMPONENT: &str = "core:pixelfed_sign_in";
 
 /// Signed-out screen of app `app_id` (titled `title`): a use of
-/// [`SIGN_IN_COMPONENT`], which the core expands before serving. It shows a
+/// [`SIGN_IN_COMPONENT`] (the body of a stale session's 401). It shows a
 /// "Sign in with Pixelfed" button for the default instance, and when users
 /// may pick another instance (D45) a server box (`$form.instance`) with its
 /// own button. The box needs no new client vocabulary: the client binds the
@@ -94,12 +94,10 @@ pub fn signed_out(config: &PixelfedConfig, app_id: &str, title: &str) -> Workspa
                 slot_id: "auth".into(),
                 provider_uri: "pixelfed://auth".into(),
                 // No title Text: the workspace title already says "Pixelfed".
-                content: UiNode::Unknown(pod_core::parts::use_node(
-                    SIGN_IN_COMPONENT,
-                    None,
-                    &args,
-                    &json!([]),
-                )),
+                content: UiNode::Unknown(json!({
+                    "type": pod_core::components::USE_TYPE, "component": SIGN_IN_COMPONENT,
+                    "args": args, "children": [],
+                })),
             }],
         },
         entities: BTreeMap::new(),

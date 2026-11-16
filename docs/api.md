@@ -20,85 +20,49 @@ and `X-Construct-Device` (a client-made device id, used by notifications).
 Images load without a bearer from `/v1/p/<pod id>/…`, which reaches only the paths sources mark public (such as
 the Pixelfed media proxy and uploads).
 
-## Apps, layouts and the event stream
+## The construct and the event stream
+
+The pod's layouts are a content-addressed construct (decisions `content-addressed-construct`, `one-layout-system`).
+A client sends the features it draws in `X-Construct-Features`; the pod seals it, for each name, the newest element
+that uses only those.
 
 | Call | Answer |
 |---|---|
-| `GET /v1/apps[?all=1][&blueprints=1]` | `{apps: [{id, title, icon, kind, latest_version, latest_compatible_version, updated_at, updates_from?}]}`: the pod's own apps, `home` first. Hidden apps only with `all=1`; the blueprints (`kind: builtin`) only with `blueprints=1` (decision `blueprints-and-home`). |
-| `GET /v1/apps/{id}/versions[?limit=1..100&before=N]` | `{app_id, latest_version, latest_compatible_version, versions: [{version, created_at, source, note?, features, compatible, incompatible?}], next_before?}`, newest first. |
-| `GET /v1/apps/{id}/versions/{n}` | One version with its `layout`. |
-| `PUT /v1/apps/{id}/hidden {hidden}` | Hides or shows any app in the app list. |
-| `GET /v1/workspaces/{id}` | The app's bundle (`{workspace, entities, queries}`) at the newest version the client can draw, with `X-Construct-Layout-Version`. A stale session gets 401 with a signed-out bundle and `X-Construct-Session: invalid`. |
-| `GET /v1/workspaces/{id}/events` | Server-sent events, below. |
+| `GET /v1/construct` | `{root, generation}`: home's element for the client's features. |
+| `POST /v1/objects {have: [ids], want: [ids]}` | `{objects: {id: object}, more}`: what `want` reaches that `have` doesn't list, `want`'s order first; `more` when one answer couldn't carry all (ask again). |
+| `GET /v1/objects/{id}` | One object (an id is `e1-` and the base32 SHA-256 of its canonical JSON): `{kind, title, icon, node, bind?, needs}`. A layout's `title` and `icon` are what devices show for it. |
+| `GET /v1/construct/data/{id}?bind=<JSON>` | `{entities, queries}`: the data of the home feeds element `id` needs; with `bind` (a use site's bindings, `{"items": "collection:books"}`), also those its bound tree reads. Only home's feeds are loaded. An upstream that fails answers its source's `core://sources/<id>` entity with an `error`. |
+| `GET /v1/construct/names/{name}` | `{name, el}`: a layout's element (by its name, or a blueprint's key) for the client's features: a notification's layout that home doesn't reach is opened this way. `404 unknown_name`. |
+| `GET /v1/construct/events` | Server-sent events, below. |
 
-`latest_compatible_version` is what opening the app serves this client (`null` if no version fits).
-`incompatible` is `update_required` (the version uses a feature this client doesn't draw) or `retired` (it uses a
-removed one). A request without `X-Construct-Features` is served the latest version.
+A bearer the pod no longer knows gets 401 with `X-Construct-Session: invalid`, and the client forgets it. On a
+server with many pods, a caller without a pod token is answered a one-element construct (a page that asks for a pod)
+on these read calls, and `401 pod_required` elsewhere.
 
-**Events.** The stream's first message is the current version, then:
+**Events.**
 
 | Event | Data | When |
 |---|---|---|
-| `layout` | `{version, workspace_id}` | A newer version this client can draw exists. |
-| `data` | `{workspace_id}`, and when the pod knows what changed: `source`, `changes` (Collections: `[{collection, rows}]`), `uri_prefixes`, `query_prefixes` | The app's data changed for this session (e.g. a post finished uploading). With prefixes, reload only data holding an entity URI that starts with a `uri_prefix`, or a query whose key is a `query_prefix` or starts with one and `:`; without, reload everything. The device named by a write's `x-construct-device` isn't sent the event of its own write when the pod changed nothing else (decision `scoped-data-events`). |
-| `notification` | `{id, channel_layout, app_id, channel, title, body, target_uri, layout, unread_total}` | A notification for any layout of the pod. `channel_layout` is the layout (or blueprint) whose channel it is; `app_id` is its old name, still sent for clients built before (decision `source-adapters`); `layout` is the layout to present it in. |
+| `construct` | `{root, generation}` | First, and whenever home's root for this client moves (any layout or component it reaches changed). |
+| `data` | `{workspace_id: "home"}`, and when the pod knows what changed: `source`, `changes` (Collections: `[{collection, rows}]`), `uri_prefixes`, `query_prefixes` | Data of a source of home's feeds changed for this session (e.g. a post finished uploading). With prefixes, reload only data holding an entity URI that starts with a `uri_prefix`, or a query whose key is a `query_prefix` or starts with one and `:`; without, reload everything. The device named by a write's `x-construct-device` isn't sent the event of its own write when the pod changed nothing else (decision `scoped-data-events`). |
+| `notification` | `{id, channel_layout, channel, title, body, target_uri, layout, unread_total}` | A notification for any layout of the pod. `channel_layout` is the layout (or blueprint) whose channel it is; `layout` is the layout to present it in. |
 | `notifications_read` | the new unread counts | Notifications were marked read on some device. |
-| `deleted` | `{workspace_id}` | The custom app was deleted. |
 
-`home`'s stream carries every layout of the pod (decision `layouts-not-apps`): `layout` and `deleted` events of any
-layout (by `workspace_id`), and `data` events for every source of home's feeds. Right after home's first message
-(and again after the server drops events for a slow reader) it sends a `layout` event with every other layout's current
-version and a `deleted` event for each deleted layout not purged yet. So a client that wasn't listening (in the
-background, offline, the server restarting) catches up; it ignores layouts it hasn't opened and versions it has.
+A `: keepalive` comment comes every 15 s. Streams opened without a session hear only `construct` events. A
+session's stream ends when the session is revoked; one session may hold 8 streams (then 429 `too_many_streams`).
 
-A `: keepalive` comment comes every 15 s. Streams opened without a session hear only `layout` events. A session's
-stream ends when the session is revoked; one session may hold 8 streams (then 429 `too_many_streams`).
-
-## The construct (decision `content-addressed-construct`)
-
-On a pod switched to the construct (`server pods switch`, MCP `switch_construct`). On a pod that isn't, `GET
-/v1/construct` answers `409 not_switched` and clients use the calls above.
-
-| Call | Answer |
-|---|---|
-| `GET /v1/construct` | `{root, generation}`: home's element for the client's features (`X-Construct-Features`); `409 not_switched`. |
-| `POST /v1/objects {have: [ids], want: [ids]}` | `{objects: {id: object}, more}`: what `want` reaches that `have` doesn't list, `want`'s order first; `more` when one answer couldn't carry all (ask again). |
-| `GET /v1/objects/{id}` | One object (an id is `e1-` and the base32 SHA-256 of its canonical JSON). |
-| `GET /v1/construct/data/{id}?bind=<JSON>` | `{entities, queries}`: the data of the home feeds element `id` needs; with `bind` (a use site's bindings, `{"items": "collection:books"}`), also those its bound tree reads. Only home's feeds are loaded. |
-| `GET /v1/construct/names/{name}` | `{name, el}`: a layout's element (by its name, or a blueprint's key) for the client's features: a notification's layout that home doesn't reach is opened this way. `404 unknown_name`. |
-
-Home's event stream adds `construct {root, generation}` (on connect and whenever the root moves). On a switched pod
-the calls above keep answering, from the construct, so installed clients still draw it: `GET /v1/workspaces/{id}`
-serves the layout's element expanded, versions are its name's history, and `layout` events announce those numbers.
-`/v1/custom-apps` writes and `PUT /v1/apps/{id}/hidden` are refused with `409 construct_switched`. A switch or a
-revert ends every event stream, so clients ask again which system the pod is on.
-
-## Custom apps
-
-The pod's own layouts (decision `layouts-not-apps`; the routes keep their app-era names). Home owns the feeds: `feeds`
-on another layout are added to home's.
-
-| Call | Answer |
-|---|---|
-| `POST /v1/custom-apps {title, icon, feeds?, note?, layout}` | Creates a layout; the pod sets the layout root's `id`; `feeds` join home's. |
-| `GET /v1/custom-apps/{id}` | Its feeds (home's: the scope it binds) and latest layout. |
-| `PUT /v1/custom-apps/{id}/layout {layout, note?, base_version?}` | A new version; 409 `stale_base` if `base_version` isn't the latest. |
-| `PATCH /v1/custom-apps/{id} {title?, icon?, feeds?}` | Renames; on home, replaces the feeds (409 `feed_in_use` while another layout binds one it drops); on another layout, adds feeds to home's. |
-| `POST /v1/custom-apps/{id}/restore {version}` | Appends a copy of an older version. |
-| `POST /v1/custom-apps/{id}/dismiss-update {version}` | Stops reporting `updates_from` for a copied part. |
-| `DELETE /v1/custom-apps/{id}` | Soft delete, purged after 30 days. |
-| `POST /v1/custom-apps/validate {feeds, layout}` | A dry run. |
-
-Every write is validated against the sources of home's feeds; errors name a JSON pointer and what is allowed. Limits per
-pod: 50 apps, 500 versions per app (oldest pruned), 256 KiB per layout, 60 writes a minute.
+The pod's layouts are written through Claude (MCP `create_layout`, `update_layout`, `rename_layout`,
+`delete_layout`, `restore_version`; [custom-apps.md](custom-apps.md#building-apps-with-claude)): every write is
+validated against the sources of home's feeds, and errors name a JSON pointer and what is allowed. Limits per pod: 50
+layouts, 256 KiB per layout.
 
 ## Notifications and devices
 
 | Call | Answer |
 |---|---|
-| `GET /v1/notifications?limit=0..100&before=<id>&app=<id>` | `{notifications, unread_total, unread_by_app, next_before?}`, newest first. |
-| `POST /v1/notifications/read {"ids": [...]}` or `{"all": true, "app"?: id}` | `{unread_total, unread_by_app}`. |
-| `GET /v1/notifications/channels` | `{channels: [{layout, app_id, id, title, description, default_enabled, importance, enabled}]}`; `layout` is the layout (or blueprint) the channel belongs to, `app_id` its old name (still sent); `enabled` is the calling device's choice. |
+| `GET /v1/notifications?limit=0..100&before=<id>&layout=<id>` | `{notifications, unread_total, unread_by_layout, next_before?}`, newest first. |
+| `POST /v1/notifications/read {"ids": [...]}` or `{"all": true, "layout"?: id}` | `{unread_total, unread_by_layout}`. |
+| `GET /v1/notifications/channels` | `{channels: [{layout, id, title, description, default_enabled, importance, enabled}]}`; `layout` is the layout (or blueprint) the channel belongs to; `enabled` is the calling device's choice. |
 | `PUT /v1/devices/{id} {platform, name?, push?: {endpoint, p256dh, auth} \| null}` | Registers the device under the session; `push` sets or removes its Web Push subscription. |
 | `PUT /v1/devices/{id}/channels {"<layout>.<channel>": bool}` | The device's channel choices. |
 | `DELETE /v1/devices/{id}` | Forgets the device. |

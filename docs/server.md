@@ -8,7 +8,7 @@ deployment. The HTTP API is in [api.md](api.md).
 ```bash
 cargo run -p server                       # http://127.0.0.1:8080
 cargo run -p fake-pixelfed                # optional: a fake Pixelfed upstream on 127.0.0.1:8081
-curl -s http://127.0.0.1:8080/v1/workspaces/pixelfed_sample_no_login | jq .
+curl -s http://127.0.0.1:8080/v1/construct | jq .        # home's root element
 ```
 
 On a loopback address, callers without a pod token use a pod named `dev` (created if missing), so `curl` and a
@@ -96,7 +96,7 @@ settings are logged at startup.
 | `CONSTRUCT_MONITOR_AUTH_FAILURES_PER_HOUR` | `20` | The monitoring source warns above this many wrong pod codes and unknown tokens an hour. |
 | `CONSTRUCT_MONITOR_LLM_TOKENS_PER_DAY` | `1000000` | It warns above this many model tokens a day. |
 | `CONSTRUCT_AGENTS_PRIVATE_HOSTS` | unset | `1`: the Agents source may sign in to a runner on any address over http (local development only); otherwise `https://` public hosts. |
-| `CONSTRUCT_SHOW_DEV_APPS` | unset | `1`: `GET /v1/apps` also lists `pixelfed_sample_no_login` (it works either way). |
+| `CONSTRUCT_SHOW_DEV_APPS` | unset | `1`: MCP also lists the dev blueprints and sources (`pixelfed_sample_no_login`; it works either way). |
 | `CONSTRUCT_TEST_HOOKS` | unset | `1` enables `POST /v1/test/fault` and local Web Push receivers. Tests only. |
 
 The fake Pixelfed's own variables are in [testing.md](testing.md#fake-pixelfed).
@@ -126,18 +126,15 @@ server pods revoke-mcp <name>                  # disconnect every Claude credent
 server pods monitoring <name> on|off           # let this pod's apps read server-wide monitoring data
 server pods adopt <name> <path/to/server.db>   # turn a pre-pods single-user database into a pod
 server pods remove-adopted [dir]               # delete the originals adopt left behind
-server pods switch <name> --dry-run            # render every layout on the old system and the construct, report differences
-server pods switch <name>                      # switch the pod to the construct (old tables kept)
-server pods switch <name> --revert             # back to the old layout system
 ```
 
-`switch` moves a pod to the content-addressed construct (decision
-[`content-addressed-construct`](decisions/content-addressed-construct.md)); Claude can do the same with MCP
-`switch_construct`. Run the dry run first: it converts in memory, draws every layout of the pod both ways with its
-data and lists each difference, changing nothing, and reports home's bindings (`home_bindings`: the old system's home
-feeds, which on the construct are home's `bind`). The switch writes the construct's tables and leaves the old ones as
-they are; `--revert` puts the pod back on them (edits made while switched stay in the construct's history only). A
-running server sees a switch made with this command within 5 seconds.
+`list` shows, for each pod, whether it is on the content-addressed construct (`construct yes`). Every pod is on it
+(decision [`one-layout-system`](decisions/one-layout-system.md)): a pod still on the old layout system is converted
+when it next opens. The conversion draws each of its layouts both ways on empty data first and logs the result: one
+`info` line when every layout draws the same, a `warn` line per layout that differs (with its differences)
+otherwise. The pod is switched either way, and the old tables are then dropped. If the conversion itself fails, the
+pod doesn't open (the host answers `503 pod_unavailable`), its old tables are kept, and the next open tries again;
+the log says why.
 
 Pod codes never go into git or config files; keep yours in a password manager.
 
@@ -167,7 +164,7 @@ hour. They are how visitors and automated sessions try a deployed server:
 ```bash
 pod=https://the-construct-pod.fly.dev
 token=$(curl -fsS -X POST $pod/v1/pods/temporary | jq -r .session_token)
-curl -fsS -H "Authorization: Bearer $token" $pod/v1/workspaces/events | jq '.queries'
+curl -fsS -H "Authorization: Bearer $token" $pod/v1/construct | jq      # {root, generation}
 ```
 
 ## Security defaults

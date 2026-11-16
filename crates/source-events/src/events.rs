@@ -67,7 +67,7 @@ pub fn ensure(tx: &Transaction<'_>, now: i64) -> rusqlite::Result<()> {
             tx,
             &definition(),
             "The Events app's events",
-            pod_core::custom::AUTHOR_POD,
+            pod_core::layouts::AUTHOR_POD,
             now,
         )?;
         return Ok(());
@@ -90,7 +90,7 @@ pub fn ensure(tx: &Transaction<'_>, now: i64) -> rusqlite::Result<()> {
             tx,
             &def,
             "The Events app's new id",
-            pod_core::custom::AUTHOR_POD,
+            pod_core::layouts::AUTHOR_POD,
             now,
         )?;
     }

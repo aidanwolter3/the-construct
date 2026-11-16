@@ -12,7 +12,8 @@ use std::time::{Duration, Instant};
 use client_core::MemoryStore;
 use e2e::{
     BOOKMARK_ENDPOINT, Harness, LIKE_ENDPOINT, TIMEOUT, Upstream, auth, bookmark_intent, entities,
-    feed, fresh_post, like_intent, post, wait_flushed, wait_signed_in, wait_until, wait_upstream,
+    feed, fresh_post, like_intent, post, wait_flushed, wait_signed_in, wait_signed_out, wait_until,
+    wait_upstream,
 };
 
 /// Real upstream: undo the suite's like/bookmark even if a step fails.
@@ -46,12 +47,7 @@ fn e2e_suite() {
     // 1. Signed out: the sign-in bundle. Then PKCE through the scripted browser.
     let store = Arc::new(MemoryStore::new());
     let engine = h.engine(&store);
-    wait_until("the signed-out bundle", TIMEOUT, || {
-        engine
-            .snapshot()
-            .workspace_json
-            .contains("Sign in with Pixelfed")
-    });
+    wait_signed_out(&engine);
     engine.dispatch(&h.login_intent());
     wait_signed_in(&engine);
     let snap = engine.snapshot();

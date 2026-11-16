@@ -1,16 +1,18 @@
 //! The content-addressed construct on the device (decision
 //! `content-addressed-construct`).
 //!
-//! The engine asks the pod which system it is on (`GET /v1/construct`): a
-//! pod that isn't switched answers `409 not_switched` (an older pod `404`),
-//! and the engine uses `/v1/workspaces/<id>` exactly as before. A switched
-//! pod answers home's hash. The engine then fetches the objects that hash
-//! reaches and it doesn't have (`POST /v1/objects {have, want}`), expands
-//! every element itself (`construct_elements::materialize`) and keys each
-//! reachable layout by its edge, so the rest of the engine and the renderer
-//! see layouts by id as before; a layout's data comes from
-//! `/v1/construct/data/<hash>`. Whether the device is current is one
-//! comparison: its root against the pod's (`event: construct`).
+//! The construct is the only layout system (decision `one-layout-system`).
+//! The engine asks the pod for home's hash (`GET /v1/construct`), fetches
+//! the objects that hash reaches and it doesn't have (`POST /v1/objects
+//! {have, want}`), expands every element itself
+//! (`construct_elements::materialize`) and keys each reachable layout by its
+//! edge, so the rest of the engine and the renderer see layouts by id; a
+//! layout's data comes from `/v1/construct/data/<hash>`, and a layout the
+//! root doesn't reach is found by name (`/v1/construct/names/<name>`).
+//! Whether the device is current is one comparison: its root against the
+//! pod's (`event: construct` on `/v1/construct/events`). A host's caller
+//! without a pod token gets a construct of one element (its "Open your pod"
+//! page), drawn the same way.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
 use std::sync::Arc;
@@ -24,22 +26,11 @@ use serde_json::{Map, Value, json};
 use crate::store::StoreOps;
 use crate::{FetchError, Inner, lock};
 
-/// Which system the pod is on, as last asked.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum Mode {
-    /// Not asked yet (or a stream reconnected: ask again).
-    #[default]
-    Unknown,
-    /// The layout system: `/v1/workspaces/<id>`.
-    Old,
-    /// The construct.
-    On,
-}
-
 /// The device's construct.
 #[derive(Default)]
 pub struct Construct {
-    pub mode: Mode,
+    /// The pod answered a root (`root` is the pod's, not only one kept).
+    pub known: bool,
     /// Home's element, as the pod last said, and the one before it.
     pub root: Option<String>,
     pub previous: Option<String>,
@@ -61,8 +52,12 @@ pub struct Construct {
     /// edges.
     pub nodes: HashMap<String, Value>,
     pub edges_by_id: HashMap<String, Vec<EdgeRef>>,
-    /// How many objects each sync fetched (newest last; tests).
+    /// How many objects each sync to a new root fetched (newest last;
+    /// tests).
     pub fetched: Vec<usize>,
+    /// What a root asked for with home changed besides home: the keys whose
+    /// element changed and those gone, drawn again once home's fetch is done.
+    pub redraw: Option<(Vec<String>, Vec<String>)>,
 }
 
 struct Have<'a>(&'a HashMap<String, Arc<Value>>);
@@ -77,7 +72,7 @@ impl Construct {
     /// What each key reaches (its edges and its embeds' edges), for the
     /// renderer's stack (`StateSnapshot::construct_json`).
     pub fn snapshot_json(&self) -> String {
-        if self.mode != Mode::On {
+        if self.root.is_none() {
             return String::new();
         }
         let reach = construct_elements::reach(&self.edges);
@@ -163,6 +158,19 @@ impl Construct {
         Some((el.clone(), bound, node))
     }
 
+    /// Each layout's title (its element's `title`), by key: those the root
+    /// reaches and those opened by name.
+    pub fn titles(&self) -> BTreeMap<String, String> {
+        self.keys
+            .iter()
+            .chain(self.extra.iter())
+            .filter_map(|(k, el)| {
+                let title = self.objects.get(el)?["title"].as_str()?.trim();
+                (!title.is_empty()).then(|| (k.clone(), title.to_owned()))
+            })
+            .collect()
+    }
+
     /// Each key and what it draws (its element and inputs), for comparing
     /// roots.
     fn instances(&self) -> BTreeMap<String, String> {
@@ -234,45 +242,52 @@ impl Inner {
         Ok(resp)
     }
 
-    /// Ask the pod which system it is on (when not known), and follow a
-    /// switched pod's root. Blocking.
-    pub(crate) fn construct_mode(&self, token: Option<&str>) -> Mode {
-        let mode = lock(&self.construct).mode;
-        if mode != Mode::Unknown {
-            return mode;
+    /// Home's root as the pod says it now (`GET /v1/construct`), with what
+    /// it reaches fetched and keyed. Asked when `ask` or not known yet; a
+    /// failure (a 401 for a stale session too) is answered as it is.
+    /// Blocking.
+    pub(crate) fn construct_current(
+        &self,
+        token: Option<&str>,
+        ask: bool,
+    ) -> Result<(), FetchError> {
+        let known = lock(&self.construct).known;
+        if known && !ask {
+            return Ok(());
         }
         let url = format!("{}/v1/construct", self.base_url);
-        let answer = client(Duration::from_secs(5))
+        let v: Value = client(Duration::from_secs(5))
             .and_then(|c| self.construct_request(c.get(&url), token))
             .and_then(|r| {
                 r.json::<Value>()
                     .map_err(|e| FetchError::Other(e.to_string()))
-            });
-        match answer {
-            Ok(v) => match v["root"].as_str() {
-                Some(root) => {
-                    println!("[ConstructEngine] the pod is on the construct (root {root})");
-                    lock(&self.construct).mode = Mode::On;
-                    if let Err(e) = self.construct_sync(root, token) {
-                        eprintln!("[ConstructEngine] construct sync failed: {e:?}");
-                    }
-                    Mode::On
-                }
-                None => Mode::Unknown,
-            },
-            Err(FetchError::Status(404 | 409)) => {
-                let mut c = lock(&self.construct);
-                if c.mode == Mode::On {
-                    println!("[ConstructEngine] the pod is back on the layout system");
-                }
-                *c = Construct {
-                    mode: Mode::Old,
-                    ..Construct::default()
-                };
-                Mode::Old
+            })?;
+        let Some(root) = v["root"]
+            .as_str()
+            .filter(|r| construct_elements::is_object_id(r))
+        else {
+            return Err(FetchError::Other("the pod answered no root".into()));
+        };
+        let (changed, gone) = self.construct_sync(root, token)?;
+        lock(&self.construct).known = true;
+        if known {
+            // Home is drawn by the fetch that asked; the others after it.
+            let home = |k: &String| k == crate::DEFAULT_WORKSPACE_ID || *k == self.workspace_id;
+            let changed: Vec<String> = changed.into_iter().filter(|k| !home(k)).collect();
+            if !changed.is_empty() || !gone.is_empty() {
+                lock(&self.construct).redraw = Some((changed, gone));
             }
-            Err(_) => Mode::Unknown,
         }
+        Ok(())
+    }
+
+    /// Draw again what [`Inner::construct_current`] found changed besides
+    /// home (after home's fetch, off its locks).
+    pub(crate) fn construct_redraw(&self) {
+        let Some((changed, gone)) = lock(&self.construct).redraw.take() else {
+            return;
+        };
+        self.redraw(&changed, gone);
     }
 
     /// The objects kept in the engine's store, read once a session is on
@@ -373,14 +388,15 @@ impl Inner {
         token: Option<&str>,
     ) -> Result<(Vec<String>, Vec<String>), FetchError> {
         self.construct_load();
-        let (before, missing) = {
+        let (before, missing, moved) = {
             let mut c = lock(&self.construct);
             let before = c.instances();
-            if c.root.as_deref() != Some(root) {
+            let moved = c.root.as_deref() != Some(root);
+            if moved {
                 c.previous = c.root.take();
                 c.root = Some(root.to_owned());
             }
-            (before, c.rebuild())
+            (before, c.rebuild(), moved)
         };
         let fetched = if missing.is_empty() {
             0
@@ -391,7 +407,9 @@ impl Inner {
         };
         let keep = {
             let mut c = lock(&self.construct);
-            c.fetched.push(fetched);
+            if moved || fetched > 0 {
+                c.fetched.push(fetched);
+            }
             c.collect_garbage()
         };
         {
@@ -480,75 +498,29 @@ impl Inner {
         Ok(())
     }
 
-    /// The events stream (re)connected: ask again which system the pod is
-    /// on. A pod reverted to the layout system is drawn from it again at
-    /// once. Blocking (events thread).
-    pub(crate) fn construct_reprobe(&self, token: Option<&str>) {
-        let was = std::mem::take(&mut lock(&self.construct).mode);
-        if was != Mode::On {
-            return;
-        }
-        let before = lock(&self.construct).root.clone();
-        match self.construct_mode(token) {
-            Mode::Old => {
-                self.refresh();
-                let loaded: Vec<String> = lock(&self.state).layouts.keys().cloned().collect();
-                for k in loaded {
-                    let path = format!("{}{k}", crate::LAYOUT_LOAD_PREFIX);
-                    if self.begin_load(&path) {
-                        self.load_data(&path);
-                    }
-                }
-            }
-            Mode::On => {
-                // The root moved while the stream was down: what this device
-                // shows that changed is drawn again.
-                let (root, keys) = {
-                    let c = lock(&self.construct);
-                    (c.root.clone(), c.keys.clone())
-                };
-                if root != before {
-                    let loaded: Vec<String> = lock(&self.state).layouts.keys().cloned().collect();
-                    let extra = lock(&self.construct).extra.clone();
-                    let gone = loaded
-                        .iter()
-                        .filter(|k| !keys.contains_key(*k) && !extra.contains_key(*k))
-                        .cloned()
-                        .collect();
-                    let mut changed = loaded;
-                    changed.push(self.workspace_id.clone());
-                    self.redraw(&changed, gone);
-                }
-            }
-            Mode::Unknown => {}
-        }
-    }
-
     /// Layout `id` from the construct: its materialized tree and its data.
-    /// `None`: the pod isn't on the construct (use the old path). Blocking.
+    /// Home asks the pod for its root again (`ask`); another layout is
+    /// drawn from the root the device has, and one the root doesn't reach
+    /// is asked for by name. Blocking.
     pub(crate) fn construct_fetch(
         &self,
         id: &str,
         token: Option<&str>,
-    ) -> Option<Result<(WorkspaceSpec, Option<u64>), FetchError>> {
-        if self.construct_mode(token) != Mode::On {
-            return None;
+        ask: bool,
+    ) -> Result<WorkspaceSpec, FetchError> {
+        self.construct_current(token, ask)?;
+        let reached = lock(&self.construct).keys.contains_key(id);
+        if !reached {
+            // Not reached from home (a notification's layout): by name, asked
+            // each time (no root moves with it).
+            self.construct_open_by_name(id, token)?;
         }
-        let mut found = lock(&self.construct).layout(id);
-        if found.is_none() {
-            // Not reached from home (a notification's layout): by name.
-            if let Err(e) = self.construct_open_by_name(id, token) {
-                return Some(Err(e));
-            }
-            found = lock(&self.construct).layout(id);
-        }
+        let found = lock(&self.construct).layout(id);
         let Some((hash, bound, node)) = found else {
-            return Some(Err(FetchError::Status(404)));
+            return Err(FetchError::Status(404));
         };
-        let workspace = match serde_json::from_value(node) {
-            Ok(w) => w,
-            Err(e) => return Some(Err(FetchError::Other(format!("bad element: {e}")))),
-        };
+        let workspace = serde_json::from_value(node)
+            .map_err(|e| FetchError::Other(format!("bad element: {e}")))?;
         let url = format!("{}/v1/construct/data/{hash}", self.base_url);
         let data = client(crate::DATA_LOAD_TIMEOUT)
             .and_then(|c| {
@@ -562,26 +534,13 @@ impl Inner {
             .and_then(|r| {
                 r.json::<DataBundle>()
                     .map_err(|e| FetchError::Other(format!("bad data bundle: {e}")))
-            });
-        if let Err(FetchError::Status(409)) = data {
-            // Reverted meanwhile: the layout system again.
-            *lock(&self.construct) = Construct {
-                mode: Mode::Old,
-                ..Construct::default()
-            };
-            return None;
-        }
-        Some(data.map(|d| {
-            (
-                WorkspaceSpec {
-                    version: "1.0.0".into(),
-                    workspace,
-                    entities: d.entities,
-                    queries: d.queries,
-                },
-                None,
-            )
-        }))
+            })?;
+        Ok(WorkspaceSpec {
+            version: "1.0.0".into(),
+            workspace,
+            entities: data.entities,
+            queries: data.queries,
+        })
     }
 
     /// `event: construct`: the pod's root moved. Fetch what changed, reload
@@ -595,13 +554,9 @@ impl Inner {
             return;
         };
         let token = self.session_token();
-        {
-            let mut c = lock(&self.construct);
-            if c.mode == Mode::On && c.root.as_deref() == Some(root.as_str()) {
-                // Current: one comparison.
-                return;
-            }
-            c.mode = Mode::On;
+        if lock(&self.construct).root.as_deref() == Some(root.as_str()) {
+            // Current: one comparison.
+            return;
         }
         let (changed, gone) = match self.construct_sync(&root, token.as_deref()) {
             Ok(x) => x,
@@ -610,6 +565,7 @@ impl Inner {
                 return;
             }
         };
+        lock(&self.construct).known = true;
         println!(
             "[ConstructEngine] construct root {root}: {} layouts changed, {} gone",
             changed.len(),

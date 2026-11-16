@@ -36,26 +36,24 @@ async fn healthz() {
     assert_eq!(body, b"ok");
 }
 
+/// Home as a device draws it (`/v1/construct/names/home`, its objects and
+/// its data).
 #[tokio::test]
-async fn pixelfed_workspace_parses() {
-    let (status, body) = get("/v1/workspaces/pixelfed_sample_no_login").await;
-    assert_eq!(status, StatusCode::OK);
-    let spec: WorkspaceSpec = serde_json::from_slice(&body).unwrap();
-    assert!(matches!(spec.workspace, UiNode::Workspace { .. }));
-    assert!(!spec.entities.is_empty());
+async fn home_is_served_by_the_construct() {
+    let (status, body) =
+        pod_core::testing::layout_for(&server::app_in_memory(), "home", None).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let spec: WorkspaceSpec = serde_json::from_value(body).unwrap();
+    assert!(
+        matches!(spec.workspace, UiNode::Page { .. }),
+        "{:?}",
+        spec.workspace
+    );
+    assert!(spec.entities.contains_key("core://theme"));
 }
 
 #[tokio::test]
 async fn removed_counter_app_is_gone() {
-    // `home` is now every pod's home app (decision `blueprints-and-home`),
-    // not the counter that once had the id.
-    let (status, body) = get("/v1/workspaces/home").await;
-    assert_eq!(status, StatusCode::OK);
-    let spec: Value = serde_json::from_slice(&body).unwrap();
-    assert_eq!(
-        spec["workspace"]["slots"][0]["content"]["type"],
-        "core://Box"
-    );
     let (status, _) = send(
         Request::post("/v1/counters/home/increment")
             .body(Body::empty())
@@ -66,34 +64,25 @@ async fn removed_counter_app_is_gone() {
 }
 
 #[tokio::test]
-async fn unknown_workspace_is_404_json() {
-    let (status, body) = get("/v1/workspaces/nope").await;
+async fn unknown_name_is_404_json() {
+    let (status, body) = get("/v1/construct/names/nope").await;
     assert_eq!(status, StatusCode::NOT_FOUND);
     let v: Value = serde_json::from_slice(&body).unwrap();
-    assert_eq!(v["error"], "workspace_not_found");
+    assert!(v["error"].is_string(), "{v}");
 }
 
 #[tokio::test]
 async fn wrong_method_is_405() {
-    let (status, _) = send(
-        Request::post("/v1/workspaces/pixelfed_sample_no_login")
-            .body(Body::empty())
-            .unwrap(),
-    )
-    .await;
+    let (status, _) = send(Request::post("/v1/construct").body(Body::empty()).unwrap()).await;
     assert_eq!(status, StatusCode::METHOD_NOT_ALLOWED);
     let (status, _) = get("/v1/pixelfed_sample_no_login/ack").await;
     assert_eq!(status, StatusCode::METHOD_NOT_ALLOWED);
 }
 
 #[tokio::test]
-async fn workspace_response_is_json_content_type() {
+async fn construct_response_is_json_content_type() {
     let resp = server::app_in_memory()
-        .oneshot(
-            Request::get("/v1/workspaces/pixelfed_sample_no_login")
-                .body(Body::empty())
-                .unwrap(),
-        )
+        .oneshot(Request::get("/v1/construct").body(Body::empty()).unwrap())
         .await
         .unwrap();
     assert_eq!(resp.headers()["content-type"], "application/json");
@@ -105,16 +94,26 @@ async fn real_tcp_listener() {
     let addr = listener.local_addr().unwrap();
     let handle = tokio::spawn(async move { axum::serve(listener, server::app_in_memory()).await });
 
-    let spec: WorkspaceSpec = reqwest::get(format!(
-        "http://{addr}/v1/workspaces/pixelfed_sample_no_login"
-    ))
-    .await
-    .unwrap()
-    .error_for_status()
-    .unwrap()
-    .json()
-    .await
-    .unwrap();
-    assert!(matches!(spec.workspace, UiNode::Workspace { .. }));
+    let root: Value = reqwest::get(format!("http://{addr}/v1/construct"))
+        .await
+        .unwrap()
+        .error_for_status()
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let root = root["root"].as_str().unwrap();
+    let objects: Value = reqwest::Client::new()
+        .post(format!("http://{addr}/v1/objects"))
+        .json(&serde_json::json!({ "have": [], "want": [root] }))
+        .send()
+        .await
+        .unwrap()
+        .error_for_status()
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert!(objects["objects"].get(root).is_some(), "{objects}");
     handle.abort();
 }

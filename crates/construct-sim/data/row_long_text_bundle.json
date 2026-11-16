@@ -76,10 +76,10 @@
                         "checked": "true",
                         "content_description": "Weekly digest",
                         "on_click": {
-                          "app": "row_check",
                           "command": "toggle_channel",
                           "id": "weekly_digest",
-                          "intent": "action.device"
+                          "intent": "action.device",
+                          "layout": "row_check"
                         },
                         "type": "core://Switch"
                       }
@@ -203,10 +203,10 @@
                         "checked": "false",
                         "content_description": "Replies",
                         "on_click": {
-                          "app": "row_check",
                           "command": "toggle_channel",
                           "id": "replies",
-                          "intent": "action.device"
+                          "intent": "action.device",
+                          "layout": "row_check"
                         },
                         "type": "core://Switch"
                       }

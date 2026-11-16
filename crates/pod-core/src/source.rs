@@ -1,11 +1,12 @@
 //! Data sources (decision `custom-apps-and-data-sources`): what an adapter
 //! offers layouts, declared in its [`SourceManifest`].
 //!
-//! A data source is an adapter seen from a layout: named feeds that fill an
-//! app's root (`GET /v1/workspaces/:id`), screen data paths, the actions its
-//! buttons may call, and the entities it serves. An app is a layout plus a
-//! list of feeds ([`crate::AppInfo::feeds`]); the core runs each feed and
-//! merges the results ([`crate::Source::feed`]). A source's id is its
+//! A data source is an adapter seen from a layout: named feeds that home
+//! binds and its layouts read (`GET /v1/construct/data/<element>`), screen
+//! data paths, the actions its buttons may call, and the entities it
+//! serves. A blueprint names the feeds it reads
+//! ([`crate::BlueprintInfo::feeds`]); the core runs each feed and merges the
+//! results ([`crate::Source::feed`]). A source's id is its
 //! adapter's [`crate::Source::name`].
 //!
 //! Patterns name their variable parts `{name}` (`[a-z_]+`), always a whole

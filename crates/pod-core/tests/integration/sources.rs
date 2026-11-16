@@ -1,6 +1,7 @@
 //! Data sources (decision `custom-apps-and-data-sources`): the catalog's
-//! checks of manifests and app feeds, the route check of layout files, an
-//! app root composed of several sources' feeds, and data events by source.
+//! checks of manifests and blueprint feeds, the route check of layout files,
+//! a layout's data composed of several sources' feeds (home's), and data
+//! events by source on the construct's stream.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -14,7 +15,7 @@ use pod_core::layouts::LayoutSource;
 use pod_core::session::session_hash;
 use pod_core::store::open_session_on;
 use pod_core::{
-    AppInfo, AppState, AuthPolicy, BoxFuture, Catalog, FeedSpec, Hydration, PathSpec, Pod,
+    AppState, AuthPolicy, BlueprintInfo, BoxFuture, Catalog, FeedSpec, Hydration, PathSpec, Pod,
     RequestCtx, Session, SignInProvider, Source, SourceManifest,
 };
 use protocol::{DataBundle, EntityRecord, WorkspaceSpec};
@@ -62,7 +63,7 @@ struct Src {
     name: &'static str,
     sign_in: Option<&'static str>,
     provides: Option<&'static str>,
-    apps: Vec<AppInfo>,
+    apps: Vec<BlueprintInfo>,
     files: &'static [LayoutSource],
     answer: Answer,
     schemes: &'static [&'static str],
@@ -86,7 +87,7 @@ impl Src {
     /// Serve app `id` (public) whose root lists `feeds`, with a layout that
     /// uses this source's routes.
     fn app(mut self, id: &'static str, feeds: &[(&'static str, &'static str)]) -> Self {
-        self.apps.push(AppInfo {
+        self.apps.push(BlueprintInfo {
             id,
             title: "T",
             icon: "photo",
@@ -109,7 +110,7 @@ impl Source for Src {
     fn name(&self) -> &'static str {
         self.name
     }
-    fn apps(&self) -> Vec<AppInfo> {
+    fn blueprints(&self) -> Vec<BlueprintInfo> {
         self.apps.clone()
     }
     fn layout_files(&self) -> &'static [LayoutSource] {
@@ -239,7 +240,7 @@ fn a_layout_file_may_only_use_its_sources_routes() {
     // Its own adapter's routes, and those of the sources its feeds name.
     assert_eq!(start(vec![Src::new("a").app("a", &[])]), Ok(()));
     let mut a = Src::new("a");
-    a.apps.push(AppInfo {
+    a.apps.push(BlueprintInfo {
         id: "x",
         title: "T",
         icon: "photo",
@@ -252,7 +253,7 @@ fn a_layout_file_may_only_use_its_sources_routes() {
     // Another source's action, without a feed of it: refused, naming what
     // is offered.
     let mut a = Src::new("a");
-    a.apps.push(AppInfo {
+    a.apps.push(BlueprintInfo {
         id: "x",
         title: "T",
         icon: "photo",
@@ -269,7 +270,7 @@ fn a_layout_file_may_only_use_its_sources_routes() {
     );
     // A screen data path no source declares.
     let mut a = Src::new("a");
-    a.apps.push(AppInfo {
+    a.apps.push(BlueprintInfo {
         id: "x",
         title: "T",
         icon: "photo",
@@ -289,49 +290,80 @@ fn a_layout_file_may_only_use_its_sources_routes() {
     );
 }
 
-async fn get_json(pod: &Pod, path: &str, bearer: Option<&str>) -> (StatusCode, Value) {
-    let mut req = Request::get(path).header(protocol::FEATURES_HEADER, protocol::features_header());
-    if let Some(t) = bearer {
-        req = req.header("authorization", format!("Bearer {t}"));
-    }
-    let resp = pod_core::app(pod.clone())
-        .oneshot(req.body(Body::empty()).unwrap())
-        .await
-        .unwrap();
-    let status = resp.status();
-    let bytes = resp.into_body().collect().await.unwrap().to_bytes();
-    (
-        status,
-        serde_json::from_slice(&bytes).unwrap_or(Value::Null),
-    )
-}
-
-/// App `ab` over a public source `a` and a source `b` that needs sign-in
-/// `test` (answering `b_answer`).
-fn composed(b_answer: Answer) -> Pod {
+/// A pod over a public source `a` (which ships the home blueprint) and a
+/// source `b` that needs sign-in `test` (answering `b_answer`), with a
+/// layout that lists both feeds (home binds them): the pod and the
+/// layout's id.
+async fn composed(b_answer: Answer) -> (Pod, String) {
     let mut b = Src::new("b");
     b.sign_in = Some("test");
     b.provides = Some("test");
     b.answer = b_answer;
-    let a = Src::new("a").app("ab", &[("a", "all"), ("b", "all")]);
-    Arc::new(AppState::in_memory(vec![Arc::new(a), Arc::new(b)]))
+    let a = Src::new("a").app("shell", &[]);
+    let pod: Pod = Arc::new(AppState::in_memory(vec![Arc::new(a), Arc::new(b)]));
+    let id = bind(&pod, &["a", "b"]).await;
+    (pod, id)
+}
+
+/// A new layout listing `<source>:all` of each source (home binds them):
+/// its id. Written with the pod token ("pod").
+async fn bind(pod: &Pod, sources: &[&str]) -> String {
+    pod.store()
+        .create_pinned_session(&session_hash("pod"))
+        .unwrap();
+    let lists: Vec<Value> = sources
+        .iter()
+        .map(|s| {
+            serde_json::json!({"type": "core://List", "query_key": format!("{s}:all"),
+            "item_template": {"type": "core://Text", "style": "Body", "value_expr": "$item.from"}})
+        })
+        .collect();
+    let feeds: Vec<Value> = sources
+        .iter()
+        .map(|s| serde_json::json!([s, "all"]))
+        .collect();
+    let body = serde_json::json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+        "params": {"name": "create_layout", "arguments": {"title": "Both", "feeds": feeds,
+            "layout": {"type": "core://Page", "title": "Both",
+                "root": {"type": "core://Column", "children": lists}}}}});
+    let resp = pod_core::app(pod.clone())
+        .oneshot(
+            Request::post("/v1/mcp")
+                .header("authorization", "Bearer pod")
+                .header("content-type", "application/json")
+                .body(Body::from(body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+    let v: Value = serde_json::from_slice(&bytes).unwrap();
+    assert_ne!(v["result"]["isError"], true, "{v}");
+    v["result"]["structuredContent"]["id"]
+        .as_str()
+        .unwrap()
+        .to_owned()
+}
+
+async fn drawn(pod: &Pod, id: &str, bearer: Option<&str>) -> (StatusCode, Value) {
+    pod_core::testing::layout_for(&pod_core::app(pod.clone()), id, bearer).await
 }
 
 #[tokio::test]
-async fn an_app_root_merges_its_feeds_and_skips_signed_out_sources() {
-    let pod = composed(Answer::Data);
+async fn a_layout_merges_its_feeds_and_skips_signed_out_sources() {
+    let (pod, id) = composed(Answer::Data).await;
     pod.store()
         .transaction(|tx| open_session_on(tx, &session_hash("good"), "test", 86_400))
         .unwrap();
     pod.store().create_session(&session_hash("bare")).unwrap();
     for bearer in [None, Some("bare")] {
-        let (status, body) = get_json(&pod, "/v1/workspaces/ab", bearer).await;
-        assert_eq!(status, StatusCode::OK);
+        let (status, body) = drawn(&pod, &id, bearer).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
         assert_eq!(body["entities"]["a://1"]["from"], "a", "{bearer:?}");
         assert!(body["entities"].get("b://1").is_none(), "{bearer:?}");
         assert_eq!(body["queries"]["a:all"][0], "a://1");
     }
-    let (status, body) = get_json(&pod, "/v1/workspaces/ab", Some("good")).await;
+    let (status, body) = drawn(&pod, &id, Some("good")).await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body["entities"]["a://1"]["from"], "a");
     assert_eq!(body["entities"]["b://1"]["from"], "b");
@@ -340,23 +372,23 @@ async fn an_app_root_merges_its_feeds_and_skips_signed_out_sources() {
 
 #[tokio::test]
 async fn a_stale_sign_in_of_one_feed_is_handled_like_before() {
-    let pod = composed(Answer::Stale);
+    let (pod, id) = composed(Answer::Stale).await;
     let store = pod.store();
     store
         .transaction(|tx| open_session_on(tx, &session_hash("good"), "test", 86_400))
         .unwrap();
     // An ordinary session: 401, the client drops it.
-    let (status, _) = get_json(&pod, "/v1/workspaces/ab", Some("good")).await;
+    let (status, _) = drawn(&pod, &id, Some("good")).await;
     assert_eq!(status, StatusCode::UNAUTHORIZED);
     // A pod token's session stays; only the source's sign-in goes.
     let pinned = session_hash("pinned");
     store.create_pinned_session(&pinned).unwrap();
     store.attach_sign_in(&pinned, "test").unwrap();
-    let (status, _) = get_json(&pod, "/v1/workspaces/ab", Some("pinned")).await;
-    assert_eq!(status, StatusCode::OK);
+    let (status, body) = drawn(&pod, &id, Some("pinned")).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
     assert!(store.session_sign_ins(&pinned).unwrap().is_empty());
     // Signed out of b now: a's data alone.
-    let (status, body) = get_json(&pod, "/v1/workspaces/ab", Some("pinned")).await;
+    let (status, body) = drawn(&pod, &id, Some("pinned")).await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body["entities"]["a://1"]["from"], "a");
 }
@@ -373,57 +405,45 @@ async fn sse_text(body: &mut Body, wait: Duration) -> String {
 }
 
 #[tokio::test]
-async fn data_events_reach_every_app_that_draws_on_the_source() {
-    let a = Src::new("a").app("ab", &[("a", "all"), ("b", "all")]);
-    let b = Src::new("b").app("bonly", &[("b", "all")]);
-    let c = Src::new("c").app("conly", &[("c", "all")]);
+async fn data_events_reach_the_construct_stream_for_homes_sources() {
+    let a = Src::new("a").app("shell", &[]);
+    let b = Src::new("b");
+    let c = Src::new("c");
     let pod: Pod = Arc::new(AppState::in_memory(vec![
         Arc::new(a),
         Arc::new(b),
         Arc::new(c),
     ]));
+    // Home binds a's and b's feeds; nothing binds c's.
+    bind(&pod, &["a", "b"]).await;
     pod.store().create_session(&session_hash("alice")).unwrap();
-    let connect = |app: &'static str| {
-        let pod = pod.clone();
-        async move {
-            pod_core::app(pod)
-                .oneshot(
-                    Request::get(format!("/v1/workspaces/{app}/events"))
-                        .header("authorization", "Bearer alice")
-                        .body(Body::empty())
-                        .unwrap(),
-                )
-                .await
-                .unwrap()
-                .into_body()
-        }
-    };
-    let mut streams = Vec::new();
-    for app in ["ab", "bonly", "conly"] {
-        let mut s = connect(app).await;
-        assert!(
-            sse_text(&mut s, Duration::from_millis(200))
-                .await
-                .contains("event: layout")
-        );
-        streams.push((app, s));
-    }
+    let mut s = pod_core::app(pod.clone())
+        .oneshot(
+            Request::get("/v1/construct/events")
+                .header("authorization", "Bearer alice")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap()
+        .into_body();
+    assert!(
+        sse_text(&mut s, Duration::from_millis(200))
+            .await
+            .contains("event: construct")
+    );
     let alice = Session {
         token_hash: session_hash("alice"),
         sign_ins: Vec::new(),
         pinned: false,
     };
-    pod.publish_data("b", &alice);
-    for (app, s) in &mut streams {
-        let text = sse_text(s, Duration::from_millis(300)).await;
-        let expected = *app != "conly";
-        assert_eq!(text.contains("event: data"), expected, "{app}: {text}");
+    for (source, expected) in [("b", true), ("c", false)] {
+        pod.publish_data(source, &alice);
+        let text = sse_text(&mut s, Duration::from_millis(300)).await;
+        assert_eq!(text.contains("event: data"), expected, "{source}: {text}");
         if expected {
-            // The wire event is unchanged: it names the app.
-            assert!(
-                text.contains(&format!(r#"{{"workspace_id":"{app}"}}"#)),
-                "{text}"
-            );
+            // The wire event is unchanged: it names home.
+            assert!(text.contains(r#"{"workspace_id":"home"}"#), "{text}");
         }
     }
 }

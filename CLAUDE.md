@@ -27,7 +27,8 @@ issues. `docs/history/` is archived; don't treat it as current.
 - `crates/client-core` the engine (cache, outbox, sign-in, event stream), a library of the clients.
 - `crates/construct-elements`: the content-addressed construct's elements (hashes, references, component
   expansion, materializing), shared by the pod (`pod_core::construct`) and the engine (`client_core::construct`);
-  pods opt in with `server pods switch` (decision `content-addressed-construct`).
+  it is the only layout system: a pod still on the old one is converted when it opens (decisions
+  `content-addressed-construct`, `one-layout-system`).
 - `crates/construct-render` the renderer and the clients (taffy, wgpu, a CPU rasterizer): the pod's MCP layout
   previews, `construct-viewer` (desktop; `scripts/macos_app.sh` bundles the Mac app) and the Android app
   (NativeActivity; `scripts/android_native.sh` builds and installs it, `android/` its manifest, resources and Java

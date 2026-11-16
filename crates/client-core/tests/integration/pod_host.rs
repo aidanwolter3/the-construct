@@ -1,5 +1,6 @@
-//! The engine in front of a pod host (D46): no token -> "Open your pod";
-//! a temporary pod opens a session; Pixelfed sign-in adds to that session;
+//! The engine in front of a pod host (D46): no token -> "Open your pod"
+//! (the host's construct of one element); a temporary pod opens a session
+//! and its home is drawn; Pixelfed sign-in adds to that session;
 //! signing out keeps the pod token; leaving the pod forgets it. Settings'
 //! list of sign-ins follows along.
 
@@ -112,7 +113,7 @@ fn a_device_opens_a_pod_signs_in_signs_out_and_leaves() {
     let engine = ConstructEngine::init_with_options(
         "",
         &base,
-        "pixelfed",
+        "home",
         EngineOptions {
             config: EngineConfig {
                 poll_interval: Duration::from_millis(100),
@@ -145,11 +146,12 @@ fn a_device_opens_a_pod_signs_in_signs_out_and_leaves() {
         auth(s)["error"] == POD_CODE_REJECTED
     });
 
-    // A temporary pod: a session without an account, the app's sign-in screen.
+    // A temporary pod: a session without an account, the pod's home.
     engine.dispatch(&open_session("/v1/pods/temporary", json!({})));
-    wait_until(&engine, "the pod's Pixelfed screen", |s| {
+    wait_until(&engine, "the pod's home", |s| {
         auth(s) == json!({ "state": "signed_out", "session": true })
-            && s.workspace_json.contains("Sign in with Pixelfed")
+            && s.workspace_json != "null"
+            && !s.workspace_json.contains("Try a temporary pod")
     });
     let token = |store: &MemoryStore| -> Option<String> {
         store.get(&session_key(&base)).map(|raw| {
@@ -168,9 +170,7 @@ fn a_device_opens_a_pod_signs_in_signs_out_and_leaves() {
                  "app_path": "/v1/auth/pixelfed/app", "token_path": "/v1/auth/pixelfed/token" })
         .to_string(),
     );
-    wait_until(&engine, "signed in with the feed", |s| {
-        auth(s)["state"] == "signed_in" && s.queries_json.contains("timeline:home")
-    });
+    wait_until(&engine, "signed in", |s| auth(s)["state"] == "signed_in");
     assert_eq!(token(&store).as_deref(), Some(pod_token.as_str()));
     let list = sign_ins(&engine);
     assert_eq!(list["sign_ins"][0]["title"], "Pixelfed", "{list}");
@@ -182,9 +182,14 @@ fn a_device_opens_a_pod_signs_in_signs_out_and_leaves() {
     wait_until(&engine, "signed out of Pixelfed, still in the pod", |s| {
         auth(s)["session"] == true
             && auth(s)["state"] == "signed_out"
-            && s.workspace_json.contains("Sign in with Pixelfed")
+            && !s.workspace_json.contains("Try a temporary pod")
     });
-    assert_eq!(token(&store).as_deref(), Some(pod_token.as_str()));
+    // The secure store is written just after the state changes.
+    let deadline = Instant::now() + TIMEOUT;
+    while token(&store).as_deref() != Some(pod_token.as_str()) {
+        assert!(Instant::now() < deadline, "the pod token stays stored");
+        thread::sleep(Duration::from_millis(10));
+    }
     let listed = sign_ins(&engine);
     assert_eq!(listed["sign_ins"], json!([]));
     // Settings can start the sign-in again.

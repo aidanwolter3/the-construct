@@ -1,5 +1,7 @@
 # Adapters are data sources; an app is a layout plus a list of feeds
 
+Superseded in part by [one-layout-system](one-layout-system.md): `/v1/custom-apps` and the custom-app tables are gone; layouts are written with the MCP tools.
+
 Superseded in part by [layouts-not-apps](layouts-not-apps.md): feeds belong to home, and every layout binds them.
 
 Date: 2026-11-03. Related: D22–D25, D32, D34, D36–D38, D40, D46, D50, issue #45.

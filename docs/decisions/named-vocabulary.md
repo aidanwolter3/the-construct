@@ -1,5 +1,7 @@
 # Layout vocabulary is named features only; the schema number is gone
 
+Superseded in part by [one-layout-system](one-layout-system.md): versions are a name's history on the construct; the versions API is gone.
+
 Date: 2026-11-04. Related: D36, D37, D38, D51, [layout-features](layout-features.md),
 [composable-actions](composable-actions.md). Supersedes the schema numbers of D36/D38 (and `RETIRED`, D37).
 
