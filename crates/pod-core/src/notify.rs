@@ -1,9 +1,9 @@
 //! Notifications from apps (D52, `docs/notifications.md`).
 //!
 //! Adapters report notifications ([`AppState::notify`]), either when the host
-//! scheduler polls them ([`AppAdapter::poll_notifications`], driven by
+//! scheduler polls them ([`Source::poll_notifications`], driven by
 //! [`AppState::poll_due`]) or from their own routes. The core stores each once
-//! (`UNIQUE(app_id, dedupe_key)`), announces it on every open events stream
+//! (`UNIQUE(layout, dedupe_key)`), announces it on every open events stream
 //! of the pod and sends it by Web Push to registered devices that want its
 //! channel and have no stream open. The core never knows what a notification
 //! means: it has an app id, a channel the app's adapter declared, ready-made
@@ -42,7 +42,7 @@ pub const MAX_DEVICES: i64 = 20;
 /// A device not seen for this long is no reason to poll.
 pub const DEVICE_ACTIVE_SECS: i64 = 30 * 86_400;
 /// What [`AppState::poll_due`] answers for a pod an adapter keeps open
-/// ([`crate::AppAdapter::keeps_open`]) and with nothing to poll: due at
+/// ([`crate::Source::keeps_open`]) and with nothing to poll: due at
 /// once, so the host opens it whenever the server starts. It never
 /// changes, so the host doesn't write it again on every pass.
 pub const KEEP_OPEN_WAKE: i64 = 0;
@@ -62,9 +62,9 @@ const MAX_BODY: usize = 1000;
 /// A notification an adapter reports.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NewNotification {
-    /// One of the adapter's apps.
-    pub app_id: String,
-    /// A channel the adapter declared for that app.
+    /// The layout (or blueprint) whose channel it is.
+    pub layout: String,
+    /// A channel the source declared for that layout.
     pub channel: String,
     /// Stable per upstream event (e.g. `<instance>:<id>`); reporting the same
     /// key again does nothing.
@@ -104,7 +104,7 @@ pub enum PollStatus {
     SignInGone(String),
 }
 
-/// What [`AppAdapter::poll_notifications`](crate::AppAdapter::poll_notifications) returns.
+/// What [`Source::poll_notifications`](crate::Source::poll_notifications) returns.
 #[derive(Debug, Clone, Default)]
 pub struct PollOutcome {
     pub new: Vec<NewNotification>,
@@ -151,7 +151,7 @@ fn truncate(s: &str, max: usize) -> String {
 fn row_to_notification(r: &rusqlite::Row<'_>) -> rusqlite::Result<Notification> {
     Ok(Notification {
         id: r.get::<_, i64>(0)?.to_string(),
-        app_id: r.get(1)?,
+        channel_layout: r.get(1)?,
         channel: r.get(2)?,
         title: r.get(3)?,
         body: r.get(4)?,
@@ -165,12 +165,12 @@ fn row_to_notification(r: &rusqlite::Row<'_>) -> rusqlite::Result<Notification> 
 }
 
 const NOTIFICATION_COLS: &str =
-    "id, app_id, channel, title, body, image_url, target_uri, group_key, created_at, read_at";
+    "id, layout, channel, title, body, image_url, target_uri, group_key, created_at, read_at";
 
 /// Unread counts per app, for the apps in `apps`.
 fn unread_on(conn: &Connection, apps: &[String]) -> rusqlite::Result<(u32, BTreeMap<String, u32>)> {
     let mut stmt = conn.prepare_cached(
-        "SELECT app_id, COUNT(*) FROM notifications WHERE read_at IS NULL GROUP BY app_id",
+        "SELECT layout, COUNT(*) FROM notifications WHERE read_at IS NULL GROUP BY layout",
     )?;
     let mut by_app = BTreeMap::new();
     let mut total = 0u32;
@@ -194,11 +194,11 @@ fn insert_on(
     let mut out = Vec::new();
     for n in items {
         let changed = conn.execute(
-            "INSERT OR IGNORE INTO notifications (app_id, channel, dedupe_key, title, body, image_url,
+            "INSERT OR IGNORE INTO notifications (layout, channel, dedupe_key, title, body, image_url,
                  target_uri, group_key, created_at, inserted_at, read_at)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
             params![
-                n.app_id,
+                n.layout,
                 n.channel,
                 n.dedupe_key,
                 n.title,
@@ -243,13 +243,13 @@ fn prune_devices_on(conn: &Connection) -> rusqlite::Result<()> {
     Ok(())
 }
 
-/// The channel choices of a device: `(app_id, channel) -> enabled`.
+/// The channel choices of a device: `(layout, channel) -> enabled`.
 fn device_prefs_on(
     conn: &Connection,
     device: &str,
 ) -> rusqlite::Result<HashMap<(String, String), bool>> {
     let mut stmt = conn.prepare_cached(
-        "SELECT app_id, channel, enabled FROM device_channel_prefs WHERE device_id = ?1",
+        "SELECT layout, channel, enabled FROM device_channel_prefs WHERE device_id = ?1",
     )?;
     stmt.query_map([device], |r| {
         Ok(((r.get(0)?, r.get(1)?), r.get::<_, i64>(2)? != 0))
@@ -438,13 +438,13 @@ impl AppState {
         };
         for a in senders {
             for c in a.custom_notification_channels(self.store(), self.catalog()) {
-                let fits = live.contains(&c.app_id)
+                let fits = live.contains(&c.layout)
                     && valid_channel_id(&c.id)
-                    && !out.iter().any(|o| o.app_id == c.app_id && o.id == c.id);
+                    && !out.iter().any(|o| o.layout == c.layout && o.id == c.id);
                 if fits {
                     out.push(c);
                 } else {
-                    tracing::warn!(adapter = a.name(), app = %c.app_id, channel = %c.id,
+                    tracing::warn!(adapter = a.name(), app = %c.layout, channel = %c.id,
                         "custom app channel dropped");
                 }
             }
@@ -546,9 +546,9 @@ impl AppState {
             .filter(|n| {
                 let known = channels
                     .iter()
-                    .any(|c| c.app_id == n.app_id && c.id == n.channel);
+                    .any(|c| c.layout == n.layout && c.id == n.channel);
                 if !known {
-                    tracing::warn!(app = %n.app_id, channel = %n.channel, "notification for an undeclared channel dropped");
+                    tracing::warn!(app = %n.layout, channel = %n.channel, "notification for an undeclared channel dropped");
                 }
                 known && !n.dedupe_key.is_empty() && n.dedupe_key.len() <= 256
             })
@@ -620,12 +620,12 @@ impl AppState {
             for n in &fresh {
                 let enabled = t
                     .prefs
-                    .get(&(n.app_id.clone(), n.channel.clone()))
+                    .get(&(n.channel_layout.clone(), n.channel.clone()))
                     .copied()
                     .unwrap_or_else(|| {
-                        channels
-                            .iter()
-                            .any(|c| c.app_id == n.app_id && c.id == n.channel && c.default_enabled)
+                        channels.iter().any(|c| {
+                            c.layout == n.channel_layout && c.id == n.channel && c.default_enabled
+                        })
                     });
                 if !enabled {
                     continue;
@@ -921,13 +921,13 @@ async fn list(
             let mut rows: Vec<Notification> = {
                 let mut stmt = c.prepare_cached(&format!(
                     "SELECT {NOTIFICATION_COLS} FROM notifications
-                     WHERE id < ?1 AND (?2 IS NULL OR app_id = ?2)
+                     WHERE id < ?1 AND (?2 IS NULL OR layout = ?2)
                      ORDER BY id DESC LIMIT ?3"
                 ))?;
                 stmt.query_map(params![before, app, limit + 1], row_to_notification)?
                     .collect::<rusqlite::Result<_>>()?
             };
-            rows.retain(|n| apps.contains(&n.app_id));
+            rows.retain(|n| apps.contains(&n.channel_layout));
             let (total, by_app) = unread_on(c, &apps)?;
             Ok((rows, total, by_app))
         })
@@ -1008,7 +1008,7 @@ async fn mark_read(State(state): State<Pod>, headers: HeaderMap, body: Bytes) ->
             } else {
                 tx.execute(
                     "UPDATE notifications SET read_at = ?1
-                     WHERE read_at IS NULL AND (?2 IS NULL OR app_id = ?2)",
+                     WHERE read_at IS NULL AND (?2 IS NULL OR layout = ?2)",
                     params![now, app],
                 )?;
             }
@@ -1048,7 +1048,7 @@ async fn channels(State(state): State<Pod>, headers: HeaderMap) -> Response {
         .into_iter()
         .map(|c| {
             let enabled = prefs
-                .get(&(c.app_id.clone(), c.id.clone()))
+                .get(&(c.layout.clone(), c.id.clone()))
                 .copied()
                 .unwrap_or(c.default_enabled);
             let mut v = serde_json::to_value(&c).unwrap_or_default();
@@ -1198,7 +1198,7 @@ async fn delete_device(
     }
 }
 
-/// `PUT /v1/devices/{id}/channels {"<app_id>.<channel>": bool, …}`: the
+/// `PUT /v1/devices/{id}/channels {"<layout>.<channel>": bool, …}`: the
 /// device's channel choices (unknown channels are refused).
 async fn set_channels(
     State(state): State<Pod>,
@@ -1226,7 +1226,7 @@ async fn set_channels(
                 json!({ "error": "unknown_channel", "channel": key }),
             );
         };
-        choices.push((c.app_id.clone(), c.id.clone(), enabled));
+        choices.push((c.layout.clone(), c.id.clone(), enabled));
     }
     let result = blocking(&state, move |s| {
         s.transaction(|tx| {
@@ -1239,9 +1239,9 @@ async fn set_channels(
             }
             for (app, channel, enabled) in &choices {
                 tx.execute(
-                    "INSERT INTO device_channel_prefs (device_id, app_id, channel, enabled)
+                    "INSERT INTO device_channel_prefs (device_id, layout, channel, enabled)
                      VALUES (?1, ?2, ?3, ?4)
-                     ON CONFLICT(device_id, app_id, channel) DO UPDATE SET enabled = excluded.enabled",
+                     ON CONFLICT(device_id, layout, channel) DO UPDATE SET enabled = excluded.enabled",
                     params![id, app, channel, i64::from(*enabled)],
                 )?;
             }

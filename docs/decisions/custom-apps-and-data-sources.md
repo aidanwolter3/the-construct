@@ -16,7 +16,7 @@ several sources per app). The pod composing, against a declared manifest, keeps 
 
 Decision:
 
-- **A data source is an adapter seen from a layout.** `AppAdapter::manifest()` returns a `SourceManifest`
+- **A data source is an adapter seen from a layout.** `Source::manifest()` returns a `SourceManifest`
   (`pod_core::source`): a title, the sign-in its data needs, its entity URI schemes, its named **feeds** (with the
   query keys each fills), its screen **data paths** (`GET`, answering a `DataBundle`), its **actions** (`POST`
   endpoints for mutations and creates) and docs of its entities' fields. The source id is the adapter's `name()`.
@@ -88,7 +88,7 @@ same token could do. A misleading button label is an accepted risk.
   the platform's default app (`ConstructController(defaultAppId = …)`) and shows "This app was deleted."; without
   one it stays on a placeholder that says so. No new snapshot field, so the FFI record is unchanged.
 - **Sign in from Settings:** `GET /v1/auth/sign-ins` also lists `providers`, `{id, title, signed_in, intent?,
-  server_placeholder?}`, from the new `AppAdapter::sign_in_start` (Pixelfed: the default instance's
+  server_placeholder?}`, from the new `Source::sign_in_start` (Pixelfed: the default instance's
   `action.auth.login`, plus a server box when other instances are allowed, D45). Settings shows "Sign in to
   <title>" for each one the session lacks and dispatches that intent. This closes a "Not yet" of decision
   `settings-page-and-sign-ins`.

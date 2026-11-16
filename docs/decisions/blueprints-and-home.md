@@ -29,7 +29,7 @@ Decision:
   is the whole blueprint (pod-only, like other parts); the expansion keeps the app's own `id` (and `title`, when the
   ref has one). Anywhere else it is refused. A blueprint deploy appends `ref_update` versions as before.
 - **The home app.** Every pod has a custom app with the fixed id `home` (`pod_core::HOME_APP`), created on open as a
-  whole reference to the `shell` blueprint (`pod_core::HOME_BLUEPRINT`, crate `app-shell`). It is listed first,
+  whole reference to the `shell` blueprint (`pod_core::HOME_BLUEPRINT`, crate `source-shell`). It is listed first,
   can't be deleted (409 `home_app`), and is otherwise the user's to change. A new pod has nothing else.
 - **Older pods keep their apps.** Migration `blueprints` marks a pod that already had layout history; on its next
   open the pod creates one app referencing each built-in it showed (not hidden, not dev), with the built-in's feeds,

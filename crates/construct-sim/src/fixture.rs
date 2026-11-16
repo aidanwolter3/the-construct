@@ -171,7 +171,7 @@ impl FixturePod {
         s.next_id += 1;
         s.notifications.insert(
             0,
-            json!({ "id": id, "app_id": app, "channel": channel, "title": title, "body": "",
+            json!({ "id": id, "channel_layout": app, "app_id": app, "channel": channel, "title": title, "body": "",
                     "created_at": now_secs(), "read": false }),
         );
     }
@@ -235,7 +235,7 @@ impl FixturePod {
             let read = n["read"].as_bool().unwrap_or(true);
             unread += i64::from(!read);
             let mut e = n.clone();
-            e["app_title"] = json!(app_title(n["app_id"].as_str().unwrap_or_default()));
+            e["app_title"] = json!(app_title(protocol::notification_layout_in(n)));
             e["when"] = json!(time_label(at, now));
             e["day"] = json!(day_label(at, now));
             e["unread"] = json!(!read);
@@ -254,7 +254,7 @@ impl FixturePod {
         let mut list = Vec::new();
         for c in &s.channels {
             let (app, id) = (
-                c["app_id"].as_str().unwrap_or_default(),
+                protocol::channel_layout_in(c),
                 c["id"].as_str().unwrap_or_default(),
             );
             let mut e = c.clone();
@@ -338,7 +338,7 @@ impl Loader for FixturePod {
                     let c = s
                         .channels
                         .iter_mut()
-                        .find(|c| c["app_id"] == app && c["id"] == id);
+                        .find(|c| protocol::channel_layout_in(c) == app && c["id"] == id);
                     match c {
                         Some(c) => c["enabled"] = json!(!c["enabled"].as_bool().unwrap_or(false)),
                         None => return Some(Err(format!("no channel {app}.{id}"))),

@@ -16,8 +16,8 @@ use pod_core::layouts::LayoutSource;
 use pod_core::session::session_hash;
 use pod_core::store::Store;
 use pod_core::{
-    AppAdapter, AppInfo, AppState, AuthPolicy, BoxFuture, FeedSpec, Hydration, NewNotification,
-    Pod, RequestCtx, SourceManifest,
+    AppInfo, AppState, AuthPolicy, BoxFuture, FeedSpec, Hydration, NewNotification, Pod,
+    RequestCtx, Source, SourceManifest,
 };
 use protocol::{DataBundle, Importance, NotificationChannel};
 use tower::ServiceExt;
@@ -33,7 +33,7 @@ static FILES: &[LayoutSource] = &[LayoutSource {
 
 struct Bell;
 
-impl AppAdapter for Bell {
+impl Source for Bell {
     fn name(&self) -> &'static str {
         "bell"
     }
@@ -65,7 +65,7 @@ impl AppAdapter for Bell {
     }
     fn notification_channels(&self) -> Vec<NotificationChannel> {
         vec![NotificationChannel {
-            app_id: "bell".into(),
+            layout: "bell".into(),
             id: "likes".into(),
             title: "likes".into(),
             description: String::new(),
@@ -77,7 +77,7 @@ impl AppAdapter for Bell {
 
 fn note(key: &str) -> NewNotification {
     NewNotification {
-        app_id: "bell".into(),
+        layout: "bell".into(),
         channel: "likes".into(),
         dedupe_key: key.into(),
         title: format!("title {key}"),

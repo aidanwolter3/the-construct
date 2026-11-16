@@ -6,14 +6,14 @@
 //! linear, append-only layout history (`app_versions`, store migration v7).
 //! New versions come only from the developer: files
 //! `crates/<adapter>/layouts/<app_id>/NNNN.json` in the repo, embedded in the
-//! binary by the app's adapter ([`crate::AppAdapter::layout_files`]) and appended at startup
+//! binary by the app's adapter ([`crate::Source::layout_files`]) and appended at startup
 //! by [`sync`] before the server listens. No HTTP route changes a built-in
 //! app's layout; custom apps (the pod user's own, [`crate::custom`]) get
 //! their versions from validated writes instead of files.
 //!
 //! # Adding a layout version
 //!
-//! 1. Copy the newest file, e.g. `crates/app-pixelfed/layouts/pixelfed/0011.json`
+//! 1. Copy the newest file, e.g. `crates/source-pixelfed/layouts/pixelfed/0011.json`
 //!    to `.../pixelfed/0012.json` (4 digits, the next number: numbering
 //!    is contiguous from the app's oldest file), and edit it. The format is
 //!    `{"note": "short changelog line", "layout": <UiNode>}`; the layout root
@@ -101,7 +101,7 @@ pub const MAX_VERSIONS_LIMIT: i64 = 100;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct LayoutSource {
     /// The folder of the app folders, as the repository names it
-    /// (`crates/app-events/layouts`): only for messages.
+    /// (`crates/source-events/layouts`): only for messages.
     pub dir: &'static str,
     pub app_id: &'static str,
     /// `NNNN` (4 digits).

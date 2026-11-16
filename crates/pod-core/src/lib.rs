@@ -7,7 +7,7 @@
 //! (`layouts/<app>/NNNN.json` in each adapter crate), synced into one append-only version history
 //! per app at startup; [`validate`] checks every layout file.
 //!
-//! Apps plug in through [`AppAdapter`]: the `server` binary builds the
+//! Apps plug in through [`Source`]: the `server` binary builds the
 //! adapters and passes them to [`AppState::try_new`]. The core never names an
 //! app; adapters supply each app's data, routes, sign-ins and tables. Each
 //! adapter is also a data source ([`source`]): an app is a layout plus a
@@ -57,8 +57,8 @@ use serde_json::{Value, json};
 use store::Store;
 
 pub use adapter::{
-    AppAdapter, AppInfo, AuthPolicy, BoxFuture, Catalog, Hydration, Pod, RequestCtx, SignInAccount,
-    SignInProvider, SignInStart,
+    AppInfo, AuthPolicy, BoxFuture, Catalog, Hydration, Pod, RequestCtx, SignInAccount,
+    SignInProvider, SignInStart, Source,
 };
 pub use custom::{AppRef, CustomApp};
 pub use notify::{NewNotification, PollCtx, PollOutcome, PollStatus};
@@ -89,7 +89,7 @@ struct Fault {
 }
 
 /// Request header the pod host (D46) sets to the path prefix under which this
-/// pod's public routes ([`AppAdapter::public_paths`]) are reachable without a
+/// pod's public routes ([`Source::public_paths`]) are reachable without a
 /// bearer, e.g. `/v1/p/<pod id>`. Absent when the pod is served on its own.
 pub const PUBLIC_PREFIX_HEADER: &str = "x-construct-public-prefix";
 
@@ -131,7 +131,7 @@ pub struct AppState {
     upload_quota_bytes: Option<u64>,
     /// Uploads are refused when the data volume is nearly full.
     disk_guard: Option<disk::DiskGuard>,
-    /// Set once the adapters' [`AppAdapter::resume`] and the upload sweeper
+    /// Set once the adapters' [`Source::resume`] and the upload sweeper
     /// have been started for this pod.
     started: std::sync::atomic::AtomicBool,
     /// SSE keepalive interval (15 s; shorter in tests). Streams with a
@@ -175,14 +175,14 @@ impl AppState {
     /// State over `store` serving `adapters`, after running their migrations
     /// and syncing their layout files into the store ([`layouts::sync`]).
     /// Panics with the error; see [`Self::try_new`].
-    pub fn new(store: Store, adapters: Vec<Arc<dyn AppAdapter>>) -> Self {
+    pub fn new(store: Store, adapters: Vec<Arc<dyn Source>>) -> Self {
         Self::try_new(store, adapters).unwrap_or_else(|e| panic!("{e}"))
     }
 
     /// [`Self::new`], returning the error (a bad adapter set, a failed
     /// adapter migration, or a changed, out-of-order or invalid layout file)
     /// instead of panicking.
-    pub fn try_new(store: Store, adapters: Vec<Arc<dyn AppAdapter>>) -> Result<Self, String> {
+    pub fn try_new(store: Store, adapters: Vec<Arc<dyn Source>>) -> Result<Self, String> {
         let catalog = Catalog::new(adapters)?;
         for a in catalog.adapters() {
             store
@@ -281,7 +281,7 @@ impl AppState {
     /// State backed by `<dir>/server.db` (the directory is created, 0700).
     pub fn open_dir(
         dir: &FsPath,
-        adapters: Vec<Arc<dyn AppAdapter>>,
+        adapters: Vec<Arc<dyn Source>>,
     ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
         util::create_private_dir(dir)?;
         Ok(Self::try_new(
@@ -291,7 +291,7 @@ impl AppState {
     }
 
     /// Private in-memory database (tests).
-    pub fn in_memory(adapters: Vec<Arc<dyn AppAdapter>>) -> Self {
+    pub fn in_memory(adapters: Vec<Arc<dyn Source>>) -> Self {
         Self::new(Store::open_in_memory().expect("in-memory SQLite"), adapters)
     }
 
@@ -414,7 +414,7 @@ impl AppState {
     }
 
     /// Tell `session`'s clients that data of `source` (an adapter's
-    /// [`AppAdapter::name`]) changed (`event: data`, D50): every app that
+    /// [`Source::name`]) changed (`event: data`, D50): every app that
     /// draws on that source ([`Catalog::app_sources`]) reloads. No-op
     /// without subscribers.
     pub fn publish_data(&self, source: &str, session: &Session) {
@@ -461,7 +461,7 @@ impl AppState {
     }
 
     /// Start this pod's background work once (called by [`app`]): every
-    /// adapter's [`AppAdapter::resume`] and the hourly upload sweeper. Needs a
+    /// adapter's [`Source::resume`] and the hourly upload sweeper. Needs a
     /// Tokio runtime; without one (some sync tests) nothing starts.
     fn start(self: &Pod) {
         use std::sync::atomic::Ordering;
@@ -596,7 +596,7 @@ impl AppState {
 
     /// The adapter of type `T`, if one is registered (how an adapter's route
     /// handlers find their own configuration).
-    pub fn adapter<T: AppAdapter>(&self) -> Option<&T> {
+    pub fn adapter<T: Source>(&self) -> Option<&T> {
         self.catalog.adapters().iter().find_map(|a| {
             let any: &dyn std::any::Any = a.as_ref();
             any.downcast_ref::<T>()
@@ -1066,7 +1066,7 @@ async fn compose(
     Ok(bundle)
 }
 
-/// What a [`AppAdapter::feed`] answers for a feed name it doesn't know (the
+/// What a [`Source::feed`] answers for a feed name it doesn't know (the
 /// catalog checks app feeds, so only a direct caller can get it): 404
 /// `feed_not_found`.
 pub fn unknown_feed(source: &str, feed: &str) -> Hydration {

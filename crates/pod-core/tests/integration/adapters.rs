@@ -15,8 +15,8 @@ use pod_core::layouts::LayoutSource;
 use pod_core::session::session_hash;
 use pod_core::store::{Step, open_session_on};
 use pod_core::{
-    AppAdapter, AppInfo, AppState, AuthPolicy, BoxFuture, Catalog, FeedSpec, Hydration, Pod,
-    RequestCtx, SignInProvider, SourceManifest, StaticAdapter,
+    AppInfo, AppState, AuthPolicy, BoxFuture, Catalog, FeedSpec, Hydration, Pod, RequestCtx,
+    SignInProvider, Source, SourceManifest, StaticAdapter,
 };
 use protocol::{DataBundle, EntityRecord, WorkspaceSpec};
 use serde_json::{Value, json};
@@ -64,7 +64,7 @@ const GATED: AppInfo = AppInfo {
     feeds: &[("gated", "all")],
 };
 
-fn open_app() -> Arc<dyn AppAdapter> {
+fn open_app() -> Arc<dyn Source> {
     let mut data = WorkspaceSpec {
         version: "1.0.0".into(),
         workspace: protocol::UiNode::Unknown(Value::Null),
@@ -86,7 +86,7 @@ static GATED_MIGRATIONS: &[Step] = &[Step::sql(
     "CREATE TABLE gated_t (n INTEGER NOT NULL);",
 )];
 
-impl AppAdapter for Gated {
+impl Source for Gated {
     fn name(&self) -> &'static str {
         "gated"
     }
@@ -173,7 +173,7 @@ async fn get_json(
 
 #[test]
 fn the_catalog_refuses_bad_adapter_sets() {
-    let err = |adapters: Vec<Arc<dyn AppAdapter>>| Catalog::new(adapters).err().unwrap();
+    let err = |adapters: Vec<Arc<dyn Source>>| Catalog::new(adapters).err().unwrap();
     assert_eq!(
         err(vec![open_app(), open_app()]),
         "two adapters are named 'open'"
@@ -353,11 +353,11 @@ async fn sign_ins_lists_the_session_sign_ins() {
     assert_eq!(body["sign_ins"][0]["apps"], json!([]));
 }
 
-/// The core knows no app (D40): outside comments, no source file names one.
+/// The core knows no source (D40): outside comments, no file of its names one.
 /// `store.rs` is the exception: migrations v2-v4 and v11 are frozen history
 /// that created and backfilled the Pixelfed tables.
 #[test]
-fn the_core_names_no_app() {
+fn the_core_names_no_source() {
     let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
     for entry in std::fs::read_dir(&src).unwrap() {
         let path = entry.unwrap().path();
@@ -376,7 +376,7 @@ fn the_core_names_no_app() {
             for app in ["pixelfed", "recipes", "collections"] {
                 assert!(
                     !code.to_ascii_lowercase().contains(app),
-                    "src/{name}:{}: the core must not name an app: {line}",
+                    "src/{name}:{}: the core must not name a source: {line}",
                     i + 1
                 );
             }
@@ -387,7 +387,7 @@ fn the_core_names_no_app() {
 /// An adapter that ships server components and nothing else.
 struct Shipping(&'static [ComponentSource]);
 
-impl AppAdapter for Shipping {
+impl Source for Shipping {
     fn name(&self) -> &'static str {
         "shipping"
     }
@@ -413,11 +413,11 @@ impl AppAdapter for Shipping {
     }
 }
 
-/// A component file of `crates/app-test/components`.
+/// A component file of `crates/source-test/components`.
 macro_rules! component {
     ($name:literal, $text:literal) => {
         ComponentSource {
-            dir: "crates/app-test/components",
+            dir: "crates/source-test/components",
             name: $name,
             file: "0001",
             text: concat!(
@@ -450,7 +450,7 @@ fn adapters_ship_server_components() {
     let err = Catalog::new(vec![Arc::new(Shipping(TAKEN))]).err().unwrap();
     assert_eq!(
         err,
-        "component 'card' is in both crates/pod-core/components and crates/app-test/components; \
+        "component 'card' is in both crates/pod-core/components and crates/source-test/components; \
          component names are unique"
     );
 }

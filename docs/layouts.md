@@ -10,23 +10,23 @@ feature has a one-paragraph description in `crates/protocol/features/`.
 
 ## Publishing a new layout version
 
-Built-in apps' layouts (the blueprints) live in their adapter crate, `crates/<adapter>/layouts/<app>/NNNN.json` (Pixelfed's in
-`crates/app-pixelfed/layouts/pixelfed/`, the Events app's in `crates/app-events/layouts/events/`). Adding a file is the only way to change how a built-in app
-looks.
+Built-in layouts (the blueprints) live in their source crate, `crates/source-*/layouts/<blueprint>/NNNN.json`
+(Pixelfed's in `crates/source-pixelfed/layouts/pixelfed/`, the Events app's in `crates/source-events/layouts/events/`).
+Adding a file is the only way to change how a blueprint looks.
 
 1. Copy the newest file of the app to the next number (four digits, no gaps), e.g.
-   `crates/app-recipes/layouts/recipes/0005.json` to `.../recipes/0006.json`, and edit it.
+   `crates/source-recipes/layouts/recipes/0005.json` to `.../recipes/0006.json`, and edit it.
 2. The file is `{"note": "<one-line changelog>", "layout": <core://Workspace or core://Page>}`. It may use server
    components (`core://Use` of `core:<name>`); the pod records the layout they expand to. The note is what the app menu's
    version history shows. The root's `id` must be the app id. Don't declare features: the pod works them out. Older
    files carry a `"schema"` number; it is ignored.
-3. Run `cargo test` (`-p app-pixelfed`, `-p app-recipes` or `-p app-events` is enough). It validates every file:
-   structure, size, slots, routes, endpoints the adapter declares, and nesting rules.
+3. Run `cargo test` (`-p source-pixelfed`, `-p source-recipes` or `-p source-events` is enough). It validates every file:
+   structure, size, slots, routes, endpoints the source declares, and nesting rules.
 4. Check it in the [simulator](simulator.md) and put screenshots in the PR.
 5. Merge to `main`. On start, the pod appends the file as the app's next version. Connected clients get a `layout`
    event on their stream and refetch; a client that pinned an older version keeps it and is told a newer one exists.
 
-There is no list of files to edit: each adapter's `build.rs` embeds its crate's `layouts/<app>/`
+There is no list of files to edit: each source crate's `build.rs` embeds its `layouts/<blueprint>/`
 directories.
 
 **Files are append-only.** Never edit or rename a file that has been deployed: the pod refuses to start and names
@@ -215,8 +215,8 @@ request. Any layout may bind them; a custom app needs no feed for them.
 | `local://layouts` | `count`: the pod's layouts but `home` |
 | `local:layouts` (query) | `local://layouts/<id>`: `id`, `title`, `icon`, `kind`, `detail`, `unread`, `version` ("v12 · latest", "v10 · pinned"), `hidden`; hidden ones left out. `local:apps` (`local://apps/<id>`) is its old name. |
 | `local:all_layouts` (query) | The same rows with the hidden layouts too (`hidden: true`), e.g. for a "Hidden" list with `unhide_layout` buttons (feature `device_layout_controls`). |
-| `local:notifications` (query) | The newest page, then the older pages `load_older_notifications` loaded: `id`, `app_id`, `app_title`, `title`, `body`, `when` ("5 min"), `day` ("Today"), `unread` |
-| `local:channels` (query) | `app_id`, `app_title`, `id`, `title`, `description`, `enabled` |
+| `local:notifications` (query) | The newest page, then the older pages `load_older_notifications` loaded: `id`, `channel_layout` (and its old name `app_id`), `app_title`, `title`, `body`, `when` ("5 min"), `day` ("Today"), `unread` |
+| `local:channels` (query) | `layout` (and its old name `app_id`), `app_title`, `id`, `title`, `description`, `enabled` |
 | `local:sign_ins` (query) | `id`, `title`, `detail` ("@dana · pixelfed.example") |
 | `local:providers` (query) | `id`, `title`, `custom_server` (another server may be typed), `server_placeholder`: sign-ins the pod offers that aren't signed in |
 | `local:versions` (query) | the versions of the layout `show_versions` named, newest first: `version`, `label`, `detail`, `when`, `compatible`, `showing` |
@@ -265,8 +265,8 @@ sees one and changing one needs no app build. Use one anywhere a node goes:
 ```
 
 - **`core:` components** ship with the server: `crates/pod-core/components/<name>/NNNN.json`, `{"note", "component"}`,
-  append-only like layout files. An adapter ships its own the same way, in `crates/app-*/components/<name>/` (its
-  build script embeds them; `AppAdapter::component_files`); names are unique across crates (decision
+  append-only like layout files. An adapter ships its own the same way, in `crates/source-*/components/<name>/` (its
+  build script embeds them; `Source::component_files`); names are unique across crates (decision
   `adapter-components`). Every blueprint is one too: `core:<blueprint>` is its whole layout (only as a
   layout's root; the layout keeps its own id) and `core:<blueprint>/<part>` a part (`screen:<id>` in `screens`,
   `slot:<id>`, or a name from the file's `"parts"`). `{"type": "core://Ref", "app", "part"}` is the older spelling.
@@ -307,9 +307,9 @@ The server components:
 | `core:author_header` | `avatar`, `name`, `handle`, `size`, paddings | A round avatar beside the name and handle. |
 | `core:toggle_action` | `field`, `icon`, `active_icon`, `label`, `active_label`, `endpoint`, `payload_field`, `tint`, `count_field`, `tag` | An icon button that flips a boolean field at once and tells an endpoint, optionally moving a count with it. |
 | `core:stat` | `value`, `label` | A number with a label under it. |
-| `core:pixelfed_sign_in` | `server`, `instance_url`, `other_servers`, `placeholder` | Pixelfed's signed-out screen: a sentence, "Sign in with Pixelfed", and a box for another server (shipped by `app-pixelfed`). |
-| `core:pixelfed_post` | `focus` | A Pixelfed post and its comments on a post screen (route `$route.id`), optionally scrolled to and highlighting one comment; the content of the blueprint's `post`, `comments` and `comment_thread` screens (shipped by `app-pixelfed`). |
-| `core:pixelfed_comment_box` | | The box that comments on the screen's post; those screens' footer (shipped by `app-pixelfed`). |
+| `core:pixelfed_sign_in` | `server`, `instance_url`, `other_servers`, `placeholder` | Pixelfed's signed-out screen: a sentence, "Sign in with Pixelfed", and a box for another server (shipped by `source-pixelfed`). |
+| `core:pixelfed_post` | `focus` | A Pixelfed post and its comments on a post screen (route `$route.id`), optionally scrolled to and highlighting one comment; the content of the blueprint's `post`, `comments` and `comment_thread` screens (shipped by `source-pixelfed`). |
+| `core:pixelfed_comment_box` | | The box that comments on the screen's post; those screens' footer (shipped by `source-pixelfed`). |
 | `core:message_page` | `title`, `body`, `background`; children: actions | A whole page with a message in the middle and actions under it. |
 
 Their definitions are the files; `get_component` reads them with examples. See decision

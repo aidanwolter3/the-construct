@@ -9,7 +9,7 @@
 //!
 //! - `core:<name>`: server components, files `crates/pod-core/components/
 //!   <name>/NNNN.json` (`{"note", "component"}`), or an adapter's own
-//!   `crates/app-*/components/<name>/NNNN.json` (`AppAdapter::
+//!   `crates/source-*/components/<name>/NNNN.json` (`Source::
 //!   component_files`), embedded in the binary and recorded in each pod's
 //!   `components` table at start. A deployed file
 //!   never changes (the pod refuses to start, as for layout files) and is

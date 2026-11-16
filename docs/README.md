@@ -4,7 +4,7 @@ Start with [architecture.md](architecture.md), then the guide for what you're do
 
 | Guide | Covers |
 |---|---|
-| [architecture.md](architecture.md) | How the pieces fit: pods, adapters, layouts, the engine, the clients |
+| [architecture.md](architecture.md) | How the pieces fit: pods, sources, layouts, the engine, the clients |
 | [layouts.md](layouts.md) | Publishing a layout version; bindings, nodes, intents and features |
 | [server.md](server.md) | Running and configuring the server, pods and their admin CLI, monitoring, deploying |
 | [api.md](api.md) | The pod's core HTTP API and event stream |
@@ -13,8 +13,8 @@ Start with [architecture.md](architecture.md), then the guide for what you're do
 | [rendering.md](rendering.md) | The Rust rendering engine: layout, scenes, GPU and CPU rasterizers, agent previews, the native prototypes |
 | [simulator.md](simulator.md) | The headless simulator (`construct-sim`): fixture and live modes, flags, script commands, targets |
 | [testing.md](testing.md) | Test suites, the end-to-end suite, the fake Pixelfed, a local real Pixelfed |
-| [pixelfed.md](pixelfed.md) | The Pixelfed app: sign-in, instances, its endpoints |
-| [posting.md](posting.md) | How photo posting works across client, engine, pod and adapter |
+| [pixelfed.md](pixelfed.md) | The Pixelfed source: sign-in, instances, its endpoints |
+| [posting.md](posting.md) | How photo posting works across client, engine, pod and source |
 | [notifications.md](notifications.md) | How notifications travel from an upstream to a device |
 | [agents.md](agents.md) | The Agents source: runs from an agent runner (CAP v3), the pod's schedules, its blueprint, notifications and Tasks wiring |
 

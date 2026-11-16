@@ -18,7 +18,7 @@ Decision:
   is signed in but the pod lists none (a pod from before this decision), "Signed in as @x" with Sign out stays as a fallback.
 - **Pod:** `GET /v1/auth/sign-ins` (pod-core): `{"sign_ins": [{id, title, server?, username?, apps: [{id, title}]}]}`
   for the caller's session (no bearer: empty; stale: 401). `SignInProvider` gains a `title`; adapters describe the
-  account behind a sign-in with `AppAdapter::sign_in_account` (stored data only, no upstream call; default none).
+  account behind a sign-in with `Source::sign_in_account` (stored data only, no upstream call; default none).
   Pixelfed answers with the session's instance URL and stored username. `apps` follows `GET /v1/apps` (dev apps
   only when shown). Read-only; no migration.
 - **Engine:** `ConstructEngine::sign_ins()` is a catalog call (blocking, bearer sent, a 401 never signs out);

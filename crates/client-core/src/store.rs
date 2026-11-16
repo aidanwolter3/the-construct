@@ -898,7 +898,7 @@ pub trait StoreOps {
                  ON CONFLICT(id) DO UPDATE SET app_id = excluded.app_id,
                      read = excluded.read, json = excluded.json",
             )?
-            .execute(params![n.id, n.app_id, n.read, json])?;
+            .execute(params![n.id, n.channel_layout, n.read, json])?;
         Ok(!existed)
     }
 
@@ -1840,7 +1840,7 @@ mod tests {
     fn notification(id: &str, app: &str) -> Notification {
         Notification {
             id: id.into(),
-            app_id: app.into(),
+            channel_layout: app.into(),
             channel: "c".into(),
             title: format!("t{id}"),
             body: String::new(),

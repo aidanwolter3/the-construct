@@ -100,8 +100,8 @@ word is the command and the rest of the entry, as written, its argument: `click 
 | `open-settings` | Presents the Settings layout as a side panel. |
 | `open-inbox` | Presents the inbox layout as a sheet. |
 | `pin-version <layout> <n or latest>` | `pin_version` / `follow_latest` (live mode; the engine still shows the latest version). |
-| `notify <app_id> <channel> <title>` | Fixture mode: a notification arrives (the inbox and its count update). |
-| `toggle-channel <app>.<channel>` | Flips a notification channel (`toggle_channel`; fixture mode). |
+| `notify <layout> <channel> <title>` | Fixture mode: a notification arrives (the inbox and its count update). |
+| `toggle-channel <layout>.<channel>` | Flips a notification channel (`toggle_channel`; fixture mode). |
 | `pick <path> [<path>…]` | Queues files (relative to the repository root) for the next media picker tap, at most its `max`; none queued is a cancelled pick. Fixture mode: the fake pod stages each file where it is (`sim-<n>` ids). |
 | `publish-version <note>` | Parsed, but fails: the engine always shows a layout's latest version. |
 

@@ -16,7 +16,7 @@
 //! Without a key (development) [`Secrets::seal`] stores plaintext, and the
 //! server warns at startup. A plaintext value always opens (rows from before
 //! sealing, or written without a key); adapters re-seal them once a key is
-//! set ([`crate::AppAdapter::on_open`]).
+//! set ([`crate::Source::on_open`]).
 
 use std::fmt;
 use std::sync::{Arc, OnceLock};

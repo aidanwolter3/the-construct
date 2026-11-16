@@ -16,8 +16,8 @@ use pod_core::layouts::LayoutSource;
 use pod_core::push::{PushSender, test_device_keys};
 use pod_core::session::session_hash;
 use pod_core::{
-    AppAdapter, AppInfo, AppState, AuthPolicy, BoxFuture, Catalog, FeedSpec, Hydration,
-    NewNotification, Pod, PollCtx, PollOutcome, PollStatus, RequestCtx, SourceManifest,
+    AppInfo, AppState, AuthPolicy, BoxFuture, Catalog, FeedSpec, Hydration, NewNotification, Pod,
+    PollCtx, PollOutcome, PollStatus, RequestCtx, Source, SourceManifest,
 };
 use protocol::{DataBundle, Importance, NotificationChannel, PushPayload};
 use serde_json::{Value, json};
@@ -50,7 +50,7 @@ struct Bell {
     keep: std::sync::atomic::AtomicBool,
 }
 
-impl AppAdapter for Bell {
+impl Source for Bell {
     fn name(&self) -> &'static str {
         "bell"
     }
@@ -96,7 +96,7 @@ impl AppAdapter for Bell {
 
 fn channel(id: &str, on: bool) -> NotificationChannel {
     NotificationChannel {
-        app_id: "bell".into(),
+        layout: "bell".into(),
         id: id.into(),
         title: id.into(),
         description: String::new(),
@@ -107,7 +107,7 @@ fn channel(id: &str, on: bool) -> NotificationChannel {
 
 fn note(key: &str, channel: &str) -> NewNotification {
     NewNotification {
-        app_id: "bell".into(),
+        layout: "bell".into(),
         channel: channel.into(),
         dedupe_key: key.into(),
         title: format!("title {key}"),
@@ -174,7 +174,7 @@ async fn call(
 #[test]
 fn the_catalog_checks_channels() {
     struct Wrong;
-    impl AppAdapter for Wrong {
+    impl Source for Wrong {
         fn name(&self) -> &'static str {
             "wrong"
         }
@@ -204,7 +204,7 @@ fn the_catalog_checks_channels() {
         }
         fn notification_channels(&self) -> Vec<NotificationChannel> {
             let mut c = channel("x", true);
-            c.app_id = "elsewhere".into();
+            c.layout = "elsewhere".into();
             vec![c]
         }
     }
@@ -212,7 +212,7 @@ fn the_catalog_checks_channels() {
     assert!(err.contains("not one of its apps"), "{err}");
 
     struct Silent;
-    impl AppAdapter for Silent {
+    impl Source for Silent {
         fn name(&self) -> &'static str {
             "silent"
         }

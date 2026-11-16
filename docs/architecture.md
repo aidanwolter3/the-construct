@@ -2,16 +2,16 @@
 
 The Construct is a server-driven UI system. A server, the **pod**, decides what every screen looks like and holds the
 user's data and sign-ins. Native clients draw whatever the pod sends with one Rust renderer over one Rust engine, and
-know nothing about any particular app.
+know nothing about any particular source.
 
 ```
                          ┌──────────────── server (crates/server) ─────────────────┐
   Pixelfed, web pages,   │  pod-host: one process, many pods, routed by pod token   │
   the Messages API  ◀───▶│  ┌──────────── pod (crates/pod-core) ────────────────┐   │
                          │  │ layouts, versions, sessions, sign-ins, SQLite      │   │
-                         │  │ adapters: app-pixelfed, app-recipes,               │   │
-                         │  │           app-collections, app-events, app-monitor│   │
-                         │  │           app-agents                               │   │
+                         │  │ sources:  source-pixelfed, source-recipes,         │   │
+                         │  │           source-collections, source-events,       │   │
+                         │  │           source-monitor, source-agents            │   │
                          │  └────────────────────────────────────────────────────┘   │
                          └──────────────▲──────────────────────────▲──────────────────┘
                      HTTP: layouts +    │                          │  SSE: layout, data,
@@ -29,48 +29,48 @@ know nothing about any particular app.
 
 ## The rule everything follows
 
-**Only adapters know apps.** `pod-core`, `pod-host`, the engine and the renderer handle layouts, entities,
+**Only sources know their upstreams.** `pod-core`, `pod-host`, the engine and the renderer handle layouts, entities,
 intents, uploads and notifications *in general* (decisions D34, D35, D40). Everything specific to Pixelfed lives in
-`crates/app-pixelfed`; everything specific to recipes lives in `crates/app-recipes`; and so on. A test
-(`the_core_names_no_app`) checks that the core names no app.
+`crates/source-pixelfed`; everything specific to recipes lives in `crates/source-recipes`; and so on. A test
+(`the_core_names_no_source`) checks that the core names no source.
 
-The payoff: most product changes ship from the pod alone, as a new layout file plus adapter code, with no client
+The payoff: most product changes ship from the pod alone, as a new layout file plus source code, with no client
 release. Only new *vocabulary* (a node type, an intent, a field on one) needs a new client build.
 
 ## Pods and the host
 
 One server process hosts many **pods**, one per user (D46). Each pod is its own SQLite database
-(`pods/<id>/server.db`) holding that user's sessions, upstream sign-ins, layout history, custom apps and app data.
+(`pods/<id>/server.db`) holding that user's sessions, upstream sign-ins, layout history, custom apps and source data.
 `host.db` lists the pods and the SHA-256 of each pod token. A request names its pod with its bearer token; without
 one, a caller sees only the "Open your pod" screen. Temporary pods (24 h, deleted afterwards) let anyone try a
 deployed server. Details: [server.md](server.md#pods).
 
-## Adapters and data sources
+## Sources and data sources
 
-An adapter implements `pod_core::AppAdapter` (`crates/pod-core/src/adapter.rs`). It can:
+A source implements `pod_core::Source` (`crates/pod-core/src/adapter.rs`). It can:
 
 - declare **apps** (an id, a title, an icon, its layout directory, the feeds it shows);
 - declare a **data source** (`SourceManifest`): named feeds, screen data paths, action endpoints, and documentation
   of its entity fields. Layouts may only call what a manifest declares (decision `custom-apps-and-data-sources`);
-- add its own **routes** (sign-in, mutations, media proxies) and its own **tables** (`<adapter>_*`, migrated by the
+- add its own **routes** (sign-in, mutations, media proxies) and its own **tables** (`<source>_*`, migrated by the
   core);
 - declare **notification channels** and poll an upstream for new notifications (D52);
 - **resume** background jobs when a pod opens (D50), and keep the pod open from server start when that work can't
   wait for a request (`keeps_open`, decision `agents-runs`);
 - declare **jacks** (decision `jacks`): abilities a pod can be plugged into, such as an account it connects.
 
-The server binary picks the adapters at compile time (`server::adapters`). Apps in this repository:
+The server binary picks the sources at compile time (`server::adapters`). Blueprints in this repository:
 
-| App id | Title | Adapter | What it is |
+| Blueprint | Title | Source | What it is |
 |---|---|---|---|
-| `pixelfed` | Pixelfed | `app-pixelfed` | A Pixelfed client: feed, carousels, likes, bookmarks, threaded comments, photo posting, notifications |
-| `pixelfed_sample_no_login` | Pixelfed sample | `app-pixelfed` (static) | A one-post sample that needs no sign-in; listed only with `CONSTRUCT_SHOW_DEV_APPS=1` |
-| `recipes` | Recipes | `app-recipes` | A recipe collection with search, categories and recipe cards (D41) |
-| `events` | Events | `app-events` | Upcoming events from websites the user watches, with alerts (decision `collection-fillers`) |
-| `shell` | Home | `app-shell` | The home blueprint: a blank page with Notifications and Settings, which every pod's `home` references |
-| `settings` | Settings | `app-shell` | Settings as a layout over device data: connection, layouts and versions, sign-ins, channels, server |
-| `inbox` | Notifications | `app-shell` | The notification inbox as a layout over device data |
-| `agents` | Agents | `app-agents` | Claude Code runs, sandboxes and checks of an external agent runner, and the pod's own schedules for it ([agents.md](agents.md)) |
+| `pixelfed` | Pixelfed | `source-pixelfed` | A Pixelfed client: feed, carousels, likes, bookmarks, threaded comments, photo posting, notifications |
+| `pixelfed_sample_no_login` | Pixelfed sample | `source-pixelfed` (static) | A one-post sample that needs no sign-in; listed only with `CONSTRUCT_SHOW_DEV_APPS=1` |
+| `recipes` | Recipes | `source-recipes` | A recipe collection with search, categories and recipe cards (D41) |
+| `events` | Events | `source-events` | Upcoming events from websites the user watches, with alerts (decision `collection-fillers`) |
+| `shell` | Home | `source-shell` | The home blueprint: a blank page with Notifications and Settings, which every pod's `home` references |
+| `settings` | Settings | `source-shell` | Settings as a layout over device data: connection, layouts and versions, sign-ins, channels, server |
+| `inbox` | Notifications | `source-shell` | The notification inbox as a layout over device data |
+| `agents` | Agents | `source-agents` | Claude Code runs, sandboxes and checks of an external agent runner, and the pod's own schedules for it ([agents.md](agents.md)) |
 
 These are **blueprints** (decision `blueprints-and-home`): served by id and updated by deploys, but not listed.
 There are no apps at runtime (decision `layouts-not-apps`): a pod has **layouts**, starting with `home`, the root
@@ -78,9 +78,9 @@ every client opens, which embeds (`core://Layout`) and presents (`action.navigat
 pod has only `home`, a reference to the `shell` blueprint; the user's agent adds layouts that reference or copy
 blueprints. Home owns every feed; each layout binds any of them, and loads only the ones it binds.
 
-Two more sources have no app of their own: **Collections** (`app-collections`), typed data that custom apps declare,
-and **Server monitoring** (`app-monitor`). The **Agents** source (`app-agents`) follows an external agent runner
-([agents.md](agents.md)). Users build their own apps on top of all of these; see
+Two more sources have no blueprint of their own: **Collections** (`source-collections`), typed data that custom apps
+declare, and **Server monitoring** (`source-monitor`). The **Agents** source (`source-agents`) follows an external
+agent runner ([agents.md](agents.md)). Users build their own layouts on top of all of these; see
 [custom-apps.md](custom-apps.md).
 
 ## Layouts
@@ -93,14 +93,15 @@ rooted at a `core://Page` (any node, no chrome from the app) or a `core://Worksp
 - **Plumbing and porcelain** (decision `plumbing-and-porcelain`). Plumbing is what the app draws: the nodes, intents
   and device data, each a named feature. Porcelain is **components** defined as data in terms of plumbing and
   expanded by the pod (`pod_core::parts`, `pod_core::components`) before serving: the server's (`core:`, files in
-  `crates/pod-core/components/` or an adapter's `crates/app-*/components/`, and every blueprint and its parts) and the pod's own (`pod:`, made by an agent). A
+  `crates/pod-core/components/` or a source's `crates/source-*/components/`, and every blueprint and its parts)
+  and the pod's own (`pod:`, made by an agent). A
   `core://Workspace` is porcelain too: an app that draws the plumbing gets it as a `core://Page`
   (`core:workspace`, `core:screen`; `pod_core::porcelain`), older apps the workspace. The app has no workspace
   drawing of its own (decision `workspace-drawn-by-the-pod`).
 
-- **Layouts are code.** Built-in apps' layouts are files, `crates/<adapter>/layouts/<app>/NNNN.json`, embedded in the binary and
-  appended to each app's history at startup. Files are append-only: the pod refuses to start if a deployed one
-  changed (D32).
+- **Layouts are code.** Blueprints' layouts are files, `crates/source-*/layouts/<blueprint>/NNNN.json`, embedded in
+  the binary and appended to each blueprint's history at startup. Files are append-only: the pod refuses to start if
+  a deployed one changed (D32).
 - **Every version stays servable.** Each piece of vocabulary is a named **feature**
   (`crates/protocol/features/<name>.md`). A client sends the features it can draw in `X-Construct-Features`, and the
   pod serves it the newest version that uses only those (decision `named-vocabulary`). Old clients keep working on
@@ -188,7 +189,7 @@ retries, the tool loop) (decision `web-and-agent-modules`).
 Pods open lazily on their first request. The host's scheduler wakes pods that have work due (`host.db`
 `pods.next_wake_at`): notification polls, collection fillers that keep rows current from the web, and reminders. A
 pod polls upstreams only while it has a device seen in the last 30 days, so idle and temporary pods cost nothing.
-A pod an adapter keeps open (`AppAdapter::keeps_open`: the Agents source while signed in to a runner) is always due,
+A pod an adapter keeps open (`Source::keeps_open`: the Agents source while signed in to a runner) is always due,
 so the scheduler opens it when the server starts and its background work runs without a request.
 
 ## Where decisions are recorded

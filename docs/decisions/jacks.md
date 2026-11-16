@@ -15,7 +15,7 @@ secrets for the search key (they belong to fillers' headers and are bound to one
 keeping account sign-ins apart (then "what can this pod do" still has no single answer).
 
 Decision: a **jack** is one ability a pod can be plugged into (`pod_core::jacks`). Every pod has the same set,
-declared by the core (`model`, `web`, `web_search`) and by adapters (`AppAdapter::jacks`: `pixelfed`,
+declared by the core (`model`, `web`, `web_search`) and by adapters (`Source::jacks`: `pixelfed`,
 `agent_runner`); ids are unique (checked at startup) and stored, so never renamed. Three kinds:
 
 - **switch** (`model`, `web`): on or off, using the server's own resources. Default on.

@@ -23,7 +23,7 @@ Considered:
 - Storing quantities as text and summing at read time. Rejected: every read would parse; a stored value is parsed
   once, and text that doesn't parse can be reported.
 
-Decision: four generic primitives in `app-collections`, server only (no node type, intent, field or engine change;
+Decision: four generic primitives in `source-collections`, server only (no node type, intent, field or engine change;
 no client build). The grocery case appears only in tests and docs.
 
 ## References (`ref`) and `unique`

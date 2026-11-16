@@ -16,8 +16,8 @@ use pod_core::layouts::LayoutSource;
 use pod_core::session::session_hash;
 use pod_core::store::open_session_on;
 use pod_core::{
-    AppAdapter, AppInfo, AppState, AuthPolicy, BoxFuture, FeedSpec, Hydration, PathSpec, Pod,
-    RequestCtx, SignInProvider, SourceManifest,
+    AppInfo, AppState, AuthPolicy, BoxFuture, FeedSpec, Hydration, PathSpec, Pod, RequestCtx,
+    SignInProvider, Source, SourceManifest,
 };
 use protocol::{DataBundle, EntityRecord, WorkspaceSpec};
 use serde_json::{Value, json};
@@ -85,7 +85,7 @@ static B_MANIFEST: SourceManifest = SourceManifest {
     dev: false,
 };
 
-impl AppAdapter for Src {
+impl Source for Src {
     fn name(&self) -> &'static str {
         self.name
     }

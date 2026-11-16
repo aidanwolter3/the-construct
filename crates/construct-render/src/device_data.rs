@@ -191,7 +191,7 @@ pub fn notifications_bundle(v: &Value, titles: &HashMap<String, String>, now: i6
         let id = n["id"].as_str().unwrap_or_default();
         let at = n["created_at"].as_i64().unwrap_or(now);
         let uri = format!("local://notifications/{id}");
-        let app = n["app_id"].as_str().unwrap_or_default();
+        let app = protocol::notification_layout_in(n);
         let mut e = n.clone();
         e["app_title"] = json!(titles.get(app).map_or(app, String::as_str));
         e["when"] = json!(time_label(at, now));
@@ -214,7 +214,7 @@ pub fn channels_bundle(v: &Value, titles: &HashMap<String, String>) -> DataBundl
     let mut list = Vec::new();
     for c in v["channels"].as_array().into_iter().flatten() {
         let (app, id) = (
-            c["app_id"].as_str().unwrap_or_default(),
+            protocol::channel_layout_in(c),
             c["id"].as_str().unwrap_or_default(),
         );
         let uri = format!("local://channels/{app}/{id}");

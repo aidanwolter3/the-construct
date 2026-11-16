@@ -16,7 +16,7 @@ source per site (rejected: code per site), storing targets and rules as a Collec
 typed columns for its own state such as `ETag`, hashes, backoff and health), and fetching from the clients
 (rejected: polling must run while no client is open).
 
-Decision: one built-in adapter, **watcher** (`crates/app-events`, source and app `watcher`; the app is `events` since decision
+Decision: one built-in adapter, **watcher** (`crates/source-events`, source and app `watcher`; the app is `events` since decision
 [rename-apps-and-folders](rename-apps-and-folders.md)). A website is a
 *target* and a filter is a *rule*: both are rows in the watcher's own tables, edited from the app's routes or by
 Claude over MCP, so new sites need no deploy. There is no stored code: extractors are a fixed set, rules are

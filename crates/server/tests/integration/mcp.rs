@@ -79,7 +79,7 @@ impl Env {
             let state = server::open_dir(old.path()).unwrap();
             state
                 .store()
-                .with_conn(app_recipes::db::seed_test_recipes)
+                .with_conn(source_recipes::db::seed_test_recipes)
                 .unwrap();
             drop(state);
             host.adopt(&name, &old.path().join("server.db"))
@@ -558,10 +558,11 @@ async fn claude_builds_and_edits_a_custom_app_with_the_tools() {
         "{vocab}"
     );
     let (err, parts) = env
-        .tool(&access, "list_parts", json!({"app": "pixelfed"}))
+        .tool(&access, "list_parts", json!({"layout": "pixelfed"}))
         .await;
     assert!(!err, "{parts}");
-    let names: Vec<&str> = parts["apps"][0]["parts"]
+    assert_eq!(parts["layouts"][0]["layout"], "pixelfed");
+    let names: Vec<&str> = parts["layouts"][0]["parts"]
         .as_array()
         .unwrap()
         .iter()
@@ -759,9 +760,10 @@ async fn claude_builds_and_edits_a_custom_app_with_the_tools() {
         .await;
     assert!(!err, "{copy}");
     let (err, ctx) = env
-        .tool(&access, "rebase_context", json!({"app": copy["id"]}))
+        .tool(&access, "rebase_context", json!({"id": copy["id"]}))
         .await;
     assert!(!err, "{ctx}");
+    assert_eq!(ctx["id"], copy["id"]);
     assert_eq!(ctx["copied_from"]["app"], "recipes");
     assert_eq!(ctx["base"]["version"], ctx["builtin_latest"]["version"]);
     let (err, not_copy) = env
@@ -773,6 +775,12 @@ async fn claude_builds_and_edits_a_custom_app_with_the_tools() {
     let (err, unknown) = env.tool(&access, "drop_tables", json!({})).await;
     assert!(err);
     assert_eq!(unknown["error"], "unknown_tool");
+    // The old app-named aliases are gone (decision `source-adapters`).
+    for alias in ["create_app", "delete_app", "list_apps", "rename_app"] {
+        let (err, gone) = env.tool(&access, alias, json!({"id": "home"})).await;
+        assert!(err, "{alias}: {gone}");
+        assert_eq!(gone["error"], "unknown_tool", "{alias}");
+    }
 }
 
 /// An app that asks for a client ID and secret (decision

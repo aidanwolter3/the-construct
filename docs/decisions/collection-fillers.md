@@ -43,7 +43,7 @@ Both are data in the definition: Claude declares them over MCP, the pod runs the
 ## Fillers
 
 `definition.fillers`, at most 50 per collection, each `{id, title, kind, …, mode, key?, every_minutes?,
-on_open_minutes?, upcoming?}` (`crates/app-collections/src/filler.rs`; run by `fill.rs`). Each row remembers the
+on_open_minutes?, upcoming?}` (`crates/source-collections/src/filler.rs`; run by `fill.rs`). Each row remembers the
 filler that wrote it (`collections_rows.filler`), and a filler only touches its own rows, so several sites fill one
 collection side by side.
 

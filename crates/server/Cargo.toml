@@ -17,14 +17,14 @@ path = "src/main.rs"
 [dependencies]
 pod-core = { path = "../pod-core" }
 pod-host = { path = "../pod-host" }
-app-pixelfed = { path = "../app-pixelfed" }
-app-recipes = { path = "../app-recipes" }
-app-shell = { path = "../app-shell" }
-app-collections = { path = "../app-collections" }
+source-pixelfed = { path = "../source-pixelfed" }
+source-recipes = { path = "../source-recipes" }
+source-shell = { path = "../source-shell" }
+source-collections = { path = "../source-collections" }
 web-extract = { path = "../web-extract" }
-app-events = { path = "../app-events" }
-app-monitor = { path = "../app-monitor" }
-app-agents = { path = "../app-agents" }
+source-events = { path = "../source-events" }
+source-monitor = { path = "../source-monitor" }
+source-agents = { path = "../source-agents" }
 protocol = { workspace = true }
 axum = { version = "0.8", features = ["http2"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "signal", "sync", "time"] }
@@ -32,7 +32,7 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 [dev-dependencies]
-app-recipes = { path = "../app-recipes", features = ["test-seed"] }
+source-recipes = { path = "../source-recipes", features = ["test-seed"] }
 serde.workspace = true
 serde_json.workspace = true
 rusqlite.workspace = true

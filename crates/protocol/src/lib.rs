@@ -30,5 +30,6 @@ pub use intent::{
 };
 pub use notify::{
     DEVICE_HEADER, Importance, Notification, NotificationChannel, NotificationEvent,
-    NotificationList, PushPayload, ReadEvent, channel_key,
+    NotificationList, PushPayload, ReadEvent, channel_key, channel_layout_in,
+    notification_layout_in,
 };

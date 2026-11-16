@@ -2,7 +2,7 @@
 //!
 //! One pod session is shared by every app. A client holds only the random
 //! session token (`Authorization: Bearer <token>`); the store keeps
-//! SHA-256(token). Adapters register sign-ins ([`crate::AppAdapter::sign_ins`]);
+//! SHA-256(token). Adapters register sign-ins ([`crate::Source::sign_ins`]);
 //! completing one records it on the session
 //! ([`crate::store::open_session_on`]), and an app that requires it
 //! ([`crate::AuthPolicy::SignIn`]) is served only to sessions that have it.
@@ -202,7 +202,7 @@ pub(crate) fn router() -> Router<Pod> {
 /// `providers` lists every sign-in the pod offers, so Settings can start
 /// one: `{"id", "title", "signed_in", "intent"?, "server_placeholder"?}`;
 /// `intent` is the `action.auth.login` to dispatch
-/// ([`crate::AppAdapter::sign_in_start`]), `server_placeholder` is set when
+/// ([`crate::Source::sign_in_start`]), `server_placeholder` is set when
 /// the user may type another server instead (sent as `instance_url`).
 async fn sign_ins(State(state): State<Pod>, headers: HeaderMap) -> Response {
     let caller = match state.caller(&headers).await {

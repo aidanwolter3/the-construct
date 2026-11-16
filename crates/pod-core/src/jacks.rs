@@ -3,7 +3,7 @@
 //! A jack is one thing the pod can do beyond holding layouts and data: ask a
 //! model, fetch websites, search the web, follow an agent runner, show a
 //! Pixelfed account. Each pod has the same set of jacks, declared by the core
-//! ([`core_jacks`]) and by adapters ([`crate::AppAdapter::jacks`]); what
+//! ([`core_jacks`]) and by adapters ([`crate::Source::jacks`]); what
 //! differs per pod is which are plugged and how they are configured.
 //!
 //! Three kinds:
@@ -16,8 +16,8 @@
 //!   server's.
 //! - **Account** ([`JackKind::Account`]): an account the adapter connects
 //!   through its own flow (a sign-in form or OAuth). The adapter reports its
-//!   state ([`crate::AppAdapter::jack_status`]) and may unplug it
-//!   ([`crate::AppAdapter::unplug_jack`]). `pixelfed`, `agent_runner`.
+//!   state ([`crate::Source::jack_status`]) and may unplug it
+//!   ([`crate::Source::unplug_jack`]). `pixelfed`, `agent_runner`.
 //!
 //! The host can **lock** a jack off for a pod (`jack.<id> = locked` in
 //! `pod_settings`, written when the pod is made): temporary pods, which

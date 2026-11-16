@@ -23,7 +23,7 @@ Decision:
   `overview`: one channel, one notification.
 - **Collections:** a reminder or alert with its own `app` (while that layout lives) keeps it; otherwise it belongs to
   the owner of the collection's feed. A system collection's alerts keep their built-in app's channel.
-- `AppAdapter::custom_notification_channels` takes the catalog too, so adapters can expand parts.
+- `Source::custom_notification_channels` takes the catalog too, so adapters can expand parts.
 - `describe_collection` and `list_collections` `used_by` list the layouts whose latest version binds the collection,
   not every layout that has the feed.
 

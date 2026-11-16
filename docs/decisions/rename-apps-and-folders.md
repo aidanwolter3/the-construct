@@ -17,14 +17,14 @@ Decision: rename, everywhere.
 
 | Was | Now |
 |---|---|
-| app `watcher`, crate `crates/app-watcher` | app `events`, crate `crates/app-events` (adapter `events`) |
+| app `watcher`, crate `crates/app-watcher` | app `events`, crate `crates/source-events` (adapter `events`) |
 | app `pixelfed_home` | app `pixelfed` |
 | app and source `pixelfed_demo` ("Pixelfed demo"), `POST /v1/demo/ack` | `pixelfed_sample_no_login` ("Pixelfed sample"), `POST /v1/pixelfed_sample_no_login/ack` |
-| `crates/app-pixelfed/demo/bundle.json` | `crates/app-pixelfed/sample/bundle.json` |
+| `crates/source-pixelfed/demo/bundle.json` | `crates/source-pixelfed/sample/bundle.json` |
 | `layouts/<app>/NNNN.json` | `crates/<adapter>/layouts/<app>/NNNN.json` |
 | `kmp-app/` (Gradle root project `kmp-app`) | `app/` (root project `app`) |
 
-- **Layout files** move into their adapter crate, one folder per app (`app-pixelfed` has two). The build script
+- **Layout files** move into their adapter crate, one folder per app (`source-pixelfed` has two). The build script
   reads the crate's own `layouts/` (`crates/pod-core/build_support/layout_files.rs`), and `LayoutSource::dir`
   carries the folder for messages. A pod records files by `<app>/NNNN`, not by path, so moving them changes
   nothing it stored.
@@ -39,7 +39,7 @@ Decision: rename, everywhere.
   Events adapter's migration 1 renames `watcher`.
 - **The Watcher's remains go.** Its tables (`watcher_*`), its import into `events` (every pod ran it long ago),
   the `watcher.imported` setting and its routes and feeds that answered 410 for its old layouts are removed. The
-  `events` collection records the app it belongs to; `app_events::events::ensure` updates it to `events`.
+  `events` collection records the app it belongs to; `source_events::events::ensure` updates it to `events`.
 - **Clients need an update**: their default app was `pixelfed_home`, and the Events app's slot id changed with its
   layout. A client's cache of the old ids is simply unused.
 - **Older decisions** mention the old names. Contrary to the usual rule, they were updated to the new app ids so a

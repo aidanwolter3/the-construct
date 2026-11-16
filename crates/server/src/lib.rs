@@ -12,15 +12,15 @@
 use std::path::Path;
 use std::sync::Arc;
 
-pub use app_agents as agents;
-pub use app_collections as collections;
-pub use app_events as events;
-pub use app_monitor as monitor;
-pub use app_pixelfed as pixelfed;
-pub use app_pixelfed::{DEFAULT_PIXELFED_URL, PixelfedAdapter, PixelfedConfig};
-pub use app_recipes as recipes;
 pub use pod_core::*;
 pub use pod_host as host;
+pub use source_agents as agents;
+pub use source_collections as collections;
+pub use source_events as events;
+pub use source_monitor as monitor;
+pub use source_pixelfed as pixelfed;
+pub use source_pixelfed::{DEFAULT_PIXELFED_URL, PixelfedAdapter, PixelfedConfig};
+pub use source_recipes as recipes;
 
 /// The pod's adapters, in `GET /v1/apps` order: the Pixelfed feed (with the
 /// `pixelfed` sign-in), the recipes, the Events app (the
@@ -32,27 +32,27 @@ pub use pod_host as host;
 /// server monitoring source (no apps; decision `server-monitoring`), and the
 /// agent runner source with its `agents` blueprint (decision
 /// `agents-data-source`).
-pub fn adapters(pixelfed: PixelfedConfig) -> Vec<Arc<dyn AppAdapter>> {
+pub fn adapters(pixelfed: PixelfedConfig) -> Vec<Arc<dyn Source>> {
     vec![
         Arc::new(PixelfedAdapter::new(pixelfed)),
-        Arc::new(app_recipes::RecipesAdapter::new()),
-        Arc::new(app_events::EventsAdapter::new()),
-        app_pixelfed::apps::sample_adapter(),
-        app_shell::adapter(),
-        app_shell::settings_adapter(),
-        app_shell::inbox_adapter(),
+        Arc::new(source_recipes::RecipesAdapter::new()),
+        Arc::new(source_events::EventsAdapter::new()),
+        source_pixelfed::apps::sample_adapter(),
+        source_shell::adapter(),
+        source_shell::settings_adapter(),
+        source_shell::inbox_adapter(),
         Arc::new({
             let private = std::env::var(FILL_PRIVATE_HOSTS_VAR).as_deref() == Ok("1");
-            app_collections::CollectionsAdapter::with_caps(collections_caps_from_env())
-                .with_model(app_collections::compute::PodModel::from_env())
-                .with_agent(app_collections::agent::PodAgent::from_env())
+            source_collections::CollectionsAdapter::with_caps(collections_caps_from_env())
+                .with_model(source_collections::compute::PodModel::from_env())
+                .with_agent(source_collections::agent::PodAgent::from_env())
                 .with_private_hosts(private)
                 .with_browser(web_extract::render::Browser::from_env(private))
         }),
-        Arc::new(app_monitor::MonitorAdapter::new(
-            app_monitor::MonitorConfig::from_env(),
+        Arc::new(source_monitor::MonitorAdapter::new(
+            source_monitor::MonitorConfig::from_env(),
         )),
-        app_agents::adapter(),
+        source_agents::adapter(),
     ]
 }
 
@@ -63,8 +63,8 @@ pub const FILL_PRIVATE_HOSTS_VAR: &str = "CONSTRUCT_FILL_PRIVATE_HOSTS";
 pub const FILL_AGENT_DAILY_VAR: &str = "CONSTRUCT_FILL_AGENT_DAILY";
 
 /// Collections' caps, with the operator's agent fill ceiling.
-pub fn collections_caps_from_env() -> app_collections::Caps {
-    let mut caps = app_collections::Caps::default();
+pub fn collections_caps_from_env() -> source_collections::Caps {
+    let mut caps = source_collections::Caps::default();
     if let Some(n) = std::env::var(FILL_AGENT_DAILY_VAR)
         .ok()
         .and_then(|v| v.trim().parse::<u32>().ok())
@@ -116,7 +116,7 @@ pub fn check_open_pod(addr: &str, on_fly: bool, insecure_opt_in: bool) -> Result
 /// OAuth apps) or spend its model key.
 pub fn temporary_pod_settings() -> Vec<(String, String)> {
     let mut out = vec![(
-        app_pixelfed::OTHER_INSTANCES_SETTING.to_owned(),
+        source_pixelfed::OTHER_INSTANCES_SETTING.to_owned(),
         "0".to_owned(),
     )];
     out.extend(pod_core::jacks::lock_settings(&[
@@ -190,13 +190,13 @@ pub const DEFAULT_VAPID_SUBJECT: &str = "https://github.com/aidanwolter3/the-con
 
 /// Every layout file the pod ships, per app in number order.
 pub fn layout_files() -> Vec<layouts::LayoutSource> {
-    let mut files = app_pixelfed::apps::files();
-    files.extend_from_slice(app_recipes::FILES);
-    files.extend_from_slice(app_events::FILES);
-    files.extend_from_slice(app_shell::FILES);
-    files.extend_from_slice(app_shell::SETTINGS_FILES);
-    files.extend_from_slice(app_shell::INBOX_FILES);
-    files.extend_from_slice(app_agents::FILES);
+    let mut files = source_pixelfed::apps::files();
+    files.extend_from_slice(source_recipes::FILES);
+    files.extend_from_slice(source_events::FILES);
+    files.extend_from_slice(source_shell::FILES);
+    files.extend_from_slice(source_shell::SETTINGS_FILES);
+    files.extend_from_slice(source_shell::INBOX_FILES);
+    files.extend_from_slice(source_agents::FILES);
     files
 }
 
@@ -207,7 +207,7 @@ pub fn catalog() -> Catalog {
 
 /// Force-parse all embedded fixtures. Call at startup to fail fast.
 pub fn validate_fixtures() {
-    app_pixelfed::apps::validate_fixtures();
+    source_pixelfed::apps::validate_fixtures();
 }
 
 /// The pod over `store` with the default Pixelfed config. Panics on a

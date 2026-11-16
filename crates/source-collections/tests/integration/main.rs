@@ -1,0 +1,16 @@
+//! The integration tests of `source-collections`, linked as one test binary: one
+//! binary per file made CI spend most of its build time linking.
+//! Add a new test file as a module here.
+
+mod bulk;
+mod collections;
+mod computed;
+mod fillers;
+mod follow;
+mod lookup;
+mod mcp_fillers;
+mod primitives;
+mod reminders;
+mod render;
+mod row_id;
+mod web;

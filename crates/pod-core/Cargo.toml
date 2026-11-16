@@ -5,7 +5,7 @@ edition.workspace = true
 publish.workspace = true
 
 # The generic pod: workspaces, layout files and versions, schema negotiation,
-# SSE, sessions and sign-ins, the store. Knows apps only through `AppAdapter`.
+# SSE, sessions and sign-ins, the store. Knows sources only through `Source`.
 
 [dependencies]
 protocol = { workspace = true }

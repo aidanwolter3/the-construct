@@ -26,7 +26,7 @@ must confirm (new vocabulary for the layouts).
 
 Decision:
 
-- **CAP v3 client** (`crates/app-agents/src/cap.rs`): snapshot, `/v3/events` pages, `/v3/stream`, the fixed command
+- **CAP v3 client** (`crates/source-agents/src/cap.rs`): snapshot, `/v3/events` pages, `/v3/stream`, the fixed command
   set `start_run {request_id, work_item_id, occurrence?, origin, model?, max_runtime_min?, resume_from?}`,
   `stop_run`, `wake_sprite` (at most 60 min), `repair_sprite`, `mark_reviewed`. The safety limits stay: size caps, no
   redirects, https on public hosts, untrusted text cleaned, and links allow-listed (`outcome.pr_url` and the claim's

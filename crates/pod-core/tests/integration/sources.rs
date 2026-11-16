@@ -14,8 +14,8 @@ use pod_core::layouts::LayoutSource;
 use pod_core::session::session_hash;
 use pod_core::store::open_session_on;
 use pod_core::{
-    AppAdapter, AppInfo, AppState, AuthPolicy, BoxFuture, Catalog, FeedSpec, Hydration, PathSpec,
-    Pod, RequestCtx, Session, SignInProvider, SourceManifest,
+    AppInfo, AppState, AuthPolicy, BoxFuture, Catalog, FeedSpec, Hydration, PathSpec, Pod,
+    RequestCtx, Session, SignInProvider, Source, SourceManifest,
 };
 use protocol::{DataBundle, EntityRecord, WorkspaceSpec};
 use serde_json::Value;
@@ -105,7 +105,7 @@ impl Src {
     }
 }
 
-impl AppAdapter for Src {
+impl Source for Src {
     fn name(&self) -> &'static str {
         self.name
     }
@@ -168,9 +168,9 @@ impl AppAdapter for Src {
 }
 
 fn err(adapters: Vec<Src>) -> String {
-    let adapters: Vec<Arc<dyn AppAdapter>> = adapters
+    let adapters: Vec<Arc<dyn Source>> = adapters
         .into_iter()
-        .map(|a| Arc::new(a) as Arc<dyn AppAdapter>)
+        .map(|a| Arc::new(a) as Arc<dyn Source>)
         .collect();
     match Catalog::new(adapters) {
         Ok(_) => "ok".into(),
@@ -232,7 +232,7 @@ fn a_layout_file_may_only_use_its_sources_routes() {
     let start = |adapters: Vec<Src>| {
         let adapters = adapters
             .into_iter()
-            .map(|a| Arc::new(a) as Arc<dyn AppAdapter>)
+            .map(|a| Arc::new(a) as Arc<dyn Source>)
             .collect();
         AppState::try_new(pod_core::store::Store::open_in_memory().unwrap(), adapters).map(|_| ())
     };

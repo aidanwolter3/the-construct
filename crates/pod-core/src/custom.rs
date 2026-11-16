@@ -926,7 +926,7 @@ pub fn feed_sources<'a>(
 
 /// Validate `layout` for app `id` over `feeds`, with the root id set to
 /// `id`: the parsed layout and its JSON. The sources' own checks
-/// ([`crate::AppAdapter::check_custom_layout`]) run too.
+/// ([`crate::Source::check_custom_layout`]) run too.
 pub fn check_layout(
     pod: &Pod,
     id: &str,
@@ -1880,9 +1880,9 @@ pub fn layouts_for_blueprints(store: &Store) -> rusqlite::Result<HashMap<String,
 pub fn target_layouts(map: &HashMap<String, String>, items: &mut [protocol::Notification]) {
     for n in items {
         n.layout = Some(
-            map.get(&n.app_id)
+            map.get(&n.channel_layout)
                 .cloned()
-                .unwrap_or_else(|| n.app_id.clone()),
+                .unwrap_or_else(|| n.channel_layout.clone()),
         );
     }
 }

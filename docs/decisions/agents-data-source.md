@@ -19,7 +19,7 @@ runner's token is the pod's, used in the background).
 
 Decision:
 
-- **A new adapter, `app-agents`,** a data source named `agents` with an `agents` blueprint. The pod connects out;
+- **A new adapter, `source-agents`,** a data source named `agents` with an `agents` blueprint. The pod connects out;
   the runner never calls it. Feeds `sessions` (with `agents:status`), `sandboxes`, `checks` and `schedules`; a
   timeline data path; actions for stop, wake, start, and run, pause and resume a schedule. Built on existing
   vocabulary only: no client build.
@@ -47,8 +47,8 @@ Decision:
   pod token can't plant a recurring prompt. Pause asks first.
 - **Tasks wiring** is opt-in per collection with the MCP tool `agents_link_tasks`, which adds the status options
   and fields it needs through Collections' `apply_change`. Rows are read with Collections' tables and written with
-  `app_collections::update_row` (a layout's update, checks and computed fields included), the one addition to
-  `app-collections`. A sent `start_task` is remembered (`agents_launches`) so a queued row is sent once; a 429 leaves
+  `source_collections::update_row` (a layout's update, checks and computed fields included), the one addition to
+  `source-collections`. A sent `start_task` is remembered (`agents_launches`) so a queued row is sent once; a 429 leaves
   it queued for the next look (every 30 s and on each Collections change).
 - **Runner text is untrusted:** plain text, cleaned and capped; the only link is a GitHub pull request URL that
   passes a strict check, and "Open in Claude" is built from the session id.

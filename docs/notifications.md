@@ -1,48 +1,50 @@
 # Notifications
 
-Apps send notifications through their pod: likes and comments from Pixelfed, matches from the Events app, reminders
+Sources send notifications through their pod: likes and comments from Pixelfed, matches from the Events app, reminders
 from a collection. They reach every device of the pod: an in-app inbox, OS notifications while an app runs, and Web
 Push when the Android app is closed. Decision D52 in [DECISIONS.md](DECISIONS.md) records the design and what was
 weighed; the original build plan is in [history/notifications-plan.md](history/notifications-plan.md).
 
 ```
- upstream ─poll─▶ adapter (knows the app) ── NewNotification{channel, title, body, target_uri, dedupe_key}
+ upstream ─poll─▶ source (its upstream) ──── NewNotification{channel, title, body, target_uri, dedupe_key}
                                                     │
  host scheduler ─wakes due pods─▶ pod-core: store once ─┬─▶ `notification` event on open event streams
                                                         └─▶ Web Push to registered devices (per-device channels)
  engine: cache, unread counts, live-arrival callback ─▶ inbox, badge, OS notifications
- tap ─▶ open the app, then action.navigation.open {target_uri} against that app's own routes
+ tap ─▶ open its layout, then action.navigation.open {target_uri} against that layout's own routes
 ```
 
 ## Who knows what
 
-Only an app's adapter knows where its notifications come from. The pod, the engine and the clients see an app id, a
-**channel** the adapter declares ("Likes"), ready-made title and body text, an optional image, a `target_uri`, and
+Only a source knows where its notifications come from. The pod, the engine and the clients see a layout, a
+**channel** the source declares ("Likes"), ready-made title and body text, an optional image, a `target_uri`, and
 the `layout` to present it in: the pod's own layout built on that blueprint (a whole reference to it, or copied from
 it), else the blueprint's id (decision `layouts-not-apps`). The client presents that layout and opens the screen of it
 whose route matches `target_uri`, like any navigation. Adding notifications to a new
-app needs adapter code only.
+source needs source code only.
 
 ## Sources
 
-- **Polling:** an adapter implements `AppAdapter::poll_notifications` and `poll_interval`, and keeps its cursor in
+- **Polling:** a source implements `Source::poll_notifications` and `poll_interval`, and keeps its cursor in
   its own tables. Pixelfed polls `GET /api/v1/notifications` every 2 minutes; the first poll stores the recent
   backlog as already read, so nothing floods in. Collections uses the same poll to send due reminders and to run
   scheduled fills, whose alerts notify. Its channels belong to the custom app showing the collection. Server
   monitoring looks at its checks every 5 minutes and notifies the custom apps built on it when one turns to warning.
 - **From a stream:** the Agents source follows its runner's event stream and notifies as records change (a run
   that needs you, a run that ends with a report, runner warnings; [agents.md](agents.md)).
-- **From a route:** an adapter calls `AppState::notify` from its own handlers.
+- **From a route:** a source calls `AppState::notify` from its own handlers.
 - **Waking pods:** pods open lazily, so the host's scheduler checks every 30 s and opens pods whose
   `host.db` `pods.next_wake_at` is due (8 at a time). A pod polls only while it has a device seen in the last 30 days,
-  so idle and temporary pods cost no upstream calls. A pod an adapter keeps open (`AppAdapter::keeps_open`, e.g. one
+  so idle and temporary pods cost no upstream calls. A pod a source keeps open (`Source::keeps_open`, e.g. one
   signed in to an agent runner) is always due, so it is opened when the server starts. Failed polls back off from 1 minute to 1 hour; a revoked
   sign-in stops polls until someone signs in again.
 
 ## Delivery
 
-1. Each notification is stored once per pod, keyed by `(app_id, dedupe_key)`, so repeated polls are harmless. The
-   newest 500 are kept for 30 days.
+1. Each notification is stored once per pod, keyed by `(layout, dedupe_key)`, so repeated polls are harmless. The
+   newest 500 are kept for 30 days. `layout` is the layout (or blueprint) whose channel it is: on the wire a
+   channel's `layout` and a notification's `channel_layout`, both also sent as `app_id` for clients built before
+   (decision [`source-adapters`](decisions/source-adapters.md)); a notification's `layout` is the layout it opens.
 2. It goes out as a `notification` event on every open events stream that has a session.
 3. It is sent by Web Push (RFC 8291 encryption, VAPID) to every registered device that wants its channel and has no
    stream open. Payloads are end-to-end encrypted, so push services see no text.
@@ -63,7 +65,7 @@ in a row. Limits per pod: 20 devices, 60 deliveries a minute. The routes are in 
 - **Android:** asks for `POST_NOTIFICATIONS` once; layouts can ask again with the
   `action.device` command `request_notification_permission`, which shows the system prompt, or the app's notification
   settings once Android won't show the prompt again ([layouts.md](layouts.md)) (`local://device#notification_permission`
-  reads `""` for now); creates the OS channel `<app_id>.<channel>` when its first notification arrives; and receives
+  reads `""` for now); creates the OS channel `<layout>.<channel>` when its first notification arrives; and receives
   push, also while the app is closed, through
   [UnifiedPush](https://unifiedpush.org): a distributor app such as ntfy if installed, otherwise the embedded FCM
   distributor via Play services, which registers with the pod's VAPID key so the pod sends Web Push straight to
@@ -77,8 +79,8 @@ in a row. Limits per pod: 20 devices, 60 deliveries a minute. The routes are in 
 
 - `server pods notify-test <name>` sends a test notification to a pod's inbox and devices.
 - Against the fake Pixelfed, `POST /_admin/notifications` injects one upstream ([testing.md](testing.md#fake-pixelfed)).
-- In the simulator, `notify <app_id> <channel> <title>`, `open-inbox`, `click <text>` (a row of the inbox) and
-  `toggle-channel <app>.<channel>` script the UI ([simulator.md](simulator.md)).
+- In the simulator, `notify <layout> <channel> <title>`, `open-inbox`, `click <text>` (a row of the inbox) and
+  `toggle-channel <layout>.<channel>` script the UI ([simulator.md](simulator.md)).
 
 ## Not done yet
 

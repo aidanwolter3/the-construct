@@ -866,7 +866,7 @@ pub mod android {
     }
 
     /// Posts `n` (tag: its id, so a second arrival replaces it) in the
-    /// channel `<app_id>.<channel>`, as the Compose app does. A tap opens
+    /// channel `<channel_layout>.<channel>`, as the Compose app does. A tap opens
     /// `ConstructActivity` (explicitly) with the tap link of `token`.
     fn post(
         env: &mut jni::Env,
@@ -885,7 +885,7 @@ pub mod android {
             .l()?;
         // The channel, made the first time (the user's choices for it live
         // in Android's settings).
-        let id = env.new_string(format!("{}.{}", n.app_id, n.channel))?;
+        let id = env.new_string(format!("{}.{}", n.channel_layout, n.channel))?;
         let existing = env
             .call_method(
                 &nm,
@@ -1003,7 +1003,7 @@ pub mod android {
             )?;
         }
         if let Some(g) = &n.group_key {
-            let group = env.new_string(format!("{}:{g}", n.app_id))?;
+            let group = env.new_string(format!("{}:{g}", n.channel_layout))?;
             set(
                 env,
                 jni_str!("setGroup"),

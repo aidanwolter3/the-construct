@@ -5,10 +5,10 @@
 //! `server pods mcp`): the host forwards such a request with
 //! [`crate::CREDENTIAL_HEADER`]` = mcp` and no bearer, and the credential
 //! reaches nothing else. The pod token itself works too (served alone, in
-//! tests). The tools read the pod's apps, data sources and layouts and write
-//! custom apps through the same validated path as `/v1/custom-apps`
+//! tests). The tools read the pod's layouts, blueprints and data sources and
+//! write layouts through the same validated path as `/v1/custom-apps`
 //! ([`crate::custom`]); writes are recorded with author `claude`. Nothing
-//! here can call an app's routes or act for the user upstream, except
+//! here can call a source's routes or act for the user upstream, except
 //! `sample_data`, which reads (truncated) data the user's own pod already
 //! serves them.
 
@@ -208,7 +208,7 @@ pub fn core_tool_names() -> Vec<String> {
         .collect()
 }
 
-/// The core's tools, then every adapter's ([`crate::AppAdapter::mcp_tools`]).
+/// The core's tools, then every adapter's ([`crate::Source::mcp_tools`]).
 fn all_tools(pod: &Pod) -> Vec<Value> {
     let mut out = tools();
     for a in pod.catalog().adapters() {
@@ -328,7 +328,7 @@ fn base_tools() -> Vec<Value> {
         tool(
             "list_parts",
             "The parts of blueprints a layout can reference with core://Ref (screens, slots and named parts), with each part's layout.",
-            json!({ "app": { "type": "string", "description": "A blueprint (all when left out)" }, "with_layouts": { "type": "boolean" } }),
+            json!({ "layout": { "type": "string", "description": "A blueprint (all when left out)" }, "with_layouts": { "type": "boolean" } }),
             &[],
         ),
         tool(
@@ -473,7 +473,7 @@ async fn call_tool(pod: &Pod, headers: &HeaderMap, params: &Value) -> Value {
         "list_jacks" => Ok(json!({ "jacks": crate::jacks::list(pod).await })),
         "plug_jack" => crate::jacks::plug_tool(pod, &args).await,
         "unplug_jack" => crate::jacks::unplug_tool(pod, &args).await,
-        "list_layouts" | "list_apps" => list_apps(pod).await,
+        "list_layouts" => list_layouts(pod).await,
         "list_data_sources" => list_data_sources(pod).await,
         "describe_vocabulary" => vocabulary(pod).await,
         "get_layout" => get_layout(pod, &args).await,
@@ -481,7 +481,7 @@ async fn call_tool(pod: &Pod, headers: &HeaderMap, params: &Value) -> Value {
         "validate_layout" => custom::validate(pod, &args)
             .map(|v| with_colour_advice(v, &args["layout"]))
             .map_err(refused),
-        "create_layout" | "create_app" => custom::create(pod, &args, Writer::Claude)
+        "create_layout" => custom::create(pod, &args, Writer::Claude)
             .await
             .map(|w| {
                 with_colour_advice(
@@ -498,14 +498,14 @@ async fn call_tool(pod: &Pod, headers: &HeaderMap, params: &Value) -> Value {
                 .map_err(refused),
             Err(e) => Err(e),
         },
-        "rename_layout" | "rename_app" => match str_arg(&args, "app") {
+        "rename_layout" => match str_arg(&args, "app") {
             Ok(app) => custom::patch(pod, app, &args)
                 .await
                 .map(|w| json!({ "ok": true, "id": w.id, "version": w.version }))
                 .map_err(refused),
             Err(e) => Err(e),
         },
-        "delete_layout" | "delete_app" => match str_arg(&args, "app") {
+        "delete_layout" => match str_arg(&args, "app") {
             Ok(app) => custom::delete(pod, app)
                 .await
                 .map(|()| json!({ "ok": true }))
@@ -598,7 +598,7 @@ async fn set_time_zone(pod: &Pod, args: &Value) -> Result<Value, Value> {
     }
 }
 
-async fn list_apps(pod: &Pod) -> Result<Value, Value> {
+async fn list_layouts(pod: &Pod) -> Result<Value, Value> {
     let builtin: Vec<crate::AppInfo> = pod
         .catalog()
         .apps()
@@ -728,7 +728,7 @@ async fn get_layout(pod: &Pod, args: &Value) -> Result<Value, Value> {
 }
 
 async fn list_parts(pod: &Pod, args: &Value) -> Result<Value, Value> {
-    let only = args["app"].as_str().map(str::to_owned);
+    let only = args["layout"].as_str().map(str::to_owned);
     let with_layouts = args["with_layouts"].as_bool().unwrap_or(false);
     let apps: Vec<(String, String)> = pod
         .catalog()
@@ -745,7 +745,7 @@ async fn list_parts(pod: &Pod, args: &Value) -> Result<Value, Value> {
             .map(|(id, title)| {
                 let parts = crate::parts::load(s, &id, None, None)?.unwrap_or_default();
                 Ok(json!({
-                    "app": id, "title": title, "version": parts.version,
+                    "layout": id, "title": title, "version": parts.version,
                     "parts": parts.parts.iter().map(|(name, v)| {
                         let mut row = json!({ "part": name,
                             "where": if name.starts_with("screen:") { "screens" } else { "any node" } });
@@ -760,7 +760,7 @@ async fn list_parts(pod: &Pod, args: &Value) -> Result<Value, Value> {
     })
     .await
     .map_err(|(s, Json(b))| refused((s, b)))?;
-    Ok(json!({ "apps": listed,
+    Ok(json!({ "layouts": listed,
         "use": "{\"type\": \"core://Ref\", \"app\": <app>, \"part\": <part>} (add \"version\" to pin one); the pod expands it when serving and keeps it current" }))
 }
 
@@ -787,7 +787,7 @@ async fn rebase_context(pod: &Pod, args: &Value) -> Result<Value, Value> {
         v.map(|(m, j)| json!({ "version": m.version, "layout": serde_json::from_str::<Value>(&j).unwrap_or(Value::Null) }))
     };
     Ok(json!({
-        "app": app,
+        "id": app,
         "copied_from": { "app": from_app, "version": from },
         "base": layout(base),
         "builtin_latest": layout(latest),
@@ -1569,7 +1569,7 @@ fn snippets() -> Value {
                 "padding_h_dp": 16, "children": [
                     {"type": "core://Text", "style": "Body", "value_expr": "$item.title"}, {"type": "core://Spacer"},
                     {"type": "core://Switch", "checked": "$item.enabled", "on_click": {"intent": "action.device",
-                        "command": "toggle_channel", "app": "$item.app_id", "id": "$item.id"}}]}}
+                        "command": "toggle_channel", "app": "$item.layout", "id": "$item.id"}}]}}
         },
         "version_list": {
             "doc": "a layout's versions to pick from on this device; send show_versions (app: the layout) first, e.g. in an action.sequence with action.navigation.open",

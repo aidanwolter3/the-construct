@@ -13,7 +13,7 @@
 //! Without a valid token a caller gets only `/healthz`, the "Open your pod"
 //! screen, the two `/v1/pods/*` calls and the Android sign-in redirect's
 //! [`app_links`] routes; images (adapters'
-//! [`pod_core::AppAdapter::public_paths`]) load without a bearer from
+//! [`pod_core::Source::public_paths`]) load without a bearer from
 //! `/v1/p/<pod id>/…`. `CONSTRUCT_OPEN_POD` (development only) serves callers
 //! without a token from one named pod, like the single-pod server before D46.
 
@@ -698,7 +698,7 @@ impl Host {
         let now = now_secs();
         let title = "Test notification".to_owned();
         let note = pod_core::NewNotification {
-            app_id: channel.app_id.clone(),
+            layout: channel.layout.clone(),
             channel: channel.id.clone(),
             dedupe_key: format!("test:{now}:{}", &new_pod_id()[..8]),
             title: title.clone(),
@@ -1418,7 +1418,7 @@ async fn temporary_pod(State(host): State<Arc<Host>>, req: Request) -> Response 
 }
 
 /// `GET /v1/p/<pod id>/<path>`: an adapter's public path of that pod
-/// ([`pod_core::AppAdapter::public_paths`]), without a bearer.
+/// ([`pod_core::Source::public_paths`]), without a bearer.
 async fn public_route(
     State(host): State<Arc<Host>>,
     Path((pod_id, rest)): Path<(String, String)>,

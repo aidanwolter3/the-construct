@@ -18,15 +18,15 @@ picker and create vocabulary) in [DECISIONS.md](DECISIONS.md).
 
 | Part | Knows | Doesn't know |
 | --- | --- | --- |
-| Layout (`crates/app-pixelfed/layouts/pixelfed/`) | The compose screen, the 4-photo limit, what the placeholder looks like | — |
+| Layout (`crates/source-pixelfed/layouts/pixelfed/`) | The compose screen, the 4-photo limit, what the placeholder looks like | — |
 | Shared UI | `core://MediaPicker`, picking files, closing the screen | Pixelfed, posts |
 | Rust clients (`construct-render`) | The same picker over the same engine: Android's photo picker through the bridge, the desktop's file dialog ([rendering.md](rendering.md)) | Pixelfed, posts |
 | Engine (`client-core`) | Staging files, uploading a create's attachments before its POST, `position`, `event: data` | What the files are for |
-| `pod-core` | Storing uploads, giving adapters access, `event: data`, the `resume` hook | Pixelfed, posts |
-| Pixelfed adapter | Media upload, processing, `POST /api/v1/statuses`, pending posts in the feed | — |
+| `pod-core` | Storing uploads, giving sources access, `event: data`, the `resume` hook | Pixelfed, posts |
+| Pixelfed source | Media upload, processing, `POST /api/v1/statuses`, pending posts in the feed | — |
 
-A second app (say, recipe photos) gets the same picker, attachments and uploads for free and only writes its own
-adapter route and layout.
+A second source (say, recipe photos) gets the same picker, attachments and uploads for free and only writes its own
+route and layout.
 
 ## The flow
 
@@ -74,7 +74,7 @@ Share ── Create ──────▶ temp post at top of feed
 - `GET /v1/uploads/{id}` is a public capability URL (like the media proxy), so placeholders can show the photos on any
   device. Uploads nobody claimed are deleted after 24 h; claimed ones when their owner releases them.
 - Adapters use `AppState::uploads()` (`get`, `claim`, `release`, `public_url`) and `AppState::publish_data`.
-- `AppAdapter::resume` runs when a pod opens, so interrupted jobs start again.
+- `Source::resume` runs when a pod opens, so interrupted jobs start again.
 
 ### Pixelfed adapter
 - `POST /v1/pixelfed/posts/create {caption, media, client_id}` checks 1–4 media and the caption length (500,

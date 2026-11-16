@@ -610,7 +610,7 @@ fn a_push_message_is_cached_and_counted_without_the_listener() {
     let n = engine
         .handle_push_message(&payload.to_string())
         .expect("a notification");
-    assert_eq!((n.id.as_str(), n.app_id.as_str()), ("9", "a"));
+    assert_eq!((n.id.as_str(), n.channel_layout.as_str()), ("9", "a"));
     assert_eq!(n.target_uri.as_deref(), Some("a://posts/9"));
     assert_eq!(
         counts(&engine.snapshot()),

@@ -933,7 +933,8 @@ async fn a_session_from_before_v11_stays_signed_in() {
             "DROP TABLE session_sign_ins; DROP TABLE adapter_migrations; DROP TABLE schema_migrations;
              ALTER TABLE sessions DROP COLUMN pinned; ALTER TABLE app_versions DROP COLUMN features;
              ALTER TABLE app_versions DROP COLUMN author;
-             ALTER TABLE app_versions DROP COLUMN meta_json; PRAGMA user_version = 10;",
+             ALTER TABLE app_versions DROP COLUMN meta_json;
+             ALTER TABLE pixelfed_clients RENAME TO pixelfed_apps; PRAGMA user_version = 10;",
         )
         .unwrap();
         let later: Vec<String> = conn
@@ -1011,7 +1012,9 @@ async fn plaintext_credentials_are_sealed_when_a_key_is_set() {
     }
     let secret: String = rusqlite::Connection::open(&path)
         .unwrap()
-        .query_row("SELECT client_secret FROM pixelfed_apps", [], |r| r.get(0))
+        .query_row("SELECT client_secret FROM pixelfed_clients", [], |r| {
+            r.get(0)
+        })
         .unwrap();
     assert!(Secrets::is_sealed(&secret));
     let pod = spawn_pod(state).await;

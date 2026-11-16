@@ -17,7 +17,7 @@ host supplies gauges (live pods, MCP credentials, free disk) measured when read.
 
 - `GET /metrics` in the Prometheus text format, on its own listener (`CONSTRUCT_METRICS_ADDR`), never the public
   address. Staging binds `[::]:9091`, which only Fly's private network reaches; Fly scrapes it into its Grafana.
-- The `monitor` data source (`crates/app-monitor`, no apps or tables): one feed with an overall status,
+- The `monitor` data source (`crates/source-monitor`, no apps or tables): one feed with an overall status,
   plain-language checks (ok or warn, thresholds in code and `CONSTRUCT_MONITOR_*`) and every counter with its last
   hour and last day, so a custom app shows the server's health at a glance. The data is the whole server's, so it
   is off in every pod until the operator runs `server pods monitoring <name> on` (pod setting `monitor.enabled`;

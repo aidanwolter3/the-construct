@@ -18,7 +18,7 @@ generic `entities` table for new data types is not built yet". Considered: letti
 in #45: code, upstream calls and secrets from a prompt), a schemaless JSON store (rejected: layouts would bind fields
 nothing checks, and a rename would orphan data), and moving Recipes into the new store (deferred, see below).
 
-Decision: one built-in, generic data source, **Collections** (`crates/app-collections`, source id `collections`).
+Decision: one built-in, generic data source, **Collections** (`crates/source-collections`, source id `collections`).
 Claude never writes a data source: it *declares* data, which this source stores, validates and serves. A collection
 is a description of data, with no logic: no computed fields, triggers or upstream calls.
 
@@ -33,7 +33,7 @@ is a description of data, with no logic: no computed fields, triggers or upstrea
   belongs to the pod, not to an account.
 - **Rows** are entities `collections://<c>/<id>`: every live field by name (an empty one reads as its default, else
   `null`), every alias too, and `id`, `deleted` (always `false` when served), `created_at`, `updated_at`.
-- **Source checks** (pod-core hook `AppAdapter::check_custom_layout`, run on every custom-app write after the core's
+- **Source checks** (pod-core hook `Source::check_custom_layout`, run on every custom-app write after the core's
   checks): every collection a layout names exists (feeds, query keys, URIs, routes) and every row binding names a
   field it has: `$item.<f>` in a row list and its `filter`/`group_by`/`where` fields, `${collections://…#f}`, a
   mutation's `field`/`also`/`entity.<f>`, a create's `entity` keys, the routes' payload keys (and `id` on update and
@@ -85,13 +85,13 @@ touches only Collections' tables; Pixelfed, Recipes and every other source stay 
 
 ## Limits
 
-Per pod, temporary pods too (`app_collections::Caps`): 20 collections, 40 live fields each, 5,000 live rows and 4 MiB
+Per pod, temporary pods too (`source_collections::Caps`): 20 collections, 40 live fields each, 5,000 live rows and 4 MiB
 of values across collections, 500 rows per edit, 4,000 characters per text value. Definition history: 500 versions
 per collection. Change sets that edit apps count against the custom-app write rate. Purge window: 30 days (deleted
 rows, removed fields' data, kept-aside values, undo records), swept hourly. What is kept for undoing (deleted
 collections and rows, kept-aside values, undo records) is also held to twice the bytes cap (8 MiB, counting 64 bytes
 per item): before each write the oldest of it goes first, so deleting and re-adding or editing over and over can't
-grow a pod's storage (security audit, `app_collections::db::trim_retained`).
+grow a pod's storage (security audit, `source_collections::db::trim_retained`).
 
 ## The four open questions of #54
 

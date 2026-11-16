@@ -6,7 +6,7 @@ publish.workspace = true
 
 # One server, many pods (D46): the pod registry (`host.db`), pod tokens,
 # temporary pods, and routing each request to its pod by bearer token. Knows
-# pods and tokens, not apps: the binary passes a factory that builds a pod.
+# pods and tokens, not sources: the binary passes a factory that builds a pod.
 
 [dependencies]
 pod-core = { path = "../pod-core" }
