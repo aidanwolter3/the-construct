@@ -19,7 +19,9 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use construct_render::images::ImageStore;
-use construct_render::interact::{Done, Loaded, Loader, StageDone, Staged, Write, Written};
+use construct_render::interact::{
+    Changes, Done, Edges, Loaded, Loader, StageDone, Staged, Write, Written,
+};
 use construct_render::remote::{day_label, time_label};
 use protocol::{DataBundle, UiNode, WorkspaceSpec};
 use serde_json::{Value, json};
@@ -44,6 +46,9 @@ pub fn default_bundle(workspace: &str) -> Option<&'static str> {
         "week_sessions" => "week_sessions_bundle.json",
         "tiles_home" => "tiles_home_bundle.json",
         "tiles_priorities" => "tiles_priorities_bundle.json",
+        // A home on a switched pod, before its first `construct` step
+        // (decision `content-addressed-construct`).
+        "home" => "construct_home_bundle.json",
         _ => return None,
     })
 }
@@ -91,6 +96,12 @@ struct State {
     next_id: u32,
     /// Photos staged so far (`stage`).
     staged: u32,
+    /// The construct's layouts by key, once a `construct` step gave them
+    /// (they replace the bundles), what changed for the session, and the
+    /// edge graph not yet taken.
+    construct: BTreeMap<String, UiNode>,
+    news: Option<Changes>,
+    edges: Option<Edges>,
 }
 
 /// The fake pod. Cheap to clone (shared state).
@@ -148,6 +159,9 @@ impl FixturePod {
                 channels,
                 next_id: 1,
                 staged: 0,
+                construct: BTreeMap::new(),
+                news: None,
+                edges: None,
             })),
         })
     }
@@ -176,8 +190,43 @@ impl FixturePod {
         );
     }
 
+    /// The pod's construct moves (`construct <file>`, decision
+    /// `content-addressed-construct`): its layouts replace what the session
+    /// has where they changed, and its edge graph comes with them.
+    pub fn set_construct(&self, path: &Path) -> Result<(), String> {
+        let v = read_json(path)?;
+        let mut layouts = Vec::new();
+        let mut s = self.lock();
+        for (key, page) in v["layouts"].as_object().into_iter().flatten() {
+            let root: UiNode = serde_json::from_value(page.clone())
+                .map_err(|e| format!("{}: layouts/{key}: {e}", path.display()))?;
+            if s.construct.get(key) != Some(&root) {
+                layouts.push((key.clone(), root.clone()));
+            }
+            s.construct.insert(key.clone(), root);
+        }
+        let keep: Vec<String> = v["layouts"]
+            .as_object()
+            .map(|o| o.keys().cloned().collect())
+            .unwrap_or_default();
+        s.construct.retain(|k, _| keep.contains(k));
+        let data: DataBundle = serde_json::from_value(v["data"].clone()).unwrap_or_default();
+        let reach: Edges = serde_json::from_value(v["reach"].clone())
+            .map_err(|e| format!("{}: reach: {e}", path.display()))?;
+        let c = Changes { data, layouts };
+        match s.news.as_mut() {
+            Some(n) => n.absorb(c),
+            None => s.news = Some(c),
+        }
+        s.edges = Some(reach);
+        Ok(())
+    }
+
     /// The layout `id`'s plumbing root and data, with no device data.
     fn bundle(&self, id: &str) -> Result<(UiNode, DataBundle), String> {
+        if let Some(root) = self.lock().construct.get(id).cloned() {
+            return Ok((root, DataBundle::default()));
+        }
         let dir = self.lock().data.clone();
         let blueprint = dir.join(format!("blueprint_{id}_page.json"));
         if blueprint.is_file() {
@@ -305,6 +354,14 @@ fn app_title(id: &str) -> String {
 }
 
 impl Loader for FixturePod {
+    fn changes(&self) -> Option<Changes> {
+        self.lock().news.take()
+    }
+
+    fn edges(&self) -> Option<Edges> {
+        self.lock().edges.take()
+    }
+
     fn layout(&self, id: &str) -> Result<(UiNode, DataBundle), String> {
         if !self.online() {
             return Err(OFFLINE.into());

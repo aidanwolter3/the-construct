@@ -369,6 +369,17 @@ impl Runner {
                 self.device_data(&pod);
                 done("")
             }
+            Step::Construct(file) => {
+                let pod = fixture_pod.expect("fixture mode");
+                let root = crate::fixture::repo_root(&std::env::current_dir().unwrap_or_default())
+                    .unwrap_or_default();
+                let path = root.join(file);
+                if let Err(e) = pod.set_construct(&path) {
+                    return Err(format!("construct: {e}"));
+                }
+                self.pump(Duration::from_millis(50));
+                done("")
+            }
             Step::ToggleChannel(channel) => {
                 let (app, id) = channel.split_once('.').unwrap_or((channel, ""));
                 let o = self.session.dispatch(&json!({ "intent": "action.device",

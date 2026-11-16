@@ -67,6 +67,10 @@ pub struct PodEngine {
 struct Shared {
     /// What came in since the session last asked.
     news: Mutex<Option<Changes>>,
+    /// The construct's edge graph, when it changed ([`Loader::edges`]).
+    edges: Mutex<Option<crate::interact::Edges>>,
+    /// The pod is switched to the construct: no versions on the device.
+    switched: std::sync::atomic::AtomicBool,
     /// What the last snapshot showed, to tell what changed.
     seen: Mutex<Seen>,
     /// The data the session was last sent (its snapshot JSON too), so a
@@ -143,6 +147,7 @@ struct Seen {
     layouts: HashMap<String, String>,
     notifications: String,
     auth: String,
+    construct: String,
 }
 
 impl Shared {
@@ -178,6 +183,11 @@ impl Shared {
 
     /// The layout a pin draws in place of `id`'s latest.
     fn pinned(&self, id: &str) -> Option<UiNode> {
+        // A switched pod has no device pins: a device always draws the
+        // construct's current hash (decision `content-addressed-construct`).
+        if self.switched.load(Ordering::SeqCst) {
+            return None;
+        }
         lock(&self.pins).get(id).map(|(_, root)| root.clone())
     }
 
@@ -668,6 +678,22 @@ fn observe(engine: &Weak<ConstructEngine>, shared: &Arc<Shared>, base: &str, sna
             }
             seen.layouts.insert(id, text);
         }
+        // The construct's edge graph (decision `content-addressed-construct`).
+        if snap.construct_json != seen.construct {
+            seen.construct = snap.construct_json.clone();
+            shared
+                .switched
+                .store(!snap.construct_json.is_empty(), Ordering::SeqCst);
+            reload = true;
+            if let Ok(v) = serde_json::from_str::<Value>(&snap.construct_json)
+                && let Ok(reach) = serde_json::from_value(v["reach"].clone())
+            {
+                *lock(&shared.edges) = Some(reach);
+                if let Some(images) = lock(&shared.images).as_ref() {
+                    images.wake();
+                }
+            }
+        }
         if snap.notifications_json != seen.notifications {
             seen.notifications = snap.notifications_json.clone();
             reload = true;
@@ -737,10 +763,22 @@ fn device_data(engine: &ConstructEngine, shared: &Shared) -> DataBundle {
                 eprintln!("construct-render: {}: {e}", f.display());
             }
             if let Ok(v) = serde_json::from_str::<Value>(&body) {
-                merge(
-                    &mut out,
-                    remote::layouts_bundle(&v, &mut lock(&shared.titles)),
-                );
+                let mut list = remote::layouts_bundle(&v, &mut lock(&shared.titles));
+                // A switched pod lists no layouts on the device: launcher
+                // membership is home's links (decision
+                // `content-addressed-construct`); the titles still name
+                // notifications' layouts.
+                if shared.switched.load(Ordering::SeqCst) {
+                    list.entities
+                        .retain(|k, _| !k.starts_with("local://layouts"));
+                    for q in list.queries.values_mut() {
+                        q.clear();
+                    }
+                    if let Ok(count) = serde_json::from_value(json!({ "count": 0 })) {
+                        list.entities.insert("local://layouts".into(), count);
+                    }
+                }
+                merge(&mut out, list);
             }
         }
         // Offline: the list kept from the last time stays.
@@ -881,6 +919,11 @@ impl Loader for PodEngine {
     }
 
     fn device(&self, command: &str, app: &str, id: &str) -> Option<Result<DataBundle, String>> {
+        if self.shared.switched.load(Ordering::SeqCst)
+            && matches!(command, "show_versions" | "pin_version" | "follow_latest")
+        {
+            return Some(Ok(DataBundle::default()));
+        }
         match command {
             "show_versions" => Some(self.versions(app)),
             "pin_version" => {
@@ -1023,6 +1066,10 @@ impl Loader for PodEngine {
 
     fn changes(&self) -> Option<Changes> {
         lock(&self.shared.news).take()
+    }
+
+    fn edges(&self) -> Option<crate::interact::Edges> {
+        lock(&self.shared.edges).take()
     }
 
     /// The engine's sign-in (D19): `action.auth.login` registers the

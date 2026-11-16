@@ -212,3 +212,30 @@ fn a_home_embeds_a_whole_layout_and_centres_its_tiles() {
     let (left, right) = (first[0], 390.0 - (last[0] + last[2]));
     assert!((left - right).abs() < 0.5, "{left} {right}");
 }
+
+/// The construct (decision `content-addressed-construct`): an edit to the
+/// layout on screen waits while a field is focused, then keeps the stack,
+/// the form and the scroll position; a link taken out closes what it led to,
+/// back to the deepest entry that still resolves.
+#[test]
+fn a_construct_edit_keeps_the_stack_and_a_removed_link_pops_back() {
+    let d = "crates/construct-sim/data";
+    let (runner, results) = run(
+        "home",
+        &format!(
+            "construct {d}/construct_v1.json; click Recipes; type note Hello there; scroll-to Item 30; \
+             click Hello there; construct {d}/construct_v2.json; assert-no-text Recipes (edited); \
+             click Item 30; back; assert-text Recipes (edited); assert-text Item 30; \
+             assert-text Hello there; click Item 30; assert-text Detail; \
+             construct {d}/construct_v4.json; wait 600; assert-text Recipes (edited); \
+             assert-no-text Detail; construct {d}/construct_v3.json; wait 600; \
+             assert-text Nothing linked here now; assert-no-text Recipes (edited)"
+        ),
+        &out_dir("construct"),
+    );
+    assert_ok(&results);
+    assert_eq!(
+        runner.session.form.get("note").map(String::as_str),
+        Some("Hello there")
+    );
+}

@@ -101,6 +101,10 @@ pub enum Step {
         title: String,
     },
     ToggleChannel(String),
+    /// Fixture mode: the pod's construct moves to the one in this file
+    /// (decision `content-addressed-construct`): `{"layouts": {key: page},
+    /// "reach": {key: [keys]}, "data"?: {entities, queries}}`.
+    Construct(String),
 }
 
 impl Step {
@@ -140,6 +144,7 @@ impl Step {
             Step::PinVersion { .. } => "pin-version",
             Step::Notify { .. } => "notify",
             Step::ToggleChannel(_) => "toggle-channel",
+            Step::Construct(_) => "construct",
         }
     }
 
@@ -147,7 +152,11 @@ impl Step {
     pub fn fixture_only(&self) -> bool {
         matches!(
             self,
-            Step::Offline | Step::Online | Step::PublishVersion(_) | Step::Notify { .. }
+            Step::Offline
+                | Step::Online
+                | Step::PublishVersion(_)
+                | Step::Notify { .. }
+                | Step::Construct(_)
         )
     }
 }
@@ -359,6 +368,7 @@ pub fn parse(script: &str) -> Result<Vec<Line>, String> {
                     version,
                 }
             }
+            "construct" => Step::Construct(need("a construct file (crates/construct-sim/data/…)")?),
             "notify" => {
                 let a = need("'<layout> <channel> <title>'")?;
                 let mut it = a.splitn(3, char::is_whitespace);
