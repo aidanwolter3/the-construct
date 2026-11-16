@@ -2360,13 +2360,12 @@ impl Inner {
         let snap = {
             let mut st = lock(&self.state);
             match result {
-                Ok(_)
-                    if token.is_some()
-                        && st.session.as_ref().map(|s| &s.token) != token.as_ref() =>
-                {
-                    // Fetched with a session that was signed out (or
-                    // replaced) meanwhile: never cache that account's data
-                    // again. Whoever changed the session refetches.
+                Ok(_) if st.session.as_ref().map(|s| &s.token) != token.as_ref() => {
+                    // Fetched with a session that was signed out, replaced
+                    // or opened meanwhile: never cache that account's data
+                    // again, nor let a fetch started signed out cover the
+                    // newer session's (a fetch takes several requests on
+                    // the construct). Whoever changed the session refetches.
                     println!(
                         "[ConstructEngine] discarded workspace '{}' fetched with a session that has \
                          since changed",

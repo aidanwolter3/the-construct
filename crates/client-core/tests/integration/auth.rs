@@ -671,17 +671,29 @@ fn outbox_401_keeps_the_like_pending_until_the_next_sign_in() {
 
 #[test]
 fn fetch_401_clears_the_session() {
-    // A pod that rejects every construct read with 401.
+    // A pod that rejects every construct read with 401, once the test has
+    // seen the restored session (until then it holds the answer: the
+    // engine's first fetch may otherwise be answered before the test looks).
     let rt = tokio::runtime::Builder::new_multi_thread()
         .worker_threads(1)
         .enable_all()
         .build()
         .unwrap();
+    let open = Arc::new(AtomicBool::new(false));
+    let gate = Arc::clone(&open);
     let app = axum::Router::new()
         .route("/healthz", axum::routing::get(|| async { "ok" }))
         .route(
             "/v1/construct",
-            axum::routing::get(|| async { (axum::http::StatusCode::UNAUTHORIZED, "{}") }),
+            axum::routing::get(move || {
+                let gate = Arc::clone(&gate);
+                async move {
+                    while !gate.load(Ordering::SeqCst) {
+                        tokio::time::sleep(Duration::from_millis(10)).await;
+                    }
+                    (axum::http::StatusCode::UNAUTHORIZED, "{}")
+                }
+            }),
         );
     let (l, addr) = bind();
     spawn_serve(&rt, l, app);
@@ -693,10 +705,14 @@ fn fetch_401_clears_the_session() {
     );
     let engine = engine(&base, &store, None, RedirectMode::Loopback);
     assert_eq!(auth(&engine.snapshot())["state"], "signed_in");
+    open.store(true, Ordering::SeqCst);
     wait_until("signed out by the fetch 401", || {
         auth(&engine.snapshot())["state"] == "signed_out"
     });
-    assert!(store.get(&session_key(&base)).is_none());
+    // The store is written after the state: it follows at once.
+    wait_until("session deleted from the store", || {
+        store.get(&session_key(&base)).is_none()
+    });
     rt.shutdown_background();
 }
 

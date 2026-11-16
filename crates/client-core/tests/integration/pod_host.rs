@@ -184,7 +184,12 @@ fn a_device_opens_a_pod_signs_in_signs_out_and_leaves() {
             && auth(s)["state"] == "signed_out"
             && !s.workspace_json.contains("Try a temporary pod")
     });
-    assert_eq!(token(&store).as_deref(), Some(pod_token.as_str()));
+    // The secure store is written just after the state changes.
+    let deadline = Instant::now() + TIMEOUT;
+    while token(&store).as_deref() != Some(pod_token.as_str()) {
+        assert!(Instant::now() < deadline, "the pod token stays stored");
+        thread::sleep(Duration::from_millis(10));
+    }
     let listed = sign_ins(&engine);
     assert_eq!(listed["sign_ins"], json!([]));
     // Settings can start the sign-in again.

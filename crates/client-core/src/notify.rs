@@ -74,6 +74,21 @@ pub(crate) struct DeviceState {
 }
 
 impl DeviceState {
+    /// A registration under `token` with this info went through: the device
+    /// counts as registered, unless its info changed while it was sent (then
+    /// the registration that change asked for still has to go).
+    fn registered(
+        &mut self,
+        token: String,
+        platform: &str,
+        name: &str,
+        push: &Option<PushSubscription>,
+    ) {
+        if self.platform == platform && self.name == name && self.push == *push {
+            self.registered_for = Some(token);
+        }
+    }
+
     pub(crate) fn new(push: Option<PushSubscription>) -> Self {
         Self {
             platform: DEFAULT_PLATFORM.to_owned(),
@@ -507,7 +522,7 @@ impl Inner {
                     if push_on { "on" } else { "off" }
                 );
                 if self.session_is(&token) {
-                    lock(&self.device).registered_for = Some(token);
+                    lock(&self.device).registered(token, &platform, &name, &push);
                 }
                 Ok(())
             }
@@ -964,9 +979,10 @@ impl ConstructEngine {
         self.inner
             .pod_call(reqwest::Method::PUT, &path, &token, Some(&body))
             .map_err(CallError::into_api)?;
-        self.inner.remember_push(Some(sub));
+        let push = Some(sub);
+        self.inner.remember_push(push.clone());
         if self.inner.session_is(&token) {
-            lock(&self.inner.device).registered_for = Some(token);
+            lock(&self.inner.device).registered(token, &platform, &name, &push);
         }
         println!("[ConstructEngine] push subscription registered with the pod");
         Ok(())
@@ -990,7 +1006,7 @@ impl ConstructEngine {
             .pod_call(reqwest::Method::PUT, &path, &token, Some(&body))
             .map_err(CallError::into_api)?;
         if self.inner.session_is(&token) {
-            lock(&self.inner.device).registered_for = Some(token);
+            lock(&self.inner.device).registered(token, &platform, &name, &None);
         }
         Ok(())
     }
