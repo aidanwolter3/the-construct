@@ -408,3 +408,152 @@ async fn a_layout_embedded_with_bind_draws_what_its_use_site_binds() {
     assert!(err, "{e}");
     assert_eq!(e["error"], "unbound_input", "{e}");
 }
+
+/// Issue #310: on a switched pod, Collections' `apply_change` edits the
+/// construct's layouts in the same step as the collection, and a change is
+/// checked against the construct's layouts as clients draw them (a bound
+/// one too), never the old tables.
+#[tokio::test]
+async fn a_change_set_edits_and_checks_the_constructs_layouts() {
+    let env = env().await;
+    let pod_code = env.pod("mine").await;
+    let access = env.connect(&pod_code).await;
+    let ok = |name: &'static str, args: Value| {
+        let (env, access) = (&env, &access);
+        async move {
+            let (err, v) = env.tool(access, name, args).await;
+            assert!(!err, "{name}: {v}");
+            v
+        }
+    };
+    let refused = |name: &'static str, args: Value| {
+        let (env, access) = (&env, &access);
+        async move {
+            let (err, v) = env.tool(access, name, args).await;
+            assert!(err, "{name}: {v}");
+            v
+        }
+    };
+    ok(
+        "define_collection",
+        json!({"name": "books", "fields": [{"name": "title", "type": "text"},
+            {"name": "author", "type": "text"}]}),
+    )
+    .await;
+    ok(
+        "add_row",
+        json!({"collection": "books", "values": {"title": "The Glass Orchard", "author": "Ida Vell"}}),
+    )
+    .await;
+    let (err, sw) = env.tool(&access, "switch_construct", json!({})).await;
+    assert!(!err, "{sw}");
+
+    let page = |query: &str, row: &str| {
+        json!({"type": "core://Page", "title": "Books", "root": {"type": "core://List",
+            "query_key": query,
+            "item_template": {"type": "core://Text", "style": "Body", "value_expr": row}}})
+    };
+    let id = |v: Value| v["id"].as_str().unwrap().to_owned();
+    // One layout reads the collection itself; another reads what home binds.
+    let list = id(ok(
+        "create_layout",
+        json!({"title": "Books", "feeds": [["collections", "books"]],
+            "layout": page("collection:books", "$item.title")}),
+    )
+    .await);
+    let shelf = id(ok(
+        "create_layout",
+        json!({"title": "Shelf", "layout": page("$in.items", "$item.title by $item.author")}),
+    )
+    .await);
+    ok(
+        "update_layout",
+        json!({"app": "home", "layout": {"type": "core://Page", "title": "Home",
+        "root": {"type": "core://Column", "children": [
+            {"type": "core://Layout", "ref": list},
+            {"type": "core://Layout", "ref": shelf, "bind": {"items": "collection:books"}}]}}}),
+    )
+    .await;
+    let version = |l: &str| {
+        let (env, access, l) = (&env, &access, l.to_owned());
+        async move {
+            let (err, v) = env.tool(access, "get_layout", json!({"app": l})).await;
+            assert!(!err, "{v}");
+            v["version"].as_i64().unwrap()
+        }
+    };
+    let (list_v, shelf_v) = (version(&list).await, version(&shelf).await);
+
+    // Removing a field the bound shelf shows is refused, naming it.
+    let e = refused(
+        "apply_change",
+        json!({"collection": "books", "changes": [{"op": "remove_field", "field": "author"}]}),
+    )
+    .await;
+    assert_eq!(e["error"], "breaks_app", "{e}");
+    assert_eq!(e["app"], shelf, "{e}");
+    assert_eq!(e["in_change_set"], false, "{e}");
+    assert!(
+        e["detail"].as_str().unwrap().contains("$item.author"),
+        "{e}"
+    );
+    // The collection reports the construct's layouts as its users.
+    let d = ok("describe_collection", json!({"collection": "books"})).await;
+    assert_eq!(d["latest_version"], 1, "{d}");
+    let users: Vec<&str> = d["used_by"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|u| u["app"].as_str())
+        .collect();
+    assert!(
+        users.contains(&list.as_str()) && users.contains(&shelf.as_str()),
+        "{d}"
+    );
+
+    // With the shelf changed in the same step, it applies: the construct's
+    // layout moves (its history seq + 1), the collection with it.
+    let r = ok(
+        "apply_change",
+        json!({"collection": "books", "note": "No authors",
+        "changes": [{"op": "remove_field", "field": "author"}],
+        "apps": [{"app": shelf, "base_version": shelf_v, "json_patch": [{"op": "replace",
+            "path": "/root/item_template/value_expr", "value": "$item.title"}]}]}),
+    )
+    .await;
+    assert_eq!(r["version"], 2, "{r}");
+    assert_eq!(r["apps"][0]["app"], shelf, "{r}");
+    assert_eq!(r["apps"][0]["version"], shelf_v + 1, "{r}");
+    let (_, got) = env.tool(&access, "get_layout", json!({"app": shelf})).await;
+    assert_eq!(got["version"], shelf_v + 1, "{got}");
+    assert_eq!(
+        got["layout"]["root"]["item_template"]["value_expr"], "$item.title",
+        "{got}"
+    );
+    assert_eq!(version(&list).await, list_v, "untouched");
+
+    // A base that isn't the name's seq refuses the whole step.
+    let e = refused(
+        "apply_change",
+        json!({"collection": "books",
+        "changes": [{"op": "add_field", "name": "read", "type": "bool", "default": false}],
+        "apps": [{"app": list, "base_version": list_v + 5, "json_patch": [{"op": "replace",
+            "path": "/title", "value": "My books"}]}]}),
+    )
+    .await;
+    assert_eq!(e["error"], "stale_base", "{e}");
+    assert_eq!(e["latest_version"], list_v, "{e}");
+    let d = ok("describe_collection", json!({"collection": "books"})).await;
+    assert_eq!(d["latest_version"], 2, "nothing applied: {d}");
+    // An edit the construct refuses refuses the change too.
+    let e = refused(
+        "apply_change",
+        json!({"collection": "books",
+        "changes": [{"op": "add_field", "name": "read", "type": "bool", "default": false}],
+        "apps": [{"app": "c-nothingabc", "layout": page("collection:books", "$item.title")}]}),
+    )
+    .await;
+    assert_eq!(e["error"], "layout_not_found", "{e}");
+    let d = ok("describe_collection", json!({"collection": "books"})).await;
+    assert_eq!(d["latest_version"], 2, "nothing applied: {d}");
+}

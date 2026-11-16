@@ -547,6 +547,77 @@ pub fn publish(pod: &Pod, moved: &[(String, i64)]) {
     }
 }
 
+/// A layout as clients draw it: what checks of the pod's data read on a
+/// switched pod ([`live_layouts`]).
+#[derive(Debug, Clone)]
+pub struct LiveLayout {
+    /// Its name (a pod layout's id, or `@core/<blueprint>`).
+    pub name: String,
+    pub title: String,
+    pub icon: String,
+    /// Its name's history seq (what `get_layout` calls its version).
+    pub version: i64,
+    /// Its element materialized: components expanded, its inputs filled in
+    /// with what the first use site reaching it from home binds.
+    pub node: Value,
+}
+
+/// Every layout of a switched pod as clients draw it: each one home
+/// reaches (breadth first, bound as the engine binds it), then each of the
+/// pod's layouts home doesn't reach, unbound. A layout bound two ways is
+/// listed for each. Elements that can't be materialized are left out.
+pub fn live_layouts(conn: &Connection) -> rusqlite::Result<Vec<LiveLayout>> {
+    let objects = ConnObjects::new(conn);
+    let mut out = Vec::new();
+    let mut seen = BTreeSet::new();
+    let mut named = BTreeSet::new();
+    let mut queue = VecDeque::new();
+    if let Some(h) = cstore::name(conn, crate::HOME_APP)? {
+        queue.push_back((crate::HOME_APP.to_owned(), h, Map::new()));
+    }
+    // Then the layouts home doesn't reach (opened by name), unbound.
+    let mut unreached = false;
+    loop {
+        while let Some((name, el, inputs)) = queue.pop_front() {
+            if seen.len() > 10_000 {
+                break;
+            }
+            if !seen.insert(construct_elements::instance_id(&el, &inputs)) {
+                continue;
+            }
+            let Some(v) = objects.object(&el) else {
+                continue;
+            };
+            let Ok(m) = construct_elements::materialize_with(&objects, &el, &inputs) else {
+                continue;
+            };
+            for e in &m.edges {
+                if let Some(t) = &e.el {
+                    queue.push_back((e.name.clone(), t.clone(), e.bind.clone()));
+                }
+            }
+            named.insert(name.clone());
+            out.push(LiveLayout {
+                version: cstore::last_seq(conn, &name)?,
+                title: v["title"].as_str().unwrap_or("").to_owned(),
+                icon: v["icon"].as_str().unwrap_or("").to_owned(),
+                name,
+                node: m.node,
+            });
+        }
+        if unreached {
+            break;
+        }
+        unreached = true;
+        for (name, h) in cstore::names(conn)? {
+            if super::is_layout_name(&name) && !named.contains(&name) {
+                queue.push_back((name, h, Map::new()));
+            }
+        }
+    }
+    Ok(out)
+}
+
 /// A layout element as written: its node normalized, its title and icon.
 fn layout_element(
     conn: &Connection,
@@ -914,7 +985,10 @@ fn current_layout(conn: &Connection, id: &str) -> Result<(String, Arc<Value>), V
     Ok((h, el))
 }
 
-fn update_layout(
+/// `update_layout` on a switched pod, in the caller's transaction: also how
+/// Collections' `apply_change` edits layouts along with a collection. The
+/// caller announces the moves with [`publish`] after committing.
+pub fn update_layout(
     pod: &Pod,
     conn: &Connection,
     args: &Value,

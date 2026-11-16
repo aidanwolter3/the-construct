@@ -1602,6 +1602,12 @@ pub fn stage_layout(
     app: &CustomApp,
     body: &Value,
 ) -> Result<(StagedLayout, Value), Refusal> {
+    if crate::construct::is_switched(pod) {
+        return Err(refuse(
+            StatusCode::CONFLICT,
+            crate::construct::switched_refusal("Staging a layout edit"),
+        ));
+    }
     let note = check_note(body.get("note"), "Edited")?;
     let base =
         match body.get("base_version") {
@@ -1640,14 +1646,20 @@ pub fn allow_write(pod: &Pod) -> Result<(), Refusal> {
 
 /// Append a staged edit in `tx` (the caller publishes the version with
 /// [`crate::AppState::publish_layout`] after committing). `Ok(Err(_))`:
-/// refused (the app changed since `base_version`, or was deleted); roll
-/// back.
+/// refused (the app changed since `base_version`, or was deleted, or the
+/// pod is switched to the construct); roll back.
 pub fn commit_staged(
     tx: &rusqlite::Transaction<'_>,
     pod: &Pod,
     staged: &StagedLayout,
     by: Writer,
 ) -> rusqlite::Result<Result<i64, Refusal>> {
+    if crate::construct::switched_on(tx)? {
+        return Ok(Err(refuse(
+            StatusCode::CONFLICT,
+            crate::construct::switched_refusal("A staged layout edit"),
+        )));
+    }
     if custom_app_on(tx, &staged.id)?.is_none() {
         return Ok(Err(not_found(&staged.id)));
     }
@@ -1682,13 +1694,35 @@ pub fn commit_staged(
 /// expanded)`. Every layout has home's feeds (decision `layouts-not-apps`),
 /// so this is every live layout once home declares a feed of `source`;
 /// callers that want the layouts that show the source check the layout.
-/// Blocking.
+/// On a switched pod: the construct's layouts as clients draw them
+/// ([`crate::construct::write::live_layouts`]), with home's feeds, not the
+/// old tables (decision `content-addressed-construct`). Blocking.
 pub fn apps_using(
     store: &Store,
     catalog: &crate::Catalog,
     source: &str,
 ) -> rusqlite::Result<Vec<(CustomApp, i64, Value)>> {
     let mut out = Vec::new();
+    if store.with_conn(|c| crate::construct::switched_on(c))? {
+        return store.with_conn(|c| {
+            let feeds = crate::construct::write::home_feeds(c);
+            if !feeds.iter().any(|(s, _)| s == source) {
+                return Ok(out);
+            }
+            for l in crate::construct::write::live_layouts(c)? {
+                let app = CustomApp {
+                    id: l.name,
+                    title: l.title,
+                    icon: l.icon,
+                    feeds: feeds.clone(),
+                    created_at: 0,
+                    updated_at: 0,
+                };
+                out.push((app, l.version, l.node));
+            }
+            Ok(out)
+        });
+    }
     for app in store.with_conn(custom_apps_on)? {
         if !app.feeds.iter().any(|(s, _)| s == source) {
             continue;

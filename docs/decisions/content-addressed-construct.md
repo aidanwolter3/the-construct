@@ -137,7 +137,7 @@ construct) back to an earlier element.
   (MCP `switch_construct` takes effect at once).
 - On a switched pod, Collections' `apply_change` can't edit layouts along with a collection (`409
   construct_switched`), and a collection change isn't checked against the construct's layouts as it is against the
-  old ones.
+  old ones. (Lifted by issue #310: see "Change sets on a switched pod" below.)
 - An installed client from before issue #126 (one that doesn't draw `page`) can't draw a switched pod's layouts: the
   construct serves plumbing only.
 - A layout opened by name (a notification's, home not reaching it) is drawn off the tree: links inside it are opened
@@ -173,3 +173,22 @@ Added on 2026-11-16, for switched pods only (a pod that isn't switched answers a
 - **Notification links.** A layout the root doesn't reach is looked up by name (`GET
   /v1/construct/names/<name>` → its element for the client's features), fetched and kept under its key, off the
   tree.
+
+## Change sets on a switched pod (issue #310)
+
+Added on 2026-11-16. Before this, `apply_change` with `apps` on a switched pod wrote the old custom-app tables,
+which nothing draws, and answered success with an old version number; and its "would this break a layout" check
+read the old tables' stale copies.
+
+- **Edits go to the construct.** On a switched pod, `apply_change`'s (and `restore_collection_version`'s) `apps`
+  edits are written by the same code as `update_layout` (`construct::write::update_layout`), in the collection
+  change's transaction: a field and the layouts using it change together or not at all. `base_version` is the
+  name's history seq (`get_layout`'s `version`); the answer's `apps[].version` is the new seq.
+- **The check reads the construct.** Every layout is checked against the new definitions as clients draw it
+  (`construct::write::live_layouts`): each one home reaches, materialized with the inputs its first use site binds
+  (so a shelf bound to `collection:books` is checked against `books`), then the pod's layouts home doesn't reach,
+  unbound, all with home's feeds. It runs after the edits, inside the transaction. `custom::apps_using` answers
+  the same on a switched pod, so `describe_collection`'s and `list_collections`' `used_by` and
+  `delete_collection`'s `collection_in_use` name the construct's layouts (blueprints home reaches included).
+- **The old store refuses.** `custom::stage_layout` and `custom::commit_staged` answer `409 construct_switched` on a
+  switched pod, like the old system's other writes. Removing the old system entirely is issue #300.

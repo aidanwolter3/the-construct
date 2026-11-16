@@ -111,6 +111,12 @@ pub fn read_switched(store: &Store) -> bool {
         .is_some_and(|v| v == "1")
 }
 
+/// Whether the pod is switched, read on `conn` (inside a transaction, where
+/// [`is_switched`] would wait for the store's lock).
+pub fn switched_on(conn: &rusqlite::Connection) -> rusqlite::Result<bool> {
+    Ok(crate::store::pod_setting_on(conn, SWITCHED_SETTING)?.is_some_and(|v| v == "1"))
+}
+
 /// Forget what [`is_switched`] read (after a switch or a revert).
 pub(crate) fn reset(pod: &Pod) {
     let st = state(pod);
