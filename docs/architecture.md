@@ -65,7 +65,7 @@ The server binary picks the sources at compile time (`server::adapters`). Bluepr
 |---|---|---|---|
 | `pixelfed` | Pixelfed | `source-pixelfed` | A Pixelfed client: feed, carousels, likes, bookmarks, threaded comments, photo posting, notifications |
 | `pixelfed_sample_no_login` | Pixelfed sample | `source-pixelfed` (static) | A one-post sample that needs no sign-in; listed only with `CONSTRUCT_SHOW_DEV_APPS=1` |
-| `recipes` | Recipes | `source-recipes` | A recipe collection with search, categories and recipe cards (D41) |
+| `recipes` | Recipes | `source-recipes` | A recipe collection with search, categories and recipe cards (D41); Claude edits a recipe's notes with the MCP tool `recipes_notes` (decision `recipe-notes`) |
 | `events` | Events | `source-events` | Upcoming events from websites the user watches, with alerts (decision `collection-fillers`) |
 | `shell` | Home | `source-shell` | The home blueprint: a blank page with Notifications and Settings, which every pod's `home` references |
 | `settings` | Settings | `source-shell` | Settings as a layout over device data: connection, layouts and versions, sign-ins, channels, server |

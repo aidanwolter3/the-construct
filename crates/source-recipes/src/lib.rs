@@ -7,12 +7,16 @@
 //! - `GET /v1/recipes/screens/recipe?id=<slug>`: one recipe's screen data
 //!   ([`db::recipe_screen`]).
 //!
+//! - MCP tool `recipes_notes`: Claude reads and writes a recipe's notes
+//!   ([`notes`], decision `recipe-notes`).
+//!
 //! A new pod starts with no recipes (decision `recipes-start-empty`); pods
 //! that ran the old family import (migration step 2) keep theirs. Tests seed
 //! made-up ones with [`db::seed_test_recipes`].
 
 pub mod db;
 pub mod format;
+pub mod notes;
 
 use axum::{
     Json, Router,
@@ -168,6 +172,30 @@ impl Source for RecipesAdapter {
 
     fn manifest(&self) -> SourceManifest {
         MANIFEST
+    }
+
+    fn mcp_tools(&self) -> Vec<serde_json::Value> {
+        vec![notes::tool_def()]
+    }
+
+    fn mcp_instructions(&self) -> Option<&'static str> {
+        Some(
+            "The recipes source holds the user's recipes (feed all; a recipe's screen data has its \
+ingredients, steps and notes). The app can't edit them: recipes_notes lists, adds, changes and \
+removes a recipe's notes, which its screen shows under Notes.",
+        )
+    }
+
+    fn mcp_call<'a>(
+        &'a self,
+        pod: &'a Pod,
+        tool: &'a str,
+        args: &'a serde_json::Value,
+    ) -> Option<BoxFuture<'a, Result<serde_json::Value, serde_json::Value>>> {
+        match tool {
+            "recipes_notes" => Some(Box::pin(notes::tool(pod, args))),
+            _ => None,
+        }
     }
 
     fn feed<'a>(

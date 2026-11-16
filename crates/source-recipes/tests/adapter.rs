@@ -9,6 +9,7 @@ use http_body_util::BodyExt;
 use pod_core::layouts::parse_files;
 use pod_core::{AppState, Catalog, Source};
 use protocol::{DataBundle, UiNode, WorkspaceSpec};
+use serde_json::json;
 use source_recipes::{FILES, RecipesAdapter};
 use tower::ServiceExt;
 
@@ -249,4 +250,133 @@ async fn a_new_pod_starts_empty_and_keeps_what_it_holds() {
     drop(state);
     let state = AppState::open_dir(dir.path(), adapters()).unwrap();
     assert_eq!(recipe_count(&state), 8);
+}
+
+async fn notes_tool(
+    state: &Arc<AppState>,
+    args: serde_json::Value,
+) -> Result<serde_json::Value, serde_json::Value> {
+    RecipesAdapter::new()
+        .mcp_call(state, "recipes_notes", &args)
+        .expect("the recipes source has recipes_notes")
+        .await
+}
+
+/// Claude adds, changes and removes a recipe's notes with `recipes_notes`
+/// (decision `recipe-notes`), and the recipe screen shows them.
+#[tokio::test]
+async fn claude_writes_a_recipes_notes_and_the_screen_shows_them() {
+    let state = seeded();
+    assert!(
+        RecipesAdapter::new()
+            .mcp_tools()
+            .iter()
+            .any(|t| t["name"] == "recipes_notes")
+    );
+    let texts = |v: &serde_json::Value| -> Vec<String> {
+        v["notes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|n| n["text"].as_str().unwrap().to_owned())
+            .collect()
+    };
+
+    // By title, any case.
+    let listed = notes_tool(&state, json!({"op": "list", "recipe": "demo pancakes"}))
+        .await
+        .unwrap();
+    assert_eq!(listed["recipe"]["id"], "demo-pancakes");
+    assert!(texts(&listed).is_empty());
+
+    for t in ["At altitude: about 50 min.", "Second note.", "Third note."] {
+        notes_tool(
+            &state,
+            json!({"op": "add", "recipe": "demo-pancakes", "text": t}),
+        )
+        .await
+        .unwrap();
+    }
+    let changed = notes_tool(
+        &state,
+        json!({"op": "update", "recipe": "demo-pancakes", "n": 3, "text": "Third, changed."}),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        texts(&changed),
+        [
+            "At altitude: about 50 min.",
+            "Second note.",
+            "Third, changed."
+        ]
+    );
+    let removed = notes_tool(
+        &state,
+        json!({"op": "remove", "recipe": "demo-pancakes", "n": 2}),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        texts(&removed),
+        ["At altitude: about 50 min.", "Third, changed."]
+    );
+    assert_eq!(removed["notes"][1]["n"], 2);
+
+    let (status, body) = get(&state, "/v1/recipes/screens/recipe?id=demo-pancakes").await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let uris = body["queries"]["recipe:demo-pancakes:notes"]
+        .as_array()
+        .unwrap();
+    let shown: Vec<&str> = uris
+        .iter()
+        .map(|u| {
+            body["entities"][u.as_str().unwrap()]["text"]
+                .as_str()
+                .unwrap()
+        })
+        .collect();
+    assert_eq!(shown, ["At altitude: about 50 min.", "Third, changed."]);
+    assert_eq!(
+        body["entities"][uris[0].as_str().unwrap()]["section"],
+        "Notes"
+    );
+
+    // Part of one title finds it; part of several answers them.
+    let found = notes_tool(&state, json!({"op": "list", "recipe": "PANCAKE"}))
+        .await
+        .unwrap();
+    assert_eq!(found["recipe"]["id"], "demo-pancakes");
+    let err = notes_tool(&state, json!({"op": "list", "recipe": "e"}))
+        .await
+        .unwrap_err();
+    assert_eq!(err["error"], "ambiguous_recipe");
+    assert!(err["matches"].as_array().unwrap().len() > 1, "{err}");
+
+    // Refusals change nothing.
+    let err = notes_tool(
+        &state,
+        json!({"op": "remove", "recipe": "demo-pancakes", "n": 5}),
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(err["error"], "note_not_found");
+    let err = notes_tool(
+        &state,
+        json!({"op": "add", "recipe": "no-such-recipe", "text": "x"}),
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(err["error"], "recipe_not_found");
+    let err = notes_tool(
+        &state,
+        json!({"op": "add", "recipe": "demo-pancakes", "text": "  "}),
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(err["error"], "invalid_request");
+    let listed = notes_tool(&state, json!({"op": "list", "recipe": "demo-pancakes"}))
+        .await
+        .unwrap();
+    assert_eq!(texts(&listed).len(), 2);
 }
