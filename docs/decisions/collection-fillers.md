@@ -62,7 +62,8 @@ collection side by side.
     `CONSTRUCT_FILL_PRIVATE_HOSTS=1`), at least a second between requests to one host from a pod. A 304 or an
     unchanged body ends the fill with no work, unless the recipe changed (its fingerprint).
   - Values are coerced to the fields' types; web forms are read (`$1,299.00` as a number, RFC 2822 and iCalendar
-    dates, a schema.org enumeration URL as a choice); a time without an offset is placed in `zone`. A value that
+    dates, a schema.org enumeration URL as a choice); a time without an offset is placed in `zone`, and a UTC time
+    (`Z`, as many sites' JSON gives it) is moved to `zone`'s clock (the same instant). A value that
     doesn't fit is skipped and counted.
   - `upcoming` (a date or datetime field) leaves out items that have passed. `details` (`link`, `extract`, `map`,
     `text`) reads each new row's own page, at most 10 a fill (the Watcher's event pages, for lineups).
