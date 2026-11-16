@@ -341,3 +341,48 @@ fn an_embedded_layout_draws_what_its_use_site_binds() {
         e.snapshot().queries_json.contains("recipes:all")
     });
 }
+
+/// Decision `newest-query-answer-wins`: a layout cached on an earlier run
+/// that home no longer reaches is never loaded again, so its cached answer
+/// (which may list the same query keys as a reachable layout's) is dropped
+/// after the next sync.
+#[test]
+fn a_cached_layout_the_root_no_longer_reaches_is_forgotten() {
+    let p = pod();
+    let (a, _) = build(&p);
+    server::construct::switch::switch(&p.state).unwrap();
+    let dir = temp_dir("unreachable");
+    let first = engine_at(&dir, &p.base);
+    wait_until("home drawn from the construct", || {
+        first.construct_status().switched && home_json(&first).contains("Home")
+    });
+    first.open_layout(&a);
+    wait_until("A drawn", || {
+        first
+            .layout_now(&a)
+            .root
+            .is_some_and(|r| serde_json::to_string(&r).unwrap().contains("Inside A"))
+    });
+    drop(first);
+
+    // Home stops linking A.
+    let state = p.state.clone();
+    let r = p.rt.block_on(async move {
+        server::construct::write::mcp(&state, "update_layout", &json!({"app": "home",
+            "layout": {"type": "core://Page", "title": "Home", "root": {"type": "core://Column",
+                "children": [{"type": "core://Text", "style": "Title", "value_expr": "Home alone"}]}}}))
+        .await
+    });
+    assert!(r.as_ref().is_some_and(Result::is_ok), "{r:?}");
+
+    let again = engine_at(&dir, &p.base);
+    wait_until("home drawn again", || {
+        home_json(&again).contains("Home alone")
+    });
+    wait_until("A forgotten", || {
+        let layouts: Value = serde_json::from_str(&again.snapshot().layouts_json).unwrap();
+        layouts.get(&a).is_none()
+    });
+    drop(again);
+    let _ = std::fs::remove_dir_all(&dir);
+}
