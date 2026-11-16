@@ -825,6 +825,103 @@ async fn event_sites_fill_one_collection_and_alerts_notify_once() {
 }
 
 #[tokio::test]
+async fn a_reworded_refill_keeps_its_rows_and_doesnt_notify_again() {
+    let base = serve(Arc::new(Site::default())).await;
+    let agent = Arc::new(FakeAgent::default());
+    *agent.page_rows.lock().unwrap() = vec![
+        json!({"title": "Jazz night", "start": "2099-12-04T20:00", "venue": "Basement bar",
+               "description": "A trio plays standards."}),
+        json!({"title": "Disco", "start": "2099-12-05T21:00", "venue": "Basement bar"}),
+    ];
+    let pod = pod_with(Some(agent.clone()));
+    ok(
+        &pod,
+        "define_collection",
+        json!({"name": "shows", "order_by": "start", "fields": [
+            {"name": "title", "type": "text", "optional": true},
+            {"name": "start", "type": "datetime", "optional": true},
+            {"name": "venue", "type": "text", "optional": true},
+            {"name": "description", "type": "text", "optional": true},
+            {"name": "going", "type": "bool", "default": false}],
+        "fillers": [{"kind": "fetch", "title": "Bar", "url": format!("{base}/plain"), "extract": "llm",
+            "fields": ["title", "start", "venue", "description"], "zone": "America/Denver",
+            "upcoming": "start"}]}),
+    )
+    .await;
+    settle(&pod, "shows").await;
+    let filler = filler_ids(&pod, "shows").await.remove(0);
+    ok(
+        &pod,
+        "apply_change",
+        json!({"collection": "shows", "changes": [{"op": "add_alert", "any": ["jazz"], "filler": filler}]}),
+    )
+    .await;
+    ok(
+        &pod,
+        "create_layout",
+        json!({"title": "Shows", "feeds": [["collections", "shows"]],
+            "layout": {"type": "core://Workspace", "id": "x", "title": "Shows", "slots": [
+                {"slot_id": "list", "provider_uri": "core://custom", "content": {
+                    "type": "core://List", "query_key": "collection:shows",
+                    "item_template": {"type": "core://Text", "style": "Body",
+                        "value_expr": "$item.title"}}}]}}),
+    )
+    .await;
+    source_collections::alerts::run(&pod, None).await;
+    let notified = |pod: &Pod| {
+        pod.store()
+            .with_conn(|c| {
+                c.query_row("SELECT COUNT(*) FROM notifications", [], |r| {
+                    r.get::<_, i64>(0)
+                })
+            })
+            .unwrap()
+    };
+    assert_eq!(notified(&pod), 1);
+    let jazz = rows(&pod, "shows").await[0]["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let (s, _) = call(
+        &pod,
+        "POST",
+        "/v1/collections/shows/update",
+        Some(json!({"id": jazz, "going": true})),
+    )
+    .await;
+    assert_eq!(s, StatusCode::OK);
+    // The model words the same show differently, drops Disco and finds a new show.
+    *agent.page_rows.lock().unwrap() = vec![
+        json!({"title": "Jazz Night!", "start": "2099-12-04T20:00", "venue": "Basement bar",
+               "description": "Standards from a local trio."}),
+        json!({"title": "Jazz night", "start": "2099-12-11T20:00", "venue": "Basement bar"}),
+    ];
+    let out = fill::fill(&pod, "shows", &filler, true).await;
+    let Outcome::Filled { stored, .. } = out else {
+        panic!("{out:?}")
+    };
+    assert_eq!((stored.created, stored.updated, stored.removed), (1, 1, 1));
+    let r = rows(&pod, "shows").await;
+    assert_eq!(r.len(), 2, "{r:?}");
+    assert_eq!(
+        (
+            r[0]["id"].as_str(),
+            r[0]["going"].clone(),
+            r[0]["title"].clone()
+        ),
+        (Some(jazz.as_str()), json!(true), json!("Jazz Night!")),
+        "the same show keeps its row, the person's mark and the new wording"
+    );
+    assert_ne!(
+        r[1]["id"].as_str(),
+        Some(jazz.as_str()),
+        "next week's show is new"
+    );
+    source_collections::alerts::run(&pod, None).await;
+    assert_eq!(notified(&pod), 2, "only the new show notifies");
+}
+
+#[tokio::test]
 async fn a_page_of_only_past_events_isnt_a_broken_recipe() {
     let base = serve(Arc::new(Site::default())).await;
     let agent = Arc::new(FakeAgent::default());
