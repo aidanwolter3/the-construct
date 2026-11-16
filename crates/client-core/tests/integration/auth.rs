@@ -576,6 +576,35 @@ fn restart_restores_the_session_from_the_store() {
     wait_signed_in(&engine);
 }
 
+/// Issue #306: the bare blueprint key (a notification's layout home
+/// doesn't reach), opened by name on a pod whose home binds the Pixelfed
+/// feeds, draws with home's feed: the pod gives the blueprint's element
+/// the home feeds its tree binds.
+#[test]
+fn a_blueprint_opened_by_its_key_gets_homes_feeds() {
+    let env = Env::start();
+    let store = Arc::new(MemoryStore::new());
+    {
+        let engine = loopback_engine(&env, &store);
+        engine.dispatch(&env.login_intent());
+        wait_signed_in(&engine);
+    }
+    let engine = ConstructEngine::init_with_options(
+        "",
+        &env.pod,
+        BLUEPRINT,
+        EngineOptions {
+            config: fast_config(),
+            secure_store: Some(Arc::clone(&store) as Arc<dyn SecureStore>),
+            url_opener: None,
+            redirect: RedirectMode::Loopback,
+            loopback_port: 0,
+        },
+    );
+    wait_signed_in(&engine);
+    assert!(engine.snapshot().workspace_json.contains("timeline:home"));
+}
+
 #[test]
 fn logout_forgets_the_session_everywhere() {
     let env = Env::start();
