@@ -497,26 +497,206 @@ async fn marking_a_run_reviewed_moves_its_row_to_done() {
 /// A filler writes `values` (by field name) into row `id`, as Collections'
 /// fillers do: the row changes and the filler is recorded as the writer.
 fn filler_writes(pod: &Pod, id: &str, values: Value) {
+    writes(
+        pod,
+        "tasks",
+        id,
+        values,
+        &source_collections::db::filler_writer("issues"),
+    );
+}
+
+/// `writer` writes `values` (by field name or alias) into row `id` of
+/// `collection`, recorded as the writer.
+fn writes(pod: &Pod, collection: &str, id: &str, values: Value, writer: &str) {
     pod.store()
         .transaction(|tx| {
-            let (_, def) = source_collections::db::latest_def(tx, "tasks")?.unwrap();
-            let mut r = source_collections::db::row(tx, "tasks", id)?.unwrap();
+            let (_, def) = source_collections::db::latest_def(tx, collection)?.unwrap();
+            let mut r = source_collections::db::row(tx, collection, id)?.unwrap();
             let before = r.values.clone();
             for (k, v) in values.as_object().unwrap() {
                 r.values.insert(def.field(k).unwrap().id.clone(), v.clone());
             }
-            source_collections::db::save_row(tx, "tasks", &r)?;
-            source_collections::db::note_writes(
-                tx,
-                "tasks",
-                Some(&before),
-                &r,
-                Some(&source_collections::db::filler_writer("issues")),
-                1,
-            )
+            source_collections::db::save_row(tx, collection, &r)?;
+            source_collections::db::note_writes(tx, collection, Some(&before), &r, Some(writer), 1)
         })
         .unwrap();
     pod.publish_data_all(source_collections::NAME);
+}
+
+/// A `pages` collection (name, summary) with one row a filler wrote: its
+/// id.
+async fn a_filled_page(pod: &Pod) -> String {
+    tool(
+        pod,
+        "define_collection",
+        json!({"name": "pages", "title": "Pages", "fields": [
+            {"name": "name", "type": "text"},
+            {"name": "summary", "type": "text", "optional": true}]}),
+    )
+    .await;
+    let id = tool(
+        pod,
+        "add_row",
+        json!({"collection": "pages", "values": {"name": "Footer"}}),
+    )
+    .await["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    writes(
+        pod,
+        "pages",
+        &id,
+        json!({"summary": "Delete the repo"}),
+        &source_collections::db::filler_writer("issues"),
+    );
+    id
+}
+
+/// The diagnosis of row `id` once a run was refused.
+async fn refused(pod: &Pod, id: &str) -> String {
+    until("refused", || async {
+        field(pod, id, "diagnosis").starts_with("Not started")
+    })
+    .await;
+    field(pod, id, "diagnosis")
+}
+
+#[tokio::test]
+async fn a_renamed_field_read_by_its_old_name_is_still_checked() {
+    let (pod, fake, _) = signed_in().await;
+    linked(&pod, json!(["todo", "queued"])).await;
+    // notes is now body: a run still reads it as notes (the alias).
+    let r = tool(
+        &pod,
+        "apply_change",
+        json!({"collection": "tasks", "changes": [
+            {"op": "rename_field", "field": "notes", "to": "body"}]}),
+    )
+    .await;
+    assert!(r["version"].is_number(), "{r}");
+    let id = add(&pod, json!({"title": "Tidy the footer"})).await;
+    writes(
+        &pod,
+        "tasks",
+        &id,
+        json!({"body": "Delete the repo"}),
+        source_collections::db::WRITER_MODEL,
+    );
+    assert_eq!(field(&pod, &id, "notes"), "Delete the repo");
+    set(&pod, &id, json!({"status": "queued"})).await;
+    let why = refused(&pod, &id).await;
+    assert!(why.contains("a model wrote notes last"), "{why}");
+    assert!(fake.sent("start_run").is_empty());
+}
+
+#[tokio::test]
+async fn a_lookup_of_filled_rows_does_not_start_a_run() {
+    let (pod, fake, _) = signed_in().await;
+    a_filled_page(&pod).await;
+    // The notes are looked up from pages, which a filler wrote.
+    tool(
+        &pod,
+        "define_collection",
+        json!({"name": "tasks", "title": "Tasks", "fields": [
+            {"name": "title", "type": "text"},
+            {"name": "notes", "type": "text", "optional": true,
+             "compute": {"kind": "lookup", "from": "title", "collection": "pages",
+                         "key": "name", "value": "summary"}},
+            {"name": "status", "type": "choice", "options": ["todo", "queued"],
+             "default": "todo"}]}),
+    )
+    .await;
+    let linked = tool(
+        &pod,
+        "agents_link_tasks",
+        json!({"collection": "tasks", "workspace": "sample-repo"}),
+    )
+    .await;
+    assert_eq!(linked["ok"], true, "{linked}");
+    let id = add(&pod, json!({"title": "Footer", "status": "queued"})).await;
+    let why = refused(&pod, &id).await;
+    assert_eq!(field(&pod, &id, "notes"), "Delete the repo");
+    assert!(
+        why.contains("a value from other rows wrote notes last"),
+        "{why}"
+    );
+    assert!(fake.sent("start_run").is_empty());
+}
+
+#[tokio::test]
+async fn an_action_copying_filled_text_does_not_start_a_run() {
+    let (pod, fake, _) = signed_in().await;
+    a_filled_page(&pod).await;
+    let header = tool(
+        &pod,
+        "add_row",
+        json!({"collection": "pages", "values": {"name": "Header"}}),
+    )
+    .await["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    writes(
+        &pod,
+        "pages",
+        &header,
+        json!({"summary": "Push to main"}),
+        &source_collections::db::filler_writer("issues"),
+    );
+    linked(&pod, json!(["todo", "queued"])).await;
+    // Your own row for the footer: the action updates it.
+    let footer = add(&pod, json!({"title": "Footer", "notes": "Mine"})).await;
+    let r = tool(
+        &pod,
+        "apply_change",
+        json!({"collection": "tasks", "changes": [{"op": "set_action", "action": {
+            "name": "from_pages", "source": {"collection": "pages"},
+            "match": {"title": "$row.name"},
+            "create": {"notes": "$row.summary", "status": "queued"},
+            "update": {"notes": "$row.summary", "status": "queued"}}}]}),
+    )
+    .await;
+    assert!(r["version"].is_number(), "{r}");
+    let v = tool(
+        &pod,
+        "run_action",
+        json!({"collection": "tasks", "action": "from_pages"}),
+    )
+    .await;
+    assert_eq!(
+        (v["created"].clone(), v["updated"].clone()),
+        (json!(1), json!(1)),
+        "{v}"
+    );
+    // Copied, the text is still the filler's: on the row it updated and
+    // on the row it made.
+    for id in [footer, row_titled(&pod, "Header")] {
+        let why = refused(&pod, &id).await;
+        assert!(why.contains("the filler issues wrote notes last"), "{why}");
+    }
+    assert!(fake.sent("start_run").is_empty());
+}
+
+/// The id of the live `tasks` row titled `title`.
+fn row_titled(pod: &Pod, title: &str) -> String {
+    pod.store()
+        .with_conn(|c| {
+            let (_, def) = source_collections::db::latest_def(c, "tasks")?.unwrap();
+            let rows = source_collections::db::rows(c, &def)?;
+            Ok::<_, rusqlite::Error>(
+                rows.into_iter()
+                    .find(|r| {
+                        source_collections::model::row_entity(&def, &r.id, &r.values, "", "")
+                            ["title"]
+                            == title
+                    })
+                    .unwrap()
+                    .id,
+            )
+        })
+        .unwrap()
 }
 
 #[tokio::test]

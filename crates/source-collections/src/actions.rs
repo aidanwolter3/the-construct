@@ -974,6 +974,64 @@ impl Run<'_> {
         Ok(Value::Null)
     }
 
+    /// The filler, model or [`db::WRITER_DERIVED`] that wrote the value at
+    /// path `p` from row `row` of `start`, or a ref it went through (issue
+    /// #289); `None`: a person.
+    fn writer(
+        &mut self,
+        start: &Definition,
+        row: &Row,
+        p: &[String],
+    ) -> rusqlite::Result<Option<String>> {
+        let mut d = start.clone();
+        let mut r = row.clone();
+        for (i, id) in p.iter().enumerate() {
+            if id == model::ROW_ID {
+                return Ok(None);
+            }
+            let writers = db::row_writers(self.tx, &d.name, &r.id)?;
+            if let Some(w) = db::writer_of(&d, &writers, id) {
+                return Ok(Some(w));
+            }
+            if i + 1 == p.len() {
+                return Ok(None);
+            }
+            let Some(f) = d.by_id(id).cloned() else {
+                return Ok(None);
+            };
+            let (Some(target), Some(next)) = (
+                f.collection.clone(),
+                r.values.get(id).and_then(Value::as_str).map(str::to_owned),
+            ) else {
+                return Ok(None);
+            };
+            let (Some(nr), Some(nd)) = (
+                self.live_row(&target, &next)?,
+                self.defs.get(&target).cloned(),
+            ) else {
+                return Ok(None);
+            };
+            d = nd;
+            r = nr;
+        }
+        Ok(None)
+    }
+
+    /// Who wrote the value `e` gives: a copy from a row keeps its writer
+    /// ([`Run::writer`]); a literal or a parameter is the caller's (`None`).
+    fn writer_of(
+        &mut self,
+        e: &Expr,
+        source: (&Definition, &Row),
+        parent: Option<(&Definition, &Row)>,
+    ) -> rusqlite::Result<Option<String>> {
+        match (e, parent) {
+            (Expr::Row(p), _) => self.writer(source.0, source.1, p),
+            (Expr::Parent(p), Some((d, r))) => self.writer(d, r, p),
+            _ => Ok(None),
+        }
+    }
+
     fn eval(
         &mut self,
         e: &Expr,
@@ -993,10 +1051,13 @@ impl Run<'_> {
     }
 
     /// A new row of `def` from `write` (names), or why not.
+    /// `copied`: field id -> the writer of a value copied from a row
+    /// ([`Run::writer_of`]), recorded as that field's writer.
     fn create(
         &mut self,
         def: &Definition,
         write: &Map<String, Value>,
+        copied: &BTreeMap<String, String>,
     ) -> rusqlite::Result<Result<Row, String>> {
         let write = match crate::refs::prepare_write(self.tx, def, write)? {
             Ok(w) => w,
@@ -1032,6 +1093,7 @@ impl Run<'_> {
                 .to_owned()));
         }
         db::insert_row(self.tx, &def.name, &row)?;
+        self.note_copied(def, &row, None, copied)?;
         self.jobs.entry(def.name.clone()).or_default().extend(jobs);
         self.touch(&def.name, &row.id, None);
         Ok(Ok(row))
@@ -1043,6 +1105,7 @@ impl Run<'_> {
         def: &Definition,
         row: &mut Row,
         write: &Map<String, Value>,
+        copied: &BTreeMap<String, String>,
     ) -> rusqlite::Result<Result<bool, String>> {
         let write = match crate::refs::prepare_write(self.tx, def, write)? {
             Ok(w) => w,
@@ -1092,8 +1155,27 @@ impl Run<'_> {
             None,
             self.now,
         )?;
+        self.note_copied(def, row, Some(&before.values), copied)?;
         self.jobs.entry(def.name.clone()).or_default().extend(jobs);
         Ok(Ok(true))
+    }
+
+    /// Record the writers of the values copied into `row` that changed
+    /// (issue #289): a copy of a filler's text is still the filler's.
+    fn note_copied(
+        &self,
+        def: &Definition,
+        row: &Row,
+        before: Option<&Map<String, Value>>,
+        copied: &BTreeMap<String, String>,
+    ) -> rusqlite::Result<()> {
+        for (field, w) in copied {
+            let now = row.values.get(field);
+            if now.is_some() && before.and_then(|b| b.get(field)) != now {
+                db::note_field_writer(self.tx, &def.name, &row.id, field, w, self.now)?;
+            }
+        }
+        Ok(())
     }
 }
 
@@ -1326,8 +1408,13 @@ pub fn run(
         let src = (&source, r);
         // The parent's match values.
         let mut wanted: Vec<(String, Value)> = Vec::new();
+        // Field id -> the writer of a value copied from a row.
+        let mut copied: BTreeMap<String, String> = BTreeMap::new();
         for a in &action.matching {
             wanted.push((a.field.clone(), run.eval(&a.value, &params, src, None)?));
+            if let Some(w) = run.writer_of(&a.value, src, None)? {
+                copied.insert(a.field.clone(), w);
+            }
         }
         if let Some((f, _)) = wanted.iter().find(|(_, v)| key_of(v).is_none()) {
             report.skipped.push(json!({ "row": r.id,
@@ -1362,13 +1449,17 @@ pub fn run(
                 reset_done.insert(p.id.clone());
                 if !action.update.is_empty() && !updated.contains(&p.id) {
                     let mut write = Map::new();
+                    let mut copied = BTreeMap::new();
                     for a in &action.update {
                         write.insert(
                             def.name_of(&a.field),
                             run.eval(&a.value, &params, src, None)?,
                         );
+                        if let Some(w) = run.writer_of(&a.value, src, None)? {
+                            copied.insert(a.field.clone(), w);
+                        }
                     }
-                    match run.update(&def, &mut p, &write)? {
+                    match run.update(&def, &mut p, &write, &copied)? {
                         Ok(true) => report.updated += 1,
                         Ok(false) => {}
                         Err(e) => return refuse(422, "invalid_value", e),
@@ -1388,8 +1479,12 @@ pub fn run(
                         def.name_of(&a.field),
                         run.eval(&a.value, &params, src, None)?,
                     );
+                    match run.writer_of(&a.value, src, None)? {
+                        Some(w) => copied.insert(a.field.clone(), w),
+                        None => copied.remove(&a.field),
+                    };
                 }
-                let p = match run.create(&def, &write)? {
+                let p = match run.create(&def, &write, &copied)? {
                     Ok(p) => p,
                     Err(e) => return refuse(422, "invalid_value", e),
                 };
@@ -1418,11 +1513,15 @@ pub fn run(
             None => 1.0,
         };
         let mut write = Map::new();
+        let mut copied = BTreeMap::new();
         for a in &child.values {
             let Some(f) = cdef.by_id(&a.field).cloned() else {
                 continue;
             };
             let mut v = run.eval(&a.value, &params, src, Some((&def, &parent)))?;
+            if let Some(w) = run.writer_of(&a.value, src, Some((&def, &parent)))? {
+                copied.insert(a.field.clone(), w);
+            }
             if f.kind == Kind::Quantity {
                 // Text is read as a quantity here, so it can be scaled.
                 let q = crate::quantity::from_value(&v)
@@ -1444,7 +1543,7 @@ pub fn run(
             }
             write.insert(f.name.clone(), v);
         }
-        if let Err(e) = run.create(cdef, &write)? {
+        if let Err(e) = run.create(cdef, &write, &copied)? {
             return refuse(422, "invalid_value", e);
         }
         report.added += 1;

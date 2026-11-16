@@ -290,8 +290,11 @@ A collection can keep itself current from the web (decision
   edited by hand.
 - **Who wrote a field:** a row a filler made carries its id (`collections_rows.filler`), and every field a filler
   or a model's computed answer wrote last is recorded in `collections_field_writers` (`filler:<id>` or `model`); a
-  person's (or Claude's) write of the field clears it. The Agents source starts runs only from rows a person wrote
-  (decision [`agents-cap-v3`](decisions/agents-cap-v3.md), issue #243).
+  person's (or Claude's) write of the field clears it. A value from other rows carries their writer too: a live
+  lookup, count or rollup's recompute records `derived`, an action's `$row.…` / `$parent.…` copy records the writer
+  of the field (or ref) it read, and a guard reading a field counts a lookup, count or rollup as `derived` and an
+  expression as the first untrusted writer of the fields it reads (issue #289). The Agents source starts runs only
+  from rows a person wrote (decision [`agents-cap-v3`](decisions/agents-cap-v3.md), issue #243).
 - **Alerts** notify once when a row matches: `any` / `all` / `none` phrases, a filler, days of the week, a window on a
   date field. Rows are served with `alert_matched` and `alert_names`.
 

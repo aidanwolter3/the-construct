@@ -65,6 +65,9 @@ Decision:
   `field_writers`): a filler (`filler:<id>`) or a model's computed answer (`model`); a person's or Claude's write
   through the app, MCP or a layout action clears it. A queued row a filler made, or whose status, title, notes,
   workspace, model or runtime a filler or a model wrote last, is failed with the reason instead of started.
+  Those fields are found as a run reads them (through `def.field`, so an alias counts) and checked by field id;
+  a lookup, count or rollup counts as written by other rows (`derived`), an expression by its inputs' writers, and
+  an action's copy keeps the writer of the value it copied (#289).
 - **Mark reviewed goes to the runner** (`mark_reviewed`); the pod-only mark is gone ([agents-reviewed](agents-reviewed.md)
   is superseded).
 - **Migration step `cap_v3`** (a Rust step): keeps only the notices already sent from the v2 state (so nothing is

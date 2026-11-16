@@ -337,9 +337,13 @@ fn wave_step(
             if fields.is_empty() {
                 continue;
             }
+            let before = row.values.clone();
             if recompute_row(tx, def, &mut row, &fields, &mut lookups, caps, out)? {
                 row.updated_at = now;
                 db::save_row(tx, name, &row)?;
+                // Values from other rows, which a filler may have written
+                // (issue #289).
+                db::note_writes(tx, name, Some(&before), &row, Some(db::WRITER_DERIVED), now)?;
                 out.changed += 1;
             }
         }
