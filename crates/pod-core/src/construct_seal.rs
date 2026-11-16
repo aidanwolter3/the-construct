@@ -110,7 +110,7 @@ pub fn seal_name(
         return Ok(d.clone());
     }
     if s.busy.contains(name) {
-        return Ok(cstore::name(conn, name)?);
+        return cstore::name(conn, name);
     }
     let Some(current) = cstore::name(conn, name)? else {
         s.done.insert(name.to_owned(), None);
