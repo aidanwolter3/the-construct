@@ -274,7 +274,7 @@ its top, and after the new layout it scrolls so that row sits where it was (rows
 row is gone, the next one still there (else the one before) keeps its place, and with none the offset stays. On a
 pod that isn't switched scroll offsets are kept in points, as before. Each new frame tells the engine what it draws, topmost first (`Loader::visible`: every drawn entry's layout and
 data path, and the layouts drawn inline in them), so an `event: data` reloads what's on screen first and leaves the
-rest stale until it's shown again (decision `scoped-data-events`). The simulator's live mode (`construct-sim --base-url`) still fetches straight from the pod (`PodClient`). `local://nav` and
+rest stale until it's shown again (decision `scoped-data-events`). A query key several cached answers list (each layout binding a feed carries its keys) is the newest answer's; answers restored at launch are stale and older than any fetched since, and the cached answers of layouts the construct no longer reaches are dropped after a sync (decision `newest-query-answer-wins`). The simulator's live mode (`construct-sim --base-url`) still fetches straight from the pod (`PodClient`). `local://nav` and
 `local://screen` are set as the Compose UI set them. Images (`core://Image`) download on four background threads, newest request first,
 without the session (the pod serves media from public paths), are cut to their box (cropped to fill, corners
 rounded) and drawn over their placeholder once they arrive; the window redraws then.

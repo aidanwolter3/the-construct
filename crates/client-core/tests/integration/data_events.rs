@@ -139,6 +139,14 @@ fn handle(mut stream: TcpStream, st: &StubState) {
         "/v1/data/gone" if st.gone.load(Ordering::SeqCst) => {
             respond(&mut stream, "404 Not Found", "{}")
         }
+        // Two answers listing the same key (each layout binding a feed
+        // carries its query keys).
+        "/v1/data/x" | "/v1/data/y" => {
+            let uri = format!("t://{}/1", &path[9..]);
+            let body = json!({ "entities": { &uri: { "name": format!("{uri} v{generation}") } },
+                "queries": { "list:shared": [uri] } });
+            respond(&mut stream, "200 OK", &body.to_string())
+        }
         "/v1/data/gone" => respond(
             &mut stream,
             "200 OK",
@@ -404,4 +412,68 @@ fn the_first_connection_reloads_nothing() {
     thread::sleep(SLOW * 4);
     assert_eq!(stub.st.event_conns.load(Ordering::SeqCst), 1);
     assert_eq!(stub.hits("/v1/data/a"), a);
+}
+
+fn shared(engine: &ConstructEngine) -> Value {
+    let q: Value = serde_json::from_str(&engine.snapshot().queries_json).unwrap();
+    q["list:shared"].clone()
+}
+
+fn load(engine: &ConstructEngine, path: &str) {
+    engine.dispatch(&json!({ "intent": "action.data.load", "path": path }).to_string());
+}
+
+/// Decision `newest-query-answer-wins`: a key two answers list is the newest
+/// answer's, whichever path sorts last.
+#[test]
+fn a_key_two_answers_list_is_the_newest_answers() {
+    let stub = Stub::start();
+    let engine = ready(&stub);
+    load(&engine, "/v1/data/y");
+    wait_until("y", || loaded(&engine, "/v1/data/y"));
+    load(&engine, "/v1/data/x");
+    wait_until("x", || shared(&engine) == json!(["t://x/1"]));
+    load(&engine, "/v1/data/y");
+    wait_until("y again", || shared(&engine) == json!(["t://y/1"]));
+}
+
+/// Decision `newest-query-answer-wins`: answers restored at launch are older
+/// than any fetched since, and are loaded again once shown.
+#[test]
+fn a_restored_answer_never_hides_a_fresh_one() {
+    let stub = Stub::start();
+    let dir = std::env::temp_dir().join(format!("construct-restored-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let config = || EngineConfig {
+        poll_interval: Duration::from_millis(100),
+        backoff_base: Duration::from_secs(5),
+        backoff_cap: Duration::from_secs(5),
+    };
+    let first =
+        ConstructEngine::init_with_config(dir.to_str().unwrap(), &stub.base, "home", config());
+    load(&first, "/v1/data/x");
+    wait_until("x", || loaded(&first, "/v1/data/x"));
+    load(&first, "/v1/data/y");
+    wait_until("y last", || shared(&first) == json!(["t://y/1"]));
+    drop(first);
+
+    let again =
+        ConstructEngine::init_with_config(dir.to_str().unwrap(), &stub.base, "home", config());
+    assert_eq!(
+        shared(&again),
+        json!(["t://y/1"]),
+        "both restored: path order"
+    );
+    let y = stub.hits("/v1/data/y");
+    load(&again, "/v1/data/x");
+    wait_until("the fresh x wins", || shared(&again) == json!(["t://x/1"]));
+    assert_eq!(stub.hits("/v1/data/y"), y, "y isn't shown");
+    again.set_visible(vec!["/v1/data/y".into(), "layout:home".into()]);
+    wait_until("y, shown, is loaded again", || {
+        stub.hits("/v1/data/y") == y + 1
+    });
+    wait_until("and is the newest", || shared(&again) == json!(["t://y/1"]));
+    drop(again);
+    let _ = std::fs::remove_dir_all(&dir);
 }
