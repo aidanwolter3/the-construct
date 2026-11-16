@@ -1,6 +1,6 @@
 # Agents: runs from an agent runner
 
-The **Agents** data source (`agents`, `crates/app-agents`, decisions
+The **Agents** data source (`agents`, `crates/source-agents`, decisions
 [`agents-data-source`](decisions/agents-data-source.md), [`agents-runs`](decisions/agents-runs.md) and
 [`agents-cap-v3`](decisions/agents-cap-v3.md)) shows and controls Claude Code work that an external **agent runner**
 (the Foreman) does on cloud sandboxes (Sprites). The pod is the dashboard and the "start work" button; the work
@@ -59,7 +59,7 @@ is plugged and to which URL; `unplug_jack agent_runner` signs out, like `POST /v
   no redirects. An answer over 4 MiB, or a stream message over 256 KiB, is refused, so a runner can't fill the shared
   server's memory. `POST /v1/agents/sign-out` forgets the runner and everything it sent. One runner per pod.
 - **Following, always:** a pod signed in to a runner is opened when the server starts and stays open
-  (`AppAdapter::keeps_open`), so its follower runs whether or not anyone uses the pod. The cursor is stored with the
+  (`Source::keeps_open`), so its follower runs whether or not anyone uses the pod. The cursor is stored with the
   mirror (`agents_state.cursor`). After any gap (a restart, a dropped stream, a runner that was away) the follower
   reads the event log from the cursor in pages, saving each page and its cursor, then follows the stream from there,
   reconnecting with backoff (1 s doubling to 60 s). It takes a snapshot only when it has no cursor (the first
@@ -139,7 +139,7 @@ pod's owner through MCP can write one.
 
 ## The Agents blueprint
 
-`agents` (`crates/app-agents/layouts/agents/`): the sign-in form until the pod is signed in; then a summary card
+`agents` (`crates/source-agents/layouts/agents/`): the sign-in form until the pod is signed in; then a summary card
 ("1 working · 1 needs you · 2 queued · 1 waiting"), chips for Runs, Schedules, Sandboxes and Checks, a "Start a run"
 form, and Sign out (asks first). A run's card shows its status (Parked, Stalled, Waiting on CI…), why it waits
 (the queue reason, the background task), what it needs from you, its tool or what it did. A run's screen adds what

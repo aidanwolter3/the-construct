@@ -105,13 +105,13 @@ plus the Collections tools below. `render_layout_preview` and `dispatch_virtual_
 user's data (feeds, device data such as `local:layouts`, screens' data paths) and answer an image with every
 node's bounds, then tap, scroll or type into it (nothing is written; `target_uri` opens a screen directly, `item`
 and `entities` try a row with made-up data, `full_height` draws a long screen whole:
-[rendering.md](rendering.md#agent-previews-mcp)). `get_layout` takes `expanded: true`. Layouts are named `id` (`app` is still accepted, and the app-era tool names still answer).
+[rendering.md](rendering.md#agent-previews-mcp)). `get_layout` takes `expanded: true`. Layouts are named `id` (`app` is still accepted).
 The server's MCP instructions tell Claude how to use them. After a change to the tools, the Claude connector needs
 "Refresh tools list" in its settings.
 
 ## Collections
 
-Collections is a built-in data source (`crates/app-collections`) that stores any collection Claude declares. Claude
+Collections is a built-in data source (`crates/source-collections`) that stores any collection Claude declares. Claude
 never writes code: it declares typed fields (`text`, `number`, `bool`, `date`, `datetime`, `choice`, `ref`,
 `quantity`; optional, with a default, `unique`), and the pod stores, validates and serves the rows.
 
@@ -298,7 +298,7 @@ A pod's **jacks** are the abilities it is plugged into (decision [`jacks`](decis
 (switches, on by default), `web_search` (config: `provider` `brave` with the pod's own `api_key`, `searxng` with a
 `base_url` (`https://` on a public host name, never an IP address or an internal name), or `duckduckgo`), and
 `mcp` (a switch, on by default: calling the MCP servers the pod is connected to), and
-accounts adapters declare: `pixelfed` and `agent_runner` (plugged by their own sign-in). Claude uses `list_jacks`, `plug_jack` and `unplug_jack`; `GET /v1/jacks` lists them. People plug them in the app
+accounts sources declare: `pixelfed` and `agent_runner` (plugged by their own sign-in). Claude uses `list_jacks`, `plug_jack` and `unplug_jack`; `GET /v1/jacks` lists them. People plug them in the app
 too: Settings → Jacks lists each with its state, and a config jack's screen takes its provider and its key in a hidden
 field, sent straight to the pod (`GET /v1/jacks/screen`, `POST /v1/jacks/plug` and `/unplug`; decision
 [`jacks-in-settings`](decisions/jacks-in-settings.md)). Secrets are sealed and
@@ -321,7 +321,7 @@ session over Streamable HTTP, with no redirects, a minute per request and 8 MB p
 
 ## The Events app
 
-The **Events** app (app id `events`, `crates/app-events`) shows every upcoming event of the websites the user
+The **Events** app (app id `events`, `crates/source-events`) shows every upcoming event of the websites the user
 watches and notifies when one matches ("a show with Brass Lanterns at Improv Millbrook"). Its data is the system collection
 `events` (`source_id`, `title`, `start`, `end`, `venue`, `description`, `url`, `tickets_url`, `seen`): each website is a
 fetch filler, and each rule an alert on that filler. Claude adds and changes them with the Collections tools; the
@@ -336,6 +336,6 @@ Try it locally: `CONSTRUCT_FILL_PRIVATE_HOSTS=1 cargo run -p server`, serve an `
 
 ## Agents
 
-The **Agents** source and blueprint (`agents`, `crates/app-agents`) show Claude Code sessions an external agent runner
+The **Agents** source and blueprint (`agents`, `crates/source-agents`) show Claude Code sessions an external agent runner
 runs, with stop, wake, start and schedule actions, notifications, and an opt-in Tasks collection (MCP tool
 `agents_link_tasks`): see [agents.md](agents.md).

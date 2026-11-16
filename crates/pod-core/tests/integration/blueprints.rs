@@ -14,8 +14,8 @@ use pod_core::layouts::LayoutSource;
 use pod_core::session::session_hash;
 use pod_core::store::Store;
 use pod_core::{
-    AppAdapter, AppInfo, AppState, AuthPolicy, BoxFuture, FeedSpec, HOME_APP, HOME_BLUEPRINT,
-    Hydration, Pod, RequestCtx, SourceManifest, StaticAdapter,
+    AppInfo, AppState, AuthPolicy, BoxFuture, FeedSpec, HOME_APP, HOME_BLUEPRINT, Hydration, Pod,
+    RequestCtx, Source, SourceManifest, StaticAdapter,
 };
 use protocol::{DataBundle, EntityRecord, WorkspaceSpec};
 use serde_json::{Value, json};
@@ -59,7 +59,7 @@ static A_MANIFEST: SourceManifest = SourceManifest {
 
 struct A;
 
-impl AppAdapter for A {
+impl Source for A {
     fn name(&self) -> &'static str {
         "a"
     }
@@ -91,7 +91,7 @@ impl AppAdapter for A {
     }
 }
 
-fn shell() -> Arc<dyn AppAdapter> {
+fn shell() -> Arc<dyn Source> {
     let empty = WorkspaceSpec {
         version: pod_core::BUNDLE_VERSION.into(),
         workspace: protocol::UiNode::Spacer { size_dp: None },

@@ -55,7 +55,7 @@ Decision:
 - **Notifications target layouts.** A notification carries `layout`: the pod's layout built on the blueprint that
   sent it (one whose latest version references or was copied from it), else the blueprint's id. Opening one pushes
   that layout and then the notification's `target_uri` in it.
-- **Menu and inbox are layouts.** Two blueprints of `app-shell`: `settings` (connection, sign-ins, notification
+- **Menu and inbox are layouts.** Two blueprints of `source-shell`: `settings` (connection, sign-ins, notification
   channels, the pod's layouts with their versions, the server, Leave pod) and `inbox` (the notifications, newest first,
   by day). They read only device data. Any layout opens them with `action.navigation.open` (`Panel` and `Sheet`),
   as it opens any layout. The native menu, bell, inbox and Settings panels are gone. The bundled sign-in and rescue layouts stay in the client.

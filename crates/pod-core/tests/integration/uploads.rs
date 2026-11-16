@@ -13,8 +13,8 @@ use http_body_util::BodyExt;
 use pod_core::layouts::LayoutSource;
 use pod_core::session::session_hash;
 use pod_core::{
-    AppAdapter, AppInfo, AppState, AuthPolicy, BoxFuture, FeedSpec, Hydration, Pod, RequestCtx,
-    Session, SourceManifest,
+    AppInfo, AppState, AuthPolicy, BoxFuture, FeedSpec, Hydration, Pod, RequestCtx, Session,
+    Source, SourceManifest,
 };
 use protocol::DataBundle;
 use serde_json::Value;
@@ -31,7 +31,7 @@ static FILES: &[LayoutSource] = &[LayoutSource {
 
 struct Up(Arc<AtomicUsize>);
 
-impl AppAdapter for Up {
+impl Source for Up {
     fn name(&self) -> &'static str {
         "up"
     }

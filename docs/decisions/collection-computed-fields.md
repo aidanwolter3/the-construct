@@ -35,7 +35,7 @@ A field of any type may declare `compute`, one of two kinds:
   - ternaries nest, and parentheses group.
 
   There are no calls and no access beyond the row; an expression is at most 300 characters and 16 levels deep
-  (`crates/app-collections/src/expr.rs`). Example: `entity.quantity ? entity.name + " (" + entity.quantity + ")" :
+  (`crates/source-collections/src/expr.rs`). Example: `entity.quantity ? entity.name + " (" + entity.quantity + ")" :
   entity.name`.
 - **`{kind: "model", from: <field> | [<fields>], prompt}`**: a model's answer to `prompt` about the values of the
   `from` fields (at most 4), coerced to the field's type. A choice must answer one of its options (case-insensitive
@@ -61,7 +61,7 @@ For `model`, three things more:
   changed meanwhile; devices get the usual data event. Each input is asked about once per field.
 - **Learning:** a write that sets the field by hand caches that value for the row's inputs, marked as a person's
   answer. A model's answer never replaces a person's.
-- **The model** sits behind the `app_collections::compute::FieldModel` trait, and tests use a fake. The server's asks
+- **The model** sits behind the `source_collections::compute::FieldModel` trait, and tests use a fake. The server's asks
   a model over the Messages API when `CONSTRUCT_INFER_API_KEY` and `CONSTRUCT_INFER_MODEL` are set
   (`CONSTRUCT_INFER_URL` overrides the endpoint). Without them, model fields keep their default; cached answers,
   people's included, still apply.

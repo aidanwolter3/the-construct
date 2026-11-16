@@ -58,7 +58,7 @@ fn a_custom_app_shows_two_sources_and_its_actions_work() {
         .unwrap();
     // New pods have no recipes (decision `recipes-start-empty`): add the made-up ones.
     pod_store
-        .with_conn(app_recipes::db::seed_test_recipes)
+        .with_conn(source_recipes::db::seed_test_recipes)
         .unwrap();
     let http = reqwest::blocking::Client::new();
     let pod = |method: reqwest::Method, path: &str, body: Option<Value>| -> (u16, Value) {

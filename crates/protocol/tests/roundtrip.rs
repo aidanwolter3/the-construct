@@ -5,7 +5,7 @@ use protocol::{
 };
 use serde_json::{Value, json};
 
-const PIXELFED_FIXTURE: &str = include_str!("../../app-pixelfed/sample/bundle.json");
+const PIXELFED_FIXTURE: &str = include_str!("../../source-pixelfed/sample/bundle.json");
 const COUNTER_FIXTURE: &str = include_str!("data/counter_home_bundle.json");
 
 fn like_intent() -> ActionIntent {

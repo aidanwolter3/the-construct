@@ -273,7 +273,7 @@ fn simulator_bundles() {
             "counter_home_bundle.json",
         ),
         (
-            "crates/app-pixelfed/sample/bundle.json",
+            "crates/source-pixelfed/sample/bundle.json",
             "pixelfed_sample_bundle.json",
         ),
     ] {

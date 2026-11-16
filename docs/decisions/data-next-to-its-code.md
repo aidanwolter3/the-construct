@@ -6,7 +6,7 @@ Date: 2026-11-04. Related: D8, D20, D34, [fake-pixelfed-own-directory](fake-pixe
 The root `fixtures/` folder mixed one file the pod ships (`pixelfed_sample_bundle.json`, the `pixelfed_sample_no_login`
 app's data, embedded in the server binary) with simulator content, engine test data, recorded Pixelfed responses
 and seed images for a dev script. Nothing about a file's place said whether it was test data, and the pod's
-Dockerfile copied the whole folder for the one shipped file. `crates/app-recipes/data/test-seed.json` had the same
+Dockerfile copied the whole folder for the one shipped file. `crates/source-recipes/data/test-seed.json` had the same
 problem: test-only recipes compiled into the pod through a public function. A renamed root folder (`testdata/`)
 was considered, but almost every file has one reader, and a shared folder hides who that is.
 
@@ -14,10 +14,10 @@ Decision: each data file lives with the code that reads it, so its place says wh
 
 | Data | Where | Ships |
 |---|---|---|
-| The `pixelfed_sample_no_login` app's posts | `crates/app-pixelfed/sample/bundle.json` | yes |
-| Real Pixelfed responses (D20) | `crates/app-pixelfed/tests/data/recorded/` | no |
+| The `pixelfed_sample_no_login` app's posts | `crates/source-pixelfed/sample/bundle.json` | yes |
+| Real Pixelfed responses (D20) | `crates/source-pixelfed/tests/data/recorded/` | no |
 | The minimal counter bundle (engine, protocol and Kotlin engine tests) | `crates/protocol/tests/data/` | no |
-| Made-up recipes for tests | `crates/app-recipes/tests/data/test-seed.json` | no |
+| Made-up recipes for tests | `crates/source-recipes/tests/data/test-seed.json` | no |
 | Simulator content: feed and events bundles, screen data, the Kitchen app, notifications | `crates/construct-sim/data/` | no |
 | Seed images for `scripts/pixelfed_dev.sh` | `scripts/pixelfed_dev/images/` | no |
 
@@ -29,7 +29,7 @@ Decision: each data file lives with the code that reads it, so its place says wh
 - Generated simulator files are still written by Rust tests (`UPDATE_FIXTURES=1`), now into
   `crates/construct-sim/data/`.
 - Test-only code that other crates' tests call is behind a feature that only dev-dependencies enable
-  (`app-recipes`'s `test-seed`, which gates `db::seed_test_recipes`), so the pod binary doesn't hold the data.
+  (`source-recipes`'s `test-seed`, which gates `db::seed_test_recipes`), so the pod binary doesn't hold the data.
 - `scripts/check_test_data.sh` (CI) fails when Rust code under a crate's `src/` embeds a file from a `tests/`
   folder outside a `#[cfg(test)]` module or a `#[cfg(test)]` / `#[cfg(any(test, …))]` attribute. It is a line
   heuristic, not a parser: it treats everything after a `#[cfg(test)] mod` as test code.

@@ -31,7 +31,7 @@ through the pod's MCP endpoint) builds the rest into it, only what you ask for, 
 
 ```
  Pixelfed, web pages ◀──▶ pod (Rust, Axum, SQLite) ── layouts + entities, events ──▶ engine (Rust) ──▶ renderer (Rust)
-                          adapters: pixelfed,                                         cache, outbox,     desktop,
+                          sources: pixelfed,                                          cache, outbox,     desktop,
  Claude (MCP) ──────────▶ recipes, collections, …                                     sign-in, SSE       Android
 ```
 
@@ -94,7 +94,7 @@ cargo run -p construct-sim -- --workspace pixelfed_sample_no_login \
 
 | Guide | |
 |---|---|
-| [Architecture](docs/architecture.md) | Pods, adapters, layouts, the engine and the clients |
+| [Architecture](docs/architecture.md) | Pods, sources, layouts, the engine and the clients |
 | [Writing layouts](docs/layouts.md) | Publishing a layout version; nodes, intents, device data and components |
 | [Running the server](docs/server.md) | Configuration, pods, fixed local codes, monitoring, deploying |
 | [HTTP API](docs/api.md) | The pod's core routes |
@@ -113,7 +113,7 @@ crates/pod-core         the generic pod: layouts and their versions, components,
                           notifications, MCP; components/, the server's components
 crates/pod-host         one server, many pods: host.db, pod tokens, temporary pods, scheduler
 crates/server           the server binary and the `server pods` admin CLI
-crates/app-*            adapters: pixelfed, recipes, collections, events, monitor, shell (home, Settings, the
+crates/source-*         sources: pixelfed, recipes, collections, events, monitor, shell (home, Settings, the
                           inbox); blueprint versions in layouts/<id>/NNNN.json
 crates/web-extract      fetching pages and reading structured data out of them, for fillers
 crates/client-core      the engine: SQLite cache, outbox, PKCE sign-in, event stream

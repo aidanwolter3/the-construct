@@ -25,10 +25,10 @@ Decision: old files may be deleted from the repo, oldest first; the newest file 
   and file numbers differ there. `layouts::builtin` is that oldest file.
 - A client that can't draw the oldest file left gets `409 no_compatible_version` on a new pod. On existing pods it
   is served the recorded version it draws, as before.
-- The legacy-file allowance is gone (`AppAdapter::legacy_files`, `StaticAdapter::with_legacy_files`): no file in
+- The legacy-file allowance is gone (`Source::legacy_files`, `StaticAdapter::with_legacy_files`): no file in
   the build holds a removed node type. Recorded versions that do are still served as stored.
 - Tests that need a history of several versions build it themselves (`crates/server/tests/apps.rs`
-  `feed_history`, synthetic sources in `crates/app-pixelfed/tests/layout_files.rs`) instead of relying on old
+  `feed_history`, synthetic sources in `crates/source-pixelfed/tests/layout_files.rs`) instead of relying on old
   files.
 
 First retirement, this decision's change: every app kept only its newest file (`pixelfed/0010`,

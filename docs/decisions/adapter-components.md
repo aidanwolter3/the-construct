@@ -8,9 +8,9 @@ was a `UiNode` tree built in Rust by the adapter. An agent couldn't read it with
 it, and only `crates/pod-core/components/` could hold server components, which would put an app's piece in the core
 (rule 1: the core knows no app).
 
-Decision: an adapter ships server components in its own crate, `crates/app-*/components/<name>/NNNN.json`, embedded
+Decision: an adapter ships server components in its own crate, `crates/source-*/components/<name>/NNNN.json`, embedded
 by its build script (`generate_component_files` in `pod-core/build_support`) and returned by
-`AppAdapter::component_files`. They are `core:<name>` like the core's: recorded at start, append-only, listed by
+`Source::component_files`. They are `core:<name>` like the core's: recorded at start, append-only, listed by
 `list_components`, copyable to `pod:`. A name shipped by two crates stops the start. An adapter's screens (the
 signed-out screen and a stale sign-in's `Hydration::StaleSession` or `Hydration::Screen`) may hold `core://Use`
 nodes: the core expands them (leniently, as when serving a layout) and leaves the workspace a workspace, so the app

@@ -27,7 +27,7 @@ Names older decisions may still use, and what they are now.
 
 | Was | Now | By |
 |---|---|---|
-| app `watcher`, crate `app-watcher` | app `events`, crate `app-events` | [rename-apps-and-folders](rename-apps-and-folders.md) |
+| app `watcher`, crate `app-watcher` | app `events`, crate `source-events` | [rename-apps-and-folders](rename-apps-and-folders.md) |
 | app `pixelfed_home` | app `pixelfed` | [rename-apps-and-folders](rename-apps-and-folders.md) |
 | app `pixelfed_demo` ("Pixelfed demo") | app `pixelfed_sample_no_login` | [rename-apps-and-folders](rename-apps-and-folders.md) |
 | `layouts/<app>/` | `crates/<adapter>/layouts/<app>/` | [rename-apps-and-folders](rename-apps-and-folders.md) |
@@ -36,6 +36,9 @@ Names older decisions may still use, and what they are now.
 | `app/desktopApp/src/sim/resources/` | `crates/construct-sim/data/` | [rust-simulator](rust-simulator.md) |
 | `app/androidApp/src/main/res/` (launcher icon, backup rules) | `crates/construct-render/android/res/` | [rust-clients](rust-clients.md) |
 | `app/` (the Compose clients) | deleted; the clients are `crates/construct-render` | [rust-clients](rust-clients.md) |
+| crates `app-*` (`app-pixelfed`, `app-recipes`, `app-collections`, `app-events`, `app-monitor`, `app-agents`, `app-shell`), trait `AppAdapter` | crates `source-*` (`source-pixelfed`, ...), trait `Source` | [source-adapters](source-adapters.md) |
+| table `pixelfed_apps` | `pixelfed_clients` | [source-adapters](source-adapters.md) |
+| `app_id` of notifications and channel choices | `layout` (store, channels), `channel_layout` (a notification on the wire) | [source-adapters](source-adapters.md) |
 
 The decision files [watcher](watcher.md) and [watcher-rules-per-site](watcher-rules-per-site.md) keep their names:
 other decisions link to them.

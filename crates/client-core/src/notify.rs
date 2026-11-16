@@ -585,7 +585,7 @@ impl Inner {
             let new = st.cache_notification(n);
             let mut by_app = st.unread_by_app.clone();
             if new && !n.read {
-                *by_app.entry(n.app_id.clone()).or_insert(0) += 1;
+                *by_app.entry(n.channel_layout.clone()).or_insert(0) += 1;
             }
             st.set_unread(ev.unread_total, by_app);
             st.seq += 1;
@@ -714,7 +714,7 @@ impl Inner {
     }
 
     /// Update `enabled` of one channel in the cached channel list.
-    fn cache_channel_choice(&self, app_id: &str, channel: &str, enabled: bool) {
+    fn cache_channel_choice(&self, layout: &str, channel: &str, enabled: bool) {
         let st = lock(&self.state);
         let Some(store) = &st.store else { return };
         let Ok(Some(raw)) = store.kv_get(KV_NOTIFICATION_CHANNELS) else {
@@ -725,7 +725,7 @@ impl Inner {
         };
         if let Some(list) = v.get_mut("channels").and_then(Value::as_array_mut) {
             for c in list {
-                if c["app_id"] == app_id && c["id"] == channel {
+                if protocol::channel_layout_in(c) == layout && c["id"] == channel {
                     c["enabled"] = json!(enabled);
                 }
             }

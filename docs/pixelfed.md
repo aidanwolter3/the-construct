@@ -1,8 +1,8 @@
-# The Pixelfed app
+# The Pixelfed source
 
-`crates/app-pixelfed` adapts a [Pixelfed](https://pixelfed.org) instance (D17, D40): it owns the upstream tokens,
-turns the home timeline into entities, and serves the `pixelfed` app's data. Its layouts are in
-`crates/app-pixelfed/layouts/pixelfed/`. The client holds only a pod session.
+`crates/source-pixelfed` adapts a [Pixelfed](https://pixelfed.org) instance (D17, D40): it owns the upstream tokens,
+turns the home timeline into entities, and serves the `pixelfed` blueprint's data. Its layouts are in
+`crates/source-pixelfed/layouts/pixelfed/`. The client holds only a pod session.
 
 Features: the home feed as a list or as two-column cards, photo carousels, likes and bookmarks, threaded comments
 with replies and likes, a post screen, [posting photos](posting.md), and [notifications](notifications.md) for likes,

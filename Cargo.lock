@@ -248,127 +248,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "330a5ed07fa54e4702c9d6c4174f74427fc0ef6e214bbd677ae50a5099946470"
 
 [[package]]
-name = "app-agents"
-version = "0.1.0"
-dependencies = [
- "app-collections",
- "app-shell",
- "axum",
- "futures-util",
- "http-body-util",
- "pod-core",
- "protocol",
- "reqwest",
- "rusqlite",
- "serde",
- "serde_json",
- "tokio",
- "tower",
- "tracing",
-]
-
-[[package]]
-name = "app-collections"
-version = "0.1.0"
-dependencies = [
- "app-shell",
- "axum",
- "base64 0.22.1",
- "construct-agent",
- "getrandom 0.3.4",
- "http-body-util",
- "pod-core",
- "protocol",
- "regex",
- "reqwest",
- "rusqlite",
- "serde",
- "serde_json",
- "sha2 0.10.9",
- "tokio",
- "tower",
- "tracing",
- "web-extract",
-]
-
-[[package]]
-name = "app-events"
-version = "0.1.0"
-dependencies = [
- "app-collections",
- "axum",
- "http-body-util",
- "pod-core",
- "protocol",
- "rusqlite",
- "serde_json",
- "tempfile",
- "tokio",
- "tower",
- "tracing",
-]
-
-[[package]]
-name = "app-monitor"
-version = "0.1.0"
-dependencies = [
- "app-shell",
- "axum",
- "http-body-util",
- "pod-core",
- "protocol",
- "rusqlite",
- "serde_json",
- "tokio",
- "tower",
- "tracing",
-]
-
-[[package]]
-name = "app-pixelfed"
-version = "0.1.0"
-dependencies = [
- "axum",
- "fake-pixelfed",
- "futures-util",
- "pod-core",
- "protocol",
- "reqwest",
- "rusqlite",
- "serde",
- "serde_json",
- "sha2 0.10.9",
- "tempfile",
- "tokio",
- "tracing",
-]
-
-[[package]]
-name = "app-recipes"
-version = "0.1.0"
-dependencies = [
- "app-recipes",
- "axum",
- "http-body-util",
- "pod-core",
- "protocol",
- "rusqlite",
- "serde",
- "serde_json",
- "tempfile",
- "tokio",
- "tower",
-]
-
-[[package]]
-name = "app-shell"
-version = "0.1.0"
-dependencies = [
- "pod-core",
- "protocol",
-]
-
-[[package]]
 name = "arrayref"
 version = "0.3.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1241,13 +1120,13 @@ dependencies = [
 name = "e2e"
 version = "0.1.0"
 dependencies = [
- "app-recipes",
  "axum",
  "client-core",
  "fake-pixelfed",
  "reqwest",
  "serde_json",
  "server",
+ "source-recipes",
  "tokio",
  "tower",
 ]
@@ -4188,13 +4067,6 @@ dependencies = [
 name = "server"
 version = "0.1.0"
 dependencies = [
- "app-agents",
- "app-collections",
- "app-events",
- "app-monitor",
- "app-pixelfed",
- "app-recipes",
- "app-shell",
  "axum",
  "base64 0.22.1",
  "fake-pixelfed",
@@ -4209,6 +4081,13 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2 0.10.9",
+ "source-agents",
+ "source-collections",
+ "source-events",
+ "source-monitor",
+ "source-pixelfed",
+ "source-recipes",
+ "source-shell",
  "tempfile",
  "tokio",
  "tower",
@@ -4432,6 +4311,127 @@ checksum = "c3d1e2c7f27f8d4cb10542a02c49005dbd6e93095799d6f3be745fae9f8fedd4"
 dependencies = [
  "libc",
  "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "source-agents"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "futures-util",
+ "http-body-util",
+ "pod-core",
+ "protocol",
+ "reqwest",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "source-collections",
+ "source-shell",
+ "tokio",
+ "tower",
+ "tracing",
+]
+
+[[package]]
+name = "source-collections"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "base64 0.22.1",
+ "construct-agent",
+ "getrandom 0.3.4",
+ "http-body-util",
+ "pod-core",
+ "protocol",
+ "regex",
+ "reqwest",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "source-shell",
+ "tokio",
+ "tower",
+ "tracing",
+ "web-extract",
+]
+
+[[package]]
+name = "source-events"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "http-body-util",
+ "pod-core",
+ "protocol",
+ "rusqlite",
+ "serde_json",
+ "source-collections",
+ "tempfile",
+ "tokio",
+ "tower",
+ "tracing",
+]
+
+[[package]]
+name = "source-monitor"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "http-body-util",
+ "pod-core",
+ "protocol",
+ "rusqlite",
+ "serde_json",
+ "source-shell",
+ "tokio",
+ "tower",
+ "tracing",
+]
+
+[[package]]
+name = "source-pixelfed"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "fake-pixelfed",
+ "futures-util",
+ "pod-core",
+ "protocol",
+ "reqwest",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "tempfile",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "source-recipes"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "http-body-util",
+ "pod-core",
+ "protocol",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "source-recipes",
+ "tempfile",
+ "tokio",
+ "tower",
+]
+
+[[package]]
+name = "source-shell"
+version = "0.1.0"
+dependencies = [
+ "pod-core",
+ "protocol",
 ]
 
 [[package]]

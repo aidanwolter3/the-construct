@@ -450,7 +450,7 @@ async fn adopting_a_single_pod_database_keeps_its_data() {
         assert_eq!(state.store().adapter_version("recipes").unwrap(), 2);
         state
             .store()
-            .with_conn(app_recipes::db::seed_test_recipes)
+            .with_conn(source_recipes::db::seed_test_recipes)
             .unwrap();
     })
     .await

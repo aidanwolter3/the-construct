@@ -324,6 +324,14 @@ const MIGRATIONS: &[Step] = &[
             updated_at INTEGER NOT NULL
         );",
     ),
+    // Decision `source-adapters`: a notification and a device's channel
+    // choice name the layout (or blueprint) the channel belongs to, so the
+    // column is `layout`. Values stay; the wire still sends `app_id` too.
+    Step::sql(
+        "notification_layouts",
+        "ALTER TABLE notifications RENAME COLUMN app_id TO layout;
+        ALTER TABLE device_channel_prefs RENAME COLUMN app_id TO layout;",
+    ),
 ];
 
 /// A pod setting inside a transaction (an adapter migration reads its
@@ -379,7 +387,7 @@ pub fn rename_app_on(tx: &Transaction<'_>, from: &str, to: &str) -> rusqlite::Re
     }
     for table in ["notifications", "device_channel_prefs"] {
         tx.execute(
-            &format!("UPDATE {table} SET app_id = ?1 WHERE app_id = ?2"),
+            &format!("UPDATE {table} SET layout = ?1 WHERE layout = ?2"),
             params![to, from],
         )?;
     }
@@ -1701,6 +1709,45 @@ mod tests {
         assert_eq!(v3.features, ["foo", "zap"]);
     }
 
+    /// `notification_layouts` keeps a pod's notifications and devices'
+    /// channel choices: only the column's name changes.
+    #[test]
+    fn notifications_and_channel_choices_survive_the_column_rename() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("server.db");
+        {
+            let mut conn = Connection::open(&path).unwrap();
+            migrate_to(&mut conn, "mcp_servers").unwrap();
+            conn.execute_batch(
+                "INSERT INTO notifications (app_id, channel, dedupe_key, title, created_at, inserted_at)
+                     VALUES ('pixelfed', 'likes', 'k', 'Liked', 1, 1);
+                 INSERT INTO device_channel_prefs (device_id, app_id, channel, enabled)
+                     VALUES ('d1', 'pixelfed', 'likes', 0);",
+            )
+            .unwrap();
+        }
+        let s = Store::open(&path).unwrap();
+        let got: (String, String, i64) = s
+            .conn()
+            .query_row(
+                "SELECT n.layout, p.layout, p.enabled FROM notifications n, device_channel_prefs p",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(got, ("pixelfed".into(), "pixelfed".into(), 0));
+        // Still idempotent on the renamed unique key.
+        let inserted = s
+            .conn()
+            .execute(
+                "INSERT OR IGNORE INTO notifications (layout, channel, dedupe_key, title, created_at, inserted_at)
+                 VALUES ('pixelfed', 'likes', 'k', 'Again', 2, 2)",
+                [],
+            )
+            .unwrap();
+        assert_eq!(inserted, 0);
+    }
+
     /// v17 works out every stored version's features and drops the schema
     /// column, so a version using a removed feature (`create_dismiss`) is
     /// retired, and one this build can't read is legacy.
@@ -1916,9 +1963,9 @@ mod tests {
             tx.execute_batch(
                 "INSERT INTO custom_apps (id, title, icon, feeds_json, created_at, updated_at)
                      VALUES ('c1', 'C', 'photo', '[[\"old_source\",\"items\"],[\"other\",\"x\"]]', 1, 1);
-                 INSERT INTO notifications (app_id, channel, dedupe_key, title, created_at, inserted_at)
+                 INSERT INTO notifications (layout, channel, dedupe_key, title, created_at, inserted_at)
                      VALUES ('old', 'likes', 'k', 'Liked', 1, 1);
-                 INSERT INTO device_channel_prefs (device_id, app_id, channel, enabled)
+                 INSERT INTO device_channel_prefs (device_id, layout, channel, enabled)
                      VALUES ('d1', 'old', 'likes', 0);
                  INSERT INTO pod_settings (key, value) VALUES ('apps.hidden', '[\"x\",\"old\"]');",
             )?;
@@ -1946,7 +1993,7 @@ mod tests {
         let (notification, pref, hidden, feeds): (String, String, String, String) = s
             .conn()
             .query_row(
-                "SELECT (SELECT app_id FROM notifications), (SELECT app_id FROM device_channel_prefs),
+                "SELECT (SELECT layout FROM notifications), (SELECT layout FROM device_channel_prefs),
                         (SELECT value FROM pod_settings WHERE key = 'apps.hidden'),
                         (SELECT feeds_json FROM custom_apps)",
                 [],

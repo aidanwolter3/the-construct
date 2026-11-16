@@ -5,8 +5,8 @@
 //! app's root (`GET /v1/workspaces/:id`), screen data paths, the actions its
 //! buttons may call, and the entities it serves. An app is a layout plus a
 //! list of feeds ([`crate::AppInfo::feeds`]); the core runs each feed and
-//! merges the results ([`crate::AppAdapter::feed`]). A source's id is its
-//! adapter's [`crate::AppAdapter::name`].
+//! merges the results ([`crate::Source::feed`]). A source's id is its
+//! adapter's [`crate::Source::name`].
 //!
 //! Patterns name their variable parts `{name}` (`[a-z_]+`), always a whole
 //! path segment, query value or query-key segment:
@@ -82,7 +82,7 @@ impl SourceManifest {
     }
 }
 
-/// A named feed ([`crate::AppAdapter::feed`]).
+/// A named feed ([`crate::Source::feed`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FeedSpec {
     /// `[a-z0-9_]+`, unique in its source, e.g. `home`. Apps name it, so

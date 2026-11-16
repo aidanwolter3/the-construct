@@ -360,7 +360,7 @@ pub fn parse(script: &str) -> Result<Vec<Line>, String> {
                 }
             }
             "notify" => {
-                let a = need("'<app_id> <channel> <title>'")?;
+                let a = need("'<layout> <channel> <title>'")?;
                 let mut it = a.splitn(3, char::is_whitespace);
                 match (it.next(), it.next(), it.next().map(str::trim)) {
                     (Some(app), Some(channel), Some(title)) if !title.is_empty() => Step::Notify {
@@ -370,21 +370,21 @@ pub fn parse(script: &str) -> Result<Vec<Line>, String> {
                     },
                     _ => {
                         return Err(format!(
-                            "{}: 'notify' needs '<app_id> <channel> <title>'",
+                            "{}: 'notify' needs '<layout> <channel> <title>'",
                             at()
                         ));
                     }
                 }
             }
             "toggle-channel" => {
-                let a = need("'<app_id>.<channel>' (e.g. pixelfed.likes)")?;
+                let a = need("'<layout>.<channel>' (e.g. pixelfed.likes)")?;
                 let ok = a.contains('.')
                     && !a.starts_with('.')
                     && !a.ends_with('.')
                     && !a.contains(char::is_whitespace);
                 if !ok {
                     return Err(format!(
-                        "{}: 'toggle-channel' needs '<app_id>.<channel>' (e.g. pixelfed.likes)",
+                        "{}: 'toggle-channel' needs '<layout>.<channel>' (e.g. pixelfed.likes)",
                         at()
                     ));
                 }

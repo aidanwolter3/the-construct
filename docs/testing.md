@@ -28,7 +28,7 @@ The Rust rendering engine (`crates/construct-render`) has golden frames: CPU fra
 `tests/data/goldens/`, and GPU frames with the same files when a wgpu adapter exists (CI's image has lavapipe,
 `mesa-vulkan-drivers`, and CI sets `CONSTRUCT_REQUIRE_GPU=1`). See [rendering.md](rendering.md#tests).
 
-Rendered fillers' tests (`web-extract`'s and `app-collections`' `render::`, decision `rendered-fetches`) drive a
+Rendered fillers' tests (`web-extract`'s and `source-collections`' `render::`, decision `rendered-fetches`) drive a
 real headless Chromium against local pages: CI's image has Debian's `chromium`; elsewhere they skip unless
 `CONSTRUCT_BROWSER` names a browser (on Ubuntu, `npx playwright install chromium` downloads one without the snap).
 
@@ -116,14 +116,14 @@ image. Staging's fake runs at `https://the-construct-fake-pixelfed.fly.dev` (`fa
 
 ## A local real Pixelfed (optional)
 
-For re-recording `crates/app-pixelfed/tests/data/recorded/` and as a contract test, `dev/pixelfed/` runs a real Pixelfed (v0.15.2,
+For re-recording `crates/source-pixelfed/tests/data/recorded/` and as a contract test, `dev/pixelfed/` runs a real Pixelfed (v0.15.2,
 digest-pinned) with MariaDB and Redis in Docker (D20). It is loopback-only (`127.0.0.1:8090`), federation and
 registration are off, and every secret in `dev/pixelfed/pixelfed.env` is a committed dev-only dummy.
 
 ```bash
 scripts/pixelfed_dev.sh up       # start the container runtime if needed, compose up, first-run init
 scripts/pixelfed_dev.sh seed     # users and posts; tokens in dev/pixelfed/.seed/ (gitignored)
-scripts/pixelfed_dev.sh record   # re-record the home timelines in crates/app-pixelfed/tests/data/recorded/
+scripts/pixelfed_dev.sh record   # re-record the home timelines in crates/source-pixelfed/tests/data/recorded/
 scripts/pixelfed_dev.sh status   # | logs [svc] | down (keeps data) | reset (deletes all data)
 ```
 
@@ -154,5 +154,5 @@ sqlite3 "$HOME/.config/the-construct"/engine/*/cache.db "SELECT id, endpoint, st
 ```
 
 A new layout version reaching an open app: with the app open on a local server, add the next
-`crates/app-pixelfed/layouts/pixelfed_sample_no_login/NNNN.json` and restart the server. The app reconnects its event
+`crates/source-pixelfed/layouts/pixelfed_sample_no_login/NNNN.json` and restart the server. The app reconnects its event
 stream and shows the new version within seconds.

@@ -1,7 +1,7 @@
-//! The app-adapter interface (docs/DECISIONS.md D40): how an app plugs into
-//! the pod.
+//! The source interface (docs/DECISIONS.md D40, decision `source-adapters`):
+//! how a data source plugs into the pod.
 //!
-//! The core knows apps only through [`AppAdapter`]. The `server` binary builds
+//! The core knows sources only through [`Source`]. The `server` binary builds
 //! the adapters at compile time and hands them to [`crate::AppState::try_new`],
 //! which collects them into a [`Catalog`].
 
@@ -26,15 +26,16 @@ use crate::store::{Step, Store};
 /// of every route, the adapter's included.
 pub type Pod = Arc<AppState>;
 
-/// A boxed, `Send` future: what [`AppAdapter::feed`] returns (keeps the
-/// trait usable as `dyn AppAdapter`).
+/// A boxed, `Send` future: what [`Source::feed`] returns (keeps the
+/// trait usable as `dyn Source`).
 pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 
-/// One app integration plugged into the pod (D40).
+/// One source plugged into the pod (D40): an adapter crate `source-*`.
 ///
-/// An adapter connects the pod to one upstream service (Pixelfed today) and
-/// serves one or more apps. Each app is a workspace whose layout comes from
-/// `layouts/<app>/NNNN.json` in the adapter's crate. The core owns everything generic: layout
+/// A source connects the pod to its data (an upstream service such as
+/// Pixelfed, or tables of its own), with its routes and jacks, and ships
+/// one or more blueprints. Each blueprint's layout comes from
+/// `layouts/<blueprint>/NNNN.json` in the source's crate. The core owns everything generic: layout
 /// versions, schema negotiation, SSE, `/v1/apps`, sessions and logout. The
 /// adapter supplies only data, its own routes and its own tables.
 ///
@@ -42,16 +43,16 @@ pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 /// - Never serve a layout yourself. Return data from your feeds
 ///   ([`Self::feed`]), and the core picks the layout version this client
 ///   can draw and merges it in.
-/// - Keep the engine and clients app-agnostic (D34). A new screen or action
+/// - Keep the engine and clients source-agnostic (D34). A new screen or action
 ///   ships as a layout file plus adapter code, never as a client change.
 /// - Upstream credentials stay on the pod. Clients only ever hold a pod
 ///   session token (D17).
 /// - The `server` binary builds each adapter once at startup, and every
 ///   request shares it. Keep any mutable state behind a lock.
 ///
-/// A layout-only app (layout files plus fixed data, no upstream) needs no
-/// adapter of its own: use [`crate::StaticAdapter`].
-pub trait AppAdapter: Any + Send + Sync {
+/// A layout-only blueprint (layout files plus fixed data, no upstream)
+/// needs no source of its own: use [`crate::StaticAdapter`].
+pub trait Source: Any + Send + Sync {
     /// A short, unique name for this adapter, such as `pixelfed`.
     ///
     /// It is the scope of the adapter's migrations (`schema_migrations`), so
@@ -185,16 +186,16 @@ pub trait AppAdapter: Any + Send + Sync {
         req: &'a RequestCtx,
     ) -> BoxFuture<'a, Hydration>;
 
-    /// The kinds of notification this adapter's apps send (D52), such as
-    /// "Likes". Called at startup and when listing channels. Each channel's
-    /// `app_id` must be one of [`Self::apps`]; ids are `[a-z0-9_]{1,32}`,
-    /// unique per app, and never change once shipped (devices store their
+    /// The kinds of notification this source's blueprints send (D52), such
+    /// as "Likes". Called at startup and when listing channels. Each
+    /// channel's `layout` must be one of [`Self::apps`]; ids are
+    /// `[a-z0-9_]{1,32}`, unique per layout, and never change once shipped (devices store their
     /// choices by id). Write titles and descriptions for people.
     fn notification_channels(&self) -> Vec<NotificationChannel> {
         Vec::new()
     }
 
-    /// Whether this adapter sends notifications for the pod's custom apps,
+    /// Whether this source sends notifications for the pod's own layouts,
     /// whose channels it declares at run time
     /// ([`Self::custom_notification_channels`]; decision
     /// `collection-reminders`). Such an adapter may poll without declaring
@@ -203,9 +204,9 @@ pub trait AppAdapter: Any + Send + Sync {
         false
     }
 
-    /// The channels this adapter declares now for the pod's custom apps
-    /// (only when [`Self::notifies_custom_apps`]): each `app_id` a live
-    /// custom app, ids `[a-z0-9_]{1,32}` that stay the same while the
+    /// The channels this source declares now for the pod's own layouts
+    /// (only when [`Self::notifies_custom_apps`]): each `layout` a live
+    /// layout of the pod, ids `[a-z0-9_]{1,32}` that stay the same while the
     /// thing they stand for exists. The core drops any other. Called often
     /// (every notification, every channel list): keep it to a quick read of
     /// the store (blocking is fine).
@@ -368,7 +369,7 @@ pub trait AppAdapter: Any + Send + Sync {
 }
 
 /// How a client starts a sign-in from its Settings
-/// ([`AppAdapter::sign_in_start`]).
+/// ([`Source::sign_in_start`]).
 #[derive(Debug, Clone, PartialEq)]
 pub struct SignInStart {
     /// The `action.auth.login` intent for the default server.
@@ -379,7 +380,7 @@ pub struct SignInStart {
     pub server_placeholder: Option<String>,
 }
 
-/// The account behind a session's sign-in ([`AppAdapter::sign_in_account`]).
+/// The account behind a session's sign-in ([`Source::sign_in_account`]).
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct SignInAccount {
     /// The upstream server's base URL, e.g. `https://pixelfed.social`.
@@ -388,7 +389,7 @@ pub struct SignInAccount {
     pub username: Option<String>,
 }
 
-/// What [`AppAdapter::feed`] returns.
+/// What [`Source::feed`] returns.
 pub enum Hydration {
     /// The normal case: entities and queries for the app's layout. The core
     /// adds the newest layout version this client can draw and sets
@@ -429,7 +430,7 @@ pub struct AppInfo {
     /// `AuthPolicy::Public`: the app needs no sign-in.
     pub auth: AuthPolicy,
     /// The feeds that fill its root, as `(source, feed)`: a source is an
-    /// adapter's [`AppAdapter::name`], a feed one of its manifest's, e.g.
+    /// adapter's [`Source::name`], a feed one of its manifest's, e.g.
     /// `[("pixelfed", "home")]`. Usually its own adapter's, but any
     /// source's may be listed; the core merges them in this order. A feed
     /// whose source needs a sign-in the caller lacks is skipped.
@@ -446,7 +447,7 @@ pub enum AuthPolicy {
     SignIn(&'static str),
 }
 
-/// A sign-in an adapter offers ([`AppAdapter::sign_ins`]).
+/// A sign-in an adapter offers ([`Source::sign_ins`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SignInProvider {
     /// Unique across adapters, e.g. `pixelfed`. Recorded on sessions
@@ -502,7 +503,7 @@ fn default_signed_out(sign_in: &str, app: &AppInfo) -> WorkspaceSpec {
 
 /// Every adapter's apps, layout files and sign-ins, checked once at startup.
 pub struct Catalog {
-    adapters: Vec<Arc<dyn AppAdapter>>,
+    adapters: Vec<Arc<dyn Source>>,
     /// Each adapter's manifest, by index into `adapters`.
     manifests: Vec<SourceManifest>,
     /// `(app, index into adapters)`, in `GET /v1/apps` order.
@@ -522,7 +523,7 @@ impl Catalog {
     /// sign-in no adapter provides, or a bad set of data sources: an invalid
     /// manifest, an entity scheme or query key two sources claim, a sign-in
     /// no adapter provides, or an app feed no source declares.
-    pub fn new(adapters: Vec<Arc<dyn AppAdapter>>) -> Result<Self, String> {
+    pub fn new(adapters: Vec<Arc<dyn Source>>) -> Result<Self, String> {
         let mut apps: Vec<(AppInfo, usize)> = Vec::new();
         let mut files = Vec::new();
         let mut sign_ins: Vec<(SignInProvider, usize)> = Vec::new();
@@ -596,12 +597,12 @@ impl Catalog {
         for (i, a) in adapters.iter().enumerate() {
             let channels = a.notification_channels();
             for (n, c) in channels.iter().enumerate() {
-                if !apps.iter().any(|(app, j)| app.id == c.app_id && *j == i) {
+                if !apps.iter().any(|(app, j)| app.id == c.layout && *j == i) {
                     return Err(format!(
                         "adapter '{}' declares channel '{}' for '{}', which is not one of its apps",
                         a.name(),
                         c.id,
-                        c.app_id
+                        c.layout
                     ));
                 }
                 if !crate::notify::valid_channel_id(&c.id) {
@@ -609,11 +610,11 @@ impl Catalog {
                 }
                 if channels[..n]
                     .iter()
-                    .any(|o| o.app_id == c.app_id && o.id == c.id)
+                    .any(|o| o.layout == c.layout && o.id == c.id)
                 {
                     return Err(format!(
                         "app '{}' declares channel '{}' twice",
-                        c.app_id, c.id
+                        c.layout, c.id
                     ));
                 }
             }
@@ -682,7 +683,7 @@ impl Catalog {
         Self::new(Vec::new()).expect("an empty catalog is valid")
     }
 
-    pub fn adapters(&self) -> &[Arc<dyn AppAdapter>] {
+    pub fn adapters(&self) -> &[Arc<dyn Source>] {
         &self.adapters
     }
 
@@ -701,7 +702,7 @@ impl Catalog {
     }
 
     /// Data source `id` (an adapter name) and its manifest.
-    pub fn source(&self, id: &str) -> Option<(&Arc<dyn AppAdapter>, &SourceManifest)> {
+    pub fn source(&self, id: &str) -> Option<(&Arc<dyn Source>, &SourceManifest)> {
         let i = self.adapters.iter().position(|a| a.name() == id)?;
         Some((&self.adapters[i], &self.manifests[i]))
     }
@@ -734,7 +735,7 @@ impl Catalog {
     }
 
     /// The adapter providing sign-in `id`.
-    pub fn sign_in_adapter(&self, id: &str) -> Option<&Arc<dyn AppAdapter>> {
+    pub fn sign_in_adapter(&self, id: &str) -> Option<&Arc<dyn Source>> {
         let (_, i) = self.sign_ins.iter().find(|(s, _)| s.id == id)?;
         self.adapters.get(*i)
     }
@@ -747,7 +748,7 @@ impl Catalog {
             .map(|(s, _)| s)
     }
 
-    /// Whether `path` is under an adapter's [`AppAdapter::public_paths`]
+    /// Whether `path` is under an adapter's [`Source::public_paths`]
     /// (and has no `..` segment).
     pub fn is_public_path(&self, path: &str) -> bool {
         !path.split('/').any(|seg| seg == ".." || seg == ".")
@@ -768,7 +769,7 @@ impl Catalog {
 
 /// The startup checks of the data sources (see [`Catalog::new`]).
 fn check_sources(
-    adapters: &[Arc<dyn AppAdapter>],
+    adapters: &[Arc<dyn Source>],
     manifests: &[SourceManifest],
     apps: &[(AppInfo, usize)],
     sign_ins: &[(SignInProvider, usize)],

@@ -48,7 +48,7 @@ when its layout has no route for it), grouped by reminder.
 
 ## Custom apps get notification channels (pod-core, generic)
 
-- `AppAdapter::notifies_custom_apps` and `custom_notification_channels(store)`: an adapter declares channels at run
+- `Source::notifies_custom_apps` and `custom_notification_channels(store)`: an adapter declares channels at run
   time for live custom apps. The core drops any other (not a live custom app, bad id, a duplicate). Such an adapter
   may poll without static channels.
 - `AppState::notification_channels` (and so `notify`, Web Push prefs, `GET /v1/notifications/channels`,

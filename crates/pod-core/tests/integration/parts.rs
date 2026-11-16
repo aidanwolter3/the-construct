@@ -14,8 +14,8 @@ use pod_core::layouts::LayoutSource;
 use pod_core::session::session_hash;
 use pod_core::store::Store;
 use pod_core::{
-    AppAdapter, AppInfo, AppState, AuthPolicy, BoxFuture, FeedSpec, Hydration, PathSpec, Pod,
-    RequestCtx, SourceManifest,
+    AppInfo, AppState, AuthPolicy, BoxFuture, FeedSpec, Hydration, PathSpec, Pod, RequestCtx,
+    Source, SourceManifest,
 };
 use protocol::{DataBundle, EntityRecord};
 use serde_json::{Value, json};
@@ -92,7 +92,7 @@ struct Src {
     files: &'static [LayoutSource],
 }
 
-impl AppAdapter for Src {
+impl Source for Src {
     fn name(&self) -> &'static str {
         self.name
     }

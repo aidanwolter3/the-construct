@@ -15,11 +15,12 @@ issues. `docs/history/` is archived; don't treat it as current.
 
 ## Where things are
 
-- `crates/protocol` wire types; `crates/pod-core` the generic pod (knows apps only through `AppAdapter`,
+- `crates/protocol` wire types; `crates/pod-core` the generic pod (knows sources only through `Source`,
   `adapter.rs`; `validate.rs` checks layout files); `crates/pod-host` many pods per server; `crates/server` the
   binary and `server pods` CLI.
-- `crates/app-pixelfed`, `app-recipes`, `app-collections`, `app-events` (Events), `app-monitor`, `app-agents` (Agents:
-  an external agent runner, [docs/agents.md](docs/agents.md)), `app-shell` (the home blueprint): the adapters.
+- `crates/source-pixelfed`, `source-recipes`, `source-collections`, `source-events` (Events), `source-monitor`,
+  `source-agents` (Agents: an external agent runner, [docs/agents.md](docs/agents.md)), `source-shell` (the home
+  blueprint): the sources.
   `crates/web-extract`: the web module (page fetching and extraction, host policy, search, web prompts);
   `crates/agent` (`construct-agent`): the agent module every model call goes through; `pod_core::jacks`: the
   abilities a pod is plugged into (decisions `jacks`, `web-and-agent-modules`).
@@ -31,9 +32,9 @@ issues. `docs/history/` is archived; don't treat it as current.
   [docs/clients.md](docs/clients.md)); `crates/construct-sim` the headless simulator over it
   ([docs/simulator.md](docs/simulator.md)).
 - `fake-pixelfed/` the fake upstream (primary test target); `crates/e2e` the end-to-end suite.
-- `crates/app-*/layouts/<app>/NNNN.json` layout versions; `crates/protocol/features/` the named vocabulary (plumbing);
-  `crates/pod-core/components/<name>/NNNN.json` the server components (porcelain, decision `plumbing-and-porcelain`);
-  an adapter's own in `crates/app-*/components/` (decision `adapter-components`).
+- `crates/source-*/layouts/<blueprint>/NNNN.json` layout versions; `crates/protocol/features/` the named vocabulary
+  (plumbing); `crates/pod-core/components/<name>/NNNN.json` the server components (porcelain, decision
+  `plumbing-and-porcelain`); a source's own in `crates/source-*/components/` (decision `adapter-components`).
 - Each crate's integration tests are one binary, `tests/integration/main.rs`: add a test file as a `mod` there
   ([docs/testing.md](docs/testing.md)).
 - Data files live next to the code that reads them (decision `data-next-to-its-code`): test data in

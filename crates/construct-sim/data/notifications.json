@@ -3,6 +3,7 @@
   "notifications": [
     {
       "id": "fx-6",
+      "channel_layout": "pixelfed",
       "app_id": "pixelfed",
       "channel": "comments",
       "title": "@bob commented on your post",
@@ -14,6 +15,7 @@
     },
     {
       "id": "fx-5",
+      "channel_layout": "pixelfed",
       "app_id": "pixelfed",
       "channel": "likes",
       "title": "@carol liked your post",
@@ -25,6 +27,7 @@
     },
     {
       "id": "fx-4",
+      "channel_layout": "pixelfed",
       "app_id": "pixelfed",
       "channel": "mentions",
       "title": "@carol mentioned you",
@@ -36,6 +39,7 @@
     },
     {
       "id": "fx-3",
+      "channel_layout": "pixelfed",
       "app_id": "pixelfed",
       "channel": "follows",
       "title": "@dana followed you",
@@ -45,6 +49,7 @@
     },
     {
       "id": "fx-2",
+      "channel_layout": "pixelfed",
       "app_id": "pixelfed",
       "channel": "boosts",
       "title": "@bob boosted your post",
@@ -56,6 +61,7 @@
     },
     {
       "id": "fx-1",
+      "channel_layout": "pixelfed",
       "app_id": "pixelfed",
       "channel": "likes",
       "title": "@bob liked your post",
@@ -67,11 +73,11 @@
     }
   ],
   "channels": [
-    {"app_id": "pixelfed", "id": "likes", "title": "Likes", "description": "When someone likes your post", "default_enabled": true, "importance": "default"},
-    {"app_id": "pixelfed", "id": "comments", "title": "Comments", "description": "When someone comments on your post or replies to you", "default_enabled": true, "importance": "high"},
-    {"app_id": "pixelfed", "id": "mentions", "title": "Mentions", "description": "When someone mentions you", "default_enabled": true, "importance": "high"},
-    {"app_id": "pixelfed", "id": "follows", "title": "New followers", "description": "When someone follows you", "default_enabled": true, "importance": "default"},
-    {"app_id": "pixelfed", "id": "boosts", "title": "Boosts", "description": "When someone boosts your post", "default_enabled": true, "importance": "default"},
-    {"app_id": "pixelfed", "id": "other", "title": "Other", "description": "Other Pixelfed activity", "default_enabled": false, "importance": "low"}
+    {"layout": "pixelfed", "app_id": "pixelfed", "id": "likes", "title": "Likes", "description": "When someone likes your post", "default_enabled": true, "importance": "default"},
+    {"layout": "pixelfed", "app_id": "pixelfed", "id": "comments", "title": "Comments", "description": "When someone comments on your post or replies to you", "default_enabled": true, "importance": "high"},
+    {"layout": "pixelfed", "app_id": "pixelfed", "id": "mentions", "title": "Mentions", "description": "When someone mentions you", "default_enabled": true, "importance": "high"},
+    {"layout": "pixelfed", "app_id": "pixelfed", "id": "follows", "title": "New followers", "description": "When someone follows you", "default_enabled": true, "importance": "default"},
+    {"layout": "pixelfed", "app_id": "pixelfed", "id": "boosts", "title": "Boosts", "description": "When someone boosts your post", "default_enabled": true, "importance": "default"},
+    {"layout": "pixelfed", "app_id": "pixelfed", "id": "other", "title": "Other", "description": "Other Pixelfed activity", "default_enabled": false, "importance": "low"}
   ]
 }

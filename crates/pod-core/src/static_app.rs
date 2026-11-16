@@ -3,7 +3,7 @@
 use axum::Router;
 use protocol::{DataBundle, WorkspaceSpec};
 
-use crate::adapter::{AppAdapter, AppInfo, BoxFuture, Hydration, Pod, RequestCtx};
+use crate::adapter::{AppInfo, BoxFuture, Hydration, Pod, RequestCtx, Source};
 use crate::layouts::LayoutSource;
 use crate::source::{FeedSpec, SourceManifest};
 
@@ -33,7 +33,7 @@ pub struct StaticAdapter {
 }
 
 impl StaticAdapter {
-    /// `name`: the adapter name ([`AppAdapter::name`]). `data`: the entities
+    /// `name`: the adapter name ([`Source::name`]). `data`: the entities
     /// and queries every workspace fetch returns (its `workspace` and
     /// `version` are ignored: the layout comes from `files`).
     pub fn new(
@@ -58,7 +58,7 @@ impl StaticAdapter {
         }
     }
 
-    /// What it offers layouts ([`AppAdapter::manifest`]); by default only
+    /// What it offers layouts ([`Source::manifest`]); by default only
     /// the [`FEED`] feed, which answers the fixed data. Declare the routes
     /// of [`Self::with_router`] here. The manifest's feeds all answer the
     /// fixed data.
@@ -67,14 +67,14 @@ impl StaticAdapter {
         self
     }
 
-    /// Extra routes for this app ([`AppAdapter::router`]).
+    /// Extra routes for this app ([`Source::router`]).
     pub fn with_router(mut self, router: fn() -> Router<Pod>) -> Self {
         self.router = router;
         self
     }
 }
 
-impl AppAdapter for StaticAdapter {
+impl Source for StaticAdapter {
     fn name(&self) -> &'static str {
         self.name
     }

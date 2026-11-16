@@ -148,7 +148,7 @@ machine only.
 ### Temporary pods
 
 With `CONSTRUCT_TEMP_PODS=1`, `POST /v1/pods/temporary` makes a pod that is deleted with everything in it after
-`CONSTRUCT_TEMP_POD_HOURS`. Temporary pods have every app, but Pixelfed only on the default instance (no typed-in
+`CONSTRUCT_TEMP_POD_HOURS`. Temporary pods have every source, but Pixelfed only on the default instance (no typed-in
 servers), the `model`, `web`, `web_search` and `mcp` jacks locked (no model calls, no fetch fillers, no searches, no
 MCP servers; decision `jacks`), and a smaller upload quota. At most 5 are made per client address an
 hour. They are how visitors and automated sessions try a deployed server:
@@ -203,7 +203,7 @@ Set secrets with `flyctl secrets set`, never in the file: at least `CONSTRUCT_SE
 (`fake-pixelfed/fly.toml`, workflow `.github/workflows/fake-pixelfed.yml`, secret `FLY_API_TOKEN_FAKE`).
 
 Schema changes must come with a migration that works on the existing databases, since staging upgrades in place.
-A migration is a named step appended to its list (the core's in `pod-core/src/store.rs`, an adapter's in its
+A migration is a named step appended to its list (the core's in `pod-core/src/store.rs`, a source's in its
 `migrations()`, `host.db`'s in `pod-host/src/db.rs`); `schema_migrations` records which names ran (decision
 `named-migrations`). Never rename, edit or remove a step that shipped. If another branch also appended a step, git
 may report a conflict at the end of the list: keep both.

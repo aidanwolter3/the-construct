@@ -17,7 +17,7 @@ and `X-Construct-Device` (a client-made device id, used by notifications).
 | `POST /v1/auth/logout` | Deletes the session and its sign-ins. |
 | `GET /healthz` *public* | `ok`. |
 
-Images load without a bearer from `/v1/p/<pod id>/…`, which reaches only the paths adapters mark public (such as
+Images load without a bearer from `/v1/p/<pod id>/…`, which reaches only the paths sources mark public (such as
 the Pixelfed media proxy and uploads).
 
 ## Apps, layouts and the event stream
@@ -41,7 +41,7 @@ removed one). A request without `X-Construct-Features` is served the latest vers
 |---|---|---|
 | `layout` | `{version, workspace_id}` | A newer version this client can draw exists. |
 | `data` | `{workspace_id}`, and when the pod knows what changed: `source`, `changes` (Collections: `[{collection, rows}]`), `uri_prefixes`, `query_prefixes` | The app's data changed for this session (e.g. a post finished uploading). With prefixes, reload only data holding an entity URI that starts with a `uri_prefix`, or a query whose key is a `query_prefix` or starts with one and `:`; without, reload everything. The device named by a write's `x-construct-device` isn't sent the event of its own write when the pod changed nothing else (decision `scoped-data-events`). |
-| `notification` | `{id, app_id, channel, title, body, target_uri, layout, unread_total}` | A notification for any app of the pod; `layout` is the layout to present it in. |
+| `notification` | `{id, channel_layout, app_id, channel, title, body, target_uri, layout, unread_total}` | A notification for any layout of the pod. `channel_layout` is the layout (or blueprint) whose channel it is; `app_id` is its old name, still sent for clients built before (decision `source-adapters`); `layout` is the layout to present it in. |
 | `notifications_read` | the new unread counts | Notifications were marked read on some device. |
 | `deleted` | `{workspace_id}` | The custom app was deleted. |
 
@@ -79,9 +79,9 @@ pod: 50 apps, 500 versions per app (oldest pruned), 256 KiB per layout, 60 write
 |---|---|
 | `GET /v1/notifications?limit=0..100&before=<id>&app=<id>` | `{notifications, unread_total, unread_by_app, next_before?}`, newest first. |
 | `POST /v1/notifications/read {"ids": [...]}` or `{"all": true, "app"?: id}` | `{unread_total, unread_by_app}`. |
-| `GET /v1/notifications/channels` | `{channels: [{app_id, id, title, description, default_enabled, importance, enabled}]}`; `enabled` is the calling device's choice. |
+| `GET /v1/notifications/channels` | `{channels: [{layout, app_id, id, title, description, default_enabled, importance, enabled}]}`; `layout` is the layout (or blueprint) the channel belongs to, `app_id` its old name (still sent); `enabled` is the calling device's choice. |
 | `PUT /v1/devices/{id} {platform, name?, push?: {endpoint, p256dh, auth} \| null}` | Registers the device under the session; `push` sets or removes its Web Push subscription. |
-| `PUT /v1/devices/{id}/channels {"<app>.<channel>": bool}` | The device's channel choices. |
+| `PUT /v1/devices/{id}/channels {"<layout>.<channel>": bool}` | The device's channel choices. |
 | `DELETE /v1/devices/{id}` | Forgets the device. |
 | `GET /v1/push/key` | `{vapid_public_key}`; 404 `push_unavailable` with `CONSTRUCT_PUSH=off`. |
 
@@ -92,7 +92,7 @@ How the pipeline works: [notifications.md](notifications.md).
 | Call | Answer |
 |---|---|
 | `POST /v1/uploads` (raw body, `Idempotency-Key`) | `{upload_id}`. JPEG, PNG or WebP, checked by content; 413 over `CONSTRUCT_UPLOAD_MAX_BYTES`, 507 `upload_quota_exceeded` or `low_disk_space`. |
-| `GET /v1/uploads/{id}` *public* | The file. The id is a 128-bit capability; it lives until an adapter releases it, or 24 h if never claimed. |
+| `GET /v1/uploads/{id}` *public* | The file. The id is a 128-bit capability; it lives until a source releases it, or 24 h if never claimed. |
 
 How a create carries attachments: [posting.md](posting.md).
 

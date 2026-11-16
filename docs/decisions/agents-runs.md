@@ -35,7 +35,7 @@ Decision:
   to `diagnosis` once per run. A row the person set to done or todo keeps it, and its unfinished run gets `stop_run`
   once. Reopen (`/v1/agents/tasks/reopen`) starts a run that resumes an ended one (`resume_from`). The runner
   queues, so there are no 429 retries.
-- **Always on:** a new `AppAdapter::keeps_open(store)` lets an adapter keep its pod open. `AppState::poll_due`
+- **Always on:** a new `Source::keeps_open(store)` lets an adapter keep its pod open. `AppState::poll_due`
   answers `KEEP_OPEN_WAKE` (0, always due) for such a pod even without a device, so the host's scheduler opens it
   at server start and `resume` starts the follower. The Agents source keeps a pod open while it is signed in to a
   runner.

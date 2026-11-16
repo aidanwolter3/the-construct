@@ -8,7 +8,7 @@ A shopping list's "where to buy" filler searched DuckDuckGo hourly per item (a `
 DuckDuckGo then answered with a block page, the filler read it as zero items, reported `ok`, and wrote empty fields
 over good recommendations. Each piece of policy that would have stopped it lived somewhere else or nowhere: host
 spacing in `fill.rs`, backoff per filler (another filler still hit a blocking site), no block detection, two
-Messages API clients (computed fields and fillers) with their own HTTP setup, prompts in `app-collections`, and
+Messages API clients (computed fields and fillers) with their own HTTP setup, prompts in `source-collections`, and
 budgets for agent fillers only.
 
 Considered: patching the filler (fixes one feature); a headless browser (heavier, and the problem is policy, not

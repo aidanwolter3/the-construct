@@ -639,7 +639,7 @@ fn db_with_a_changed_file(dir: &std::path::Path) {
     let file = server::store::FileVersion {
         key: "pixelfed_sample_no_login/0003".into(),
         number: 3,
-        path: "crates/app-pixelfed/layouts/pixelfed_sample_no_login/0003.json".into(),
+        path: "crates/source-pixelfed/layouts/pixelfed_sample_no_login/0003.json".into(),
         note: newest_note("pixelfed_sample_no_login"),
         json: "{}".into(),
         file_hash: "0".repeat(64),
@@ -651,7 +651,7 @@ fn db_with_a_changed_file(dir: &std::path::Path) {
         .unwrap();
 }
 
-const CHANGED: &str = "crates/app-pixelfed/layouts/pixelfed_sample_no_login/0003.json changed after it was deployed as version 1";
+const CHANGED: &str = "crates/source-pixelfed/layouts/pixelfed_sample_no_login/0003.json changed after it was deployed as version 1";
 
 #[test]
 fn a_sync_error_stops_the_start() {

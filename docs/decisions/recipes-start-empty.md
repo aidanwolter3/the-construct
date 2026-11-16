@@ -3,7 +3,7 @@
 Date: 2026-11-04. Related: D41, D46.
 
 The recipes adapter's migration step 2 imported the family collection (81 recipes) from
-`crates/app-recipes/data/import-0001.json`, made by `scripts/recipes_from_pdf.py` (D41). D46 then limited that
+`crates/source-recipes/data/import-0001.json`, made by `scripts/recipes_from_pdf.py` (D41). D46 then limited that
 import to pods made with `server pods create <name> --import-recipes`, through the pod setting
 `recipes.import_family` and `HostConfig::new_pod_settings`. The owner's pod on staging already holds the recipes in
 its own database, the repository may become public, and the file was real family recipes that tests also leaned on.
@@ -16,8 +16,8 @@ Decision: migration step 2 stays in place and does nothing. Pods that ran it kee
 including temporary ones and the local `dev` pod, start with none. The import file, the PDF script,
 `--import-recipes`, `recipes.import_family` and `HostConfig::new_pod_settings` are removed. `Host::create_pod`
 still takes per-pod settings (temporary pods use them). Tests seed eight made-up recipes, one per category the
-recipes layouts' chips name, from `crates/app-recipes/data/test-seed.json` with
-`app_recipes::db::seed_test_recipes` (host tests adopt a seeded single-pod database). The generic `db::import`
+recipes layouts' chips name, from `crates/source-recipes/data/test-seed.json` with
+`source_recipes::db::seed_test_recipes` (host tests adopt a seeded single-pod database). The generic `db::import`
 stays for a future import path.
 
 Consequences: a `recipes.import_family` row in an existing pod's `pod_settings` is now unused and harmless. The

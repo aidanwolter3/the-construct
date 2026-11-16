@@ -4,7 +4,7 @@ Date: 2026-11-03. Related: D40, D45, D46, security audit #31 (M5).
 
 Each pod's `server.db` held the Pixelfed adapter's upstream credentials in plaintext: `pixelfed_account.access_token`
 and `refresh_token` (`read write` tokens for real accounts, since staging accepts any instance) and
-`pixelfed_apps.client_secret`. Anyone with the volume, a backup or `fly ssh` could use them. The files were also
+`pixelfed_clients.client_secret`. Anyone with the volume, a backup or `fly ssh` could use them. The files were also
 created with the default umask (world-readable).
 
 Considered: encrypting the whole database (SQLCipher: a different SQLite build for every crate, and the bundled
@@ -22,7 +22,7 @@ Decision:
 - **Key.** `CONSTRUCT_SECRETS_KEY`: base64 of 32 random bytes (`openssl rand -base64 32`), a Fly secret on staging.
   A comma-separated list rotates keys: the first seals, all open.
 - **Upgrading existing rows.** A one-time migration can't do it, because the key may be set (or rotated) after the
-  deploy. A new `AppAdapter::on_open` hook runs every time a pod opens, after its migrations; the Pixelfed adapter
+  deploy. A new `Source::on_open` hook runs every time a pod opens, after its migrations; the Pixelfed adapter
   re-seals every value that is plaintext or sealed under an older key, in one transaction. Sign-ins survive: the
   plaintext is read and written back sealed.
 - **No key (development, or a deploy before the secret is set).** Values are stored in plaintext and existing
