@@ -200,12 +200,16 @@ jobs:
           done
           [ "$code" = 200 ] || { echo "healthz returned $code"; exit 1; }
           pod=https://the-construct-pod.fly.dev
-          # Without a pod token: only the "Open your pod" screen (D46).
-          curl -fsS "$pod/v1/workspaces/pixelfed_sample_no_login" | jq -e '.workspace.title == "The Construct"'
-          # A temporary pod (deleted when it expires) serves the apps.
+          # Without a pod token: a one-element construct asking for a pod code (D46).
+          root=$(curl -fsS "$pod/v1/construct" | jq -er '.root')
+          curl -fsS "$pod/v1/objects/$root" | jq -e '.kind == "element" and (tojson | contains("pod_token"))'
+          # A temporary pod (deleted when it expires) serves its construct and its data.
           token=$(curl -fsS -X POST "$pod/v1/pods/temporary" | jq -er '.session_token')
-          curl -fsS -H "Authorization: Bearer $token" "$pod/v1/workspaces/pixelfed_sample_no_login" \
-            | jq -e '.workspace.id == "pixelfed_sample_no_login" and (.entities | length) > 0'
+          root=$(curl -fsS -H "Authorization: Bearer $token" "$pod/v1/construct" | jq -er '.root')
+          curl -fsS -H "Authorization: Bearer $token" "$pod/v1/objects/$root" \
+            | jq -e '.kind == "element" and .node.id == "home"'
+          curl -fsS -H "Authorization: Bearer $token" "$pod/v1/construct/data/$root" \
+            | jq -e '(.entities | length) > 0'
       - name: Note skipped deploy
         if: steps.secrets.outputs.pod != 'true' || steps.secrets.outputs.fake != 'true'
         run: echo "::warning::FLY_API_TOKEN_POD / FLY_API_TOKEN_FAKE secrets missing; some deploy steps were skipped."
