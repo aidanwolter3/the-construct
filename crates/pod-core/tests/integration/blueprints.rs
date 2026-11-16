@@ -423,3 +423,55 @@ async fn layout_writes_are_capped() {
     assert!(err, "{b}");
     assert_eq!(b["error"], "rate_limited", "{b}");
 }
+
+// ---------- a source that no longer exists (decision `remove-recipes-source`) ----------
+
+/// A pod whose home binds `a/all` and whose layout is the whole `a_home`
+/// blueprint, reopened by a build without source `a`: it opens, serves
+/// home, and home binds the feeds that remain.
+#[tokio::test]
+async fn a_removed_source_drops_out_of_home() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = dir.path().join("server.db");
+    let pod = open(&db);
+    let whole = json!({"type": "core://Use", "ref": "@core/a_home"});
+    let (err, made) = tool(
+        &pod,
+        "create_layout",
+        json!({"title": "Mine", "feeds": [["a", "all"]], "layout": whole}),
+    )
+    .await;
+    assert!(!err, "{made}");
+    let id = made["id"].as_str().unwrap().to_owned();
+    drop(pod);
+    let pod = Arc::new(
+        AppState::try_new(Store::open(&db).unwrap(), vec![shell()]).expect("opens without a"),
+    );
+    pod.store()
+        .create_pinned_session(&session_hash("pod"))
+        .unwrap();
+    // Home is served, and binds the feeds that remain.
+    let (status, root) = call(&pod, "GET", "/v1/construct", None).await;
+    assert_eq!(status, StatusCode::OK, "{root}");
+    let feeds = pod
+        .store()
+        .with_conn(|c| Ok::<_, rusqlite::Error>(pod_core::construct::write::home_feeds(c)))
+        .unwrap();
+    assert!(feeds.is_empty(), "{feeds:?}");
+    // The layout that showed a's blueprint is still there.
+    let (status, ws) = layout(&pod, &id).await;
+    assert!(status != StatusCode::INTERNAL_SERVER_ERROR, "{ws}");
+    // And layouts can still be written.
+    let page = json!({"type": "core://Page", "title": "P", "root": {"type": "core://Spacer"}});
+    let (err, b) = tool(
+        &pod,
+        "create_layout",
+        json!({"title": "Plain", "layout": page}),
+    )
+    .await;
+    assert!(!err, "{b}");
+    drop(pod);
+    // Reopening again changes nothing.
+    let pod = AppState::try_new(Store::open(&db).unwrap(), vec![shell()]).expect("reopens");
+    drop(pod);
+}

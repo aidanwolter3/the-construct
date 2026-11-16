@@ -3,9 +3,8 @@
 //! runs it, and tests build the same pod with [`state_in_memory`] and friends.
 //!
 //! The core's modules are re-exported (`server::layouts`, `server::store`,
-//! ...), `server::pixelfed` is the Pixelfed adapter crate and
-//! `server::recipes` the recipes adapter crate, `server::collections` the
-//! Collections adapter crate, `server::events` the Events adapter crate,
+//! ...), `server::pixelfed` is the Pixelfed adapter crate,
+//! `server::collections` the Collections adapter crate, `server::events` the Events adapter crate,
 //! `server::monitor` the monitoring source crate, `server::agents` the agent
 //! runner source crate.
 
@@ -20,10 +19,9 @@ pub use source_events as events;
 pub use source_monitor as monitor;
 pub use source_pixelfed as pixelfed;
 pub use source_pixelfed::{DEFAULT_PIXELFED_URL, PixelfedAdapter, PixelfedConfig};
-pub use source_recipes as recipes;
 
 /// The pod's adapters, in the order their blueprints are listed: the Pixelfed feed (with the
-/// `pixelfed` sign-in), the recipes, the Events app (the
+/// `pixelfed` sign-in), the Events app (the
 /// Collections `events` collection), then the
 /// `pixelfed_sample_no_login` dev app, the `shell` blueprint (every pod's
 /// home app starts from it, decision `blueprints-and-home`); and
@@ -35,7 +33,6 @@ pub use source_recipes as recipes;
 pub fn adapters(pixelfed: PixelfedConfig) -> Vec<Arc<dyn Source>> {
     vec![
         Arc::new(PixelfedAdapter::new(pixelfed)),
-        Arc::new(source_recipes::RecipesAdapter::new()),
         Arc::new(source_events::EventsAdapter::new()),
         source_pixelfed::apps::sample_adapter(),
         source_shell::adapter(),
@@ -191,7 +188,6 @@ pub const DEFAULT_VAPID_SUBJECT: &str = "https://github.com/aidanwolter3/the-con
 /// Every layout file the pod ships, per app in number order.
 pub fn layout_files() -> Vec<layouts::LayoutSource> {
     let mut files = source_pixelfed::apps::files();
-    files.extend_from_slice(source_recipes::FILES);
     files.extend_from_slice(source_events::FILES);
     files.extend_from_slice(source_shell::FILES);
     files.extend_from_slice(source_shell::SETTINGS_FILES);

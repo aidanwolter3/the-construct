@@ -13,6 +13,21 @@ fn preview_node(details: &Value, text: &str) -> Option<Value> {
         .cloned()
 }
 
+/// The test dishes as a list, each row opening its own screen.
+fn dishes() -> Value {
+    json!({"type": "core://Workspace", "title": "Dishes",
+        "screens": [{"id": "dish", "route": "collections://dishes/{id}", "title": "Dish",
+            "data": "/v1/collections/dishes/row?id=$route.id",
+            "content": {"type": "core://List", "query_key": "collection:dishes:row:$route.id",
+                "item_template": {"type": "core://Text", "style": "Body",
+                    "value_expr": "Category $item.category"}}}],
+        "slots": [{"slot_id": "all", "provider_uri": "core://custom",
+            "content": {"type": "core://List", "query_key": "collection:dishes",
+                "item_template": {"type": "core://Button", "label": "$item.title", "on_click": {
+                    "intent": "action.navigation.open", "target_uri": "collections://dishes/$item.id",
+                    "presentation": "Push"}}}}]})
+}
+
 /// A screen opened directly loads its data path, home draws a layout it
 /// embeds with its data, a row can be tried with a made-up item and made-up
 /// lists, a long screen is drawn whole, and nothing a source doesn't
@@ -26,8 +41,7 @@ async fn previews_read_like_a_device_with_the_users_data() {
         .tool(
             &access,
             "create_layout",
-            json!({"title": "Recipes", "feeds": [["recipes", "all"]],
-                   "layout": {"type": "core://Use", "ref": "@core/recipes"}}),
+            json!({"title": "Dishes", "feeds": [["collections", "dishes"]], "layout": dishes()}),
         )
         .await;
     assert!(!err, "{created}");
@@ -38,16 +52,16 @@ async fn previews_read_like_a_device_with_the_users_data() {
         &env,
         &access,
         "render_layout_preview",
-        json!({"id": id, "target_uri": "recipes://recipes/test-garden-salad", "full_height": true}),
+        json!({"id": id, "target_uri": "collections://dishes/test-garden-salad", "full_height": true}),
     )
     .await;
     assert!(!err, "{text}");
-    assert!(text.contains("opened screen recipe"), "{text}");
+    assert!(text.contains("opened screen dish"), "{text}");
     assert!(!text.contains("not sent"), "{text}");
     let details = preview_details(&text);
     assert!(
-        preview_node(&details, "romaine lettuce").is_some(),
-        "the ingredients: {details}"
+        preview_node(&details, "Category Salads").is_some(),
+        "the row: {details}"
     );
     // Taps are summed up in a few words.
     for n in details["nodes"].as_array().unwrap() {
@@ -63,11 +77,11 @@ async fn previews_read_like_a_device_with_the_users_data() {
     )
     .await;
     assert!(err && text.contains("no_screen"), "{text}");
-    assert!(text.contains("recipes://recipes/{id}"), "{text}");
+    assert!(text.contains("collections://dishes/{id}"), "{text}");
 
     // 2. Home embeds the layout, drawn with the user's data.
     let home = json!({"type": "core://Page", "title": "Home", "root": {"type": "core://Column",
-        "children": [{"type": "core://Text", "style": "Title", "value_expr": "Layout Recipes"},
+        "children": [{"type": "core://Text", "style": "Title", "value_expr": "Layout Dishes"},
             {"type": "core://Layout", "ref": id}]}});
     let (err, w) = env
         .tool(
@@ -86,7 +100,7 @@ async fn previews_read_like_a_device_with_the_users_data() {
     .await;
     assert!(!err, "{text}");
     let details = preview_details(&text);
-    assert!(preview_node(&details, "Layout Recipes").is_some(), "{text}");
+    assert!(preview_node(&details, "Layout Dishes").is_some(), "{text}");
     assert!(
         preview_node(&details, "Test Garden Salad").is_some(),
         "the embedded layout's data: {text}"

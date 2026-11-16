@@ -181,7 +181,7 @@ fn is_layout_id(id: &str) -> bool {
 }
 
 /// Whether `path` is a data path some data source of the pod declares
-/// (`SourceManifest::data_paths`, e.g. `/v1/recipes/screens/recipe?id=x`):
+/// (`SourceManifest::data_paths`, e.g. `/v1/collections/todos/row?id=x`):
 /// the only paths a preview's screens and `action.data.load` may read.
 fn is_data_path(pod: &Pod, path: &str) -> bool {
     let plain = path.len() <= 512

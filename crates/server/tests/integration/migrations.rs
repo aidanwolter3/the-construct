@@ -145,6 +145,44 @@ fn set(v: &Value) -> Vec<String> {
     out
 }
 
+/// Sources the fixtures' old build had and this one doesn't (decision
+/// `remove-recipes-source`).
+const REMOVED_SOURCES: &[&str] = &["recipes"];
+
+/// Whether `name` is a blueprint (or a part of one) of a removed source.
+fn of_removed_source(name: &str) -> bool {
+    REMOVED_SOURCES.iter().any(|s| {
+        let b = format!("@core/{s}");
+        name == b || name.starts_with(&format!("{b}/"))
+    })
+}
+
+/// What a fixture's element of `name` is in this build: home no longer
+/// binds feeds of removed sources (a new home element, written when the
+/// pod opens).
+fn today(name: &str, element: &Value) -> Value {
+    let mut el = element.clone();
+    if name == "home"
+        && let Some(feeds) = el["bind"]["feeds"].as_array_mut()
+    {
+        feeds.retain(|f| !REMOVED_SOURCES.contains(&f[0].as_str().unwrap_or("")));
+    }
+    el
+}
+
+/// Whether a history entry is one this build adds when the pod opens: a
+/// re-seal (a blueprint it uses changed) or home dropping a removed
+/// source's feeds.
+fn added_on_open(e: &Value) -> bool {
+    let note = e["note"].as_str().unwrap_or("");
+    e["author"] == "pod"
+        && (note.starts_with("Re-sealed") || note.starts_with("Home no longer binds"))
+}
+
+/// Layouts that drew a part of a removed source's blueprint: drawn
+/// differently now, in the dry run and after.
+const USES_A_REMOVED_BLUEPRINT: &[&str] = &["c-r7jeifhpzm"];
+
 /// An old pod opens on the construct: the dry run compared every layout
 /// and found what draws differently, and the pod's names are what the
 /// old build's switch made of it.
@@ -178,9 +216,10 @@ fn an_old_pod_is_converted_when_it_opens() {
         .filter(|l| l["same"] == false)
         .map(|l| l["id"].as_str().unwrap())
         .collect();
+    want_different.extend_from_slice(USES_A_REMOVED_BLUEPRINT);
     want_different.sort();
     assert_eq!(different, want_different, "{report:#?}");
-    assert_eq!(different, ["c-jyiz6is4ld", "c-u4zg5a4d4t"]);
+    assert_eq!(different, ["c-jyiz6is4ld", "c-r7jeifhpzm", "c-u4zg5a4d4t"]);
 
     // Switched, the old tables and settings gone.
     assert_eq!(setting(&state, "construct.switched").as_deref(), Some("1"));
@@ -201,11 +240,11 @@ fn an_old_pod_is_converted_when_it_opens() {
     let got = snapshot(&state);
     let want = json_fixture("old_pod_switched.json");
     for (name, w) in &want {
-        let g = got.get(name).unwrap_or_else(|| panic!("no name {name}"));
         if name.starts_with("@core/") {
             continue;
         }
-        assert_eq!(g["element"], w["element"], "{name}'s element");
+        let g = got.get(name).unwrap_or_else(|| panic!("no name {name}"));
+        assert_eq!(g["element"], today(name, &w["element"]), "{name}'s element");
         // The history the old build recorded, then (when a blueprint it
         // uses changed in this build: settings) the pod's re-seal.
         let (g_hist, w_hist) = (
@@ -215,11 +254,10 @@ fn an_old_pod_is_converted_when_it_opens() {
         let extra = g_hist.len() - w_hist.len();
         assert_eq!(&g_hist[extra..], &w_hist[..], "{name}'s history");
         for e in &g_hist[..extra] {
-            assert_eq!(e["author"], "pod", "{name}: {e}");
-            assert!(
-                e["note"].as_str().unwrap().starts_with("Re-sealed"),
-                "{name}: {e}"
-            );
+            assert!(added_on_open(e), "{name}: {e}");
+        }
+        if USES_A_REMOVED_BLUEPRINT.contains(&name.as_str()) {
+            continue;
         }
         assert_eq!(
             g["materialized"], w["materialized"],
@@ -241,7 +279,10 @@ fn an_old_pod_is_converted_when_it_opens() {
     assert_eq!(mine(&got), want_names);
     // Every @core/ name the old build had is there, at this build's files.
     let core = pod_core::construct::core::load(&server::catalog()).unwrap();
-    for name in want.keys().filter(|n| n.starts_with("@core/")) {
+    for name in want
+        .keys()
+        .filter(|n| n.starts_with("@core/") && !of_removed_source(n))
+    {
         assert_eq!(
             got[name]["hash"].as_str(),
             core.current(name),
@@ -289,11 +330,13 @@ fn an_already_switched_pod_keeps_its_names() {
         if let Some(w) = want.get(name)
             && !name.starts_with("@core/")
         {
-            assert_eq!(g["element"], w["element"], "{name}'s element");
-            assert_eq!(
-                g["materialized"], w["materialized"],
-                "{name} draws the same"
-            );
+            assert_eq!(g["element"], today(name, &w["element"]), "{name}'s element");
+            if !USES_A_REMOVED_BLUEPRINT.contains(&name.as_str()) {
+                assert_eq!(
+                    g["materialized"], w["materialized"],
+                    "{name} draws the same"
+                );
+            }
         }
     }
 }
@@ -317,7 +360,7 @@ fn a_fresh_pod_starts_with_todays_home() {
     assert_eq!(set(&got["home"]["edges"]), set(&want["home"]["edges"]));
     let names: Vec<&String> = got.keys().collect();
     let want_names: Vec<&String> = want.keys().collect();
-    for n in &want_names {
+    for n in want_names.iter().filter(|n| !of_removed_source(n)) {
         assert!(names.contains(n), "{n} in {names:?}");
     }
     drop(state);

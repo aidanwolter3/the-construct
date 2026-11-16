@@ -29,6 +29,8 @@ keyring = { version = "3.6", default-features = false, features = ["apple-native
 [dev-dependencies]
 # tests/integration/outbox.rs runs the real server (in-process, random port).
 server = { path = "../server" }
+# A made-up collection the tests list (`source_collections::test_seed`).
+source-collections = { path = "../source-collections", features = ["test-seed"] }
 # tests/integration/auth.rs runs the fake Pixelfed upstream behind the real pod.
 fake-pixelfed = { path = "../../fake-pixelfed" }
 axum = "0.8"

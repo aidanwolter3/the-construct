@@ -129,9 +129,9 @@ async fn the_stream_starts_with_the_root_and_sends_each_new_one() {
     let made = pod_core::construct::write::mcp(
         &pod.state,
         "create_layout",
-        &json!({"title": "Note", "feeds": [["recipes", "all"]],
+        &json!({"title": "Note", "feeds": [["pixelfed", "home"]],
             "layout": {"type": "core://Page", "title": "Note", "root": {"type": "core://List",
-                "query_key": "recipes:all",
+                "query_key": "timeline:home",
                 "item_template": {"type": "core://Text", "style": "Body", "value_expr": "$item.title"}}}}),
     )
     .await

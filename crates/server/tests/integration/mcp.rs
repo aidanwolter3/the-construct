@@ -1,7 +1,7 @@
 //! Claude through MCP (decision `mcp-connector`), through the real host: OAuth
 //! discovery, registration, the pod-code page, the code exchange with PKCE, the
 //! scoped credential (only `/v1/mcp`), every tool against a pod with the
-//! made-up test recipes, and that rotation keeps and revocation ends the connection.
+//! made-up test dishes, and that rotation keeps and revocation ends the connection.
 
 mod construct;
 mod previews;
@@ -70,7 +70,7 @@ fn client() -> reqwest::Client {
 }
 
 impl Env {
-    /// An admin pod with the made-up test recipes (a seeded single-pod
+    /// An admin pod with the made-up test dishes (a seeded single-pod
     /// database, adopted); its pod token.
     async fn pod(&self, name: &str) -> String {
         let host = self.host.clone();
@@ -80,7 +80,7 @@ impl Env {
             let state = server::open_dir(old.path()).unwrap();
             state
                 .store()
-                .with_conn(source_recipes::db::seed_test_recipes)
+                .with_conn(source_collections::test_seed::seed_test_dishes)
                 .unwrap();
             drop(state);
             host.adopt(&name, &old.path().join("server.db"))
@@ -541,11 +541,11 @@ async fn claude_connects_with_oauth_and_the_pod_code() {
     assert_eq!(status, StatusCode::UNAUTHORIZED);
 }
 
-/// The Kitchen-style layout over the recipes.
-fn recipes_layout(title: &str) -> Value {
+/// The Kitchen-style layout over the test dishes.
+fn dishes_layout(title: &str) -> Value {
     json!({"type": "core://Workspace", "id": "x", "title": title,
         "slots": [{"slot_id": "r", "provider_uri": "core://custom",
-          "content": {"type": "core://List", "query_key": "recipes:all",
+          "content": {"type": "core://List", "query_key": "collection:dishes",
             "item_template": {"type": "core://Text", "style": "Body", "value_expr": "$item.title"}}}]})
 }
 
@@ -557,16 +557,14 @@ async fn claude_builds_and_edits_a_custom_app_with_the_tools() {
 
     let (err, sources) = env.tool(&access, "list_data_sources", json!({})).await;
     assert!(!err, "{sources}");
-    let recipes = sources["sources"]
+    let collections = sources["sources"]
         .as_array()
         .unwrap()
         .iter()
-        .find(|s| s["id"] == "recipes")
+        .find(|s| s["id"] == "collections")
         .unwrap()
         .clone();
-    assert_eq!(recipes["feeds"][0]["name"], "all");
-    assert_eq!(recipes["signed_in"], true);
-    assert!(recipes["entities"][0]["fields"].as_array().unwrap().len() > 5);
+    assert_eq!(collections["signed_in"], true, "{collections}");
     let pixelfed = sources["sources"]
         .as_array()
         .unwrap()
@@ -624,34 +622,34 @@ async fn claude_builds_and_edits_a_custom_app_with_the_tools() {
     assert!(names.contains(&"slot:feed"), "{names:?}");
 
     let (err, layout) = env
-        .tool(&access, "get_layout", json!({"app": "recipes"}))
+        .tool(&access, "get_layout", json!({"app": "events"}))
         .await;
     assert!(!err, "{layout}");
-    assert_eq!(layout["name"], "@core/recipes");
+    assert_eq!(layout["name"], "@core/events");
     assert_eq!(layout["layout"]["type"], "core://Page");
 
-    // Samples: the feed, then a recipe screen's data path with a real id.
+    // Samples: the feed, then a row screen's data path with a real id.
     let (err, sample) = env
         .tool(
             &access,
             "sample_data",
-            json!({"source": "recipes", "feed": "all", "limit": 3}),
+            json!({"source": "collections", "feed": "dishes", "limit": 3}),
         )
         .await;
     assert!(!err, "{sample}");
-    let listed = sample["queries"]["recipes:all"].as_array().unwrap();
+    let listed = sample["queries"]["collection:dishes"].as_array().unwrap();
     assert_eq!(listed.len(), 3);
     let first = listed[0]
         .as_str()
         .unwrap()
-        .strip_prefix("recipes://recipes/")
+        .strip_prefix("collections://dishes/")
         .unwrap()
         .to_owned();
     let (err, screen) = env
         .tool(
             &access,
             "sample_data",
-            json!({"source": "recipes", "path": format!("/v1/recipes/screens/recipe?id={first}")}),
+            json!({"source": "collections", "path": format!("/v1/collections/dishes/row?id={first}")}),
         )
         .await;
     assert!(!err, "{screen}");
@@ -660,14 +658,14 @@ async fn claude_builds_and_edits_a_custom_app_with_the_tools() {
             .as_object()
             .unwrap()
             .keys()
-            .any(|k| k.ends_with(":steps")),
+            .any(|k| k.ends_with(&format!(":row:{first}"))),
         "{screen}"
     );
     let (err, bad) = env
         .tool(
             &access,
             "sample_data",
-            json!({"source": "recipes", "path": "/v1/auth/sign-ins"}),
+            json!({"source": "collections", "path": "/v1/auth/sign-ins"}),
         )
         .await;
     assert!(err);
@@ -679,13 +677,13 @@ async fn claude_builds_and_edits_a_custom_app_with_the_tools() {
     assert_eq!(signed_out["error"], "signed_out");
 
     // Validation errors are something Claude can act on.
-    let mut wrong = recipes_layout("K");
+    let mut wrong = dishes_layout("K");
     wrong["slots"][0]["content"]["query_key"] = json!("timeline:home");
     let (err, v) = env
         .tool(
             &access,
             "validate_layout",
-            json!({"feeds": [["recipes", "all"]], "layout": wrong}),
+            json!({"feeds": [["collections", "dishes"]], "layout": wrong}),
         )
         .await;
     assert!(err);
@@ -695,7 +693,9 @@ async fn claude_builds_and_edits_a_custom_app_with_the_tools() {
         v["allowed"]
             .as_array()
             .unwrap()
-            .contains(&json!("recipes:all"))
+            .iter()
+            .any(|k| k.as_str().is_some_and(|k| k.starts_with("collection:"))),
+        "{v}"
     );
 
     // Create, patch, restore, rename, delete.
@@ -703,8 +703,8 @@ async fn claude_builds_and_edits_a_custom_app_with_the_tools() {
         .tool(
             &access,
             "create_layout",
-            json!({"title": "Dinner", "icon": "recipe", "feeds": [["recipes", "all"]],
-            "layout": recipes_layout("Dinner"), "note": "Just the recipes, please"}),
+            json!({"title": "Dinner", "icon": "recipe", "feeds": [["collections", "dishes"]],
+            "layout": dishes_layout("Dinner"), "note": "Just the dishes, please"}),
         )
         .await;
     assert!(!err, "{created}");
@@ -724,7 +724,7 @@ async fn claude_builds_and_edits_a_custom_app_with_the_tools() {
         .tool(
             &access,
             "update_layout",
-            json!({"app": id, "base_version": first, "layout": recipes_layout("x")}),
+            json!({"app": id, "base_version": first, "layout": dishes_layout("x")}),
         )
         .await;
     assert!(err);
@@ -761,7 +761,7 @@ async fn claude_builds_and_edits_a_custom_app_with_the_tools() {
         "rebase_context",
         "switch_construct",
     ] {
-        let (err, v) = env.tool(&access, gone, json!({"app": "recipes"})).await;
+        let (err, v) = env.tool(&access, gone, json!({"app": "events"})).await;
         assert!(err, "{gone}");
         assert_eq!(v["error"], "unknown_tool", "{gone}");
     }
@@ -773,7 +773,7 @@ async fn claude_builds_and_edits_a_custom_app_with_the_tools() {
             .as_array()
             .unwrap()
             .iter()
-            .any(|a| a["id"] == "recipes" && a["name"] == "@core/recipes")
+            .any(|a| a["id"] == "events" && a["name"] == "@core/events")
     );
     assert!(
         rows.iter()
@@ -785,7 +785,7 @@ async fn claude_builds_and_edits_a_custom_app_with_the_tools() {
     assert!(!err, "{layout}");
     let history = layout["history"].as_array().unwrap();
     assert!(history.iter().all(|v| v["author"] == "claude"), "{layout}");
-    assert_eq!(history.last().unwrap()["note"], "Just the recipes, please");
+    assert_eq!(history.last().unwrap()["note"], "Just the dishes, please");
     let host_token = &pod_code;
     let (status, name) = env
         .get(&format!("/v1/construct/names/{id}"), host_token)
@@ -805,7 +805,7 @@ async fn claude_builds_and_edits_a_custom_app_with_the_tools() {
         .tool(
             &access,
             "update_layout",
-            json!({"app": "recipes", "layout": recipes_layout("x")}),
+            json!({"app": "events", "layout": dishes_layout("x")}),
         )
         .await;
     assert!(err);
@@ -817,13 +817,13 @@ async fn claude_builds_and_edits_a_custom_app_with_the_tools() {
     assert_eq!(status, StatusCode::NOT_FOUND);
     // `copied_from` is gone: a copy of a blueprint is a layout like any other.
     let (_, now) = env
-        .tool(&access, "get_layout", json!({"app": "recipes"}))
+        .tool(&access, "get_layout", json!({"app": "events"}))
         .await;
     let (err, copy) = env
         .tool(
             &access,
             "create_layout",
-            json!({"title": "My recipes", "feeds": [["recipes", "all"]], "layout": now["layout"]}),
+            json!({"title": "My events", "feeds": [["collections", "events"]], "layout": now["layout"]}),
         )
         .await;
     assert!(!err, "{copy}");
@@ -1092,7 +1092,7 @@ async fn components_are_defined_used_and_expanded() {
             "{want} in {components:?}"
         );
     }
-    assert!(of_kind("blueprint").iter().any(|b| b == "@core/recipes"));
+    assert!(of_kind("blueprint").iter().any(|b| b == "@core/events"));
 
     let (err, ws) = env
         .tool(&access, "get_component", json!({"name": "@core/workspace"}))
@@ -1505,15 +1505,15 @@ async fn agents_preview_a_layout_and_tap_it() {
         "slots": [{"slot_id": "r", "provider_uri": "core://custom", "content": {"type": "core://Column", "children": [
             {"type": "core://ChoiceChips", "field": "filter", "options": [
                 {"label": "All", "value": ""}, {"label": "Started", "value": "started"}]},
-            {"type": "core://List", "query_key": "recipes:all",
+            {"type": "core://List", "query_key": "collection:dishes",
              "item_template": {"type": "core://Tappable",
-                "on_click": {"intent": "action.navigation.open", "presentation": "Push", "target_uri": "recipes://recipes/$item.id"},
+                "on_click": {"intent": "action.navigation.open", "presentation": "Push", "target_uri": "collections://dishes/$item.id"},
                 "content": {"type": "core://Text", "style": "Body", "value_expr": "$item.title"}}}]}}]});
     let (err, created) = env
         .tool(
             &access,
             "create_layout",
-            json!({"title": "Recipes", "layout": layout, "feeds": [["recipes", "all"]]}),
+            json!({"title": "Recipes", "layout": layout, "feeds": [["collections", "dishes"]]}),
         )
         .await;
     assert!(!err, "{created}");
@@ -1581,14 +1581,14 @@ async fn agents_preview_a_layout_and_tap_it() {
     assert!(!err, "{text}");
     assert!(text.contains("not sent"), "{text}");
     assert!(
-        text.contains("recipes://recipes/"),
+        text.contains("collections://dishes/"),
         "bound to the item: {text}"
     );
 
     // 4. A draft layout, drawn with home's data, needs no saving.
     let draft = json!({"type": "core://Page", "id": "d", "root": {"type": "core://Column", "children": [
         {"type": "core://Text", "style": "Title", "value_expr": "Draft"},
-        {"type": "core://List", "query_key": "recipes:all",
+        {"type": "core://List", "query_key": "collection:dishes",
          "item_template": {"type": "core://Text", "style": "Body", "value_expr": "$item.title"}}]}});
     let (err, _, text) = preview_call(
         &env,
@@ -1666,7 +1666,7 @@ async fn previews_refuse_values_past_a_saved_layouts_bounds() {
     let access = env.connect(&pod_code).await;
     let icon = |size: u64| {
         json!({"type": "core://IconButton", "icon": "add", "content_description": "Add", "size_dp": size,
-               "on_click": {"intent": "action.navigation.open", "presentation": "Push", "target_uri": "recipes://recipes/1"}})
+               "on_click": {"intent": "action.navigation.open", "presentation": "Push", "target_uri": "collections://dishes/1"}})
     };
 
     // A draft.

@@ -1,5 +1,7 @@
 # New pods start with no recipes; the family import file is gone
 
+Superseded by [remove-recipes-source](remove-recipes-source.md): the recipes source, its migrations and its test seed are gone.
+
 Date: 2026-11-04. Related: D41, D46.
 
 The recipes adapter's migration step 2 imported the family collection (81 recipes) from

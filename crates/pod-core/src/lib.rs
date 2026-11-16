@@ -190,6 +190,15 @@ impl AppState {
                 .map_err(|e| format!("opening the '{}' adapter's data: {e}", a.name()))?;
         }
         let conversion = construct::open(&store, &catalog)?;
+        // A source this build no longer has (decision `remove-recipes-source`):
+        // home stops binding its feeds.
+        match construct::write::drop_unknown_feeds(&store, &catalog) {
+            Ok(gone) if !gone.is_empty() => {
+                tracing::info!(feeds = ?gone, "home no longer binds removed sources' feeds")
+            }
+            Ok(_) => {}
+            Err(e) => tracing::warn!(error = %e, "home still binds a removed source's feed"),
+        }
         Ok(Self {
             locals: Mutex::new(Vec::new()),
             store,

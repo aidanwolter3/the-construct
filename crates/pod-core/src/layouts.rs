@@ -770,15 +770,18 @@ pub struct SourceUse {
     pub layout: PodLayout,
     /// Its name's newest history entry.
     pub version: i64,
-    /// Its element materialized (unbound).
+    /// Its element materialized as devices draw it: components expanded,
+    /// its inputs filled in with what the first use site reaching it from
+    /// home binds.
     pub node: Value,
     /// Home's feeds of the source (every layout may bind them).
     pub feeds: Vec<String>,
 }
 
-/// Every live layout of the pod when home binds a feed of `source` (each
-/// may bind it), materialized: what a source checks a change of its own
-/// data against (decision `collections`). Blocking.
+/// Every layout of the pod as devices draw it, when home binds a feed of
+/// `source` (each may bind it): what a source checks a change of its own
+/// data against (decision `collections`). A layout home reaches bound two
+/// ways is listed for each. Blocking.
 pub fn layouts_with_source(store: &Store, source: &str) -> rusqlite::Result<Vec<SourceUse>> {
     store.with_conn(|conn| {
         let feeds: Vec<String> = home_feeds(conn)
@@ -790,15 +793,18 @@ pub fn layouts_with_source(store: &Store, source: &str) -> rusqlite::Result<Vec<
             return Ok(Vec::new());
         }
         let mut out = Vec::new();
-        for l in pod_layouts(conn)? {
-            let Some(node) = materialized(conn, &l.element) else {
-                continue;
-            };
-            let version = cstore::last_seq(conn, &l.id)?;
+        for l in crate::construct::write::live_layouts(conn)? {
+            let element = cstore::name(conn, &l.name)?.unwrap_or_default();
             out.push(SourceUse {
-                layout: l,
-                version,
-                node,
+                layout: PodLayout {
+                    id: l.name,
+                    title: l.title,
+                    icon: l.icon,
+                    element,
+                    created_at: 0,
+                },
+                version: l.version,
+                node: l.node,
                 feeds: feeds.clone(),
             });
         }

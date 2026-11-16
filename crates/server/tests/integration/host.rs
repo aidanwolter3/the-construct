@@ -327,7 +327,7 @@ async fn a_caller_without_a_pod_token_gets_only_the_open_screen() {
 }
 
 #[tokio::test]
-async fn a_pod_token_opens_its_pod_and_new_pods_have_no_recipes() {
+async fn a_pod_token_opens_its_pod() {
     let env = env().await;
     let first = env.create("first").await;
     let other = env.create("other").await;
@@ -349,12 +349,6 @@ async fn a_pod_token_opens_its_pod_and_new_pods_have_no_recipes() {
             .filter_map(|l| l["id"].as_str())
             .collect();
         assert_eq!(ids, ["home"], "{layouts}");
-        let (status, _, body) = blueprint_data(&env, token, "recipes").await;
-        assert_eq!(status, StatusCode::OK, "{body}");
-        let n = body["queries"]["recipes:all"]
-            .as_array()
-            .map_or(0, Vec::len);
-        assert_eq!(n, 0, "decision `recipes-start-empty`");
     }
 }
 
@@ -481,14 +475,9 @@ async fn temporary_pods_are_capped_and_swept() {
     let (status, body) = post(&env.url("/v1/pods/temporary"), None, json!({})).await;
     assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
     assert_eq!(body["error"], "temporary_pods_full");
-    // Full features, no recipes.
-    let (status, _, body) = blueprint_data(&env, &tokens[0], "recipes").await;
+    // Full features.
+    let (status, _, _) = blueprint_data(&env, &tokens[0], "events").await;
     assert_eq!(status, StatusCode::OK);
-    assert!(
-        body["queries"]["recipes:all"]
-            .as_array()
-            .is_none_or(Vec::is_empty)
-    );
     sign_in(&env, &tokens[0]).await;
     // Expired pods are swept: token dead, files gone.
     let pods = env.host.store().pods().unwrap();
@@ -521,7 +510,7 @@ async fn temporary_pods_are_capped_and_swept() {
 }
 
 /// The rollout: a single-pod `server.db` from before D46 (here with the
-/// made-up test recipes) becomes an admin pod with everything in it.
+/// made-up test dishes) becomes an admin pod with everything in it.
 #[tokio::test]
 async fn adopting_a_single_pod_database_keeps_its_data() {
     let env = env().await;
@@ -529,10 +518,9 @@ async fn adopting_a_single_pod_database_keeps_its_data() {
     let old_path = old.path().to_owned();
     tokio::task::spawn_blocking(move || {
         let state = server::open_dir(&old_path).unwrap();
-        assert_eq!(state.store().adapter_version("recipes").unwrap(), 2);
         state
             .store()
-            .with_conn(source_recipes::db::seed_test_recipes)
+            .with_conn(source_collections::test_seed::seed_test_dishes)
             .unwrap();
     })
     .await
@@ -549,9 +537,15 @@ async fn adopting_a_single_pod_database_keeps_its_data() {
             .join(format!("server.db.adopted-{}", pod.id))
             .is_file()
     );
-    let (status, _, body) = blueprint_data(&env, &pod.token, "recipes").await;
+    let (status, _, body) = get(&env.url("/v1/collections/dishes/rows"), Some(&pod.token)).await;
     assert_eq!(status, StatusCode::OK, "{body}");
-    assert_eq!(body["queries"]["recipes:all"].as_array().unwrap().len(), 8);
+    assert_eq!(
+        body["queries"]["collection:dishes"]
+            .as_array()
+            .unwrap()
+            .len(),
+        8
+    );
     // The renamed original can go once the pod works; a lookalike for a pod
     // that doesn't exist stays.
     let stranger = old.path().join(format!("x.adopted-{}", "0".repeat(32)));

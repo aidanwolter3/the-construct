@@ -424,6 +424,7 @@ impl Inner {
         }
         let json = lock(&self.construct).snapshot_json();
         lock(&self.state).construct_json = json;
+        self.forget_unreachable();
         let c = lock(&self.construct);
         let now = c.instances();
         let changed: Vec<String> = now
@@ -437,6 +438,37 @@ impl Inner {
             .cloned()
             .collect();
         Ok((changed, gone))
+    }
+
+    /// Forget the cached answers of layouts the root doesn't reach and that
+    /// weren't opened by name, unless on screen (marked gone there): a
+    /// layout cached before the pod moved to the construct, or since
+    /// dropped, is never loaded again, and its answer would keep listing
+    /// its query keys (decision `newest-query-answer-wins`).
+    fn forget_unreachable(&self) {
+        let reach: Vec<String> = {
+            let c = lock(&self.construct);
+            c.keys.keys().chain(c.extra.keys()).cloned().collect()
+        };
+        let mut st = lock(&self.state);
+        let home = format!("{}{}", crate::LAYOUT_LOAD_PREFIX, self.workspace_id);
+        let shown = st.visible.clone().unwrap_or_default();
+        let unreachable: Vec<String> = st
+            .data
+            .keys()
+            .filter(|path| **path != home && !shown.contains(path))
+            .filter(|path| {
+                path.strip_prefix(crate::LAYOUT_LOAD_PREFIX)
+                    .is_some_and(|id| !reach.iter().any(|k| k == id))
+            })
+            .cloned()
+            .collect();
+        for path in unreachable {
+            st.drop_data(&path);
+            if let Some(id) = path.strip_prefix(crate::LAYOUT_LOAD_PREFIX) {
+                st.layouts.remove(id);
+            }
+        }
     }
 
     /// Layout `key`, which the root doesn't reach, by name (`GET

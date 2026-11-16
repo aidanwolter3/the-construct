@@ -444,7 +444,7 @@ fn the_core_names_no_source() {
             }
             // `std::collections` is not the Collections source.
             let code = code.replace("std::collections", "");
-            for app in ["pixelfed", "recipes", "collections"] {
+            for app in ["pixelfed", "collections"] {
                 assert!(
                     !code.to_ascii_lowercase().contains(app),
                     "src/{name}:{}: the core must not name a source: {line}",

@@ -69,7 +69,7 @@ collection:<c>:images:<row>, entities {image, thumbnail, page, title, source, n,
 with an ordinary update (payload {id: \"$item.row_id\", <field>: \"$item.image\"}) into a plain field the \
 displayed picture prefers (an expr compute: entity.my_photo ? entity.my_photo : entity.found_photo). \
 every_minutes schedules fills; on_open_minutes fills when the app opens and the data is older; upcoming \
-(a date field) drops past items; zone places times without an offset; details reads each new row's own \
+(a date field) drops past items; zone places times without an offset and moves UTC (Z) times to its clock; details reads each new row's own \
 page. A page whose content a script builds (the raw HTML has no items) or that answers a plain fetch with \
 a bot check takes render: true (or {wait_for: <CSS selector>, timeout_seconds?: 5..=45}) on a url or url_field \
 filler (and on collections_preview): the server's headless browser loads it, waits for the network to go quiet \
@@ -133,7 +133,7 @@ pub fn tools() -> Vec<Value> {
     let order = json!({ "description": "A field, or a list of fields (first key first), rows are listed by (else oldest first). A choice sorts by the order of its options; empty values last.",
         "anyOf": [{ "type": "string" }, { "type": "array", "items": { "type": "string" } }] });
     let filler = json!({ "type": "object",
-        "description": "A filler: what keeps rows current from the web (decision collection-fillers); each writes only its own rows. kind \"fetch\" (a recipe, no model call per fill): {kind, title?, url (one page) | url_field (a text field holding each row's own page; that row is filled from it) | query_field (a text field holding each row's web search, e.g. its name: the row's item is searched with the pod's web_search jack and a model fills its fields from the results with extract llm, or with extract images (no model; Brave or SearXNG) its first image result fills map {field: image (the picture's URL) | thumbnail | page (where it is) | title | source (the site)}; people may add rows), extract: events (an ics feed or a page's schema.org events: items {id, title, start, end, venue, description, url, tickets_url}) | json | embedded-json (a page's <script id=script, default __NEXT_DATA__>) | jsonld (schema.org objects of types, e.g. [\"Product\"]) | rss (items {title, link, description, published, updated, id, author, category}) | ics (VEVENT properties lowercase: summary, dtstart, location, ...) | selectors (CSS) | llm (a model reads each changed page's text: fields? [names] and hint? instead of map), items? (json/embedded-json: a path to the list; selectors: a CSS selector per item), types?, script?, zone? (IANA, for times without an offset), map: {field: path} (paths: a.b, a[0], a[*]; a list key is looked into, so offers.price works; a path may end in filters: \"description | link\" the first link in it (Google redirects unwrapped), \"description | text\" its text without HTML; selectors: a CSS selector inside the item, sel@attr for an attribute, @attr for the item's own), headers? {name: value, value may be \"Bearer {secret:<name>}\"}, details? {link: a mapped field with the row's page, extract, types?, map: {field: path} (fields not in map), text?: a field for the page's text when nothing is found; or extract \"llm\" with fields: [names] and hint?: a model reads the page's text for those fields}: read each new row's own page, once (a model call per new row with llm)}. kind \"agent\" (a model with web search and fetch answers the rows; costs model calls): {kind, title?, prompt, fields? (default every field that isn't computed), max_searches? (default 5, at most 20), max_fetches? (default 10, at most 30), fills_per_day? (default 4)}. Both: mode? replace (default: its rows are the latest answer; rows it no longer lists are deleted; they can't be added or deleted by hand) | upsert (adds and updates rows by key, keeps others; people may add rows), key? (a mapped field identifying a row; with replace, rows keep their ids and unfilled fields), upcoming? (a mapped date or datetime field: past items are left out), every_minutes? (fetch: 15..10080; agent: 60..10080), on_open_minutes? (1..1440: fill when an app showing it opens and the last fill is older); url_field and query_field fillers also take refresh? (once: fill a row when its URL or query first appears or changes; every: on each fill, skipping pages whose text didn't change; default every for url_field, once for query_field) and on_empty? (keep, the default: a row whose page or search yields nothing, or is blocked, keeps its values; clear). Every request goes through the pod's host policy (spacing, a daily cap per site, a shared backoff after a site blocks the pod). Values are coerced to the fields' types (prices like \"$1,299\" and feed dates are read); a value that doesn't fit is skipped. Filled fields can't be set by hand." });
+        "description": "A filler: what keeps rows current from the web (decision collection-fillers); each writes only its own rows. kind \"fetch\" (a recipe, no model call per fill): {kind, title?, url (one page) | url_field (a text field holding each row's own page; that row is filled from it) | query_field (a text field holding each row's web search, e.g. its name: the row's item is searched with the pod's web_search jack and a model fills its fields from the results with extract llm, or with extract images (no model; Brave or SearXNG) its first image result fills map {field: image (the picture's URL) | thumbnail | page (where it is) | title | source (the site)}; people may add rows), extract: events (an ics feed or a page's schema.org events: items {id, title, start, end, venue, description, url, tickets_url}) | json | embedded-json (a page's <script id=script, default __NEXT_DATA__>) | jsonld (schema.org objects of types, e.g. [\"Product\"]) | rss (items {title, link, description, published, updated, id, author, category}) | ics (VEVENT properties lowercase: summary, dtstart, location, ...) | selectors (CSS) | llm (a model reads each changed page's text: fields? [names] and hint? instead of map), items? (json/embedded-json: a path to the list; selectors: a CSS selector per item), types?, script?, zone? (IANA, for times without an offset; UTC times move to its clock), map: {field: path} (paths: a.b, a[0], a[*]; a list key is looked into, so offers.price works; a path may end in filters: \"description | link\" the first link in it (Google redirects unwrapped), \"description | text\" its text without HTML; selectors: a CSS selector inside the item, sel@attr for an attribute, @attr for the item's own), headers? {name: value, value may be \"Bearer {secret:<name>}\"}, details? {link: a mapped field with the row's page, extract, types?, map: {field: path} (fields not in map), text?: a field for the page's text when nothing is found; or extract \"llm\" with fields: [names] and hint?: a model reads the page's text for those fields}: read each new row's own page, once (a model call per new row with llm)}. kind \"agent\" (a model with web search and fetch answers the rows; costs model calls): {kind, title?, prompt, fields? (default every field that isn't computed), max_searches? (default 5, at most 20), max_fetches? (default 10, at most 30), fills_per_day? (default 4)}. Both: mode? replace (default: its rows are the latest answer; rows it no longer lists are deleted; they can't be added or deleted by hand) | upsert (adds and updates rows by key, keeps others; people may add rows), key? (a mapped field identifying a row; with replace, rows keep their ids and unfilled fields), upcoming? (a mapped date or datetime field: past items are left out), every_minutes? (fetch: 15..10080; agent: 60..10080), on_open_minutes? (1..1440: fill when an app showing it opens and the last fill is older); url_field and query_field fillers also take refresh? (once: fill a row when its URL or query first appears or changes; every: on each fill, skipping pages whose text didn't change; default every for url_field, once for query_field) and on_empty? (keep, the default: a row whose page or search yields nothing, or is blocked, keeps its values; clear). Every request goes through the pod's host policy (spacing, a daily cap per site, a shared backoff after a site blocks the pod). Values are coerced to the fields' types (prices like \"$1,299\" and feed dates are read); a value that doesn't fit is skipped. Filled fields can't be set by hand." });
     let alert = json!({ "type": "object",
         "description": "An alert: notify once when a row matches. {name?, any?: [phrases] (one must appear), all?: [phrases], none?: [phrases], fields?: [text fields searched; default all text fields], filler?: a filler id (only its rows), days?: [mon..sun], within_days?, date_field? (default the first date or datetime field; past rows stop matching), title?, body? (templates: {field}, {start_text}, {alert}, {filler}), label?, app?}" });
     let action = json!({ "type": "object",
@@ -166,7 +166,7 @@ pub fn tools() -> Vec<Value> {
         ),
         tool(
             "apply_change",
-            "Change a collection's definition (every layout that shows it must still fit it; change a layout with update_layout first). changes: [{op: add_field, name, type, options?, collection?, unique?, optional?, default?, compute?} | {op: rename_field, field, to} | {op: remove_field, field} | {op: restore_field, field} | {op: update_field, field, type?, options?, collection?, unique?, optional?, default?, compute?} | {op: set_action, action} | {op: remove_action, action: name} | {op: recompute_field, field} | {op: set_order, field?: name or [names], descending?} | {op: set_title, title} | {op: add_reminder, field, title, body?, at?, unless?, label?, app?} | {op: update_reminder, reminder: id, ...} | {op: remove_reminder, reminder: id} | {op: set_filler, filler} | {op: remove_filler, filler: id} | {op: add_alert, ...} | {op: update_alert, alert: id, ...} | {op: remove_alert, alert: id}]. set_filler adds a filler (as define_collection's fillers), or changes the one filler.id names, and starts its fill; remove_filler stops one (its rows stay, no longer locked; its alerts go). add_alert notifies once per row when a row matches (as define_collection's alerts). describe_collection lists fillers and alerts with their ids. A reminder notifies the user once per row when its date field is reached: on that date at at (HH:MM, default 09:00) in the pod's time zone (set_time_zone), unless the row then has unless {field, equals} (e.g. {field: \"done\", equals: true}); dates before the day it was added never notify, and a reminder more than 7 days late is dropped. title and body are the notification's text with {field} replaced by the row's value; label names it in the user's notification settings (default \"<Title>: <field>\"); app (a layout id) is the layout it comes from and opens, default the oldest layout that shows the collection (with none, nothing is sent). describe_collection lists reminders with their ids. compute (one kind or a list tried in order: {kind: \"expr\", expr}, {kind: \"lookup\", from, collection, key, value, match?, learn?}, {kind: \"count\", from, collection, key, where?} or {kind: \"model\", from, prompt}, as in define_collection) is computed for existing rows too (a model only fills empty ones); null stops computing and keeps the values. Lookups and counts are live: a change to the rows of the collection they read recomputes the rows it affects at once, cascading. recompute_field computes the field again for every row (a row only the model could answer keeps its value), e.g. after changing a lookup's match. Fields and actions are as in define_collection. update_field {type: \"ref\", collection} turns a text field into a ref: each value becomes the id of the row of that collection whose id or unique text field equals it (ignoring case and spacing; make the target's name field unique first); values that match no row are kept aside and reported in conversions (set_aside, samples). unique: true fails while live rows share a value (the error lists them). set_action adds an action or replaces the one of that name; remove_action removes it. A collection can't be deleted while another collection's ref, lookup, count, rollup or action names it. Every layout using Collections is checked against the new definition; if any would break, nothing applies and the error names the layout and the binding. Renamed fields keep their old name as an alias; removed fields are hidden and restorable for 30 days; type changes convert row by row and keep values that don't convert aside.",
+            "Change a collection's definition and the layouts that show it in one step. changes: [{op: add_field, name, type, options?, collection?, unique?, optional?, default?, compute?} | {op: rename_field, field, to} | {op: remove_field, field} | {op: restore_field, field} | {op: update_field, field, type?, options?, collection?, unique?, optional?, default?, compute?} | {op: set_action, action} | {op: remove_action, action: name} | {op: recompute_field, field} | {op: set_order, field?: name or [names], descending?} | {op: set_title, title} | {op: add_reminder, field, title, body?, at?, unless?, label?, app?} | {op: update_reminder, reminder: id, ...} | {op: remove_reminder, reminder: id} | {op: set_filler, filler} | {op: remove_filler, filler: id} | {op: add_alert, ...} | {op: update_alert, alert: id, ...} | {op: remove_alert, alert: id}]. set_filler adds a filler (as define_collection's fillers), or changes the one filler.id names, and starts its fill; remove_filler stops one (its rows stay, no longer locked; its alerts go). add_alert notifies once per row when a row matches (as define_collection's alerts). describe_collection lists fillers and alerts with their ids. A reminder notifies the user once per row when its date field is reached: on that date at at (HH:MM, default 09:00) in the pod's time zone (set_time_zone), unless the row then has unless {field, equals} (e.g. {field: \"done\", equals: true}); dates before the day it was added never notify, and a reminder more than 7 days late is dropped. title and body are the notification's text with {field} replaced by the row's value; label names it in the user's notification settings (default \"<Title>: <field>\"); app (a layout id) is the layout it comes from and opens, default the oldest layout that shows the collection (with none, nothing is sent). describe_collection lists reminders with their ids. compute (one kind or a list tried in order: {kind: \"expr\", expr}, {kind: \"lookup\", from, collection, key, value, match?, learn?}, {kind: \"count\", from, collection, key, where?} or {kind: \"model\", from, prompt}, as in define_collection) is computed for existing rows too (a model only fills empty ones); null stops computing and keeps the values. Lookups and counts are live: a change to the rows of the collection they read recomputes the rows it affects at once, cascading. recompute_field computes the field again for every row (a row only the model could answer keeps its value), e.g. after changing a lookup's match. Fields and actions are as in define_collection. update_field {type: \"ref\", collection} turns a text field into a ref: each value becomes the id of the row of that collection whose id or unique text field equals it (ignoring case and spacing; make the target's name field unique first); values that match no row are kept aside and reported in conversions (set_aside, samples). unique: true fails while live rows share a value (the error lists them). set_action adds an action or replaces the one of that name; remove_action removes it. A collection can't be deleted while another collection's ref, lookup, count, rollup or action names it. Every layout using Collections is checked, as devices draw it, against the new definition; if any would break, nothing applies and the error names the layout and the binding. apps: [{app, layout | json_patch, base_version?}] edits layouts in the same step (app is a layout id; base_version is the version get_layout shows). Renamed fields keep their old name as an alias; removed fields are hidden and restorable for 30 days; type changes convert row by row and keep values that don't convert aside.",
             json!({ "collection": collection, "base_version": { "type": "integer", "description": "The definition version you read" },
                     "changes": { "type": "array", "items": { "type": "object" } }, "note": note }),
             &["collection", "changes"],
@@ -327,11 +327,14 @@ fn users(apps: &[SourceUse], name: &str) -> Vec<Value> {
     let scheme = format!("collections://{name}/");
     let route = format!("/v1/collections/{name}/");
     // Not by feeds: every layout reports home's (decision `layouts-not-apps`).
+    // A layout bound two ways is listed once.
+    let mut seen = std::collections::BTreeSet::new();
     apps.iter()
         .filter(|u| {
             let text = u.node.to_string();
             text.contains(&format!("\"{key}\"")) || text.contains(&scheme) || text.contains(&route)
         })
+        .filter(|u| seen.insert(u.layout.id.clone()))
         .map(|u| json!({ "layout": u.layout.id, "title": u.layout.title, "version": u.version }))
         .collect()
 }
@@ -1114,23 +1117,109 @@ async fn preview_mcp(
 
 // ---------- change sets ----------
 
-/// A change set's layout edits (`apps`) are refused: a layout is changed
-/// with `update_layout` (decision `content-addressed-construct`), before
-/// a collection change that would break it.
-fn refuse_layout_edits(args: &Value) -> Result<(), Value> {
-    let edits = args
-        .get("apps")
-        .filter(|a| !a.is_null())
-        .is_some_and(|a| a.as_array().is_none_or(|l| !l.is_empty()));
-    if edits {
-        return Err(json!({ "error": "layout_edits_refused", "status": 409,
-            "detail": "a change set no longer edits layouts: change them with update_layout first (they may stop using what the change removes), then apply the change" }));
+/// The layout edits of a change set, as construct
+/// `update_layout` arguments (`base_version` is the name's history seq,
+/// as `get_layout` shows it): checked and written in the change set's
+/// transaction.
+fn construct_edits(args: &Value, note: &str) -> Result<Vec<Value>, Value> {
+    let Some(items) = args.get("apps").filter(|a| !a.is_null()) else {
+        return Ok(Vec::new());
+    };
+    let Some(items) = items.as_array() else {
+        return Err(bad(
+            "\"apps\" is a list of {app, layout | json_patch, base_version?}",
+        ));
+    };
+    let mut out: Vec<Value> = Vec::new();
+    for (i, item) in items.iter().enumerate() {
+        let Some(id) = item["app"].as_str().filter(|a| !a.is_empty()) else {
+            return Err(bad(format!("apps[{i}]: \"app\" is a layout id")));
+        };
+        if out.iter().any(|a| a["app"] == id) {
+            return Err(bad(format!("app '{id}' is listed twice")));
+        }
+        if item.get("json_patch").is_none_or(Value::is_null) && !item["layout"].is_object() {
+            return Err(bad(format!("apps[{i}]: pass \"layout\" or \"json_patch\"")));
+        }
+        let mut a = item.clone();
+        if a.get("note").is_none_or(Value::is_null) {
+            a["note"] = json!(note);
+        }
+        out.push(a);
     }
-    Ok(())
+    Ok(out)
 }
 
-/// Apply `planned` (a new definition of `name`, from `base`): every layout
-/// using Collections must fit the new definition, else nothing applies.
+/// A layout that a change of a collection would break.
+fn breaks_layout(
+    id: &str,
+    title: &str,
+    in_change_set: bool,
+    e: &pod_core::validate::LayoutError,
+) -> Value {
+    json!({
+        "error": "breaks_layout", "status": 422, "layout": id, "title": title,
+        "in_change_set": in_change_set,
+        "at": e.pointer, "allowed": e.allowed,
+        "detail": format!("layout '{title}' ({id}) would break: {}{}",
+            if e.pointer.is_empty() { String::new() } else { format!("{}: ", e.pointer) }, e.message),
+        "fix": "change that layout in the same apply_change (apps: [{app, layout | json_patch}]), or change the collection differently",
+    })
+}
+
+/// Inside the change set's transaction: write `edits`
+/// to the construct (as `update_layout` does), then check every layout as
+/// clients draw it against `defs`. `Ok(Err(_))`: refused; roll back.
+#[allow(clippy::type_complexity)]
+fn construct_commit(
+    tx: &rusqlite::Transaction<'_>,
+    pod: &Pod,
+    edits: &[Value],
+    defs: &HashMap<String, Definition>,
+) -> rusqlite::Result<Result<(Vec<(String, i64)>, Vec<(String, i64)>), Value>> {
+    use pod_core::construct::write as cwrite;
+    let mut versions = Vec::new();
+    let mut moved = Vec::new();
+    for a in edits {
+        let id = a["app"].as_str().unwrap_or("").to_owned();
+        match cwrite::update_layout(pod, tx, a) {
+            Ok((answer, m)) => {
+                versions.push((id, answer["version"].as_i64().unwrap_or(0)));
+                moved.extend(m);
+            }
+            Err(mut b) => {
+                let status = match b["error"].as_str() {
+                    Some("stale_base") => 409,
+                    Some("layout_not_found" | "not_found") => 404,
+                    Some("invalid_layout") => 422,
+                    _ => 400,
+                };
+                b["app"] = json!(id);
+                b["status"] = json!(status);
+                return Ok(Err(b));
+            }
+        }
+    }
+    let feeds: Vec<String> = cwrite::home_feeds(tx)
+        .into_iter()
+        .filter(|(s, _)| s == NAME)
+        .map(|(_, f)| f)
+        .collect();
+    if feeds.is_empty() {
+        return Ok(Ok((versions, moved)));
+    }
+    for l in cwrite::live_layouts(tx)? {
+        if let Err(e) = crate::bindings::check(&l.node, &feeds, defs) {
+            let edited = versions.iter().any(|(a, _)| *a == l.name);
+            return Ok(Err(breaks_layout(&l.name, &l.title, edited, &e)));
+        }
+    }
+    Ok(Ok((versions, moved)))
+}
+
+/// Apply `planned` (a new definition of `name`, from `base`) with the layout
+/// edits of `args["apps"]`, atomically: every layout using Collections must
+/// fit the new definition as devices draw it, else nothing applies.
 async fn commit(
     pod: &Pod,
     caps: crate::Caps,
@@ -1140,18 +1229,15 @@ async fn commit(
     args: &Value,
     note: String,
 ) -> Result<Value, Value> {
-    refuse_layout_edits(args)?;
-    // Every layout using Collections, against the new definitions.
+    // The layout edits, and the check of every layout as devices draw it,
+    // happen in the change set's transaction below.
+    let edits = construct_edits(args, &note)?;
     let catalog_apps = {
-        pod.blocking(move |s| {
-            let apps = pod_layouts::layouts_with_source(s, NAME)?;
-            let defs = s.with_conn(db::all_defs)?;
-            Ok((apps, defs))
-        })
-        .await
-        .map_err(db_err)?
+        pod.blocking(move |s| s.with_conn(db::all_defs))
+            .await
+            .map_err(db_err)?
     };
-    let (apps, defs) = catalog_apps;
+    let defs = catalog_apps;
     let mut new_defs: HashMap<String, Definition> =
         defs.into_iter().map(|(_, d)| (d.name.clone(), d)).collect();
     new_defs.insert(name.to_owned(), planned.def.clone());
@@ -1163,18 +1249,7 @@ async fn commit(
         model::check_lookups(d, &new_defs)
             .map_err(|e| json!({ "error": "invalid_change", "detail": e, "status": 400 }))?;
     }
-    for u in &apps {
-        if let Err(e) = crate::bindings::check(&u.node, &u.feeds, &new_defs) {
-            let (id, title) = (&u.layout.id, &u.layout.title);
-            return Err(json!({
-                "error": "breaks_layout", "status": 422, "layout": id, "title": title,
-                "at": e.pointer, "allowed": e.allowed,
-                "detail": format!("layout '{title}' ({id}) would break: {}{}",
-                    if e.pointer.is_empty() { String::new() } else { format!("{}: ", e.pointer) }, e.message),
-                "fix": "change that layout with update_layout first, or change the collection differently",
-            }));
-        }
-    }
+    let pod2 = pod.clone();
     let def = planned.def.clone();
     let convert = planned.convert.clone();
     let to_compute = planned.compute.clone();
@@ -1182,7 +1257,7 @@ async fn commit(
     let coll = name.to_owned();
     let others = new_defs.clone();
     let created = planned.created.clone();
-    let (version, conversions, jobs) = refusable(pod, move |tx| {
+    let (version, conversions, versions, moved, jobs) = refusable(pod, move |tx| {
         let current = db::latest_def(tx, &coll)?.map(|(v, _)| v);
         if current != Some(base) {
             return Ok(Err(json!({ "error": "stale_base", "status": 409, "latest_version": current,
@@ -1224,15 +1299,21 @@ async fn commit(
         for id in &to_recompute {
             jobs.extend(crate::compute::backfill(tx, &def, id, true, caps.rows, now, caps)?);
         }
-        Ok(Ok((version, conversions, jobs)))
+        let (versions, moved) = match construct_commit(tx, &pod2, &edits, &others)? {
+            Ok(vm) => vm,
+            Err(b) => return Ok(Err(b)),
+        };
+        Ok(Ok((version, conversions, versions, moved, jobs)))
     })
     .await?;
+    pod_core::construct::write::publish(pod, &moved);
     pod.publish_data_all(NAME);
     let computing = jobs.len();
     crate::compute::spawn(pod, name, jobs);
     Ok(json!({
         "ok": true, "collection": name, "version": version,
         "conversions": conversions.iter().map(|c| c.to_json(&planned.def.title)).collect::<Vec<_>>(),
+        "apps": versions.iter().map(|(a, v)| json!({ "app": a, "version": v })).collect::<Vec<_>>(),
         "definition": planned.def.describe(pod_core::util::now_secs(), KEEP_SECS, &new_defs),
         "computing_rows": computing,
         "created_rules": planned.created.iter().map(|d| &d.name).collect::<Vec<_>>(),

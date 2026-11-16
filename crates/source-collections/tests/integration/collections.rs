@@ -506,31 +506,17 @@ async fn a_change_set_adds_and_renames_with_the_app_and_old_writes_still_land() 
     let app = create_app(&pod, "Todos", todo_layout("· due $item.due")).await;
     add(&pod, json!({"title": "Milk", "due": "2026-11-05"})).await;
 
-    // A change set no longer edits layouts (they are changed with
-    // update_layout): the rename keeps the layout working through the
-    // alias, and then the layout takes the new names.
-    let (err, e) = tool(
-        &pod,
-        "apply_change",
-        json!({"collection": "todos", "base_version": 1,
-        "changes": [{"op": "set_title", "title": "Tasks"}],
-        "apps": [{"app": app, "layout": todo_layout("")}]}),
-    )
-    .await;
-    assert!(err && e["error"] == "layout_edits_refused", "{e}");
+    // The layout changes with the rename, in the same step: alone, the
+    // rename would keep working through the alias, so check that the new
+    // layout uses it.
     let r = ok(&pod, "apply_change", json!({"collection": "todos", "base_version": 1,
         "note": "Priority, and due is now deadline",
         "changes": [
             {"op": "add_field", "name": "priority", "type": "choice", "options": ["low", "high"], "default": "low"},
-            {"op": "rename_field", "field": "due", "to": "deadline"}]})).await;
+            {"op": "rename_field", "field": "due", "to": "deadline"}],
+        "apps": [{"app": app, "layout": todo_layout("· $item.priority · due $item.deadline")}]})).await;
     assert_eq!(r["version"], 2);
-    ok(
-        &pod,
-        "update_layout",
-        json!({"app": app,
-        "layout": todo_layout("· $item.priority · due $item.deadline")}),
-    )
-    .await;
+    assert_eq!(r["apps"][0]["app"], app.as_str(), "{r}");
     let (_, ws) =
         pod_core::testing::layout_for(&pod_core::app(pod.clone()), &app, Some("phone")).await;
     assert!(ws["workspace"].to_string().contains("$item.deadline"));

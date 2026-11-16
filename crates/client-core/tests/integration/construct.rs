@@ -28,6 +28,10 @@ fn pod() -> Pod {
         .build()
         .unwrap();
     let state = Arc::new(server::state_in_memory());
+    state
+        .store()
+        .with_conn(source_collections::test_seed::seed_test_dishes)
+        .unwrap();
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     listener.set_nonblocking(true).unwrap();
     let base = format!("http://{}", listener.local_addr().unwrap());
@@ -284,7 +288,7 @@ fn an_embedded_layout_draws_what_its_use_site_binds() {
     let state = p.state.clone();
     p.rt.block_on(async move {
         let shelf = server::construct::write::mcp(&state, "create_layout", &json!({"title": "Shelf",
-            "feeds": [["recipes", "all"]],
+            "feeds": [["collections", "dishes"]],
             "layout": {"type": "core://Page", "title": "Shelf", "root": {"type": "core://Column", "children": [
                 {"type": "core://Text", "style": "Title", "value_expr": "$in.label"},
                 {"type": "core://List", "query_key": "$in.items",
@@ -297,9 +301,9 @@ fn an_embedded_layout_draws_what_its_use_site_binds() {
             "layout": {"type": "core://Page", "title": "Home", "root": {"type": "core://Column", "children": [
                 {"type": "core://Text", "style": "Title", "value_expr": "Home"},
                 {"type": "core://Layout", "ref": {"name": shelf, "as": "shelf-a"},
-                    "bind": {"label": "Books", "items": "recipes:all"}},
+                    "bind": {"label": "Books", "items": "collection:dishes"}},
                 {"type": "core://Layout", "ref": {"name": shelf, "as": "shelf-b"},
-                    "bind": {"label": "Films", "items": "recipes:none"}}]}}}))
+                    "bind": {"label": "Films", "items": "collection:none"}}]}}}))
             .await
             .unwrap();
         assert!(r.is_ok(), "{r:?}");
@@ -319,19 +323,19 @@ fn an_embedded_layout_draws_what_its_use_site_binds() {
     wait_until("shelf-a drawn", || drawn("shelf-a").contains("Books"));
     wait_until("shelf-b drawn", || drawn("shelf-b").contains("Films"));
     assert!(
-        drawn("shelf-a").contains("recipes:all"),
+        drawn("shelf-a").contains("collection:dishes"),
         "{}",
         drawn("shelf-a")
     );
     assert!(
-        drawn("shelf-b").contains("recipes:none"),
+        drawn("shelf-b").contains("collection:none"),
         "{}",
         drawn("shelf-b")
     );
     assert!(!drawn("shelf-a").contains("$in."), "{}", drawn("shelf-a"));
     // The data shelf-a's binding reads came with it.
     wait_until("shelf-a's data", || {
-        e.snapshot().queries_json.contains("recipes:all")
+        e.snapshot().queries_json.contains("collection:dishes")
     });
 }
 
@@ -364,10 +368,10 @@ fn parse(s: &str) -> Value {
     serde_json::from_str(s).unwrap()
 }
 
-/// A page listing the recipes, titled `title`.
-fn recipes_page(title: &str) -> Value {
+/// A page listing the test dishes, titled `title`.
+fn dishes_page(title: &str) -> Value {
     json!({"type": "core://Page", "title": title, "root": {"type": "core://List",
-        "query_key": "recipes:all",
+        "query_key": "collection:dishes",
         "item_template": {"type": "core://Text", "style": "Body", "value_expr": "$item.title"}}})
 }
 
@@ -398,7 +402,7 @@ fn one_engine_on_home_opens_other_layouts_and_follows_them() {
         .unwrap();
     let id = create(
         &p,
-        json!({"title": "Mine", "feeds": [["recipes", "all"]], "layout": recipes_page("Mine")}),
+        json!({"title": "Mine", "feeds": [["collections", "dishes"]], "layout": dishes_page("Mine")}),
     );
     home_linking(&p, Some(&id));
 
@@ -408,7 +412,7 @@ fn one_engine_on_home_opens_other_layouts_and_follows_them() {
     wait_until("the other layout", || {
         let s = e.snapshot();
         parse(&s.layouts_json)[&id]["workspace"]["title"] == "Mine"
-            && parse(&s.queries_json).get("recipes:all").is_some()
+            && parse(&s.queries_json).get("collection:dishes").is_some()
     });
     let s = e.snapshot();
     assert_eq!(
@@ -425,12 +429,15 @@ fn one_engine_on_home_opens_other_layouts_and_follows_them() {
     tool(
         &p,
         "update_layout",
-        json!({"app": id, "layout": recipes_page("Mine, again")}),
+        json!({"app": id, "layout": dishes_page("Mine, again")}),
     );
     wait_until("the new version", || {
         parse(&e.snapshot().layouts_json)[&id]["workspace"]["title"] == "Mine, again"
     });
-    // Home no longer reaches it: it is gone from the device.
+    // Home no longer reaches it: it is gone from the device, and marked so
+    // while it is on screen (off screen, it is forgotten: decision
+    // `newest-query-answer-wins`).
+    e.set_visible(vec![format!("layout:{id}"), "layout:home".to_owned()]);
     home_linking(&p, None);
     wait_until("gone", || {
         parse(&e.snapshot().layouts_json)[&id]["gone"] == json!(true)
@@ -459,8 +466,8 @@ fn leaving_the_pod_forgets_the_other_layouts_it_opened() {
         .unwrap();
     let id = create(
         &p,
-        json!({"title": "Notes", "feeds": [["recipes", "all"]],
-            "layout": recipes_page("Private notes")}),
+        json!({"title": "Notes", "feeds": [["collections", "dishes"]],
+            "layout": dishes_page("Private notes")}),
     );
     home_linking(&p, Some(&id));
     let dir = tempfile::tempdir().unwrap();
@@ -527,4 +534,48 @@ fn sign_ins_without_a_session_needs_no_request_and_an_old_pod_says_so() {
             reason: SIGN_INS_UNSUPPORTED.into()
         }
     );
+}
+
+/// Decision `newest-query-answer-wins`: a layout cached on an earlier run
+/// that home no longer reaches is never loaded again, so its cached answer
+/// (which may list the same query keys as a reachable layout's) is dropped
+/// after the next sync.
+#[test]
+fn a_cached_layout_the_root_no_longer_reaches_is_forgotten() {
+    let p = pod();
+    let (a, _) = build(&p);
+    let dir = temp_dir("unreachable");
+    let first = engine_at(&dir, &p.base);
+    wait_until("home drawn from the construct", || {
+        first.construct_status().root.is_some() && home_json(&first).contains("Home")
+    });
+    first.open_layout(&a);
+    wait_until("A drawn", || {
+        first
+            .layout_now(&a)
+            .root
+            .is_some_and(|r| serde_json::to_string(&r).unwrap().contains("Inside A"))
+    });
+    drop(first);
+
+    // Home stops linking A.
+    let state = p.state.clone();
+    let r = p.rt.block_on(async move {
+        server::construct::write::mcp(&state, "update_layout", &json!({"app": "home",
+            "layout": {"type": "core://Page", "title": "Home", "root": {"type": "core://Column",
+                "children": [{"type": "core://Text", "style": "Title", "value_expr": "Home alone"}]}}}))
+        .await
+    });
+    assert!(r.as_ref().is_some_and(Result::is_ok), "{r:?}");
+
+    let again = engine_at(&dir, &p.base);
+    wait_until("home drawn again", || {
+        home_json(&again).contains("Home alone")
+    });
+    wait_until("A forgotten", || {
+        let layouts: Value = serde_json::from_str(&again.snapshot().layouts_json).unwrap();
+        layouts.get(&a).is_none()
+    });
+    drop(again);
+    let _ = std::fs::remove_dir_all(&dir);
 }

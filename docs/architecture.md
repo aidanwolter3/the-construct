@@ -9,9 +9,9 @@ know nothing about any particular source.
   Pixelfed, web pages,   │  pod-host: one process, many pods, routed by pod token   │
   the Messages API  ◀───▶│  ┌──────────── pod (crates/pod-core) ────────────────┐   │
                          │  │ construct, sessions, sign-ins, SQLite              │   │
-                         │  │ sources:  source-pixelfed, source-recipes,         │   │
-                         │  │           source-collections, source-events,       │   │
-                         │  │           source-monitor, source-agents            │   │
+                         │  │ sources:  source-pixelfed, source-collections,     │   │
+                         │  │           source-events, source-monitor,           │   │
+                         │  │           source-agents                            │   │
                          │  └────────────────────────────────────────────────────┘   │
                          └──────────────▲──────────────────────────▲──────────────────┘
                      HTTP: layouts +    │                          │  SSE: construct, data,
@@ -31,7 +31,7 @@ know nothing about any particular source.
 
 **Only sources know their upstreams.** `pod-core`, `pod-host`, the engine and the renderer handle layouts, entities,
 intents, uploads and notifications *in general* (decisions D34, D35, D40). Everything specific to Pixelfed lives in
-`crates/source-pixelfed`; everything specific to recipes lives in `crates/source-recipes`; and so on. A test
+`crates/source-pixelfed`; everything specific to Events lives in `crates/source-events`; and so on. A test
 (`the_core_names_no_source`) checks that the core names no source.
 
 The payoff: most product changes ship from the pod alone, as a new layout file plus source code, with no client
@@ -65,7 +65,6 @@ The server binary picks the sources at compile time (`server::adapters`). Bluepr
 |---|---|---|---|
 | `pixelfed` | Pixelfed | `source-pixelfed` | A Pixelfed client: feed, carousels, likes, bookmarks, threaded comments, photo posting, notifications |
 | `pixelfed_sample_no_login` | Pixelfed sample | `source-pixelfed` (static) | A one-post sample that needs no sign-in; listed only with `CONSTRUCT_SHOW_DEV_APPS=1` |
-| `recipes` | Recipes | `source-recipes` | A recipe collection with search, categories and recipe cards (D41) |
 | `events` | Events | `source-events` | Upcoming events from websites the user watches, with alerts (decision `collection-fillers`) |
 | `shell` | Home | `source-shell` | The home blueprint: a blank page with Notifications and Settings, which every pod's `home` references |
 | `settings` | Settings | `source-shell` | Settings as a layout over device data: connection, sign-ins, channels, server |

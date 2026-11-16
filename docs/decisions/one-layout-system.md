@@ -67,7 +67,9 @@ on this build; then the old tables are dropped, and only the construct's paths a
   table's code, the old branches of the MCP tools, the MCP tools `set_hidden`, `dismiss_update`, `rebase_context`
   and `switch_construct`, and `copied_from` on writes (`copy_component` answers `from`). `@core/` components are
   read-only to `update_component` and `define_component`; a `core://Use`'s arguments are checked when written
-  (`invalid_use`) rather than drawn as a placeholder.
+  (`invalid_use`) rather than drawn as a placeholder. Collections' `apply_change` writes its layout edits to the
+  construct (as `update_layout` does) and checks every layout as devices draw it; a layout it would break is
+  `breaks_layout` (`breaks_app` before).
 - **Vocabulary**: `core://Ref {app, part}` is no longer accepted (the startup conversion still reads it). The
   feature `device_layout_controls` (`hide_layout`, `unhide_layout`, `delete_layout`) moves to `features/removed/`;
   the device commands `show_versions`, `pin_version` and `follow_latest`, and the local data `local:layouts`,

@@ -2,7 +2,7 @@
 
 A pod's apps are the user's own: any layout the [vocabulary](layouts.md) can draw, over the feeds, screen data and
 actions the pod's data sources declare. They are usually built by Claude through the pod's MCP endpoint, often from a
-**blueprint** (a built-in layout the server ships and updates, such as `pixelfed`, `recipes` or `events`). A new pod
+**blueprint** (a built-in layout the server ships and updates, such as `pixelfed` or `events`). A new pod
 has one app, `home`; nothing else until the user asks for it. Data an app keeps itself (a todo list, a maintenance
 log) lives in **Collections**.
 
@@ -19,8 +19,8 @@ Built-in layouts are blueprints, named `@core/<blueprint>` and moved to each dep
 answers `{layouts, blueprints}`. A layout can be a whole blueprint by reference, kept current by the pod:
 
 ```json
-{"title": "Recipes", "icon": "recipe", "feeds": [["recipes", "all"]],
- "layout": {"type": "core://Use", "ref": "@core/recipes"}}
+{"title": "Events", "icon": "dashboard", "feeds": [["collections", "events"]],
+ "layout": {"type": "core://Use", "ref": "@core/events"}}
 ```
 
 Name the blueprint's feeds (`list_layouts` shows them): they join home's. To change a blueprint, read it
@@ -38,11 +38,14 @@ A layout of the pod is a name (`c-` and 10 characters, except `home`) pointing t
 and a node; the name keeps its history, and `restore_version` moves it back. Devices show a layout's `title` and
 `icon` from its element.
 
-**Home owns the feeds** (`["recipes", "all"]`, `["pixelfed", "home"]`, `["collections", "todos"]`, at most 32): every
+**Home owns the feeds** (`["pixelfed", "home"]`, `["collections", "todos"]`, `["collections", "recipes"]`, at most 32): every
 layout may bind any of them, and a layout's request loads only the feeds whose query keys it binds. Feeds named when
 creating a layout (or renaming one) are added to home's. Changing home's own feed list is refused (`feed_in_use`,
 naming the layout) while another layout still binds a feed it would drop. Home's event stream carries every change of
 the construct (a new root) and every data change of its feeds, so one engine follows them all.
+When a pod opens, feeds naming a source the server no longer has (such as the removed `recipes` source) are dropped
+from home's feeds (a new home element without them), so home's scope holds no feed nothing can fill (decision
+[`remove-recipes-source`](decisions/remove-recipes-source.md)).
 
 - **Validation.** Every write is checked against the sources of home's feeds: a layout may only bind query keys
   those feeds fill and call the data paths and endpoints their manifests declare. Errors name a JSON pointer and
@@ -116,9 +119,11 @@ never writes code: it declares typed fields (`text`, `number`, `bool`, `date`, `
 
 `describe_collection` gives ready-made layout snippets for all of these.
 
-- **Change sets.** `apply_change` sends a collection change together with the app layouts that go with it. Every
-  custom app using Collections is checked against the new definition; if one would break, nothing applies and the
-  error names the app and binding.
+- **Change sets.** `apply_change` sends a collection change together with the layouts that go with it (`apps:
+  [{app, layout | json_patch, base_version?}]`): the edits are written as `update_layout` writes them
+  (`base_version` is the version `get_layout` shows) in the same step, and every layout is checked as devices draw
+  it, bound with what home passes it. If one would break, nothing applies and `breaks_layout` names the layout and
+  binding.
 - **Safe schema changes.** Fields have permanent ids. A rename keeps the old name as an alias; a removal hides the
   field and keeps its data 30 days (`restore_field`); a type change converts row by row and keeps what doesn't
   convert aside. A write made under an older definition (an offline device) still lands.

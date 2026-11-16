@@ -512,6 +512,15 @@ struct State {
     store: Option<Store>,
     /// The last answer of each loaded data path (cached in `data_loads`).
     data: BTreeMap<String, DataLoad>,
+    /// When each answer arrived, in load order (this run only): a key
+    /// several answers list (each layout binding a feed carries its query
+    /// keys) takes the newest answer's value ([`State::effective_queries`]).
+    /// Answers restored from the cache at launch are 0: older than any
+    /// fetched since. `queries_order` is the workspace's own.
+    data_order: BTreeMap<String, u64>,
+    queries_order: u64,
+    /// The last order handed out.
+    last_order: u64,
     /// Load state per data path (this run only).
     loads: BTreeMap<String, LoadStatus>,
     /// Pending create rows (their temporary entities are listed).
@@ -657,12 +666,24 @@ impl State {
     }
 
     /// The workspace's queries, overlaid with every loaded data path's
-    /// queries, plus the temporary entities of settling and pending creates
-    /// appended to their query.
+    /// queries (for a key several list, the newest answer's), plus the
+    /// temporary entities of settling and pending creates appended to their
+    /// query.
     fn effective_queries(&self) -> BTreeMap<String, Vec<String>> {
-        let mut out = self.queries.clone();
-        for load in self.data.values() {
-            for (k, v) in &load.queries {
+        // Oldest first, so the newest answer's value of a key is the one
+        // left (a tie keeps the path order: the workspace, then the paths).
+        let mut answers: Vec<(u64, &BTreeMap<String, Vec<String>>)> =
+            vec![(self.queries_order, &self.queries)];
+        answers.extend(self.data.iter().map(|(path, load)| {
+            (
+                self.data_order.get(path).copied().unwrap_or(0),
+                &load.queries,
+            )
+        }));
+        answers.sort_by_key(|(order, _)| *order);
+        let mut out = BTreeMap::new();
+        for (_, queries) in answers {
+            for (k, v) in queries {
                 out.insert(k.clone(), v.clone());
             }
         }
@@ -748,6 +769,11 @@ impl State {
                         );
                     }
                 }
+                // Restored answers are old: each is loaded again once it is
+                // shown, and a fresher answer's value of a key wins.
+                self.stale.extend(data.keys().cloned());
+                self.data_order.clear();
+                self.queries_order = 0;
                 self.data = data;
                 self.creates = creates;
                 self.attachments = attachments.into_iter().map(|a| (a.id.clone(), a)).collect();
@@ -847,6 +873,8 @@ impl State {
         self.workspace = Some(workspace);
         self.entities = merged;
         self.queries = queries;
+        self.last_order += 1;
+        self.queries_order = self.last_order;
         self.workspace_uris = Some(uris);
     }
 
@@ -944,6 +972,8 @@ impl State {
             }
         );
         self.entities.extend(fetched);
+        self.last_order += 1;
+        self.data_order.insert(path.to_owned(), self.last_order);
         self.data.insert(path.to_owned(), load);
         self.loads.insert(path.to_owned(), LoadStatus::ready());
     }
@@ -952,6 +982,7 @@ impl State {
     /// until something else replaces them).
     fn drop_data(&mut self, path: &str) {
         self.stale.remove(path);
+        self.data_order.remove(path);
         if self.data.remove(path).is_none() {
             return;
         }
@@ -1044,6 +1075,7 @@ impl State {
         self.delete_attachments(&gone);
         self.queries.clear();
         self.data.clear();
+        self.data_order.clear();
         self.loads.clear();
         self.settling.clear();
         self.layouts.clear();

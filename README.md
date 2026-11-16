@@ -22,7 +22,7 @@ through the pod's MCP endpoint) builds the rest into it, only what you ask for, 
 
 | | |
 |---|---|
-| **Blueprints** | Built-in layouts the server ships and keeps current, for the agent to reference or copy: **Pixelfed** (a [Pixelfed](https://pixelfed.org) client with feed and card views, likes, bookmarks, threaded comments, photo posting and notifications, for any instance), **Recipes** (a recipe collection with search and categories), **Events** (upcoming events from websites you watch, with alerts when one matches), **Settings** and the **inbox**. A new pod's `home` is the blank `shell` blueprint. |
+| **Blueprints** | Built-in layouts the server ships and keeps current, for the agent to reference or copy: **Pixelfed** (a [Pixelfed](https://pixelfed.org) client with feed and card views, likes, bookmarks, threaded comments, photo posting and notifications, for any instance), **Events** (upcoming events from websites you watch, with alerts when one matches), **Settings** and the **inbox**. A new pod's `home` is the blank `shell` blueprint. |
 | **Collections** | Typed data the agent declares (a todo list, a maintenance log), with computed fields, reminders, and **fillers** that keep rows current from the web (iCalendar feeds, schema.org data, or a model reading a page). |
 | **Components** | Reusable pieces of layout defined as data and expanded by the pod: the server's (`core:card`, `core:section_header`, `core:back_button`, every blueprint and its parts) and the pod's own (`pod:…`, defined by the agent). Changing one needs no client build. |
 | **Theme** | The pod's colours (`${local://theme#accent}` and other tokens), set by the agent. |
@@ -32,7 +32,7 @@ through the pod's MCP endpoint) builds the rest into it, only what you ask for, 
 ```
  Pixelfed, web pages ◀──▶ pod (Rust, Axum, SQLite) ── layouts + entities, events ──▶ engine (Rust) ──▶ renderer (Rust)
                           sources: pixelfed,                                          cache, outbox,     desktop,
- Claude (MCP) ──────────▶ recipes, collections, …                                     sign-in, SSE       Android
+ Claude (MCP) ──────────▶ collections, events, …                                       sign-in, SSE       Android
 ```
 
 Clients open the pod's `home` layout. Home embeds other layouts (`core://Layout`: in place, in a card, or as a sheet
@@ -69,7 +69,7 @@ You need Rust; for the Android app also an Android SDK with an NDK. Details are 
    CONSTRUCT_POD_URL=http://127.0.0.1:8080 cargo run --release -p construct-render --features viewer --bin construct-viewer
    ```
 
-3. Connect Claude Code to the pod and ask for a first layout, such as "show my recipes on home":
+3. Connect Claude Code to the pod and ask for a first layout, such as "keep my recipes in a collection and show them on home":
 
    ```bash
    claude mcp add --transport http construct-local http://127.0.0.1:8080/v1/mcp \
@@ -113,7 +113,7 @@ crates/pod-core         the generic pod: layouts and their versions, components,
                           notifications, MCP; components/, the server's components
 crates/pod-host         one server, many pods: host.db, pod tokens, temporary pods, scheduler
 crates/server           the server binary and the `server pods` admin CLI
-crates/source-*         sources: pixelfed, recipes, collections, events, monitor, shell (home, Settings, the
+crates/source-*         sources: pixelfed, collections, events, monitor, agents, shell (home, Settings, the
                           inbox); blueprint versions in layouts/<id>/NNNN.json
 crates/web-extract      fetching pages and reading structured data out of them, for fillers
 crates/client-core      the engine: SQLite cache, outbox, PKCE sign-in, event stream

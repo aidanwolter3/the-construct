@@ -65,6 +65,8 @@ pub mod model;
 pub mod quantity;
 pub mod refs;
 pub mod remind;
+#[cfg(any(test, feature = "test-seed"))]
+pub mod test_seed;
 
 use std::collections::HashMap;
 use std::sync::Arc;
