@@ -92,9 +92,10 @@ construct) back to an earlier element.
   `name_history(name, seq, hash, at, author, note)`, `follows(name, follower)`, and the pod setting
   `construct.switched`. The tables are created by the first switch, so a pod that is never switched is never
   touched. Pod GC: after each write, objects no name's history reaches are deleted; each name keeps 500 entries.
-- **Client store.** The engine keeps objects in memory by hash, and each layout it draws in its cache as before
-  (so the last screen shows at once on a start, offline too). Client GC keeps what the current and previous root
-  reach (the stack's entries are reachable from the root, or closed).
+- **Client store.** The engine keeps objects by hash in memory and in its store (`construct_objects`, issue #301),
+  and each layout it draws in its cache as before (so the last screen shows at once on a start, offline too).
+  Client GC keeps what the current and previous root reach (the stack's entries are reachable from the root, or
+  closed), and the layouts opened by name.
 - Components are expanded on the client: the expansion of definitions (parameters, `core://Children`,
   `core://IfArg`, `core://Fragment`, `$arg`) moved from `pod_core::components` and `pod_core::parts` into the crate
   `construct-elements`, which the pod and the engine both use. Elements are deduplicated and fetched one by one.
@@ -139,9 +140,36 @@ construct) back to an earlier element.
   old ones.
 - An installed client from before issue #126 (one that doesn't draw `page`) can't draw a switched pod's layouts: the
   construct serves plumbing only.
-- A notification that names a layout home doesn't reach can't be opened on a new client of a switched pod (it has no
-  edge to resolve).
-- Not yet: `bind` and `$in` on layout edges (a layout still reads home's feeds directly), scroll anchors kept as an
-  entity URI and offset (offsets are kept per scroll, as today), objects kept across an app restart (they are
-  fetched again: the root's whole set once), and presence beyond what is shown (fetch order is the root, then
-  what it reaches).
+- A layout opened by name (a notification's, home not reaching it) is drawn off the tree: links inside it are opened
+  by name too, and the stack never cuts it on a new root (home never reached it).
+- A key draws the binding of the first use site that reaches it from home (breadth first): the same layout bound two
+  ways needs two keys (`as`). An installed client older than `layout_bind` gets, by name history, the newest home it
+  can draw, from before the bindings.
+- MCP previews and `expand` of a layout that reads inputs show it unbound (its `$in.` names as written); its use
+  sites are checked when they are written.
+- Not yet: presence beyond what is shown (fetch order is the root, then what it reaches), and anchors of a scroll
+  over a list nested in a row that is drawn again unchanged (it keeps its offset in points).
+
+## Bindings, scroll anchors, kept objects, notification links (issue #301)
+
+Added on 2026-11-16, for switched pods only (a pod that isn't switched answers as before):
+
+- **`bind` on edges** (feature `layout_bind`). A `core://Layout` or `action.navigation.open` binds its target's
+  inputs: `"bind": {"items": "collection:books"}`. A layout's own `$in.<name>` reads them (a list's `query_key`, a
+  text); the engine materializes the target with them filled in (`construct_elements::materialize_with`; the same
+  element bound two ways is two instances) and asks for its data with them (`GET /v1/construct/data/<id>?bind=`),
+  so only the feeds the bound tree reads load, and only home's. Only home binds the pod's data; another layout's
+  `bind` passes its own inputs on (`"$in.<name>"`, else `bind_outside_home`). Each element's inputs are checked at
+  every use site on write (`unbound_input`), both ways: an edge that leaves one unbound, and a new input a use
+  site doesn't bind yet. Home's feeds stay its `bind` (the switch and dry run report them as `home_bindings`).
+- **Scroll anchors.** On a switched pod each vertical scroll of a stack entry keeps its first visible row (its
+  entity URI) and how far the view is past that row's top; after the entry's data or element changes the offset
+  is set so that row stays where it was, falling back to the nearest row still there (the next, else the one
+  before), else the offset.
+- **Kept objects.** The engine keeps the objects it fetched in its store (`construct_objects`, per app), reads them
+  when a session is on the construct, and fetches nothing when the root it is given reaches only objects it has;
+  client GC deletes from the store what the current and previous root (and layouts opened by name) don't reach.
+  They are forgotten when the device leaves the pod.
+- **Notification links.** A layout the root doesn't reach is looked up by name (`GET
+  /v1/construct/names/<name>` → its element for the client's features), fetched and kept under its key, off the
+  tree.

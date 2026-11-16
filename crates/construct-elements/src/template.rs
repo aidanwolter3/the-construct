@@ -196,10 +196,126 @@ pub fn subst_value_in(
     })
 }
 
+/// An element's tree with the inputs in `inputs` bound (decision
+/// `content-addressed-construct`): each `$in.<name>` that `inputs` names is
+/// replaced, in strings and keys; any other `$in.` or `$arg.` stays as
+/// written (a component's own arguments are bound when it is used).
+pub fn bind_inputs(
+    v: &Value,
+    inputs: &Map<String, Value>,
+    work: &mut Work,
+) -> Result<Value, Error> {
+    fn text(s: &str, inputs: &Map<String, Value>, work: &mut Work) -> Result<Value, Error> {
+        if let Some(name) = s.strip_prefix("$in.")
+            && is_arg_name(name)
+        {
+            return Ok(match inputs.get(name) {
+                Some(x) => {
+                    work.charge(weight(x))?;
+                    x.clone()
+                }
+                None => Value::String(s.to_owned()),
+            });
+        }
+        work.charge(s.len() + 2)?;
+        if !s.contains("$in.") {
+            return Ok(Value::String(s.to_owned()));
+        }
+        let mut out = String::new();
+        let mut rest = s;
+        while let Some(i) = rest.find("$in.") {
+            out.push_str(&rest[..i]);
+            let after = &rest[i + 4..];
+            let end = after
+                .find(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
+                .unwrap_or(after.len());
+            match inputs.get(&after[..end]).filter(|_| end > 0) {
+                Some(x) => {
+                    let piece = as_text(x);
+                    work.charge(piece.len())?;
+                    out.push_str(&piece);
+                }
+                None => out.push_str(&rest[i..i + 4 + end]),
+            }
+            rest = &after[end..];
+        }
+        out.push_str(rest);
+        Ok(Value::String(out))
+    }
+    Ok(match v {
+        Value::String(s) => text(s, inputs, work)?,
+        Value::Array(a) => Value::Array(
+            a.iter()
+                .map(|c| bind_inputs(c, inputs, work))
+                .collect::<Result<_, _>>()?,
+        ),
+        Value::Object(m) => {
+            work.charge(2)?;
+            let mut out = Map::new();
+            for (k, c) in m {
+                let key = if k.contains("$in.") {
+                    as_text(&text(k, inputs, work)?)
+                } else {
+                    k.clone()
+                };
+                out.insert(key, bind_inputs(c, inputs, work)?);
+            }
+            Value::Object(out)
+        }
+        other => other.clone(),
+    })
+}
+
+/// The inputs element `el` reads at its own level (`$in.<name>` in its tree),
+/// but not its declared parameters (a component's, bound by `args`): what an
+/// edge to it binds.
+pub fn inputs_of(el: &Value) -> std::collections::BTreeSet<String> {
+    let declared: std::collections::BTreeSet<&str> = el["params"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|p| p["name"].as_str())
+        .collect();
+    let text = el["node"].to_string();
+    let mut out = std::collections::BTreeSet::new();
+    for (i, _) in text.match_indices("$in.") {
+        let rest = &text[i + 4..];
+        let end = rest
+            .find(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
+            .unwrap_or(rest.len());
+        if end > 0 && !declared.contains(&rest[..end]) {
+            out.insert(rest[..end].to_owned());
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn binds_only_the_inputs_given() {
+        let inputs = json!({"items": "collections:books", "n": 2})
+            .as_object()
+            .unwrap()
+            .clone();
+        let mut w = Work::default();
+        let v = json!({"query_key": "$in.items", "label": "$in.n of $in.other $arg.x",
+            "count": "$in.n", "bind": {"items": "$in.items"}});
+        assert_eq!(
+            bind_inputs(&v, &inputs, &mut w).unwrap(),
+            json!({"query_key": "collections:books", "label": "2 of $in.other $arg.x",
+                "count": 2, "bind": {"items": "collections:books"}})
+        );
+        let el = json!({"params": [{"name": "title"}],
+            "node": {"a": "$in.items", "b": "$in.title", "c": "$arg.x"}});
+        assert_eq!(
+            inputs_of(&el).into_iter().collect::<Vec<_>>(),
+            vec!["items".to_owned()]
+        );
+    }
 
     #[test]
     fn substitutes_whole_and_inline_arguments() {

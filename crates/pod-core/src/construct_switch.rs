@@ -106,6 +106,15 @@ pub fn refresh_core(pod: &Pod) -> Result<Vec<(String, i64)>, String> {
         .map_err(|e| e.to_string())
 }
 
+/// Home's bindings in `plan`: the old system's home feeds, which on the
+/// construct are home's `bind` (only home binds the pod's data; every other
+/// layout reads them through it or through `bind` on its edges).
+fn home_bindings(plan: &Plan) -> Value {
+    plan.current(crate::HOME_APP)
+        .and_then(|id| plan.objects.get(id))
+        .map_or(json!({}), |v| v["bind"].clone())
+}
+
 /// Tell every stream the pod changed systems.
 fn announce_mode(pod: &Pod) {
     super::reset(pod);
@@ -127,6 +136,7 @@ pub fn switch(pod: &Pod) -> Result<Value, String> {
         "ok": true,
         "switched": true,
         "construct": root,
+        "home_bindings": home_bindings(&plan),
         "layouts": plan.layouts,
         "names": plan.names.len(),
         "objects": plan.objects.len(),
@@ -262,6 +272,7 @@ pub async fn dry_run(pod: &Pod) -> Result<Value, String> {
         "layouts": layouts,
         "notes": plan.notes.iter().map(convert::Note::to_json).collect::<Vec<_>>(),
         "construct": plan.current(crate::HOME_APP),
+        "home_bindings": home_bindings(&plan),
         "names": plan.names.len(),
         "objects": plan.objects.len(),
         "switch": "switch_construct {} (or `server pods switch <id>`) writes this; the old tables stay as they are",

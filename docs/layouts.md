@@ -207,7 +207,16 @@ what is written:
 - **Forward only**: a write that would make a layout reach itself is refused (`cycle`). A way back is
   `action.navigation.pop_to` or Back.
 - **Inputs**: inside a component's template `$in.<name>` reads an argument as `$arg.<name>` does, and a use may pass
-  them as `bind` instead of `args`. Home's feeds are its `bind`; every layout reads home's feeds as before.
+  them as `bind` instead of `args`. Home's feeds are its `bind`; every layout may still read home's feeds directly.
+- **Bindings between layouts** (feature `layout_bind`): a layout may read `$in.<name>` too (a list's `query_key`,
+  a text), and each `core://Layout` or `action.navigation.open` that leads to it binds them with `bind`:
+  `{"type": "core://Layout", "ref": {"name": "c-shelf", "as": "shelf-books"}, "bind": {"items":
+  "collection:books"}}`. Only home binds the pod's data (query keys of home's feeds, or any value); another layout
+  passes its own inputs on (`"bind": {"items": "$in.items"}`). A use site that leaves an input unbound is refused
+  (`unbound_input`), as is a new input its use sites don't bind yet (bind it there first), and a value other than
+  `$in.<name>` outside home (`bind_outside_home`). The same layout bound two ways needs two edge keys (`as`); a key
+  draws the binding of the first use site that reaches it from home. The device fills the inputs in and loads only
+  the data they bind.
 - **No versions on the device**: `local:layouts` and `local:all_layouts` are empty, the versions commands do
   nothing, and Settings has no Layouts section; the history is the agent's (`restore_version`).
 

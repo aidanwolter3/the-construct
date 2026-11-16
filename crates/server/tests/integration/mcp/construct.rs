@@ -246,3 +246,165 @@ async fn a_pod_is_switched_after_a_clean_dry_run_and_reverted() {
         );
     }
 }
+
+/// Bindings between layouts (issue #301): one layout reads its list from an
+/// input, home embeds it twice bound to two collections, and each embed
+/// draws its own; an unbound use and a binding outside home are refused,
+/// and a layout home doesn't reach is found by name.
+#[tokio::test]
+async fn a_layout_embedded_with_bind_draws_what_its_use_site_binds() {
+    let env = env().await;
+    let pod_code = env.pod("mine").await;
+    let access = env.connect(&pod_code).await;
+    let ok = |name: &'static str, args: Value| {
+        let (env, access) = (&env, &access);
+        async move {
+            let (err, v) = env.tool(access, name, args).await;
+            assert!(!err, "{name}: {v}");
+            v
+        }
+    };
+    for (c, title) in [("books", "The Glass Orchard"), ("films", "Harbor Lights")] {
+        ok(
+            "define_collection",
+            json!({"name": c, "fields": [{"name": "text", "type": "text"}]}),
+        )
+        .await;
+        ok(
+            "add_row",
+            json!({"collection": c, "values": {"text": title}}),
+        )
+        .await;
+    }
+    let (err, sw) = env.tool(&access, "switch_construct", json!({})).await;
+    assert!(!err, "{sw}");
+    assert!(sw["home_bindings"].is_object(), "{sw}");
+
+    // A shelf lists whatever its use site binds to `items`.
+    let shelf = ok("create_layout", json!({"title": "Shelf",
+        "feeds": [["collections", "books"], ["collections", "films"]],
+        "layout": {"type": "core://Page", "title": "Shelf", "root": {"type": "core://List",
+            "query_key": "$in.items",
+            "item_template": {"type": "core://Text", "style": "Body", "value_expr": "$item.text"}}}}))
+    .await["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let home = |books: Value| {
+        json!({"app": "home", "layout": {"type": "core://Page", "title": "Home", "root": {
+            "type": "core://Column", "children": [
+                {"type": "core://Layout", "ref": {"name": shelf, "as": "shelf-books"}, "bind": books},
+                {"type": "core://Layout", "ref": {"name": shelf, "as": "shelf-films"},
+                    "bind": {"items": "collection:films"}}]}}})
+    };
+
+    // Unbound: refused, naming the input.
+    let (err, e) = env.tool(&access, "update_layout", home(json!({}))).await;
+    assert!(err, "{e}");
+    assert_eq!(e["error"], "unbound_input", "{e}");
+    assert!(e["detail"].as_str().unwrap().contains("items"), "{e}");
+
+    ok("update_layout", home(json!({"items": "collection:books"}))).await;
+
+    // Another layout binds only by passing its own inputs on.
+    let (err, e) = env
+        .tool(
+            &access,
+            "create_layout",
+            json!({"title": "Nested",
+            "layout": {"type": "core://Page", "title": "Nested", "root": {"type": "core://Layout",
+                "ref": shelf, "bind": {"items": "collection:books"}}}}),
+        )
+        .await;
+    assert!(err, "{e}");
+    assert_eq!(e["error"], "bind_outside_home", "{e}");
+    let nested = ok(
+        "create_layout",
+        json!({"title": "Nested",
+        "layout": {"type": "core://Page", "title": "Nested", "root": {"type": "core://Layout",
+            "ref": shelf, "bind": {"items": "$in.items"}}}}),
+    )
+    .await["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+
+    // Each embed's data is what its binding reads, and nothing else.
+    let (s, root) = get(&env, "/v1/construct", &pod_code).await;
+    assert_eq!(s, StatusCode::OK, "{root}");
+    let root = root["root"].as_str().unwrap().to_owned();
+    let (_, all) = post(
+        &env,
+        "/v1/objects",
+        &pod_code,
+        json!({"have": [], "want": [root]}),
+    )
+    .await;
+    let objects = all["objects"].as_object().unwrap();
+    let edges: Vec<Value> = objects[&root]["node"]["root"]["children"]
+        .as_array()
+        .unwrap()
+        .clone();
+    let el = edges[0]["ref"]["el"].as_str().unwrap().to_owned();
+    assert_eq!(
+        edges[1]["ref"]["el"].as_str(),
+        Some(el.as_str()),
+        "one element, used twice"
+    );
+    let data = |items: &str| {
+        let bind = json!({ "items": items }).to_string();
+        let path = format!(
+            "/v1/construct/data/{el}?bind={}",
+            bind.bytes()
+                .map(|b| match b {
+                    b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'-' | b'_' | b'.' =>
+                        (b as char).to_string(),
+                    _ => format!("%{b:02X}"),
+                })
+                .collect::<String>()
+        );
+        let env = &env;
+        let pod_code = &pod_code;
+        async move { get(env, &path, pod_code).await }
+    };
+    let (s, books) = data("collection:books").await;
+    assert_eq!(s, StatusCode::OK, "{books}");
+    assert!(books.to_string().contains("The Glass Orchard"), "{books}");
+    assert!(!books.to_string().contains("Harbor Lights"), "{books}");
+    assert_eq!(
+        books["queries"]["collection:books"]
+            .as_array()
+            .map(Vec::len),
+        Some(1),
+        "{books}"
+    );
+    let (_, films) = data("collection:films").await;
+    assert!(films.to_string().contains("Harbor Lights"), "{films}");
+    assert!(!films.to_string().contains("The Glass Orchard"), "{films}");
+    // A binding reaches only home's feeds.
+    let (_, other) = data("collection:secret").await;
+    assert_eq!(
+        other["queries"].as_object().map(|q| q.len()),
+        Some(0),
+        "{other}"
+    );
+
+    // A layout home doesn't reach (a notification's) is found by name.
+    let (s, by_name) = get(&env, &format!("/v1/construct/names/{nested}"), &pod_code).await;
+    assert_eq!(s, StatusCode::OK, "{by_name}");
+    assert!(
+        by_name["el"].as_str().unwrap().starts_with("e1-"),
+        "{by_name}"
+    );
+    let (s, _) = get(&env, "/v1/construct/names/c-nothing", &pod_code).await;
+    assert_eq!(s, StatusCode::NOT_FOUND);
+
+    // A new input the use sites don't bind is refused at the layout's write.
+    let (err, e) = env
+        .tool(&access, "update_layout", json!({"app": shelf, "layout": {"type": "core://Page",
+            "title": "$in.heading", "root": {"type": "core://List", "query_key": "$in.items",
+                "item_template": {"type": "core://Text", "style": "Body", "value_expr": "$item.text"}}}}))
+        .await;
+    assert!(err, "{e}");
+    assert_eq!(e["error"], "unbound_input", "{e}");
+}

@@ -193,3 +193,151 @@ fn one_hash_says_the_device_is_current_and_an_edit_fetches_only_what_changed() {
     .unwrap();
     assert_eq!(again, before.root);
 }
+
+fn engine_at(dir: &std::path::Path, base: &str) -> ConstructEngine {
+    ConstructEngine::init_with_config(
+        dir.to_str().unwrap(),
+        base,
+        "home",
+        EngineConfig {
+            poll_interval: Duration::from_millis(100),
+            backoff_base: Duration::from_millis(20),
+            backoff_cap: Duration::from_millis(200),
+        },
+    )
+}
+
+fn temp_dir(name: &str) -> std::path::PathBuf {
+    let d = std::env::temp_dir().join(format!(
+        "construct-{name}-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    let _ = std::fs::remove_dir_all(&d);
+    std::fs::create_dir_all(&d).unwrap();
+    d
+}
+
+/// Issue #301: the objects a device fetched are kept in its store, so after
+/// a restart with the root unchanged nothing is fetched again.
+#[test]
+fn after_a_restart_no_object_is_fetched_again_when_the_root_is_unchanged() {
+    let p = pod();
+    build(&p);
+    server::construct::switch::switch(&p.state).unwrap();
+    let dir = temp_dir("restart");
+    let e = engine_at(&dir, &p.base);
+    wait_until("home drawn from the construct", || {
+        e.construct_status().switched && home_json(&e).contains("Home")
+    });
+    assert_eq!(e.construct_status().fetched.first(), Some(&4));
+    let root = e.construct_status().root;
+    drop(e);
+
+    let again = engine_at(&dir, &p.base);
+    wait_until("home drawn again", || {
+        again.construct_status().switched && !again.construct_status().fetched.is_empty()
+    });
+    let s = again.construct_status();
+    assert_eq!(s.root, root);
+    assert!(
+        s.fetched.iter().all(|n| *n == 0),
+        "nothing refetched: {s:?}"
+    );
+    wait_until("home drawn", || home_json(&again).contains("Home"));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Issue #301: a layout home doesn't reach (a notification's) is opened by
+/// name and drawn off the tree.
+#[test]
+fn a_layout_the_root_doesnt_reach_is_opened_by_name() {
+    let p = pod();
+    build(&p);
+    let state = p.state.clone();
+    let lone = p.rt.block_on(async move {
+        server::custom::create(&state, &json!({"title": "Lone", "layout": {"type": "core://Page",
+            "title": "Lone", "root": {"type": "core://Text", "style": "Body", "value_expr": "Off the tree"}}}),
+            server::custom::Writer::Claude)
+        .await
+        .unwrap()
+        .id
+    });
+    server::construct::switch::switch(&p.state).unwrap();
+    let e = engine(&p.base);
+    wait_until("home drawn from the construct", || {
+        e.construct_status().switched && home_json(&e).contains("Home")
+    });
+    let graph: Value = serde_json::from_str(&e.snapshot().construct_json).unwrap();
+    assert!(graph["reach"].get(&lone).is_none(), "{graph}");
+    e.open_layout(&lone);
+    wait_until("the lone layout drawn", || {
+        e.layout_now(&lone)
+            .root
+            .is_some_and(|r| serde_json::to_string(&r).unwrap().contains("Off the tree"))
+    });
+}
+
+/// Issue #301: one layout embedded twice, each use site binding its inputs
+/// differently, draws each binding (and loads the data each binds).
+#[test]
+fn an_embedded_layout_draws_what_its_use_site_binds() {
+    let p = pod();
+    build(&p);
+    server::construct::switch::switch(&p.state).unwrap();
+    let state = p.state.clone();
+    p.rt.block_on(async move {
+        let shelf = server::construct::write::mcp(&state, "create_layout", &json!({"title": "Shelf",
+            "feeds": [["recipes", "all"]],
+            "layout": {"type": "core://Page", "title": "Shelf", "root": {"type": "core://Column", "children": [
+                {"type": "core://Text", "style": "Title", "value_expr": "$in.label"},
+                {"type": "core://List", "query_key": "$in.items",
+                    "item_template": {"type": "core://Text", "style": "Body", "value_expr": "$item.title"}}]}}}))
+            .await
+            .unwrap()
+            .unwrap();
+        let shelf = shelf["id"].as_str().unwrap().to_owned();
+        let r = server::construct::write::mcp(&state, "update_layout", &json!({"app": "home",
+            "layout": {"type": "core://Page", "title": "Home", "root": {"type": "core://Column", "children": [
+                {"type": "core://Text", "style": "Title", "value_expr": "Home"},
+                {"type": "core://Layout", "ref": {"name": shelf, "as": "shelf-a"},
+                    "bind": {"label": "Books", "items": "recipes:all"}},
+                {"type": "core://Layout", "ref": {"name": shelf, "as": "shelf-b"},
+                    "bind": {"label": "Films", "items": "recipes:none"}}]}}}))
+            .await
+            .unwrap();
+        assert!(r.is_ok(), "{r:?}");
+    });
+    let e = engine(&p.base);
+    wait_until("home drawn from the construct", || {
+        e.construct_status().switched && home_json(&e).contains("shelf-a")
+    });
+    let drawn = |key: &str| {
+        e.layout_now(key)
+            .root
+            .map(|r| serde_json::to_string(&r).unwrap())
+            .unwrap_or_default()
+    };
+    e.open_layout("shelf-a");
+    e.open_layout("shelf-b");
+    wait_until("shelf-a drawn", || drawn("shelf-a").contains("Books"));
+    wait_until("shelf-b drawn", || drawn("shelf-b").contains("Films"));
+    assert!(
+        drawn("shelf-a").contains("recipes:all"),
+        "{}",
+        drawn("shelf-a")
+    );
+    assert!(
+        drawn("shelf-b").contains("recipes:none"),
+        "{}",
+        drawn("shelf-b")
+    );
+    assert!(!drawn("shelf-a").contains("$in."), "{}", drawn("shelf-a"));
+    // The data shelf-a's binding reads came with it.
+    wait_until("shelf-a's data", || {
+        e.snapshot().queries_json.contains("recipes:all")
+    });
+}

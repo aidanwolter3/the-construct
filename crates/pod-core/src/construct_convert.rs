@@ -796,9 +796,20 @@ pub fn derive(
             }
         }
     }
-    let features = serde_json::from_value::<protocol::UiNode>(node)
-        .map(|n| protocol::required_features(&n).join(","))
+    let mut features: Vec<&str> = serde_json::from_value::<protocol::UiNode>(node)
+        .map(|n| protocol::required_features(&n))
         .unwrap_or_default();
+    // Bindings between layouts are drawn by the engine, not the renderer: an
+    // element that binds or reads them needs a client that fills them in.
+    let binds = m
+        .as_ref()
+        .is_some_and(|m| m.edges.iter().any(|e| !e.bind.is_empty()));
+    if layout && (binds || !construct_elements::template::inputs_of(&el).is_empty()) {
+        features.push(protocol::feature::LAYOUT_BIND);
+        features.sort_unstable();
+        features.dedup();
+    }
+    let features = features.join(",");
     (
         json!({
             "params": params,

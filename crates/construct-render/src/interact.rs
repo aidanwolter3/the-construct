@@ -369,6 +369,59 @@ pub struct Changes {
     pub layouts: Vec<(String, UiNode)>,
 }
 
+/// Where a scrolling view was, by its items (decision
+/// `content-addressed-construct`): the first item showing, how far the view
+/// was scrolled past its top, and the items in order with their tops, for
+/// when that one is gone.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Anchor {
+    pub uri: String,
+    pub offset_dp: f32,
+    pub items: Vec<(String, f32)>,
+}
+
+impl Anchor {
+    /// The anchor of a view scrolled to `offset` over `items` (entity, top,
+    /// height); `None` without items.
+    pub fn at(offset: f32, items: &[(String, f32, f32)]) -> Option<Anchor> {
+        let first = items
+            .iter()
+            .find(|(_, top, h)| top + h > offset)
+            .or(items.last())?;
+        Some(Anchor {
+            uri: first.0.clone(),
+            offset_dp: offset - first.1,
+            items: items.iter().map(|(u, t, _)| (u.clone(), *t)).collect(),
+        })
+    }
+
+    /// The offset that shows the anchored item where it was, over the
+    /// view's new `items`; if it is gone, the nearest one still there (the
+    /// next, else the one before) where that one was; `None` if none is.
+    pub fn offset_in(&self, items: &[(String, f32, f32)]) -> Option<f32> {
+        let now = |uri: &str| items.iter().find(|(u, _, _)| u == uri).map(|i| i.1);
+        if let Some(top) = now(&self.uri) {
+            return Some(top + self.offset_dp);
+        }
+        let at = self.items.iter().position(|(u, _)| *u == self.uri)?;
+        let scrolled = self.items[at].1 + self.offset_dp;
+        let after = self.items[at + 1..].iter();
+        let before = self.items[..at].iter().rev();
+        after
+            .chain(before)
+            .find_map(|(u, old)| now(u).map(|top| top + scrolled - old))
+    }
+}
+
+/// The anchors of an entry's vertical scrolls laid out in `laid`.
+fn anchors_of(laid: &Laid, scroll: &BTreeMap<String, f32>) -> BTreeMap<String, Anchor> {
+    scroll
+        .iter()
+        .filter(|(id, _)| !id.contains(':'))
+        .filter_map(|(id, &offset)| Some((id.clone(), Anchor::at(offset, &laid.scroll_items(id))?)))
+        .collect()
+}
+
 /// On a pod switched to the construct (decision
 /// `content-addressed-construct`): each layout key and the keys it reaches
 /// ([`Loader::edges`]). A stack entry the one below it no longer reaches is
@@ -2444,6 +2497,12 @@ impl Session {
             scale: self.viewport.scale,
         };
         let prev = self.stack[i].stale.take();
+        // On a switched pod each scroll keeps its first visible item where
+        // it was (decision `content-addressed-construct`).
+        let anchors = match (&prev, self.edges.is_some()) {
+            (Some(p), true) => anchors_of(p, &self.stack[i].scroll),
+            _ => BTreeMap::new(),
+        };
         let e = &self.stack[i];
         let started = Instant::now();
         let laid = self.builder.relayout(
@@ -2465,6 +2524,12 @@ impl Session {
         self.work.laid_out = self.work.laid_out.saturating_add(1);
         self.work.layout += started.elapsed();
         let e = &mut self.stack[i];
+        for (id, anchor) in &anchors {
+            let max = laid.scroll_max.get(id).copied().unwrap_or(0.0);
+            if let Some(offset) = anchor.offset_in(&laid.scroll_items(id)) {
+                e.scroll.insert(id.clone(), offset.clamp(0.0, max));
+            }
+        }
         // After an action from outside it, a `follow_end` view goes to
         // its end once it has something to scroll.
         if e.follow {
@@ -4123,11 +4188,17 @@ impl Session {
                     UiNode::Page { screens, .. } => screens.clone(),
                     _ => Vec::new(),
                 };
+                let switched = self.edges.is_some();
                 for e in self.stack.iter_mut().filter(|e| e.id == id && !e.screen) {
                     e.root = root.clone();
                     e.screens = screens.clone();
-                    e.laid = None;
-                    e.stale = None;
+                    if switched {
+                        // Kept for its scroll anchors.
+                        e.relay();
+                    } else {
+                        e.laid = None;
+                        e.stale = None;
+                    }
                 }
                 self.layouts.insert(id.to_owned(), root);
             }
@@ -4710,5 +4781,39 @@ mod tests {
             assert_eq!(tagged["effect"], e.name(), "{e:?}");
             assert!(!e.name().contains("secret"));
         }
+    }
+}
+
+#[cfg(test)]
+mod anchor_tests {
+    use super::Anchor;
+
+    fn items(list: &[(&str, f32)]) -> Vec<(String, f32, f32)> {
+        list.iter()
+            .map(|(u, t)| (u.to_string(), *t, 40.0))
+            .collect()
+    }
+
+    #[test]
+    fn an_anchor_keeps_its_item_and_falls_back_to_the_next() {
+        let before = items(&[("a", 0.0), ("b", 40.0), ("c", 80.0), ("d", 120.0)]);
+        // Scrolled 10 points into b.
+        let a = Anchor::at(50.0, &before).unwrap();
+        assert_eq!((a.uri.as_str(), a.offset_dp), ("b", 10.0));
+        // Two rows above: b moved down 80, so does the offset.
+        let above = items(&[
+            ("x", 0.0),
+            ("y", 40.0),
+            ("a", 80.0),
+            ("b", 120.0),
+            ("c", 160.0),
+        ]);
+        assert_eq!(a.offset_in(&above), Some(130.0));
+        // b is gone: c stays where it was (30 points below the top).
+        let gone = items(&[("a", 0.0), ("c", 40.0), ("d", 80.0)]);
+        assert_eq!(a.offset_in(&gone), Some(10.0));
+        // Only rows before it are left: the one before keeps its place.
+        assert_eq!(a.offset_in(&items(&[("a", 0.0)])), Some(50.0));
+        assert_eq!(a.offset_in(&items(&[("z", 0.0)])), None);
     }
 }

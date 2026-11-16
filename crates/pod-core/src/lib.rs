@@ -1038,6 +1038,7 @@ async fn get_construct_workspace(state: Pod, id: String, headers: HeaderMap) -> 
 pub(crate) async fn get_element_data(
     State(state): State<Pod>,
     Path(id): Path<String>,
+    axum::extract::Query(q): axum::extract::Query<HashMap<String, String>>,
     headers: HeaderMap,
 ) -> Response {
     if let Some(r) = construct::http::guard(&state, &headers).await {
@@ -1059,9 +1060,13 @@ pub(crate) async fn get_element_data(
         session: caller.clone().into_session(),
     };
     let (p, lookup) = (state.clone(), id.clone());
-    let owned = tokio::task::spawn_blocking(move || construct::http::element_feeds(&p, &lookup))
-        .await
-        .unwrap_or_default();
+    // A use site's bindings (`?bind=`): the data its bound tree reads too.
+    let inputs = construct::http::inputs_param(q.get("bind").map(String::as_str));
+    let owned = tokio::task::spawn_blocking(move || {
+        construct::http::bound_element_feeds(&p, &lookup, &inputs)
+    })
+    .await
+    .unwrap_or_default();
     let feeds: Vec<(&str, &str)> = owned
         .iter()
         .map(|(s, f)| (s.as_str(), f.as_str()))
