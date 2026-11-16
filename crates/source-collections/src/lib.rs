@@ -65,6 +65,7 @@ pub mod model;
 pub mod quantity;
 pub mod refs;
 pub mod remind;
+pub mod share;
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -546,6 +547,26 @@ impl Source for CollectionsAdapter {
         let defs: HashMap<String, Definition> =
             defs.into_iter().map(|(_, d)| (d.name.clone(), d)).collect();
         bindings::check(layout, feeds, &defs)
+    }
+
+    fn share_inputs(
+        &self,
+        conn: &rusqlite::Connection,
+        node: &mut Value,
+    ) -> Result<Vec<pod_core::construct::share::DataInput>, LayoutError> {
+        let defs = db::defs_by_name(conn).map_err(|e| LayoutError {
+            pointer: String::new(),
+            message: format!("collections could not be read: {e}"),
+            allowed: Vec::new(),
+        })?;
+        let defs: HashMap<String, Definition> = defs.into_iter().collect();
+        share::share_inputs(node, &defs)
+    }
+
+    fn data_sets(&self, conn: &rusqlite::Connection) -> Vec<pod_core::construct::share::DataSet> {
+        db::all_defs(conn)
+            .map(|d| share::data_sets(&d))
+            .unwrap_or_default()
     }
 
     fn mcp_tools(&self) -> Vec<Value> {

@@ -41,7 +41,8 @@ release. Only new *vocabulary* (a node type, an intent, a field on one) needs a 
 
 One server process hosts many **pods**, one per user (D46). Each pod is its own SQLite database
 (`pods/<id>/server.db`) holding that user's sessions, upstream sign-ins, layout history, custom apps and source data.
-`host.db` lists the pods and the SHA-256 of each pod token. A request names its pod with its bearer token; without
+`host.db` lists the pods and the SHA-256 of each pod token, and holds the shelf of what pods share with each other
+(owner handles, publications and their objects: decision [`sharing`](decisions/sharing.md)). A request names its pod with its bearer token; without
 one, a caller sees only the "Open your pod" screen. Temporary pods (24 h, deleted afterwards) let anyone try a
 deployed server. Details: [server.md](server.md#pods).
 
@@ -126,6 +127,10 @@ fetched in its store (so a restart with the same root fetches nothing), opens a 
 (`GET /v1/construct/names/<name>`), and the renderer keeps each scroll anchored to its first visible row.
 A pod that isn't switched works exactly as before, and a new client speaks both. Switching, its dry run and the revert
 are `server pods switch` and MCP `switch_construct` ([server.md](server.md#admin-commands)).
+Switched pods can share: publishing copies a name's closure, its data references turned into inputs, to the
+host's **shelf** in `host.db`, readable by another pod only with the share link, and adopting copies it into the
+adopter's store bound to its own data (decision [`sharing`](decisions/sharing.md), `pod_core::construct::share`,
+`pod_host::shelf`).
 
 ## Wire bundle
 

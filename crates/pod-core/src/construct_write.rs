@@ -673,7 +673,7 @@ async fn run(pod: &Pod, args: &Value, f: Tool) -> Result<Value, Value> {
     }
 }
 
-async fn run_write(
+pub(crate) async fn run_write(
     pod: &Pod,
     args: &Value,
     f: impl FnOnce(&Pod, &Connection, &Value) -> Result<(Value, Vec<(String, i64)>), Value>
@@ -712,6 +712,11 @@ async fn run_write(
     let ((answer, moved), p) = r?;
     // Cached objects stay valid (they are immutable); roots don't.
     publish(&p, &moved);
+    // Publications kept shared follow their names (decision `sharing`).
+    if p.shelf().is_some() && !moved.is_empty() {
+        let q = p.clone();
+        let _ = tokio::task::spawn_blocking(move || super::share::after_write(&q, &moved)).await;
+    }
     Ok(answer)
 }
 
@@ -821,7 +826,7 @@ fn grown_feeds(
 }
 
 /// Give home these feeds (a new home element).
-fn set_home_feeds(
+pub(crate) fn set_home_feeds(
     pod: &Pod,
     conn: &Connection,
     feeds: &[(String, String)],

@@ -15,6 +15,8 @@
 //! - [`write`]: the MCP tools' writes on a switched pod.
 //! - [`http`]: `GET /v1/construct`, `/v1/objects`, `/v1/construct/data`.
 //! - [`switch`]: the switch, its dry run and the revert.
+//! - [`share`]: publishing to the host's shelf and adopting from it
+//!   (decision `sharing`).
 
 #[path = "construct_convert.rs"]
 pub mod convert;
@@ -22,6 +24,8 @@ pub mod convert;
 pub mod http;
 #[path = "construct_seal.rs"]
 pub mod seal;
+#[path = "construct_share.rs"]
+pub mod share;
 #[path = "construct_store.rs"]
 pub mod store;
 #[path = "construct_switch.rs"]

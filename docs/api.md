@@ -73,6 +73,11 @@ serves the layout's element expanded, versions are its name's history, and `layo
 `/v1/custom-apps` writes and `PUT /v1/apps/{id}/hidden` are refused with `409 construct_switched`. A switch or a
 revert ends every event stream, so clients ask again which system the pod is on.
 
+Objects are answered only from the pod's own store: an element another pod shared is readable only after this pod
+adopted it (MCP `adopt`, decision [`sharing`](decisions/sharing.md)), and knowing another pod's hash grants
+nothing. An adopted element is drawn like any other; its edge's `bind` maps its inputs to this pod's data (a
+collection name, and field inputs `<input>__<field>` to this pod's field names).
+
 ## Custom apps
 
 The pod's own layouts (decision `layouts-not-apps`; the routes keep their app-era names). Home owns the feeds: `feeds`

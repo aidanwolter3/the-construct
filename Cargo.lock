@@ -3259,6 +3259,7 @@ version = "0.1.0"
 dependencies = [
  "axum",
  "base64 0.22.1",
+ "construct-elements",
  "getrandom 0.3.4",
  "pod-core",
  "protocol",

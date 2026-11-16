@@ -109,6 +109,27 @@ and `entities` try a row with made-up data, `full_height` draws a long screen wh
 The server's MCP instructions tell Claude how to use them. After a change to the tools, the Claude connector needs
 "Refresh tools list" in its settings.
 
+### Sharing with other users on the server
+
+On a switched pod (decision [`content-addressed-construct`](decisions/content-addressed-construct.md)) Claude can
+share a layout, a component or the whole construct (`home`) with other users of the same server, and adopt what
+they share (decision [`sharing`](decisions/sharing.md)). Share links work through Claude only: the apps have no
+share screen.
+
+- `set_handle` chooses the pod's handle (`@ann`, unique on the server); publications are named `@<handle>/<slug>`.
+- `publish {name}` answers a review and shares nothing: every element of the closure, the interface (each
+  collection the layout uses becomes an input, with the fields it reads and writes and a suggested schema) and
+  each literal text or URL that would go out. A reference to one row is refused. `publish {name, confirm:
+  <review_id>}` shares exactly what was reviewed and answers the share link (`share-…`); `leave_out` leaves
+  elements out, `keep_shared: true` sends later versions without asking while they bring no new text or URLs.
+  Only `visibility: link` (unlisted) for now.
+- `describe_publication {link}` shows what a link holds; `adopt {link, bindings}` copies it into the pod bound to
+  the user's own collections (`{"chores": {"collection": "tasks", "fields": {"title": "name"}}}`, or `{"new":
+  "chores"}` for an empty one from the suggested schema) and answers the reference to put in home. Without
+  bindings it proposes them.
+- `list_adoptions` and `update_adoption` follow new versions while they fit the bindings; `list_publications` and
+  `revoke_publication` manage the pod's own. A revoked publication keeps drawing where it was adopted.
+
 ## Collections
 
 Collections is a built-in data source (`crates/source-collections`) that stores any collection Claude declares. Claude

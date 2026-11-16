@@ -188,7 +188,7 @@ its intent in action.confirm. Jacks are the abilities the pod is plugged into (a
 with the pod's own key, accounts such as an agent runner): list_jacks shows each and its state, plug_jack and \
 unplug_jack change the switch and config ones (a search key is given once and never shown back); account jacks are \
 plugged through their own sign-in. A feature whose jack is unplugged says so: tell the user which jack it needs \
-rather than working around it.";
+rather than working around it. On a switched pod the user can share with other users of this server: publish answers a review first (show it: elements, inputs, and flagged text and URLs) and shares only with confirm; adopt binds a share link to the user's own data (propose, confirm with the user, then put its \"use\" in home); a revoked share keeps drawing where it was adopted.";
 
 // ---------- tools ----------
 
@@ -220,6 +220,7 @@ fn all_tools(pod: &Pod) -> Vec<Value> {
 fn tools() -> Vec<Value> {
     let mut out = base_tools();
     out.push(crate::construct::switch::tool_spec());
+    out.extend(crate::construct::share::tool_specs());
     out.extend(crate::preview::tools());
     out.extend(crate::mcp_servers::tools());
     out
@@ -474,6 +475,10 @@ async fn call_tool(pod: &Pod, headers: &HeaderMap, params: &Value) -> Value {
     // on a switched pod the layout and component tools write it.
     if name == "switch_construct" {
         return tool_result(crate::construct::switch::tool(pod, &args).await);
+    }
+    // Sharing between the server's pods (decision `sharing`).
+    if let Some(r) = crate::construct::share::tool(pod, name, &args).await {
+        return tool_result(r);
     }
     if crate::construct_switched(pod).await
         && let Some(r) = crate::construct::write::mcp(pod, name, &args).await
