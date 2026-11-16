@@ -167,7 +167,7 @@ hour. They are how visitors and automated sessions try a deployed server:
 ```bash
 pod=https://the-construct-pod.fly.dev
 token=$(curl -fsS -X POST $pod/v1/pods/temporary | jq -r .session_token)
-curl -fsS -H "Authorization: Bearer $token" $pod/v1/workspaces/recipes | jq '.queries'
+curl -fsS -H "Authorization: Bearer $token" $pod/v1/workspaces/events | jq '.queries'
 ```
 
 ## Security defaults

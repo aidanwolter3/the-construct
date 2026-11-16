@@ -481,3 +481,80 @@ async fn a_feed_belongs_to_the_layout_that_binds_it_else_home() {
     assert_eq!(owners()["all"], owner);
     assert_eq!(owners().len(), 1);
 }
+
+// ---------- a source that no longer exists (decision `remove-recipes-source`) ----------
+
+/// A pod whose home binds `a/all` and whose layout is the whole `a_home`
+/// blueprint, reopened by a build without source `a`: it opens, serves
+/// home, and home binds the feeds that remain.
+async fn a_removed_source_drops_out_of_home(switched: bool) {
+    let dir = tempfile::tempdir().unwrap();
+    let db = dir.path().join("server.db");
+    let pod = open(&db);
+    let whole = json!({"type": "core://Ref", "app": "a_home", "part": "layout"});
+    let (status, made) = call(
+        &pod,
+        "POST",
+        "/v1/custom-apps",
+        Some(json!({"title": "Mine", "feeds": [["a", "all"]], "layout": whole})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{made}");
+    let id = made["id"].as_str().unwrap().to_owned();
+    if switched {
+        pod_core::construct::switch::switch(&pod).unwrap();
+    }
+    drop(pod);
+    let pod = Arc::new(
+        AppState::try_new(Store::open(&db).unwrap(), vec![shell()]).expect("opens without a"),
+    );
+    pod.store()
+        .create_pinned_session(&session_hash("pod"))
+        .unwrap();
+    // Starting the pod (re-sealing a switched pod's names) works too.
+    let (status, ws) = call(&pod, "GET", "/v1/workspaces/home", None).await;
+    assert_eq!(status, StatusCode::OK, "{ws}");
+    let feeds = if switched {
+        pod.store()
+            .with_conn(|c| Ok::<_, rusqlite::Error>(pod_core::construct::write::home_feeds(c)))
+            .unwrap()
+    } else {
+        pod.store()
+            .with_conn(pod_core::custom::home_feeds_on)
+            .unwrap()
+            .unwrap()
+    };
+    assert!(feeds.is_empty(), "{feeds:?}");
+    // The layout that showed a's blueprint is still there.
+    let (status, ws) = call(&pod, "GET", &format!("/v1/workspaces/{id}"), None).await;
+    assert!(status != StatusCode::INTERNAL_SERVER_ERROR, "{ws}");
+    // And home can still be written.
+    let (status, b) = call(
+        &pod,
+        "POST",
+        "/v1/custom-apps",
+        Some(
+            json!({"title": "Plain", "layout": {"type": "core://Workspace", "title": "P",
+            "slots": [{"slot_id": "s", "provider_uri": "local://x",
+                "content": {"type": "core://Text", "style": "Body", "value_expr": "hi"}}]}}),
+        ),
+    )
+    .await;
+    if !switched {
+        assert_eq!(status, StatusCode::CREATED, "{b}");
+    }
+    drop(pod);
+    // Reopening again changes nothing.
+    let pod = AppState::try_new(Store::open(&db).unwrap(), vec![shell()]).expect("reopens");
+    drop(pod);
+}
+
+#[tokio::test]
+async fn a_removed_source_drops_out_of_an_unswitched_home() {
+    a_removed_source_drops_out_of_home(false).await;
+}
+
+#[tokio::test]
+async fn a_removed_source_drops_out_of_a_switched_home() {
+    a_removed_source_drops_out_of_home(true).await;
+}

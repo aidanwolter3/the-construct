@@ -1,0 +1,19 @@
+{
+  "note": "Made up for tests: a dishes collection other crates' tests seed with source_collections::test_seed.",
+  "name": "dishes",
+  "title": "Dishes",
+  "fields": [
+    {"name": "title", "type": "text"},
+    {"name": "category", "type": "text", "optional": true}
+  ],
+  "rows": [
+    {"id": "test-garden-salad", "values": {"title": "Test Garden Salad", "category": "Salads"}},
+    {"id": "placeholder-pot-pie", "values": {"title": "Placeholder Pot Pie", "category": "Mains"}},
+    {"id": "sample-pilaf", "values": {"title": "Sample Pilaf", "category": "Sides"}},
+    {"id": "example-brownies", "values": {"title": "Example Brownies", "category": "Desserts"}},
+    {"id": "demo-pancakes", "values": {"title": "Demo Pancakes", "category": "Breakfast"}},
+    {"id": "mock-loaf", "values": {"title": "Mock Loaf", "category": "Breads"}},
+    {"id": "imaginary-trail-mix", "values": {"title": "Imaginary Trail Mix", "category": "Snacks"}},
+    {"id": "pretend-lemonade", "values": {"title": "Pretend Lemonade", "category": "Drinks"}}
+  ]
+}

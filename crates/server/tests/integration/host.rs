@@ -244,7 +244,7 @@ async fn a_caller_without_a_pod_token_gets_only_the_open_screen() {
     assert_eq!(status, StatusCode::UNAUTHORIZED);
     assert_eq!(body["error"], "pod_required");
     // A token the host does not know is told to go away.
-    let (status, header, _) = get(&env.url("/v1/workspaces/recipes"), Some("cpod_nope")).await;
+    let (status, header, _) = get(&env.url("/v1/workspaces/events"), Some("cpod_nope")).await;
     assert_eq!(status, StatusCode::UNAUTHORIZED);
     assert_eq!(header.as_deref(), Some("invalid"));
     let (status, body) = post(&env.url("/v1/pods/temporary"), None, json!({})).await;
@@ -253,7 +253,7 @@ async fn a_caller_without_a_pod_token_gets_only_the_open_screen() {
 }
 
 #[tokio::test]
-async fn a_pod_token_opens_its_pod_and_new_pods_have_no_recipes() {
+async fn a_pod_token_opens_its_pod() {
     let env = env().await;
     let first = env.create("first").await;
     let other = env.create("other").await;
@@ -266,12 +266,8 @@ async fn a_pod_token_opens_its_pod_and_new_pods_have_no_recipes() {
         assert_eq!(body["error"], "pod_not_found");
     }
     for token in [&first, &other] {
-        let (status, _, body) = get(&env.url("/v1/workspaces/recipes"), Some(token)).await;
+        let (status, _, body) = get(&env.url("/v1/workspaces/events"), Some(token)).await;
         assert_eq!(status, StatusCode::OK, "{body}");
-        let n = body["queries"]["recipes:all"]
-            .as_array()
-            .map_or(0, Vec::len);
-        assert_eq!(n, 0, "decision `recipes-start-empty`");
         // A new pod lists only its home app (decision `blueprints-and-home`).
         let (_, _, apps) = get(&env.url("/v1/apps"), Some(token)).await;
         assert_eq!(apps["apps"][0]["id"], "home", "{apps}");
@@ -328,7 +324,7 @@ async fn pods_keep_their_sign_ins_and_media_apart() {
     // Only public paths: the feed itself is not reachable that way.
     for path in [
         format!("/v1/p/{id_a}/v1/workspaces/pixelfed"),
-        format!("/v1/p/{id_a}/v1/workspaces/recipes"),
+        format!("/v1/p/{id_a}/v1/workspaces/events"),
         format!("/v1/p/{id_a}/v1/pixelfed/media/../../workspaces/recipes"),
         format!("/v1/p/{}/v1/pixelfed/media/{key}", "0".repeat(32)),
     ] {
@@ -362,12 +358,12 @@ async fn logout_keeps_the_pod_token_and_rotation_replaces_it() {
     let new = tokio::task::spawn_blocking(move || host.rotate("me").unwrap())
         .await
         .unwrap();
-    let (status, header, _) = get(&env.url("/v1/workspaces/recipes"), Some(&token)).await;
+    let (status, header, _) = get(&env.url("/v1/workspaces/events"), Some(&token)).await;
     assert_eq!(
         (status, header.as_deref()),
         (StatusCode::UNAUTHORIZED, Some("invalid"))
     );
-    let (status, _, _) = get(&env.url("/v1/workspaces/recipes"), Some(&new)).await;
+    let (status, _, _) = get(&env.url("/v1/workspaces/events"), Some(&new)).await;
     assert_eq!(status, StatusCode::OK);
 }
 
@@ -381,7 +377,7 @@ async fn temporary_pods_are_capped_and_swept() {
         ..HostConfig::default()
     })
     .await;
-    let (_, _, body) = get(&env.url("/v1/workspaces/recipes"), None).await;
+    let (_, _, body) = get(&env.url("/v1/workspaces/events"), None).await;
     let spec: WorkspaceSpec = serde_json::from_value(body).unwrap();
     assert_eq!(
         session_buttons(&spec),
@@ -399,14 +395,9 @@ async fn temporary_pods_are_capped_and_swept() {
     let (status, body) = post(&env.url("/v1/pods/temporary"), None, json!({})).await;
     assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
     assert_eq!(body["error"], "temporary_pods_full");
-    // Full features, no recipes.
-    let (status, _, body) = get(&env.url("/v1/workspaces/recipes"), Some(&tokens[0])).await;
+    // Full features.
+    let (status, _, _) = get(&env.url("/v1/workspaces/events"), Some(&tokens[0])).await;
     assert_eq!(status, StatusCode::OK);
-    assert!(
-        body["queries"]["recipes:all"]
-            .as_array()
-            .is_none_or(Vec::is_empty)
-    );
     sign_in(&env, &tokens[0]).await;
     // Expired pods are swept: token dead, files gone.
     let pods = env.host.store().pods().unwrap();
@@ -427,7 +418,7 @@ async fn temporary_pods_are_capped_and_swept() {
     assert!(env.host.store().pod_by_name(&first.name).unwrap().is_none());
     let mut dead = 0;
     for t in &tokens {
-        let (status, _, _) = get(&env.url("/v1/workspaces/recipes"), Some(t)).await;
+        let (status, _, _) = get(&env.url("/v1/workspaces/events"), Some(t)).await;
         if status == StatusCode::UNAUTHORIZED {
             dead += 1;
         }
@@ -439,7 +430,7 @@ async fn temporary_pods_are_capped_and_swept() {
 }
 
 /// The rollout: a single-pod `server.db` from before D46 (here with the
-/// made-up test recipes) becomes an admin pod with everything in it.
+/// made-up test dishes) becomes an admin pod with everything in it.
 #[tokio::test]
 async fn adopting_a_single_pod_database_keeps_its_data() {
     let env = env().await;
@@ -447,10 +438,9 @@ async fn adopting_a_single_pod_database_keeps_its_data() {
     let old_path = old.path().to_owned();
     tokio::task::spawn_blocking(move || {
         let state = server::open_dir(&old_path).unwrap();
-        assert_eq!(state.store().adapter_version("recipes").unwrap(), 2);
         state
             .store()
-            .with_conn(source_recipes::db::seed_test_recipes)
+            .with_conn(source_collections::test_seed::seed_test_dishes)
             .unwrap();
     })
     .await
@@ -467,9 +457,15 @@ async fn adopting_a_single_pod_database_keeps_its_data() {
             .join(format!("server.db.adopted-{}", pod.id))
             .is_file()
     );
-    let (status, _, body) = get(&env.url("/v1/workspaces/recipes"), Some(&pod.token)).await;
+    let (status, _, body) = get(&env.url("/v1/collections/dishes/rows"), Some(&pod.token)).await;
     assert_eq!(status, StatusCode::OK, "{body}");
-    assert_eq!(body["queries"]["recipes:all"].as_array().unwrap().len(), 8);
+    assert_eq!(
+        body["queries"]["collection:dishes"]
+            .as_array()
+            .unwrap()
+            .len(),
+        8
+    );
     // The renamed original can go once the pod works; a lookalike for a pod
     // that doesn't exist stays.
     let stranger = old.path().join(format!("x.adopted-{}", "0".repeat(32)));
@@ -484,7 +480,7 @@ async fn adopting_a_single_pod_database_keeps_its_data() {
         [old.path().join(format!("server.db.adopted-{}", pod.id))]
     );
     assert!(stranger.is_file());
-    let (status, _, _) = get(&env.url("/v1/workspaces/recipes"), Some(&pod.token)).await;
+    let (status, _, _) = get(&env.url("/v1/workspaces/events"), Some(&pod.token)).await;
     assert_eq!(status, StatusCode::OK, "the pod is unaffected");
 }
 
@@ -500,7 +496,7 @@ async fn the_open_pod_serves_callers_without_a_token() {
     assert_eq!(body["workspace"]["id"], "pixelfed_sample_no_login");
     // Admin pods still need their own token.
     let token = env.create("me").await;
-    let (status, _, _) = get(&env.url("/v1/workspaces/recipes"), Some(&token)).await;
+    let (status, _, _) = get(&env.url("/v1/workspaces/events"), Some(&token)).await;
     assert_eq!(status, StatusCode::OK);
     tokio::time::sleep(Duration::from_millis(1)).await;
 }
@@ -557,7 +553,7 @@ async fn responses_carry_security_headers() {
             ..HostConfig::default()
         })
         .await;
-        for path in ["/healthz", "/v1/workspaces/recipes", "/v1/nowhere"] {
+        for path in ["/healthz", "/v1/workspaces/events", "/v1/nowhere"] {
             let resp = reqwest::get(env.url(path)).await.unwrap();
             let h = resp.headers();
             assert_eq!(h["x-content-type-options"], "nosniff", "{path}");

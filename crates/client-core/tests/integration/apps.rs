@@ -30,6 +30,10 @@ fn pod(state: AppState) -> Pod {
         .build()
         .unwrap();
     let state = Arc::new(state);
+    state
+        .store()
+        .with_conn(source_collections::test_seed::seed_test_dishes)
+        .unwrap();
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     listener.set_nonblocking(true).unwrap();
     let base = format!("http://{}", listener.local_addr().unwrap());
@@ -369,15 +373,15 @@ fn custom_apps_are_listed_hidden_and_deleted_and_the_engine_leaves_a_deleted_one
         .store()
         .create_pinned_session(&server::session::session_hash("pod-token"))
         .unwrap();
-    // A custom app over the recipes, made with the pod token.
+    // A custom app over the test dishes, made with the pod token.
     let layout = json!({"type": "core://Workspace", "id": "x", "title": "Mine",
         "slots": [{"slot_id": "r", "provider_uri": "core://custom",
-          "content": {"type": "core://List", "query_key": "recipes:all",
+          "content": {"type": "core://List", "query_key": "collection:dishes",
             "item_template": {"type": "core://Text", "style": "Body", "value_expr": "$item.title"}}}]});
     let created: Value = reqwest::blocking::Client::new()
         .post(format!("{}/v1/custom-apps", p.base))
         .bearer_auth("pod-token")
-        .json(&json!({"title": "Mine", "icon": "recipe", "feeds": [["recipes", "all"]], "layout": layout}))
+        .json(&json!({"title": "Mine", "icon": "recipe", "feeds": [["collections", "dishes"]], "layout": layout}))
         .send()
         .unwrap()
         .json()
@@ -444,14 +448,14 @@ fn one_engine_on_home_opens_other_layouts_and_follows_them() {
     let layout = |title: &str| {
         json!({"type": "core://Workspace", "id": "x", "title": title,
             "slots": [{"slot_id": "r", "provider_uri": "core://custom",
-              "content": {"type": "core://List", "query_key": "recipes:all",
+              "content": {"type": "core://List", "query_key": "collection:dishes",
                 "item_template": {"type": "core://Text", "style": "Body", "value_expr": "$item.title"}}}]})
     };
     let http = reqwest::blocking::Client::new();
     let created: Value = http
         .post(format!("{}/v1/custom-apps", p.base))
         .bearer_auth("pod-token")
-        .json(&json!({"title": "Mine", "feeds": [["recipes", "all"]], "layout": layout("Mine")}))
+        .json(&json!({"title": "Mine", "feeds": [["collections", "dishes"]], "layout": layout("Mine")}))
         .send()
         .unwrap()
         .json()
@@ -467,7 +471,7 @@ fn one_engine_on_home_opens_other_layouts_and_follows_them() {
     wait_until("the other layout", || {
         let s = e.snapshot();
         parse(&s.layouts_json)[&id]["workspace"]["title"] == "Mine"
-            && parse(&s.queries_json).get("recipes:all").is_some()
+            && parse(&s.queries_json).get("collection:dishes").is_some()
     });
     let s = e.snapshot();
     assert_eq!(
@@ -520,12 +524,12 @@ fn leaving_the_pod_forgets_the_other_layouts_it_opened() {
         .unwrap();
     let layout = json!({"type": "core://Workspace", "id": "x", "title": "Private notes",
         "slots": [{"slot_id": "r", "provider_uri": "core://custom",
-          "content": {"type": "core://List", "query_key": "recipes:all",
+          "content": {"type": "core://List", "query_key": "collection:dishes",
             "item_template": {"type": "core://Text", "style": "Body", "value_expr": "$item.title"}}}]});
     let created: Value = reqwest::blocking::Client::new()
         .post(format!("{}/v1/custom-apps", p.base))
         .bearer_auth("pod-token")
-        .json(&json!({"title": "Notes", "feeds": [["recipes", "all"]], "layout": layout}))
+        .json(&json!({"title": "Notes", "feeds": [["collections", "dishes"]], "layout": layout}))
         .send()
         .unwrap()
         .json()

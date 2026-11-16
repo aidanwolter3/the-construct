@@ -18,7 +18,6 @@ path = "src/main.rs"
 pod-core = { path = "../pod-core" }
 pod-host = { path = "../pod-host" }
 source-pixelfed = { path = "../source-pixelfed" }
-source-recipes = { path = "../source-recipes" }
 source-shell = { path = "../source-shell" }
 source-collections = { path = "../source-collections" }
 web-extract = { path = "../web-extract" }
@@ -32,7 +31,6 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 [dev-dependencies]
-source-recipes = { path = "../source-recipes", features = ["test-seed"] }
 serde.workspace = true
 serde_json.workspace = true
 rusqlite.workspace = true
@@ -45,3 +43,4 @@ tower = { version = "0.5", features = ["util"] }
 http-body-util = "0.1"
 tempfile = "3"
 fake-pixelfed = { path = "../../fake-pixelfed" }
+source-collections = { path = "../source-collections", features = ["test-seed"] }

@@ -2,7 +2,7 @@
 
 Server-driven UI: a Rust pod serves app layouts (JSON `UiNode` trees) and entities; desktop, Android and a headless
 simulator draw them with one Rust renderer (`construct-render`) over one Rust engine (decision `rust-clients`). Built-in layouts are blueprints, not listed:
-Pixelfed (`pixelfed`), Recipes (`recipes`), Events (`events`), Agents (`agents`), the blank home (`shell`), Settings
+Pixelfed (`pixelfed`), Events (`events`), Agents (`agents`), the blank home (`shell`), Settings
 (`settings`) and the inbox (`inbox`). There are no apps at runtime: a pod's layouts are the user's own (from blueprints or Collections),
 starting with `home`, which clients open first and which embeds and presents the others on one engine
 (decision `layouts-not-apps`).
@@ -18,7 +18,7 @@ issues. `docs/history/` is archived; don't treat it as current.
 - `crates/protocol` wire types; `crates/pod-core` the generic pod (knows sources only through `Source`,
   `adapter.rs`; `validate.rs` checks layout files); `crates/pod-host` many pods per server; `crates/server` the
   binary and `server pods` CLI.
-- `crates/source-pixelfed`, `source-recipes`, `source-collections`, `source-events` (Events), `source-monitor`,
+- `crates/source-pixelfed`, `source-collections`, `source-events` (Events), `source-monitor`,
   `source-agents` (Agents: an external agent runner, [docs/agents.md](docs/agents.md)), `source-shell` (the home
   blueprint): the sources.
   `crates/web-extract`: the web module (page fetching and extraction, host policy, search, web prompts);

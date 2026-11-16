@@ -62,11 +62,11 @@ async fn build(env: &Env, access: &str) -> (String, String, String) {
         .await;
     assert!(!err, "{d}");
     let (err, c) = env
-        .tool(access, "create_layout", json!({"title": "Coming up", "feeds": [["recipes", "all"]],
+        .tool(access, "create_layout", json!({"title": "Coming up", "feeds": [["collections", "dishes"]],
             "layout": {"type": "core://Page", "title": "Coming up", "root": {"type": "core://Column",
                 "padding_h_dp": 16, "children": [
                     {"type": "core://Use", "component": "core:section_header", "args": {"text": "Next"}},
-                    {"type": "core://List", "query_key": "recipes:all", "item_template":
+                    {"type": "core://List", "query_key": "collection:dishes", "item_template":
                         {"type": "core://Text", "style": "Body", "value_expr": "$item.title"}}]}}}))
         .await;
     assert!(!err, "{c}");
@@ -74,11 +74,11 @@ async fn build(env: &Env, access: &str) -> (String, String, String) {
     let (err, b) = env
         .tool(access, "create_layout", json!({"title": "Recipes",
             "layout": {"type": "core://Workspace", "title": "Recipes", "slots": [
-                {"slot_id": "main", "provider_uri": "recipes://all", "content": {"type": "core://Column", "children": [
+                {"slot_id": "main", "provider_uri": "core://custom", "content": {"type": "core://Column", "children": [
                     {"type": "core://Use", "component": "pod:tile", "args": {"label": "All recipes"}, "children": [
                         {"type": "core://Text", "style": "Secondary", "value_expr": "From your book"}]},
                     {"type": "core://Layout", "layout": c, "presentation": "Inline"},
-                    {"type": "core://List", "query_key": "recipes:all", "item_template":
+                    {"type": "core://List", "query_key": "collection:dishes", "item_template":
                         {"type": "core://Use", "component": "core:card", "children": [
                             {"type": "core://Text", "style": "Title", "value_expr": "$item.title"}]}}]}}]}}))
         .await;

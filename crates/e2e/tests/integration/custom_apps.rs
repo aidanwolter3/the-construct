@@ -1,7 +1,7 @@
 //! Custom apps end to end (decision `custom-apps-and-data-sources`), against the fake:
-//! create a "Kitchen" app over the Pixelfed home feed and the recipes with the pod token,
-//! then through the client engine: open it, see posts and recipes together, like a post
-//! through the outbox (it reaches the upstream), load a recipe screen, and watch a second
+//! create a "Kitchen" app over the Pixelfed home feed and the made-up test dishes with the pod token,
+//! then through the client engine: open it, see posts and dishes together, like a post
+//! through the outbox (it reaches the upstream), load a dish screen, and watch a second
 //! engine pick up a new version live. Deleting it ends with a 404.
 
 use std::sync::Arc;
@@ -19,10 +19,10 @@ const POD_TOKEN: &str = "e2e-pod-token";
 fn kitchen(title: &str) -> Value {
     json!({
         "type": "core://Workspace", "id": "x", "title": title,
-        "screens": [{"id": "recipe", "route": "recipes://recipes/{id}", "title": "Recipe",
-            "data": "/v1/recipes/screens/recipe?id=$route.id",
-            "content": {"type": "core://List", "query_key": "recipe:$route.id:steps",
-                "item_template": {"type": "core://Text", "style": "Body", "value_expr": "$item.text"}}}],
+        "screens": [{"id": "dish", "route": "collections://dishes/{id}", "title": "Dish",
+            "data": "/v1/collections/dishes/row?id=$route.id",
+            "content": {"type": "core://List", "query_key": "collection:dishes:row:$route.id",
+                "item_template": {"type": "core://Text", "style": "Body", "value_expr": "$item.category"}}}],
         "slots": [
             {"slot_id": "posts", "provider_uri": "core://custom",
              "content": {"type": "core://Column", "children": [
@@ -34,10 +34,10 @@ fn kitchen(title: &str) -> Value {
                     "field": "is_liked", "value_expr": "!entity.is_liked", "rollback_value": false,
                     "endpoint": "/v1/pixelfed/posts/like",
                     "payload": {"id": "$item.id", "liked": "$value"}}}}]}},
-            {"slot_id": "recipes", "provider_uri": "core://custom",
-             "content": {"type": "core://List", "query_key": "recipes:all",
+            {"slot_id": "dishes", "provider_uri": "core://custom",
+             "content": {"type": "core://List", "query_key": "collection:dishes",
                 "item_template": {"type": "core://Button", "label": "$item.title", "on_click": {
-                    "intent": "action.navigation.open", "target_uri": "recipes://recipes/$item.id",
+                    "intent": "action.navigation.open", "target_uri": "collections://dishes/$item.id",
                     "presentation": "Push"}}}}
         ]
     })
@@ -56,9 +56,9 @@ fn a_custom_app_shows_two_sources_and_its_actions_work() {
     pod_store
         .create_pinned_session(&server::session::session_hash(POD_TOKEN))
         .unwrap();
-    // New pods have no recipes (decision `recipes-start-empty`): add the made-up ones.
+    // A made-up collection of dishes to list next to the posts.
     pod_store
-        .with_conn(source_recipes::db::seed_test_recipes)
+        .with_conn(source_collections::test_seed::seed_test_dishes)
         .unwrap();
     let http = reqwest::blocking::Client::new();
     let pod = |method: reqwest::Method, path: &str, body: Option<Value>| -> (u16, Value) {
@@ -90,8 +90,8 @@ fn a_custom_app_shows_two_sources_and_its_actions_work() {
         reqwest::Method::POST,
         "/v1/custom-apps",
         Some(json!({"title": "Kitchen", "icon": "recipe",
-            "feeds": [["recipes", "all"], ["pixelfed", "home"]],
-            "layout": kitchen("Kitchen"), "note": "Recipes next to my feed"})),
+            "feeds": [["collections", "dishes"], ["pixelfed", "home"]],
+            "layout": kitchen("Kitchen"), "note": "Dishes next to my feed"})),
     );
     assert_eq!(status, 201, "{created}");
     let id = created["id"].as_str().unwrap().to_owned();
@@ -105,13 +105,13 @@ fn a_custom_app_shows_two_sources_and_its_actions_work() {
         "{apps}"
     );
 
-    // 3. An engine on it: posts and recipes together.
+    // 3. An engine on it: posts and dishes together.
     let kitchen_engine = h.engine_on(&store, None, &id);
-    wait_until("posts and recipes", TIMEOUT, || {
+    wait_until("posts and dishes", TIMEOUT, || {
         let ents = entities(&kitchen_engine.snapshot());
         ents.as_object().is_some_and(|m| {
             m.keys().any(|k| k.starts_with("pixelfed://posts/"))
-                && m.keys().any(|k| k.starts_with("recipes://recipes/"))
+                && m.keys().any(|k| k.starts_with("collections://dishes/"))
         })
     });
     let snap = kitchen_engine.snapshot();
@@ -127,16 +127,16 @@ fn a_custom_app_shows_two_sources_and_its_actions_work() {
     wait_flushed(&kitchen_engine, TIMEOUT);
     wait_upstream(up, &post_id, (true, false));
 
-    // 5. A recipe screen's data loads.
+    // 5. A dish screen's data loads.
     kitchen_engine.dispatch(
-        &json!({"intent": "action.data.load", "path": "/v1/recipes/screens/recipe?id=placeholder-pot-pie"})
+        &json!({"intent": "action.data.load", "path": "/v1/collections/dishes/row?id=placeholder-pot-pie"})
             .to_string(),
     );
-    wait_until("the recipe's steps", TIMEOUT, || {
+    wait_until("the dish's row", TIMEOUT, || {
         kitchen_engine
             .snapshot()
-            .entities_json
-            .contains("recipes://steps/")
+            .queries_json
+            .contains("collection:dishes:row:placeholder-pot-pie")
     });
 
     // 6. A second engine on the app gets a new version live.

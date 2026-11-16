@@ -11,7 +11,6 @@ const REWRITTEN: &[(&str, u32)] = &[
     ("settings", 4),
     ("inbox", 2),
     ("shell", 6),
-    ("recipes", 6),
     ("pixelfed", 12),
     ("pixelfed", 13),
 ];

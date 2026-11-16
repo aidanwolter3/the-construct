@@ -245,6 +245,22 @@ impl AppState {
             .map_err(|e| format!("starting the pod's apps from blueprints: {e}"))?;
         custom::convert_to_layouts(&store, &catalog)
             .map_err(|e| format!("converting the pod's apps to layouts: {e}"))?;
+        // A source this build no longer has (decision `remove-recipes-source`):
+        // home stops binding its feeds, on both layout systems.
+        let dropped = custom::drop_unknown_feeds(&store, &catalog)
+            .map_err(|e| format!("dropping feeds of removed sources: {e}"))?;
+        if dropped > 0 {
+            tracing::info!(apps = dropped, "feeds of removed sources dropped");
+        }
+        if construct::read_switched(&store) {
+            match construct::write::drop_unknown_feeds(&store, &catalog) {
+                Ok(gone) if !gone.is_empty() => {
+                    tracing::info!(feeds = ?gone, "home no longer binds removed sources' feeds")
+                }
+                Ok(_) => {}
+                Err(e) => tracing::warn!(error = %e, "home still binds a removed source's feed"),
+            }
+        }
         Ok(Self {
             locals: Mutex::new(Vec::new()),
             store,

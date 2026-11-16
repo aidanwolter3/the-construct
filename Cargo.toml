@@ -9,7 +9,6 @@ members = [
     "crates/pod-core",
     "crates/pod-host",
     "crates/source-pixelfed",
-    "crates/source-recipes",
     "crates/source-collections",
     "crates/source-events",
     "crates/source-monitor",

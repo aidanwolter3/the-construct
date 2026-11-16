@@ -511,7 +511,7 @@ fn remembered_form_values_survive_a_restart_per_app() {
     assert_eq!(root["view"], "cards");
     assert_eq!(home.remembered_form_values("post")["view"], "grid");
     // Another app on the same storage has its own values.
-    let other = ConstructEngine::init_with_workspace(storage, base, "recipes");
+    let other = ConstructEngine::init_with_workspace(storage, base, "events");
     assert!(other.remembered_form_values("").is_empty());
     // None forgets.
     home.remember_form_value("", "view", None);

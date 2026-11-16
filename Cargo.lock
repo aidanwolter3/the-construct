@@ -586,6 +586,7 @@ dependencies = [
  "serde_json",
  "server",
  "sha2 0.10.9",
+ "source-collections",
  "tempfile",
  "tokio",
 ]
@@ -1135,7 +1136,7 @@ dependencies = [
  "reqwest",
  "serde_json",
  "server",
- "source-recipes",
+ "source-collections",
  "tokio",
  "tower",
 ]
@@ -4096,7 +4097,6 @@ dependencies = [
  "source-events",
  "source-monitor",
  "source-pixelfed",
- "source-recipes",
  "source-shell",
  "tempfile",
  "tokio",
@@ -4417,23 +4417,6 @@ dependencies = [
  "tempfile",
  "tokio",
  "tracing",
-]
-
-[[package]]
-name = "source-recipes"
-version = "0.1.0"
-dependencies = [
- "axum",
- "http-body-util",
- "pod-core",
- "protocol",
- "rusqlite",
- "serde",
- "serde_json",
- "source-recipes",
- "tempfile",
- "tokio",
- "tower",
 ]
 
 [[package]]
