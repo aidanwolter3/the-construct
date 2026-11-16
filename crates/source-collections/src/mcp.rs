@@ -408,6 +408,7 @@ async fn define(pod: &Pod, adapter: &CollectionsAdapter, args: &Value) -> Result
         actions: Vec::new(),
         order_by: Vec::new(),
         descending: args["descending"].as_bool().unwrap_or(false),
+        keep: None,
     };
     // After every field exists: a compute may read a later one.
     let mut others = pod
@@ -486,7 +487,7 @@ async fn define(pod: &Pod, adapter: &CollectionsAdapter, args: &Value) -> Result
                 "detail": "change it with apply_change (describe_collection shows it)" }),
             ));
         }
-        if db::all_defs(tx)?.len() >= caps.collections {
+        if db::all_defs(tx)?.iter().filter(|(_, d)| !crate::inbox::is_inbox(&d.name)).count() >= caps.collections {
             return Ok(Err(fail(
                 StatusCode::CONFLICT,
                 "too_many_collections",
@@ -1344,7 +1345,12 @@ fn create_rules(
             }
             None => {}
         }
-        if db::all_defs(tx)?.len() >= caps.collections {
+        if db::all_defs(tx)?
+            .iter()
+            .filter(|(_, d)| !crate::inbox::is_inbox(&d.name))
+            .count()
+            >= caps.collections
+        {
             return Ok(Err(fail(
                 StatusCode::CONFLICT,
                 "too_many_collections",
@@ -1564,7 +1570,7 @@ async fn restore(pod: &Pod, caps: crate::Caps, args: &Value) -> Result<Value, Va
             return Ok(Err(json!({ "error": "collection_not_found", "collection": target, "status": 404,
                 "detail": "no deleted collection has this name (list_collections lists deleted ones)" })));
         };
-        if db::all_defs(tx)?.len() >= caps.collections {
+        if db::all_defs(tx)?.iter().filter(|(_, d)| !crate::inbox::is_inbox(&d.name)).count() >= caps.collections {
             return Ok(Err(fail(
                 StatusCode::CONFLICT,
                 "too_many_collections",

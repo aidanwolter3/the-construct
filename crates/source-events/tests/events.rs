@@ -371,7 +371,9 @@ async fn a_pod_from_before_the_rename_moves_to_the_new_id() {
                      CREATE TABLE watcher_targets (id TEXT PRIMARY KEY);
                      INSERT INTO pod_settings (key, value) VALUES ('watcher.imported', '1');
                      INSERT INTO notifications (layout, channel, dedupe_key, title, created_at, inserted_at)
-                         VALUES ('watcher', 'matches', 'k1', 'Friday Improv', 1, 1);
+                         VALUES ('watcher', 'matches', 'k1', 'Friday Improv',
+                             unixepoch(), unixepoch());
+                     DELETE FROM collections_defs WHERE name IN ('notifications', 'notification_channels');
                      UPDATE collections_defs SET def_json = replace(def_json, '\"app\":\"events\"', '\"app\":\"watcher\"');",
                 )
             })

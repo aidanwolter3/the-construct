@@ -729,6 +729,7 @@ impl Host {
             target_uri: None,
             group_key: None,
             created_at: now,
+            subject: None,
             quiet: false,
         };
         let rt = tokio::runtime::Builder::new_current_thread()

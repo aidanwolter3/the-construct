@@ -190,6 +190,14 @@ pub trait Source: Any + Send + Sync {
         false
     }
 
+    /// Where this source keeps the pod's notifications, when it keeps
+    /// them (decision `notifications-in-a-collection`: Collections keeps
+    /// them as a collection). The first source that offers one holds every
+    /// source's; without one, the core keeps them in its own tables.
+    fn notification_store(&self) -> Option<std::sync::Arc<dyn crate::NotificationStore>> {
+        None
+    }
+
     /// The channels this source declares now for the pod's own layouts
     /// (only when [`Self::notifies_layouts`]): each `layout` a live
     /// layout of the pod, ids `[a-z0-9_]{1,32}` that stay the same while the

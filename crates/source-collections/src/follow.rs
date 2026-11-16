@@ -111,6 +111,13 @@ pub fn publish_rows(
         detail,
     };
     pod.publish_data_scoped(NAME, scope, except_device);
+    // Notifications read, deleted or switched off: the badge follows.
+    if rows.keys().any(|c| crate::inbox::is_inbox(c))
+        && let Ok(rt) = tokio::runtime::Handle::try_current()
+    {
+        let pod = pod.clone();
+        rt.spawn(async move { pod.announce_unread().await });
+    }
 }
 
 /// A computed field's kind that reads another collection.
@@ -157,6 +164,9 @@ pub fn settle(tx: &Connection, now: i64, caps: Caps) -> rusqlite::Result<Followe
                 .or_default()
                 .insert(ch.id.clone());
         }
+        // A row that went takes its notifications with it; `read_at`
+        // follows `read` (decision `notifications-in-a-collection`).
+        crate::inbox::follow_changes(tx, &changed, now)?;
         if wave >= MAX_WAVES {
             tracing::warn!(
                 rows = changed.len(),
@@ -190,7 +200,39 @@ pub fn settle(tx: &Connection, now: i64, caps: Caps) -> rusqlite::Result<Followe
         }
         wave_step(tx, defs, &deps, changed, now, caps, &mut out)?;
     }
+    keep(tx, &out, now)?;
     Ok(out)
+}
+
+/// The rows past a changed collection's [`model::Keep`] go for good:
+/// beyond its newest `rows` live rows, or created more than `days` ago.
+fn keep(tx: &Connection, out: &Followed, now: i64) -> rusqlite::Result<()> {
+    for collection in out.rows.keys() {
+        let Some((_, def)) = db::latest_def(tx, collection)? else {
+            continue;
+        };
+        let Some(k) = def.keep else {
+            continue;
+        };
+        let mut rows = db::all_rows(tx, collection, true)?;
+        // Newest first.
+        rows.reverse();
+        let mut live = 0u32;
+        for r in rows {
+            let old = k.days > 0 && r.created_at < now - i64::from(k.days) * 86_400;
+            let over = r.deleted_at.is_none() && {
+                live += 1;
+                k.rows > 0 && live > k.rows
+            };
+            if old || over {
+                tx.execute(
+                    "DELETE FROM collections_rows WHERE collection = ?1 AND id = ?2",
+                    rusqlite::params![collection, r.id],
+                )?;
+            }
+        }
+    }
+    Ok(())
 }
 
 /// One wave: the rows `changed` touched, recomputed where they read them.

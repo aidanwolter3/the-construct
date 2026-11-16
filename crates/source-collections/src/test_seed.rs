@@ -41,6 +41,7 @@ pub fn seed_test_dishes(conn: &Connection) -> rusqlite::Result<()> {
         actions: Vec::new(),
         order_by: Vec::new(),
         descending: false,
+        keep: None,
     };
     let now = pod_core::util::now_secs();
     let tx = conn.unchecked_transaction()?;

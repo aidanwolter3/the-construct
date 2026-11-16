@@ -116,6 +116,7 @@ fn note(key: &str, channel: &str) -> NewNotification {
         target_uri: Some(format!("bell://items/{key}")),
         group_key: None,
         created_at: 1_700_000_000,
+        subject: None,
         quiet: false,
     }
 }
@@ -293,6 +294,29 @@ async fn notifications_are_stored_once_and_read() {
             .is_empty()
     );
 
+    // 'other' is off by default: stored, but neither listed nor counted.
+    let (status, list) = call(&p, "GET", "/v1/notifications", None, None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(list["unread_total"], 1);
+    assert_eq!(list["notifications"].as_array().unwrap().len(), 2);
+    // Switched on (for the whole pod), they show.
+    call(
+        &p,
+        "PUT",
+        "/v1/devices/device-0001",
+        Some(json!({"platform": "android"})),
+        None,
+    )
+    .await;
+    let (status, _) = call(
+        &p,
+        "PUT",
+        "/v1/devices/device-0001/channels",
+        Some(json!({"bell.other": true})),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
     let (status, list) = call(&p, "GET", "/v1/notifications", None, None).await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(list["unread_total"], 2);
@@ -657,7 +681,8 @@ async fn web_push_reaches_devices_that_want_it() {
         payload.event.notification.target_uri.as_deref(),
         Some("bell://items/p1")
     );
-    assert_eq!(payload.event.unread_total, 2);
+    // 'other' is off, so it isn't counted either.
+    assert_eq!(payload.event.unread_total, 1);
 
     // A device with its stream open gets no push.
     got.lock().unwrap().clear();

@@ -59,6 +59,7 @@ pub mod filler;
 pub mod follow;
 pub mod images;
 pub mod import;
+pub mod inbox;
 pub mod lookup;
 mod mcp;
 pub mod model;
@@ -483,11 +484,26 @@ impl Source for CollectionsAdapter {
                 tokio::time::sleep(std::time::Duration::from_secs(3600)).await;
             }
         });
-        Box::pin(async {})
+        // Every pod has its notification collections (decision
+        // `notifications-in-a-collection`), so layouts can bind them.
+        let pod = Arc::clone(pod);
+        Box::pin(async move {
+            let _ = pod
+                .blocking(|s| {
+                    inbox::prepare(s).inspect_err(|e| {
+                        tracing::error!(error = %e, "the notification collections could not be prepared");
+                    })
+                })
+                .await;
+        })
     }
 
     fn notifies_layouts(&self) -> bool {
         true
+    }
+
+    fn notification_store(&self) -> Option<Arc<dyn pod_core::NotificationStore>> {
+        Some(Arc::new(inbox::InboxStore))
     }
 
     fn layout_notification_channels(

@@ -343,6 +343,7 @@ pub fn alerts(
                 target_uri: None,
                 group_key: Some("monitor".into()),
                 created_at: now,
+                subject: None,
                 quiet: false,
             });
         }

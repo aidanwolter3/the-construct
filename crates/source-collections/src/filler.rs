@@ -1623,6 +1623,7 @@ mod tests {
             alerts: Vec::new(),
             system: None,
             actions: Vec::new(),
+            keep: None,
         }
     }
 
