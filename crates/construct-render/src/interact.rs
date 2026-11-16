@@ -369,6 +369,19 @@ pub struct Changes {
     pub layouts: Vec<(String, UiNode)>,
 }
 
+impl Changes {
+    /// Later changes over these: newer entities, queries and layout roots
+    /// win.
+    pub fn absorb(&mut self, later: Changes) {
+        self.data.entities.extend(later.data.entities);
+        self.data.queries.extend(later.data.queries);
+        for (id, root) in later.layouts {
+            self.layouts.retain(|(i, _)| *i != id);
+            self.layouts.push((id, root));
+        }
+    }
+}
+
 /// Something the pod answered in the background.
 enum Answer {
     Write(Undo, Written),
@@ -656,6 +669,11 @@ pub struct Session {
     pub staging: usize,
     /// What the loader was last told is on screen ([`Loader::visible`]).
     shown: Vec<Shown>,
+    /// The loader's changes and the pod's answers that came while a screen
+    /// slid in or out, applied on the first frame after the slide ends
+    /// (decision `hold-changes-during-transitions`).
+    held: Option<Changes>,
+    held_answers: Vec<Answer>,
 }
 
 /// How long the caret shows, then hides (Android's 500 ms).
@@ -812,6 +830,8 @@ impl Session {
             picking: None,
             staging: 0,
             shown: Vec::new(),
+            held: None,
+            held_answers: Vec::new(),
         }
     }
 
@@ -1914,16 +1934,46 @@ impl Session {
     /// Applies what the loader heard of ([`Loader::changes`]) and the
     /// answers of writes that came back: the pod's fresh data, or the local
     /// change undone. True when anything changed.
+    ///
+    /// While a screen slides in or out nothing on it changes: what comes
+    /// in is kept aside and applied, and laid out, on the first frame after
+    /// the slide ends (decision `hold-changes-during-transitions`; laying
+    /// every screen out again mid-slide drops frames on a phone). Only a
+    /// picked photo, the user's own choice, applies at once, like the
+    /// user's taps and local writes, which never wait for a poll.
     pub fn poll(&mut self) -> bool {
-        let changes = self.loader.as_ref().and_then(|l| l.changes());
+        let news = self.loader.as_ref().and_then(|l| l.changes());
+        let mut arrived: Vec<Answer> = match self.answered.lock() {
+            Ok(mut g) => std::mem::take(&mut *g),
+            Err(p) => std::mem::take(&mut *p.into_inner()),
+        };
+        let mut changes = self.held.take();
+        if let Some(c) = news {
+            match changes.as_mut() {
+                Some(h) => h.absorb(c),
+                None => changes = Some(c),
+            }
+        }
+        if self.sliding(Instant::now()) {
+            self.held = changes.take();
+            let (picked, rest): (Vec<Answer>, Vec<Answer>) = arrived
+                .into_iter()
+                .partition(|a| matches!(a, Answer::Picked(_)));
+            self.held_answers.extend(rest);
+            if picked.is_empty() {
+                return false;
+            }
+            arrived = picked;
+        } else if !self.held_answers.is_empty() {
+            let mut done = std::mem::take(&mut self.held_answers);
+            done.append(&mut arrived);
+            arrived = done;
+        }
         let changed = changes.is_some();
         if let Some(c) = changes {
             self.apply_changes(c);
         }
-        let done: Vec<Answer> = match self.answered.lock() {
-            Ok(mut g) => std::mem::take(&mut *g),
-            Err(p) => std::mem::take(&mut *p.into_inner()),
-        };
+        let done = arrived;
         if done.is_empty() {
             return changed;
         }
@@ -2151,13 +2201,27 @@ impl Session {
         }
     }
 
-    /// Whether a slide is still moving (draw again next frame).
+    /// Whether a layout or screen is sliding in or out at `now` (what
+    /// [`Session::poll`] holds changes for).
+    fn sliding(&self, now: Instant) -> bool {
+        self.animate
+            && self
+                .stack
+                .iter()
+                .skip(1)
+                .any(|e| now.duration_since(e.closing.unwrap_or(e.opened)) < SLIDE)
+    }
+
+    /// Whether a slide is still moving, or changes held during one wait
+    /// for the frame after it (draw again next frame).
     pub fn animating(&self) -> bool {
         if !self.animate {
             return false;
         }
         let now = Instant::now();
         if self.spinning
+            || self.held.is_some()
+            || !self.held_answers.is_empty()
             || !self.pager_anims.is_empty()
             || !self.card_anims.is_empty()
             || !self.swiped.is_empty()
@@ -2167,10 +2231,7 @@ impl Session {
         {
             return true;
         }
-        self.stack
-            .iter()
-            .skip(1)
-            .any(|e| now.duration_since(e.closing.unwrap_or(e.opened)) < SLIDE)
+        self.sliding(now)
     }
 
     /// The box a sheet or panel group draws in, and the box and insets its
@@ -4396,6 +4457,90 @@ mod tests {
         // A slide that ended stays ended; one closing is held too.
         assert_eq!(s.stack[2].opened, now - Duration::from_secs(2));
         assert_eq!(s.stack[3].closing, Some(now - Duration::from_millis(85)));
+    }
+
+    /// A loader whose changes a test hands it.
+    struct News(Arc<Mutex<Option<Changes>>>);
+
+    impl Loader for News {
+        fn layout(&self, id: &str) -> Result<(UiNode, DataBundle), String> {
+            Err(format!("no layout {id}"))
+        }
+        fn data(&self, _path: &str) -> Result<DataBundle, String> {
+            Ok(DataBundle::default())
+        }
+        fn changes(&self) -> Option<Changes> {
+            self.0.lock().unwrap().take()
+        }
+    }
+
+    #[test]
+    fn changes_wait_for_the_slide_to_end_and_the_users_own_writes_dont() {
+        let root: UiNode = serde_json::from_value(serde_json::json!({
+            "type": "core://Column", "children": [
+                { "type": "core://Text", "style": "Body", "value_expr": "${x://g/a#name}" },
+                { "type": "core://Text", "style": "Body", "value_expr": "${x://g/b#name}" }
+            ]
+        }))
+        .unwrap();
+        let named = |uri: &str, name: &str| {
+            let mut e = protocol::EntityRecord::new();
+            e.set("name", name);
+            (uri.to_owned(), e)
+        };
+        let mut data = DataBundle::default();
+        data.entities
+            .extend([named("x://g/a", "Basil"), named("x://g/b", "Mint")]);
+        let news = Arc::new(Mutex::new(None));
+        let mut s = Session::new("home", root.clone(), data, Viewport::PHONE);
+        s.loader = Some(Box::new(News(news.clone())));
+        s.animate = true;
+        let texts = |s: &mut Session| -> Vec<String> {
+            s.scene()
+                .unwrap()
+                .semantics
+                .iter()
+                .filter_map(|n| n.text_content.clone())
+                .collect()
+        };
+        assert!(texts(&mut s).contains(&"Basil".to_owned()));
+        s.take_work();
+
+        // A screen slides in; the engine's answer lands mid-slide.
+        let mut opening = Entry::layout("calendar", root, BTreeMap::new());
+        opening.opened = Instant::now();
+        s.stack.push(opening);
+        let mut fresh = DataBundle::default();
+        fresh.entities.extend([named("x://g/a", "Thyme")]);
+        *news.lock().unwrap() = Some(Changes {
+            data: fresh,
+            layouts: Vec::new(),
+        });
+        assert!(!s.poll());
+        s.scene().unwrap();
+        assert_eq!(s.data.entities["x://g/a"].get_str("name"), Some("Basil"));
+        assert_eq!(s.take_work().data_changes, 0);
+        // The window keeps drawing so the frame after the slide applies it.
+        assert!(s.animating());
+
+        // The user's own write during the slide shows at once.
+        s.dispatch(&serde_json::json!({
+            "intent": "action.local.set", "entity_uri": "x://g/b",
+            "field": "name", "value_expr": "\"Sage\""
+        }))
+        .unwrap();
+        assert_eq!(s.data.entities["x://g/b"].get_str("name"), Some("Sage"));
+        s.scene().unwrap();
+        assert_eq!(s.data.entities["x://g/a"].get_str("name"), Some("Basil"));
+
+        // The slide ends: the first frame after it applies the change.
+        let ended = Instant::now() - SLIDE - Duration::from_millis(1);
+        s.stack[1].opened = ended;
+        let shown = texts(&mut s);
+        assert!(shown.contains(&"Thyme".to_owned()), "{shown:?}");
+        assert!(shown.contains(&"Sage".to_owned()));
+        assert_eq!(s.take_work().data_changes, 1);
+        assert!(!s.animating());
     }
 
     #[test]
