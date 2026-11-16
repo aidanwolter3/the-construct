@@ -15,6 +15,7 @@
 
 pub mod adapter;
 pub mod components;
+pub mod construct;
 pub mod custom;
 pub mod disk;
 pub mod jacks;
@@ -475,6 +476,23 @@ impl AppState {
             let (a, pod) = (Arc::clone(a), Arc::clone(self));
             rt.spawn(async move { a.resume(&pod).await });
         }
+        // A switched pod's `@core/` names follow this build's files
+        // (decision `content-addressed-construct`).
+        let pod = Arc::clone(self);
+        rt.spawn_blocking(move || {
+            if construct::is_switched(&pod) {
+                match construct::switch::refresh_core(&pod) {
+                    Ok(moved) if !moved.is_empty() => {
+                        tracing::info!(moved = moved.len(), "the construct follows this build");
+                        construct::write::publish(&pod, &moved);
+                    }
+                    Ok(_) => {}
+                    Err(e) => {
+                        tracing::warn!(error = %e, "the construct's @core names weren't moved")
+                    }
+                }
+            }
+        });
         let weak = Arc::downgrade(self);
         rt.spawn(async move {
             loop {
@@ -675,6 +693,7 @@ pub fn app(state: Pod) -> Router {
         .merge(layouts::router())
         .merge(notify::router())
         .merge(custom::router())
+        .merge(construct::http::router())
         .merge(mcp::router())
         .route("/v1/jacks", get(get_jacks))
         .route("/v1/jacks/screen", get(get_jacks_screen))
@@ -864,6 +883,11 @@ async fn get_workspace(
     if let Some(r) = layouts::reject_invalid_workspace_id(&id) {
         return r;
     }
+    // A switched pod serves its own layouts from the construct (decision
+    // `content-addressed-construct`), so installed clients keep drawing it.
+    if custom::is_custom_id(&id) && construct_switched(&state).await {
+        return get_construct_workspace(state, id, headers).await;
+    }
     let app = match state.app(&id).await {
         Ok(Some(app)) => app,
         Ok(None) => {
@@ -940,6 +964,112 @@ async fn get_workspace(
         queries: bundle.queries,
     };
     (layouts::served_headers(served.version), Json(spec)).into_response()
+}
+
+/// Whether the pod is switched to the construct (read off the async workers
+/// the first time).
+pub(crate) async fn construct_switched(pod: &Pod) -> bool {
+    if let Some(known) = construct::known_switched(pod) {
+        return known;
+    }
+    let p = pod.clone();
+    tokio::task::spawn_blocking(move || construct::is_switched(&p))
+        .await
+        .unwrap_or(false)
+}
+
+/// `GET /v1/workspaces/<id>` for one of a switched pod's layouts: the
+/// construct's element sealed for the client and materialized, with the
+/// data of the home feeds it needs, as for a custom layout before.
+async fn get_construct_workspace(state: Pod, id: String, headers: HeaderMap) -> Response {
+    let caller = match state.caller(&headers).await {
+        Ok(c) => c,
+        Err(e) => return e.into_response(),
+    };
+    if caller == Caller::Stale {
+        return session::unauthorized();
+    }
+    let client = layouts::client_caps(&headers);
+    let req = RequestCtx {
+        client: client.clone(),
+        headers,
+        session: caller.clone().into_session(),
+    };
+    let (p, lookup) = (state.clone(), id.clone());
+    let served =
+        tokio::task::spawn_blocking(move || construct::http::serve_layout(&p, &lookup, &client))
+            .await;
+    let served = match served {
+        Ok(Ok(Some(s))) => s,
+        Ok(Ok(None)) => {
+            return json_error(
+                StatusCode::NOT_FOUND,
+                json!({ "error": "workspace_not_found", "id": id }),
+            );
+        }
+        _ => {
+            return json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                json!({ "error": "store_error" }),
+            );
+        }
+    };
+    let feeds: Vec<(&str, &str)> = served
+        .feeds
+        .iter()
+        .map(|(s, f)| (s.as_str(), f.as_str()))
+        .collect();
+    let bundle = match compose(&state, &feeds, &feeds, &caller, &req, true).await {
+        Ok(b) => b,
+        Err(r) => return *r,
+    };
+    let spec = WorkspaceSpec {
+        version: BUNDLE_VERSION.into(),
+        workspace: served.layout,
+        entities: bundle.entities,
+        queries: bundle.queries,
+    };
+    (layouts::served_headers(served.version), Json(spec)).into_response()
+}
+
+/// `GET /v1/construct/data/<id>`: the data of the home feeds element `id`
+/// needs (decision `content-addressed-construct`), as `/v1/workspaces`
+/// composes a custom layout's.
+pub(crate) async fn get_element_data(
+    State(state): State<Pod>,
+    Path(id): Path<String>,
+    headers: HeaderMap,
+) -> Response {
+    if let Some(r) = construct::http::guard(&state, &headers).await {
+        return r;
+    }
+    if !construct_elements::is_object_id(&id) {
+        return json_error(
+            StatusCode::BAD_REQUEST,
+            json!({ "error": "invalid_object_id" }),
+        );
+    }
+    let caller = match state.caller(&headers).await {
+        Ok(c) => c,
+        Err(e) => return e.into_response(),
+    };
+    let req = RequestCtx {
+        client: layouts::client_caps(&headers),
+        headers,
+        session: caller.clone().into_session(),
+    };
+    let (p, lookup) = (state.clone(), id.clone());
+    let owned = tokio::task::spawn_blocking(move || construct::http::element_feeds(&p, &lookup))
+        .await
+        .unwrap_or_default();
+    let feeds: Vec<(&str, &str)> = owned
+        .iter()
+        .map(|(s, f)| (s.as_str(), f.as_str()))
+        .collect();
+    match compose(&state, &feeds, &feeds, &caller, &req, true).await {
+        Ok(b) => Json(b).into_response(),
+        Err(r) => *r,
+    }
 }
 
 /// Run `feeds` (`(source, feed)`, checked by the catalog) concurrently and

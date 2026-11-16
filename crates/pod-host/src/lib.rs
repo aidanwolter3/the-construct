@@ -673,6 +673,40 @@ impl Host {
         store.set_pod_setting(key, value).map_err(|e| e.to_string())
     }
 
+    /// `server pods switch <name> [--dry-run | --revert]` (decision
+    /// `content-addressed-construct`): `mode` is `switch`, `dry_run` or
+    /// `revert`. Answers the pod's report.
+    pub fn switch_construct(&self, name: &str, mode: &str) -> Result<serde_json::Value, String> {
+        let pod = self
+            .store
+            .live_pod(
+                &self
+                    .store
+                    .pod_by_name(name)
+                    .map_err(|e| e.to_string())?
+                    .ok_or_else(|| format!("no pod named {name:?}"))?
+                    .id,
+            )
+            .map_err(|e| e.to_string())?
+            .ok_or_else(|| format!("pod {name:?} has expired"))?;
+        let store =
+            Store::open(&self.pod_dir(&pod.id)?.join("server.db")).map_err(|e| e.to_string())?;
+        let state: Pod = Arc::new((self.factory)(store)?);
+        let rt = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(2)
+            .enable_all()
+            .build()
+            .map_err(|e| e.to_string())?;
+        let args = match mode {
+            "dry_run" => serde_json::json!({ "dry_run": true }),
+            "revert" => serde_json::json!({ "revert": true }),
+            "switch" => serde_json::json!({}),
+            other => return Err(format!("unknown switch mode {other:?}")),
+        };
+        rt.block_on(pod_core::construct::switch::tool(&state, &args))
+            .map_err(|e| e.to_string())
+    }
+
     pub fn notify_test(&self, name: &str) -> Result<String, String> {
         let pod = self
             .store

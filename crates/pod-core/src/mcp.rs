@@ -219,6 +219,7 @@ fn all_tools(pod: &Pod) -> Vec<Value> {
 
 fn tools() -> Vec<Value> {
     let mut out = base_tools();
+    out.push(crate::construct::switch::tool_spec());
     out.extend(crate::preview::tools());
     out.extend(crate::mcp_servers::tools());
     out
@@ -467,6 +468,16 @@ async fn call_tool(pod: &Pod, headers: &HeaderMap, params: &Value) -> Value {
         _ => {}
     }
     if let Some(r) = crate::mcp_servers::call(pod, headers, name, &args).await {
+        return tool_result(r);
+    }
+    // The construct (decision `content-addressed-construct`): switching, and
+    // on a switched pod the layout and component tools write it.
+    if name == "switch_construct" {
+        return tool_result(crate::construct::switch::tool(pod, &args).await);
+    }
+    if crate::construct_switched(pod).await
+        && let Some(r) = crate::construct::write::mcp(pod, name, &args).await
+    {
         return tool_result(r);
     }
     let r = match name {

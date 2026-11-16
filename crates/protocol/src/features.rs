@@ -391,6 +391,9 @@ fn intent_features(intent: &ActionIntent, out: &mut BTreeSet<&'static str>) {
             }
         }
         ActionIntent::NavigateBack => add(feature::NAVIGATE_BACK),
+        ActionIntent::NavigatePopTo { .. } | ActionIntent::NavigatePopToRoot => {
+            add(feature::NAVIGATE_POP_TO)
+        }
         ActionIntent::OptimisticMutate { .. } => add(feature::OPTIMISTIC_MUTATION),
         ActionIntent::AuthLogin { .. } => add(feature::AUTH_LOGIN),
         ActionIntent::OpenSession { .. } => add(feature::AUTH_SESSION),

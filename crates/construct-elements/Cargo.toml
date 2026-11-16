@@ -1,0 +1,14 @@
+[package]
+name = "construct-elements"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+# Elements of a content-addressed construct (decision
+# `content-addressed-construct`): canonical JSON and `e1-` hashes, component
+# definitions and their expansion, and materializing an element for the
+# renderer. Used by the pod and the engine alike; no I/O.
+
+[dependencies]
+serde_json.workspace = true
+sha2 = "0.10"

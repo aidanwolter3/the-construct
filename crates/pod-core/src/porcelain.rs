@@ -43,7 +43,7 @@ pub fn draws_plumbing(client: &ClientCaps) -> bool {
 /// Whether a workspace's one slot draws the whole page itself (a filling
 /// `core://Box`, an inline `core://Layout` shown always, or a
 /// `core://Gesture` around one): no title.
-fn fills_screen(slots: &[Value]) -> bool {
+pub fn fills_screen(slots: &[Value]) -> bool {
     let [slot] = slots else { return false };
     fills(&slot["content"])
 }
@@ -62,6 +62,14 @@ fn fills(c: &Value) -> bool {
 /// The `core://Page` a `core://Workspace` (uses already expanded) stands
 /// for, still holding the two component uses.
 pub fn page_of(ws: &Value) -> Option<Value> {
+    let slots = ws["slots"].as_array().cloned().unwrap_or_default();
+    page_of_with(ws, fills_screen(&slots))
+}
+
+/// [`page_of`], with whether the workspace fills the screen worked out by the
+/// caller (from its expansion: the construct converts a workspace whose
+/// slots still hold uses, decision `content-addressed-construct`).
+pub fn page_of_with(ws: &Value, fills: bool) -> Option<Value> {
     if ws["type"].as_str() != Some("core://Workspace") {
         return None;
     }
@@ -73,7 +81,7 @@ pub fn page_of(ws: &Value) -> Option<Value> {
         &json!({
             "title": ws["title"],
             "title_scrolls": ws["title_scrolls"].as_bool().unwrap_or(false),
-            "fills_screen": fills_screen(&slots),
+            "fills_screen": fills,
         }),
         &Value::Array(children),
     );

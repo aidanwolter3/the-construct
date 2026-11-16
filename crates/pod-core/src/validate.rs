@@ -873,6 +873,16 @@ pub struct LayoutError {
     pub allowed: Vec<String>,
 }
 
+impl From<construct_elements::template::Error> for LayoutError {
+    fn from(e: construct_elements::template::Error) -> Self {
+        Self {
+            pointer: e.pointer,
+            message: e.message,
+            allowed: Vec::new(),
+        }
+    }
+}
+
 impl LayoutError {
     fn new(pointer: &str, message: impl Into<String>) -> Self {
         Self {
