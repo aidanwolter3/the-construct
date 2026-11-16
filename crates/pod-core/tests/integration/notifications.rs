@@ -755,3 +755,28 @@ async fn a_public_server_refuses_private_endpoints() {
     assert_eq!(status, StatusCode::BAD_REQUEST);
     assert_eq!(v["error"], "push_endpoint_not_allowed");
 }
+
+/// Decision `notifications-in-a-collection`: a notification about
+/// something goes when its source says that thing is gone.
+#[tokio::test]
+async fn a_notification_goes_with_its_subject() {
+    let p = pod_with(None);
+    let mut a = note("a", "likes");
+    a.subject = Some("bell://items/a".into());
+    p.pod.notify(vec![a, note("b", "likes")]).await.unwrap();
+    let gone = p
+        .pod
+        .notifications_gone(vec!["bell://items/a".into(), "bell://items/x".into()])
+        .await
+        .unwrap();
+    assert_eq!(gone, 1);
+    let (_, list) = call(&p, "GET", "/v1/notifications", None, None).await;
+    let titles: Vec<&str> = list["notifications"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|n| n["title"].as_str().unwrap())
+        .collect();
+    assert_eq!(titles, ["title b"]);
+    assert_eq!(list["unread_total"], 1);
+}

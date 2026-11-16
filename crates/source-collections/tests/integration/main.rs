@@ -7,6 +7,7 @@ mod collections;
 mod computed;
 mod fillers;
 mod follow;
+mod inbox;
 mod lookup;
 mod mcp_fillers;
 mod primitives;

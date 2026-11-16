@@ -126,7 +126,7 @@ pub fn notifications_definition(channels: &Definition) -> Definition {
             learn: false,
         }];
     }
-    Definition {
+    let mut def = Definition {
         name: NOTIFICATIONS.into(),
         title: "Notifications".into(),
         next_field: fields.len() as u32 + 1,
@@ -142,7 +142,22 @@ pub fn notifications_definition(channels: &Definition) -> Definition {
             rows: pod_core::notify::KEEP_COUNT as u32,
             days: (pod_core::notify::KEEP_SECS / 86_400) as u32,
         }),
+    };
+    // A layout's "Mark all read" and "Clear read" are its own actions.
+    let mut defs = model::Defs::default();
+    defs.insert(def.name.clone(), def.clone());
+    for spec in [
+        json!({"name": "mark_all_read", "title": "Mark all read",
+            "source": {"collection": NOTIFICATIONS, "where": [{"field": "read", "equals": false}]},
+            "update": {"read": true}}),
+        json!({"name": "clear_read", "title": "Clear read notifications",
+            "source": {"collection": NOTIFICATIONS, "where": [{"field": "read", "equals": true}]},
+            "delete": true}),
+    ] {
+        let a = crate::actions::parse(&def, &spec, &defs).expect("a valid action");
+        def.actions.push(a);
     }
+    def
 }
 
 /// Create both collections unless the pod has them; a new
@@ -184,6 +199,19 @@ pub fn ensure(tx: &Transaction<'_>, now: i64) -> rusqlite::Result<(Definition, D
 pub fn prepare(store: &pod_core::store::Store) -> rusqlite::Result<()> {
     let now = pod_core::util::now_secs();
     store.transaction(|tx| ensure(tx, now).map(|_| ()))
+}
+
+/// [`prepare`] when `collection` is one of these and the pod has it not
+/// yet (a request that comes before the pod's start finished).
+pub fn prepare_for(store: &pod_core::store::Store, collection: &str) -> rusqlite::Result<()> {
+    if is_inbox(collection)
+        && store
+            .with_conn(|c| db::latest_def(c, collection))?
+            .is_none()
+    {
+        prepare(store)?;
+    }
+    Ok(())
 }
 
 fn table_exists(conn: &Connection, name: &str) -> rusqlite::Result<bool> {
@@ -798,5 +826,23 @@ impl NotificationStore for InboxStore {
     fn remove_about(&self, pod: &Pod, subjects: &[String]) -> rusqlite::Result<usize> {
         let subjects: HashSet<String> = subjects.iter().cloned().collect();
         self.write(pod, |tx, _, _, now, _| remove_about_on(tx, &subjects, now))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_definitions_are_valid() {
+        let c = channels_definition();
+        model::check_definition(&c, 40).unwrap();
+        let n = notifications_definition(&c);
+        model::check_definition(&n, 40).unwrap();
+        let defs: model::Defs = [(c.name.clone(), c), (n.name.clone(), n.clone())]
+            .into_iter()
+            .collect();
+        crate::actions::check_all(&n, &defs).unwrap();
+        assert!(n.actions.iter().all(|a| a.source == NOTIFICATIONS));
     }
 }

@@ -21,6 +21,10 @@
 //! deletes each live row matching `where` (as a row delete does; no
 //! `match`, `create`, `update`, `reset_when`, `scale` or `child`).
 //!
+//! An update action reads its own collection too and has only `update`:
+//! it writes `update` to each live row matching `where`, as a row update
+//! does (decision `notifications-in-a-collection`: "mark all read").
+//!
 //! A call is one edit across both collections (`undo_edit` reverts it),
 //! and a repeated `client_id` answers the first call's edit.
 
@@ -141,6 +145,18 @@ pub struct Action {
 }
 
 impl Action {
+    /// An update action: its own rows, `update` only.
+    pub fn updates_own(&self, own: &str) -> bool {
+        !self.delete
+            && self.source == own
+            && !self.update.is_empty()
+            && self.matching.is_empty()
+            && self.create.is_empty()
+            && self.reset_when.is_empty()
+            && self.scale.is_none()
+            && self.child.is_none()
+    }
+
     /// The child field that links a child to its parent (`$parent.id`).
     pub fn link(&self) -> Option<&str> {
         self.child
@@ -469,12 +485,24 @@ pub fn parse(def: &Definition, spec: &Value, defs: &Defs) -> Result<Action, Stri
                 "a delete action only deletes the rows matching source.where, so it has no {k}"
             )));
         }
-    } else if source_name == def.name {
+    }
+    // An update action: its own rows, only `update`.
+    let own_update = !delete && source_name == def.name;
+    if own_update
+        && let Some(k) = ["match", "create", "reset_when", "scale", "child"]
+            .into_iter()
+            .find(|k| o.get(*k).is_some_and(|v| !v.is_null()))
+    {
+        return Err(at(format!(
+            "an action reading its own rows deletes them (delete: true) or updates them (update only), so it has no {k}"
+        )));
+    }
+    if own_update && o.get("update").is_none_or(Value::is_null) {
         return Err(at(
-            "source is another collection than its own (only a delete action, delete: true, reads its own rows)".into(),
+            "an action reading its own rows deletes them (delete: true) or updates them (update: {field: value})".into(),
         ));
     }
-    let source = if delete {
+    let source = if delete || own_update {
         def
     } else {
         defs.get(&source_name)
@@ -512,7 +540,7 @@ pub fn parse(def: &Definition, spec: &Value, defs: &Defs) -> Result<Action, Stri
     let matching = ctx
         .assigns(o.get("match"), def, Place::Row, "match")
         .map_err(at)?;
-    if matching.is_empty() && !delete {
+    if matching.is_empty() && !delete && !own_update {
         return Err(at("match names the fields that find the parent row, e.g. {\"ingredient\": \"$row.ingredient\"}".into()));
     }
     let create = ctx
@@ -639,8 +667,15 @@ pub fn check(def: &Definition, action: &Action, defs: &Defs) -> Result<(), Strin
         }
         return Ok(());
     }
+    if action.updates_own(&def.name) {
+        for a in &action.update {
+            field_of(def, &a.field)?;
+            expr(&a.value)?;
+        }
+        return Ok(());
+    }
     if action.source == def.name {
-        return Err("source is another collection than its own".into());
+        return Err("an action reading its own rows deletes or only updates them".into());
     }
     for c in &action.reset_when {
         field_of(def, &c.field)?;
@@ -839,7 +874,7 @@ pub fn describe(def: &Definition, a: &Action, defs: &Defs) -> Value {
     });
     if a.delete {
         v["delete"] = json!(true);
-    } else {
+    } else if !a.updates_own(&def.name) {
         v["match"] = assigns(&a.matching, Some(def));
     }
     if !a.title.is_empty() {
@@ -1317,8 +1352,30 @@ pub fn run(
             report.deleted += 1;
         }
     }
-    // A delete action has nothing to upsert.
-    let upserts = if action.delete { &[][..] } else { &rows[..] };
+    if action.updates_own(&def.name) {
+        for r in &rows {
+            let mut p = r.clone();
+            let src = (&source, r);
+            let mut write = Map::new();
+            for a in &action.update {
+                write.insert(
+                    def.name_of(&a.field),
+                    run.eval(&a.value, &params, src, None)?,
+                );
+            }
+            match run.update(&def, &mut p, &write)? {
+                Ok(true) => report.updated += 1,
+                Ok(false) => {}
+                Err(e) => return refuse(422, "invalid_value", e),
+            }
+        }
+    }
+    // A delete or update action has nothing to upsert.
+    let upserts = if action.delete || action.updates_own(&def.name) {
+        &[][..]
+    } else {
+        &rows[..]
+    };
     let mut parents: Vec<Row> = db::all_rows(tx, &def.name, false)?;
     let mut reset_done: HashSet<String> = HashSet::new();
     let mut updated: HashSet<String> = HashSet::new();

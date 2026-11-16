@@ -437,6 +437,7 @@ impl Source for CollectionsAdapter {
             let now = pod_core::util::now_secs();
             let found = pod
                 .blocking(move |s| {
+                    inbox::prepare_for(s, &name)?;
                     s.with_conn(|c| match db::latest_def(c, &name)? {
                         Some((_, def)) => {
                             // Opening an app fills a stale collection.
@@ -488,13 +489,17 @@ impl Source for CollectionsAdapter {
         // `notifications-in-a-collection`), so layouts can bind them.
         let pod = Arc::clone(pod);
         Box::pin(async move {
+            let p = pod.clone();
             let _ = pod
-                .blocking(|s| {
-                    inbox::prepare(s).inspect_err(|e| {
-                        tracing::error!(error = %e, "the notification collections could not be prepared");
-                    })
+                .blocking(move |s| {
+                    inbox::prepare(s)?;
+                    // The channels' rows carry what sources declare now.
+                    p.channel_states().map(|_| ())
                 })
-                .await;
+                .await
+                .inspect_err(|e| {
+                    tracing::error!(status = ?e.0, "the notification collections could not be prepared");
+                });
         })
     }
 
@@ -1204,6 +1209,7 @@ async fn rows_route(State(pod): State<Pod>, Path(collection): Path<String>) -> R
     let name = collection.clone();
     let found = pod
         .blocking(move |s| {
+            inbox::prepare_for(s, &name)?;
             s.with_conn(|c| match db::latest_def(c, &name)? {
                 Some((_, def)) => db::bundle(c, &def).map(Some),
                 None => Ok(None),
