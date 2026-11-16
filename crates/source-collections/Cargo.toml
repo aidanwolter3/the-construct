@@ -8,6 +8,10 @@ publish.workspace = true
 # layouts declare and keep in the pod itself (`collections_*` tables), changed by
 # Claude over MCP. No upstream, no blueprints of its own.
 
+[features]
+# `test_seed`: a made-up collection other crates' tests start from.
+test-seed = []
+
 [dependencies]
 pod-core = { path = "../pod-core" }
 web-extract = { path = "../web-extract" }

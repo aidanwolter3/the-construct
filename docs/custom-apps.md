@@ -2,7 +2,7 @@
 
 A pod's apps are the user's own: any layout the [vocabulary](layouts.md) can draw, over the feeds, screen data and
 actions the pod's data sources declare. They are usually built by Claude through the pod's MCP endpoint, often from a
-**blueprint** (a built-in layout the server ships and updates, such as `pixelfed`, `recipes` or `events`). A new pod
+**blueprint** (a built-in layout the server ships and updates, such as `pixelfed` or `events`). A new pod
 has one app, `home`; nothing else until the user asks for it. Data an app keeps itself (a todo list, a maintenance
 log) lives in **Collections**.
 
@@ -19,8 +19,8 @@ id, but listed only with `GET /v1/apps?blueprints=1` (MCP `list_layouts` answers
 can be a whole blueprint by reference, kept current by the pod:
 
 ```json
-{"title": "Recipes", "icon": "recipe", "feeds": [["recipes", "all"]],
- "layout": {"type": "core://Ref", "app": "recipes", "part": "layout"}}
+{"title": "Events", "icon": "dashboard", "feeds": [["collections", "events"]],
+ "layout": {"type": "core://Ref", "app": "events", "part": "layout"}}
 ```
 
 Name the blueprint's feeds (`list_layouts` shows them): they join home's. To change a blueprint, copy its layout
@@ -40,16 +40,19 @@ A layout of the pod is a title, an icon and a version history. It is served exac
 versions, feature negotiation) and marked `"kind": "custom"` in `GET /v1/apps`. Ids are `c-` and 10 characters,
 except `home`.
 
-**Home owns the feeds** (`["recipes", "all"]`, `["pixelfed", "home"]`, `["collections", "todos"]`, at most 32): every
+**Home owns the feeds** (`["pixelfed", "home"]`, `["collections", "todos"]`, `["collections", "recipes"]`, at most 32): every
 layout may bind any of them, and a layout's request loads only the feeds whose query keys it binds. Feeds named when
 creating a layout (or renaming one) are added to home's. Changing home's own feed list is refused (409
 `feed_in_use`, naming the layout) while another layout still binds a feed it would drop. Home's event stream carries
 every layout's new versions and deletions, and every data change of its feeds, so one engine follows them all.
+When a pod opens, feeds naming a source the server no longer has (such as the removed `recipes` source) are dropped
+from home's and every layout's feeds (on a switched pod, a new home element without them), so home's scope holds no
+feed nothing can fill (decision [`remove-recipes-source`](decisions/remove-recipes-source.md)).
 
 ```bash
 pod=http://127.0.0.1:8080; token=cpod_…
 curl -fsS -H "Authorization: Bearer $token" -H 'content-type: application/json' $pod/v1/custom-apps -d '{
-  "title": "Kitchen", "icon": "recipe", "feeds": [["recipes", "all"], ["pixelfed", "home"]],
+  "title": "Kitchen", "icon": "recipe", "feeds": [["collections", "recipes"], ["pixelfed", "home"]],
   "note": "Recipes next to my feed", "layout": {"type": "core://Workspace", "title": "Kitchen", "slots": []}}'
 ```
 

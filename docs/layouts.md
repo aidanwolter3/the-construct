@@ -15,12 +15,12 @@ Built-in layouts (the blueprints) live in their source crate, `crates/source-*/l
 Adding a file is the only way to change how a blueprint looks.
 
 1. Copy the newest file of the app to the next number (four digits, no gaps), e.g.
-   `crates/source-recipes/layouts/recipes/0005.json` to `.../recipes/0006.json`, and edit it.
+   `crates/source-events/layouts/events/0006.json` to `.../events/0007.json`, and edit it.
 2. The file is `{"note": "<one-line changelog>", "layout": <core://Workspace or core://Page>}`. It may use server
    components (`core://Use` of `core:<name>`); the pod records the layout they expand to. The note is what the app menu's
    version history shows. The root's `id` must be the app id. Don't declare features: the pod works them out. Older
    files carry a `"schema"` number; it is ignored.
-3. Run `cargo test` (`-p source-pixelfed`, `-p source-recipes` or `-p source-events` is enough). It validates every file:
+3. Run `cargo test` (`-p source-pixelfed` or `-p source-events` is enough). It validates every file:
    structure, size, slots, routes, endpoints the source declares, and nesting rules.
 4. Check it in the [simulator](simulator.md) and put screenshots in the PR.
 5. Merge to `main`. On start, the pod appends the file as the app's next version. Connected clients get a `layout`
@@ -49,16 +49,16 @@ and Back, and wraps what scrolls in `core://Scroll`:
 
 ```json
 {
-  "type": "core://Page", "id": "recipes", "title": "Recipes",
+  "type": "core://Page", "id": "events", "title": "Events",
   "root": {"type": "core://Column", "children": [
     {"type": "core://Row", "padding_h_dp": 12, "children": [
       {"type": "core://Use", "component": "core:back_button"},
-      {"type": "core://Text", "style": "Title", "value_expr": "Recipes"}, {"type": "core://Spacer"},
+      {"type": "core://Text", "style": "Title", "value_expr": "Events"}, {"type": "core://Spacer"},
       {"type": "core://IconButton", "icon": "settings", "content_description": "Settings",
        "on_click": {"intent": "action.navigation.open", "layout": "settings", "presentation": "Panel"}}]},
     {"type": "core://Scroll", "content": {"type": "core://Column", "children": []}}]},
-  "screens": [{"id": "recipe", "route": "recipes://recipes/{id}", "data": "/v1/recipes/screens/recipe?id=$route.id",
-    "item": "recipes://recipes/$route.id", "root": {"type": "core://Use", "component": "core:card", "children": []}}]
+  "screens": [{"id": "event", "route": "collections://events/{id}", "data": "/v1/collections/events/row?id=$route.id",
+    "item": "collections://events/$route.id", "root": {"type": "core://Use", "component": "core:card", "children": []}}]
 }
 ```
 
@@ -80,17 +80,17 @@ may still be written with it; prefer a `core://Page` for a new one.
 ```json
 {
   "type": "core://Workspace",
-  "id": "recipes",
-  "title": "Recipes",
+  "id": "events",
+  "title": "Events",
   "slots": [
-    { "slot_id": "recipes", "provider_uri": "recipes://all", "content": { "type": "core://Column", "children": [] } }
+    { "slot_id": "matches", "provider_uri": "events://matches", "content": { "type": "core://Column", "children": [] } }
   ],
   "screens": [
     {
-      "id": "recipe",
-      "route": "recipes://recipes/{id}",
-      "title": "Recipe",
-      "data": "/v1/recipes/screens/recipe?id=$route.id",
+      "id": "event",
+      "route": "collections://events/{id}",
+      "title": "Event",
+      "data": "/v1/collections/events/row?id=$route.id",
       "content": { "type": "core://Column", "children": [] },
       "footer": null
     }

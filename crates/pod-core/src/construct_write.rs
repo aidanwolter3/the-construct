@@ -820,6 +820,60 @@ fn grown_feeds(
     Ok((feeds.len() != before).then_some(feeds))
 }
 
+/// Drop home's feeds of sources this build doesn't have (decision
+/// `remove-recipes-source`): a removed source's feed would otherwise stay
+/// in home's `bind` for good, since the tools only grow it. Answers the
+/// feeds dropped. Blocking; run when the pod opens, on a switched pod.
+pub fn drop_unknown_feeds(
+    store: &crate::store::Store,
+    catalog: &Catalog,
+) -> Result<Vec<(String, String)>, String> {
+    let mut refused = None;
+    let dropped = store
+        .transaction(|tx| {
+            let feeds = home_feeds(tx);
+            let (keep, gone): (Vec<_>, Vec<_>) = feeds
+                .into_iter()
+                .partition(|(s, _)| catalog.source(s).is_some());
+            if gone.is_empty() {
+                return Ok(gone);
+            }
+            let Some(h) = cstore::name(tx, crate::HOME_APP)? else {
+                return Ok(Vec::new());
+            };
+            let Some((el, _)) = cstore::object(tx, &h)? else {
+                return Ok(Vec::new());
+            };
+            let mut el = (*el).clone();
+            el["bind"]["feeds"] = json!(keep);
+            let note = format!(
+                "Home no longer binds {} (no such source)",
+                gone.iter()
+                    .map(|(s, f)| format!("{s}/{f}"))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            );
+            if let Err(e) = put(
+                tx,
+                catalog,
+                crate::HOME_APP,
+                el,
+                true,
+                crate::custom::AUTHOR_POD,
+                &note,
+            ) {
+                refused = Some(e);
+                return Err(rusqlite::Error::QueryReturnedNoRows);
+            }
+            Ok(gone)
+        })
+        .map_err(|e| match refused.take() {
+            Some(r) => r.to_string(),
+            None => e.to_string(),
+        })?;
+    Ok(dropped)
+}
+
 /// Give home these feeds (a new home element).
 fn set_home_feeds(
     pod: &Pod,

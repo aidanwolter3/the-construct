@@ -28,6 +28,10 @@ fn pod() -> Pod {
         .build()
         .unwrap();
     let state = Arc::new(server::state_in_memory());
+    state
+        .store()
+        .with_conn(source_collections::test_seed::seed_test_dishes)
+        .unwrap();
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     listener.set_nonblocking(true).unwrap();
     let base = format!("http://{}", listener.local_addr().unwrap());
@@ -291,7 +295,7 @@ fn an_embedded_layout_draws_what_its_use_site_binds() {
     let state = p.state.clone();
     p.rt.block_on(async move {
         let shelf = server::construct::write::mcp(&state, "create_layout", &json!({"title": "Shelf",
-            "feeds": [["recipes", "all"]],
+            "feeds": [["collections", "dishes"]],
             "layout": {"type": "core://Page", "title": "Shelf", "root": {"type": "core://Column", "children": [
                 {"type": "core://Text", "style": "Title", "value_expr": "$in.label"},
                 {"type": "core://List", "query_key": "$in.items",
@@ -304,9 +308,9 @@ fn an_embedded_layout_draws_what_its_use_site_binds() {
             "layout": {"type": "core://Page", "title": "Home", "root": {"type": "core://Column", "children": [
                 {"type": "core://Text", "style": "Title", "value_expr": "Home"},
                 {"type": "core://Layout", "ref": {"name": shelf, "as": "shelf-a"},
-                    "bind": {"label": "Books", "items": "recipes:all"}},
+                    "bind": {"label": "Books", "items": "collection:dishes"}},
                 {"type": "core://Layout", "ref": {"name": shelf, "as": "shelf-b"},
-                    "bind": {"label": "Films", "items": "recipes:none"}}]}}}))
+                    "bind": {"label": "Films", "items": "collection:none"}}]}}}))
             .await
             .unwrap();
         assert!(r.is_ok(), "{r:?}");
@@ -326,18 +330,18 @@ fn an_embedded_layout_draws_what_its_use_site_binds() {
     wait_until("shelf-a drawn", || drawn("shelf-a").contains("Books"));
     wait_until("shelf-b drawn", || drawn("shelf-b").contains("Films"));
     assert!(
-        drawn("shelf-a").contains("recipes:all"),
+        drawn("shelf-a").contains("collection:dishes"),
         "{}",
         drawn("shelf-a")
     );
     assert!(
-        drawn("shelf-b").contains("recipes:none"),
+        drawn("shelf-b").contains("collection:none"),
         "{}",
         drawn("shelf-b")
     );
     assert!(!drawn("shelf-a").contains("$in."), "{}", drawn("shelf-a"));
     // The data shelf-a's binding reads came with it.
     wait_until("shelf-a's data", || {
-        e.snapshot().queries_json.contains("recipes:all")
+        e.snapshot().queries_json.contains("collection:dishes")
     });
 }

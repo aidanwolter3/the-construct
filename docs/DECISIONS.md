@@ -1438,6 +1438,8 @@ Superseded in part (`hydrate` became a manifest plus named feeds) by
 
 ## D41: Recipes are a second adapter with its own tables in the pod's SQLite
 
+Superseded by [remove-recipes-source](decisions/remove-recipes-source.md): the recipes source is removed; recipes live in Collections.
+
 Superseded in part by [recipes-start-empty](decisions/recipes-start-empty.md) (the family import is gone).
 
 - **Why:** issue #13: the family recipe collection (81 recipes, 8 categories, normalized from the original scans)

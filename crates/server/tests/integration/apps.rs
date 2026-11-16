@@ -199,12 +199,12 @@ async fn apps_lists_dev_apps_only_when_shown() {
     let apps = body["apps"].as_array().unwrap();
     // The blueprints (Settings and the inbox among them, decision
     // `layouts-not-apps`), then the pod's own home (decision `blueprints-and-home`).
-    assert_eq!(apps.len(), 8, "{body}");
-    assert_eq!(apps[3]["id"], "shell");
-    assert_eq!(apps[4]["id"], "settings");
-    assert_eq!(apps[5]["id"], "inbox");
-    assert_eq!(apps[6]["id"], "agents");
-    assert_eq!(apps[7]["id"], "home");
+    assert_eq!(apps.len(), 7, "{body}");
+    assert_eq!(apps[2]["id"], "shell");
+    assert_eq!(apps[3]["id"], "settings");
+    assert_eq!(apps[4]["id"], "inbox");
+    assert_eq!(apps[5]["id"], "agents");
+    assert_eq!(apps[6]["id"], "home");
     let a = &apps[0];
     assert_eq!(
         (&a["id"], &a["title"], &a["icon"], &a["latest_version"]),
@@ -218,10 +218,6 @@ async fn apps_lists_dev_apps_only_when_shown() {
     assert!(is_rfc3339(&a["updated_at"]), "{a}");
     assert_eq!(
         (&apps[1]["id"], &apps[1]["title"], &apps[1]["icon"]),
-        (&json!("recipes"), &json!("Recipes"), &json!("recipe"))
-    );
-    assert_eq!(
-        (&apps[2]["id"], &apps[2]["title"], &apps[2]["icon"]),
         (&json!("events"), &json!("Events"), &json!("dashboard"))
     );
 
@@ -245,7 +241,6 @@ async fn apps_lists_dev_apps_only_when_shown() {
         got,
         [
             ("pixelfed", "Pixelfed", "photo", files("pixelfed")),
-            ("recipes", "Recipes", "recipe", files("recipes")),
             ("events", "Events", "dashboard", files("events")),
             (
                 "pixelfed_sample_no_login",

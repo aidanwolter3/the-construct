@@ -512,6 +512,39 @@ pub fn blueprint_ref(app: &str, id: &str) -> Value {
     json!({ "type": crate::parts::REF_TYPE, "app": app, "part": crate::parts::LAYOUT_PART, "id": id })
 }
 
+/// Drop feeds of sources this build doesn't have from every custom app's
+/// feeds (home's are the pod's scope; decision `remove-recipes-source`):
+/// a removed source's feed would otherwise stay in home's for good and
+/// fail every check of home's scope. Answers how many apps changed.
+pub fn drop_unknown_feeds(store: &Store, catalog: &Catalog) -> rusqlite::Result<usize> {
+    store.transaction(|tx| {
+        let rows: Vec<(String, String)> = {
+            let mut stmt = tx.prepare("SELECT id, feeds_json FROM custom_apps")?;
+            stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
+                .collect::<Result<_, _>>()?
+        };
+        let mut changed = 0;
+        for (id, json) in rows {
+            let Ok(feeds) = serde_json::from_str::<Vec<(String, String)>>(&json) else {
+                continue;
+            };
+            let keep: Vec<_> = feeds
+                .iter()
+                .filter(|(s, _)| catalog.source(s).is_some())
+                .collect();
+            if keep.len() == feeds.len() {
+                continue;
+            }
+            tx.execute(
+                "UPDATE custom_apps SET feeds_json = ?1 WHERE id = ?2",
+                params![serde_json::to_string(&keep).expect("serializes"), id],
+            )?;
+            changed += 1;
+        }
+        Ok(changed)
+    })
+}
+
 /// Start a pod's apps from blueprints (decision `blueprints-and-home`):
 /// the [`crate::HOME_APP`] (a reference to [`crate::HOME_BLUEPRINT`]) when
 /// the pod has none and the catalog has the blueprint; and once, on a pod
