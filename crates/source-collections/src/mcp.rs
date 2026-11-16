@@ -171,7 +171,7 @@ pub fn tools() -> Vec<Value> {
         ),
         tool(
             "apply_change",
-            "Change a collection's definition and the custom apps that show it in one step. changes: [{op: add_field, name, type, options?, collection?, unique?, optional?, default?, compute?} | {op: rename_field, field, to} | {op: remove_field, field} | {op: restore_field, field} | {op: update_field, field, type?, options?, collection?, unique?, optional?, default?, compute?} | {op: set_action, action} | {op: remove_action, action: name} | {op: recompute_field, field} | {op: set_order, field?: name or [names], descending?} | {op: set_title, title} | {op: add_reminder, field, title, body?, at?, unless?, label?, app?} | {op: update_reminder, reminder: id, ...} | {op: remove_reminder, reminder: id} | {op: set_filler, filler} | {op: remove_filler, filler: id} | {op: add_alert, ...} | {op: update_alert, alert: id, ...} | {op: remove_alert, alert: id}]. set_filler adds a filler (as define_collection's fillers), or changes the one filler.id names, and starts its fill; remove_filler stops one (its rows stay, no longer locked; its alerts go). add_alert notifies once per row when a row matches (as define_collection's alerts). describe_collection lists fillers and alerts with their ids. A reminder notifies the user once per row when its date field is reached: on that date at at (HH:MM, default 09:00) in the pod's time zone (set_time_zone), unless the row then has unless {field, equals} (e.g. {field: \"done\", equals: true}); dates before the day it was added never notify, and a reminder more than 7 days late is dropped. title and body are the notification's text with {field} replaced by the row's value; label names it in the user's notification settings (default \"<Title>: <field>\"); app (a custom app id) is the app it comes from and opens, default the oldest custom app with the collection as a feed (with none, nothing is sent). describe_collection lists reminders with their ids. compute (one kind or a list tried in order: {kind: \"expr\", expr}, {kind: \"lookup\", from, collection, key, value, match?, learn?}, {kind: \"count\", from, collection, key, where?} or {kind: \"model\", from, prompt}, as in define_collection) is computed for existing rows too (a model only fills empty ones); null stops computing and keeps the values. Lookups and counts are live: a change to the rows of the collection they read recomputes the rows it affects at once, cascading. recompute_field computes the field again for every row (a row only the model could answer keeps its value), e.g. after changing a lookup's match. Fields and actions are as in define_collection. update_field {type: \"ref\", collection} turns a text field into a ref: each value becomes the id of the row of that collection whose id or unique text field equals it (ignoring case and spacing; make the target's name field unique first); values that match no row are kept aside and reported in conversions (set_aside, samples). unique: true fails while live rows share a value (the error lists them). set_action adds an action or replaces the one of that name; remove_action removes it. A collection can't be deleted while another collection's ref, lookup, count, rollup or action names it. Every custom app using Collections is checked against the new definition; if any would break, nothing applies and the error names the app and the binding. Renamed fields keep their old name as an alias; removed fields are hidden and restorable for 30 days; type changes convert row by row and keep values that don't convert aside.",
+            "Change a collection's definition and the custom apps that show it in one step. changes: [{op: add_field, name, type, options?, collection?, unique?, optional?, default?, compute?} | {op: rename_field, field, to} | {op: remove_field, field} | {op: restore_field, field} | {op: update_field, field, type?, options?, collection?, unique?, optional?, default?, compute?} | {op: set_action, action} | {op: remove_action, action: name} | {op: recompute_field, field} | {op: set_order, field?: name or [names], descending?} | {op: set_title, title} | {op: add_reminder, field, title, body?, at?, unless?, label?, app?} | {op: update_reminder, reminder: id, ...} | {op: remove_reminder, reminder: id} | {op: set_filler, filler} | {op: remove_filler, filler: id} | {op: add_alert, ...} | {op: update_alert, alert: id, ...} | {op: remove_alert, alert: id}]. set_filler adds a filler (as define_collection's fillers), or changes the one filler.id names, and starts its fill; remove_filler stops one (its rows stay, no longer locked; its alerts go). add_alert notifies once per row when a row matches (as define_collection's alerts). describe_collection lists fillers and alerts with their ids. A reminder notifies the user once per row when its date field is reached: on that date at at (HH:MM, default 09:00) in the pod's time zone (set_time_zone), unless the row then has unless {field, equals} (e.g. {field: \"done\", equals: true}); dates before the day it was added never notify, and a reminder more than 7 days late is dropped. title and body are the notification's text with {field} replaced by the row's value; label names it in the user's notification settings (default \"<Title>: <field>\"); app (a custom app id) is the app it comes from and opens, default the oldest custom app with the collection as a feed (with none, nothing is sent). describe_collection lists reminders with their ids. compute (one kind or a list tried in order: {kind: \"expr\", expr}, {kind: \"lookup\", from, collection, key, value, match?, learn?}, {kind: \"count\", from, collection, key, where?} or {kind: \"model\", from, prompt}, as in define_collection) is computed for existing rows too (a model only fills empty ones); null stops computing and keeps the values. Lookups and counts are live: a change to the rows of the collection they read recomputes the rows it affects at once, cascading. recompute_field computes the field again for every row (a row only the model could answer keeps its value), e.g. after changing a lookup's match. Fields and actions are as in define_collection. update_field {type: \"ref\", collection} turns a text field into a ref: each value becomes the id of the row of that collection whose id or unique text field equals it (ignoring case and spacing; make the target's name field unique first); values that match no row are kept aside and reported in conversions (set_aside, samples). unique: true fails while live rows share a value (the error lists them). set_action adds an action or replaces the one of that name; remove_action removes it. A collection can't be deleted while another collection's ref, lookup, count, rollup or action names it. Every custom app using Collections is checked against the new definition; if any would break, nothing applies and the error names the app and the binding. apps: [{app, layout | json_patch, base_version?}] edits layouts in the same step (base_version is the version get_layout shows). Renamed fields keep their old name as an alias; removed fields are hidden and restorable for 30 days; type changes convert row by row and keep values that don't convert aside.",
             json!({ "collection": collection, "base_version": { "type": "integer", "description": "The definition version you read" },
                     "changes": { "type": "array", "items": { "type": "object" } }, "apps": apps, "note": note }),
             &["collection", "changes"],
@@ -1181,6 +1181,110 @@ async fn app_bodies(
     Ok(out)
 }
 
+/// The app edits of a change set on a switched pod, as construct
+/// `update_layout` arguments (`base_version` is the name's history seq,
+/// as `get_layout` shows it): checked and written in the change set's
+/// transaction.
+fn construct_edits(args: &Value, note: &str) -> Result<Vec<Value>, Value> {
+    let Some(items) = args.get("apps").filter(|a| !a.is_null()) else {
+        return Ok(Vec::new());
+    };
+    let Some(items) = items.as_array() else {
+        return Err(bad(
+            "\"apps\" is a list of {app, layout | json_patch, base_version?}",
+        ));
+    };
+    let mut out: Vec<Value> = Vec::new();
+    for (i, item) in items.iter().enumerate() {
+        let Some(id) = item["app"].as_str().filter(|a| !a.is_empty()) else {
+            return Err(bad(format!("apps[{i}]: \"app\" is a layout id")));
+        };
+        if out.iter().any(|a| a["app"] == id) {
+            return Err(bad(format!("app '{id}' is listed twice")));
+        }
+        if item.get("json_patch").is_none_or(Value::is_null) && !item["layout"].is_object() {
+            return Err(bad(format!("apps[{i}]: pass \"layout\" or \"json_patch\"")));
+        }
+        let mut a = item.clone();
+        if a.get("note").is_none_or(Value::is_null) {
+            a["note"] = json!(note);
+        }
+        out.push(a);
+    }
+    Ok(out)
+}
+
+/// A layout that a change of a collection would break.
+fn breaks_app(
+    id: &str,
+    title: &str,
+    in_change_set: bool,
+    e: &pod_core::validate::LayoutError,
+) -> Value {
+    json!({
+        "error": "breaks_app", "status": 422, "app": id, "title": title,
+        "in_change_set": in_change_set,
+        "at": e.pointer, "allowed": e.allowed,
+        "detail": format!("app '{title}' ({id}) would break: {}{}",
+            if e.pointer.is_empty() { String::new() } else { format!("{}: ", e.pointer) }, e.message),
+        "fix": "change that app's layout in the same apply_change (apps: [{app, layout | json_patch}]), or change the collection differently",
+    })
+}
+
+/// On a switched pod, inside the change set's transaction: write `edits`
+/// to the construct (as `update_layout` does), then check every layout as
+/// clients draw it against `defs`. `Ok(Err(_))`: refused; roll back.
+#[allow(clippy::type_complexity)]
+fn construct_commit(
+    tx: &rusqlite::Transaction<'_>,
+    pod: &Pod,
+    edits: &[Value],
+    defs: &HashMap<String, Definition>,
+) -> rusqlite::Result<Result<(Vec<(String, i64)>, Vec<(String, i64)>), Value>> {
+    use pod_core::construct::write as cwrite;
+    if !pod_core::construct::switched_on(tx)? {
+        return Ok(Err(json!({ "error": "stale_base", "status": 409,
+            "detail": "the pod was switched back to the old layout system meanwhile; apply the change again" })));
+    }
+    let mut versions = Vec::new();
+    let mut moved = Vec::new();
+    for a in edits {
+        let id = a["app"].as_str().unwrap_or("").to_owned();
+        match cwrite::update_layout(pod, tx, a) {
+            Ok((answer, m)) => {
+                versions.push((id, answer["version"].as_i64().unwrap_or(0)));
+                moved.extend(m);
+            }
+            Err(mut b) => {
+                let status = match b["error"].as_str() {
+                    Some("stale_base") => 409,
+                    Some("layout_not_found" | "not_found") => 404,
+                    Some("invalid_layout") => 422,
+                    _ => 400,
+                };
+                b["app"] = json!(id);
+                b["status"] = json!(status);
+                return Ok(Err(b));
+            }
+        }
+    }
+    let feeds: Vec<String> = cwrite::home_feeds(tx)
+        .into_iter()
+        .filter(|(s, _)| s == NAME)
+        .map(|(_, f)| f)
+        .collect();
+    if feeds.is_empty() {
+        return Ok(Ok((versions, moved)));
+    }
+    for l in cwrite::live_layouts(tx)? {
+        if let Err(e) = crate::bindings::check(&l.node, &feeds, defs) {
+            let edited = versions.iter().any(|(a, _)| *a == l.name);
+            return Ok(Err(breaks_app(&l.name, &l.title, edited, &e)));
+        }
+    }
+    Ok(Ok((versions, moved)))
+}
+
 /// Apply `planned` (a new definition of `name`, from `base`) with the app
 /// edits of `args["apps"]`, atomically: every custom app using Collections
 /// must fit the new definition, else nothing applies.
@@ -1193,7 +1297,25 @@ async fn commit(
     args: &Value,
     note: String,
 ) -> Result<Value, Value> {
-    let bodies = app_bodies(pod, args, &note).await?;
+    // A switched pod's layouts are the construct's (decision
+    // `content-addressed-construct`): its edits and the check against its
+    // layouts happen in the transaction below.
+    let switched = {
+        let p = pod.clone();
+        tokio::task::spawn_blocking(move || pod_core::construct::is_switched(&p))
+            .await
+            .unwrap_or(false)
+    };
+    let edits = if switched {
+        construct_edits(args, &note)?
+    } else {
+        Vec::new()
+    };
+    let bodies = if switched {
+        Vec::new()
+    } else {
+        app_bodies(pod, args, &note).await?
+    };
     // Stage the app edits: the core's checks now, ours below.
     let mut staged = Vec::new();
     let mut edited: HashMap<String, Value> = HashMap::new();
@@ -1210,7 +1332,11 @@ async fn commit(
     let catalog_apps = {
         let pod2 = pod.clone();
         pod.blocking(move |s| {
-            let apps = custom::apps_using(s, pod2.catalog(), NAME)?;
+            let apps = if switched {
+                Vec::new()
+            } else {
+                custom::apps_using(s, pod2.catalog(), NAME)?
+            };
             let defs = s.with_conn(db::all_defs)?;
             Ok((apps, defs))
         })
@@ -1238,18 +1364,16 @@ async fn commit(
             .map(|(_, f)| f.clone())
             .collect();
         if let Err(e) = crate::bindings::check(layout, &feeds, &new_defs) {
-            return Err(json!({
-                "error": "breaks_app", "status": 422, "app": app.id, "title": app.title,
-                "in_change_set": edited.contains_key(&app.id),
-                "at": e.pointer, "allowed": e.allowed,
-                "detail": format!("app '{}' ({}) would break: {}{}", app.title, app.id,
-                    if e.pointer.is_empty() { String::new() } else { format!("{}: ", e.pointer) }, e.message),
-                "fix": "change that app's layout in the same apply_change (apps: [{app, layout | json_patch}]), or change the collection differently",
-            }));
+            return Err(breaks_app(
+                &app.id,
+                &app.title,
+                edited.contains_key(&app.id),
+                &e,
+            ));
         }
     }
     // Apps in the change set that don't use Collections are fine too.
-    if !staged.is_empty() {
+    if !staged.is_empty() || !edits.is_empty() {
         custom::allow_write(pod).map_err(|(status, mut b)| {
             b["status"] = json!(status.as_u16());
             b
@@ -1263,7 +1387,7 @@ async fn commit(
     let coll = name.to_owned();
     let others = new_defs.clone();
     let created = planned.created.clone();
-    let (version, conversions, versions, jobs) = refusable(pod, move |tx| {
+    let (version, conversions, versions, moved, jobs) = refusable(pod, move |tx| {
         let current = db::latest_def(tx, &coll)?.map(|(v, _)| v);
         if current != Some(base) {
             return Ok(Err(json!({ "error": "stale_base", "status": 409, "latest_version": current,
@@ -1306,6 +1430,16 @@ async fn commit(
             jobs.extend(crate::compute::backfill(tx, &def, id, true, caps.rows, now, caps)?);
         }
         let mut versions = Vec::new();
+        let mut moved = Vec::new();
+        if switched {
+            match construct_commit(tx, &pod2, &edits, &others)? {
+                Ok((v, m)) => {
+                    versions = v;
+                    moved = m;
+                }
+                Err(b) => return Ok(Err(b)),
+            }
+        }
         for s in &staged {
             match custom::commit_staged(tx, &pod2, s, Writer::Claude)? {
                 Ok(v) => versions.push((s.id.clone(), v)),
@@ -1315,11 +1449,15 @@ async fn commit(
                 }
             }
         }
-        Ok(Ok((version, conversions, versions, jobs)))
+        Ok(Ok((version, conversions, versions, moved, jobs)))
     })
     .await?;
-    for (app, v) in &versions {
-        pod.publish_layout(app, *v);
+    if switched {
+        pod_core::construct::write::publish(pod, &moved);
+    } else {
+        for (app, v) in &versions {
+            pod.publish_layout(app, *v);
+        }
     }
     pod.publish_data_all(NAME);
     let computing = jobs.len();
