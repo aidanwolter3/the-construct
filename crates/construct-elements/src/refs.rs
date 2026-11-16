@@ -46,7 +46,13 @@ pub struct EdgeRef {
     pub name: String,
     pub el: Option<String>,
     pub site: Site,
+    /// The target's inputs this use site binds (`bind`), with the element's
+    /// own inputs already filled in: what `$in.<name>` reads in the target.
+    pub bind: Map<String, Value>,
 }
+
+/// The field of an edge that binds its target's inputs.
+pub const BIND_FIELD: &str = "bind";
 
 impl Ref {
     /// A reference as written: a name, or the sealed object.

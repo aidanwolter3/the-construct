@@ -40,6 +40,9 @@ click Hello there; shot before; construct crates/construct-sim/data/construct_v2
 click Item 30; back; assert-text Recipes (edited); assert-text Item 30; assert-text Hello there; shot edited; \
 click Item 30; construct crates/construct-sim/data/construct_v4.json; wait 600; assert-text Recipes (edited); shot unlinked; \
 construct crates/construct-sim/data/construct_v3.json; wait 600; assert-text Nothing linked here now; shot cut"
+scenario scroll-anchor home \
+  "construct crates/construct-sim/data/construct_v1.json; click Recipes; scroll-to Item 30; shot before; \
+construct crates/construct-sim/data/construct_anchor_above.json; wait 300; assert-text Item 30; shot rows-above"
 scenario tiles-home tiles_home \
   "shot top; scroll-to Photos; assert-text Read more; shot tiles"
 for page in home groceries log; do

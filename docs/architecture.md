@@ -121,6 +121,9 @@ target by hash, so home's hash is the whole construct's. A device is current whe
 (`GET /v1/construct`, `event: construct`), fetches only the objects it lacks (`POST /v1/objects`), and expands
 components itself (`crates/construct-elements`, shared with the pod). The engine keys each reachable layout by its
 edge and hands the renderer the edge graph; the renderer closes the stack entries the one below no longer reaches.
+An edge may bind its target's inputs (`bind`; only home binds the pod's data), the engine keeps the objects it
+fetched in its store (so a restart with the same root fetches nothing), opens a layout home doesn't reach by name
+(`GET /v1/construct/names/<name>`), and the renderer keeps each scroll anchored to its first visible row.
 A pod that isn't switched works exactly as before, and a new client speaks both. Switching, its dry run and the revert
 are `server pods switch` and MCP `switch_construct` ([server.md](server.md#admin-commands)).
 

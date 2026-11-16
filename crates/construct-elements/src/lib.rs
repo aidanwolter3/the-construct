@@ -11,5 +11,7 @@ pub mod refs;
 pub mod template;
 
 pub use canonical::{canonical, is_object_id, object_id};
-pub use materialize::{Materialized, Objects, materialize, reach};
+pub use materialize::{
+    Keyed, Materialized, Objects, instance_id, keyed, materialize, materialize_with, reach,
+};
 pub use refs::{EdgeRef, Ref};

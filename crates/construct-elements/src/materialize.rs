@@ -15,7 +15,7 @@ use std::sync::Arc;
 use serde_json::{Map, Value, json};
 
 use crate::def::{CHILDREN_TYPE, Def, FRAGMENT_TYPE, IF_ARG_TYPE};
-use crate::refs::{EdgeRef, Ref, Site, site_of};
+use crate::refs::{BIND_FIELD, EdgeRef, Ref, Site, site_of};
 use crate::template::{
     Error, MAX_EXPANDED_BYTES, Work, as_text, subst_in, subst_value_in, truthy, weight,
 };
@@ -91,6 +91,19 @@ pub fn element_def(el: &Value) -> Result<Option<Def>, String> {
 /// can't expand (too much work, too large); a missing object is drawn as a
 /// placeholder and listed in [`Materialized::missing`].
 pub fn materialize(objects: &dyn Objects, id: &str) -> Result<Materialized, Error> {
+    materialize_with(objects, id, &Map::new())
+}
+
+/// [`materialize`] with the element's inputs bound: each `$in.<name>` of its
+/// own tree that `inputs` names reads that value (a string that is only
+/// `$in.<name>` becomes the value itself), so a layout embedded or opened
+/// with `bind` draws what its use site bound. Inputs it isn't given stay as
+/// written.
+pub fn materialize_with(
+    objects: &dyn Objects,
+    id: &str,
+    inputs: &Map<String, Value>,
+) -> Result<Materialized, Error> {
     let mut m = Mat {
         objects,
         work: Work::default(),
@@ -108,7 +121,10 @@ pub fn materialize(objects: &dyn Objects, id: &str) -> Result<Materialized, Erro
             missing: m.missing,
         });
     };
-    let node = el.get("node").cloned().unwrap_or(Value::Null);
+    let mut node = el.get("node").cloned().unwrap_or(Value::Null);
+    if !inputs.is_empty() {
+        node = crate::template::bind_inputs(&node, inputs, &mut m.work)?;
+    }
     let node = m.one(&node, "/node", 0, None)?.unwrap_or(Value::Null);
     let size = serde_json::to_vec(&node).map_or(usize::MAX, |b| b.len());
     if size > MAX_EXPANDED_BYTES {
@@ -288,6 +304,11 @@ impl Mat<'_> {
         let mut rest = o.clone();
         rest.remove("ref");
         let mut out = self.object(&rest, at, depth, scope)?;
+        // The target's bindings go with the edge, not to the renderer.
+        let bind = match out.remove(BIND_FIELD) {
+            Some(Value::Object(b)) => b,
+            _ => Map::new(),
+        };
         if let Some(r) = Ref::parse(&raw) {
             out.insert("layout".into(), json!(r.key()));
             self.edges.push(EdgeRef {
@@ -295,6 +316,7 @@ impl Mat<'_> {
                 name: r.name.clone(),
                 el: r.el.clone(),
                 site,
+                bind,
             });
         }
         Ok(Out::One(Value::Object(out)))
@@ -384,6 +406,58 @@ impl Mat<'_> {
         }
         Ok(out)
     }
+}
+
+/// What one key of the construct draws: its element and the inputs its use
+/// site bound.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Keyed {
+    pub el: String,
+    pub inputs: Map<String, Value>,
+}
+
+/// The id a materialized element is kept under: its own id, or with bound
+/// inputs, its id and their canonical JSON (the same element bound two ways
+/// draws two things).
+pub fn instance_id(el: &str, inputs: &Map<String, Value>) -> String {
+    if inputs.is_empty() {
+        return el.to_owned();
+    }
+    format!(
+        "{el}?{}",
+        crate::canonical::canonical(&Value::Object(inputs.clone()))
+    )
+}
+
+/// Every key reachable from `root` (keyed `root_key`), breadth first: the
+/// element each draws and the inputs bound at the first use site that
+/// reaches it (decision `content-addressed-construct`). Elements not in
+/// `objects` are left out.
+pub fn keyed(objects: &dyn Objects, root_key: &str, root: &str) -> BTreeMap<String, Keyed> {
+    let mut out = BTreeMap::new();
+    let mut queue = std::collections::VecDeque::from([(
+        root_key.to_owned(),
+        Keyed {
+            el: root.to_owned(),
+            inputs: Map::new(),
+        },
+    )]);
+    while let Some((key, k)) = queue.pop_front() {
+        if out.contains_key(&key) || objects.object(&k.el).is_none() {
+            continue;
+        }
+        if let Ok(m) = materialize_with(objects, &k.el, &k.inputs) {
+            for e in m.edges {
+                if let Some(el) = e.el
+                    && !out.contains_key(&e.key)
+                {
+                    queue.push_back((e.key, Keyed { el, inputs: e.bind }));
+                }
+            }
+        }
+        out.insert(key, k);
+    }
+    out
 }
 
 /// The edge graph of materialized elements: each key, the keys it reaches —
@@ -480,6 +554,7 @@ mod tests {
             name: key.into(),
             el: None,
             site,
+            bind: Map::new(),
         };
         let mut direct = BTreeMap::new();
         direct.insert(

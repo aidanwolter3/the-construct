@@ -5,7 +5,8 @@
 //! | `GET /v1/construct` | `{root, generation}`: home's element for the client's features; `409 not_switched` on a pod that isn't switched |
 //! | `POST /v1/objects {have, want}` | `{objects: {id: object}}`: what `want` reaches that `have` doesn't list, `want`'s order first |
 //! | `GET /v1/objects/{id}` | one object |
-//! | `GET /v1/construct/data/{id}` | `{entities, queries}`: the home feeds element `id` needs |
+//! | `GET /v1/construct/data/{id}?bind=` | `{entities, queries}`: the home feeds element `id` needs, with a use site's bindings (a JSON object) |
+//! | `GET /v1/construct/names/{name}` | `{name, el}`: a layout's element for the client's features, by name or key (a notification's layout the root doesn't reach) |
 //!
 //! They answer as `GET /v1/workspaces/<id>` does: a request that reaches the
 //! pod is the pod's (a hosted pod is reached only with its token), and a
@@ -38,6 +39,7 @@ pub(crate) fn router() -> Router<Pod> {
         .route("/v1/objects", post(post_objects))
         .route("/v1/objects/{id}", get(get_object))
         .route("/v1/construct/data/{id}", get(crate::get_element_data))
+        .route("/v1/construct/names/{name}", get(get_name))
 }
 
 /// `None` when the caller may read the construct, else the answer.
@@ -78,6 +80,52 @@ async fn get_construct(State(pod): State<Pod>, headers: HeaderMap) -> Response {
         Ok(Ok((None, _))) => json_error(
             StatusCode::NOT_FOUND,
             json!({ "error": "no_home", "detail": "the construct has no home" }),
+        ),
+        _ => json_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            json!({ "error": "store_error" }),
+        ),
+    }
+}
+
+/// `GET /v1/construct/names/{name}`: the element a layout's name (or a
+/// blueprint's key, `events` for `@core/events`) points to, sealed for the
+/// client. Only layouts and blueprints: a component is reached through what
+/// uses it.
+async fn get_name(
+    State(pod): State<Pod>,
+    Path(name): Path<String>,
+    headers: HeaderMap,
+) -> Response {
+    if let Some(r) = guard(&pod, &headers).await {
+        return r;
+    }
+    let client = crate::layouts::client_caps(&headers);
+    let p = pod.clone();
+    let found = tokio::task::spawn_blocking(move || {
+        let names = if super::is_layout_name(&name) {
+            vec![name.clone()]
+        } else if p.catalog().is_app(&name) {
+            vec![super::blueprint_name(&name)]
+        } else {
+            Vec::new()
+        };
+        for n in names {
+            let el = p
+                .store()
+                .with_conn(|c| super::seal::seal_name(c, &n, &client, &mut Default::default()))?;
+            if let Some(el) = el {
+                return Ok::<_, rusqlite::Error>(Some((name, el)));
+            }
+        }
+        Ok(None)
+    })
+    .await;
+    match found {
+        Ok(Ok(Some((name, el)))) => Json(json!({ "name": name, "el": el })).into_response(),
+        Ok(Ok(None)) => json_error(
+            StatusCode::NOT_FOUND,
+            json!({ "error": "unknown_name", "detail": "no layout has that name" }),
         ),
         _ => json_error(
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -204,13 +252,35 @@ pub fn serve_layout(
         return Ok(None);
     };
     let version = store.with_conn(|c| cstore::last_seq(c, id))?;
-    let Some(m) = super::seal::materialize(pod, &el) else {
+    // A layout that reads inputs draws what the first use site reaching it
+    // from home binds, as the engine draws it.
+    let objects = super::seal::objects(pod);
+    let reads = construct_elements::Objects::object(&objects, &el)
+        .is_some_and(|v| !construct_elements::template::inputs_of(&v).is_empty());
+    let root = if reads {
+        super::seal::root_for(pod, client)?
+    } else {
+        None
+    };
+    let inputs = root
+        .and_then(|root| {
+            construct_elements::keyed(&objects, crate::HOME_APP, &root)
+                .remove(id)
+                .map(|k| k.inputs)
+        })
+        .unwrap_or_default();
+    let m = if inputs.is_empty() {
+        super::seal::materialize(pod, &el)
+    } else {
+        construct_elements::materialize_with(&objects, &el, &inputs).ok()
+    };
+    let Some(m) = m else {
         return Ok(None);
     };
     let Ok(layout) = serde_json::from_value::<protocol::UiNode>(m.node.clone()) else {
         return Ok(None);
     };
-    let feeds = element_feeds(pod, &el);
+    let feeds = bound_element_feeds(pod, &el, &inputs);
     Ok(Some(Served {
         version,
         layout,
@@ -222,6 +292,42 @@ pub fn serve_layout(
 pub fn element_feeds(pod: &Pod, id: &str) -> Vec<(String, String)> {
     construct_elements::Objects::object(&super::seal::objects(pod), id)
         .and_then(|v| serde_json::from_value(v["needs"]["feeds"].clone()).ok())
+        .unwrap_or_default()
+}
+
+/// The home feeds element `id` needs drawn with `inputs` bound (a use
+/// site's `bind`): its own `needs.feeds` and those its bound tree binds.
+/// Only home's feeds are ever loaded: a binding reaches no other data.
+pub fn bound_element_feeds(
+    pod: &Pod,
+    id: &str,
+    inputs: &Map<String, Value>,
+) -> Vec<(String, String)> {
+    let mut feeds = element_feeds(pod, id);
+    if inputs.is_empty() {
+        return feeds;
+    }
+    let objects = super::seal::objects(pod);
+    let Ok(m) = construct_elements::materialize_with(&objects, id, inputs) else {
+        return feeds;
+    };
+    let home = pod
+        .store()
+        .with_conn(|c| Ok::<_, rusqlite::Error>(super::write::home_feeds(c)))
+        .unwrap_or_default();
+    for f in crate::custom::bound_feeds(pod.catalog(), &home, &m.node) {
+        if !feeds.contains(&f) {
+            feeds.push(f);
+        }
+    }
+    feeds
+}
+
+/// The inputs a request binds (`?bind=<JSON object>`); none when absent or
+/// not an object.
+pub fn inputs_param(raw: Option<&str>) -> Map<String, Value> {
+    raw.and_then(|s| serde_json::from_str::<Value>(s).ok())
+        .and_then(|v| v.as_object().cloned())
         .unwrap_or_default()
 }
 

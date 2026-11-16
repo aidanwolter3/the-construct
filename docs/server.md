@@ -134,7 +134,8 @@ server pods switch <name> --revert             # back to the old layout system
 `switch` moves a pod to the content-addressed construct (decision
 [`content-addressed-construct`](decisions/content-addressed-construct.md)); Claude can do the same with MCP
 `switch_construct`. Run the dry run first: it converts in memory, draws every layout of the pod both ways with its
-data and lists each difference, changing nothing. The switch writes the construct's tables and leaves the old ones as
+data and lists each difference, changing nothing, and reports home's bindings (`home_bindings`: the old system's home
+feeds, which on the construct are home's `bind`). The switch writes the construct's tables and leaves the old ones as
 they are; `--revert` puts the pod back on them (edits made while switched stay in the construct's history only). A
 running server sees a switch made with this command within 5 seconds.
 

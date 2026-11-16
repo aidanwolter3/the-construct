@@ -3477,6 +3477,14 @@ impl Inner {
     fn forget_session(self: &Arc<Self>) {
         self.replace_flow(None);
         lock(&self.device).registered_for = None;
+        // Another pod has another construct (a pod on the layout system
+        // keeps its mode, as before).
+        {
+            let mut c = lock(&self.construct);
+            if c.mode == construct::Mode::On {
+                *c = construct::Construct::default();
+            }
+        }
         let (snap, token) = {
             let mut st = lock(&self.state);
             let token = st.session.take().map(|s| s.token);
@@ -3490,6 +3498,14 @@ impl Inner {
                 .map(|s| s.clear_pinned_versions(&self.workspace_id))
             {
                 eprintln!("[ConstructEngine] forgetting pinned versions: {e}");
+            }
+            // So are the construct's objects (decision content-addressed-construct).
+            if let Some(Err(e)) = st
+                .store
+                .as_ref()
+                .map(|s| s.clear_construct_objects(&self.workspace_id))
+            {
+                eprintln!("[ConstructEngine] forgetting the construct's objects: {e}");
             }
             st.seq += 1;
             (st.snapshot(), token)

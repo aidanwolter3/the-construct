@@ -17,10 +17,11 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use construct_elements::refs::{EdgeRef, Site};
-use construct_elements::{Objects, materialize};
+use construct_elements::{Objects, instance_id, materialize_with};
 use protocol::{DataBundle, WorkspaceSpec};
-use serde_json::{Value, json};
+use serde_json::{Map, Value, json};
 
+use crate::store::StoreOps;
 use crate::{FetchError, Inner, lock};
 
 /// Which system the pod is on, as last asked.
@@ -46,10 +47,18 @@ pub struct Construct {
     pub objects: HashMap<String, Arc<Value>>,
     /// Each layout reachable from the root: its edge key → element.
     pub keys: BTreeMap<String, String>,
+    /// The inputs each key's use site binds (`bind` on its edge).
+    pub inputs: BTreeMap<String, Map<String, Value>>,
+    /// Layouts the root doesn't reach, opened by name (a notification's):
+    /// key → element.
+    pub extra: BTreeMap<String, String>,
+    /// Whether the objects kept in the engine's store were read.
+    pub loaded: bool,
     /// Each key's own edges.
     pub edges: BTreeMap<String, Vec<EdgeRef>>,
-    /// Elements materialized, by id (immutable, so kept while reachable),
-    /// and their edges.
+    /// Elements materialized, by instance id (`instance_id`: the element
+    /// and its bound inputs; immutable, so kept while reachable), and their
+    /// edges.
     pub nodes: HashMap<String, Value>,
     pub edges_by_id: HashMap<String, Vec<EdgeRef>>,
     /// How many objects each sync fetched (newest last; tests).
@@ -82,48 +91,99 @@ impl Construct {
             return missing;
         };
         let mut keys = BTreeMap::new();
+        let mut inputs = BTreeMap::new();
         let mut edges = BTreeMap::new();
-        let mut queue = VecDeque::from([(crate::DEFAULT_WORKSPACE_ID.to_owned(), root)]);
-        while let Some((key, id)) = queue.pop_front() {
+        let mut queue =
+            VecDeque::from([(crate::DEFAULT_WORKSPACE_ID.to_owned(), root, Map::new())]);
+        while let Some((key, id, bound)) = queue.pop_front() {
             if keys.contains_key(&key) {
                 continue;
             }
             keys.insert(key.clone(), id.clone());
-            let own = match (self.nodes.contains_key(&id), self.edges_by_id.get(&id)) {
-                (true, Some(e)) => e.clone(),
-                _ => match materialize(&Have(&self.objects), &id) {
-                    Ok(m) => {
-                        missing.extend(m.missing.iter().cloned());
-                        if m.missing.is_empty() {
-                            self.nodes.insert(id.clone(), m.node);
-                            self.edges_by_id.insert(id.clone(), m.edges.clone());
-                        }
-                        m.edges
-                    }
-                    Err(_) => Vec::new(),
-                },
-            };
+            let (own, lacks) = self.materialized(&id, &bound);
+            missing.extend(lacks);
             for e in &own {
                 if let Some(el) = &e.el
                     && !keys.contains_key(&e.key)
                 {
-                    queue.push_back((e.key.clone(), el.clone()));
+                    queue.push_back((e.key.clone(), el.clone(), e.bind.clone()));
                 }
+            }
+            if !bound.is_empty() {
+                inputs.insert(key.clone(), bound);
             }
             edges.insert(key, own);
         }
+        for (key, id) in self.extra.clone() {
+            if !keys.contains_key(&key) {
+                missing.extend(self.materialized(&id, &Map::new()).1);
+            }
+        }
         self.keys = keys;
+        self.inputs = inputs;
         self.edges = edges;
         missing
     }
 
-    /// The objects the root and the previous root reach (client GC).
-    fn collect_garbage(&mut self) {
+    /// Element `id` with `bound` inputs materialized (kept by instance id):
+    /// its edges, and the objects it lacks.
+    fn materialized(
+        &mut self,
+        id: &str,
+        bound: &Map<String, Value>,
+    ) -> (Vec<EdgeRef>, BTreeSet<String>) {
+        let inst = instance_id(id, bound);
+        if self.nodes.contains_key(&inst)
+            && let Some(e) = self.edges_by_id.get(&inst)
+        {
+            return (e.clone(), BTreeSet::new());
+        }
+        match materialize_with(&Have(&self.objects), id, bound) {
+            Ok(m) => {
+                if m.missing.is_empty() {
+                    self.nodes.insert(inst.clone(), m.node);
+                    self.edges_by_id.insert(inst, m.edges.clone());
+                }
+                (m.edges, m.missing)
+            }
+            Err(_) => (Vec::new(), BTreeSet::new()),
+        }
+    }
+
+    /// Layout `key`'s element, its inputs and its materialized tree, whether
+    /// the root reaches it or it was opened by name.
+    pub fn layout(&self, key: &str) -> Option<(String, Map<String, Value>, Value)> {
+        let el = self.keys.get(key).or_else(|| self.extra.get(key))?;
+        let bound = if self.keys.contains_key(key) {
+            self.inputs.get(key).cloned().unwrap_or_default()
+        } else {
+            Map::new()
+        };
+        let node = self.nodes.get(&instance_id(el, &bound))?.clone();
+        Some((el.clone(), bound, node))
+    }
+
+    /// Each key and what it draws (its element and inputs), for comparing
+    /// roots.
+    fn instances(&self) -> BTreeMap<String, String> {
+        self.keys
+            .iter()
+            .map(|(k, el)| {
+                let bound = self.inputs.get(k).cloned().unwrap_or_default();
+                (k.clone(), instance_id(el, &bound))
+            })
+            .collect()
+    }
+
+    /// The objects the root and the previous root reach, and the layouts
+    /// opened by name (client GC). Answers what is kept.
+    fn collect_garbage(&mut self) -> BTreeSet<String> {
         let mut keep = BTreeSet::new();
         let mut queue: VecDeque<String> = self
             .root
             .iter()
             .chain(self.previous.iter())
+            .chain(self.extra.values())
             .cloned()
             .collect();
         while let Some(id) = queue.pop_front() {
@@ -139,8 +199,11 @@ impl Construct {
             }
         }
         self.objects.retain(|id, _| keep.contains(id));
-        self.nodes.retain(|id, _| keep.contains(id));
-        self.edges_by_id.retain(|id, _| keep.contains(id));
+        let element = |inst: &str| inst.split('?').next().unwrap_or("").to_owned();
+        self.nodes.retain(|inst, _| keep.contains(&element(inst)));
+        self.edges_by_id
+            .retain(|inst, _| keep.contains(&element(inst)));
+        keep
     }
 }
 
@@ -212,65 +275,177 @@ impl Inner {
         }
     }
 
-    /// Fetch what `root` reaches that the device lacks, and key it. Answers
-    /// the keys whose element changed (or appeared) and those gone.
-    /// Blocking.
-    pub(crate) fn construct_sync(
+    /// The objects kept in the engine's store, read once a session is on
+    /// the construct: immutable, so what they hold is never fetched again.
+    fn construct_load(&self) {
+        if std::mem::replace(&mut lock(&self.construct).loaded, true) {
+            return;
+        }
+        let rows = {
+            let st = lock(&self.state);
+            st.store
+                .as_ref()
+                .map(|s| s.construct_objects(&self.workspace_id))
+        };
+        let rows = match rows {
+            Some(Ok(r)) => r,
+            Some(Err(e)) => {
+                eprintln!("[ConstructEngine] reading kept objects: {e}");
+                return;
+            }
+            None => return,
+        };
+        let mut c = lock(&self.construct);
+        for (id, text) in rows {
+            if let Ok(v) = serde_json::from_str::<Value>(&text)
+                && construct_elements::object_id(&v) == id
+            {
+                c.objects.entry(id).or_insert_with(|| Arc::new(v));
+            }
+        }
+    }
+
+    /// Fetch what `want` reaches that the device lacks (`POST /v1/objects`),
+    /// keeping it in memory and in the store; the construct is keyed again
+    /// after each answer. Answers how many objects came. Blocking.
+    fn construct_fetch_objects(
         &self,
-        root: &str,
+        mut want: Vec<String>,
         token: Option<&str>,
-    ) -> Result<(Vec<String>, Vec<String>), FetchError> {
-        let before = lock(&self.construct).keys.clone();
-        let mut want = vec![root.to_owned()];
+    ) -> Result<usize, FetchError> {
         let mut fetched = 0;
+        let mut kept: Vec<(String, String)> = Vec::new();
+        let mut result = Ok(());
         for _ in 0..16 {
             let have: Vec<String> = lock(&self.construct).objects.keys().cloned().collect();
             let url = format!("{}/v1/objects", self.base_url);
             let body = json!({ "have": have, "want": want });
-            let resp = client(Duration::from_secs(20))
-                .and_then(|c| self.construct_request(c.post(&url).json(&body), token))?;
-            let v: Value = resp.json().map_err(|e| FetchError::Other(e.to_string()))?;
+            let v: Value = match client(Duration::from_secs(20))
+                .and_then(|c| self.construct_request(c.post(&url).json(&body), token))
+                .and_then(|r| r.json().map_err(|e| FetchError::Other(e.to_string())))
+            {
+                Ok(v) => v,
+                Err(e) => {
+                    result = Err(e);
+                    break;
+                }
+            };
             let mut c = lock(&self.construct);
             if let Some(objs) = v["objects"].as_object() {
                 for (id, o) in objs {
                     // An object is its hash: one that doesn't match is not taken.
                     if construct_elements::object_id(o) == *id {
                         c.objects.insert(id.clone(), Arc::new(o.clone()));
+                        kept.push((id.clone(), construct_elements::canonical(o)));
                         fetched += 1;
                     }
                 }
             }
+            let missing = c.rebuild();
+            if missing.is_empty() && v["more"] != json!(true) {
+                break;
+            }
+            want = missing.into_iter().collect();
+            if want.is_empty() {
+                want = c.root.iter().cloned().collect();
+            }
+        }
+        if !kept.is_empty() {
+            let st = lock(&self.state);
+            if let Some(Err(e)) = st
+                .store
+                .as_ref()
+                .map(|s| s.put_construct_objects(&self.workspace_id, &kept))
+            {
+                eprintln!("[ConstructEngine] keeping objects: {e}");
+            }
+        }
+        result.map(|()| fetched)
+    }
+
+    /// Fetch what `root` reaches that the device lacks, and key it. Answers
+    /// the keys whose element (or bound inputs) changed, or appeared, and
+    /// those gone. Nothing is fetched when the device already has every
+    /// object the root reaches (kept from an earlier run, too). Blocking.
+    pub(crate) fn construct_sync(
+        &self,
+        root: &str,
+        token: Option<&str>,
+    ) -> Result<(Vec<String>, Vec<String>), FetchError> {
+        self.construct_load();
+        let (before, missing) = {
+            let mut c = lock(&self.construct);
+            let before = c.instances();
             if c.root.as_deref() != Some(root) {
                 c.previous = c.root.take();
                 c.root = Some(root.to_owned());
             }
-            let missing = c.rebuild();
-            if missing.is_empty() && v["more"] != json!(true) {
-                c.fetched.push(fetched);
-                c.collect_garbage();
-                break;
+            (before, c.rebuild())
+        };
+        let fetched = if missing.is_empty() {
+            0
+        } else {
+            let mut want = vec![root.to_owned()];
+            want.extend(missing);
+            self.construct_fetch_objects(want, token)?
+        };
+        let keep = {
+            let mut c = lock(&self.construct);
+            c.fetched.push(fetched);
+            c.collect_garbage()
+        };
+        {
+            let st = lock(&self.state);
+            if let Some(Err(e)) = st
+                .store
+                .as_ref()
+                .map(|s| s.retain_construct_objects(&self.workspace_id, &keep))
+            {
+                eprintln!("[ConstructEngine] forgetting objects: {e}");
             }
-            want = if missing.is_empty() {
-                vec![root.to_owned()]
-            } else {
-                missing.into_iter().collect()
-            };
         }
         let json = lock(&self.construct).snapshot_json();
         lock(&self.state).construct_json = json;
         let c = lock(&self.construct);
-        let changed: Vec<String> = c
-            .keys
+        let now = c.instances();
+        let changed: Vec<String> = now
             .iter()
-            .filter(|(k, id)| before.get(*k) != Some(*id))
+            .filter(|(k, inst)| before.get(*k) != Some(*inst))
             .map(|(k, _)| k.clone())
             .collect();
         let gone: Vec<String> = before
             .keys()
-            .filter(|k| !c.keys.contains_key(*k))
+            .filter(|k| !now.contains_key(*k) && !c.extra.contains_key(*k))
             .cloned()
             .collect();
         Ok((changed, gone))
+    }
+
+    /// Layout `key`, which the root doesn't reach, by name (`GET
+    /// /v1/construct/names/<key>`): a notification's layout. Its element is
+    /// fetched and kept under `key`, off the tree. Blocking.
+    fn construct_open_by_name(&self, key: &str, token: Option<&str>) -> Result<(), FetchError> {
+        let url = format!("{}/v1/construct/names/{key}", self.base_url);
+        let v: Value = client(Duration::from_secs(10))
+            .and_then(|c| self.construct_request(c.get(&url), token))
+            .and_then(|r| r.json().map_err(|e| FetchError::Other(e.to_string())))?;
+        let Some(el) = v["el"]
+            .as_str()
+            .filter(|e| construct_elements::is_object_id(e))
+        else {
+            return Err(FetchError::Status(404));
+        };
+        lock(&self.construct)
+            .extra
+            .insert(key.to_owned(), el.to_owned());
+        println!("[ConstructEngine] opening '{key}' by name: the root doesn't reach it");
+        let missing = lock(&self.construct).rebuild();
+        if !missing.is_empty() {
+            let mut want = vec![el.to_owned()];
+            want.extend(missing);
+            self.construct_fetch_objects(want, token)?;
+        }
+        Ok(())
     }
 
     /// The events stream (re)connected: ask again which system the pod is
@@ -302,9 +477,10 @@ impl Inner {
                 };
                 if root != before {
                     let loaded: Vec<String> = lock(&self.state).layouts.keys().cloned().collect();
+                    let extra = lock(&self.construct).extra.clone();
                     let gone = loaded
                         .iter()
-                        .filter(|k| !keys.contains_key(*k))
+                        .filter(|k| !keys.contains_key(*k) && !extra.contains_key(*k))
                         .cloned()
                         .collect();
                     let mut changed = loaded;
@@ -326,13 +502,15 @@ impl Inner {
         if self.construct_mode(token) != Mode::On {
             return None;
         }
-        let found = {
-            let c = lock(&self.construct);
-            c.keys
-                .get(id)
-                .and_then(|h| c.nodes.get(h).map(|n| (h.clone(), n.clone())))
-        };
-        let Some((hash, node)) = found else {
+        let mut found = lock(&self.construct).layout(id);
+        if found.is_none() {
+            // Not reached from home (a notification's layout): by name.
+            if let Err(e) = self.construct_open_by_name(id, token) {
+                return Some(Err(e));
+            }
+            found = lock(&self.construct).layout(id);
+        }
+        let Some((hash, bound, node)) = found else {
             return Some(Err(FetchError::Status(404)));
         };
         let workspace = match serde_json::from_value(node) {
@@ -341,7 +519,14 @@ impl Inner {
         };
         let url = format!("{}/v1/construct/data/{hash}", self.base_url);
         let data = client(crate::DATA_LOAD_TIMEOUT)
-            .and_then(|c| self.construct_request(c.get(&url), token))
+            .and_then(|c| {
+                let mut req = c.get(&url);
+                // The data the use site's bindings read too.
+                if !bound.is_empty() {
+                    req = req.query(&[("bind", Value::Object(bound.clone()).to_string())]);
+                }
+                self.construct_request(req, token)
+            })
             .and_then(|r| {
                 r.json::<DataBundle>()
                     .map_err(|e| FetchError::Other(format!("bad data bundle: {e}")))

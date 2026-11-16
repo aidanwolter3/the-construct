@@ -287,6 +287,8 @@ struct Build<'t, 'i> {
     /// `prev`.
     adopted: HashSet<usize>,
     reuse: Reuse,
+    /// Each list item's element and its entity (scroll anchors).
+    items: HashMap<usize, String>,
 }
 
 /// What a frame was built against besides its entities and queries. A
@@ -466,6 +468,7 @@ impl SceneBuilder {
             parts: HashMap::new(),
             adopted: HashSet::new(),
             reuse: Reuse::default(),
+            items: HashMap::new(),
         };
         let ctx = Ctx {
             entities: &input.data.entities,
@@ -534,6 +537,7 @@ impl SceneBuilder {
             env,
             parts: b.parts,
             reuse: b.reuse,
+            items: b.items,
         };
         laid.scroll_max = laid.scroll_extents();
         laid.slides = laid
@@ -1968,6 +1972,7 @@ impl<'i> Build<'_, 'i> {
                     let Some(mut cell) = self.list_item(item_template, &ib, uri) else {
                         continue;
                     };
+                    self.items.insert(cell, (*uri).clone());
                     let focused = focus
                         .as_ref()
                         .is_some_and(|f| ctx.text(&f.uri) == uri.as_str());
@@ -2925,6 +2930,8 @@ pub struct Laid {
     parts: HashMap<PartKey, Part>,
     /// How many list items were built and how many taken over.
     pub reuse: Reuse,
+    /// Each list item's element and its entity (scroll anchors).
+    items: HashMap<usize, String>,
 }
 
 // SAFETY: taffy's `CompactLength` holds a raw pointer only for CSS `calc()`
@@ -2935,6 +2942,38 @@ pub struct Laid {
 unsafe impl Send for Laid {}
 
 impl Laid {
+    /// The list items in scrolling view `id`, in order: each one's entity,
+    /// its top in the view's content and its height (points). Items of a
+    /// view scrolling inside it are its own (decision
+    /// `content-addressed-construct`, scroll anchors).
+    pub fn scroll_items(&self, id: &str) -> Vec<(String, f32, f32)> {
+        let Some(view) = self
+            .elems
+            .iter()
+            .find(|e| e.scrolls && e.sem.as_ref().is_some_and(|s| s.id == id))
+        else {
+            return Vec::new();
+        };
+        let mut out = Vec::new();
+        let mut stack: Vec<(usize, f32)> = view.kids.iter().rev().map(|k| (*k, 0.0)).collect();
+        while let Some((i, top)) = stack.pop() {
+            let e = &self.elems[i];
+            let Ok(l) = self.tree.layout(e.node) else {
+                continue;
+            };
+            let y = top + l.location.y;
+            if let Some(uri) = self.items.get(&i) {
+                out.push((uri.clone(), y, l.size.height));
+                continue;
+            }
+            if e.scrolls || e.sticky {
+                continue;
+            }
+            stack.extend(e.kids.iter().rev().map(|k| (*k, y)));
+        }
+        out
+    }
+
     /// How far each scrolling view can scroll (its content past its height).
     fn scroll_extents(&self) -> BTreeMap<String, f32> {
         self.elems

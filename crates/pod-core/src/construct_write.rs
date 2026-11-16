@@ -296,6 +296,7 @@ pub fn put(
             ),
         ));
     }
+    check_bindings(conn, name, &el)?;
     let feeds = if name == crate::HOME_APP {
         serde_json::from_value(el["bind"]["feeds"].clone()).unwrap_or_default()
     } else {
@@ -321,6 +322,115 @@ pub fn put(
     cstore::bump_generation(conn).map_err(store_err)?;
     cstore::collect_garbage(conn).map_err(store_err)?;
     Ok(moved)
+}
+
+/// Every edge (`core://Layout`, `action.navigation.open`) in `v`: its
+/// reference and its `bind`.
+fn edges_with_bind(v: &Value, out: &mut Vec<(Ref, Map<String, Value>)>) {
+    match v {
+        Value::Object(o) => {
+            if let Some(site) = construct_elements::refs::site_of(o)
+                && site != Site::Use
+                && let Some(r) = Ref::parse(&o["ref"])
+            {
+                let bind = o
+                    .get(construct_elements::refs::BIND_FIELD)
+                    .and_then(Value::as_object)
+                    .cloned()
+                    .unwrap_or_default();
+                out.push((r, bind));
+            }
+            o.values().for_each(|c| edges_with_bind(c, out));
+        }
+        Value::Array(a) => a.iter().for_each(|c| edges_with_bind(c, out)),
+        _ => {}
+    }
+}
+
+/// The inputs one use site leaves unbound, as a refusal.
+fn unbound(from: &str, r: &Ref, bind: &Map<String, Value>, target: &Value) -> Result<(), Value> {
+    let missing: Vec<String> = construct_elements::template::inputs_of(target)
+        .into_iter()
+        .filter(|n| !bind.contains_key(n))
+        .collect();
+    if missing.is_empty() {
+        return Ok(());
+    }
+    let example: Map<String, Value> = missing
+        .iter()
+        .map(|n| {
+            (
+                n.clone(),
+                json!("<a query key of home's feeds, or $in.<name>>"),
+            )
+        })
+        .collect();
+    Err(refuse(
+        "unbound_input",
+        format!(
+            "'{from}' uses '{}' without binding its input(s) {}: add \"bind\": {} to that \
+             core://Layout or action.navigation.open (decision content-addressed-construct)",
+            r.name,
+            missing.join(", "),
+            Value::Object(example)
+        ),
+    ))
+}
+
+/// Bindings between layouts (decision `content-addressed-construct`): each
+/// edge of `el` binds every input its target reads; only home binds the
+/// pod's data, so another layout's `bind` values pass its own inputs on
+/// (`"$in.<name>"`); and a new element for `name` reads no input that a use
+/// site of it leaves unbound.
+fn check_bindings(conn: &Connection, name: &str, el: &Value) -> Result<(), Value> {
+    let mut edges = Vec::new();
+    edges_with_bind(&el["node"], &mut edges);
+    for (r, bind) in &edges {
+        if name != crate::HOME_APP {
+            for (k, v) in bind {
+                let passes = v
+                    .as_str()
+                    .and_then(|s| s.strip_prefix("$in."))
+                    .is_some_and(|n| {
+                        !n.is_empty() && n.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_')
+                    });
+                if !passes {
+                    return Err(refuse(
+                        "bind_outside_home",
+                        format!(
+                            "'{name}' binds '{k}' of '{}' to {v}: only home binds the pod's data; \
+                             another layout passes its own inputs on (\"{k}\": \"$in.{k}\") and \
+                             home binds them",
+                            r.name
+                        ),
+                    ));
+                }
+            }
+        }
+        let Some(target) = r.el.as_deref() else {
+            continue;
+        };
+        if let Some((t, _)) = cstore::object(conn, target).map_err(store_err)? {
+            unbound(name, r, bind, &t)?;
+        }
+    }
+    if construct_elements::template::inputs_of(el).is_empty() {
+        return Ok(());
+    }
+    for f in cstore::followers(conn, name).map_err(store_err)? {
+        let Some(cur) = cstore::name(conn, &f).map_err(store_err)? else {
+            continue;
+        };
+        let Some((fv, _)) = cstore::object(conn, &cur).map_err(store_err)? else {
+            continue;
+        };
+        let mut theirs = Vec::new();
+        edges_with_bind(&fv["node"], &mut theirs);
+        for (r, bind) in theirs.iter().filter(|(r, _)| r.name == name && !r.pin) {
+            unbound(&f, r, bind, el)?;
+        }
+    }
+    Ok(())
 }
 
 fn union(given: &Value, derived: &Value) -> Value {
@@ -474,7 +584,16 @@ fn check_layout(
         .extra
         .borrow_mut()
         .insert(probe.clone(), Arc::new(el.clone()));
-    let m = construct_elements::materialize(&objects, &probe)
+    // Its inputs are bound at its use sites (checked there): here each
+    // stands for data the device provides, so a list may read one.
+    let inputs: Map<String, Value> = construct_elements::template::inputs_of(el)
+        .into_iter()
+        .map(|n| {
+            let key = format!("{}in.{n}", crate::validate::LOCAL_QUERY_PREFIX);
+            (n, json!(key))
+        })
+        .collect();
+    let m = construct_elements::materialize_with(&objects, &probe, &inputs)
         .map_err(|e| refuse("invalid_layout", e.to_string()))?;
     if let Some(x) = m.missing.iter().next() {
         return Err(refuse(

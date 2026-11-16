@@ -19,7 +19,7 @@
 //! }).unwrap();
 //! ```
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 use std::time::Duration;
 
@@ -167,6 +167,19 @@ CREATE TABLE IF NOT EXISTS pinned_versions (
 );
 ";
 
+/// The content-addressed construct's objects this device has fetched
+/// (decision `content-addressed-construct`), per app, by id: immutable, so
+/// never fetched again; kept while the current or previous root reaches them,
+/// and forgotten when the device leaves the pod. Only a switched pod fills it.
+const MIGRATION_CONSTRUCT_OBJECTS: &str = "
+CREATE TABLE IF NOT EXISTS construct_objects (
+    app_id TEXT NOT NULL,
+    id TEXT NOT NULL,
+    object TEXT NOT NULL,
+    PRIMARY KEY (app_id, id)
+);
+";
+
 /// The store's steps, `(name, sql)`, run in order, each once, in its own
 /// transaction; `schema_migrations` records the names that ran. Add a step at
 /// the end with a new name; never rename, edit or remove one that shipped:
@@ -180,6 +193,7 @@ const MIGRATIONS: &[(&str, &str)] = &[
     ("notifications", MIGRATION_V6),
     ("remembered_values", MIGRATION_V7),
     ("pinned_versions", MIGRATION_PINNED_VERSIONS),
+    ("construct_objects", MIGRATION_CONSTRUCT_OBJECTS),
 ];
 
 /// Notifications kept in the cache (the newest ids).
@@ -830,6 +844,49 @@ pub trait StoreOps {
                 )?
                 .execute(params![app_id, scope, field])?,
         };
+        Ok(())
+    }
+
+    // ---- construct_objects ----
+
+    /// The construct's objects kept for `app_id`: `(id, object JSON)`.
+    fn construct_objects(&self, app_id: &str) -> StoreResult<Vec<(String, String)>> {
+        self.conn()
+            .prepare_cached("SELECT id, object FROM construct_objects WHERE app_id = ?1")?
+            .query_map([app_id], |r| Ok((r.get(0)?, r.get(1)?)))?
+            .collect()
+    }
+
+    /// Keep these objects (`(id, object JSON)`; an id already kept is left).
+    fn put_construct_objects(&self, app_id: &str, objects: &[(String, String)]) -> StoreResult<()> {
+        let mut stmt = self.conn().prepare_cached(
+            "INSERT OR IGNORE INTO construct_objects (app_id, id, object) VALUES (?1, ?2, ?3)",
+        )?;
+        for (id, object) in objects {
+            stmt.execute(params![app_id, id, object])?;
+        }
+        Ok(())
+    }
+
+    /// Forget the kept objects of `app_id` that aren't in `keep` (client GC).
+    fn retain_construct_objects(&self, app_id: &str, keep: &BTreeSet<String>) -> StoreResult<()> {
+        let kept = self.construct_objects(app_id)?;
+        let mut stmt = self
+            .conn()
+            .prepare_cached("DELETE FROM construct_objects WHERE app_id = ?1 AND id = ?2")?;
+        for (id, _) in kept {
+            if !keep.contains(&id) {
+                stmt.execute(params![app_id, id])?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Forget every kept object of `app_id` (the device left the pod).
+    fn clear_construct_objects(&self, app_id: &str) -> StoreResult<()> {
+        self.conn()
+            .prepare_cached("DELETE FROM construct_objects WHERE app_id = ?1")?
+            .execute([app_id])?;
         Ok(())
     }
 

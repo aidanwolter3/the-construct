@@ -64,7 +64,8 @@ On a pod switched to the construct (`server pods switch`, MCP `switch_construct`
 | `GET /v1/construct` | `{root, generation}`: home's element for the client's features (`X-Construct-Features`); `409 not_switched`. |
 | `POST /v1/objects {have: [ids], want: [ids]}` | `{objects: {id: object}, more}`: what `want` reaches that `have` doesn't list, `want`'s order first; `more` when one answer couldn't carry all (ask again). |
 | `GET /v1/objects/{id}` | One object (an id is `e1-` and the base32 SHA-256 of its canonical JSON). |
-| `GET /v1/construct/data/{id}` | `{entities, queries}`: the data of the home feeds element `id` needs. |
+| `GET /v1/construct/data/{id}?bind=<JSON>` | `{entities, queries}`: the data of the home feeds element `id` needs; with `bind` (a use site's bindings, `{"items": "collection:books"}`), also those its bound tree reads. Only home's feeds are loaded. |
+| `GET /v1/construct/names/{name}` | `{name, el}`: a layout's element (by its name, or a blueprint's key) for the client's features: a notification's layout that home doesn't reach is opened this way. `404 unknown_name`. |
 
 Home's event stream adds `construct {root, generation}` (on connect and whenever the root moves). On a switched pod
 the calls above keep answering, from the construct, so installed clients still draw it: `GET /v1/workspaces/{id}`

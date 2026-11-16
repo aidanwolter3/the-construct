@@ -2,6 +2,8 @@
 
 use construct_sim::fixture::media_file;
 
+use construct_sim::script;
+
 use crate::common::{assert_ok, out_dir, run};
 
 #[test]
@@ -238,4 +240,78 @@ fn a_construct_edit_keeps_the_stack_and_a_removed_link_pops_back() {
         runner.session.form.get("note").map(String::as_str),
         Some("Hello there")
     );
+}
+
+/// Scroll anchors on a switched pod (decision `content-addressed-construct`):
+/// rows added above the scroll position don't move the rows on screen, and
+/// when the first row showing goes, the next one stays where it was.
+#[test]
+fn rows_added_above_the_scroll_position_dont_move_the_visible_row() {
+    let d = "crates/construct-sim/data";
+    let out = out_dir("anchor");
+    let (mut runner, results) = run(
+        "home",
+        &format!("construct {d}/construct_v1.json; click Recipes; scroll-to Item 30"),
+        &out,
+    );
+    assert_ok(&results);
+    let y = |runner: &mut construct_sim::run::Runner, t: &str| {
+        let scene = runner.session.scene().unwrap();
+        let n = scene
+            .semantics
+            .iter()
+            .find(|n| n.text_content.as_deref() == Some(t));
+        n.map(|n| n.bounds[1])
+    };
+    let item30 = y(&mut runner, "Item 30");
+    // The first row showing: the one the scroll is anchored to.
+    let first = (1..30)
+        .find(|n| y(&mut runner, &format!("Item {n}")).is_some())
+        .unwrap();
+    assert!(first > 1, "scrolled");
+    let next = format!("Item {}", first + 1);
+    let next_y = y(&mut runner, &next);
+    assert!(
+        item30.is_some() && next_y.is_some(),
+        "{first} {item30:?} {next_y:?}"
+    );
+
+    let more = script::parse(&format!(
+        "construct {d}/construct_anchor_above.json; wait 300; assert-text Item 30"
+    ))
+    .unwrap();
+    assert_ok(&runner.run(&more));
+    let near = |a: Option<f32>, b: Option<f32>| match (a, b) {
+        (Some(a), Some(b)) => (a - b).abs() < 0.5,
+        _ => false,
+    };
+    assert!(near(y(&mut runner, "Item 30"), item30));
+    assert!(near(y(&mut runner, &next), next_y));
+    assert_eq!(y(&mut runner, "New item 5"), None);
+
+    // The anchored row goes: the one after it keeps its place.
+    let mut gone: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(
+            crate::common::root()
+                .join(d)
+                .join("construct_anchor_above.json"),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    let uri = format!("sim://items/{first}");
+    gone["data"]["queries"]["sim:items"]
+        .as_array_mut()
+        .unwrap()
+        .retain(|u| u.as_str() != Some(uri.as_str()));
+    std::fs::create_dir_all(&out).unwrap();
+    let file = out.join("construct_anchor_gone.json");
+    std::fs::write(&file, gone.to_string()).unwrap();
+    let step = script::parse(&format!(
+        "construct {}; wait 300; assert-no-text Item {first}",
+        file.display()
+    ))
+    .unwrap();
+    assert_ok(&runner.run(&step));
+    assert!(near(y(&mut runner, &next), next_y));
 }
