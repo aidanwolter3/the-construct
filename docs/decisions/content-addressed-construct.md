@@ -57,7 +57,8 @@ elements; a device compares one hash. A pod moves to it only when switched, afte
   route mean what they meant.
 - The engine materializes each reachable element under its key (components expanded, each edge written back as
   `layout: <key>`), so the renderer's stack, screens and transitions are unchanged. With each new root it also gives
-  the renderer the **edge graph**: key → the keys that element and the elements it embeds link to.
+  the renderer the **edge graph** (`StateSnapshot::construct_json`, `Loader::edges`): key → the keys that element
+  and the elements it embeds link to.
 - A stack entry records its key and its presentation, transition, form values, scroll offsets and open screens; no
   hashes. When a new root arrives, each entry is checked against the one below it: at the first key the entry below
   no longer reaches, the stack is cut back there, each removed entry closing with its own transition.
@@ -91,8 +92,9 @@ construct) back to an earlier element.
   `name_history(name, seq, hash, at, author, note)`, `follows(name, follower)`, and the pod setting
   `construct.switched`. The tables are created by the first switch, so a pod that is never switched is never
   touched. Pod GC: after each write, objects no name's history reaches are deleted; each name keeps 500 entries.
-- **Client store.** The engine keeps objects in its cache by hash. Client GC keeps what the current and previous
-  root and the stack reach.
+- **Client store.** The engine keeps objects in memory by hash, and each layout it draws in its cache as before
+  (so the last screen shows at once on a start, offline too). Client GC keeps what the current and previous root
+  reach (the stack's entries are reachable from the root, or closed).
 - Components are expanded on the client: the expansion of definitions (parameters, `core://Children`,
   `core://IfArg`, `core://Fragment`, `$arg`) moved from `pod_core::components` and `pod_core::parts` into the crate
   `construct-elements`, which the pod and the engine both use. Elements are deduplicated and fetched one by one.
@@ -130,6 +132,14 @@ construct) back to an earlier element.
 - A launcher row bound to `local:layouts` with `$item.id` has no edge to resolve: the conversion writes such a list
   out as one row per live layout (its template with `$item.id`, `$item.title` and `$item.icon` filled in), and the
   dry run reports the difference (`$item.version` has nothing to show).
+- `server pods switch` runs in another process: a running server re-reads whether a pod is switched every 5 s
+  (MCP `switch_construct` takes effect at once).
+- On a switched pod, Collections' `apply_change` can't edit layouts along with a collection (`409
+  construct_switched`), and a collection change isn't checked against the construct's layouts as it is against the
+  old ones.
+- A notification that names a layout home doesn't reach can't be opened on a new client of a switched pod (it has no
+  edge to resolve).
 - Not yet: `bind` and `$in` on layout edges (a layout still reads home's feeds directly), scroll anchors kept as an
-  entity URI and offset (offsets are kept per scroll, as today), and presence beyond what is shown (fetch order is
-  the root, then the stack, then the rest).
+  entity URI and offset (offsets are kept per scroll, as today), objects kept across an app restart (they are
+  fetched again: the root's whole set once), and presence beyond what is shown (fetch order is the root, then
+  what it reaches).
