@@ -1,7 +1,8 @@
-//! Blueprints (decision `blueprints-and-home`): built-in apps are listed
-//! only as blueprints, every pod has a `home` app that references the home
-//! blueprint, a whole blueprint can be referenced as a layout's root, and a
-//! pod made before blueprints keeps an app for each built-in it showed.
+//! Blueprints on the construct (decisions `blueprints-and-home`,
+//! `content-addressed-construct`): a new pod's home is the whole home
+//! blueprint (`@core/shell`), a layout can be a whole blueprint by
+//! reference, home owns the feeds and each layout loads what it binds, and
+//! the layout writes are checked.
 
 use std::sync::Arc;
 
@@ -14,10 +15,11 @@ use pod_core::layouts::LayoutSource;
 use pod_core::session::session_hash;
 use pod_core::store::Store;
 use pod_core::{
-    AppInfo, AppState, AuthPolicy, BoxFuture, FeedSpec, HOME_APP, HOME_BLUEPRINT, Hydration, Pod,
-    RequestCtx, Source, SourceManifest, StaticAdapter,
+    AppState, AuthPolicy, BlueprintInfo, BoxFuture, FeedSpec, HOME_APP, HOME_BLUEPRINT, Hydration,
+    Pod, RequestCtx, Source, SourceManifest, StaticAdapter,
 };
 use protocol::{DataBundle, EntityRecord, WorkspaceSpec};
+
 use serde_json::{Value, json};
 use tower::ServiceExt;
 
@@ -36,10 +38,9 @@ const SHELL_FILE: LayoutSource = LayoutSource {
     app_id: HOME_BLUEPRINT,
     name: "0001",
     text: r#"{"note": "List", "layout": {"type": "core://Workspace", "id": "shell", "title": "Home",
-      "slots": [{"slot_id": "list", "provider_uri": "local://layouts",
-        "content": {"type": "core://List", "query_key": "local:layouts",
-          "item_template": {"type": "core://Tappable", "content": {"type": "core://Text", "style": "Body", "value_expr": "$item.title"},
-            "on_click": {"intent": "action.navigation.open", "layout": "$item.id", "presentation": "Push"}}}}]}}"#,
+      "slots": [{"slot_id": "list", "provider_uri": "local://inbox",
+        "content": {"type": "core://Tappable", "content": {"type": "core://Text", "style": "Body", "value_expr": "Inbox"},
+            "on_click": {"intent": "action.navigation.open", "layout": "a_home", "presentation": "Push"}}}]}}"#,
 };
 
 static A_MANIFEST: SourceManifest = SourceManifest {
@@ -63,8 +64,8 @@ impl Source for A {
     fn name(&self) -> &'static str {
         "a"
     }
-    fn apps(&self) -> Vec<AppInfo> {
-        vec![AppInfo {
+    fn blueprints(&self) -> Vec<BlueprintInfo> {
+        vec![BlueprintInfo {
             id: "a_home",
             title: "A",
             icon: "photo",
@@ -98,7 +99,7 @@ fn shell() -> Arc<dyn Source> {
         entities: Default::default(),
         queries: Default::default(),
     };
-    let info = AppInfo {
+    let info = BlueprintInfo {
         id: HOME_BLUEPRINT,
         title: "Home",
         icon: "dashboard",
@@ -130,7 +131,7 @@ async fn call(pod: &Pod, method: &str, path: &str, body: Option<Value>) -> (Stat
         .method(method)
         .uri(path)
         .header("authorization", "Bearer pod")
-        .header(protocol::FEATURES_HEADER, crate::workspace_features());
+        .header(protocol::FEATURES_HEADER, protocol::features_header());
     let body = match body {
         Some(b) => {
             req = req.header("content-type", "application/json");
@@ -150,119 +151,104 @@ async fn call(pod: &Pod, method: &str, path: &str, body: Option<Value>) -> (Stat
     )
 }
 
-async fn app_ids(pod: &Pod, path: &str) -> Vec<String> {
-    let (_, apps) = call(pod, "GET", path, None).await;
-    apps["apps"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|a| a["id"].as_str().unwrap().to_owned())
-        .collect()
+/// One MCP tool call: `(is_error, result)`.
+async fn tool(pod: &Pod, name: &str, args: Value) -> (bool, Value) {
+    let (status, body) = call(
+        pod,
+        "POST",
+        "/v1/mcp",
+        Some(json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+            "params": {"name": name, "arguments": args}})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let r = &body["result"];
+    (r["isError"] == true, r["structuredContent"].clone())
+}
+
+/// A layout as a device draws it.
+async fn layout(pod: &Pod, id: &str) -> (StatusCode, Value) {
+    pod_core::testing::layout_for(&pod_core::app(pod.clone()), id, Some("pod")).await
 }
 
 #[tokio::test]
-async fn a_new_pod_has_only_its_home_app() {
+async fn a_new_pod_starts_with_home_as_the_whole_home_blueprint() {
     let dir = tempfile::tempdir().unwrap();
     let pod = open(&dir.path().join("server.db"));
-    assert_eq!(app_ids(&pod, "/v1/apps").await, [HOME_APP]);
-    assert_eq!(
-        app_ids(&pod, "/v1/apps?blueprints=1").await,
-        ["a_home", HOME_BLUEPRINT, HOME_APP]
-    );
-    // Home serves the whole home blueprint under its own id.
-    let (status, ws) = call(&pod, "GET", "/v1/workspaces/home", None).await;
+    let (status, root) = call(&pod, "GET", "/v1/construct", None).await;
+    assert_eq!(status, StatusCode::OK, "{root}");
+    let (_, home) = tool(&pod, "get_layout", json!({"id": HOME_APP})).await;
+    assert_eq!(home["layout"]["ref"]["name"], "@core/shell", "{home}");
+    assert_eq!(home["title"], "Home");
+    assert_eq!(home["feeds"], json!([]));
+    // Home draws the whole home blueprint under its own id.
+    let (status, ws) = layout(&pod, HOME_APP).await;
     assert_eq!(status, StatusCode::OK, "{ws}");
-    assert_eq!(ws["workspace"]["id"], HOME_APP);
-    assert_eq!(
-        ws["workspace"]["slots"][0]["content"]["type"],
-        "core://List"
-    );
-    let (_, history) = call(&pod, "GET", "/v1/apps/home/versions", None).await;
-    let features = history["versions"][0]["features"].to_string();
-    assert!(
-        features.contains("navigate_layout") && features.contains("local_data"),
-        "{history}"
-    );
-    // Blueprints still serve by id (notifications and links name them).
-    let (status, _) = call(&pod, "GET", "/v1/workspaces/a_home", None).await;
+    assert_eq!(ws["workspace"]["type"], "core://Page", "{ws}");
+    assert_eq!(ws["workspace"]["id"], HOME_APP, "{ws}");
+    // Blueprints are drawn by their key too (notifications and links name
+    // them).
+    let (status, _) = layout(&pod, "a_home").await;
     assert_eq!(status, StatusCode::OK);
-    // Home can't be deleted, but it can be changed.
-    let (status, b) = call(&pod, "DELETE", "/v1/custom-apps/home", None).await;
-    assert_eq!(status, StatusCode::CONFLICT, "{b}");
-    assert_eq!(b["error"], "home_app");
-    // Reopening adds nothing.
+    // Home can't be deleted.
+    let (err, b) = tool(&pod, "delete_layout", json!({"id": HOME_APP})).await;
+    assert!(err, "{b}");
+    assert_eq!(b["error"], "home_cannot_be_deleted");
+    // Reopening moves nothing.
+    let names = || {
+        pod_core::construct::store::names(&rusqlite_conn(&dir.path().join("server.db"))).unwrap()
+    };
+    let before = names();
+    let seq = |n: &str| {
+        pod_core::construct::store::last_seq(&rusqlite_conn(&dir.path().join("server.db")), n)
+            .unwrap()
+    };
+    let home_seq = seq(HOME_APP);
     drop(pod);
     let pod = open(&dir.path().join("server.db"));
-    assert_eq!(app_ids(&pod, "/v1/apps").await, [HOME_APP]);
+    assert_eq!(names(), before);
+    assert_eq!(seq(HOME_APP), home_seq);
+    drop(pod);
+}
+
+fn rusqlite_conn(db: &std::path::Path) -> rusqlite::Connection {
+    rusqlite::Connection::open(db).unwrap()
 }
 
 #[tokio::test]
-async fn an_app_can_be_a_whole_blueprint_by_reference() {
+async fn a_layout_can_be_a_whole_blueprint_by_reference() {
     let dir = tempfile::tempdir().unwrap();
     let pod = open(&dir.path().join("server.db"));
-    let whole = json!({"type": "core://Ref", "app": "a_home", "part": "layout"});
-    let (status, b) = call(
+    let whole = json!({"type": "core://Use", "ref": "@core/a_home"});
+    let (err, b) = tool(
         &pod,
-        "POST",
-        "/v1/custom-apps",
-        Some(json!({"title": "Mine", "icon": "photo", "feeds": [["a", "all"]], "layout": whole})),
+        "create_layout",
+        json!({"title": "Mine", "icon": "photo", "feeds": [["a", "all"]], "layout": whole}),
     )
     .await;
-    assert_eq!(status, StatusCode::CREATED, "{b}");
+    assert!(!err, "{b}");
     let id = b["id"].as_str().unwrap().to_owned();
-    let (_, ws) = call(&pod, "GET", &format!("/v1/workspaces/{id}"), None).await;
-    assert_eq!(ws["workspace"]["id"], id.as_str());
-    assert_eq!(ws["queries"]["a:all"], json!(["a://1"]));
-    // Only at the root.
-    let nested = json!({"type": "core://Workspace", "id": "x", "title": "M",
-        "slots": [{"slot_id": "s", "provider_uri": "core://c", "content": whole}]});
-    let (status, b) = call(
+    let (status, ws) = layout(&pod, &id).await;
+    assert_eq!(status, StatusCode::OK, "{ws}");
+    assert_eq!(ws["queries"]["a:all"], json!(["a://1"]), "{ws}");
+    // The old spelling of a use is taken; the old reference node isn't.
+    let (err, b) = tool(
         &pod,
-        "POST",
-        "/v1/custom-apps",
-        Some(
-            json!({"title": "Nested", "icon": "photo", "feeds": [["a", "all"]], "layout": nested}),
-        ),
+        "create_layout",
+        json!({"title": "Old", "layout": {"type": "core://Use", "component": "core:a_home"}}),
     )
     .await;
-    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{b}");
-    assert!(
-        b.to_string().contains("only be referenced at the root"),
-        "{b}"
-    );
+    assert!(!err, "{b}");
+    let (err, b) = tool(
+        &pod,
+        "create_layout",
+        json!({"title": "Older", "layout": {"type": "core://Page", "title": "P",
+            "root": {"type": format!("core://{}", "Ref"), "app": "a_home", "part": "layout"}}}),
+    )
+    .await;
+    assert!(err, "{b}");
+    assert!(b.to_string().contains("unknown node type"), "{b}");
 }
-
-#[tokio::test]
-async fn an_older_pod_keeps_an_app_for_each_built_in_it_showed() {
-    let dir = tempfile::tempdir().unwrap();
-    let db = dir.path().join("server.db");
-    // What the `blueprints` migration leaves on a pod with layout history.
-    open(&db)
-        .store()
-        .set_pod_setting(pod_core::custom::CONVERT_SETTING, "1")
-        .unwrap();
-    let pod = open(&db);
-    let (_, apps) = call(&pod, "GET", "/v1/apps", None).await;
-    let rows = apps["apps"].as_array().unwrap();
-    assert_eq!(rows.len(), 2, "{apps}");
-    assert_eq!(rows[0]["id"], HOME_APP);
-    assert_eq!(rows[1]["title"], "A");
-    let id = rows[1]["id"].as_str().unwrap().to_owned();
-    let (_, ws) = call(&pod, "GET", &format!("/v1/workspaces/{id}"), None).await;
-    assert_eq!(ws["workspace"]["id"], id.as_str());
-    assert_eq!(ws["queries"]["a:all"], json!(["a://1"]), "{ws}");
-    assert_eq!(
-        pod.store()
-            .pod_setting(pod_core::custom::CONVERT_SETTING)
-            .unwrap(),
-        None
-    );
-    drop(pod);
-    let pod = open(&db);
-    assert_eq!(app_ids(&pod, "/v1/apps").await.len(), 2, "converted once");
-}
-
-// ---------- layouts, not apps (decision `layouts-not-apps`) ----------
 
 fn list_of(query: &str) -> Value {
     json!({"type": "core://Workspace", "title": "L", "slots": [{"slot_id": "s", "provider_uri": "core://a",
@@ -275,50 +261,31 @@ async fn home_owns_the_feeds_and_each_layout_loads_what_it_binds() {
     let dir = tempfile::tempdir().unwrap();
     let pod = open(&dir.path().join("server.db"));
     // Feeds named by a new layout join home's.
-    let (status, made) = call(
+    let (err, made) = tool(
         &pod,
-        "POST",
-        "/v1/custom-apps",
-        Some(json!({"title": "A list", "feeds": [["a", "all"]], "layout": list_of("a:all")})),
+        "create_layout",
+        json!({"title": "A list", "feeds": [["a", "all"]], "layout": list_of("a:all")}),
     )
     .await;
-    assert_eq!(status, StatusCode::CREATED, "{made}");
+    assert!(!err, "{made}");
     let first = made["id"].as_str().unwrap().to_owned();
-    let (_, home) = call(&pod, "GET", "/v1/custom-apps/home", None).await;
+    let (_, home) = tool(&pod, "get_layout", json!({"id": HOME_APP})).await;
     assert_eq!(home["feeds"], json!([["a", "all"]]), "{home}");
     // Another layout binds them without naming any.
-    let (status, made) = call(
+    let (err, made) = tool(
         &pod,
-        "POST",
-        "/v1/custom-apps",
-        Some(json!({"title": "Again", "layout": list_of("a:all")})),
+        "create_layout",
+        json!({"title": "Again", "layout": list_of("a:all")}),
     )
     .await;
-    assert_eq!(status, StatusCode::CREATED, "{made}");
-    let second = made["id"].as_str().unwrap().to_owned();
-    let (_, ws) = call(&pod, "GET", &format!("/v1/workspaces/{first}"), None).await;
+    assert!(!err, "{made}");
+    let (_, ws) = layout(&pod, &first).await;
     assert_eq!(ws["queries"]["a:all"], json!(["a://1"]), "{ws}");
     // Home binds no feed of its own: nothing of a's loads with it, but it
-    // still learns about the sources of its scope.
-    let (_, ws) = call(&pod, "GET", "/v1/workspaces/home", None).await;
+    // still learns about its sources and the pod's theme.
+    let (_, ws) = layout(&pod, HOME_APP).await;
     assert!(ws["queries"].get("a:all").is_none(), "{ws}");
-    assert_eq!(
-        ws["entities"]["core://sources/a"]["signed_in"], true,
-        "{ws}"
-    );
-    // Home can't drop a feed a layout still binds; the error names it.
-    let (status, b) = call(
-        &pod,
-        "PATCH",
-        "/v1/custom-apps/home",
-        Some(json!({"feeds": []})),
-    )
-    .await;
-    assert_eq!(status, StatusCode::CONFLICT, "{b}");
-    assert_eq!(b["error"], "feed_in_use");
-    let named = b["layout"].as_str().unwrap();
-    assert!(named == first || named == second, "{b}");
-    assert!(b["detail"].as_str().unwrap().contains(named), "{b}");
+    assert!(ws["entities"].get("core://theme").is_some(), "{ws}");
 }
 
 #[tokio::test]
@@ -330,18 +297,18 @@ async fn embedded_and_presented_layouts_are_checked() {
             "slots": [{"slot_id": "s", "provider_uri": "local://x", "content": content}]}})
     };
     let ok = with(json!({"type": "core://Column", "children": [
-        {"type": "core://Layout", "layout": "inbox", "presentation": "Sheet", "show_when": "$form.inbox"},
+        {"type": "core://Layout", "layout": "a_home", "presentation": "Sheet", "show_when": "$form.inbox"},
         {"type": "core://Button", "label": "Open", "on_click": {"intent": "action.navigation.open",
-            "layout": "settings", "presentation": "Panel", "animation": "slide"}},
+            "layout": "a_home", "presentation": "Panel", "animation": "slide"}},
         {"type": "core://Button", "label": "Leave", "on_click": {"intent": "action.confirm",
             "title": "Leave this pod?", "confirm_label": "Leave",
             "then": {"intent": "action.device", "command": "leave_pod"}}}]}));
-    let (status, b) = call(&pod, "POST", "/v1/custom-apps", Some(ok)).await;
-    assert_eq!(status, StatusCode::CREATED, "{b}");
+    let (err, b) = tool(&pod, "create_layout", ok).await;
+    assert!(!err, "{b}");
     for (bad, says) in [
         (
             json!({"type": "core://Layout", "layout": "not a layout"}),
-            "not a layout id",
+            "no layout 'not a layout'",
         ),
         (
             json!({"type": "core://Button", "label": "x", "on_click": {"intent": "action.navigation.open", "presentation": "Push"}}),
@@ -356,10 +323,12 @@ async fn embedded_and_presented_layouts_are_checked() {
             "open the layout with action.navigation.open",
         ),
         (
-            json!({"type": "core://Button", "label": "x", "on_click": {"intent": "action.sequence", "steps": [
-                {"intent": "action.device", "command": "refresh"},
-                {"intent": "action.device", "command": "open_inbox"}]}}),
-            "open_settings and open_inbox were retired",
+            json!({"type": "core://Button", "label": "x", "on_click": {"intent": "action.device", "command": "hide_layout", "layout": "home"}}),
+            "device_layout_controls",
+        ),
+        (
+            json!({"type": "core://Button", "label": "x", "on_click": {"intent": "action.device", "command": "show_versions", "layout": "home"}}),
+            "unknown device command",
         ),
         (
             json!({"type": "core://Button", "label": "x", "on_click": {"intent": "action.confirm",
@@ -367,117 +336,90 @@ async fn embedded_and_presented_layouts_are_checked() {
             "needs a title and a confirm_label",
         ),
         (
-            json!({"type": "core://Button", "label": "x", "on_click": {"intent": "action.confirm",
-                "title": "Sure?", "confirm_label": "Yes", "then": {"intent": "action.device", "command": "explode"}}}),
-            "unknown device command",
-        ),
-        (
             json!({"type": "core://AppFrame", "app": "home"}),
             "core://Layout",
         ),
     ] {
-        let (status, b) = call(&pod, "POST", "/v1/custom-apps", Some(with(bad))).await;
-        assert!(status.is_client_error(), "{b}");
-        assert!(b["detail"].as_str().unwrap().contains(says), "{says}: {b}");
+        let (err, b) = tool(&pod, "create_layout", with(bad)).await;
+        assert!(err, "{b}");
+        assert!(b.to_string().contains(says), "{says}: {b}");
     }
-}
-
-#[tokio::test]
-async fn an_app_era_home_becomes_a_list_and_gives_its_feeds_to_home() {
-    let dir = tempfile::tempdir().unwrap();
-    let db = dir.path().join("server.db");
-    let pod = open(&db);
-    let (_, made) = call(
-        &pod,
-        "POST",
-        "/v1/custom-apps",
-        Some(json!({"title": "A list", "feeds": [["a", "all"]], "layout": list_of("a:all")})),
-    )
-    .await;
-    let id = made["id"].as_str().unwrap().to_owned();
-    // What a pod of the app era holds: the app's own feeds, an empty home
-    // whose latest version is a dock.
-    let dock = json!({"type": "core://Workspace", "id": "home", "title": "Home", "slots": [{"slot_id": "d",
-        "provider_uri": "local://apps", "content": {"type": "core://Dock", "field": "tab", "query_key": "local:apps",
-        "item": {"value": "$item.id", "label": "$item.title", "content": {"type": "core://AppFrame", "app": "$item.id"}}}}]});
-    pod.store()
-        .transaction(|tx| {
-            tx.execute(
-                "UPDATE custom_apps SET feeds_json = CASE WHEN id = 'home' THEN '[]' ELSE '[[\"a\",\"all\"]]' END",
-                [],
-            )?;
-            pod_core::store::append_authored_version_on(
-                tx,
-                HOME_APP,
-                &dock.to_string(),
-                "custom",
-                Some("Dock"),
-                pod_core::store::Authored {
-                    author: "user",
-                    meta_json: None,
-                    features: "[\"dock\",\"app_frame\"]",
-                },
-            )?;
-            Ok(())
-        })
-        .unwrap();
-    pod.store()
-        .set_pod_setting(pod_core::custom::LAYOUTS_CONVERT_SETTING, "1")
-        .unwrap();
-    drop(pod);
-    let pod = open(&db);
-    let (_, home) = call(&pod, "GET", "/v1/custom-apps/home", None).await;
-    assert_eq!(home["feeds"], json!([["a", "all"]]), "{home}");
-    assert_eq!(
-        home["layout"]["slots"][0]["content"]["children"][1]["query_key"], "local:layouts",
-        "{home}"
-    );
-    let (_, ws) = call(&pod, "GET", &format!("/v1/workspaces/{id}"), None).await;
-    assert_eq!(ws["queries"]["a:all"], json!(["a://1"]), "{ws}");
-    assert_eq!(
-        pod.store()
-            .pod_setting(pod_core::custom::LAYOUTS_CONVERT_SETTING)
-            .unwrap(),
-        None
-    );
 }
 
 #[tokio::test]
 async fn a_feed_belongs_to_the_layout_that_binds_it_else_home() {
     let dir = tempfile::tempdir().unwrap();
     let pod = open(&dir.path().join("server.db"));
-    let owners = || pod_core::custom::feed_owners(pod.store(), pod.catalog(), "a").unwrap();
-    // No layout declares a feed of a: nothing to own.
+    let owners = || pod_core::layouts::feed_owners(pod.store(), pod.catalog(), "a").unwrap();
+    // Home binds no feed of a: nothing to own.
     assert!(owners().is_empty());
-    // A layout that binds nothing of a's, made first, with the feed: every
-    // layout reports home's feeds, but none binds it, so home owns it.
+    // A layout that binds nothing of a's, made first, with the feed: home
+    // binds it, but no layout shows it, so home owns it.
     let empty = json!({"type": "core://Workspace", "title": "E", "slots": [{"slot_id": "s",
         "provider_uri": "local://x", "content": {"type": "core://Text", "style": "Body", "value_expr": "hi"}}]});
-    let (status, made) = call(
+    let (err, made) = tool(
         &pod,
-        "POST",
-        "/v1/custom-apps",
-        Some(json!({"title": "Empty", "feeds": [["a", "all"]], "layout": empty})),
+        "create_layout",
+        json!({"title": "Empty", "feeds": [["a", "all"]], "layout": empty}),
     )
     .await;
-    assert_eq!(status, StatusCode::CREATED, "{made}");
+    assert!(!err, "{made}");
     assert_eq!(owners()["all"], HOME_APP);
     // The layouts that bind it: one of them owns it (the oldest; made in
     // the same second, they tie on age), the same one each time.
     let mut binders = Vec::new();
     for title in ["First", "Second"] {
-        let (status, made) = call(
+        let (err, made) = tool(
             &pod,
-            "POST",
-            "/v1/custom-apps",
-            Some(json!({"title": title, "layout": list_of("a:all")})),
+            "create_layout",
+            json!({"title": title, "layout": list_of("a:all")}),
         )
         .await;
-        assert_eq!(status, StatusCode::CREATED, "{made}");
+        assert!(!err, "{made}");
         binders.push(made["id"].as_str().unwrap().to_owned());
     }
     let owner = owners()["all"].clone();
     assert!(binders.contains(&owner), "{owner} of {binders:?}");
     assert_eq!(owners()["all"], owner);
     assert_eq!(owners().len(), 1);
+}
+
+#[tokio::test]
+async fn layout_writes_are_capped() {
+    let dir = tempfile::tempdir().unwrap();
+    let pod = Arc::new(
+        AppState::new(
+            Store::open(&dir.path().join("server.db")).unwrap(),
+            vec![Arc::new(A), shell()],
+        )
+        .with_layout_caps(pod_core::layouts::Caps {
+            layouts: 2,
+            writes_per_minute: 3,
+        }),
+    );
+    pod.store()
+        .create_pinned_session(&session_hash("pod"))
+        .unwrap();
+    let page = json!({"type": "core://Page", "title": "P", "root": {"type": "core://Spacer"}});
+    let (err, b) = tool(
+        &pod,
+        "create_layout",
+        json!({"title": "One", "layout": page}),
+    )
+    .await;
+    assert!(!err, "{b}");
+    // Home and one more: the cap.
+    let (err, b) = tool(
+        &pod,
+        "create_layout",
+        json!({"title": "Two", "layout": page}),
+    )
+    .await;
+    assert!(err, "{b}");
+    assert_eq!(b["error"], "too_many_layouts", "{b}");
+    let (err, b) = tool(&pod, "rename_layout", json!({"id": HOME_APP, "title": "H"})).await;
+    assert!(!err, "{b}");
+    let (err, b) = tool(&pod, "rename_layout", json!({"id": HOME_APP, "title": "I"})).await;
+    assert!(err, "{b}");
+    assert_eq!(b["error"], "rate_limited", "{b}");
 }

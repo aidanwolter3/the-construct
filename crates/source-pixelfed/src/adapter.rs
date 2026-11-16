@@ -6,10 +6,10 @@ use std::sync::{Arc, RwLock};
 use axum::Router;
 use pod_core::layouts::LayoutSource;
 use pod_core::{
-    AppInfo, BoxFuture, EntityDoc, FeedSpec, Hydration, PathSpec, Pod, PollCtx, PollOutcome,
+    BlueprintInfo, BoxFuture, EntityDoc, FeedSpec, Hydration, PathSpec, Pod, PollCtx, PollOutcome,
     RequestCtx, Session, SignInAccount, SignInProvider, Source, SourceManifest,
 };
-use protocol::{NotificationChannel, WorkspaceSpec};
+use protocol::NotificationChannel;
 
 use crate::config::{Instance, PixelfedConfig};
 use crate::upstream::{Clients, Upstream};
@@ -22,7 +22,7 @@ pub const SIGN_IN: &str = "pixelfed";
 /// and routes.
 pub const NAME: &str = "pixelfed";
 
-/// The home timeline feed (`AppInfo::feeds` entry `("pixelfed", "home")`).
+/// The home timeline feed (`BlueprintInfo::feeds` entry `("pixelfed", "home")`).
 pub const HOME_FEED: &str = "home";
 
 /// What layouts may use of Pixelfed (decision
@@ -243,7 +243,7 @@ impl Source for PixelfedAdapter {
         NAME
     }
 
-    fn apps(&self) -> Vec<AppInfo> {
+    fn blueprints(&self) -> Vec<BlueprintInfo> {
         vec![apps::PIXELFED]
     }
 
@@ -298,10 +298,6 @@ impl Source for PixelfedAdapter {
             let others = crate::routes::others_allowed(pod).await.unwrap_or(false);
             Some(crate::layout::sign_in_start(&rt.config, others))
         })
-    }
-
-    fn signed_out(&self, _sign_in: &str, app: &AppInfo, _req: &RequestCtx) -> WorkspaceSpec {
-        crate::layout::signed_out(&self.runtime().config, app.id, app.title)
     }
 
     fn manifest(&self) -> SourceManifest {

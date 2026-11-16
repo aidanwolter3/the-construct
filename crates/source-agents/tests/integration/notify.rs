@@ -42,7 +42,7 @@ async fn runner_events_notify_the_agents_layout() {
         .as_array()
         .unwrap()
         .iter()
-        .filter(|c| c["app_id"] == app.as_str())
+        .filter(|c| c["layout"] == app.as_str())
         .map(|c| c["id"].as_str().unwrap())
         .collect();
     assert_eq!(mine, ["needs_you", "sessions", "warnings"]);
@@ -161,7 +161,7 @@ async fn runner_events_notify_the_agents_layout() {
     tokio::time::sleep(std::time::Duration::from_millis(300)).await;
     let got = notifications(&pod).await;
     assert_eq!(titles(&got), want, "{got:#?}");
-    assert!(got.iter().all(|n| n["app_id"] == app.as_str()));
+    assert!(got.iter().all(|n| n["channel_layout"] == app.as_str()));
     let done = got
         .iter()
         .find(|n| n["title"] == "Done: Tidy the readme")

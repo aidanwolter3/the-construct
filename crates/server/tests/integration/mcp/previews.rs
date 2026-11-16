@@ -13,8 +13,8 @@ fn preview_node(details: &Value, text: &str) -> Option<Value> {
         .cloned()
 }
 
-/// A screen opened directly loads its data path, home gets the device's
-/// list of layouts, a row can be tried with a made-up item and made-up
+/// A screen opened directly loads its data path, home draws a layout it
+/// embeds with its data, a row can be tried with a made-up item and made-up
 /// lists, a long screen is drawn whole, and nothing a source doesn't
 /// declare is read.
 #[tokio::test]
@@ -27,7 +27,7 @@ async fn previews_read_like_a_device_with_the_users_data() {
             &access,
             "create_layout",
             json!({"title": "Recipes", "feeds": [["recipes", "all"]],
-                   "layout": {"type": "core://Ref", "app": "recipes", "part": "layout"}}),
+                   "layout": {"type": "core://Use", "ref": "@core/recipes"}}),
         )
         .await;
     assert!(!err, "{created}");
@@ -65,10 +65,10 @@ async fn previews_read_like_a_device_with_the_users_data() {
     assert!(err && text.contains("no_screen"), "{text}");
     assert!(text.contains("recipes://recipes/{id}"), "{text}");
 
-    // 2. Home binds the device's list of layouts.
-    let home = json!({"type": "core://Workspace", "title": "Home", "slots": [{"slot_id": "l",
-        "content": {"type": "core://List", "query_key": "local:layouts",
-            "item_template": {"type": "core://Text", "style": "Body", "value_expr": "Layout $item.title"}}}]});
+    // 2. Home embeds the layout, drawn with the user's data.
+    let home = json!({"type": "core://Page", "title": "Home", "root": {"type": "core://Column",
+        "children": [{"type": "core://Text", "style": "Title", "value_expr": "Layout Recipes"},
+            {"type": "core://Layout", "ref": id}]}});
     let (err, w) = env
         .tool(
             &access,
@@ -85,9 +85,11 @@ async fn previews_read_like_a_device_with_the_users_data() {
     )
     .await;
     assert!(!err, "{text}");
+    let details = preview_details(&text);
+    assert!(preview_node(&details, "Layout Recipes").is_some(), "{text}");
     assert!(
-        preview_node(&preview_details(&text), "Layout Recipes").is_some(),
-        "{text}"
+        preview_node(&details, "Test Garden Salad").is_some(),
+        "the embedded layout's data: {text}"
     );
 
     // 3. A row tried with a made-up item, and a list of made-up rows.
@@ -156,7 +158,7 @@ async fn previews_read_like_a_device_with_the_users_data() {
 
     // 5. A load from a path no data source declares reads nothing.
     let load = json!({"type": "core://Page", "id": "d", "root": {"type": "core://Button", "label": "Load",
-        "on_click": {"intent": "action.data.load", "path": "/v1/apps?all=1"}}});
+        "on_click": {"intent": "action.data.load", "path": "/v1/nowhere?all=1"}}});
     let (err, _, text) = preview_call(
         &env,
         &access,

@@ -81,10 +81,10 @@ impl Stub {
             streams: Mutex::default(),
             event_conns: AtomicUsize::new(0),
             list: Mutex::new(
-                json!({ "notifications": [], "unread_total": 0, "unread_by_app": {} }),
+                json!({ "notifications": [], "unread_total": 0, "unread_by_layout": {} }),
             ),
             list_status: AtomicU16::new(200),
-            read_answer: Mutex::new(json!({ "unread_total": 0, "unread_by_app": {} })),
+            read_answer: Mutex::new(json!({ "unread_total": 0, "unread_by_layout": {} })),
             read_status: AtomicU16::new(200),
         });
         let shared = Arc::clone(&st);
@@ -127,7 +127,7 @@ impl Stub {
 
     fn set_list(&self, items: Vec<Value>, total: u32, by_app: Value) {
         *self.st.list.lock().unwrap() =
-            json!({ "notifications": items, "unread_total": total, "unread_by_app": by_app });
+            json!({ "notifications": items, "unread_total": total, "unread_by_layout": by_app });
     }
 }
 
@@ -399,7 +399,7 @@ fn the_device_is_registered_after_a_sign_in_and_when_its_info_changes() {
     );
     assert_eq!(
         counts(&engine.snapshot()),
-        json!({ "unread_total": 0, "unread_by_app": {} })
+        json!({ "unread_total": 0, "unread_by_layout": {} })
     );
     engine.dispatch(
         &json!({ "intent": "action.auth.session", "path": "/v1/pods/temporary", "payload": {} })
@@ -456,7 +456,7 @@ fn a_streamed_notification_updates_counts_and_calls_the_listener_once() {
     wait_until("the count", || total(&engine) == 1);
     assert_eq!(
         counts(&engine.snapshot()),
-        json!({ "unread_total": 1, "unread_by_app": { "a": 1 } })
+        json!({ "unread_total": 1, "unread_by_layout": { "a": 1 } })
     );
     wait_until("the listener", || heard.lock().unwrap().len() == 1);
     assert_eq!(heard.lock().unwrap()[0], "5");
@@ -465,7 +465,7 @@ fn a_streamed_notification_updates_counts_and_calls_the_listener_once() {
     // Then a read event clears the counts.
     stub.push(
         "notifications_read",
-        &json!({ "unread_total": 0, "unread_by_app": {} }),
+        &json!({ "unread_total": 0, "unread_by_layout": {} }),
     );
     wait_until("read", || total(&engine) == 0);
     assert_eq!(heard.lock().unwrap().len(), 1);
@@ -488,7 +488,7 @@ fn the_catch_up_fetch_after_a_reconnect_never_calls_the_listener() {
     let heard = listen(&engine);
     connected(&stub, &engine);
     wait_until("counts from the fetch", || total(&engine) == 3);
-    assert_eq!(counts(&engine.snapshot())["unread_by_app"]["b"], 1);
+    assert_eq!(counts(&engine.snapshot())["unread_by_layout"]["b"], 1);
     // Missed while disconnected: the next catch-up brings it, quietly.
     stub.set_list(
         vec![
@@ -557,7 +557,7 @@ fn mark_read_is_optimistic_then_posted_and_resent_after_a_failure() {
     stub.st.read_status.store(200, Ordering::SeqCst);
     stub.st.list_status.store(200, Ordering::SeqCst);
     *stub.st.read_answer.lock().unwrap() =
-        json!({ "unread_total": 1, "unread_by_app": { "a": 1 } });
+        json!({ "unread_total": 1, "unread_by_layout": { "a": 1 } });
     stub.set_list(
         vec![
             notification("3", "a", false),
@@ -578,7 +578,7 @@ fn mark_read_is_optimistic_then_posted_and_resent_after_a_failure() {
     assert_eq!(posts[1].json(), json!({ "ids": ["1"] }));
 
     // Mark all: the pod's answer comes back.
-    *stub.st.read_answer.lock().unwrap() = json!({ "unread_total": 0, "unread_by_app": {} });
+    *stub.st.read_answer.lock().unwrap() = json!({ "unread_total": 0, "unread_by_layout": {} });
     let ev = engine.mark_all_notifications_read(None).unwrap();
     assert_eq!(ev.unread_total, 0);
     assert_eq!(total(&engine), 0);
@@ -614,7 +614,7 @@ fn a_push_message_is_cached_and_counted_without_the_listener() {
     assert_eq!(n.target_uri.as_deref(), Some("a://posts/9"));
     assert_eq!(
         counts(&engine.snapshot()),
-        json!({ "unread_total": 1, "unread_by_app": { "a": 1 } })
+        json!({ "unread_total": 1, "unread_by_layout": { "a": 1 } })
     );
     assert!(engine.handle_push_message("{\"v\":1}").is_none());
     assert!(engine.handle_push_message("garbage").is_none());

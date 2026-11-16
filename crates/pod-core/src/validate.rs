@@ -167,7 +167,10 @@ fn finish_structure(node: UiNode) -> Result<UiNode, String> {
                 continue;
             }
             ActionIntent::Device {
-                command, app, id, ..
+                command,
+                layout,
+                id,
+                ..
             } => {
                 let c = command.as_str();
                 // Retired (decision `layouts-not-apps`): old versions still
@@ -184,8 +187,8 @@ fn finish_structure(node: UiNode) -> Result<UiNode, String> {
                     ));
                 }
                 let blank = |v: &Option<String>| v.as_deref().is_none_or(|a| a.trim().is_empty());
-                if protocol::DEVICE_COMMANDS_WITH_APP.contains(&c) && blank(app) {
-                    return Err(format!("action.device {command} needs an app"));
+                if protocol::DEVICE_COMMANDS_WITH_APP.contains(&c) && blank(layout) {
+                    return Err(format!("action.device {command} needs a layout"));
                 }
                 if protocol::DEVICE_COMMANDS_WITH_ID.contains(&c) && blank(id) {
                     return Err(format!("action.device {command} needs an id"));

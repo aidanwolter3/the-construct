@@ -1,22 +1,19 @@
-//! The Construct pod, without any app (D40).
+//! The Construct pod, without any source (D40).
 //!
-//! The core keeps its state in SQLite (see [`store`]), serves each app's
-//! workspace (`GET /v1/workspaces/:id`), the read-only apps and versions API
-//! and the layout push channel (see [`layouts`]), and owns sessions and
-//! sign-ins (see [`session`]). Workspace layouts are code
-//! (`layouts/<app>/NNNN.json` in each adapter crate), synced into one append-only version history
-//! per app at startup; [`validate`] checks every layout file.
+//! The core keeps its state in SQLite (see [`store`]), serves the pod's
+//! construct (decision `content-addressed-construct`, see [`construct`]):
+//! elements by hash, names that move, home's element as the root, its data
+//! and its event stream; and owns sessions and sign-ins (see [`session`]).
+//! Blueprints are code (`layouts/<blueprint>/NNNN.json` in each source
+//! crate), named `@core/<blueprint>` in every pod when it opens.
 //!
-//! Apps plug in through [`Source`]: the `server` binary builds the
-//! adapters and passes them to [`AppState::try_new`]. The core never names an
-//! app; adapters supply each app's data, routes, sign-ins and tables. Each
-//! adapter is also a data source ([`source`]): an app is a layout plus a
-//! list of feeds, which the core runs and merges.
+//! Sources plug in through [`Source`]: the `server` binary builds them and
+//! passes them to [`AppState::try_new`]. The core never names a source;
+//! sources supply data, routes, sign-ins, tables and blueprints ([`source`]).
 
 pub mod adapter;
 pub mod components;
 pub mod construct;
-pub mod custom;
 pub mod disk;
 pub mod jacks;
 pub mod layouts;
@@ -26,7 +23,6 @@ pub mod metrics;
 pub mod migrations;
 pub mod net;
 pub mod notify;
-pub mod parts;
 pub mod porcelain;
 pub mod preview;
 pub mod push;
@@ -35,6 +31,7 @@ pub mod session;
 pub mod source;
 pub mod static_app;
 pub mod store;
+pub mod testing;
 pub mod tz;
 pub mod uploads;
 pub mod util;
@@ -53,15 +50,13 @@ use axum::{
     response::{IntoResponse, Response},
     routing::{get, post},
 };
-use protocol::WorkspaceSpec;
 use serde_json::{Value, json};
 use store::Store;
 
 pub use adapter::{
-    AppInfo, AuthPolicy, BoxFuture, Catalog, Hydration, Pod, RequestCtx, SignInAccount,
+    AuthPolicy, BlueprintInfo, BoxFuture, Catalog, Hydration, Pod, RequestCtx, SignInAccount,
     SignInProvider, SignInStart, Source,
 };
-pub use custom::{AppRef, CustomApp};
 pub use notify::{NewNotification, PollCtx, PollOutcome, PollStatus};
 pub use session::{Caller, Session};
 pub use source::{EntityDoc, FeedSpec, PathSpec, SourceManifest};
@@ -70,16 +65,12 @@ pub use static_app::StaticAdapter;
 /// `WorkspaceSpec::version` of the bundles the pod builds.
 pub const BUNDLE_VERSION: &str = "1.0.0";
 
-/// Every pod's own home app (decision `blueprints-and-home`): the one app
-/// clients open first. It starts as a reference to [`HOME_BLUEPRINT`] and is
-/// the user's to change.
+/// Every pod's own home layout (decision `blueprints-and-home`): the root of
+/// its construct, which clients open first. It starts as the whole of
+/// [`HOME_BLUEPRINT`] and is the user's to change.
 pub const HOME_APP: &str = "home";
 /// The blueprint a pod's [`HOME_APP`] starts from.
 pub const HOME_BLUEPRINT: &str = "shell";
-
-/// Blueprints of the pod itself (home, Settings, the inbox): never turned
-/// into a layout of their own by a conversion.
-pub const SYSTEM_BLUEPRINTS: [&str; 3] = [HOME_BLUEPRINT, "settings", "inbox"];
 
 /// A pending injected fault (test hook): the next `remaining` mutation
 /// requests get `status` without being applied.
@@ -119,10 +110,12 @@ pub struct AppState {
     fault: Mutex<Option<Fault>>,
     /// Pod sessions older than this are invalid (`CONSTRUCT_SESSION_TTL_DAYS`).
     session_ttl_secs: i64,
-    /// `CONSTRUCT_SHOW_DEV_APPS=1`: `GET /v1/apps` also lists the dev apps.
+    /// `CONSTRUCT_SHOW_DEV_APPS=1`: MCP also lists the dev blueprints and
+    /// sources.
     show_dev_apps: bool,
-    /// New app versions, fanned out to SSE subscribers.
-    layout_tx: tokio::sync::broadcast::Sender<layouts::LayoutEvent>,
+    /// The construct's generation after each move of a name, fanned out to
+    /// its event streams ([`construct::events`]).
+    construct_tx: tokio::sync::broadcast::Sender<i64>,
     /// "Your data changed" (D50), fanned out to that session's subscribers.
     data_tx: tokio::sync::broadcast::Sender<layouts::DataEvent>,
     /// Largest upload (`CONSTRUCT_UPLOAD_MAX_BYTES`, D49).
@@ -156,8 +149,11 @@ pub struct AppState {
     public_base: std::sync::OnceLock<String>,
     /// MCP servers may be on private hosts (tests; decision `mcp-jack`).
     mcp_private_hosts: bool,
-    /// Custom apps: caps and the write-rate window.
-    pub(crate) custom: custom::CustomState,
+    /// Layout writes: caps and the write-rate window.
+    pub(crate) writes: layouts::WriteState,
+    /// What moving this pod from the old layout system found, when this
+    /// open did ([`migrations::layout_system`]).
+    conversion: Option<migrations::layout_system::Report>,
     /// Layout previews agents are looking at (MCP, `preview`).
     pub(crate) previews: preview::Previews,
     /// Served by a pod host (D46), which sets [`CREDENTIAL_HEADER`] (and
@@ -174,14 +170,15 @@ pub const CREDENTIAL_HEADER: &str = "x-construct-credential";
 
 impl AppState {
     /// State over `store` serving `adapters`, after running their migrations
-    /// and syncing their layout files into the store ([`layouts::sync`]).
-    /// Panics with the error; see [`Self::try_new`].
+    /// and opening the pod's construct ([`construct::open`]). Panics with
+    /// the error; see [`Self::try_new`].
     pub fn new(store: Store, adapters: Vec<Arc<dyn Source>>) -> Self {
         Self::try_new(store, adapters).unwrap_or_else(|e| panic!("{e}"))
     }
 
     /// [`Self::new`], returning the error (a bad adapter set, a failed
-    /// adapter migration, or a changed, out-of-order or invalid layout file)
+    /// adapter migration, an invalid or changed layout or component file,
+    /// or a pod the old layout system held that could not be converted)
     /// instead of panicking.
     pub fn try_new(store: Store, adapters: Vec<Arc<dyn Source>>) -> Result<Self, String> {
         let catalog = Catalog::new(adapters)?;
@@ -192,59 +189,7 @@ impl AppState {
             a.on_open(&store)
                 .map_err(|e| format!("opening the '{}' adapter's data: {e}", a.name()))?;
         }
-        // Server components first: layout files may use them (decision
-        // `plumbing-and-porcelain`).
-        let core = components::core_files(catalog.component_files())?;
-        let pending = parts::Pending {
-            defs: core
-                .iter()
-                .map(|f| (f.name.clone(), f.number, f.def.clone()))
-                .collect(),
-        };
-        for f in &core {
-            let bare = f.name.trim_start_matches(components::CORE);
-            if catalog.is_app(bare) {
-                return Err(format!(
-                    "{}: '{bare}' is a blueprint's id; name the component otherwise",
-                    f.path
-                ));
-            }
-            parts::check_definition(&store, &catalog, &f.name, f.number, &f.def, &pending)
-                .map_err(|e| format!("{}: {e}", f.path))?;
-        }
-        let core_changed = components::sync_core(&store, &core)?;
-        let report = layouts::sync(&store, &catalog)?;
-        for warning in &report.missing {
-            tracing::warn!("{warning}");
-        }
-        for path in &report.adopted {
-            tracing::info!(file = %path, "layout file hash recorded (deployed before migration v8)");
-        }
-        for (path, version) in &report.appended {
-            tracing::info!(file = %path, version, "layout file deployed as a new version");
-        }
-        // Custom apps that reference a built-in that just changed get a
-        // `ref_update` version (decision `layout-parts`).
-        let changed: Vec<(String, i64)> = report
-            .appended
-            .iter()
-            .filter_map(|(path, version)| {
-                // `<dir>/<app>/NNNN.json`: the file's folder is its app.
-                let app = path.rsplit('/').nth(1)?;
-                Some((app.to_owned(), *version))
-            })
-            .rev() // the newest version of each app first
-            .collect();
-        custom::ref_updates(&store, &catalog, &changed)
-            .map_err(|e| format!("updating custom apps after the layout sync: {e}"))?;
-        custom::component_updates(&store, &catalog, &core_changed)
-            .map_err(|e| format!("updating layouts after the component sync: {e}"))?;
-        // Blueprints (decision `blueprints-and-home`): a home app for every
-        // pod, and apps for the built-ins an older pod showed.
-        custom::seed_blueprint_apps(&store, &catalog)
-            .map_err(|e| format!("starting the pod's apps from blueprints: {e}"))?;
-        custom::convert_to_layouts(&store, &catalog)
-            .map_err(|e| format!("converting the pod's apps to layouts: {e}"))?;
+        let conversion = construct::open(&store, &catalog)?;
         Ok(Self {
             locals: Mutex::new(Vec::new()),
             store,
@@ -253,7 +198,7 @@ impl AppState {
             fault: Mutex::new(None),
             session_ttl_secs: session::DEFAULT_SESSION_TTL_DAYS * 86_400,
             show_dev_apps: false,
-            layout_tx: tokio::sync::broadcast::channel(layouts::CHANNEL_CAPACITY).0,
+            construct_tx: tokio::sync::broadcast::channel(layouts::CHANNEL_CAPACITY).0,
             data_tx: tokio::sync::broadcast::channel(layouts::CHANNEL_CAPACITY).0,
             upload_max_bytes: uploads::max_bytes_from_env(),
             upload_quota_bytes: None,
@@ -268,7 +213,8 @@ impl AppState {
             public_prefix: std::sync::OnceLock::new(),
             public_base: std::sync::OnceLock::new(),
             mcp_private_hosts: false,
-            custom: custom::CustomState::default(),
+            writes: layouts::WriteState::default(),
+            conversion,
             previews: preview::Previews::default(),
             hosted: std::sync::atomic::AtomicBool::new(false),
             internal_secret: {
@@ -296,8 +242,8 @@ impl AppState {
         Self::new(Store::open_in_memory().expect("in-memory SQLite"), adapters)
     }
 
-    /// `CONSTRUCT_SHOW_DEV_APPS=1`: `GET /v1/apps` also lists the dev apps
-    /// (their other endpoints work either way).
+    /// `CONSTRUCT_SHOW_DEV_APPS=1`: MCP also lists the dev blueprints and
+    /// sources (they work either way).
     pub fn with_dev_apps(mut self, show: bool) -> Self {
         self.show_dev_apps = show;
         self
@@ -476,23 +422,6 @@ impl AppState {
             let (a, pod) = (Arc::clone(a), Arc::clone(self));
             rt.spawn(async move { a.resume(&pod).await });
         }
-        // A switched pod's `@core/` names follow this build's files
-        // (decision `content-addressed-construct`).
-        let pod = Arc::clone(self);
-        rt.spawn_blocking(move || {
-            if construct::is_switched(&pod) {
-                match construct::switch::refresh_core(&pod) {
-                    Ok(moved) if !moved.is_empty() => {
-                        tracing::info!(moved = moved.len(), "the construct follows this build");
-                        construct::write::publish(&pod, &moved);
-                    }
-                    Ok(_) => {}
-                    Err(e) => {
-                        tracing::warn!(error = %e, "the construct's @core names weren't moved")
-                    }
-                }
-            }
-        });
         let weak = Arc::downgrade(self);
         rt.spawn(async move {
             loop {
@@ -502,12 +431,6 @@ impl AppState {
                     && n > 0
                 {
                     tracing::info!(deleted = n, "old unclaimed uploads deleted");
-                }
-                let purged = blocking(&pod, |s| custom::purge(s, util::now_secs())).await;
-                if let Ok(n) = purged
-                    && n > 0
-                {
-                    tracing::info!(purged = n, "deleted custom apps purged");
                 }
                 drop(pod);
                 tokio::time::sleep(uploads::SWEEP_EVERY).await;
@@ -550,51 +473,16 @@ impl AppState {
         ok.then(|| hash.to_owned())
     }
 
-    /// Limits on custom apps ([`custom::Caps`]).
-    pub fn with_custom_app_caps(mut self, caps: custom::Caps) -> Self {
-        self.custom = custom::CustomState::new(caps);
+    /// Limits on the pod's layouts ([`layouts::Caps`]).
+    pub fn with_layout_caps(mut self, caps: layouts::Caps) -> Self {
+        self.writes = layouts::WriteState::new(caps);
         self
     }
 
-    /// The app `id`: a built-in one, or a live custom app. `None` for an
-    /// unknown or deleted app.
-    pub async fn app(self: &Pod, id: &str) -> Result<Option<custom::AppRef>, ApiError> {
-        if let Some(a) = self.catalog.app(id) {
-            return Ok(Some(custom::AppRef::Builtin(*a)));
-        }
-        if !custom::is_custom_id(id) {
-            return Ok(None);
-        }
-        let id = id.to_owned();
-        blocking(self, move |s| {
-            s.with_conn(|c| custom::custom_app_on(c, &id))
-        })
-        .await
-        .map(|a| a.map(custom::AppRef::Custom))
-    }
-
-    /// The data sources app `app` draws on: its feeds' sources, plus a
-    /// built-in app's own adapter.
-    pub fn sources_of(&self, app: &custom::AppRef) -> Vec<&'static str> {
-        match app {
-            custom::AppRef::Builtin(a) => self
-                .catalog
-                .app_sources(a.id)
-                .into_iter()
-                .map(|(n, _)| n)
-                .collect(),
-            custom::AppRef::Custom(a) => {
-                let mut out: Vec<&'static str> = Vec::new();
-                for (s, _) in &a.feeds {
-                    if let Some((adapter, _)) = self.catalog.source(s)
-                        && !out.contains(&adapter.name())
-                    {
-                        out.push(adapter.name());
-                    }
-                }
-                out
-            }
-        }
+    /// What moving this pod from the old layout system found (its dry run),
+    /// when this open did.
+    pub fn conversion(&self) -> Option<&migrations::layout_system::Report> {
+        self.conversion.as_ref()
     }
 
     /// Enable `POST /v1/test/fault` (`CONSTRUCT_TEST_HOOKS=1`).
@@ -645,15 +533,11 @@ impl AppState {
         blocking(self, f).await
     }
 
-    /// Broadcast a new app version to SSE subscribers (no-op without any).
-    /// Built-in apps get new versions only with a deploy; custom app writes
-    /// ([`custom`]) call this, and so do tests and tooling that append with
-    /// [`layouts::append_version`].
-    pub fn publish_layout(&self, workspace_id: &str, version: i64) {
-        let _ = self.layout_tx.send(layouts::LayoutEvent {
-            workspace_id: workspace_id.to_owned(),
-            version,
-        });
+    /// Tell the construct's event streams that names moved (`generation`
+    /// is the construct's write count after them; no-op without
+    /// subscribers).
+    pub fn publish_construct(&self, generation: i64) {
+        let _ = self.construct_tx.send(generation);
     }
 
     /// End all open SSE streams (call before graceful shutdown, which
@@ -666,8 +550,8 @@ impl AppState {
         self.shutdown.subscribe()
     }
 
-    pub fn subscribe_layouts(&self) -> tokio::sync::broadcast::Receiver<layouts::LayoutEvent> {
-        self.layout_tx.subscribe()
+    pub fn subscribe_construct(&self) -> tokio::sync::broadcast::Receiver<i64> {
+        self.construct_tx.subscribe()
     }
 
     /// Consume one injected fault, if any is pending.
@@ -688,11 +572,8 @@ pub fn app(state: Pod) -> Router {
     state.start();
     let mut router = Router::new()
         .route("/healthz", get(|| async { "ok" }))
-        .route("/v1/workspaces/{id}", get(get_workspace))
         .merge(session::router())
-        .merge(layouts::router())
         .merge(notify::router())
-        .merge(custom::router())
         .merge(construct::http::router())
         .merge(mcp::router())
         .route("/v1/jacks", get(get_jacks))
@@ -824,217 +705,9 @@ pub async fn blocking<T: Send + 'static>(
     }
 }
 
-/// The signed-out screen for `app`, which requires `sign_in`, expanded
-/// ([`served_screen`]).
-async fn signed_out(
-    state: &Pod,
-    sign_in: &str,
-    app: &AppInfo,
-    req: &RequestCtx,
-) -> Result<WorkspaceSpec, ApiError> {
-    let adapter = state
-        .catalog
-        .sign_in_adapter(sign_in)
-        .expect("the catalog checked every app's sign-in");
-    served_screen(state, req, adapter.signed_out(sign_in, app, req)).await
-}
-
-/// An adapter's screen (signed out, stale sign-in) with its component uses
-/// expanded (leniently, as when serving a layout): an adapter builds its
-/// screens from server components, such as Pixelfed's
-/// `core:pixelfed_sign_in`. The workspace itself stays a workspace, drawn
-/// by the app as before.
-async fn served_screen(
-    state: &Pod,
-    req: &RequestCtx,
-    mut screen: WorkspaceSpec,
-) -> Result<WorkspaceSpec, ApiError> {
-    let json = serde_json::to_string(&screen.workspace).unwrap_or_default();
-    if !parts::may_hold_refs(&json) {
-        return Ok(screen);
-    }
-    let Ok(doc) = serde_json::from_str::<serde_json::Value>(&json) else {
-        return Ok(screen);
-    };
-    let client = req.client.clone();
-    let st = state.clone();
-    let expanded = state
-        .blocking(move |s| {
-            Ok(parts::expand(s, st.catalog(), &doc, Some(&client), parts::Mode::Lenient).ok())
-        })
-        .await?;
-    if let Some(node) = expanded.and_then(|v| serde_json::from_value(v).ok()) {
-        screen.workspace = node;
-    }
-    Ok(screen)
-}
-
-/// `GET /v1/workspaces/:id`: the app's data, its feeds' merged
-/// ([`compose`]), with the newest layout version the client can draw
-/// (`X-Construct-Layout-Version`). An app that requires a sign-in
-/// ([`AuthPolicy::SignIn`]) gets its signed-out screen instead when the
-/// caller lacks it: 200 without a bearer, 401 + `X-Construct-Session: invalid`
-/// with one, so the client learns its session is stale.
-async fn get_workspace(
-    State(state): State<Pod>,
-    Path(id): Path<String>,
-    headers: HeaderMap,
-) -> Response {
-    if let Some(r) = layouts::reject_invalid_workspace_id(&id) {
-        return r;
-    }
-    // A switched pod serves its own layouts from the construct (decision
-    // `content-addressed-construct`), so installed clients keep drawing it.
-    if custom::is_custom_id(&id) && construct_switched(&state).await {
-        return get_construct_workspace(state, id, headers).await;
-    }
-    let app = match state.app(&id).await {
-        Ok(Some(app)) => app,
-        Ok(None) => {
-            return json_error(
-                StatusCode::NOT_FOUND,
-                json!({ "error": "workspace_not_found", "id": id }),
-            );
-        }
-        Err(e) => return e.into_response(),
-    };
-    let caller = match state.caller(&headers).await {
-        Ok(c) => c,
-        Err(e) => return e.into_response(),
-    };
-    // Only a session the pod no longer knows is told to go away; a valid one
-    // that lacks the app's sign-in gets the signed-out screen (D46: a pod
-    // token's session must survive every app's sign-out).
-    let stale = caller == Caller::Stale;
-    let req = RequestCtx {
-        client: layouts::client_caps(&headers),
-        headers,
-        session: caller.clone().into_session(),
-    };
-    if let custom::AppRef::Builtin(info) = &app
-        && let AuthPolicy::SignIn(sign_in) = info.auth
-        && !caller.has(sign_in)
-    {
-        let screen = match signed_out(&state, sign_in, info, &req).await {
-            Ok(s) => s,
-            Err(e) => return e.into_response(),
-        };
-        return if stale {
-            session::stale_session(screen)
-        } else {
-            Json(screen).into_response()
-        };
-    }
-    let served = match layouts::active_for_client(&state, &id, &req.headers).await {
-        Ok(Some(v)) => v,
-        Ok(None) => {
-            return json_error(
-                StatusCode::CONFLICT,
-                json!({ "error": "no_compatible_version", "id": id,
-                        "detail": "no layout version of this app fits this client's schema" }),
-            );
-        }
-        Err(e) => return e.into_response(),
-    };
-    // A pod's own layout loads only the feeds of its scope (home's) that
-    // it binds (decision `layouts-not-apps`); a blueprint its own.
-    let scope = app.feeds();
-    let feeds = if app.is_custom() {
-        let doc = serde_json::to_value(&served.layout).unwrap_or(Value::Null);
-        custom::bound_feeds(&state.catalog, &scope, &doc)
-    } else {
-        scope.clone()
-    };
-    let feeds: Vec<(&str, &str)> = feeds
-        .iter()
-        .map(|(s, f)| (s.as_str(), f.as_str()))
-        .collect();
-    let described: Vec<(&str, &str)> = scope
-        .iter()
-        .map(|(s, f)| (s.as_str(), f.as_str()))
-        .collect();
-    let bundle = match compose(&state, &feeds, &described, &caller, &req, app.is_custom()).await {
-        Ok(bundle) => bundle,
-        Err(r) => return *r,
-    };
-    let spec = WorkspaceSpec {
-        version: BUNDLE_VERSION.into(),
-        workspace: served.layout,
-        entities: bundle.entities,
-        queries: bundle.queries,
-    };
-    (layouts::served_headers(served.version), Json(spec)).into_response()
-}
-
-/// Whether the pod is switched to the construct (read off the async workers
-/// the first time).
-pub(crate) async fn construct_switched(pod: &Pod) -> bool {
-    if let Some(known) = construct::known_switched(pod) {
-        return known;
-    }
-    let p = pod.clone();
-    tokio::task::spawn_blocking(move || construct::is_switched(&p))
-        .await
-        .unwrap_or(false)
-}
-
-/// `GET /v1/workspaces/<id>` for one of a switched pod's layouts: the
-/// construct's element sealed for the client and materialized, with the
-/// data of the home feeds it needs, as for a custom layout before.
-async fn get_construct_workspace(state: Pod, id: String, headers: HeaderMap) -> Response {
-    let caller = match state.caller(&headers).await {
-        Ok(c) => c,
-        Err(e) => return e.into_response(),
-    };
-    if caller == Caller::Stale {
-        return session::unauthorized();
-    }
-    let client = layouts::client_caps(&headers);
-    let req = RequestCtx {
-        client: client.clone(),
-        headers,
-        session: caller.clone().into_session(),
-    };
-    let (p, lookup) = (state.clone(), id.clone());
-    let served =
-        tokio::task::spawn_blocking(move || construct::http::serve_layout(&p, &lookup, &client))
-            .await;
-    let served = match served {
-        Ok(Ok(Some(s))) => s,
-        Ok(Ok(None)) => {
-            return json_error(
-                StatusCode::NOT_FOUND,
-                json!({ "error": "workspace_not_found", "id": id }),
-            );
-        }
-        _ => {
-            return json_error(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                json!({ "error": "store_error" }),
-            );
-        }
-    };
-    let feeds: Vec<(&str, &str)> = served
-        .feeds
-        .iter()
-        .map(|(s, f)| (s.as_str(), f.as_str()))
-        .collect();
-    let bundle = match compose(&state, &feeds, &feeds, &caller, &req, true).await {
-        Ok(b) => b,
-        Err(r) => return *r,
-    };
-    let spec = WorkspaceSpec {
-        version: BUNDLE_VERSION.into(),
-        workspace: served.layout,
-        entities: bundle.entities,
-        queries: bundle.queries,
-    };
-    (layouts::served_headers(served.version), Json(spec)).into_response()
-}
-
 /// `GET /v1/construct/data/<id>`: the data of the home feeds element `id`
-/// needs (decision `content-addressed-construct`), as `/v1/workspaces`
-/// composes a custom layout's.
+/// needs (decision `content-addressed-construct`), with a use site's
+/// bindings (`?bind=`).
 pub(crate) async fn get_element_data(
     State(state): State<Pod>,
     Path(id): Path<String>,
@@ -1071,7 +744,7 @@ pub(crate) async fn get_element_data(
         .iter()
         .map(|(s, f)| (s.as_str(), f.as_str()))
         .collect();
-    match compose(&state, &feeds, &feeds, &caller, &req, true).await {
+    match compose(&state, &feeds, &caller, &req).await {
         Ok(b) => Json(b).into_response(),
         Err(r) => *r,
     }
@@ -1079,26 +752,17 @@ pub(crate) async fn get_element_data(
 
 /// Run `feeds` (`(source, feed)`, checked by the catalog) concurrently and
 /// merge their data in order. A feed whose source needs a sign-in the caller
-/// lacks is skipped.
-///
-/// A built-in app (`lenient` false) ends the request on any other answer
-/// than data, the first in feed order winning: a fixed screen is served as
-/// is; a stale sign-in on a pinned session (a pod token, D46) loses only
-/// that sign-in and gets the screen, any other session a 401 with it; an
-/// error passes through.
-///
-/// A custom app (`lenient` true) keeps going: a failing feed is skipped and
-/// recorded, a stale sign-in on a pinned session is detached (on any other
-/// session it is a 401, as for built-ins). It also gets one
+/// lacks is skipped; a failing one is skipped and recorded; a stale sign-in
+/// on a pinned session (a pod token, D46) is detached (on any other session
+/// it is a 401 with the source's screen). The data also gets one
 /// `core://sources/<id>` entity per source, `{title, signed_in, error?}`,
-/// so its layout can tell a signed-out or failing source apart.
-async fn compose(
+/// so a layout can tell a signed-out or failing source apart, and the
+/// pod's theme (`core://theme`).
+pub(crate) async fn compose(
     state: &Pod,
     feeds: &[(&str, &str)],
-    described: &[(&str, &str)],
     caller: &Caller,
     req: &RequestCtx,
-    lenient: bool,
 ) -> Result<protocol::DataBundle, Box<Response>> {
     let runs = feeds.iter().map(|(source, feed)| async move {
         let (adapter, manifest) = state.catalog.source(source)?;
@@ -1127,18 +791,8 @@ async fn compose(
                 bundle.entities.extend(data.entities);
                 bundle.queries.extend(data.queries);
             }
-            Hydration::Screen(screen) if !lenient => {
-                return Err(Box::new(match served_screen(state, req, screen).await {
-                    Ok(screen) => Json(screen).into_response(),
-                    Err(e) => e.into_response(),
-                }));
-            }
             Hydration::Screen(_) => errors.push((source, "unavailable".into())),
             Hydration::StaleSession(screen) => {
-                let screen = match served_screen(state, req, screen).await {
-                    Ok(screen) => screen,
-                    Err(e) => return Err(Box::new(e.into_response())),
-                };
                 // A pinned session stays; only the unusable sign-in goes.
                 if let (Some(session), Some(sign_in)) = (&req.session, sign_in)
                     && session.pinned
@@ -1149,54 +803,47 @@ async fn compose(
                     {
                         return Err(Box::new(e.into_response()));
                     }
-                    if !lenient {
-                        return Err(Box::new(Json(screen).into_response()));
-                    }
                     detached.push(source);
                     continue;
                 }
                 return Err(Box::new(session::stale_session(screen)));
             }
-            Hydration::Error(r) if !lenient => return Err(Box::new(r)),
             Hydration::Error(r) => {
                 let status = r.status();
-                tracing::warn!(source, %status, "a custom app's feed failed; served without it");
+                tracing::warn!(source, %status, "a feed failed; served without it");
                 errors.push((source, format!("error {}", status.as_u16())));
             }
         }
     }
-    if lenient {
-        let mut seen: Vec<&str> = Vec::new();
-        for (source, _) in feeds.iter().chain(described) {
-            let Some((adapter, manifest)) = state.catalog.source(source) else {
-                continue;
-            };
-            let name = adapter.name();
-            if seen.contains(&name) {
-                continue;
-            }
-            seen.push(name);
-            let signed_in =
-                !detached.contains(&name) && manifest.sign_in.is_none_or(|s| caller.has(s));
-            let mut e = protocol::EntityRecord::default();
-            e.set("id", name);
-            e.set("title", manifest.title);
-            e.set("signed_in", signed_in);
-            if let Some((_, err)) = errors.iter().find(|(s, _)| *s == name) {
-                e.set("error", err.clone());
-            }
-            bundle.entities.insert(format!("core://sources/{name}"), e);
+    let mut seen: Vec<&str> = Vec::new();
+    for (source, _) in feeds {
+        let Some((adapter, manifest)) = state.catalog.source(source) else {
+            continue;
+        };
+        let name = adapter.name();
+        if seen.contains(&name) {
+            continue;
         }
-        // The pod's theme (decision `plumbing-and-porcelain`): the app
-        // serves it as `local://theme` for the device's mode.
-        match blocking(state, porcelain::theme_entity).await {
-            Ok(e) => {
-                bundle
-                    .entities
-                    .insert(porcelain::THEME_ENTITY.to_owned(), e);
-            }
-            Err(e) => return Err(Box::new(e.into_response())),
+        seen.push(name);
+        let signed_in = !detached.contains(&name) && manifest.sign_in.is_none_or(|s| caller.has(s));
+        let mut e = protocol::EntityRecord::default();
+        e.set("id", name);
+        e.set("title", manifest.title);
+        e.set("signed_in", signed_in);
+        if let Some((_, err)) = errors.iter().find(|(s, _)| *s == name) {
+            e.set("error", err.clone());
         }
+        bundle.entities.insert(format!("core://sources/{name}"), e);
+    }
+    // The pod's theme (decision `plumbing-and-porcelain`): the app serves it
+    // as `local://theme` for the device's mode.
+    match blocking(state, porcelain::theme_entity).await {
+        Ok(e) => {
+            bundle
+                .entities
+                .insert(porcelain::THEME_ENTITY.to_owned(), e);
+        }
+        Err(e) => return Err(Box::new(e.into_response())),
     }
     Ok(bundle)
 }

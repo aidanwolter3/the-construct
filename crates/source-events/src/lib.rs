@@ -14,7 +14,7 @@ use std::sync::Arc;
 use pod_core::layouts::LayoutSource;
 use pod_core::store::Step;
 use pod_core::{
-    AppInfo, AuthPolicy, BoxFuture, Hydration, Pod, RequestCtx, Source, SourceManifest,
+    AuthPolicy, BlueprintInfo, BoxFuture, Hydration, Pod, RequestCtx, Source, SourceManifest,
 };
 use protocol::{Importance, NotificationChannel};
 use rusqlite::Transaction;
@@ -27,7 +27,7 @@ pub const APP_ID: &str = "events";
 pub const CHANNEL: &str = "matches";
 
 /// The Events app: the `events` collection.
-pub const APP: AppInfo = AppInfo {
+pub const APP: BlueprintInfo = BlueprintInfo {
     id: APP_ID,
     title: "Events",
     icon: "dashboard",
@@ -102,7 +102,7 @@ impl Source for EventsAdapter {
         NAME
     }
 
-    fn apps(&self) -> Vec<AppInfo> {
+    fn blueprints(&self) -> Vec<BlueprintInfo> {
         vec![APP]
     }
 

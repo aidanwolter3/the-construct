@@ -352,7 +352,7 @@ enum FetchOutcome {
 ///   of `queries_json` (cached, so also shown offline), as are the temporary
 ///   entities of pending `action.mutation.create` rows.
 /// - `notifications_json`: unread notification counts (D52),
-///   `{"unread_total": n, "unread_by_app": {app_id: n}}` (apps with none
+///   `{"unread_total": n, "unread_by_layout": {app_id: n}}` (apps with none
 ///   left out; zeros while signed out). Lists come from
 ///   [`ConstructEngine::list_notifications`].
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -534,7 +534,7 @@ struct State {
     followups: Vec<Followup>,
     /// Unread notifications (D52; see [`StateSnapshot::notifications_json`]).
     unread_total: u32,
-    unread_by_app: BTreeMap<String, u32>,
+    unread_by_layout: BTreeMap<String, u32>,
     /// Staged attachments (D49), by id; each is drawn as the local entity
     /// `construct://attachments/<id>`.
     attachments: BTreeMap<String, Attachment>,

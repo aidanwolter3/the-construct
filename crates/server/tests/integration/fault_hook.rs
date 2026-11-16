@@ -76,9 +76,7 @@ async fn fault_hook_fails_next_n_mutations() {
     // GETs are not mutations and do not consume the fault.
     let (status, _) = send(
         &app,
-        Request::get("/v1/workspaces/pixelfed_sample_no_login")
-            .body(Body::empty())
-            .unwrap(),
+        Request::get("/v1/construct").body(Body::empty()).unwrap(),
     )
     .await;
     assert_eq!(status, StatusCode::OK);

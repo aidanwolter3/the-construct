@@ -22,7 +22,7 @@ pub use source_pixelfed as pixelfed;
 pub use source_pixelfed::{DEFAULT_PIXELFED_URL, PixelfedAdapter, PixelfedConfig};
 pub use source_recipes as recipes;
 
-/// The pod's adapters, in `GET /v1/apps` order: the Pixelfed feed (with the
+/// The pod's adapters, in the order their blueprints are listed: the Pixelfed feed (with the
 /// `pixelfed` sign-in), the recipes, the Events app (the
 /// Collections `events` collection), then the
 /// `pixelfed_sample_no_login` dev app, the `shell` blueprint (every pod's

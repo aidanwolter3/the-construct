@@ -371,21 +371,27 @@ async fn without_a_model_the_field_keeps_its_default_and_an_app_groups_by_it() {
     )
     .await;
     let app = app["id"].as_str().unwrap().to_owned();
-    // The section and the app's grouping by it, in one change set.
+    // The section, then the layout's grouping by it.
     let mut grouped = layout;
     grouped["slots"][0]["content"]["group_by"] = json!({"field": "section",
         "header": {"type": "core://Text", "style": "Title", "value_expr": "$item.section"}});
     ok(
         &pod,
         "apply_change",
-        json!({"collection": "groceries", "changes": section_change(),
-        "apps": [{"app": app, "layout": grouped}]}),
+        json!({"collection": "groceries", "changes": section_change()}),
+    )
+    .await;
+    ok(
+        &pod,
+        "update_layout",
+        json!({"app": app, "layout": grouped}),
     )
     .await;
     add(&pod, json!({"name": "Apples"})).await;
     tokio::time::sleep(Duration::from_millis(50)).await;
     assert_eq!(section_of(&rows(&pod).await, "Apples"), "Other");
-    let (status, ws) = call(&pod, "GET", &format!("/v1/workspaces/{app}"), "phone", None).await;
+    let (status, ws) =
+        pod_core::testing::layout_for(&pod_core::app(pod.clone()), &app, Some("phone")).await;
     assert_eq!(status, StatusCode::OK, "{ws}");
     // Bad computes are refused with the op's pointer.
     for bad in [

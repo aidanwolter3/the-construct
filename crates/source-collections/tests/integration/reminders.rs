@@ -186,7 +186,7 @@ async fn a_todo_due_today_notifies_once_and_a_ticked_one_never() {
         .find(|c| c["id"] == reminder.as_str())
         .unwrap_or_else(|| panic!("no channel in {channels}"))
         .clone();
-    assert_eq!(channel["app_id"], app.as_str());
+    assert_eq!(channel["layout"], app.as_str());
     assert_eq!(channel["enabled"], true);
 
     let (today, tomorrow) = today_and_tomorrow();
@@ -199,7 +199,7 @@ async fn a_todo_due_today_notifies_once_and_a_ticked_one_never() {
     assert_eq!(got.len(), 1, "{got:?}");
     assert_eq!(got[0]["title"], "Due today: Pay rent");
     assert_eq!(got[0]["body"], format!("Due {today}"));
-    assert_eq!(got[0]["app_id"], app.as_str());
+    assert_eq!(got[0]["channel_layout"], app.as_str());
     assert_eq!(got[0]["channel"], reminder.as_str());
     assert_eq!(
         got[0]["target_uri"],
@@ -269,7 +269,7 @@ async fn without_an_app_nothing_is_sent_and_bad_specs_are_refused() {
     )
     .await;
     assert!(
-        err && v["detail"].as_str().unwrap().contains("no custom app"),
+        err && v["detail"].as_str().unwrap().contains("no layout"),
         "{v}"
     );
     ok(

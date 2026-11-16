@@ -19,7 +19,6 @@
 
 use std::collections::HashMap;
 
-use pod_core::custom;
 use pod_core::store::Store;
 use pod_core::{Catalog, NewNotification, Pod};
 use protocol::{Importance, NotificationChannel};
@@ -419,7 +418,7 @@ pub fn apply_spec(def: &Definition, a: &mut Alert, op: &Value) -> Result<(), Str
         Some(Value::Null) => a.app = None,
         Some(v) => {
             let id = v.as_str().unwrap_or("").trim();
-            if !custom::is_custom_id(id) {
+            if !pod_core::layouts::is_layout_id(id) {
                 return Err(format!("\"app\": '{id}' is not a custom app's id"));
             }
             a.app = Some(id.to_owned());
@@ -632,10 +631,10 @@ fn defaults(def: &Definition) -> (String, String) {
 
 /// The app and channel alert `a` of `def` notifies on now: a system
 /// collection's own, the alert's `app` while it lives, else the layout
-/// that shows the collection (`owners`, [`custom::feed_owners`]; decision
+/// that shows the collection (`owners`, [`pod_core::layouts::feed_owners`]; decision
 /// `notification-owner`).
 fn target(
-    apps: &[custom::CustomApp],
+    apps: &[pod_core::layouts::PodLayout],
     owners: &HashMap<String, String>,
     def: &Definition,
     a: &Alert,
@@ -653,9 +652,9 @@ fn target(
 
 /// Every custom app's alert channels.
 pub fn channels(store: &Store, catalog: &Catalog) -> Vec<NotificationChannel> {
-    let read = custom::feed_owners(store, catalog, NAME).and_then(|owners| {
+    let read = pod_core::layouts::feed_owners(store, catalog, NAME).and_then(|owners| {
         store.with_conn(|c| -> rusqlite::Result<_> {
-            Ok((db::all_defs(c)?, custom::custom_apps_on(c)?, owners))
+            Ok((db::all_defs(c)?, pod_core::layouts::pod_layouts(c)?, owners))
         })
     });
     let Ok((defs, apps, owners)) = read else {
@@ -735,14 +734,14 @@ pub fn mark_sent(
 type Owed = (NewNotification, [String; 3]);
 
 /// What `def`'s alerts owe at `now` (`only`: one collection; `owners`:
-/// [`custom::feed_owners`] of Collections).
+/// [`pod_core::layouts::feed_owners`] of Collections).
 pub fn plan(
     conn: &Connection,
     owners: &HashMap<String, String>,
     only: Option<&str>,
     now: i64,
 ) -> rusqlite::Result<Vec<Owed>> {
-    let apps = custom::custom_apps_on(conn)?;
+    let apps = pod_core::layouts::pod_layouts(conn)?;
     let mut out: Vec<Owed> = Vec::new();
     for (_, def) in db::all_defs(conn)? {
         if def.alerts.is_empty() || only.is_some_and(|o| o != def.name) {
@@ -805,7 +804,7 @@ pub async fn run(pod: &Pod, only: Option<String>) {
     let p = pod.clone();
     let Ok(owed) = pod
         .blocking(move |s| {
-            let owners = custom::feed_owners(s, p.catalog(), NAME)?;
+            let owners = pod_core::layouts::feed_owners(s, p.catalog(), NAME)?;
             s.with_conn(|c| plan(c, &owners, o.as_deref(), now))
         })
         .await

@@ -2,7 +2,6 @@
 
 use std::sync::Arc;
 
-use pod_core::layouts::parse_files;
 use pod_core::{Catalog, Source};
 use serde_json::json;
 use source_agents::{AgentsAdapter, FILES};
@@ -25,8 +24,8 @@ fn every_layout_file_is_embedded() {
 fn layout_files_parse_and_validate() {
     let adapters: Vec<Arc<dyn Source>> = vec![Arc::new(AgentsAdapter::default())];
     let catalog = Catalog::new(adapters).unwrap();
-    let files = parse_files(&catalog, FILES).unwrap();
-    assert_eq!(files.len(), FILES.len());
+    let core = pod_core::construct::core::load_with(&catalog, FILES).unwrap();
+    assert_eq!(core.names["@core/agents"].len(), FILES.len());
 }
 
 #[test]

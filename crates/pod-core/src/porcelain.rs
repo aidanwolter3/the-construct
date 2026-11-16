@@ -11,10 +11,13 @@ use serde_json::{Value, json};
 
 use protocol::ClientCaps;
 
-use crate::adapter::Catalog;
-use crate::parts::{Mode, use_node};
 use crate::store::Store;
-use crate::validate::LayoutError;
+
+/// A component use as a node: `{"type": "core://Use", "component": name,
+/// "args", "children"}` (a write makes it a reference).
+fn use_node(name: &str, args: &Value, children: &Value) -> Value {
+    json!({ "type": crate::components::USE_TYPE, "component": name, "args": args, "children": children })
+}
 
 /// The features an app must draw to get a workspace as plumbing.
 pub const PLUMBING: [&str; 3] = [
@@ -77,7 +80,6 @@ pub fn page_of_with(ws: &Value, fills: bool) -> Option<Value> {
     let children: Vec<Value> = slots.iter().map(|s| s["content"].clone()).collect();
     let root = use_node(
         WORKSPACE_COMPONENT,
-        None,
         &json!({
             "title": ws["title"],
             "title_scrolls": ws["title_scrolls"].as_bool().unwrap_or(false),
@@ -96,7 +98,7 @@ pub fn page_of_with(ws: &Value, fills: bool) -> Option<Value> {
             }
             let mut screen = json!({
                 "id": s["id"], "route": s["route"], "title": s["title"],
-                "root": use_node(SCREEN_COMPONENT, None, &json!({
+                "root": use_node(SCREEN_COMPONENT, &json!({
                     "title": s["title"],
                     "data": s["data"].as_str().unwrap_or(""),
                     "has_footer": !s["footer"].is_null(),
@@ -114,15 +116,6 @@ pub fn page_of_with(ws: &Value, fills: bool) -> Option<Value> {
         page["screens"] = Value::Array(screens);
     }
     Some(page)
-}
-
-/// A `core://Workspace` (uses already expanded) as plumbing; anything else
-/// as it is.
-pub fn to_plumbing(store: &Store, catalog: &Catalog, doc: &Value) -> Result<Value, LayoutError> {
-    match page_of(doc) {
-        Some(page) => crate::parts::expand(store, catalog, &page, None, Mode::Lenient),
-        None => Ok(doc.clone()),
-    }
 }
 
 // ---------- theme ----------

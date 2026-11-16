@@ -1,5 +1,5 @@
 {
-  "note": "Jacks: see what the pod is plugged into, plug in a search provider and its key (typed into a hidden field, feature text_field_secret), unplug",
+  "note": "No layout versions on the device (issue #300): the Layouts section and the versions screen are gone (home links to layouts; the agent keeps their history); notification channels are named by their layout ($item.layout, toggle_channel layout)",
   "layout": {
     "type": "core://Workspace",
     "id": "settings",
@@ -35,101 +35,6 @@
               "type": "core://Text",
               "style": "Secondary",
               "value_expr": "${local://session#server}"
-            }
-          ]
-        }
-      },
-      {
-        "slot_id": "layouts",
-        "provider_uri": "local://layouts",
-        "content": {
-          "type": "core://Column",
-          "children": [
-            {
-              "type": "core://Use",
-              "component": "core:section_header",
-              "args": {
-                "text": "Layouts",
-                "divider": true
-              }
-            },
-            {
-              "type": "core://List",
-              "query_key": "local:layouts",
-              "empty_text": "Only home so far. Ask your agent to build something.",
-              "item_template": {
-                "type": "core://Tappable",
-                "content_description": "Versions of $item.title",
-                "on_click": {
-                  "intent": "action.sequence",
-                  "steps": [
-                    {
-                      "intent": "action.device",
-                      "command": "show_versions",
-                      "app": "$item.id"
-                    },
-                    {
-                      "intent": "action.navigation.open",
-                      "target_uri": "settings://versions/$item.id",
-                      "presentation": "Push"
-                    }
-                  ]
-                },
-                "content": {
-                  "type": "core://Use",
-                  "component": "core:list_row",
-                  "args": {
-                    "title": "$item.title",
-                    "trailing": "$item.version"
-                  }
-                }
-              }
-            },
-            {
-              "type": "core://List",
-              "query_key": "local:all_layouts",
-              "where": {
-                "field": "hidden",
-                "equals": "true"
-              },
-              "group_by": {
-                "field": "hidden",
-                "header": {
-                  "type": "core://Use",
-                  "component": "core:section_header",
-                  "args": {
-                    "text": "Hidden",
-                    "style": "Secondary",
-                    "padding_v": 4
-                  }
-                }
-              },
-              "item_template": {
-                "type": "core://Row",
-                "spacing_dp": 8,
-                "padding_h_dp": 16,
-                "padding_v_dp": 4,
-                "align": "Center",
-                "children": [
-                  {
-                    "type": "core://Text",
-                    "style": "Body",
-                    "value_expr": "$item.title"
-                  },
-                  {
-                    "type": "core://Spacer"
-                  },
-                  {
-                    "type": "core://Button",
-                    "label": "Show",
-                    "on_click": {
-                      "intent": "action.device",
-                      "command": "unhide_layout",
-                      "app": "$item.id"
-                    }
-                  }
-                ]
-              }
             }
           ]
         }
@@ -322,7 +227,7 @@
                       "on_click": {
                         "intent": "action.navigation.open",
                         "presentation": "Push",
-                        "target_uri": "settings://notifications/$item.app_id"
+                        "target_uri": "settings://notifications/$item.layout"
                       },
                       "type": "core://Tappable"
                     },
@@ -384,152 +289,6 @@
     ],
     "screens": [
       {
-        "id": "versions",
-        "route": "settings://versions/{id}",
-        "title": "${local://versions#app_title}",
-        "content": {
-          "type": "core://Column",
-          "children": [
-            {
-              "type": "core://Row",
-              "spacing_dp": 8,
-              "padding_h_dp": 16,
-              "padding_v_dp": 8,
-              "children": [
-                {
-                  "type": "core://Spacer"
-                },
-                {
-                  "type": "core://Button",
-                  "label": "Hide from the list",
-                  "on_click": {
-                    "intent": "action.sequence",
-                    "steps": [
-                      {
-                        "intent": "action.device",
-                        "command": "hide_layout",
-                        "app": "$route.id"
-                      },
-                      {
-                        "intent": "action.navigation.back"
-                      }
-                    ]
-                  }
-                },
-                {
-                  "type": "core://Button",
-                  "label": "Delete",
-                  "on_click": {
-                    "intent": "action.confirm",
-                    "title": "Delete this layout?",
-                    "message": "It goes from every device.",
-                    "confirm_label": "Delete",
-                    "then": {
-                      "intent": "action.sequence",
-                      "steps": [
-                        {
-                          "intent": "action.device",
-                          "command": "delete_layout",
-                          "app": "$route.id"
-                        },
-                        {
-                          "intent": "action.navigation.back"
-                        }
-                      ]
-                    }
-                  }
-                }
-              ]
-            },
-            {
-              "type": "core://Conditional",
-              "value": "${local://versions#pinned}",
-              "content": {
-                "type": "core://Row",
-                "spacing_dp": 8,
-                "padding_h_dp": 16,
-                "padding_v_dp": 8,
-                "children": [
-                  {
-                    "type": "core://Text",
-                    "style": "Body",
-                    "value_expr": "Showing v${local://versions#pinned} on this device"
-                  },
-                  {
-                    "type": "core://Spacer"
-                  },
-                  {
-                    "type": "core://Button",
-                    "label": "Show latest",
-                    "on_click": {
-                      "intent": "action.device",
-                      "command": "follow_latest",
-                      "app": "$route.id"
-                    }
-                  }
-                ]
-              }
-            },
-            {
-              "type": "core://List",
-              "query_key": "local:versions",
-              "empty_text": "Loading versions…",
-              "item_template": {
-                "type": "core://Tappable",
-                "content_description": "Show $item.label",
-                "on_click": {
-                  "intent": "action.device",
-                  "command": "pin_version",
-                  "app": "$route.id",
-                  "id": "$item.version"
-                },
-                "content": {
-                  "type": "core://Row",
-                  "spacing_dp": 8,
-                  "padding_h_dp": 16,
-                  "padding_v_dp": 8,
-                  "children": [
-                    {
-                      "type": "core://Container",
-                      "children": [
-                        {
-                          "type": "core://Row",
-                          "spacing_dp": 8,
-                          "align": "Center",
-                          "children": [
-                            {
-                              "type": "core://Text",
-                              "style": "Body",
-                              "value_expr": "$item.label · $item.when"
-                            },
-                            {
-                              "type": "core://Conditional",
-                              "value": "$item.showing",
-                              "content": {
-                                "type": "core://Chip",
-                                "text": "Showing",
-                                "icon": "check"
-                              }
-                            }
-                          ]
-                        },
-                        {
-                          "type": "core://Text",
-                          "style": "Secondary",
-                          "value_expr": "$item.detail"
-                        }
-                      ],
-                      "orientation": "Vertical",
-                      "padding_dp": 0
-                    }
-                  ]
-                }
-              }
-            }
-          ]
-        }
-      },
-      {
         "content": {
           "children": [
             {
@@ -565,7 +324,7 @@
                             "checked": "$item.enabled",
                             "content_description": "$item.title",
                             "on_click": {
-                              "app": "$item.app_id",
+                              "layout": "$item.layout",
                               "command": "toggle_channel",
                               "id": "$item.id",
                               "intent": "action.device"
@@ -600,15 +359,15 @@
               "query_key": "local:channels",
               "type": "core://List",
               "where": {
-                "equals": "$route.app",
-                "field": "app_id"
+                "equals": "$route.layout",
+                "field": "layout"
               }
             }
           ],
           "type": "core://Column"
         },
         "id": "notifications",
-        "route": "settings://notifications/{app}",
+        "route": "settings://notifications/{layout}",
         "title": "Notifications"
       },
       {

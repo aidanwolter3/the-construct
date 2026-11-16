@@ -1,23 +1,18 @@
-//! Components (decision `plumbing-and-porcelain`): porcelain defined as
-//! data. A component is a node tree with parameters, `{doc, params,
-//! children?, template, examples}`, that the pod expands into plumbing
-//! before serving ([`crate::parts`]); clients never see one. A layout uses
-//! one with `{"type": "core://Use", "component": "core:section_header",
-//! "args": {...}, "children": [...], "version"?: n}`.
+//! Server components (decision `plumbing-and-porcelain`): porcelain defined
+//! as data. A component is a node tree with parameters, `{doc, params,
+//! children?, template, examples}`; clients expand it (decision
+//! `content-addressed-construct`, `construct_elements::materialize`). A
+//! layout uses one with `{"type": "core://Use", "ref": "@core/section_header",
+//! "args": {...}, "children": [...]}` (`"component": "core:section_header"` is
+//! accepted when written).
 //!
-//! Two sources, one namespace each:
-//!
-//! - `core:<name>`: server components, files `crates/pod-core/components/
-//!   <name>/NNNN.json` (`{"note", "component"}`), or an adapter's own
-//!   `crates/source-*/components/<name>/NNNN.json` (`Source::
-//!   component_files`), embedded in the binary and recorded in each pod's
-//!   `components` table at start. A deployed file
-//!   never changes (the pod refuses to start, as for layout files) and is
-//!   never removed. Blueprints are components too: `core:<blueprint>` is a
-//!   whole layout and `core:<blueprint>/<part>` one of its parts
-//!   (`screen:<id>`, `slot:<id>`, a declared part).
-//! - `pod:<name>`: the pod's own, written by an agent ([`put_pod`]),
-//!   versioned, restorable, deletable while no layout uses them.
+//! Server components are files `crates/pod-core/components/<name>/NNNN.json`
+//! (`{"note", "component"}`), or a source's own
+//! `crates/source-*/components/<name>/NNNN.json` (`Source::component_files`),
+//! embedded in the binary; each pod names the newest file of each
+//! `@core/<name>` when it opens ([`crate::construct::core`]). A deployed file
+//! never changes and is never removed. The pod's own components are
+//! `@me/<name>`, written by an agent.
 //!
 //! In a template, `$arg.<name>` is the argument (a whole string `"$arg.n"`
 //! takes the argument's own JSON type), `{"type": "core://Children"}` is
@@ -27,16 +22,12 @@
 //! stands for several siblings. Runtime bindings (`$item`, `$form`, `${uri#f}`,
 //! `$route`) pass through untouched.
 
-use rusqlite::{OptionalExtension, params};
-use serde_json::{Value, json};
+use serde_json::Value;
 
 pub use construct_elements::def::{
     CHILDREN_TYPE, Def, Example, FRAGMENT_TYPE, IF_ARG_TYPE, MAX_DEF_BYTES, MAX_EXAMPLES,
     MAX_NAME_CHARS, MAX_PARAMS, Param, ParamType, USE_TYPE, arg_names, valid_bare_name,
 };
-
-use crate::store::Store;
-use crate::util::now_secs;
 
 /// One embedded server component file.
 #[derive(Debug, Clone, Copy)]
@@ -51,158 +42,12 @@ pub struct ComponentSource {
 
 include!(concat!(env!("OUT_DIR"), "/component_files.rs"));
 
-/// Prefix of server components.
+/// The other spelling of a server component's name in a write (`core:x`
+/// for `@core/x`).
 pub const CORE: &str = "core:";
-/// Prefix of the pod's own components.
+/// The other spelling of the pod's own components' names (`pod:x` for
+/// `@me/x`).
 pub const POD: &str = "pod:";
-/// Most `pod:` components a pod keeps.
-pub const MAX_POD_COMPONENTS: usize = 200;
-/// Versions kept per `pod:` component (the oldest are pruned).
-pub const MAX_POD_VERSIONS: usize = 100;
-/// `author` of server components.
-pub const AUTHOR_SERVER: &str = "server";
-
-/// A component version's metadata.
-#[derive(Debug, Clone, PartialEq)]
-pub struct VersionMeta {
-    pub name: String,
-    pub version: i64,
-    pub note: String,
-    pub author: String,
-    pub created_at: i64,
-    /// `{"copied_from": {"component", "version"}}`.
-    pub meta: Option<Value>,
-}
-
-fn meta_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<VersionMeta> {
-    let meta: Option<String> = r.get(5)?;
-    Ok(VersionMeta {
-        name: r.get(0)?,
-        version: r.get(1)?,
-        note: r.get::<_, Option<String>>(2)?.unwrap_or_default(),
-        author: r.get(3)?,
-        created_at: r.get(4)?,
-        meta: meta.and_then(|m| serde_json::from_str(&m).ok()),
-    })
-}
-
-/// The newest version of `name` (`core:x` / `pod:x`): `(version, definition)`.
-pub fn latest(store: &Store, name: &str) -> rusqlite::Result<Option<(i64, Value)>> {
-    store
-        .with_conn(|c| {
-            c.query_row(
-            "SELECT version, json FROM components WHERE name = ?1 ORDER BY version DESC LIMIT 1",
-            [name],
-            |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?)),
-        )
-        .optional()
-        })
-        .map(|o| o.map(|(v, j)| (v, serde_json::from_str(&j).unwrap_or(Value::Null))))
-}
-
-/// Version `version` of `name`.
-pub fn version(store: &Store, name: &str, version: i64) -> rusqlite::Result<Option<Value>> {
-    store
-        .with_conn(|c| {
-            c.query_row(
-                "SELECT json FROM components WHERE name = ?1 AND version = ?2",
-                params![name, version],
-                |r| r.get::<_, String>(0),
-            )
-            .optional()
-        })
-        .map(|o| o.map(|j| serde_json::from_str(&j).unwrap_or(Value::Null)))
-}
-
-/// The versions of `name`, newest first.
-pub fn history(store: &Store, name: &str) -> rusqlite::Result<Vec<VersionMeta>> {
-    store.with_conn(|c| {
-        let mut st = c.prepare(
-            "SELECT name, version, note, author, created_at, meta_json FROM components
-             WHERE name = ?1 ORDER BY version DESC",
-        )?;
-        st.query_map([name], meta_row)?.collect()
-    })
-}
-
-/// Every component's newest version: `(meta, definition)`, by name.
-pub fn list(store: &Store) -> rusqlite::Result<Vec<(VersionMeta, Value)>> {
-    store.with_conn(|c| {
-        let mut st = c.prepare(
-            "SELECT c.name, c.version, c.note, c.author, c.created_at, c.meta_json, c.json
-             FROM components c
-             JOIN (SELECT name, MAX(version) AS v FROM components GROUP BY name) m
-               ON m.name = c.name AND m.v = c.version
-             ORDER BY c.name",
-        )?;
-        st.query_map([], |r| {
-            let json: String = r.get(6)?;
-            Ok((
-                meta_row(r)?,
-                serde_json::from_str(&json).unwrap_or(Value::Null),
-            ))
-        })?
-        .collect()
-    })
-}
-
-/// Append a version of `pod:<name>` (checked by the caller): the new
-/// version number. Prunes beyond [`MAX_POD_VERSIONS`].
-pub fn put_pod(
-    store: &Store,
-    name: &str,
-    def: &Value,
-    note: &str,
-    author: &str,
-    meta: Option<&Value>,
-) -> rusqlite::Result<i64> {
-    debug_assert!(name.starts_with(POD));
-    store.transaction(|tx| {
-        let next: i64 = tx.query_row(
-            "SELECT COALESCE(MAX(version), 0) + 1 FROM components WHERE name = ?1",
-            [name],
-            |r| r.get(0),
-        )?;
-        tx.execute(
-            "INSERT INTO components (name, version, json, note, author, file_hash, meta_json, created_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, NULL, ?6, ?7)",
-            params![
-                name,
-                next,
-                def.to_string(),
-                note,
-                author,
-                meta.map(Value::to_string),
-                now_secs()
-            ],
-        )?;
-        tx.execute(
-            "DELETE FROM components WHERE name = ?1 AND version <= ?2",
-            params![name, next - MAX_POD_VERSIONS as i64],
-        )?;
-        Ok(next)
-    })
-}
-
-/// Delete every version of `pod:<name>`; false when there was none.
-pub fn delete_pod(store: &Store, name: &str) -> rusqlite::Result<bool> {
-    debug_assert!(name.starts_with(POD));
-    store
-        .with_conn(|c| c.execute("DELETE FROM components WHERE name = ?1", [name]))
-        .map(|n| n > 0)
-}
-
-/// How many `pod:` components the pod has.
-pub fn pod_count(store: &Store) -> rusqlite::Result<usize> {
-    store.with_conn(|c| {
-        c.query_row(
-            "SELECT COUNT(DISTINCT name) FROM components WHERE name LIKE 'pod:%'",
-            [],
-            |r| r.get::<_, i64>(0),
-        )
-        .map(|n| n as usize)
-    })
-}
 
 /// A parsed server component file.
 #[derive(Debug, Clone)]
@@ -213,7 +58,6 @@ pub struct CoreFile {
     pub path: String,
     pub note: String,
     pub def: Value,
-    pub file_hash: String,
 }
 
 /// Parse the embedded server component files (`Err`: the file and why).
@@ -275,91 +119,8 @@ pub fn core_files(sources: &[ComponentSource]) -> Result<Vec<CoreFile>, String> 
             number,
             path,
             note,
-            file_hash: crate::layouts::canonical_hash(&doc),
             def,
         });
     }
     Ok(out)
-}
-
-/// Record new server component files in the store (one transaction):
-/// `Ok(appended (name, version))`, `Err` to stop the start with (a deployed
-/// file changed, or a new one is numbered below a deployed one).
-pub fn sync_core(store: &Store, files: &[CoreFile]) -> Result<Vec<(String, i64)>, String> {
-    let r = store.transaction(|tx| {
-        let mut appended = Vec::new();
-        for f in files {
-            let recorded: Option<Option<String>> = tx
-                .query_row(
-                    "SELECT file_hash FROM components WHERE name = ?1 AND version = ?2",
-                    params![f.name, f.number],
-                    |r| r.get(0),
-                )
-                .optional()?;
-            match recorded {
-                Some(h) if h.as_deref() == Some(f.file_hash.as_str()) => continue,
-                Some(_) => {
-                    return Ok(Err(format!(
-                        "{} changed after it was deployed; component files are append-only: \
-                         restore it and put the change in the next file",
-                        f.path
-                    )));
-                }
-                None => {}
-            }
-            let max: i64 = tx.query_row(
-                "SELECT COALESCE(MAX(version), 0) FROM components WHERE name = ?1",
-                [&f.name],
-                |r| r.get(0),
-            )?;
-            if max >= f.number {
-                return Ok(Err(format!(
-                    "{} is new but numbered below a deployed version ({max})",
-                    f.path
-                )));
-            }
-            tx.execute(
-                "INSERT INTO components (name, version, json, note, author, file_hash, meta_json, created_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, NULL, ?7)",
-                params![
-                    f.name,
-                    f.number,
-                    f.def.to_string(),
-                    f.note,
-                    AUTHOR_SERVER,
-                    f.file_hash,
-                    now_secs()
-                ],
-            )?;
-            appended.push((f.name.clone(), f.number));
-        }
-        Ok(Ok(appended))
-    });
-    match r {
-        Ok(r) => r,
-        Err(e) => Err(format!("recording the server components: {e}")),
-    }
-}
-
-/// `{"name", "version", "note", "author", "doc", "params", "children",
-/// "copied_from"?}` of a definition (the MCP listing).
-pub fn summary(meta: &VersionMeta, def: &Value) -> Value {
-    let mut v = json!({
-        "name": meta.name,
-        "version": meta.version,
-        "note": meta.note,
-        "author": meta.author,
-        "doc": def["doc"],
-        "params": def["params"],
-        "children": def["children"].as_bool().unwrap_or(false),
-    });
-    if let Some(c) = meta
-        .meta
-        .as_ref()
-        .map(|m| &m["copied_from"])
-        .filter(|c| !c.is_null())
-    {
-        v["copied_from"] = c.clone();
-    }
-    v
 }

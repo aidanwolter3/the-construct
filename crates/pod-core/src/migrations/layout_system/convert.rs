@@ -1,15 +1,17 @@
 //! The old system as elements and names (decision
-//! `content-addressed-construct`): what a switch writes and its dry run
-//! renders. Reads only; [`Plan`] is applied by [`super::switch`].
+//! `content-addressed-construct`): what the conversion of a pod that wasn't
+//! switched writes. Reads only what [`super::tables::Old`] read; the
+//! [`Plan`] is applied by [`super::apply`].
 //!
 //! - Every server component `core:<name>` becomes `@core/<name>` (its latest
-//!   definition), every `pod:<name>` `@me/<name>`; a use pinned to a
-//!   `version` gets that version's element, pinned.
+//!   recorded definition), every `pod:<name>` `@me/<name>`; a use pinned to
+//!   a `version` gets that version's element, pinned.
 //! - Every blueprint becomes `@core/<id>`, its history every version the pod
 //!   recorded (a client is sealed with the newest it can draw). A workspace
 //!   becomes the page it stands for (`core:workspace`, `core:screen`).
 //!   Settings loses its Layouts section and versions screen (no versions on
-//!   the device).
+//!   the device). The pod then moves these names to this build's files
+//!   ([`crate::construct::core::refresh`]).
 //! - A blueprint's node part `core:<app>/<part>` becomes `@core/<app>/<part>`;
 //!   a screen part is expanded in place (it can't be a page's screen).
 //! - Every live pod layout keeps its id as its name. Links and embeds
@@ -23,16 +25,14 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
+use construct_elements::Objects;
 use construct_elements::refs::{OPEN_INTENT, Ref, Site};
-use construct_elements::{Objects, object_id};
 use serde_json::{Map, Value, json};
 
-use super::{CORE_PREFIX, ME_PREFIX, blueprint_name, component_name};
+use super::tables::Old;
 use crate::adapter::Catalog;
-use crate::store::Store;
-
-/// The author of what the conversion and the pod itself write.
-pub const AUTHOR_POD: &str = "pod";
+use crate::construct::{CORE_PREFIX, blueprint_name, component_name};
+use crate::layouts::AUTHOR_POD;
 
 /// One planned move of a name.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -85,61 +85,61 @@ impl Objects for Plan {
     }
 }
 
-/// Convert the pod's live layouts and every component and blueprint.
-pub fn convert(store: &Store, catalog: &Catalog) -> rusqlite::Result<Plan> {
-    let layouts = store.with_conn(crate::custom::custom_apps_on)?;
-    let hidden = crate::custom::hidden_apps(store)?;
-    let home_feeds = store
-        .with_conn(crate::custom::home_feeds_on)?
-        .unwrap_or_default();
+/// Convert the pod's live layouts and every component and blueprint (see
+/// the module docs) from what the old tables hold.
+pub fn convert(old: &Old, catalog: &Catalog) -> Plan {
     let mut c = Converter {
-        store,
+        old,
         catalog,
         plan: Plan::default(),
         done: BTreeMap::new(),
         in_progress: BTreeSet::new(),
-        layouts: layouts
+        layouts: old
+            .layouts
             .iter()
             .map(|a| (a.id.clone(), (a.title.clone(), a.icon.clone())))
             .collect(),
-        rows: layouts
+        rows: old
+            .layouts
             .iter()
             .filter(|a| a.id != crate::HOME_APP)
             .map(|a| Row {
                 id: a.id.clone(),
                 title: a.title.clone(),
                 icon: a.icon.clone(),
-                hidden: hidden.contains(&a.id),
+                hidden: old.hidden.contains(&a.id),
             })
             .collect(),
-        home_feeds,
+        home_feeds: old.home_feeds.clone(),
         at: String::new(),
     };
     // Server components and blueprints first: every name ships.
-    let comps = crate::components::list(store)?;
-    for (meta, _) in &comps {
-        if meta.name.starts_with(crate::components::CORE) {
-            c.component(&meta.name, None)?;
-        }
+    let names: Vec<String> = old.components.keys().cloned().collect();
+    for n in names
+        .iter()
+        .filter(|n| n.starts_with(crate::components::CORE))
+    {
+        c.component(n, None);
     }
-    for (meta, _) in &comps {
-        if meta.name.starts_with(crate::components::POD) {
-            c.component(&meta.name, None)?;
-        }
+    for n in names
+        .iter()
+        .filter(|n| n.starts_with(crate::components::POD))
+    {
+        c.component(n, None);
     }
-    let apps: Vec<&'static str> = catalog.apps().map(|a| a.id).collect();
+    let apps: Vec<&'static str> = catalog.blueprints().map(|a| a.id).collect();
     for app in apps {
-        c.blueprint(app)?;
+        c.blueprint(app);
     }
     // The pod's layouts, home first, then the ones home doesn't reach.
     if c.layouts.contains_key(crate::HOME_APP) {
-        c.layout(crate::HOME_APP)?;
+        c.layout(crate::HOME_APP);
     }
     let ids: Vec<String> = c.layouts.keys().cloned().collect();
     for id in ids {
-        c.layout(&id)?;
+        c.layout(&id);
     }
-    Ok(c.plan)
+    c.plan
 }
 
 struct Row {
@@ -150,7 +150,7 @@ struct Row {
 }
 
 struct Converter<'a> {
-    store: &'a Store,
+    old: &'a Old,
     catalog: &'a Catalog,
     plan: Plan,
     /// Names converted: their current hash (`None`: can't be).
@@ -176,18 +176,15 @@ impl Converter<'_> {
     }
 
     /// Hash `el`, work out its needs and features, keep it. Answers its id.
-    fn finish(&mut self, mut el: Value, layout: bool) -> String {
-        let probe = object_id(&el);
-        self.plan
-            .objects
-            .insert(probe.clone(), Arc::new(el.clone()));
-        let (needs, features) = derive(self.catalog, &self.home_feeds, &self.plan, &probe, layout);
-        self.plan.objects.remove(&probe);
-        el["needs"] = needs;
-        let id = object_id(&el);
-        self.plan.objects.insert(id.clone(), Arc::new(el));
-        self.plan.features.insert(id.clone(), features);
-        id
+    fn finish(&mut self, el: Value, layout: bool) -> String {
+        crate::construct::core::finish(
+            self.catalog,
+            &mut self.plan.objects,
+            &mut self.plan.features,
+            &self.home_feeds,
+            el,
+            layout,
+        )
     }
 
     fn push_name(&mut self, name: &str, hash: &str, note: String) {
@@ -203,35 +200,27 @@ impl Converter<'_> {
     }
 
     /// `old` (`core:x` or `pod:x`), latest or `version`: its element id.
-    fn component(&mut self, old: &str, version: Option<i64>) -> rusqlite::Result<Option<String>> {
-        let Some(name) = component_name(old) else {
-            return Ok(None);
-        };
+    fn component(&mut self, old: &str, version: Option<i64>) -> Option<String> {
+        let name = component_name(old)?;
         if version.is_none()
             && let Some(done) = self.done.get(&name)
         {
-            return Ok(done.clone());
+            return done.clone();
         }
         if self.in_progress.contains(&name) {
-            return Ok(None);
+            return None;
         }
-        let def = match version {
-            Some(n) => crate::components::version(self.store, old, n)?.map(|d| (n, d)),
-            None => crate::components::latest(self.store, old)?,
-        };
+        let def = self.old.component(old, version);
         let Some((n, def)) = def else {
             if version.is_none() {
                 self.done.insert(name, None);
             }
-            return Ok(None);
+            return None;
         };
         self.in_progress.insert(name.clone());
         let saved = std::mem::replace(&mut self.at, name.clone());
-        let template = self.tree(&def["template"], false)?;
-        let examples = match def.get("examples") {
-            Some(ex) => Some(self.tree(ex, false)?),
-            None => None,
-        };
+        let template = self.tree(&def["template"], false);
+        let examples = def.get("examples").map(|ex| self.tree(ex, false));
         self.at = saved;
         self.in_progress.remove(&name);
         let mut el = json!({
@@ -249,41 +238,35 @@ impl Converter<'_> {
             self.push_name(&name, &id, format!("Converted from {old} version {n}"));
             self.done.insert(name, Some(id.clone()));
         }
-        Ok(Some(id))
+        Some(id)
     }
 
     /// Blueprint `app`: every recorded version, oldest first. Its current id.
-    fn blueprint(&mut self, app: &str) -> rusqlite::Result<Option<String>> {
+    fn blueprint(&mut self, app: &str) -> Option<String> {
         let name = blueprint_name(app);
         if let Some(done) = self.done.get(&name) {
-            return Ok(done.clone());
+            return done.clone();
         }
         if self.in_progress.contains(&name) {
-            return Ok(None);
+            return None;
         }
-        let Some(info) = self.catalog.app(app).copied() else {
-            return Ok(None);
-        };
+        let info = self.catalog.blueprint(app).copied()?;
         self.in_progress.insert(name.clone());
         let saved = std::mem::replace(&mut self.at, name.clone());
-        let mut versions = Vec::new();
-        let mut before = None;
-        loop {
-            let page = self.store.app_versions(app, before, 100)?;
-            let Some(last) = page.last() else { break };
-            before = Some(last.version);
-            versions.extend(page);
-        }
-        versions.reverse();
+        let versions: Vec<(i64, Option<String>, String)> = self
+            .old
+            .versions
+            .get(app)
+            .into_iter()
+            .flatten()
+            .map(|(n, v)| (*n, v.note.clone(), v.json.clone()))
+            .collect();
         let mut current = None;
-        for v in versions {
-            let Some((_, json)) = self.store.app_version(app, v.version)? else {
-                continue;
-            };
+        for (version, note, json) in versions {
             let Ok(doc) = serde_json::from_str::<Value>(&json) else {
                 continue;
             };
-            let node = self.layout_node(&doc, app)?;
+            let node = self.layout_node(&doc, app);
             let el =
                 json!({ "kind": "element", "title": info.title, "icon": info.icon, "node": node });
             let id = self.finish(el, false);
@@ -292,9 +275,8 @@ impl Converter<'_> {
                 &id,
                 format!(
                     "Blueprint {app} version {}{}",
-                    v.version,
-                    v.note
-                        .as_deref()
+                    version,
+                    note.as_deref()
                         .map(|n| format!(": {n}"))
                         .unwrap_or_default()
                 ),
@@ -304,31 +286,22 @@ impl Converter<'_> {
         self.at = saved;
         self.in_progress.remove(&name);
         self.done.insert(name, current.clone());
-        Ok(current)
+        current
     }
 
     /// Part `part` of blueprint `app` (latest, or of `version`), as an
     /// element; named `@core/<app>/<part>` unless pinned.
-    fn part(
-        &mut self,
-        app: &str,
-        part: &str,
-        version: Option<i64>,
-    ) -> rusqlite::Result<Option<String>> {
+    fn part(&mut self, app: &str, part: &str, version: Option<i64>) -> Option<String> {
         let name = format!("{CORE_PREFIX}{app}/{part}");
         if version.is_none()
             && let Some(done) = self.done.get(&name)
         {
-            return Ok(done.clone());
+            return done.clone();
         }
-        let Some(parts) = crate::parts::load(self.store, app, version, None)? else {
-            return Ok(None);
-        };
-        let Some(node) = parts.parts.get(part) else {
-            return Ok(None);
-        };
+        let parts = super::expand::parts(self.old, app, version)?;
+        let node = parts.parts.get(part)?;
         let saved = std::mem::replace(&mut self.at, name.clone());
-        let node = self.tree(node, false)?;
+        let node = self.tree(node, false);
         self.at = saved;
         let id = self.finish(json!({ "kind": "element", "node": node }), false);
         if version.is_none() {
@@ -339,31 +312,27 @@ impl Converter<'_> {
             );
             self.done.insert(name, Some(id.clone()));
         }
-        Ok(Some(id))
+        Some(id)
     }
 
     /// Pod layout `id`: its current element (`None` while it is being
     /// converted: a reference to it closes a cycle).
-    fn layout(&mut self, id: &str) -> rusqlite::Result<Option<String>> {
+    fn layout(&mut self, id: &str) -> Option<String> {
         if let Some(done) = self.done.get(id) {
-            return Ok(done.clone());
+            return done.clone();
         }
         if self.in_progress.contains(id) {
-            return Ok(None);
+            return None;
         }
-        let Some((title, icon)) = self.layouts.get(id).cloned() else {
-            return Ok(None);
-        };
-        let Some((v, json)) = self.store.app_latest(id)? else {
-            return Ok(None);
-        };
-        let Ok(doc) = serde_json::from_str::<Value>(&json) else {
-            return Ok(None);
+        let (title, icon) = self.layouts.get(id).cloned()?;
+        let (version, v) = self.old.version(id, None)?;
+        let Ok(doc) = serde_json::from_str::<Value>(&v.json) else {
+            return None;
         };
         self.in_progress.insert(id.to_owned());
         let saved = std::mem::replace(&mut self.at, id.to_owned());
         let doc = self.launcher(doc);
-        let node = self.layout_node(&doc, id)?;
+        let node = self.layout_node(&doc, id);
         self.at = saved;
         self.in_progress.remove(id);
         let mut el = json!({ "kind": "element", "title": title, "icon": icon, "node": node });
@@ -374,16 +343,16 @@ impl Converter<'_> {
         self.push_name(
             id,
             &hash,
-            format!("Converted from layout {id} version {}", v.version),
+            format!("Converted from layout {id} version {version}"),
         );
         self.done.insert(id.to_owned(), Some(hash.clone()));
         self.plan.layouts.push(id.to_owned());
-        Ok(Some(hash))
+        Some(hash)
     }
 
     /// A stored layout (`id`'s, or a blueprint version) as a page with
     /// references.
-    fn layout_node(&mut self, doc: &Value, id: &str) -> rusqlite::Result<Value> {
+    fn layout_node(&mut self, doc: &Value, id: &str) -> Value {
         let mut doc = doc.clone();
         if id == "settings" {
             doc = strip_versions(doc);
@@ -392,15 +361,9 @@ impl Converter<'_> {
         doc = self.expand_screen_parts(doc);
         if doc["type"].as_str() == Some("core://Workspace") {
             // Whether it fills the screen is read from its expansion.
-            let expanded = if crate::parts::may_hold_refs(&doc.to_string()) {
-                crate::parts::expand(
-                    self.store,
-                    self.catalog,
-                    &doc,
-                    None,
-                    crate::parts::Mode::Lenient,
-                )
-                .unwrap_or_else(|_| doc.clone())
+            let expanded = if super::expand::may_hold_refs(&doc.to_string()) {
+                super::expand::expand(self.old, self.catalog, &doc, super::expand::Mode::Lenient)
+                    .unwrap_or_else(|_| doc.clone())
             } else {
                 doc.clone()
             };
@@ -422,19 +385,18 @@ impl Converter<'_> {
         for s in screens.drain(..) {
             let is_ref = matches!(
                 s["type"].as_str(),
-                Some(crate::parts::REF_TYPE | crate::components::USE_TYPE)
+                Some(super::expand::REF_TYPE | crate::components::USE_TYPE)
             );
             if !is_ref {
                 out.push(s);
                 continue;
             }
             let wrapped = json!({ "screens": [s] });
-            match crate::parts::expand(
-                self.store,
+            match super::expand::expand(
+                self.old,
                 self.catalog,
                 &wrapped,
-                None,
-                crate::parts::Mode::Lenient,
+                super::expand::Mode::Lenient,
             ) {
                 Ok(v) => {
                     out.extend(v["screens"].as_array().cloned().unwrap_or_default());
@@ -491,16 +453,16 @@ impl Converter<'_> {
     }
 
     /// A tree with its uses, parts and links as references.
-    fn tree(&mut self, v: &Value, in_screens: bool) -> rusqlite::Result<Value> {
+    fn tree(&mut self, v: &Value, in_screens: bool) -> Value {
         let _ = in_screens;
         match v {
             Value::Object(o) => self.object(o),
-            Value::Array(a) => a.iter().map(|c| self.tree(c, false)).collect(),
-            other => Ok(other.clone()),
+            Value::Array(a) => Value::Array(a.iter().map(|c| self.tree(c, false)).collect()),
+            other => other.clone(),
         }
     }
 
-    fn object(&mut self, o: &Map<String, Value>) -> rusqlite::Result<Value> {
+    fn object(&mut self, o: &Map<String, Value>) -> Value {
         let ty = o.get("type").and_then(Value::as_str);
         let sealed = |name: String, el: String, pin: bool, as_: Option<String>| {
             Ref {
@@ -514,12 +476,12 @@ impl Converter<'_> {
         // A use: a component, a blueprint or one of its parts.
         if matches!(
             ty,
-            Some(crate::components::USE_TYPE | crate::parts::REF_TYPE)
+            Some(crate::components::USE_TYPE | super::expand::REF_TYPE)
         ) && !o.contains_key("ref")
         {
             let version = o.get("version").and_then(Value::as_i64);
             let (target, part) = match ty {
-                Some(crate::parts::REF_TYPE) => (
+                Some(super::expand::REF_TYPE) => (
                     o.get("app").and_then(Value::as_str).map(str::to_owned),
                     o.get("part").and_then(Value::as_str).map(str::to_owned),
                 ),
@@ -528,7 +490,7 @@ impl Converter<'_> {
                     match c.strip_prefix(crate::components::CORE) {
                         Some(bare) => {
                             let (app, part) = bare.split_once('/').unwrap_or((bare, ""));
-                            if !part.is_empty() || self.catalog.is_app(app) {
+                            if !part.is_empty() || self.catalog.is_blueprint(app) {
                                 (Some(app.to_owned()), Some(part.to_owned()))
                             } else {
                                 (None, None)
@@ -543,22 +505,24 @@ impl Converter<'_> {
                 if matches!(k.as_str(), "component" | "version" | "app" | "part") {
                     continue;
                 }
-                out.insert(k.clone(), self.tree(c, false)?);
+                out.insert(k.clone(), self.tree(c, false));
             }
             out.insert("type".into(), json!(crate::components::USE_TYPE));
             let made = match (target, part) {
-                (Some(app), Some(part)) if part.is_empty() || part == crate::parts::LAYOUT_PART => {
+                (Some(app), Some(part))
+                    if part.is_empty() || part == super::expand::LAYOUT_PART =>
+                {
                     // A whole blueprint (pinned: that version's element).
                     match version {
                         Some(n) => self
-                            .blueprint_version(&app, n)?
+                            .blueprint_version(&app, n)
                             .map(|el| sealed(blueprint_name(&app), el, true, None)),
                         None => self
-                            .blueprint(&app)?
+                            .blueprint(&app)
                             .map(|el| sealed(blueprint_name(&app), el, false, None)),
                     }
                 }
-                (Some(app), Some(part)) => self.part(&app, &part, version)?.map(|el| {
+                (Some(app), Some(part)) => self.part(&app, &part, version).map(|el| {
                     sealed(
                         format!("{CORE_PREFIX}{app}/{part}"),
                         el,
@@ -568,7 +532,7 @@ impl Converter<'_> {
                 }),
                 _ => {
                     let c = o.get("component").and_then(Value::as_str).unwrap_or("");
-                    match (component_name(c), self.component(c, version)?) {
+                    match (component_name(c), self.component(c, version)) {
                         (Some(name), Some(el)) => Some(sealed(name, el, version.is_some(), None)),
                         _ => None,
                     }
@@ -577,7 +541,7 @@ impl Converter<'_> {
             match made {
                 Some(r) => {
                     out.insert("ref".into(), r);
-                    return Ok(Value::Object(out));
+                    return Value::Object(out);
                 }
                 None => {
                     self.note(
@@ -587,7 +551,7 @@ impl Converter<'_> {
                             label(o)
                         ),
                     );
-                    return Ok(construct_elements::materialize::placeholder());
+                    return construct_elements::materialize::placeholder();
                 }
             }
         }
@@ -606,7 +570,7 @@ impl Converter<'_> {
             let mut out = Map::new();
             for (k, c) in o {
                 if k != "layout" {
-                    out.insert(k.clone(), self.tree(c, false)?);
+                    out.insert(k.clone(), self.tree(c, false));
                 }
             }
             if target.contains('$') {
@@ -615,14 +579,14 @@ impl Converter<'_> {
                     format!("a link to the layout named by {target} stays as it is (no edge)"),
                 );
                 out.insert("layout".into(), json!(target));
-                return Ok(Value::Object(out));
+                return Value::Object(out);
             }
             let found = if self.layouts.contains_key(target) {
-                match self.layout(target)? {
+                match self.layout(target) {
                     Some(el) => Some(sealed(target.to_owned(), el, false, None)),
                     None => {
                         // A cycle: elements only go forward.
-                        return Ok(match site {
+                        return match site {
                             Site::Link if target == crate::HOME_APP => {
                                 self.note(
                                     "link_became_pop",
@@ -648,11 +612,11 @@ impl Converter<'_> {
                                 );
                                 construct_elements::materialize::placeholder()
                             }
-                        });
+                        };
                     }
                 }
-            } else if self.catalog.is_app(target) {
-                self.blueprint(target)?
+            } else if self.catalog.is_blueprint(target) {
+                self.blueprint(target)
                     .map(|el| sealed(blueprint_name(target), el, false, Some(target.to_owned())))
             } else {
                 None
@@ -669,29 +633,25 @@ impl Converter<'_> {
                     out.insert("layout".into(), json!(target));
                 }
             }
-            return Ok(Value::Object(out));
+            return Value::Object(out);
         }
         let mut out = Map::new();
         for (k, c) in o {
-            out.insert(k.clone(), self.tree(c, k == "screens")?);
+            out.insert(k.clone(), self.tree(c, k == "screens"));
         }
-        Ok(Value::Object(out))
+        Value::Object(out)
     }
 
     /// One version of blueprint `app` as an element (pinned uses).
-    fn blueprint_version(&mut self, app: &str, n: i64) -> rusqlite::Result<Option<String>> {
-        let Some(info) = self.catalog.app(app).copied() else {
-            return Ok(None);
+    fn blueprint_version(&mut self, app: &str, n: i64) -> Option<String> {
+        let info = self.catalog.blueprint(app).copied()?;
+        let (_, v) = self.old.version(app, Some(n))?;
+        let Ok(doc) = serde_json::from_str::<Value>(&v.json) else {
+            return None;
         };
-        let Some((_, json)) = self.store.app_version(app, n)? else {
-            return Ok(None);
-        };
-        let Ok(doc) = serde_json::from_str::<Value>(&json) else {
-            return Ok(None);
-        };
-        let node = self.layout_node(&doc, app)?;
+        let node = self.layout_node(&doc, app);
         let el = json!({ "kind": "element", "title": info.title, "icon": info.icon, "node": node });
-        Ok(Some(self.finish(el, false)))
+        Some(self.finish(el, false))
     }
 }
 
@@ -746,109 +706,4 @@ pub fn strip_versions(mut doc: Value) -> Value {
         });
     }
     doc
-}
-
-/// An element's needs and features, from its materialization.
-pub fn derive(
-    catalog: &Catalog,
-    home_feeds: &[(String, String)],
-    objects: &dyn Objects,
-    id: &str,
-    layout: bool,
-) -> (Value, String) {
-    let Some(el) = objects.object(id) else {
-        return (json!({}), String::new());
-    };
-    let m = construct_elements::materialize(objects, id).ok();
-    let node = m.as_ref().map_or(Value::Null, |m| m.node.clone());
-    let mut params: BTreeSet<String> = el["params"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .filter_map(|p| p["name"].as_str().map(str::to_owned))
-        .collect();
-    let text = el["node"].to_string();
-    for prefix in ["$in.", "$arg."] {
-        for (i, _) in text.match_indices(prefix) {
-            let rest = &text[i + prefix.len()..];
-            let end = rest
-                .find(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
-                .unwrap_or(rest.len());
-            if end > 0 {
-                params.insert(rest[..end].to_owned());
-            }
-        }
-    }
-    let mut data = BTreeSet::new();
-    let mut endpoints = BTreeSet::new();
-    collect_paths(&node, &mut data, &mut endpoints);
-    let feeds = if layout {
-        crate::custom::bound_feeds(catalog, home_feeds, &node)
-    } else {
-        Vec::new()
-    };
-    let sources: BTreeSet<String> = feeds.iter().map(|(s, _)| s.clone()).collect();
-    let mut jacks = BTreeSet::new();
-    for s in &sources {
-        if let Some((adapter, _)) = catalog.source(s) {
-            for j in adapter.jacks() {
-                jacks.insert(j.id.to_owned());
-            }
-        }
-    }
-    let mut features: Vec<&str> = serde_json::from_value::<protocol::UiNode>(node)
-        .map(|n| protocol::required_features(&n))
-        .unwrap_or_default();
-    // Bindings between layouts are drawn by the engine, not the renderer: an
-    // element that binds or reads them needs a client that fills them in.
-    let binds = m
-        .as_ref()
-        .is_some_and(|m| m.edges.iter().any(|e| !e.bind.is_empty()));
-    if layout && (binds || !construct_elements::template::inputs_of(&el).is_empty()) {
-        features.push(protocol::feature::LAYOUT_BIND);
-        features.sort_unstable();
-        features.dedup();
-    }
-    let features = features.join(",");
-    (
-        json!({
-            "params": params,
-            "feeds": feeds,
-            "sources": sources,
-            "data": data,
-            "endpoints": endpoints,
-            "jacks": jacks,
-        }),
-        features,
-    )
-}
-
-fn collect_paths(v: &Value, data: &mut BTreeSet<String>, endpoints: &mut BTreeSet<String>) {
-    match v {
-        Value::Object(o) => {
-            for (k, c) in o {
-                match (k.as_str(), c) {
-                    ("data" | "path", Value::String(s)) if s.starts_with('/') => {
-                        data.insert(s.clone());
-                    }
-                    ("endpoint", Value::String(s)) if s.starts_with('/') => {
-                        endpoints.insert(s.clone());
-                    }
-                    _ => collect_paths(c, data, endpoints),
-                }
-            }
-        }
-        Value::Array(a) => a.iter().for_each(|c| collect_paths(c, data, endpoints)),
-        _ => {}
-    }
-}
-
-/// Whether `name` is one of the server's (`@core/…`).
-pub fn is_core(name: &str) -> bool {
-    name.starts_with(CORE_PREFIX)
-}
-
-/// Whether `name` is one of the pod's own components (`@me/…`).
-pub fn is_me(name: &str) -> bool {
-    name.starts_with(ME_PREFIX)
 }

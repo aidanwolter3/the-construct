@@ -1,8 +1,9 @@
-//! Custom apps end to end (decision `custom-apps-and-data-sources`), against the fake:
-//! create a "Kitchen" app over the Pixelfed home feed and the recipes with the pod token,
-//! then through the client engine: open it, see posts and recipes together, like a post
-//! through the outbox (it reaches the upstream), load a recipe screen, and watch a second
-//! engine pick up a new version live. Deleting it ends with a 404.
+//! A layout of the pod end to end (decision `content-addressed-construct`), against the
+//! fake: create a "Kitchen" layout over the Pixelfed home feed and the recipes with the
+//! pod's MCP tools, then through the client engine: open it, see posts and recipes
+//! together, like a post through the outbox (it reaches the upstream), load a recipe
+//! screen, and watch a second engine pick up a new version live. Deleting it ends with
+//! its name gone.
 
 use std::sync::Arc;
 
@@ -44,11 +45,11 @@ fn kitchen(title: &str) -> Value {
 }
 
 #[test]
-fn a_custom_app_shows_two_sources_and_its_actions_work() {
+fn a_layout_shows_two_sources_and_its_actions_work() {
     let h = Harness::from_env();
     let up = &h.upstream;
     if up.is_real() {
-        eprintln!("[e2e] custom apps: skipped (the fake only)");
+        eprintln!("[e2e] custom layouts: skipped (the fake only)");
         return;
     }
     up.reset();
@@ -85,25 +86,32 @@ fn a_custom_app_shows_two_sources_and_its_actions_work() {
     wait_signed_in(&home);
     drop(home);
 
-    // 2. Create the app with the pod token.
-    let (status, created) = pod(
-        reqwest::Method::POST,
-        "/v1/custom-apps",
-        Some(json!({"title": "Kitchen", "icon": "recipe",
+    // 2. Create the layout with the pod token (the pod's MCP tools).
+    let tool = |name: &str, args: Value| -> Value {
+        let (status, body) = pod(
+            reqwest::Method::POST,
+            "/v1/mcp",
+            Some(json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+                "params": {"name": name, "arguments": args}})),
+        );
+        assert_eq!(status, 200, "{body}");
+        let r = &body["result"];
+        assert_ne!(r["isError"], true, "{name}: {body}");
+        serde_json::from_str(r["content"][0]["text"].as_str().unwrap()).unwrap()
+    };
+    let created = tool(
+        "create_layout",
+        json!({"title": "Kitchen", "icon": "recipe",
             "feeds": [["recipes", "all"], ["pixelfed", "home"]],
-            "layout": kitchen("Kitchen"), "note": "Recipes next to my feed"})),
+            "layout": kitchen("Kitchen"), "note": "Recipes next to my feed"}),
     );
-    assert_eq!(status, 201, "{created}");
     let id = created["id"].as_str().unwrap().to_owned();
-    let (_, apps) = pod(reqwest::Method::GET, "/v1/apps", None);
-    assert!(
-        apps["apps"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|a| a["id"] == id.as_str() && a["kind"] == "custom"),
-        "{apps}"
+    let (status, _) = pod(
+        reqwest::Method::GET,
+        &format!("/v1/construct/names/{id}"),
+        None,
     );
+    assert_eq!(status, 200);
 
     // 3. An engine on it: posts and recipes together.
     let kitchen_engine = h.engine_on(&store, None, &id);
@@ -144,24 +152,22 @@ fn a_custom_app_shows_two_sources_and_its_actions_work() {
     wait_until("the second engine's first fetch", TIMEOUT, || {
         other.snapshot().workspace_json.contains("Kitchen")
     });
-    let (status, b) = pod(
-        reqwest::Method::PUT,
-        &format!("/v1/custom-apps/{id}/layout"),
-        Some(json!({"layout": kitchen("Kitchen v2"), "note": "Rename", "base_version": 1})),
+    tool(
+        "update_layout",
+        json!({"id": id, "layout": kitchen("Kitchen v2"), "note": "Rename",
+            "base_version": created["version"]}),
     );
-    assert_eq!(status, 200, "{b}");
     wait_until("the pushed version", TIMEOUT, || {
         other.snapshot().workspace_json.contains("Kitchen v2")
     });
 
     // 7. Delete: gone for everyone.
+    tool("delete_layout", json!({"id": id}));
     let (status, _) = pod(
-        reqwest::Method::DELETE,
-        &format!("/v1/custom-apps/{id}"),
+        reqwest::Method::GET,
+        &format!("/v1/construct/names/{id}"),
         None,
     );
-    assert_eq!(status, 200);
-    let (status, _) = pod(reqwest::Method::GET, &format!("/v1/workspaces/{id}"), None);
     assert_eq!(status, 404);
     // Undo the like on the fake for the other tests.
     kitchen_engine.dispatch(&like_intent(&post_id));

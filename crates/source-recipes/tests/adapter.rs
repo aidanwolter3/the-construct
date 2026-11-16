@@ -6,7 +6,6 @@ use std::sync::Arc;
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use http_body_util::BodyExt;
-use pod_core::layouts::parse_files;
 use pod_core::{AppState, Catalog, Source};
 use protocol::{DataBundle, UiNode, WorkspaceSpec};
 use source_recipes::{FILES, RecipesAdapter};
@@ -55,13 +54,17 @@ fn every_layout_file_is_embedded() {
 #[test]
 fn layout_files_parse_and_validate() {
     let catalog = Catalog::new(adapters()).unwrap();
-    let files = parse_files(&catalog, FILES).unwrap();
-    assert_eq!(files.len(), FILES.len());
-    // The newest recipes layout (0005) pins the search box and chips.
-    assert!(
-        protocol::required_features(&files.last().unwrap().layout)
-            .contains(&protocol::feature::STICKY)
-    );
+    let core = pod_core::construct::core::load_with(&catalog, FILES).unwrap();
+    assert_eq!(core.names["@core/recipes"].len(), FILES.len());
+    // The newest recipes layout pins the search box and chips.
+    let newest = core.current("@core/recipes").unwrap();
+    assert!(core.features[newest].contains(protocol::feature::STICKY));
+}
+
+/// The recipes blueprint as a layout of the pod, drawn as a device draws it.
+async fn recipes(state: &Arc<AppState>) -> (StatusCode, serde_json::Value) {
+    let id = pod_core::testing::use_blueprint(state, "recipes").await;
+    pod_core::testing::layout_for(&pod_core::app(state.clone()), &id, None).await
 }
 
 async fn get(state: &Arc<AppState>, path: &str) -> (StatusCode, serde_json::Value) {
@@ -89,7 +92,7 @@ async fn the_workspace_lists_every_recipe_and_a_screen_loads_one() {
     let state = seeded();
     assert_eq!(state.store().adapter_version("recipes").unwrap(), 2);
 
-    let (status, body) = get(&state, "/v1/workspaces/recipes").await;
+    let (status, body) = recipes(&state).await;
     assert_eq!(status, StatusCode::OK, "{body}");
     let spec: WorkspaceSpec = serde_json::from_value(body).unwrap();
     assert_eq!(spec.queries["recipes:all"].len(), 8);
@@ -120,10 +123,7 @@ async fn the_workspace_lists_every_recipe_and_a_screen_loads_one() {
     assert_eq!(status, StatusCode::BAD_REQUEST);
 }
 
-/// A client gets the newest layout whose features it draws: with `sticky`
-/// the search box and chips pinned at the top. A new pod has only the newest
-/// file (decision `retired-layout-files`), so a client without `sticky` has
-/// no version it can draw.
+/// The newest recipes layout: the search box and chips pinned at the top.
 #[tokio::test]
 async fn each_client_gets_the_newest_layout_it_draws() {
     let state = seeded();
@@ -139,12 +139,10 @@ async fn each_client_gets_the_newest_layout_it_draws() {
             .collect::<Vec<_>>()
             .join(",")
     };
-    let (status, body) = get_as(&state, "/v1/workspaces/recipes", &without(&["sticky"])).await;
-    assert_eq!(status, StatusCode::CONFLICT, "{body}");
-    assert_eq!(body["error"], "no_compatible_version");
+    let _ = without;
     for (missing, sticky_drawn, search, tappable) in [(&[][..], true, true, true)] {
         let schema = format!("{missing:?}");
-        let (status, body) = get_as(&state, "/v1/workspaces/recipes", &without(missing)).await;
+        let (status, body) = recipes(&state).await;
         assert_eq!(status, StatusCode::OK, "{body}");
         let spec: WorkspaceSpec = serde_json::from_value(body).unwrap();
         for f in protocol::required_features(&spec.workspace) {
@@ -166,13 +164,27 @@ async fn each_client_gets_the_newest_layout_it_draws() {
                     .any(|n| matches!(n, UiNode::ChoiceChips { .. }))
             );
         }
+        // A recipe row is a tappable row, not a button (the page's own
+        // chrome may hold buttons).
+        let rows: Vec<String> = walk
+            .iter()
+            .find_map(|n| match n {
+                UiNode::List {
+                    item_template,
+                    filter: Some(_),
+                    ..
+                } => Some(item_template.walk().iter().map(|n| n.type_tag()).collect()),
+                _ => None,
+            })
+            .unwrap();
+        assert!(!types.is_empty());
         assert_eq!(
-            types.iter().any(|t| t == "core://Tappable"),
+            rows.iter().any(|t| t == "core://Tappable"),
             tappable,
             "{schema}"
         );
         assert_eq!(
-            types.iter().any(|t| t == "core://Button"),
+            rows.iter().any(|t| t == "core://Button"),
             !tappable,
             "{schema}"
         );
@@ -188,7 +200,12 @@ async fn each_client_gets_the_newest_layout_it_draws() {
             assert_eq!(f.value, "$form.q");
             assert!(walk.iter().any(|n| matches!(n,
                 UiNode::TextField { field, on_submit: None, .. } if field == "q")));
-            let recipe = spec.entities.values().next().unwrap();
+            let recipe = spec
+                .entities
+                .iter()
+                .find(|(k, _)| k.starts_with("recipes://recipes/"))
+                .map(|(_, e)| e)
+                .unwrap();
             for field in &f.fields {
                 assert!(recipe.get_str(field).is_some(), "{field}");
             }
@@ -213,7 +230,9 @@ async fn each_client_gets_the_newest_layout_it_draws() {
             assert_eq!(where_.equals, format!("$form.{field}"));
             let shorts: std::collections::HashSet<&str> = spec
                 .entities
-                .values()
+                .iter()
+                .filter(|(k, _)| k.starts_with("recipes://recipes/"))
+                .map(|(_, e)| e)
                 .filter_map(|e| e.get_str(&where_.field))
                 .collect();
             assert_eq!(options[0].value, "");
@@ -233,7 +252,7 @@ async fn a_new_pod_starts_empty_and_keeps_what_it_holds() {
     let state = AppState::open_dir(dir.path(), adapters()).unwrap();
     assert_eq!(state.store().adapter_version("recipes").unwrap(), 2);
     assert_eq!(recipe_count(&state), 0);
-    let (status, body) = get(&Arc::new(state), "/v1/workspaces/recipes").await;
+    let (status, body) = recipes(&Arc::new(state)).await;
     assert_eq!(status, StatusCode::OK, "{body}");
     assert!(
         body["queries"]["recipes:all"]

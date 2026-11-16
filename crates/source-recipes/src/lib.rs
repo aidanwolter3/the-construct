@@ -2,7 +2,8 @@
 //! the pod's own SQLite (`recipes_*` tables), served as the `recipes`
 //! app. There is no upstream and no sign-in.
 //!
-//! - `GET /v1/workspaces/recipes`: the `all` feed, every recipe by category
+//! - The `all` feed (what a layout binding it gets in
+//!   `GET /v1/construct/data/<element>`): every recipe by category
 //!   (`queries["recipes:all"]`, `recipes://recipes/<slug>` entities).
 //! - `GET /v1/recipes/screens/recipe?id=<slug>`: one recipe's screen data
 //!   ([`db::recipe_screen`]).
@@ -24,8 +25,8 @@ use axum::{
 use pod_core::layouts::LayoutSource;
 use pod_core::store::Step;
 use pod_core::{
-    AppInfo, AuthPolicy, BoxFuture, EntityDoc, FeedSpec, Hydration, PathSpec, Pod, RequestCtx,
-    Source, SourceManifest,
+    AuthPolicy, BlueprintInfo, BoxFuture, EntityDoc, FeedSpec, Hydration, PathSpec, Pod,
+    RequestCtx, Source, SourceManifest,
 };
 use serde::Deserialize;
 use serde_json::json;
@@ -34,7 +35,7 @@ use serde_json::json;
 pub const NAME: &str = "recipes";
 
 /// The recipes app.
-pub const APP: AppInfo = AppInfo {
+pub const APP: BlueprintInfo = BlueprintInfo {
     id: "recipes",
     title: "Recipes",
     icon: "recipe",
@@ -43,7 +44,7 @@ pub const APP: AppInfo = AppInfo {
     feeds: &[(NAME, ALL_FEED)],
 };
 
-/// Every recipe, by category (`AppInfo::feeds` entry `("recipes", "all")`).
+/// Every recipe, by category (`BlueprintInfo::feeds` entry `("recipes", "all")`).
 pub const ALL_FEED: &str = "all";
 
 /// What layouts may use of the recipes (decision
@@ -150,7 +151,7 @@ impl Source for RecipesAdapter {
         NAME
     }
 
-    fn apps(&self) -> Vec<AppInfo> {
+    fn blueprints(&self) -> Vec<BlueprintInfo> {
         vec![APP]
     }
 

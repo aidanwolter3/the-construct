@@ -1,0 +1,98 @@
+{
+  "changed": false,
+  "construct": "e1-p73mc7lygd3cyzg7f5ih4ye6vqqf5mhuhcmvuvsgcjba6argk2dq",
+  "dry_run": true,
+  "home_bindings": {
+    "feeds": [
+      [
+        "recipes",
+        "all"
+      ]
+    ]
+  },
+  "layouts": [
+    {
+      "element": "e1-ehbu6m6gqnc6bq2xilfaidwumvo6ldd5oprld33uhbdegvzhaxaa",
+      "id": "c-ki77kjxymj",
+      "nodes": 10,
+      "same": true,
+      "tree_same": true
+    },
+    {
+      "differences": [
+        "node 24: was Button [0.0,740.0,141.0,40.0] \"Back to meals\" action.navigation.open layout=c-r7jeifhpzm presentation=Push now Button [0.0,740.0,141.0,40.0] \"Back to meals\" action.navigation.pop_to"
+      ],
+      "element": "e1-muiwhrxq3xebp3xw25y7jonok4drzkzdkydzsiwq7t3hicjad6da",
+      "id": "c-jyiz6is4ld",
+      "nodes": 25,
+      "same": false,
+      "tree_same": false
+    },
+    {
+      "element": "e1-w55sdxvucguq3cvqlk3omha33ck7mb3qtr446pog3updnsaiwlea",
+      "id": "c-r7jeifhpzm",
+      "nodes": 49,
+      "same": true,
+      "tree_same": true
+    },
+    {
+      "differences": [
+        "node 0: was Text [0.0,0.0,42.0,16.0] \" layouts\"  now Text [0.0,0.0,49.0,16.0] \"4 layouts\" ",
+        "node 1: was (none) now Tappable [0.0,16.0,80.0,28.0] action.navigation.open layout=c-jyiz6is4ld presentation=Push",
+        "node 2: was (none) now Text [0.0,16.0,80.0,28.0] \"Recipes\" ",
+        "node 3: was (none) now Tappable [0.0,44.0,112.0,28.0] action.navigation.open layout=c-ki77kjxymj presentation=Push",
+        "node 4: was (none) now Text [0.0,44.0,112.0,28.0] \"Coming up\" ",
+        "node 5: was (none) now Tappable [0.0,72.0,60.0,28.0] action.navigation.open layout=c-r7jeifhpzm presentation=Push",
+        "node 6: was (none) now Text [0.0,72.0,60.0,28.0] \"Meals\" ",
+        "node 7: was (none) now Tappable [0.0,100.0,96.0,28.0] action.navigation.pop_to",
+        "node 8: was (none) now Text [0.0,100.0,96.0,28.0] \"Launcher\" "
+      ],
+      "element": "e1-w64kfz3zvgriw5cxhw3ykxxji2wqxqfgu3elumuy2qkk4v3k6tna",
+      "id": "c-u4zg5a4d4t",
+      "nodes": 1,
+      "same": false,
+      "tree_same": false
+    },
+    {
+      "element": "e1-p73mc7lygd3cyzg7f5ih4ye6vqqf5mhuhcmvuvsgcjba6argk2dq",
+      "id": "home",
+      "nodes": 17,
+      "same": true,
+      "tree_same": true
+    },
+    {
+      "element": "e1-szfgf5bpddxrzkmh6wvhoi4dqbmhuhfh47yqr6643uqkrxi2bbka",
+      "id": "c-o4pmrfxsm3",
+      "nodes": 1,
+      "same": true,
+      "tree_same": true
+    }
+  ],
+  "layouts_compared": 6,
+  "layouts_different": 2,
+  "names": 41,
+  "notes": [
+    {
+      "at": "@core/page_header",
+      "detail": "a link to c-example, which isn't a layout, stays as it is",
+      "kind": "unknown_link"
+    },
+    {
+      "at": "c-jyiz6is4ld",
+      "detail": "a link back to c-r7jeifhpzm (which leads here) became action.navigation.pop_to",
+      "kind": "link_became_pop"
+    },
+    {
+      "at": "c-u4zg5a4d4t",
+      "detail": "a list of local:layouts became 4 rows of links (versions aren't shown)",
+      "kind": "launcher_written_out"
+    },
+    {
+      "at": "c-u4zg5a4d4t",
+      "detail": "a link back to c-u4zg5a4d4t (which leads here) became action.navigation.pop_to",
+      "kind": "link_became_pop"
+    }
+  ],
+  "objects": 59,
+  "switch": "switch_construct {} (or `server pods switch <id>`) writes this; the old tables stay as they are"
+}

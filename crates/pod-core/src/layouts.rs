@@ -1,99 +1,48 @@
-//! Layouts as code, the read-only apps / versions API and the layout push
-//! channel.
+//! The pod's layouts (decision `content-addressed-construct`): what every
+//! layout of the pod shares, over the construct's names.
 //!
-//! The pod serves the apps its adapters register (one workspace each; dev
-//! apps are listed only with `CONSTRUCT_SHOW_DEV_APPS=1`). Each app has ONE
-//! linear, append-only layout history (`app_versions`, store migration v7).
-//! New versions come only from the developer: files
-//! `crates/<adapter>/layouts/<app_id>/NNNN.json` in the repo, embedded in the
-//! binary by the app's adapter ([`crate::Source::layout_files`]) and appended at startup
-//! by [`sync`] before the server listens. No HTTP route changes a built-in
-//! app's layout; custom apps (the pod user's own, [`crate::custom`]) get
-//! their versions from validated writes instead of files.
-//!
-//! # Adding a layout version
-//!
-//! 1. Copy the newest file, e.g. `crates/source-pixelfed/layouts/pixelfed/0011.json`
-//!    to `.../pixelfed/0012.json` (4 digits, the next number: numbering
-//!    is contiguous from the app's oldest file), and edit it. The format is
-//!    `{"note": "short changelog line", "layout": <UiNode>}`; the layout root
-//!    is the app's `core://Workspace` (id = the app id). Clients are served
-//!    the newest version whose features they all draw
-//!    ([`protocol::ClientCaps::can_draw`], decision `named-vocabulary`).
-//!    Deployed files may still carry the `"schema"` of D36; it is ignored.
-//! 2. Nothing to list: the adapter's `build.rs` embeds every
-//!    `layouts/<app_id>/*.json` of its crate (`crates/pod-core/build_support/`). The
-//!    layout features a file uses are worked out, not declared
-//!    ([`protocol::required_features`], recorded per version).
-//! 3. `cargo test --workspace` (validates every file), deploy. On start the pod
-//!    appends it as the app's next version and pushes it to connected clients
-//!    on their next fetch.
-//!
-//! Files are append-only: once deployed, a file must never change (the pod
-//! refuses to start, naming the file and how to recover, if its content
-//! differs from what it recorded: [`file_hash`], the hash of the file's own
-//! note and layout JSON, independent of how the Rust types serialize it); add
-//! a new file instead. To stop clients drawing old versions, remove the
-//! feature they use (move its file to `crates/protocol/features/removed/`)
-//! rather than editing files. Old files may be deleted from the repo, oldest
-//! first (decision `retired-layout-files`): an app's files then start above
-//! `0001`, pods that recorded the deleted ones keep them in their history
-//! (no warning), and new pods start from the oldest file present. A gap in
-//! the numbering, a file that is not a valid
-//! layout (structure checked by [`crate::validate::validate_structure`]), an
-//! unknown action intent tag, a root id that is not the app id, or a new file
-//! numbered below a deployed one also stop the start. A deployed file missing
-//! from the build (a rollback deploy, an older branch) only logs a warning:
-//! the recorded history is served unchanged.
-//!
-//! `X-Construct-Layout-Version` on `GET /v1/workspaces/:id` carries the
-//! served version (the newest the client can draw); the SSE `version` carries
-//! the app's latest version number.
+//! - **Ids.** A pod layout's name is its id: [`crate::HOME_APP`] or `c-` and
+//!   10 base32 characters ([`is_layout_id`]); a blueprint is `@core/<id>`.
+//! - **Writes.** Caps and the write-rate window ([`Caps`], [`allow_write`]).
+//! - **Feeds.** Home owns every feed (its element's `bind`): which feeds a
+//!   layout binds ([`bound_feeds`]), which layout owns a feed for
+//!   notifications ([`feed_owners`]), and checks of feed lists.
+//! - **Files.** Blueprints ship as files `crates/source-*/layouts/<blueprint>/
+//!   NNNN.json` ([`LayoutSource`]); [`crate::construct::core`] makes them
+//!   elements named `@core/<blueprint>` when a pod opens. Files are
+//!   append-only: never edit or renumber a deployed one; old ones may be
+//!   deleted, oldest first (decision `retired-layout-files`).
+//! - **Events.** What the construct's event stream sends besides new roots
+//!   ([`DataEvent`], notifications; [`crate::construct::events`]).
 
-// Helpers return a ready error `Response` for the handler to send as is.
-#![allow(clippy::result_large_err)]
-
-use std::collections::HashMap;
-use std::sync::Arc;
-use std::time::Duration;
+use std::collections::{HashMap, VecDeque};
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 use axum::{
-    Json, Router,
-    extract::{Path, Query, State},
-    http::{HeaderMap, HeaderName, HeaderValue, StatusCode},
-    response::{
-        IntoResponse, Response,
-        sse::{Event, KeepAlive, Sse},
-    },
-    routing::get,
+    http::{HeaderMap, StatusCode},
+    response::{Response, sse::Event},
 };
 use protocol::UiNode;
+use rusqlite::Connection;
 use serde_json::{Value, json};
 use tokio::sync::broadcast;
 
-use crate::adapter::{AppInfo, AuthPolicy, Catalog};
-use crate::session::{Caller, unauthorized};
-use crate::store::{AppVersion, FileVersion, Store, SyncReport};
-use crate::{ApiError, AppState, blocking, json_error};
+use crate::adapter::Catalog;
+use crate::construct::store as cstore;
+use crate::source::SourceManifest;
+use crate::store::Store;
+use crate::{AppState, Pod, blocking, json_error};
 
-/// Response header carrying the served app version (the client's one
-/// monotonic "layout version" per workspace).
-pub const VERSION_HEADER: &str = "x-construct-layout-version";
 /// Default SSE keepalive interval.
 pub const DEFAULT_KEEPALIVE: Duration = Duration::from_secs(15);
 /// Default cap on open SSE streams per session token. A client keeps one
 /// stream open; the headroom covers a pod token shared by a few devices and
 /// dead connections the server has not noticed yet.
 pub const DEFAULT_SSE_STREAMS_PER_TOKEN: usize = 8;
-/// Capacity of the layout broadcast channel (a lagging subscriber is caught
-/// up with the current version, so losing intermediate events is harmless).
+/// Capacity of the event broadcast channels (a lagging subscriber is caught
+/// up with the current root, so losing intermediate events is harmless).
 pub const CHANNEL_CAPACITY: usize = 64;
-/// The version a [`LayoutEvent`] carries when a custom app was deleted:
-/// its streams send `event: deleted` and end.
-pub const DELETED_VERSION: i64 = -1;
-/// Default and largest page of `GET /v1/apps/:id/versions`.
-pub const DEFAULT_VERSIONS_LIMIT: i64 = 20;
-pub const MAX_VERSIONS_LIMIT: i64 = 100;
 
 // ---------- layout files ----------
 
@@ -107,78 +56,6 @@ pub struct LayoutSource {
     /// `NNNN` (4 digits).
     pub name: &'static str,
     pub text: &'static str,
-}
-
-/// A parsed, validated layout file.
-#[derive(Debug, Clone, PartialEq)]
-pub struct LayoutFile {
-    pub app_id: String,
-    pub number: u32,
-    /// `<dir>/<app>/NNNN.json` ([`LayoutSource::dir`]).
-    pub path: String,
-    pub note: String,
-    pub layout: UiNode,
-    /// [`file_hash`] of the file's note and layout.
-    pub file_hash: String,
-    /// Named parts other layouts may reference (`"parts"`, decision
-    /// `layout-parts`).
-    pub parts: std::collections::BTreeMap<String, UiNode>,
-}
-
-impl LayoutFile {
-    fn to_version(&self) -> FileVersion {
-        FileVersion {
-            key: format!("{}/{:04}", self.app_id, self.number),
-            number: self.number,
-            path: self.path.clone(),
-            note: self.note.clone(),
-            json: to_json(&self.layout),
-            file_hash: self.file_hash.clone(),
-            meta_json: (!self.parts.is_empty()).then(|| {
-                let parts: serde_json::Map<String, Value> = self
-                    .parts
-                    .iter()
-                    .map(|(k, v)| (k.clone(), node_value(v)))
-                    .collect();
-                json!({ "parts": parts }).to_string()
-            }),
-        }
-    }
-}
-
-/// The hash the append-only check compares: SHA-256 of the canonical JSON
-/// (sorted keys, no whitespace) of `{"layout": <the file's layout as
-/// written>, "note": <trimmed note>}`. Reformatting or reordering keys in the
-/// file does not change it, and neither does a change to the Rust types
-/// (field order, a new defaulted field), unlike a hash of the re-serialized
-/// `UiNode`.
-pub fn file_hash(note: &str, layout: &Value) -> String {
-    file_hash_with_parts(note, layout, None)
-}
-
-/// [`file_hash`] of a file that also declares `"parts"` (they are hashed
-/// with it; files without parts hash as before).
-pub fn file_hash_with_parts(note: &str, layout: &Value, parts: Option<&Value>) -> String {
-    let mut doc = json!({ "layout": layout, "note": note });
-    if let Some(p) = parts {
-        doc["parts"] = p.clone();
-    }
-    let mut out = String::new();
-    write_canonical(&doc, &mut out);
-    crate::store::content_hash(&out)
-}
-
-/// SHA-256 of `v`'s canonical JSON (sorted keys, no whitespace).
-pub fn canonical_hash(v: &Value) -> String {
-    let mut out = String::new();
-    write_canonical(v, &mut out);
-    crate::store::content_hash(&out)
-}
-
-/// The canonical JSON the hashes use (sorted keys, no whitespace), shared
-/// with the construct's object ids (`construct_elements::canonical`).
-fn write_canonical(v: &Value, out: &mut String) {
-    construct_elements::canonical::write_canonical(v, out);
 }
 
 /// Whether this build knows the intent tag (an unknown one, and the
@@ -226,218 +103,6 @@ fn collect_unknown_intent_tags(
     }
 }
 
-/// Parse and validate one file of an app in `catalog` (`Err` names the file).
-pub fn parse_file(catalog: &Catalog, src: &LayoutSource) -> Result<LayoutFile, String> {
-    parse_file_with(catalog, src, catalog.component_defs())
-}
-
-/// [`parse_file`] with these server components (`defs`) instead of this
-/// build's: what a file expanded to when its components were older.
-pub fn parse_file_with(
-    catalog: &Catalog,
-    src: &LayoutSource,
-    defs: &crate::parts::Pending,
-) -> Result<LayoutFile, String> {
-    let path = format!("{}/{}/{}.json", src.dir, src.app_id, src.name);
-    let fail = |e: String| format!("{path}: {e}");
-    if !catalog.is_app(src.app_id) {
-        return Err(fail(format!("'{}' is not an app", src.app_id)));
-    }
-    let number = match src.name.parse::<u32>() {
-        Ok(n) if n >= 1 && src.name.len() == 4 && src.name.bytes().all(|b| b.is_ascii_digit()) => n,
-        _ => {
-            return Err(fail(
-                "file names are 4-digit version numbers from 0001 (NNNN.json)".into(),
-            ));
-        }
-    };
-    let doc: Value =
-        serde_json::from_str(src.text).map_err(|e| fail(format!("not valid JSON: {e}")))?;
-    let Value::Object(obj) = &doc else {
-        return Err(fail(r#"expected {"note": "...", "layout": {...}}"#.into()));
-    };
-    if let Some(k) = obj
-        .keys()
-        .find(|k| !matches!(k.as_str(), "note" | "schema" | "layout" | "parts"))
-    {
-        return Err(fail(format!(
-            "unknown key '{k}' (only \"note\", \"layout\" and \"parts\")"
-        )));
-    }
-    let note = obj
-        .get("note")
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|n| !n.is_empty())
-        .ok_or_else(|| fail("\"note\" must be a non-empty string".into()))?
-        .to_owned();
-    let written = obj
-        .get("layout")
-        .ok_or_else(|| fail("\"layout\" is missing".into()))?;
-    // Server components (decision `plumbing-and-porcelain`) are expanded
-    // here: the pod records the plumbing the file stands for.
-    let expanded;
-    let layout = if src.text.contains(crate::components::USE_TYPE) {
-        expanded = crate::parts::expand_file_with(catalog, written, defs)
-            .map_err(|e| fail(format!("invalid layout: {e}")))?;
-        &expanded
-    } else {
-        written
-    };
-    let parsed = crate::validate::validate_structure(src.app_id, layout)
-        .map_err(|e| fail(format!("invalid layout: {e}")))?;
-    // An unknown intent tag would deserialize as `ActionIntent::Unknown` and
-    // ship as a dead action (lenient only for legacy stored versions).
-    if crate::validate::intents(&parsed)
-        .iter()
-        .any(|i| matches!(i, protocol::ActionIntent::Unknown))
-    {
-        let mut found = Vec::new();
-        // Pointers into the file as written.
-        unknown_intent_tags(written, "/layout", &mut found);
-        let what = match found.first() {
-            Some((at, tag)) => format!("unknown action intent '{tag}' at {at}"),
-            None => "unknown action intent".to_owned(),
-        };
-        return Err(fail(format!(
-            "invalid layout: {what} (a typo? this build does not know it)"
-        )));
-    }
-    // Node types this build doesn't know are refused (D37). Versions deployed
-    // before a node type was removed stay in pods' history, served as they are.
-    let unknown = crate::validate::unknown_node_types(&parsed);
-    if let Some(t) = unknown.first() {
-        return Err(fail(format!(
-            "invalid layout: unknown node type '{t}' (a typo? this build does not know it)"
-        )));
-    }
-    // Layouts reach only what their app's data sources declare (decision
-    // `custom-apps-and-data-sources`).
-    crate::source::check_routes(&parsed, &catalog.app_sources(src.app_id))
-        .map_err(|e| fail(format!("invalid layout: {e}")))?;
-    // `"schema"` (D36): deployed files keep it, so it is allowed and not
-    // read; features replaced it (decision `named-vocabulary`).
-    let raw_parts = obj.get("parts");
-    let mut parts = std::collections::BTreeMap::new();
-    if let Some(p) = raw_parts {
-        let Value::Object(map) = p else {
-            return Err(fail("\"parts\" must be an object of named nodes".into()));
-        };
-        for (name, v) in map {
-            if name.is_empty()
-                || name.contains(':')
-                || !name
-                    .bytes()
-                    .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_')
-            {
-                return Err(fail(format!("part name '{name}' must be [a-z0-9_]+")));
-            }
-            let v = if v.to_string().contains(crate::components::USE_TYPE) {
-                crate::parts::expand_file_with(catalog, v, defs)
-                    .map_err(|e| fail(format!("part '{name}': {e}")))?
-            } else {
-                v.clone()
-            };
-            let node: UiNode = serde_json::from_value(v)
-                .map_err(|e| fail(format!("part '{name}' is not a node: {e}")))?;
-            if let Some(t) = crate::validate::unknown_node_types(&node).first() {
-                return Err(fail(format!("part '{name}': unknown node type '{t}'")));
-            }
-            crate::source::check_routes(&node, &catalog.app_sources(src.app_id))
-                .map_err(|e| fail(format!("part '{name}': {e}")))?;
-            parts.insert(name.clone(), node);
-        }
-    }
-    let file_hash = file_hash_with_parts(&note, written, raw_parts);
-    Ok(LayoutFile {
-        parts,
-        app_id: src.app_id.to_owned(),
-        number,
-        path,
-        note,
-        layout: parsed,
-        file_hash,
-    })
-}
-
-/// Parse every source; per app the numbers must run without gaps from the
-/// app's lowest file (`0001`, or a later one once older files are retired:
-/// decision `retired-layout-files`).
-pub fn parse_files(catalog: &Catalog, sources: &[LayoutSource]) -> Result<Vec<LayoutFile>, String> {
-    let mut files = sources
-        .iter()
-        .map(|s| parse_file(catalog, s))
-        .collect::<Result<Vec<_>, _>>()?;
-    files.sort_by(|a, b| (a.app_id.as_str(), a.number).cmp(&(b.app_id.as_str(), b.number)));
-    for a in catalog.apps() {
-        let mut app_files = files.iter().filter(|f| f.app_id == a.id).peekable();
-        let first = app_files.peek().map_or(1, |f| f.number);
-        for (expected, f) in (first..).zip(app_files) {
-            if f.number != expected {
-                return Err(if f.number < expected {
-                    format!("{} is listed twice", f.path)
-                } else {
-                    format!(
-                        "{}: layout files are numbered without gaps, expected {:04}.json next",
-                        f.path, expected
-                    )
-                });
-            }
-        }
-    }
-    Ok(files)
-}
-
-/// Append every new layout file of the catalog's apps (one transaction) to
-/// the store; see the module docs. Blocking; idempotent. `Err` is the message
-/// to stop the start with.
-pub fn sync(store: &Store, catalog: &Catalog) -> Result<SyncReport, String> {
-    sync_sources(store, catalog, catalog.files())
-}
-
-/// [`sync`] over any set of sources (tests).
-pub fn sync_sources(
-    store: &Store,
-    catalog: &Catalog,
-    sources: &[LayoutSource],
-) -> Result<SyncReport, String> {
-    let files = parse_files(catalog, sources)?;
-    let apps: Vec<(&str, Vec<FileVersion>)> = catalog
-        .apps()
-        .map(|a| {
-            let versions = files
-                .iter()
-                .filter(|f| f.app_id == a.id)
-                .map(LayoutFile::to_version)
-                .collect();
-            (a.id, versions)
-        })
-        .collect();
-    store
-        .sync_layout_files(&apps)
-        .map_err(|e| format!("syncing the layout files: {e}"))?
-}
-
-/// An app's oldest layout file in this build (its lowest-numbered one; see
-/// [`parse_files`]). Panics if the embedded files are invalid (the pod would
-/// not start either).
-pub fn builtin(catalog: &Catalog, workspace_id: &str) -> Option<UiNode> {
-    let src = catalog
-        .files()
-        .iter()
-        .filter(|f| f.app_id == workspace_id)
-        .min_by(|a, b| a.name.cmp(b.name))?;
-    Some(
-        parse_file(catalog, src)
-            .expect("embedded layout files are valid")
-            .layout,
-    )
-}
-
-fn to_json(node: &UiNode) -> String {
-    serde_json::to_string(node).expect("a UiNode serializes")
-}
-
 /// A layout as JSON, through its text form: `serde_json::to_value` would
 /// widen `f32` fields (`aspect_ratio` 0.8 -> 0.800000011920929).
 pub fn node_value(node: &UiNode) -> Value {
@@ -445,40 +110,6 @@ pub fn node_value(node: &UiNode) -> Value {
         .ok()
         .and_then(|t| serde_json::from_str(&t).ok())
         .unwrap_or(Value::Null)
-}
-
-fn from_json(json: &str) -> rusqlite::Result<UiNode> {
-    serde_json::from_str(json).map_err(|e| {
-        rusqlite::Error::FromSqlConversionFailure(0, rusqlite::types::Type::Text, Box::new(e))
-    })
-}
-
-// ---------- serving ----------
-
-/// What a workspace serves: its app's latest version and layout.
-#[derive(Debug, Clone, PartialEq)]
-pub struct Served {
-    pub version: i64,
-    pub layout: UiNode,
-}
-
-/// The latest layout of an app; `None` if the workspace is not an app or has
-/// no versions (never after [`sync`]). Blocking.
-pub fn active(
-    store: &Store,
-    catalog: &Catalog,
-    workspace_id: &str,
-) -> rusqlite::Result<Option<Served>> {
-    if !catalog.is_app(workspace_id) && !crate::custom::is_custom_id(workspace_id) {
-        return Ok(None);
-    }
-    match store.app_latest(workspace_id)? {
-        Some((v, json)) => Ok(Some(Served {
-            version: v.version,
-            layout: from_json(&crate::parts::serve(store, catalog, &json, None))?,
-        })),
-        None => Ok(None),
-    }
 }
 
 /// What the client draws: the features in [`protocol::FEATURES_HEADER`].
@@ -492,140 +123,6 @@ pub fn client_caps(headers: &HeaderMap) -> protocol::ClientCaps {
         Some(features) => protocol::ClientCaps::from_header(features),
         None => protocol::ClientCaps::unfiltered(),
     }
-}
-
-/// The newest version of an app `client` can draw (by the features it uses,
-/// [`AppVersion::compatibility`]): metadata
-/// only. `None` if the app has no version that fits. Blocking.
-pub fn newest_compatible(
-    store: &Store,
-    app_id: &str,
-    client: &protocol::ClientCaps,
-) -> rusqlite::Result<Option<AppVersion>> {
-    let mut before = None;
-    loop {
-        let page = store.app_versions(app_id, before, DEFAULT_VERSIONS_LIMIT)?;
-        let Some(last) = page.last() else {
-            return Ok(None);
-        };
-        before = Some(last.version);
-        if let Some(v) = page
-            .into_iter()
-            .find(|v| v.compatibility(client) == protocol::Compatibility::Compatible)
-        {
-            return Ok(Some(v));
-        }
-    }
-}
-
-/// The newest version of an app `client` can draw ([`newest_compatible`])
-/// with its layout; `None` if the workspace is not an app or no version fits.
-/// Blocking.
-pub fn active_for(
-    store: &Store,
-    catalog: &Catalog,
-    workspace_id: &str,
-    client: &protocol::ClientCaps,
-) -> rusqlite::Result<Option<Served>> {
-    if !catalog.is_app(workspace_id) && !crate::custom::is_custom_id(workspace_id) {
-        return Ok(None);
-    }
-    let Some(latest) = store.app_latest_meta(workspace_id)? else {
-        return Ok(None);
-    };
-    // The newest version whose recorded features fit and, when it uses
-    // components or parts, whose expansion today fits too (a use that
-    // follows a component can expand to newer vocabulary than was recorded;
-    // decision `plumbing-and-porcelain`).
-    let mut before = None;
-    let (v, served) = 'found: loop {
-        let page = store.app_versions(workspace_id, before, DEFAULT_VERSIONS_LIMIT)?;
-        let Some(last) = page.last() else {
-            return Ok(None);
-        };
-        before = Some(last.version);
-        for v in page {
-            if v.compatibility(client) != protocol::Compatibility::Compatible {
-                continue;
-            }
-            let Some((_, json)) = store.app_version(workspace_id, v.version)? else {
-                continue;
-            };
-            let served = crate::parts::serve(store, catalog, &json, Some(client));
-            if (crate::parts::may_hold_refs(&json) || v.is_workspace())
-                && let Ok(node) = serde_json::from_str::<UiNode>(&served)
-                && client.can_draw(&protocol::required_features(&node))
-                    != protocol::Compatibility::Compatible
-            {
-                tracing::info!(
-                    app = workspace_id,
-                    version = v.version,
-                    "skipped a version whose expansion the client can't draw"
-                );
-                continue;
-            }
-            break 'found (v, served);
-        }
-    };
-    if v.version != latest.version {
-        tracing::info!(
-            app = workspace_id,
-            latest = latest.version,
-            served = v.version,
-            missing = ?latest
-                .features
-                .iter()
-                .filter(|f| !client.features.contains(*f))
-                .collect::<Vec<_>>(),
-            "served an older layout version the client can draw"
-        );
-    }
-    Ok(Some(Served {
-        version: v.version,
-        layout: from_json(&served)?,
-    }))
-}
-
-/// Async [`active_for`] with the client read from the request headers.
-pub async fn active_for_client(
-    state: &Arc<AppState>,
-    workspace_id: &str,
-    headers: &HeaderMap,
-) -> Result<Option<Served>, ApiError> {
-    let ws = workspace_id.to_owned();
-    let client = client_caps(headers);
-    let st = state.clone();
-    blocking(state, move |s| active_for(s, st.catalog(), &ws, &client)).await
-}
-
-/// `(version, layout)`; see [`active`]. Blocking.
-pub fn latest(
-    store: &Store,
-    catalog: &Catalog,
-    workspace_id: &str,
-) -> rusqlite::Result<Option<(i64, UiNode)>> {
-    Ok(active(store, catalog, workspace_id)?.map(|s| (s.version, s.layout)))
-}
-
-/// Append `layout` as the app's next version (source `manual`) WITHOUT a
-/// layout file. Tests and tooling only: no HTTP route reaches it, and a real
-/// pod gets new versions from files. Does not broadcast (see
-/// [`AppState::publish_layout`]). Blocking.
-pub fn append_version(
-    store: &Store,
-    app_id: &str,
-    layout: &UiNode,
-    note: Option<&str>,
-) -> rusqlite::Result<i64> {
-    store.append_app_version(app_id, &to_json(layout), crate::store::SOURCE_MANUAL, note)
-}
-
-/// `X-Construct-Layout-Version: <app version>`.
-pub fn served_headers(version: i64) -> [(HeaderName, HeaderValue); 1] {
-    [(
-        HeaderName::from_static(VERSION_HEADER),
-        HeaderValue::from(version),
-    )]
 }
 
 // ---------- ids ----------
@@ -689,357 +186,10 @@ pub fn rfc3339(secs: i64) -> String {
     )
 }
 
-// ---------- routes ----------
-
-pub fn router() -> Router<Arc<AppState>> {
-    Router::new()
-        .route("/v1/apps", get(list_apps))
-        .route("/v1/apps/{id}/versions", get(app_versions))
-        .route("/v1/apps/{id}/versions/{n}", get(app_version))
-        .route("/v1/workspaces/{id}/events", get(events))
-}
-
-/// 400 for a malformed id, 404 `app_not_found` for an unknown one: the
-/// app's id.
-async fn known_app(state: &Arc<AppState>, id: &str) -> Result<String, Response> {
-    if let Some(r) = reject_invalid_workspace_id(id) {
-        return Err(r);
-    }
-    match state.app(id).await {
-        Ok(Some(a)) => Ok(a.id().to_owned()),
-        Ok(None) => Err(json_error(
-            StatusCode::NOT_FOUND,
-            json!({ "error": "app_not_found", "id": id }),
-        )),
-        Err(e) => Err(e.into_response()),
-    }
-}
-
-/// One version's metadata for `client`: `features` (the layout features it
-/// uses), `compatible`, and
-/// `incompatible` (`update_required` | `retired`) when the client cannot draw
-/// it.
-fn version_json(v: &AppVersion, client: &protocol::ClientCaps) -> Value {
-    let compat = v.compatibility(client);
-    let mut out = json!({
-        "version": v.version,
-        "created_at": rfc3339(v.created_at),
-        "source": v.source,
-        "compatible": compat.reason().is_none(),
-    });
-    if let Some(n) = &v.note {
-        out["note"] = json!(n);
-    }
-    if let Some(a) = &v.author {
-        out["author"] = json!(a);
-    }
-    if !v.features.is_empty() {
-        out["features"] = json!(v.features);
-    }
-    if let Some(r) = compat.reason() {
-        out["incompatible"] = json!(r);
-    }
-    out
-}
-
-/// `GET /v1/apps[?all=1][&blueprints=1]` -> `{"apps": [{id, title, icon,
-/// kind, hidden, latest_version, latest_compatible_version, updated_at,
-/// updates_from?}]}` (public): the pod's own apps (`kind` `custom`, the
-/// home app among them) oldest first; with `blueprints=1` the built-in
-/// blueprints first (`kind` `builtin`, decision `blueprints-and-home`). Hidden apps (`PUT /v1/apps/:id/hidden`) are listed only
-/// with `?all=1`. Dev apps only with `CONSTRUCT_SHOW_DEV_APPS=1`.
-/// `latest_compatible_version` is the newest version the client
-/// ([`protocol::FEATURES_HEADER`]) can draw,
-/// i.e. what opening the app serves it (null if none fits).
-async fn list_apps(
-    State(state): State<Arc<AppState>>,
-    Query(query): Query<HashMap<String, String>>,
-    headers: HeaderMap,
-) -> Response {
-    let client = client_caps(&headers);
-    let flag = |k: &str| query.get(k).is_some_and(|v| v == "1" || v == "true");
-    let all = flag("all");
-    // A switched pod's layouts are its construct's names (decision
-    // `content-addressed-construct`); none are hidden.
-    if crate::construct_switched(&state).await {
-        let st = state.clone();
-        let blueprints = flag("blueprints");
-        let rows = blocking(&state, move |_| crate::construct::http::app_rows(&st)).await;
-        return match rows {
-            Ok(mut rows) => {
-                if blueprints {
-                    let bp: Vec<Value> = state
-                        .catalog()
-                        .apps()
-                        .filter(|a| !a.dev || state.show_dev_apps())
-                        .map(|a| {
-                            json!({ "id": a.id, "title": a.title, "icon": a.icon,
-                            "kind": "builtin", "hidden": false })
-                        })
-                        .collect();
-                    rows.splice(0..0, bp);
-                }
-                Json(json!({ "apps": rows })).into_response()
-            }
-            Err(e) => e.into_response(),
-        };
-    }
-    // Built-in apps are blueprints (decision `blueprints-and-home`): a pod
-    // lists only its own apps, and the blueprints with `?blueprints=1`.
-    let builtin: Vec<AppInfo> = if flag("blueprints") {
-        state
-            .catalog()
-            .apps()
-            .filter(|a| !a.dev || state.show_dev_apps())
-            .copied()
-            .collect()
-    } else {
-        Vec::new()
-    };
-    let st = state.clone();
-    let listed = blocking(&state, move |s| {
-        let hidden = crate::custom::hidden_apps(s)?;
-        let dismissed = crate::custom::dismissed(s)?;
-        let custom = s.with_conn(crate::custom::custom_apps_on)?;
-        let mut apps: Vec<crate::custom::AppRef> = builtin
-            .into_iter()
-            .map(crate::custom::AppRef::Builtin)
-            .chain(custom.into_iter().map(crate::custom::AppRef::Custom))
-            .collect();
-        if !all {
-            apps.retain(|a| !hidden.iter().any(|h| h == a.id()));
-        }
-        apps.into_iter()
-            .map(|a| {
-                let latest = s.app_latest_meta(a.id())?;
-                let compatible = newest_compatible(s, a.id(), &client)?.map(|v| v.version);
-                let is_hidden = hidden.iter().any(|h| h == a.id());
-                let updates = match &a {
-                    crate::custom::AppRef::Custom(c) => {
-                        crate::custom::updates_from(s, st.catalog(), &c.id, &client, &dismissed)?
-                    }
-                    crate::custom::AppRef::Builtin(_) => None,
-                };
-                Ok((a, is_hidden, latest, compatible, updates))
-            })
-            .collect::<rusqlite::Result<Vec<_>>>()
-    })
-    .await;
-    let listed = match listed {
-        Ok(l) => l,
-        Err(e) => return e.into_response(),
-    };
-    let apps: Vec<Value> = listed
-        .iter()
-        .map(|(a, hidden, v, compatible, updates)| {
-            let mut row = json!({
-                "id": a.id(),
-                "title": a.title(),
-                "icon": a.icon(),
-                "kind": a.kind(),
-                "hidden": hidden,
-                "latest_version": v.as_ref().map(|v| v.version),
-                "latest_compatible_version": compatible,
-                "updated_at": v.as_ref().map(|v| rfc3339(v.created_at)),
-            });
-            if let Some(u) = updates {
-                row["updates_from"] = u.clone();
-            }
-            row
-        })
-        .collect();
-    Json(json!({ "apps": apps })).into_response()
-}
-
-fn bad_query() -> Response {
-    json_error(
-        StatusCode::BAD_REQUEST,
-        json!({ "error": "invalid_request",
-                "expected": { "limit": format!("integer 1..={MAX_VERSIONS_LIMIT}"), "before": "integer >= 1" } }),
-    )
-}
-
-/// `GET /v1/apps/:id/versions[?limit=1..=100 (20)&before=N]` ->
-/// `{app_id, latest_version, latest_compatible_version, versions: [{version,
-/// created_at, source, note?, features?, compatible, incompatible?}],
-/// next_before?}` newest first; `next_before` iff older versions exist (pass
-/// it as `before` for the next page). `compatible` and
-/// `latest_compatible_version` are for the client's
-/// [`protocol::FEATURES_HEADER`].
-async fn app_versions(
-    State(state): State<Arc<AppState>>,
-    Path(id): Path<String>,
-    Query(query): Query<HashMap<String, String>>,
-    headers: HeaderMap,
-) -> Response {
-    if crate::custom::is_custom_id(&id) && crate::construct_switched(&state).await {
-        let (st, lookup) = (state.clone(), id.clone());
-        return match blocking(&state, move |_| {
-            crate::construct::http::versions(&st, &lookup)
-        })
-        .await
-        {
-            Ok(Some(v)) => Json(v).into_response(),
-            Ok(None) => json_error(
-                StatusCode::NOT_FOUND,
-                json!({ "error": "app_not_found", "id": id }),
-            ),
-            Err(e) => e.into_response(),
-        };
-    }
-    let app_id = match known_app(&state, &id).await {
-        Ok(a) => a,
-        Err(r) => return r,
-    };
-    let parse = |k: &str| {
-        query
-            .get(k)
-            .map(|v| v.trim().parse::<i64>().ok().filter(|n| *n >= 1))
-    };
-    let limit = match parse("limit") {
-        None => DEFAULT_VERSIONS_LIMIT,
-        Some(Some(n)) if n <= MAX_VERSIONS_LIMIT => n,
-        Some(_) => return bad_query(),
-    };
-    let before = match parse("before") {
-        None => None,
-        Some(Some(n)) => Some(n),
-        Some(None) => return bad_query(),
-    };
-    let client = client_caps(&headers);
-    let lookup = app_id.clone();
-    let result = blocking(&state, {
-        let client = client.clone();
-        move |s| {
-            let latest = s.app_latest_meta(&lookup)?.map(|v| v.version);
-            let compatible = newest_compatible(s, &lookup, &client)?.map(|v| v.version);
-            let rows = s.app_versions(&lookup, before, limit + 1)?;
-            Ok((latest, compatible, rows))
-        }
-    })
-    .await;
-    let (latest, compatible, rows) = match result {
-        Ok(x) => x,
-        Err(e) => return e.into_response(),
-    };
-    let more = rows.len() as i64 > limit;
-    let page = &rows[..rows.len().min(limit as usize)];
-    let mut body = json!({
-        "app_id": app_id,
-        "latest_version": latest,
-        "latest_compatible_version": compatible,
-        "versions": page
-            .iter()
-            .map(|v| version_json(v, &client))
-            .collect::<Vec<_>>(),
-    });
-    if more && let Some(last) = page.last() {
-        body["next_before"] = json!(last.version);
-    }
-    Json(body).into_response()
-}
-
-/// `GET /v1/apps/:id/versions/:n` -> `{app_id, version, created_at, source,
-/// note?, features?, compatible, incompatible?, layout}` (the layout is served
-/// even when incompatible: it is history to look at).
-async fn app_version(
-    State(state): State<Arc<AppState>>,
-    Path((id, n)): Path<(String, String)>,
-    headers: HeaderMap,
-) -> Response {
-    if crate::custom::is_custom_id(&id)
-        && crate::construct_switched(&state).await
-        && let Some(n) = n.parse::<i64>().ok().filter(|n| *n >= 1)
-    {
-        let (st, lookup) = (state.clone(), id.clone());
-        return match blocking(&state, move |_| {
-            crate::construct::http::version(&st, &lookup, n)
-        })
-        .await
-        {
-            Ok(Some(v)) => Json(v).into_response(),
-            Ok(None) => json_error(
-                StatusCode::NOT_FOUND,
-                json!({ "error": "version_not_found", "app_id": id, "version": n }),
-            ),
-            Err(e) => e.into_response(),
-        };
-    }
-    let app_id = match known_app(&state, &id).await {
-        Ok(a) => a,
-        Err(r) => return r,
-    };
-    let Some(n) = n.parse::<i64>().ok().filter(|n| *n >= 1) else {
-        return json_error(
-            StatusCode::BAD_REQUEST,
-            json!({ "error": "invalid_request", "expected": { "version": "integer >= 1" } }),
-        );
-    };
-    let lookup = app_id.clone();
-    let client = client_caps(&headers);
-    let st = state.clone();
-    let found = blocking(&state, move |s| {
-        // A custom version's built-in parts, as this client would be served them.
-        Ok(s.app_version(&lookup, n)?.map(|(v, json)| {
-            let served = crate::parts::serve(s, st.catalog(), &json, Some(&client));
-            (v, served)
-        }))
-    })
-    .await;
-    match found {
-        Ok(Some((v, stored))) => {
-            let mut body = version_json(&v, &client_caps(&headers));
-            body["app_id"] = json!(app_id);
-            body["layout"] = match from_json(&stored) {
-                Ok(layout) => node_value(&layout),
-                // A legacy version this build cannot read as a UiNode: serve
-                // what was stored rather than fail (it is history to look at).
-                Err(e) => match serde_json::from_str::<Value>(&stored) {
-                    Ok(raw) => {
-                        tracing::warn!(
-                            app = %app_id,
-                            version = n,
-                            "serving a stored layout that is not a valid UiNode as is: {e}"
-                        );
-                        raw
-                    }
-                    Err(e) => {
-                        tracing::error!(
-                            app = %app_id,
-                            version = n,
-                            "stored layout is not JSON: {e}"
-                        );
-                        return json_error(
-                            StatusCode::INTERNAL_SERVER_ERROR,
-                            json!({ "error": "corrupt_version", "app_id": app_id, "version": n,
-                                    "detail": "the stored layout of this version is not valid JSON" }),
-                        );
-                    }
-                },
-            };
-            Json(body).into_response()
-        }
-        Ok(None) => json_error(
-            StatusCode::NOT_FOUND,
-            json!({ "error": "version_not_found", "app_id": app_id, "version": n }),
-        ),
-        Err(e) => e.into_response(),
-    }
-}
-
-// ---------- push ----------
+// ---------- events ----------
 
 use crate::notify::NotifyEvent;
 
-/// An app's latest version changed (what the SSE channel carries).
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct LayoutEvent {
-    pub workspace_id: String,
-    pub version: i64,
-}
-
-/// A session's data from one source changed (D50): `event: data` to that
-/// session's subscribers of the apps that draw on `source` only.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DataEvent {
     /// A data source id (an adapter's name).
@@ -1068,7 +218,11 @@ pub struct DataScope {
     pub detail: serde_json::Map<String, Value>,
 }
 
-fn data_event(workspace_id: &str, source: Option<&str>, scope: Option<&DataScope>) -> Event {
+pub(crate) fn data_event(
+    workspace_id: &str,
+    source: Option<&str>,
+    scope: Option<&DataScope>,
+) -> Event {
     let mut body = json!({ "workspace_id": workspace_id });
     if let (Some(source), Some(scope)) = (source, scope) {
         body["source"] = json!(source);
@@ -1081,18 +235,8 @@ fn data_event(workspace_id: &str, source: Option<&str>, scope: Option<&DataScope
     Event::default().event("data").data(body.to_string())
 }
 
-fn layout_event(ev: &LayoutEvent) -> Event {
-    Event::default()
-        .event("layout")
-        .data(json!({ "workspace_id": ev.workspace_id, "version": ev.version }).to_string())
-}
-
-/// The next notification event of a stream that has notifications (never
-/// resolves for one that doesn't). A lag only loses events (the client
-/// refreshes its counts when it reconnects), so it is skipped; a closed
-/// channel stops notifications on this stream.
 /// The next tick of a stream's session re-check; never without one.
-async fn tick(i: &mut Option<tokio::time::Interval>) {
+pub(crate) async fn tick(i: &mut Option<tokio::time::Interval>) {
     match i {
         Some(i) => {
             i.tick().await;
@@ -1104,7 +248,7 @@ async fn tick(i: &mut Option<tokio::time::Interval>) {
 /// Whether the session an events stream was opened with is still valid
 /// (`None`: no session, nothing to revoke). A store error counts as invalid:
 /// the client reconnects and is checked afresh.
-async fn session_still_valid(state: &Arc<AppState>, hash: Option<&str>) -> bool {
+pub(crate) async fn session_still_valid(state: &Arc<AppState>, hash: Option<&str>) -> bool {
     let Some(hash) = hash.map(str::to_owned) else {
         return true;
     };
@@ -1158,7 +302,9 @@ impl Drop for SseSlot {
     }
 }
 
-async fn recv_notify(rx: &mut Option<broadcast::Receiver<NotifyEvent>>) -> Option<NotifyEvent> {
+pub(crate) async fn recv_notify(
+    rx: &mut Option<broadcast::Receiver<NotifyEvent>>,
+) -> Option<NotifyEvent> {
     let Some(r) = rx.as_mut() else {
         return std::future::pending().await;
     };
@@ -1175,7 +321,7 @@ async fn recv_notify(rx: &mut Option<broadcast::Receiver<NotifyEvent>>) -> Optio
     }
 }
 
-fn notify_event(ev: &NotifyEvent) -> Event {
+pub(crate) fn notify_event(ev: &NotifyEvent) -> Event {
     match ev {
         NotifyEvent::New(n) => Event::default()
             .event(protocol::notify::NOTIFICATION_EVENT)
@@ -1186,447 +332,476 @@ fn notify_event(ev: &NotifyEvent) -> Event {
     }
 }
 
-fn workspace_not_found(id: &str) -> Response {
-    if let Some(r) = reject_invalid_workspace_id(id) {
-        return r;
-    }
-    json_error(
-        StatusCode::NOT_FOUND,
-        json!({ "error": "workspace_not_found", "id": truncated_id(id) }),
-    )
-}
+// ---------- ids ----------
 
-/// The version a layout event announces to a subscriber: the newest one
-/// `client` can draw ([`newest_compatible`]). Blocking.
-fn announced_version(
-    store: &Store,
-    app_id: &str,
-    client: &protocol::ClientCaps,
-) -> rusqlite::Result<Option<i64>> {
-    Ok(newest_compatible(store, app_id, client)?.map(|v| v.version))
-}
-
-async fn announced_async(
-    state: &Arc<AppState>,
-    app_id: &str,
-    client: protocol::ClientCaps,
-) -> Result<Option<i64>, ApiError> {
-    let id = app_id.to_owned();
-    // A switched pod's layouts announce their names' history (decision
-    // `content-addressed-construct`).
-    if crate::custom::is_custom_id(&id) && crate::construct_switched(state).await {
-        return blocking(state, move |s| {
-            let seq = s.with_conn(|c| crate::construct::store::last_seq(c, &id))?;
-            Ok((seq > 0).then_some(seq))
+/// Whether `id` has the shape of one of the pod's own layouts: `c-` and 10
+/// base32 characters, or the pod's own [`crate::HOME_APP`] (a blueprint's
+/// id never holds `-`).
+pub fn is_layout_id(id: &str) -> bool {
+    id == crate::HOME_APP
+        || id.strip_prefix("c-").is_some_and(|rest| {
+            rest.len() == 10
+                && rest
+                    .bytes()
+                    .all(|b| b.is_ascii_lowercase() || (b'2'..=b'7').contains(&b))
         })
-        .await;
-    }
-    blocking(state, move |s| announced_version(s, &id, &client)).await
 }
 
-/// The `construct` event a home stream of a switched pod sends: the root
-/// for this client's features.
-async fn construct_event(state: &Arc<AppState>, client: protocol::ClientCaps) -> Option<Event> {
-    let st = state.clone();
-    let r = tokio::task::spawn_blocking(move || {
-        let root = crate::construct::seal::root_for(&st, &client)?;
-        let g = st.store().with_conn(crate::construct::store::generation)?;
-        Ok::<_, rusqlite::Error>((root, g))
-    })
-    .await
-    .ok()?
-    .ok()?;
-    let (Some(root), g) = r else { return None };
-    Some(
-        Event::default()
-            .event("construct")
-            .data(json!({ "root": root, "generation": g }).to_string()),
-    )
+/// A new layout id.
+pub fn new_layout_id() -> String {
+    const ALPHABET: &[u8; 32] = b"abcdefghijklmnopqrstuvwxyz234567";
+    let mut buf = [0u8; 10];
+    getrandom::fill(&mut buf).expect("OS random number generator");
+    let tail: String = buf
+        .iter()
+        .map(|b| ALPHABET[usize::from(*b) % 32] as char)
+        .collect();
+    format!("c-{tail}")
 }
 
-/// Other layouts' `(id, announced version)`s and deleted layouts' ids.
-type Others = (Vec<(String, i64)>, Vec<String>);
+// ---------- writes ----------
 
-/// Home's stream (decision `layouts-not-apps`) on connecting and after a
-/// lag: every other layout of the pod with the version it announces, and
-/// the custom layouts deleted but not purged yet. A client that was not
-/// listening while one changed (in the background, offline, the server
-/// restarting) learns of it here; it ignores layouts it hasn't opened and
-/// versions it already has. Blocking.
-fn others_now(
-    store: &Store,
-    catalog: &Catalog,
-    client: &protocol::ClientCaps,
-) -> rusqlite::Result<Others> {
-    let custom = store.with_conn(crate::custom::custom_apps_on)?;
-    let ids = catalog
-        .apps()
-        .map(|a| a.id.to_owned())
-        .chain(custom.into_iter().map(|a| a.id))
-        .filter(|id| id != crate::HOME_APP);
-    let mut live = Vec::new();
-    for id in ids {
-        if let Some(v) = announced_version(store, &id, client)? {
-            live.push((id, v));
+/// Who wrote a name's move: the user's agent.
+pub const AUTHOR_CLAUDE: &str = "claude";
+/// What the pod itself writes (a conversion, a deploy's `@core/` names).
+pub const AUTHOR_POD: &str = "pod";
+/// Most feeds home binds.
+pub const MAX_HOME_FEEDS: usize = 32;
+/// Most feeds one write may name.
+pub const MAX_FEEDS: usize = 8;
+/// Longest layout title.
+pub const MAX_TITLE_CHARS: usize = 60;
+/// The icons a layout may have.
+pub const LAYOUT_ICONS: &[&str] = &["photo", "recipe", "dashboard"];
+/// Longest note of a move.
+pub const MAX_NOTE_CHARS: usize = 500;
+
+/// Limits per pod (temporary pods get the same).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Caps {
+    /// The pod's own layouts (home included).
+    pub layouts: usize,
+    /// Writes (layouts, components, collections' changes) per minute.
+    pub writes_per_minute: usize,
+}
+
+impl Default for Caps {
+    fn default() -> Self {
+        Self {
+            layouts: 50,
+            writes_per_minute: 60,
         }
     }
-    let deleted = store.with_conn(crate::custom::deleted_app_ids_on)?;
-    Ok((live, deleted))
 }
 
-async fn others_async(
-    state: &Arc<AppState>,
-    client: protocol::ClientCaps,
-) -> Result<Others, ApiError> {
-    if crate::construct_switched(state).await {
-        return blocking(state, |s| {
-            s.with_conn(|c| {
-                let mut live = Vec::new();
-                for (n, _) in crate::construct::store::names(c)? {
-                    if crate::custom::is_custom_id(&n) && n != crate::HOME_APP {
-                        live.push((n.clone(), crate::construct::store::last_seq(c, &n)?));
+/// The per-pod write state: caps and the write-rate window.
+#[derive(Debug, Default)]
+pub struct WriteState {
+    pub(crate) caps: Caps,
+    writes: Mutex<VecDeque<Instant>>,
+}
+
+impl WriteState {
+    pub fn new(caps: Caps) -> Self {
+        Self {
+            caps,
+            writes: Mutex::new(VecDeque::new()),
+        }
+    }
+
+    /// Count one write; `false` when the last minute already had
+    /// [`Caps::writes_per_minute`].
+    fn allow(&self) -> bool {
+        let mut w = self.writes.lock().unwrap_or_else(|e| e.into_inner());
+        let now = Instant::now();
+        while w
+            .front()
+            .is_some_and(|t| now.duration_since(*t) >= Duration::from_secs(60))
+        {
+            w.pop_front();
+        }
+        if w.len() >= self.caps.writes_per_minute {
+            return false;
+        }
+        w.push_back(now);
+        true
+    }
+}
+
+/// A refused write: its status and JSON body.
+pub type Refusal = (StatusCode, Value);
+
+/// Count one write against the pod's rate cap.
+pub fn allow_write(pod: &Pod) -> Result<(), Refusal> {
+    if pod.writes.allow() {
+        return Ok(());
+    }
+    Err((
+        StatusCode::TOO_MANY_REQUESTS,
+        json!({ "error": "rate_limited",
+                "detail": format!("at most {} layout writes a minute", pod.writes.caps.writes_per_minute) }),
+    ))
+}
+
+// ---------- feeds ----------
+
+/// Home's feeds: its element's `bind` (decision `content-addressed-construct`),
+/// the feeds every layout of the pod may bind.
+pub fn home_feeds(conn: &Connection) -> Vec<(String, String)> {
+    cstore::name(conn, crate::HOME_APP)
+        .ok()
+        .flatten()
+        .and_then(|h| cstore::object(conn, &h).ok().flatten())
+        .and_then(|(v, _)| serde_json::from_value(v["bind"]["feeds"].clone()).ok())
+        .unwrap_or_default()
+}
+
+/// The sources of home's feeds, each once, in order: the data a client of
+/// the construct is told changed (`event: data`).
+pub fn home_sources(catalog: &Catalog, conn: &Connection) -> Vec<&'static str> {
+    let mut out: Vec<&'static str> = Vec::new();
+    for (s, _) in home_feeds(conn) {
+        if let Some((a, _)) = catalog.source(&s)
+            && !out.contains(&a.name())
+        {
+            out.push(a.name());
+        }
+    }
+    out
+}
+
+/// Check a feeds list: at most `max` distinct `[source, feed]` pairs (or
+/// `"source/feed"`), each a declared feed of a source layouts may use (not
+/// a dev source unless dev blueprints are shown); `null` or `[]` is none.
+pub fn check_feeds(pod: &Pod, v: &Value, max: usize) -> Result<Vec<(String, String)>, Value> {
+    let offered = || -> Vec<String> {
+        pod.catalog()
+            .sources()
+            .filter(|(_, m)| !m.dev || pod.show_dev_apps())
+            .flat_map(|(s, m)| m.feeds.iter().map(move |f| format!("{s}/{}", f.name)))
+            .collect()
+    };
+    let bad = |detail: String| json!({ "error": "invalid_feeds", "detail": detail, "allowed": offered() });
+    if v.is_null() {
+        return Ok(Vec::new());
+    }
+    let Some(items) = v.as_array() else {
+        return Err(bad(
+            "\"feeds\" must be a list of [source, feed] pairs".into()
+        ));
+    };
+    if items.len() > max {
+        return Err(bad(format!("at most {max} feeds")));
+    }
+    let mut out: Vec<(String, String)> = Vec::new();
+    for item in items {
+        let pair = item.as_array().and_then(|p| match p.as_slice() {
+            [Value::String(s), Value::String(f)] => Some((s.clone(), f.clone())),
+            _ => None,
+        });
+        let pair = pair.or_else(|| {
+            item.as_str()
+                .and_then(|t| t.split_once('/'))
+                .map(|(s, f)| (s.to_owned(), f.to_owned()))
+        });
+        let Some((source, feed)) = pair else {
+            return Err(bad(format!("{item} is not a [source, feed] pair")));
+        };
+        let ok = pod
+            .catalog()
+            .source(&source)
+            .is_some_and(|(_, m)| (!m.dev || pod.show_dev_apps()) && m.feed(&feed).is_some());
+        if !ok {
+            return Err(bad(format!("'{source}/{feed}' is not a feed of this pod")));
+        }
+        if out.contains(&(source.clone(), feed.clone())) {
+            return Err(bad(format!("'{source}/{feed}' is listed twice")));
+        }
+        out.push((source, feed));
+    }
+    Ok(out)
+}
+
+/// The manifests of `feeds`' sources, each once.
+pub fn feed_sources<'a>(
+    pod: &'a Pod,
+    feeds: &[(String, String)],
+) -> Vec<(&'static str, &'a SourceManifest)> {
+    let mut out: Vec<(&'static str, &SourceManifest)> = Vec::new();
+    for (s, _) in feeds {
+        if let Some((a, m)) = pod.catalog().source(s)
+            && !out.iter().any(|(n, _)| *n == a.name())
+        {
+            out.push((a.name(), m));
+        }
+    }
+    out
+}
+
+/// The feeds of `feeds` that `layout` (materialized) binds: those whose
+/// query keys it lists, or whose source's entities it binds by URI. Only
+/// these load with it (decision `layouts-not-apps`).
+pub fn bound_feeds(
+    catalog: &Catalog,
+    feeds: &[(String, String)],
+    layout: &Value,
+) -> Vec<(String, String)> {
+    feed_bindings(catalog, feeds, layout)
+        .into_iter()
+        .map(|(f, _)| f)
+        .collect()
+}
+
+/// How a layout binds a feed ([`feed_bindings`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Binding {
+    /// It lists one of the feed's query keys.
+    QueryKey,
+    /// It only binds an entity of the feed's source by URI.
+    EntityUri,
+}
+
+/// The feeds of `feeds` that `layout` binds, each with how
+/// ([`bound_feeds`]).
+pub fn feed_bindings(
+    catalog: &Catalog,
+    feeds: &[(String, String)],
+    layout: &Value,
+) -> Vec<((String, String), Binding)> {
+    fn keys<'a>(v: &'a Value, out: &mut Vec<&'a str>) {
+        match v {
+            Value::Object(m) => {
+                for (k, c) in m {
+                    match (k.as_str(), c) {
+                        ("query_key", Value::String(q)) => out.push(q),
+                        _ => keys(c, out),
                     }
                 }
-                Ok((live, Vec::new()))
-            })
-        })
-        .await;
+            }
+            Value::Array(a) => a.iter().for_each(|c| keys(c, out)),
+            _ => {}
+        }
     }
-    let st = state.clone();
-    blocking(state, move |s| others_now(s, st.catalog(), &client)).await
+    let mut used = Vec::new();
+    keys(layout, &mut used);
+    let text = layout.to_string();
+    feeds
+        .iter()
+        .filter_map(|f| {
+            let (source, feed) = f;
+            let (_, m) = catalog.source(source)?;
+            let spec = m.feed(feed)?;
+            let by_key = spec.query_keys.iter().any(|pattern| {
+                // A pattern feed's keys use its name for the placeholder.
+                let filled = if spec.is_pattern() {
+                    let open = pattern.find('{');
+                    let close = pattern.find('}');
+                    match (open, close) {
+                        (Some(o), Some(c)) if o < c => {
+                            format!("{}{}{}", &pattern[..o], feed, &pattern[c + 1..])
+                        }
+                        _ => (*pattern).to_owned(),
+                    }
+                } else {
+                    (*pattern).to_owned()
+                };
+                used.iter().any(|k| crate::source::key_matches(&filled, k))
+            });
+            if by_key {
+                return Some((f.clone(), Binding::QueryKey));
+            }
+            m.entity_schemes
+                .iter()
+                .any(|scheme| text.contains(&format!("${{{scheme}://")))
+                .then(|| (f.clone(), Binding::EntityUri))
+        })
+        .collect()
 }
 
-/// Queue on home's stream what [`others_now`] finds changed since `others`
-/// (all of it on a fresh stream) and every deleted layout, and remember it.
-fn queue_others(
-    (live, deleted): Others,
-    others: &mut HashMap<String, i64>,
-    queue: &mut std::collections::VecDeque<Event>,
-) {
-    for (id, v) in live {
-        if others.get(&id) == Some(&v) {
+// ---------- the pod's layouts ----------
+
+/// One of the pod's own layouts, as its name points now.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PodLayout {
+    /// Its id (its name).
+    pub id: String,
+    pub title: String,
+    pub icon: String,
+    /// Its element.
+    pub element: String,
+    /// When its name was first written (Unix seconds).
+    pub created_at: i64,
+}
+
+/// Every live layout of the pod: home first, then oldest first.
+pub fn pod_layouts(conn: &Connection) -> rusqlite::Result<Vec<PodLayout>> {
+    let mut out = Vec::new();
+    for (n, h) in cstore::names(conn)? {
+        if !is_layout_id(&n) {
             continue;
         }
-        others.insert(id.clone(), v);
-        queue.push_back(layout_event(&LayoutEvent {
-            workspace_id: id,
-            version: v,
-        }));
+        let el = cstore::object(conn, &h)?.map(|(v, _)| v);
+        let created_at: i64 = conn.query_row(
+            "SELECT COALESCE(MIN(at), 0) FROM name_history WHERE name = ?1",
+            [&n],
+            |r| r.get(0),
+        )?;
+        let text = |k: &str| {
+            el.as_ref()
+                .and_then(|e| e[k].as_str())
+                .unwrap_or("")
+                .to_owned()
+        };
+        out.push(PodLayout {
+            title: text("title"),
+            icon: text("icon"),
+            id: n,
+            element: h,
+            created_at,
+        });
     }
-    for id in deleted {
-        others.remove(&id);
-        queue.push_back(deleted_event(&id));
-    }
-}
-
-fn deleted_event(id: &str) -> Event {
-    Event::default()
-        .event("deleted")
-        .data(json!({ "workspace_id": id }).to_string())
-}
-
-/// `GET /v1/workspaces/:id/events` (SSE). First message: the current
-/// version; then one `layout` event (`{workspace_id, version}`) each time a
-/// new version of this app changes what the subscriber would be served (on
-/// home's stream, after the first message, every other layout's version and
-/// deletion: [`others_now`]); a
-/// `: keepalive` comment every [`AppState::sse_keepalive`]. The version is
-/// the newest one the client ([`protocol::FEATURES_HEADER`]) can draw, so a
-/// version it can't draw causes no event (and no refetch). New versions normally arrive
-/// with a deploy (a restart), so clients mostly see the first message after
-/// reconnecting.
-///
-/// Auth mirrors `GET /v1/workspaces/:id`: no bearer is fine (events carry only
-/// ids and numbers, no content); for an app with [`AuthPolicy::SignIn`] a
-/// bearer that is not a valid session with that sign-in is 401 so the client
-/// learns it is stale.
-///
-/// A stream opened with a session ends once that session stops being valid
-/// (logout, `server pods rotate`, expiry): the session is checked again
-/// before each private event (`notification`, `data`) and on every keepalive
-/// interval, so the stream never forwards anything after the revocation and
-/// closes within one interval even when idle. A re-check rather than a
-/// revocation broadcast, because `server pods rotate` runs in another
-/// process. One session token may hold at most
-/// [`AppState::sse_streams_per_token`] streams; another one is 429
-/// `too_many_streams`.
-async fn events(
-    State(state): State<Arc<AppState>>,
-    Path(id): Path<String>,
-    headers: HeaderMap,
-) -> Response {
-    let app = match state.app(&id).await {
-        Ok(Some(app)) => app,
-        Ok(None) => return workspace_not_found(&id),
-        Err(e) => return e.into_response(),
-    };
-    // Events carry only version numbers, so anyone may listen; only a
-    // session the pod no longer knows is told so (a valid one lacking the
-    // app's sign-in, e.g. a pod token's, D46, must not be dropped).
-    let caller = match state.caller(&headers).await {
-        Ok(c) => c,
-        Err(e) => return e.into_response(),
-    };
-    if let (AuthPolicy::SignIn(_), Caller::Stale) = (app.auth(), &caller) {
-        return unauthorized();
-    }
-    let slot = match caller.session() {
-        Some(session) => match state.sse_slot(&session.token_hash) {
-            Some(slot) => Some(slot),
-            None => {
-                tracing::warn!(workspace = %id, "events stream refused: too many open for this token");
-                return json_error(
-                    StatusCode::TOO_MANY_REQUESTS,
-                    json!({ "error": "too_many_streams", "limit": state.sse_streams_per_token() }),
-                );
-            }
-        },
-        None => None,
-    };
-    // Notifications (D52) are private: only a valid session hears them, for
-    // every app of the pod. A device with a stream open gets no Web Push.
-    let notify_rx = caller.session().map(|_| state.subscribe_notifications());
-    let live = match (&caller, crate::notify::device_id(&headers)) {
-        (Caller::Signed(_), Some(device)) => Some(state.device_live(&device)),
-        _ => None,
-    };
-    // The session's own `data` events (D50) need to know who listens, and
-    // which sources this app draws on.
-    let session_hash = caller.session().map(|s| s.token_hash.clone());
-    let device = crate::notify::device_id(&headers);
-    let sources = state.sources_of(&app);
-    let client = client_caps(&headers);
-    // Subscribe before reading the current version so nothing published in
-    // between is missed (a duplicate version is harmless to clients).
-    let rx = state.subscribe_layouts();
-    let data_rx = state.subscribe_data();
-    let current = match announced_async(&state, &id, client.clone()).await {
-        Ok(Some(v)) => v,
-        Ok(None) => return workspace_not_found(&id),
-        Err(e) => return e.into_response(),
-    };
-    tracing::info!(workspace = %id, version = current, ?client, "layout events subscriber connected");
-    struct S {
-        first: bool,
-        /// The app was deleted: the `deleted` event went out, end.
-        done: bool,
-        sent: i64,
-        client: protocol::ClientCaps,
-        rx: broadcast::Receiver<LayoutEvent>,
-        notify_rx: Option<broadcast::Receiver<NotifyEvent>>,
-        _live: Option<crate::notify::LiveDevice>,
-        data_rx: broadcast::Receiver<DataEvent>,
-        session_hash: Option<String>,
-        /// This stream's device (`x-construct-device`), whose own writes
-        /// it isn't told of.
-        device: Option<String>,
-        sources: Vec<&'static str>,
-        recheck: Option<tokio::time::Interval>,
-        _slot: Option<SseSlot>,
-        shutdown: tokio::sync::watch::Receiver<bool>,
-        state: Arc<AppState>,
-        id: String,
-        /// Home's stream: the version last announced of each other layout.
-        others: HashMap<String, i64>,
-        /// Events to send before waiting for more ([`queue_others`]).
-        queue: std::collections::VecDeque<Event>,
-    }
-    let recheck = session_hash.as_ref().map(|_| {
-        let every = state.sse_keepalive();
-        let mut i = tokio::time::interval_at(tokio::time::Instant::now() + every, every);
-        i.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
-        i
+    out.sort_by(|a, b| {
+        (a.id != crate::HOME_APP, a.created_at, &a.id).cmp(&(
+            b.id != crate::HOME_APP,
+            b.created_at,
+            &b.id,
+        ))
     });
-    let stream = futures_util::stream::unfold(
-        S {
-            first: true,
-            done: false,
-            sent: current,
-            client,
-            rx,
-            notify_rx,
-            _live: live,
-            data_rx,
-            session_hash,
-            device,
-            sources,
-            recheck,
-            _slot: slot,
-            shutdown: state.shutdown_signal(),
-            state: state.clone(),
-            id,
-            others: Default::default(),
-            queue: Default::default(),
-        },
-        |mut s| async move {
-            let event = |s: &S| {
-                layout_event(&LayoutEvent {
-                    workspace_id: s.id.clone(),
-                    version: s.sent,
-                })
+    Ok(out)
+}
+
+/// One live layout of the pod.
+pub fn pod_layout(conn: &Connection, id: &str) -> rusqlite::Result<Option<PodLayout>> {
+    if !is_layout_id(id) || cstore::name(conn, id)?.is_none() {
+        return Ok(None);
+    }
+    Ok(pod_layouts(conn)?.into_iter().find(|l| l.id == id))
+}
+
+/// Layout `id`'s element materialized (unbound), from the store.
+pub fn materialized(conn: &Connection, element: &str) -> Option<Value> {
+    let objects = crate::construct::write::ConnObjects::new(conn);
+    construct_elements::materialize(&objects, element)
+        .ok()
+        .map(|m| m.node)
+}
+
+/// The one layout each feed of `source` belongs to, for notifications
+/// (decision `notification-owner`): `feed -> layout id`. Every layout binds
+/// home's feeds, so home "declares" them all; the owner is the oldest live
+/// layout whose element binds the feed by query key, else the oldest that
+/// binds one of its entities by URI, else home (home is the last choice in
+/// both). Feeds home doesn't bind are left out. Blocking.
+pub fn feed_owners(
+    store: &Store,
+    catalog: &Catalog,
+    source: &str,
+) -> rusqlite::Result<HashMap<String, String>> {
+    store.with_conn(|conn| {
+        let mine: Vec<(String, String)> = home_feeds(conn)
+            .into_iter()
+            .filter(|(s, _)| s == source)
+            .collect();
+        if mine.is_empty() {
+            return Ok(HashMap::new());
+        }
+        let mut layouts = pod_layouts(conn)?;
+        let home_first = layouts.first().is_some_and(|a| a.id == crate::HOME_APP);
+        layouts.rotate_left(usize::from(home_first));
+        let mut by_key: HashMap<String, String> = HashMap::new();
+        let mut by_uri: HashMap<String, String> = HashMap::new();
+        for l in &layouts {
+            let Some(node) = materialized(conn, &l.element) else {
+                continue;
             };
-            if s.done {
-                return None;
+            for ((_, f), how) in feed_bindings(catalog, &mine, &node) {
+                let into = match how {
+                    Binding::QueryKey => &mut by_key,
+                    Binding::EntityUri => &mut by_uri,
+                };
+                into.entry(f).or_insert_with(|| l.id.clone());
             }
-            if s.first {
-                s.first = false;
-                if s.id == crate::HOME_APP {
-                    match others_async(&s.state, s.client.clone()).await {
-                        Ok(o) => queue_others(o, &mut s.others, &mut s.queue),
-                        Err(e) => tracing::warn!(error = ?e, "events: other layouts not announced"),
-                    }
-                    if crate::construct_switched(&s.state).await
-                        && let Some(e) = construct_event(&s.state, s.client.clone()).await
-                    {
-                        s.queue.push_back(e);
-                    }
-                }
-                let e = event(&s);
-                return Some((Ok::<_, std::convert::Infallible>(e), s));
+        }
+        Ok(mine
+            .into_iter()
+            .map(|(_, f)| {
+                let owner = by_key
+                    .get(&f)
+                    .or_else(|| by_uri.get(&f))
+                    .cloned()
+                    .unwrap_or_else(|| crate::HOME_APP.to_owned());
+                (f, owner)
+            })
+            .collect())
+    })
+}
+
+/// The pod's own layouts built on each blueprint: `blueprint id -> layout
+/// id`, the first live layout (oldest first, home last) whose element uses
+/// the blueprint whole (`core://Use` of `@core/<blueprint>`; decision
+/// `layouts-not-apps`: notifications of a blueprint open these). Blocking.
+pub fn layouts_for_blueprints(
+    catalog: &Catalog,
+    conn: &Connection,
+) -> rusqlite::Result<HashMap<String, String>> {
+    let mut out = HashMap::new();
+    let mut layouts = pod_layouts(conn)?;
+    let home_first = layouts.first().is_some_and(|a| a.id == crate::HOME_APP);
+    layouts.rotate_left(usize::from(home_first));
+    for l in layouts {
+        let Some((el, _)) = cstore::object(conn, &l.element)? else {
+            continue;
+        };
+        construct_elements::refs::visit(&el["node"], &mut |r, site| {
+            if site == construct_elements::refs::Site::Use
+                && let Some(bp) = r.name.strip_prefix(crate::construct::CORE_PREFIX)
+                && catalog.is_blueprint(bp)
+            {
+                out.entry(bp.to_owned()).or_insert_with(|| l.id.clone());
             }
-            loop {
-                if let Some(e) = s.queue.pop_front() {
-                    return Some((Ok(e), s));
-                }
-                enum Got {
-                    Layout(Result<LayoutEvent, broadcast::error::RecvError>),
-                    Notify(Option<NotifyEvent>),
-                    Data(Result<DataEvent, broadcast::error::RecvError>),
-                    Recheck,
-                    Stop,
-                }
-                let got = tokio::select! {
-                    r = s.rx.recv() => Got::Layout(r),
-                    n = recv_notify(&mut s.notify_rx) => Got::Notify(n),
-                    d = s.data_rx.recv() => Got::Data(d),
-                    _ = tick(&mut s.recheck) => Got::Recheck,
-                    // Server shutting down: end the stream so graceful
-                    // shutdown is not held open by subscribers.
-                    _ = s.shutdown.wait_for(|stop| *stop) => Got::Stop,
-                };
-                let received = match got {
-                    Got::Stop => return None,
-                    Got::Layout(r) => r,
-                    Got::Recheck => {
-                        if !session_still_valid(&s.state, s.session_hash.as_deref()).await {
-                            return None;
-                        }
-                        continue;
-                    }
-                    Got::Notify(Some(e)) => {
-                        if !session_still_valid(&s.state, s.session_hash.as_deref()).await {
-                            return None;
-                        }
-                        return Some((Ok(notify_event(&e)), s));
-                    }
-                    Got::Notify(None) => continue,
-                    Got::Data(d) => {
-                        let mine = match &d {
-                            Ok(d) => {
-                                s.sources.contains(&d.source.as_str())
-                                    && d.token_hash.as_ref().is_none_or(|h| {
-                                        s.session_hash.as_deref() == Some(h.as_str())
-                                    })
-                                    && (d.except_device.is_none() || d.except_device != s.device)
-                            }
-                            // Lagged: a reload is never wrong.
-                            Err(broadcast::error::RecvError::Lagged(_)) => s.session_hash.is_some(),
-                            Err(broadcast::error::RecvError::Closed) => return None,
-                        };
-                        if mine {
-                            if !session_still_valid(&s.state, s.session_hash.as_deref()).await {
-                                return None;
-                            }
-                            // A lag lost what changed: the unscoped event
-                            // (reload everything).
-                            let e = match &d {
-                                Ok(d) => data_event(&s.id, Some(&d.source), d.scope.as_ref()),
-                                Err(_) => data_event(&s.id, None, None),
-                            };
-                            return Some((Ok(e), s));
-                        }
-                        continue;
-                    }
-                };
-                // The construct (decision `content-addressed-construct`): a
-                // change of system ends every stream (clients ask again which
-                // system the pod is on); a move of a name is a new root on
-                // home's.
-                if let Ok(ev) = &received
-                    && ev.workspace_id == crate::construct::CONSTRUCT_EVENT_ID
-                {
-                    if ev.version == crate::construct::switch::MODE_CHANGED {
-                        return None;
-                    }
-                    if s.id == crate::HOME_APP
-                        && let Some(e) = construct_event(&s.state, s.client.clone()).await
-                    {
-                        return Some((Ok(e), s));
-                    }
-                    continue;
-                }
-                // Home's stream carries every layout's changes (decision
-                // `layouts-not-apps`): one engine shows them all.
-                if s.id == crate::HOME_APP
-                    && let Ok(ev) = &received
-                    && ev.workspace_id != s.id
-                {
-                    if ev.version == DELETED_VERSION {
-                        s.others.remove(&ev.workspace_id);
-                        return Some((Ok(deleted_event(&ev.workspace_id)), s));
-                    }
-                    let other = ev.workspace_id.clone();
-                    let Ok(Some(v)) = announced_async(&s.state, &other, s.client.clone()).await
-                    else {
-                        continue;
-                    };
-                    if s.others.get(&other) == Some(&v) {
-                        continue;
-                    }
-                    s.others.insert(other.clone(), v);
-                    let e = layout_event(&LayoutEvent {
-                        workspace_id: other,
-                        version: v,
-                    });
-                    return Some((Ok(e), s));
-                }
-                let lagged = match received {
-                    Ok(ev) if ev.workspace_id == s.id && ev.version == DELETED_VERSION => {
-                        s.done = true;
-                        return Some((Ok(deleted_event(&s.id)), s));
-                    }
-                    Ok(ev) if ev.workspace_id == s.id => false,
-                    Ok(_) => continue,
-                    Err(broadcast::error::RecvError::Lagged(n)) => {
-                        tracing::warn!(workspace = %s.id, skipped = n, "layout subscriber lagged; sending current");
-                        if s.id == crate::HOME_APP
-                            && let Ok(o) = others_async(&s.state, s.client.clone()).await
-                        {
-                            queue_others(o, &mut s.others, &mut s.queue);
-                        }
-                        true
-                    }
-                    Err(broadcast::error::RecvError::Closed) => return None,
-                };
-                // Re-read what this subscriber would be served now; only a
-                // change is announced (always after a lag).
-                let Ok(Some(v)) = announced_async(&s.state, &s.id, s.client.clone()).await else {
-                    continue;
-                };
-                if v == s.sent && !lagged {
-                    continue;
-                }
-                s.sent = v;
-                let e = event(&s);
-                return Some((Ok(e), s));
-            }
-        },
-    );
-    Sse::new(stream)
-        .keep_alive(
-            KeepAlive::new()
-                .interval(state.sse_keepalive())
-                .text("keepalive"),
-        )
-        .into_response()
+        });
+    }
+    Ok(out)
+}
+
+/// One of the pod's layouts as a source's checks see it.
+#[derive(Debug, Clone)]
+pub struct SourceUse {
+    pub layout: PodLayout,
+    /// Its name's newest history entry.
+    pub version: i64,
+    /// Its element materialized (unbound).
+    pub node: Value,
+    /// Home's feeds of the source (every layout may bind them).
+    pub feeds: Vec<String>,
+}
+
+/// Every live layout of the pod when home binds a feed of `source` (each
+/// may bind it), materialized: what a source checks a change of its own
+/// data against (decision `collections`). Blocking.
+pub fn layouts_with_source(store: &Store, source: &str) -> rusqlite::Result<Vec<SourceUse>> {
+    store.with_conn(|conn| {
+        let feeds: Vec<String> = home_feeds(conn)
+            .into_iter()
+            .filter(|(s, _)| s == source)
+            .map(|(_, f)| f)
+            .collect();
+        if feeds.is_empty() {
+            return Ok(Vec::new());
+        }
+        let mut out = Vec::new();
+        for l in pod_layouts(conn)? {
+            let Some(node) = materialized(conn, &l.element) else {
+                continue;
+            };
+            let version = cstore::last_seq(conn, &l.id)?;
+            out.push(SourceUse {
+                layout: l,
+                version,
+                node,
+                feeds: feeds.clone(),
+            });
+        }
+        Ok(out)
+    })
 }

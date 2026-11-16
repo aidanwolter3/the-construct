@@ -14,7 +14,7 @@ use std::sync::Arc;
 
 use pod_core::layouts::LayoutSource;
 use pod_core::source::{EntityDoc, PathSpec, SourceManifest};
-use pod_core::{AppInfo, AuthPolicy, Source, StaticAdapter};
+use pod_core::{AuthPolicy, BlueprintInfo, Source, StaticAdapter};
 use protocol::WorkspaceSpec;
 
 // `FILES`: every `layouts/shell/*.json`, in number order (`build.rs`).
@@ -24,7 +24,7 @@ include!(concat!(env!("OUT_DIR"), "/layout_files.rs"));
 pub const NAME: &str = pod_core::HOME_BLUEPRINT;
 
 /// The blueprint. Never listed as an app; each pod's `home` app references it.
-pub const SHELL: AppInfo = AppInfo {
+pub const SHELL: BlueprintInfo = BlueprintInfo {
     id: NAME,
     title: "Home",
     icon: "dashboard",
@@ -51,7 +51,7 @@ pub const INBOX: &str = "inbox";
 
 /// Settings as a layout: connection, layouts and versions, sign-ins, the
 /// pod's jacks, notification channels, the server, leaving the pod.
-pub const SETTINGS_APP: AppInfo = AppInfo {
+pub const SETTINGS_APP: BlueprintInfo = BlueprintInfo {
     id: SETTINGS,
     title: "Settings",
     icon: "dashboard",
@@ -61,7 +61,7 @@ pub const SETTINGS_APP: AppInfo = AppInfo {
 };
 
 /// The notification inbox as a layout (device data only).
-pub const INBOX_APP: AppInfo = AppInfo {
+pub const INBOX_APP: BlueprintInfo = BlueprintInfo {
     id: INBOX,
     title: "Notifications",
     icon: "dashboard",

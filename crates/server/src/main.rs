@@ -20,7 +20,8 @@
 //! - `pods revoke-mcp <name>`: disconnect Claude (every MCP credential).
 //! - `pods monitoring <name> on|off`: whether the pod's apps may read the
 //!   server's monitoring data (the `monitor` source; decision `server-monitoring`).
-//! - `pods list`.
+//! - `pods list`: each pod, with whether it is on the construct (a pod the
+//!   old layout system still holds is converted when it next opens).
 //!
 //! Environment:
 //! - `CONSTRUCT_ADDR`: listen address (default `127.0.0.1:8080`).
@@ -34,7 +35,7 @@
 //! - `CONSTRUCT_TEMP_PODS=1`, `CONSTRUCT_TEMP_POD_HOURS`, `CONSTRUCT_TEMP_POD_MAX`:
 //!   anyone may create a temporary pod.
 //! - `CONSTRUCT_TEST_HOOKS=1`: enables `POST /v1/test/fault` in every pod.
-//! - `CONSTRUCT_SHOW_DEV_APPS=1`: `GET /v1/apps` also lists the dev apps.
+//! - `CONSTRUCT_SHOW_DEV_APPS=1`: MCP also lists the dev blueprints and sources.
 //! - `CONSTRUCT_SESSION_TTL_DAYS`: lifetime of sessions other than pod tokens.
 //! - `CONSTRUCT_VAPID_PRIVATE_KEY`, `CONSTRUCT_VAPID_SUBJECT`, `CONSTRUCT_PUSH=off`:
 //!   Web Push for notifications (D52); without a key the server makes one and
@@ -138,7 +139,6 @@ fn main() -> std::process::ExitCode {
                  server pods create <name>\n       \
                  server pods adopt <name> <path/to/server.db>\n       server pods remove-adopted [dir]\n       \
                  server pods rotate <name>\n       \
-                 server pods switch <name> [--dry-run | --revert]\n       \
                  server pods delete <name>\n       server pods notify-test <name>\n       \
                  server pods mcp <name> [label]\n       server pods revoke-mcp <name>\n       \
                  server pods monitoring <name> on|off\n       server pods list"
@@ -227,16 +227,6 @@ fn pods(args: &[&str]) -> Result<(), String> {
                 println!("Deleted {}", p.display());
             }
         }
-        ["switch", name, flags @ ..] => {
-            let mode = match flags {
-                [] => "switch",
-                ["--dry-run"] => "dry_run",
-                ["--revert"] => "revert",
-                _ => return Err("usage: server pods switch <name> [--dry-run | --revert]".into()),
-            };
-            let report = host.switch_construct(name, mode)?;
-            println!("{report:#}");
-        }
         ["notify-test", name] => {
             let title = host.notify_test(name)?;
             println!("Sent \"{title}\" to pod '{name}'.");
@@ -284,8 +274,15 @@ fn pods(args: &[&str]) -> Result<(), String> {
                     .expires_at
                     .map_or_else(|| "-".to_owned(), |t| t.to_string());
                 let mcp = host.store().mcp_credentials(&p.id).map_or(0, |c| c.len());
+                // Whether it is on the construct (a pod the old layout
+                // system holds converts when it next opens).
+                let construct = match host.pod_on_construct(&p.id) {
+                    Some(true) => "yes",
+                    Some(false) => "no",
+                    None => "?",
+                };
                 println!(
-                    "{:<24} {:<9} id {}  created {}  expires {expires}  mcp {mcp}",
+                    "{:<24} {:<9} id {}  created {}  expires {expires}  mcp {mcp}  construct {construct}",
                     p.name,
                     format!("{:?}", p.kind).to_lowercase(),
                     p.id,
@@ -295,7 +292,7 @@ fn pods(args: &[&str]) -> Result<(), String> {
         }
         _ => {
             return Err(
-                "unknown pods command (create, adopt, remove-adopted, rotate, switch, delete, notify-test, mcp, revoke-mcp, monitoring, list)".into(),
+                "unknown pods command (create, adopt, remove-adopted, rotate, delete, notify-test, mcp, revoke-mcp, monitoring, list)".into(),
             );
         }
     }

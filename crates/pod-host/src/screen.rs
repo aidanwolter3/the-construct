@@ -1,18 +1,18 @@
 //! The screen a caller without a pod token sees (D46).
 
-use std::collections::BTreeMap;
-
-use protocol::{ActionIntent, Orientation, SlotSpec, TextStyle, UiNode, WorkspaceSpec};
-use serde_json::json;
+use protocol::{ActionIntent, Orientation, TextStyle, UiNode};
+use serde_json::{Value, json};
 
 /// The form field holding the typed pod code.
 pub const TOKEN_FIELD: &str = "pod_token";
 pub const OPEN_PATH: &str = "/v1/pods/open";
 pub const TEMPORARY_PATH: &str = "/v1/pods/temporary";
 
-/// "Open your pod" for workspace `id` (the client asked for it, so it keeps
-/// its id): a pod code box, and with temporary pods a button for one.
-pub fn open_your_pod(id: &str, temporary_hours: Option<u64>) -> WorkspaceSpec {
+/// "Open your pod", the home of a caller without a pod: a construct
+/// element (decision `content-addressed-construct`) whose page has a pod
+/// code box, and with temporary pods a button for one. It refers to
+/// nothing, so it is its own whole construct.
+pub fn open_your_pod(temporary_hours: Option<u64>) -> Value {
     let mut children = vec![
         UiNode::Text {
             value_expr: "Enter your pod code to open your apps. Your data lives in your own \
@@ -58,24 +58,20 @@ pub fn open_your_pod(id: &str, temporary_hours: Option<u64>) -> WorkspaceSpec {
             },
         ]);
     }
-    WorkspaceSpec {
-        version: pod_core::BUNDLE_VERSION.into(),
-        workspace: UiNode::Workspace {
-            id: id.into(),
-            title: "The Construct".into(),
-            screens: Vec::new(),
-            title_scrolls: false,
-            slots: vec![SlotSpec {
-                slot_id: "pod".into(),
-                provider_uri: "construct://pod".into(),
-                content: UiNode::Container {
-                    orientation: Orientation::Vertical,
-                    padding_dp: 16,
-                    children,
-                },
-            }],
-        },
-        entities: BTreeMap::new(),
-        queries: BTreeMap::new(),
-    }
+    let page = UiNode::Page {
+        id: pod_core::HOME_APP.into(),
+        title: "The Construct".into(),
+        root: Box::new(UiNode::Container {
+            orientation: Orientation::Vertical,
+            padding_dp: 16,
+            children,
+        }),
+        screens: Vec::new(),
+    };
+    json!({
+        "kind": "element",
+        "title": "The Construct",
+        "icon": "dashboard",
+        "node": serde_json::to_value(&page).unwrap_or(Value::Null),
+    })
 }

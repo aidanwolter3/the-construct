@@ -98,7 +98,7 @@ impl ReadReq {
         match self {
             ReadReq::Ids(ids) => json!({ "ids": ids }),
             ReadReq::All(None) => json!({ "all": true }),
-            ReadReq::All(Some(app)) => json!({ "all": true, "app": app }),
+            ReadReq::All(Some(app)) => json!({ "all": true, "layout": app }),
         }
     }
 }
@@ -232,11 +232,11 @@ fn signed_out() -> LayoutApiError {
     }
 }
 
-fn empty_list(unread_total: u32, unread_by_app: BTreeMap<String, u32>) -> NotificationList {
+fn empty_list(unread_total: u32, unread_by_layout: BTreeMap<String, u32>) -> NotificationList {
     NotificationList {
         notifications: Vec::new(),
         unread_total,
-        unread_by_app,
+        unread_by_layout,
         next_before: None,
     }
 }
@@ -293,9 +293,9 @@ impl State {
     /// See [`crate::StateSnapshot::notifications_json`].
     pub(crate) fn notifications_json(&self) -> String {
         if self.session.is_none() {
-            return json!({ "unread_total": 0, "unread_by_app": {} }).to_string();
+            return json!({ "unread_total": 0, "unread_by_layout": {} }).to_string();
         }
-        json!({ "unread_total": self.unread_total, "unread_by_app": self.unread_by_app })
+        json!({ "unread_total": self.unread_total, "unread_by_layout": self.unread_by_layout })
             .to_string()
     }
 
@@ -306,17 +306,17 @@ impl State {
             && let Ok(ev) = serde_json::from_str::<ReadEvent>(&raw)
         {
             self.unread_total = ev.unread_total;
-            self.unread_by_app = ev.unread_by_app;
+            self.unread_by_layout = ev.unread_by_layout;
         }
     }
 
     /// Set the unread counts (memory and store). Does not bump `seq`.
     fn set_unread(&mut self, total: u32, by_app: BTreeMap<String, u32>) {
         self.unread_total = total;
-        self.unread_by_app = by_app;
-        self.unread_by_app.retain(|_, n| *n > 0);
+        self.unread_by_layout = by_app;
+        self.unread_by_layout.retain(|_, n| *n > 0);
         if let Some(store) = &self.store {
-            let raw = json!({ "unread_total": total, "unread_by_app": self.unread_by_app });
+            let raw = json!({ "unread_total": total, "unread_by_layout": self.unread_by_layout });
             if let Err(e) = store.kv_set(KV_NOTIFICATION_UNREAD, &raw.to_string()) {
                 eprintln!("[ConstructEngine] cannot cache the unread counts: {e}");
             }
@@ -326,7 +326,7 @@ impl State {
     fn unread_event(&self) -> ReadEvent {
         ReadEvent {
             unread_total: self.unread_total,
-            unread_by_app: self.unread_by_app.clone(),
+            unread_by_layout: self.unread_by_layout.clone(),
         }
     }
 
@@ -375,7 +375,7 @@ impl State {
                 return Ok(());
             }
             for app in store.unread_notification_apps()? {
-                if !self.unread_by_app.contains_key(&app) {
+                if !self.unread_by_layout.contains_key(&app) {
                     store.mark_notifications_read(None, Some(&app))?;
                 }
             }
@@ -401,7 +401,7 @@ impl State {
             }
             None => BTreeMap::new(),
         };
-        let mut by_app = self.unread_by_app.clone();
+        let mut by_app = self.unread_by_layout.clone();
         let total = match req {
             ReadReq::All(None) => {
                 by_app.clear();
@@ -428,7 +428,7 @@ impl State {
     /// Sign-out: forget the cached notifications, channels and counts.
     pub(crate) fn clear_notifications(&mut self) {
         self.unread_total = 0;
-        self.unread_by_app.clear();
+        self.unread_by_layout.clear();
         if let Some(store) = &self.store {
             match store.delete_notification_cache() {
                 Ok(n) if n > 0 => println!("[ConstructEngine] removed {n} cached notifications"),
@@ -566,7 +566,7 @@ impl Inner {
                 return;
             }
             st.cache_notifications(&list.notifications);
-            st.set_unread(list.unread_total, list.unread_by_app.clone());
+            st.set_unread(list.unread_total, list.unread_by_layout.clone());
             st.sync_read_flags();
             st.seq += 1;
             st.snapshot()
@@ -583,7 +583,7 @@ impl Inner {
             let mut st = lock(&self.state);
             st.session.as_ref()?;
             let new = st.cache_notification(n);
-            let mut by_app = st.unread_by_app.clone();
+            let mut by_app = st.unread_by_layout.clone();
             if new && !n.read {
                 *by_app.entry(n.channel_layout.clone()).or_insert(0) += 1;
             }
@@ -602,7 +602,7 @@ impl Inner {
             if st.session.is_none() {
                 return;
             }
-            st.set_unread(ev.unread_total, ev.unread_by_app.clone());
+            st.set_unread(ev.unread_total, ev.unread_by_layout.clone());
             st.sync_read_flags();
             st.seq += 1;
             st.snapshot()
@@ -670,7 +670,7 @@ impl Inner {
         let Some(token) = self.session_token() else {
             return Ok(ReadEvent {
                 unread_total: 0,
-                unread_by_app: BTreeMap::new(),
+                unread_by_layout: BTreeMap::new(),
             });
         };
         let (snap, local) = {
@@ -698,7 +698,7 @@ impl Inner {
         app: Option<&str>,
     ) -> Result<NotificationList, LayoutApiError> {
         let st = lock(&self.state);
-        let mut list = empty_list(st.unread_total, st.unread_by_app.clone());
+        let mut list = empty_list(st.unread_total, st.unread_by_layout.clone());
         if let Some(store) = &st.store {
             list.notifications = store
                 .load_notifications(before, limit as usize, app)
@@ -817,7 +817,7 @@ impl ConstructEngine {
             path.push_str(&format!("&before={}", segment(b)));
         }
         if let Some(a) = app_id {
-            path.push_str(&format!("&app={}", segment(a)));
+            path.push_str(&format!("&layout={}", segment(a)));
         }
         match self
             .inner
@@ -1058,7 +1058,7 @@ mod tests {
         assert_eq!(ReadReq::All(None).body(), json!({ "all": true }));
         assert_eq!(
             ReadReq::All(Some("a".into())).body(),
-            json!({ "all": true, "app": "a" })
+            json!({ "all": true, "layout": "a" })
         );
     }
 }

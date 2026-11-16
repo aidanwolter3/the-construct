@@ -13,7 +13,7 @@ use http_body_util::BodyExt;
 use pod_core::layouts::LayoutSource;
 use pod_core::session::session_hash;
 use pod_core::{
-    AppInfo, AppState, AuthPolicy, BoxFuture, FeedSpec, Hydration, Pod, RequestCtx, Session,
+    AppState, AuthPolicy, BlueprintInfo, BoxFuture, FeedSpec, Hydration, Pod, RequestCtx, Session,
     Source, SourceManifest,
 };
 use protocol::DataBundle;
@@ -35,8 +35,8 @@ impl Source for Up {
     fn name(&self) -> &'static str {
         "up"
     }
-    fn apps(&self) -> Vec<AppInfo> {
-        vec![AppInfo {
+    fn blueprints(&self) -> Vec<BlueprintInfo> {
+        vec![BlueprintInfo {
             id: "up",
             title: "Up",
             icon: "photo",
@@ -267,12 +267,14 @@ async fn sse_text(body: &mut Body, wait: Duration) -> String {
 async fn data_events_reach_only_their_session_and_resume_runs_once() {
     let resumed = Arc::new(AtomicUsize::new(0));
     let pod = pod_counting(1024, Arc::clone(&resumed));
+    // Home binds up's feed: its data events reach the construct's stream.
+    pod_core::testing::bind_home(&pod, &[("up", "all")]);
     let connect = |token: &'static str| {
         let pod = pod.clone();
         async move {
             pod_core::app(pod)
                 .oneshot(
-                    Request::get("/v1/workspaces/up/events")
+                    Request::get("/v1/construct/events")
                         .header("authorization", format!("Bearer {token}"))
                         .body(Body::empty())
                         .unwrap(),
@@ -284,23 +286,23 @@ async fn data_events_reach_only_their_session_and_resume_runs_once() {
     };
     let mut alice = connect("alice").await;
     let mut bob = connect("bob").await;
-    // The first message (the layout version) arrives on connecting.
+    // The first message (the construct's root) arrives on connecting.
     assert!(
         sse_text(&mut alice, Duration::from_millis(200))
             .await
-            .contains("event: layout")
+            .contains("event: construct")
     );
     assert!(
         sse_text(&mut bob, Duration::from_millis(200))
             .await
-            .contains("event: layout")
+            .contains("event: construct")
     );
 
     pod.publish_data("up", &session("alice"));
     pod.publish_data("other", &session("bob"));
     let a = sse_text(&mut alice, Duration::from_millis(300)).await;
     assert!(
-        a.contains("event: data") && a.contains(r#"{"workspace_id":"up"}"#),
+        a.contains("event: data") && a.contains(r#"{"workspace_id":"home"}"#),
         "{a}"
     );
     let b = sse_text(&mut bob, Duration::from_millis(300)).await;

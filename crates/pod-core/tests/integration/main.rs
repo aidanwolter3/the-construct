@@ -4,10 +4,8 @@
 
 mod adapters;
 mod blueprints;
-mod custom_apps;
 mod jacks;
 mod notifications;
-mod parts;
 mod sources;
 mod sse;
 mod uploads;

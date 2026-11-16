@@ -116,7 +116,7 @@ fn a_todo_app_syncs_live_and_survives_a_change_made_while_offline() {
             e.snapshot().workspace_json.contains("Todos")
         });
     }
-    let events = format!("/v1/workspaces/{app}/events");
+    let events = "/v1/construct/events";
     wait_until("both event streams", TIMEOUT, || {
         h.hits().iter().filter(|x| x.path == events).count() >= 2
     });
