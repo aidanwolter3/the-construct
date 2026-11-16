@@ -26,7 +26,7 @@ Run these before pushing; CI runs the same and keeps `main` green:
 ```bash
 cargo fmt --all && cargo clippy --workspace --all-targets -- -D warnings && cargo test --workspace
 cargo clippy -p construct-render --features viewer --all-targets -- -D warnings   # the window and viewer code
-scripts/check_decisions.sh && scripts/check_test_data.sh
+scripts/check_decisions.sh && scripts/check_test_data.sh && scripts/check_old_names.sh
 scripts/sim_scenarios.sh /tmp/sim         # the simulator's scenarios (look at the PNGs for UI changes)
 # Needs an Android SDK and NDK (not in cloud sessions; CI builds it): the APK, Java bridge and JNI names
 scripts/android_native.sh

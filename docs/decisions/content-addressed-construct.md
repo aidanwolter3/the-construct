@@ -1,5 +1,7 @@
 # A construct is one hash: immutable elements, moving names, opt-in per pod
 
+Superseded in part by [one-layout-system](one-layout-system.md): every pod is switched when it opens, the old system (its endpoints, tables, the switch and the revert) is gone, and clients use only the construct's paths.
+
 Date: 2026-11-16. Related: [layouts-not-apps](layouts-not-apps.md), [layout-parts](layout-parts.md),
 [plumbing-and-porcelain](plumbing-and-porcelain.md), [named-vocabulary](named-vocabulary.md),
 [hold-changes-during-transitions](hold-changes-during-transitions.md), [source-adapters](source-adapters.md),

@@ -1,5 +1,7 @@
 # Built-in apps are blueprints; every pod opens on its own `home` app, a dock drawn from a layout
 
+Superseded in part by [one-layout-system](one-layout-system.md): the apps list, hidden layouts and versions are gone; blueprints are `@core/` names.
+
 Superseded in part by [layouts-not-apps](layouts-not-apps.md): the Dock, Drawer, AppFrame, shell mode and the native
 menu and inbox are gone; blueprints, home and device data stay. Hiding and deleting layouts and paging the inbox
 are device commands now: [device-layout-and-inbox-commands](device-layout-and-inbox-commands.md).
