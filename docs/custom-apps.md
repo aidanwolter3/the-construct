@@ -322,7 +322,7 @@ never shown back. The host can lock a jack off for a pod (`jack.<id> = locked` i
 
 The pod can call the tools of remote MCP servers (decision [`mcp-jack`](decisions/mcp-jack.md), `pod_core::mcp_servers`),
 for `mcp` fillers. Claude connects one with `mcp_connect {name, url}` (an `https://` endpoint on a public host
-name): a server that needs nothing connects at once, one that takes an API key with `token` (sealed, never shown
+name, default port): a server that needs nothing connects at once, one that takes an API key with `token` (sealed, never shown
 back), and one that uses OAuth answers a `sign_in_url` for the user to open in a browser. The pod finds the
 server's authorization server (protected resource metadata, then OAuth metadata), registers itself as a public
 client and signs in with PKCE; the browser comes back to the pod's public callback
@@ -331,7 +331,9 @@ their own; when a refresh is refused the server reads `needs_sign_in` and `mcp_c
 The server must accept the pod's redirect URI (proton-mcp: add the pod's host to `ALLOWED_REDIRECT_HOSTS`).
 `mcp_servers` lists the servers with their state and tools (with `name`: each tool's input schema),
 `mcp_call_tool` calls one now, `mcp_disconnect` forgets one. At most 20 servers a pod; each call opens its own
-session over Streamable HTTP, with no redirects, a minute per request and 8 MB per answer.
+session over Streamable HTTP, with no redirects, a minute per request and 8 MB per answer. What a server lists is kept
+capped: tool names of at most 128 characters (longer ones are skipped), descriptions of 600, an input schema of
+16 KB (a larger one reads as a bare object schema), 200 tools and 1 MB in all.
 
 ## The Events app
 
