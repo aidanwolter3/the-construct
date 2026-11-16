@@ -91,13 +91,13 @@ the adopter's own reference.**
   and whether it was revoked; `update_adoption` moves the name when the new version's interface still fits the
   saved bindings, and otherwise answers what to bind ("version 5 reads `chores__quantity`": a new field, or a
   reference whose `bind` lacks it). A pod never writes into another pod: nothing advances by itself.
-- No new vocabulary and no client build: share links work through the agent (MCP). A switched pod draws an
-  adopted element like any other.
+- No new vocabulary and no client build: share links work through the agent (MCP). A pod draws an adopted
+  element like any other.
 
 ## Rollout and limits
 
-- Only switched pods share (decision content-addressed-construct): on a pod that isn't switched every sharing
-  tool answers `not_switched`, and nothing else changes.
+- Every pod is on the construct (decision `one-layout-system`), so every pod of a hosted server can share; a pod
+  run without a host answers `no_shelf`.
 - Not yet: `public` (listed) publications and browsing them (needs moderation and limits); opening a share link
   on the device (needs vocabulary and a client build); **slots** an adopter fills (an element-valued input, an
   engine change): a left-out element is removed instead; following in the background.

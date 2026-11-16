@@ -1,0 +1,1504 @@
+{
+  "@core/agents": {
+    "history": [
+      {
+        "author": "pod",
+        "note": "Blueprint agents version 6: A run that timed out has Continue (a new run carries it on); Follow up reopens a schedule's run too",
+        "seq": 5
+      },
+      {
+        "author": "pod",
+        "note": "Blueprint agents version 5: CAP v3: parked, stalled and waiting-on-CI/review/deploy runs, queue reasons, troubled sandboxes with Repair, and the pod's own schedules with an editor",
+        "seq": 4
+      },
+      {
+        "author": "pod",
+        "note": "Blueprint agents version 4: Mark reviewed on a run's screen: a run that needs review reads Reviewed on this pod",
+        "seq": 3
+      },
+      {
+        "author": "pod",
+        "note": "Blueprint agents version 3: Runs (CAP v2): what a run needs from you, its outcome, an asleep sandbox, Stop and a follow-up (Reopen) on a run's screen",
+        "seq": 2
+      },
+      {
+        "author": "pod",
+        "note": "Blueprint agents version 1: First version: sessions, schedules, sandboxes and checks of an agent runner, with its sign-in",
+        "seq": 1
+      }
+    ]
+  },
+  "@core/author_header": {
+    "history": [
+      {
+        "author": "pod",
+        "note": "Converted from core:author_header version 1",
+        "seq": 1
+      }
+    ]
+  },
+  "@core/back_button": {
+    "history": [
+      {
+        "author": "pod",
+        "note": "Converted from core:back_button version 1",
+        "seq": 1
+      }
+    ]
+  },
+  "@core/card": {
+    "history": [
+      {
+        "author": "pod",
+        "note": "Converted from core:card version 3",
+        "seq": 1
+      }
+    ]
+  },
+  "@core/chevron_card": {
+    "history": [
+      {
+        "author": "pod",
+        "note": "Converted from core:chevron_card version 1",
+        "seq": 1
+      }
+    ]
+  },
+  "@core/divided_item": {
+    "history": [
+      {
+        "author": "pod",
+        "note": "Converted from core:divided_item version 1",
+        "seq": 1
+      }
+    ]
+  },
+  "@core/dot": {
+    "history": [
+      {
+        "author": "pod",
+        "note": "Converted from core:dot version 1",
+        "seq": 1
+      }
+    ]
+  },
+  "@core/events": {
+    "history": [
+      {
+        "author": "pod",
+        "note": "Blueprint events version 3: Theme colours instead of fixed ones, so it follows dark mode",
+        "seq": 3
+      },
+      {
+        "author": "pod",
+        "note": "Blueprint events version 2: Same layout, written with components: core:card, core:pill, core:warning_chip, core:section_header, core:link_button",
+        "seq": 2
+      },
+      {
+        "author": "pod",
+        "note": "Blueprint events version 1: The app's new id: events (was watcher)",
+        "seq": 1
+      }
+    ]
+  },
+  "@core/filled_card": {
+    "history": [
+      {
+        "author": "pod",
+        "note": "Converted from core:filled_card version 1",
+        "seq": 1
+      }
+    ]
+  },
+  "@core/footer_bar": {
+    "history": [
+      {
+        "author": "pod",
+        "note": "Converted from core:footer_bar version 1",
+        "seq": 1
+      }
+    ]
+  },
+  "@core/header_bar": {
+    "history": [
+      {
+        "author": "pod",
+        "note": "Converted from core:header_bar version 1",
+        "seq": 1
+      }
+    ]
+  },
+  "@core/inbox": {
+    "history": [
+      {
+        "author": "pod",
+        "note": "Blueprint inbox version 4: Theme colours instead of fixed ones, so it follows dark mode",
+        "seq": 3
+      },
+      {
+        "author": "pod",
+        "note": "Blueprint inbox version 3: Load older (feature device_inbox_paging): a button under the list while the inbox has more",
+        "seq": 2
+      },
+      {
+        "author": "pod",
+        "note": "Blueprint inbox version 1: The inbox as a layout: every notification, newest first, by day",
+        "seq": 1
+      }
+    ]
+  },
+  "@core/labeled_text": {
+    "history": [
+      {
+        "author": "pod",
+        "note": "Converted from core:labeled_text version 1",
+        "seq": 1
+      }
+    ]
+  },
+  "@core/link_button": {
+    "history": [
+      {
+        "author": "pod",
+        "note": "Converted from core:link_button version 1",
+        "seq": 1
+      }
+    ]
+  },
+  "@core/list_row": {
+    "history": [
+      {
+        "author": "pod",
+        "note": "Converted from core:list_row version 1",
+        "seq": 1
+      }
+    ]
+  },
+  "@core/message_page": {
+    "history": [
+      {
+        "author": "pod",
+        "note": "Converted from core:message_page version 2",
+        "seq": 1
+      }
+    ]
+  },
+  "@core/page_header": {
+    "history": [
+      {
+        "author": "pod",
+        "note": "Converted from core:page_header version 1",
+        "seq": 1
+      }
+    ]
+  },
+  "@core/pill": {
+    "history": [
+      {
+        "author": "pod",
+        "note": "Converted from core:pill version 3",
+        "seq": 1
+      }
+    ]
+  },
+  "@core/pixelfed": {
+    "history": [
+      {
+        "author": "pod",
+        "note": "Blueprint pixelfed version 4: Theme colours instead of fixed ones, so it follows dark mode",
+        "seq": 3
+      },
+      {
+        "author": "pod",
+        "note": "Blueprint pixelfed version 3: Same layout: the post, comments and comment_thread screens share core:pixelfed_post and core:pixelfed_comment_box",
+        "seq": 2
+      },
+      {
+        "author": "pod",
+        "note": "Blueprint pixelfed version 1: The app's new id: pixelfed (was pixelfed)",
+        "seq": 1
+      }
+    ]
+  },
+  "@core/pixelfed_comment_box": {
+    "history": [
+      {
+        "author": "pod",
+        "note": "Converted from core:pixelfed_comment_box version 1",
+        "seq": 1
+      }
+    ]
+  },
+  "@core/pixelfed_post": {
+    "history": [
+      {
+        "author": "pod",
+        "note": "Converted from core:pixelfed_post version 2",
+        "seq": 1
+      }
+    ]
+  },
+  "@core/pixelfed_sample_no_login": {
+    "history": [
+      {
+        "author": "pod",
+        "note": "Blueprint pixelfed_sample_no_login version 2: A comments screen for the post's comment button, which linked to a route the sample didn't define",
+        "seq": 2
+      },
+      {
+        "author": "pod",
+        "note": "Blueprint pixelfed_sample_no_login version 1: The app's new id: pixelfed_sample_no_login (was pixelfed_sample_no_login)",
+        "seq": 1
+      }
+    ]
+  },
+  "@core/pixelfed_sign_in": {
+    "history": [
+      {
+        "author": "pod",
+        "note": "Converted from core:pixelfed_sign_in version 1",
+        "seq": 1
+      }
+    ]
+  },
+  "@core/recipes": {
+    "history": [
+      {
+        "author": "pod",
+        "note": "Blueprint recipes version 3: Theme colours instead of fixed ones, so it follows dark mode",
+        "seq": 2
+      },
+      {
+        "author": "pod",
+        "note": "Blueprint recipes version 1: Recipes: the search box and category chips stay pinned at the top while the list scrolls (core://Sticky, schema 11)",
+        "seq": 1
+      }
+    ]
+  },
+  "@core/recipes/slot:recipes": {
+    "history": [
+      {
+        "author": "pod",
+        "note": "Part slot:recipes of blueprint recipes version 3",
+        "seq": 1
+      }
+    ]
+  },
+  "@core/screen": {
+    "history": [
+      {
+        "author": "pod",
+        "note": "Converted from core:screen version 2",
+        "seq": 1
+      }
+    ]
+  },
+  "@core/scroll_page": {
+    "history": [
+      {
+        "author": "pod",
+        "note": "Converted from core:scroll_page version 1",
+        "seq": 1
+      }
+    ]
+  },
+  "@core/section_header": {
+    "history": [
+      {
+        "author": "pod",
+        "note": "Converted from core:section_header version 1",
+        "seq": 1
+      }
+    ]
+  },
+  "@core/settings": {
+    "history": [
+      {
+        "author": "pod",
+        "note": "Blueprint settings version 7: Jacks: see what the pod is plugged into, plug in a search provider and its key (typed into a hidden field, feature text_field_secret), unplug",
+        "seq": 4
+      },
+      {
+        "author": "pod",
+        "note": "Blueprint settings version 5: Sign out and Leave pod ask first (action.confirm)",
+        "seq": 3
+      },
+      {
+        "author": "pod",
+        "note": "Blueprint settings version 3: Notifications: one row per app, each opening that app's switches; no server picker (Leave pod stays)",
+        "seq": 2
+      },
+      {
+        "author": "pod",
+        "note": "Blueprint settings version 1: Settings as a layout: connection, your layouts and their versions, sign-ins, notifications, server, leaving the pod",
+        "seq": 1
+      }
+    ]
+  },
+  "@core/shell": {
+    "history": [
+      {
+        "author": "pod",
+        "note": "Blueprint shell version 3: Same layout, written with a component: core:message_page",
+        "seq": 3
+      },
+      {
+        "author": "pod",
+        "note": "Blueprint shell version 2: The blank page, with Notifications and Settings at the top right (they are layouts now)",
+        "seq": 2
+      },
+      {
+        "author": "pod",
+        "note": "Blueprint shell version 1: A blank page: the pod owner asks their agent to build everything, the home screen included",
+        "seq": 1
+      }
+    ]
+  },
+  "@core/stat": {
+    "history": [
+      {
+        "author": "pod",
+        "note": "Converted from core:stat version 1",
+        "seq": 1
+      }
+    ]
+  },
+  "@core/toggle_action": {
+    "history": [
+      {
+        "author": "pod",
+        "note": "Converted from core:toggle_action version 1",
+        "seq": 1
+      }
+    ]
+  },
+  "@core/warning_chip": {
+    "history": [
+      {
+        "author": "pod",
+        "note": "Converted from core:warning_chip version 1",
+        "seq": 1
+      }
+    ]
+  },
+  "@core/workspace": {
+    "history": [
+      {
+        "author": "pod",
+        "note": "Converted from core:workspace version 1",
+        "seq": 1
+      }
+    ]
+  },
+  "@me/tile": {
+    "element": {
+      "children": true,
+      "doc": "A tile that opens something.",
+      "examples": [
+        {
+          "args": {
+            "label": "Dinner"
+          },
+          "note": "A tile"
+        }
+      ],
+      "kind": "element",
+      "node": {
+        "background": "${local://theme#card}",
+        "content": {
+          "children": [
+            {
+              "style": "Title",
+              "type": "core://Text",
+              "value_expr": "› $arg.label"
+            },
+            {
+              "type": "core://Children"
+            }
+          ],
+          "spacing_dp": 4,
+          "type": "core://Column"
+        },
+        "corner_dp": 14,
+        "padding_h_dp": 12,
+        "padding_v_dp": 10,
+        "type": "core://Box"
+      },
+      "params": [
+        {
+          "doc": "What it says",
+          "name": "label",
+          "required": true,
+          "type": "text"
+        }
+      ]
+    },
+    "history": [
+      {
+        "author": "pod",
+        "note": "Converted from pod:tile version 2",
+        "seq": 1
+      }
+    ]
+  },
+  "c-jyiz6is4ld": {
+    "edges": [
+      "c-ki77kjxymj"
+    ],
+    "element": {
+      "icon": "recipe",
+      "kind": "element",
+      "node": {
+        "id": "c-jyiz6is4ld",
+        "root": {
+          "args": {
+            "fills_screen": false,
+            "title": "Recipes",
+            "title_scrolls": false
+          },
+          "children": [
+            {
+              "children": [
+                {
+                  "args": {
+                    "label": "All recipes"
+                  },
+                  "children": [
+                    {
+                      "style": "Secondary",
+                      "type": "core://Text",
+                      "value_expr": "From your book"
+                    }
+                  ],
+                  "ref": {
+                    "name": "@me/tile",
+                    "pin": false
+                  },
+                  "type": "core://Use"
+                },
+                {
+                  "presentation": "Inline",
+                  "ref": {
+                    "name": "c-ki77kjxymj",
+                    "pin": false
+                  },
+                  "type": "core://Layout"
+                },
+                {
+                  "item_template": {
+                    "children": [
+                      {
+                        "style": "Title",
+                        "type": "core://Text",
+                        "value_expr": "$item.title"
+                      }
+                    ],
+                    "ref": {
+                      "name": "@core/card",
+                      "pin": false
+                    },
+                    "type": "core://Use"
+                  },
+                  "query_key": "recipes:all",
+                  "type": "core://List"
+                },
+                {
+                  "label": "Back to meals",
+                  "on_click": {
+                    "edge": "c-r7jeifhpzm",
+                    "intent": "action.navigation.pop_to"
+                  },
+                  "type": "core://Button"
+                }
+              ],
+              "type": "core://Column"
+            }
+          ],
+          "ref": {
+            "name": "@core/workspace",
+            "pin": false
+          },
+          "type": "core://Use"
+        },
+        "title": "Recipes",
+        "type": "core://Page"
+      },
+      "title": "Recipes"
+    },
+    "history": [
+      {
+        "author": "pod",
+        "note": "Converted from layout c-jyiz6is4ld version 2",
+        "seq": 1
+      }
+    ],
+    "materialized": {
+      "id": "c-jyiz6is4ld",
+      "root": {
+        "children": [
+          {
+            "content": {
+              "children": [
+                {
+                  "content": {
+                    "content_description": "Back",
+                    "icon": "arrow_back",
+                    "on_click": {
+                      "intent": "action.navigation.back"
+                    },
+                    "tag": "layout-back",
+                    "type": "core://IconButton"
+                  },
+                  "type": "core://Conditional",
+                  "value": "${local://nav#pushed}"
+                },
+                {
+                  "children": [
+                    {
+                      "style": "Headline",
+                      "type": "core://Text",
+                      "value_expr": "Recipes"
+                    }
+                  ],
+                  "padding_h_dp": 16,
+                  "padding_v_dp": 12,
+                  "type": "core://Column"
+                }
+              ],
+              "type": "core://Row"
+            },
+            "equals": "false",
+            "type": "core://Conditional",
+            "value": "${local://nav#inline}"
+          },
+          {
+            "content": {
+              "children": [
+                {
+                  "children": [
+                    {
+                      "background": "${local://theme#card}",
+                      "content": {
+                        "children": [
+                          {
+                            "style": "Title",
+                            "type": "core://Text",
+                            "value_expr": "› All recipes"
+                          },
+                          {
+                            "style": "Secondary",
+                            "type": "core://Text",
+                            "value_expr": "From your book"
+                          }
+                        ],
+                        "spacing_dp": 4,
+                        "type": "core://Column"
+                      },
+                      "corner_dp": 14,
+                      "padding_h_dp": 12,
+                      "padding_v_dp": 10,
+                      "type": "core://Box"
+                    },
+                    {
+                      "layout": "c-ki77kjxymj",
+                      "presentation": "Inline",
+                      "type": "core://Layout"
+                    },
+                    {
+                      "item_template": {
+                        "background": "${local://theme#card}",
+                        "border_color": "${local://theme#card_border}",
+                        "content": {
+                          "children": [
+                            {
+                              "style": "Title",
+                              "type": "core://Text",
+                              "value_expr": "$item.title"
+                            }
+                          ],
+                          "spacing_dp": 0,
+                          "type": "core://Column"
+                        },
+                        "corner_dp": 14,
+                        "padding_h_dp": 14,
+                        "padding_v_dp": 12,
+                        "type": "core://Box"
+                      },
+                      "query_key": "recipes:all",
+                      "type": "core://List"
+                    },
+                    {
+                      "label": "Back to meals",
+                      "on_click": {
+                        "edge": "c-r7jeifhpzm",
+                        "intent": "action.navigation.pop_to"
+                      },
+                      "type": "core://Button"
+                    }
+                  ],
+                  "type": "core://Column"
+                },
+                {
+                  "content": {
+                    "size_dp": 16,
+                    "type": "core://Spacer"
+                  },
+                  "equals": "false",
+                  "type": "core://Conditional",
+                  "value": "${local://nav#inline}"
+                }
+              ],
+              "type": "core://Column"
+            },
+            "type": "core://Scroll"
+          }
+        ],
+        "type": "core://Column"
+      },
+      "title": "Recipes",
+      "type": "core://Page"
+    }
+  },
+  "c-ki77kjxymj": {
+    "edges": [],
+    "element": {
+      "icon": "photo",
+      "kind": "element",
+      "node": {
+        "id": "c-ki77kjxymj",
+        "root": {
+          "children": [
+            {
+              "args": {
+                "text": "Next"
+              },
+              "ref": {
+                "name": "@core/section_header",
+                "pin": false
+              },
+              "type": "core://Use"
+            },
+            {
+              "item_template": {
+                "style": "Body",
+                "type": "core://Text",
+                "value_expr": "$item.title"
+              },
+              "query_key": "recipes:all",
+              "type": "core://List"
+            }
+          ],
+          "padding_h_dp": 16,
+          "type": "core://Column"
+        },
+        "title": "Coming up",
+        "type": "core://Page"
+      },
+      "title": "Coming up"
+    },
+    "history": [
+      {
+        "author": "pod",
+        "note": "Converted from layout c-ki77kjxymj version 1",
+        "seq": 1
+      }
+    ],
+    "materialized": {
+      "id": "c-ki77kjxymj",
+      "root": {
+        "children": [
+          {
+            "children": [
+              {
+                "style": "Label",
+                "type": "core://Text",
+                "value_expr": "Next"
+              }
+            ],
+            "padding_h_dp": 16,
+            "padding_v_dp": 8,
+            "type": "core://Column"
+          },
+          {
+            "item_template": {
+              "style": "Body",
+              "type": "core://Text",
+              "value_expr": "$item.title"
+            },
+            "query_key": "recipes:all",
+            "type": "core://List"
+          }
+        ],
+        "padding_h_dp": 16,
+        "type": "core://Column"
+      },
+      "title": "Coming up",
+      "type": "core://Page"
+    }
+  },
+  "c-o4pmrfxsm3": {
+    "edges": [],
+    "element": {
+      "icon": "photo",
+      "kind": "element",
+      "node": {
+        "id": "c-o4pmrfxsm3",
+        "root": {
+          "style": "Body",
+          "type": "core://Text",
+          "value_expr": "Nothing to see"
+        },
+        "title": "Old notes",
+        "type": "core://Page"
+      },
+      "title": "Old notes"
+    },
+    "history": [
+      {
+        "author": "pod",
+        "note": "Converted from layout c-o4pmrfxsm3 version 1",
+        "seq": 1
+      }
+    ],
+    "materialized": {
+      "id": "c-o4pmrfxsm3",
+      "root": {
+        "style": "Body",
+        "type": "core://Text",
+        "value_expr": "Nothing to see"
+      },
+      "title": "Old notes",
+      "type": "core://Page"
+    }
+  },
+  "c-r7jeifhpzm": {
+    "edges": [
+      "c-jyiz6is4ld",
+      "settings"
+    ],
+    "element": {
+      "icon": "photo",
+      "kind": "element",
+      "node": {
+        "id": "c-r7jeifhpzm",
+        "root": {
+          "children": [
+            {
+              "args": {
+                "title": "Meals"
+              },
+              "ref": {
+                "name": "@core/page_header",
+                "pin": false
+              },
+              "type": "core://Use"
+            },
+            {
+              "content": {
+                "args": {
+                  "label": "Recipes"
+                },
+                "ref": {
+                  "name": "@me/tile",
+                  "pin": false
+                },
+                "type": "core://Use"
+              },
+              "content_description": "Recipes",
+              "on_click": {
+                "intent": "action.navigation.open",
+                "presentation": "Push",
+                "ref": {
+                  "name": "c-jyiz6is4ld",
+                  "pin": false
+                }
+              },
+              "type": "core://Tappable"
+            },
+            {
+              "args": {
+                "label": "Pinned"
+              },
+              "ref": {
+                "name": "@me/tile",
+                "pin": true
+              },
+              "type": "core://Use"
+            },
+            {
+              "ref": {
+                "name": "@core/recipes/slot:recipes",
+                "pin": false
+              },
+              "type": "core://Use"
+            },
+            {
+              "label": "Settings",
+              "on_click": {
+                "intent": "action.navigation.open",
+                "presentation": "Panel",
+                "ref": {
+                  "as": "settings",
+                  "name": "@core/settings",
+                  "pin": false
+                }
+              },
+              "type": "core://Button"
+            }
+          ],
+          "type": "core://Column"
+        },
+        "title": "Meals",
+        "type": "core://Page"
+      },
+      "title": "Meals"
+    },
+    "history": [
+      {
+        "author": "pod",
+        "note": "Converted from layout c-r7jeifhpzm version 1",
+        "seq": 1
+      }
+    ],
+    "materialized": {
+      "id": "c-r7jeifhpzm",
+      "root": {
+        "children": [
+          {
+            "align": "Center",
+            "children": [
+              {
+                "content": {
+                  "content_description": "Back",
+                  "icon": "arrow_back",
+                  "on_click": {
+                    "intent": "action.navigation.back"
+                  },
+                  "tag": "back",
+                  "type": "core://IconButton"
+                },
+                "type": "core://Conditional",
+                "value": "${local://nav#can_go_back}"
+              },
+              {
+                "style": "Title",
+                "type": "core://Text",
+                "value_expr": "Meals"
+              },
+              {
+                "type": "core://Spacer"
+              }
+            ],
+            "padding_h_dp": 12,
+            "padding_v_dp": 4,
+            "spacing_dp": 4,
+            "type": "core://Row"
+          },
+          {
+            "content": {
+              "background": "${local://theme#card}",
+              "content": {
+                "children": [
+                  {
+                    "style": "Title",
+                    "type": "core://Text",
+                    "value_expr": "› Recipes"
+                  }
+                ],
+                "spacing_dp": 4,
+                "type": "core://Column"
+              },
+              "corner_dp": 14,
+              "padding_h_dp": 12,
+              "padding_v_dp": 10,
+              "type": "core://Box"
+            },
+            "content_description": "Recipes",
+            "on_click": {
+              "intent": "action.navigation.open",
+              "layout": "c-jyiz6is4ld",
+              "presentation": "Push"
+            },
+            "type": "core://Tappable"
+          },
+          {
+            "background": "${local://theme#card}",
+            "content": {
+              "children": [
+                {
+                  "style": "Title",
+                  "type": "core://Text",
+                  "value_expr": "Pinned"
+                }
+              ],
+              "spacing_dp": 4,
+              "type": "core://Column"
+            },
+            "corner_dp": 14,
+            "padding_h_dp": 12,
+            "padding_v_dp": 10,
+            "type": "core://Box"
+          },
+          {
+            "children": [
+              {
+                "content": {
+                  "children": [
+                    {
+                      "children": [
+                        {
+                          "field": "q",
+                          "placeholder": "Search recipes or ingredients",
+                          "type": "core://TextField"
+                        }
+                      ],
+                      "padding_h_dp": 16,
+                      "type": "core://Row"
+                    },
+                    {
+                      "field": "cat",
+                      "options": [
+                        {
+                          "label": "All",
+                          "value": ""
+                        },
+                        {
+                          "label": "Salads & sides",
+                          "value": "Appetizers/Sides/Salads"
+                        },
+                        {
+                          "label": "Mains",
+                          "value": "Main Dishes"
+                        },
+                        {
+                          "label": "Rice & grains",
+                          "value": "Side Dishes"
+                        },
+                        {
+                          "label": "Desserts",
+                          "value": "Desserts"
+                        },
+                        {
+                          "label": "Breakfast",
+                          "value": "Breakfast"
+                        },
+                        {
+                          "label": "Baking",
+                          "value": "Baking"
+                        },
+                        {
+                          "label": "Snacks",
+                          "value": "Snacks/Confections"
+                        },
+                        {
+                          "label": "Drinks",
+                          "value": "Drinks"
+                        }
+                      ],
+                      "padding_h_dp": 16,
+                      "type": "core://ChoiceChips"
+                    }
+                  ],
+                  "padding_v_dp": 8,
+                  "spacing_dp": 8,
+                  "type": "core://Column"
+                },
+                "type": "core://Sticky"
+              },
+              {
+                "empty_text": "No recipes yet",
+                "filter": {
+                  "fields": [
+                    "search_text"
+                  ],
+                  "no_match_text": "No recipes match",
+                  "value": "$form.q"
+                },
+                "group_by": {
+                  "field": "category",
+                  "header": {
+                    "children": [
+                      {
+                        "size_dp": 14,
+                        "type": "core://Spacer"
+                      },
+                      {
+                        "children": [
+                          {
+                            "style": "Label",
+                            "type": "core://Text",
+                            "value_expr": "$item.category_short"
+                          },
+                          {
+                            "type": "core://Spacer"
+                          },
+                          {
+                            "style": "Secondary",
+                            "type": "core://Text",
+                            "value_expr": "$item.group_count"
+                          }
+                        ],
+                        "padding_h_dp": 16,
+                        "type": "core://Row"
+                      },
+                      {
+                        "size_dp": 4,
+                        "type": "core://Spacer"
+                      }
+                    ],
+                    "type": "core://Column"
+                  }
+                },
+                "item_template": {
+                  "content": {
+                    "children": [
+                      {
+                        "align": "Center",
+                        "background": "$item.color",
+                        "content": {
+                          "style": "Display",
+                          "type": "core://Text",
+                          "value_expr": "$item.initial"
+                        },
+                        "content_color": "$item.ink",
+                        "corner_dp": 12,
+                        "height_dp": 44,
+                        "type": "core://Box",
+                        "width_dp": 44
+                      },
+                      {
+                        "children": [
+                          {
+                            "style": "Label",
+                            "type": "core://Text",
+                            "value_expr": "$item.title"
+                          },
+                          {
+                            "style": "Secondary",
+                            "type": "core://Text",
+                            "value_expr": "$item.meta"
+                          }
+                        ],
+                        "spacing_dp": 2,
+                        "type": "core://Column"
+                      }
+                    ],
+                    "padding_h_dp": 16,
+                    "padding_v_dp": 8,
+                    "spacing_dp": 14,
+                    "type": "core://Row"
+                  },
+                  "content_description": "Open $item.title",
+                  "on_click": {
+                    "intent": "action.navigation.open",
+                    "presentation": "Push",
+                    "target_uri": "recipes://recipes/$item.id"
+                  },
+                  "type": "core://Tappable"
+                },
+                "query_key": "recipes:all",
+                "type": "core://List",
+                "where": {
+                  "equals": "$form.cat",
+                  "field": "category_short"
+                }
+              }
+            ],
+            "spacing_dp": 8,
+            "type": "core://Column"
+          },
+          {
+            "label": "Settings",
+            "on_click": {
+              "intent": "action.navigation.open",
+              "layout": "settings",
+              "presentation": "Panel"
+            },
+            "type": "core://Button"
+          }
+        ],
+        "type": "core://Column"
+      },
+      "title": "Meals",
+      "type": "core://Page"
+    }
+  },
+  "c-u4zg5a4d4t": {
+    "edges": [
+      "c-jyiz6is4ld",
+      "c-ki77kjxymj",
+      "c-r7jeifhpzm"
+    ],
+    "element": {
+      "icon": "photo",
+      "kind": "element",
+      "node": {
+        "id": "c-u4zg5a4d4t",
+        "root": {
+          "children": [
+            {
+              "style": "Secondary",
+              "type": "core://Text",
+              "value_expr": "4 layouts"
+            },
+            {
+              "children": [
+                {
+                  "content": {
+                    "style": "Title",
+                    "type": "core://Text",
+                    "value_expr": "Recipes"
+                  },
+                  "on_click": {
+                    "intent": "action.navigation.open",
+                    "presentation": "Push",
+                    "ref": {
+                      "name": "c-jyiz6is4ld",
+                      "pin": false
+                    }
+                  },
+                  "type": "core://Tappable"
+                },
+                {
+                  "content": {
+                    "style": "Title",
+                    "type": "core://Text",
+                    "value_expr": "Coming up"
+                  },
+                  "on_click": {
+                    "intent": "action.navigation.open",
+                    "presentation": "Push",
+                    "ref": {
+                      "name": "c-ki77kjxymj",
+                      "pin": false
+                    }
+                  },
+                  "type": "core://Tappable"
+                },
+                {
+                  "content": {
+                    "style": "Title",
+                    "type": "core://Text",
+                    "value_expr": "Meals"
+                  },
+                  "on_click": {
+                    "intent": "action.navigation.open",
+                    "presentation": "Push",
+                    "ref": {
+                      "name": "c-r7jeifhpzm",
+                      "pin": false
+                    }
+                  },
+                  "type": "core://Tappable"
+                },
+                {
+                  "content": {
+                    "style": "Title",
+                    "type": "core://Text",
+                    "value_expr": "Launcher"
+                  },
+                  "on_click": {
+                    "edge": "c-u4zg5a4d4t",
+                    "intent": "action.navigation.pop_to"
+                  },
+                  "type": "core://Tappable"
+                }
+              ],
+              "type": "core://Column"
+            }
+          ],
+          "type": "core://Column"
+        },
+        "title": "Launcher",
+        "type": "core://Page"
+      },
+      "title": "Launcher"
+    },
+    "history": [
+      {
+        "author": "pod",
+        "note": "Converted from layout c-u4zg5a4d4t version 1",
+        "seq": 1
+      }
+    ],
+    "materialized": {
+      "id": "c-u4zg5a4d4t",
+      "root": {
+        "children": [
+          {
+            "style": "Secondary",
+            "type": "core://Text",
+            "value_expr": "4 layouts"
+          },
+          {
+            "children": [
+              {
+                "content": {
+                  "style": "Title",
+                  "type": "core://Text",
+                  "value_expr": "Recipes"
+                },
+                "on_click": {
+                  "intent": "action.navigation.open",
+                  "layout": "c-jyiz6is4ld",
+                  "presentation": "Push"
+                },
+                "type": "core://Tappable"
+              },
+              {
+                "content": {
+                  "style": "Title",
+                  "type": "core://Text",
+                  "value_expr": "Coming up"
+                },
+                "on_click": {
+                  "intent": "action.navigation.open",
+                  "layout": "c-ki77kjxymj",
+                  "presentation": "Push"
+                },
+                "type": "core://Tappable"
+              },
+              {
+                "content": {
+                  "style": "Title",
+                  "type": "core://Text",
+                  "value_expr": "Meals"
+                },
+                "on_click": {
+                  "intent": "action.navigation.open",
+                  "layout": "c-r7jeifhpzm",
+                  "presentation": "Push"
+                },
+                "type": "core://Tappable"
+              },
+              {
+                "content": {
+                  "style": "Title",
+                  "type": "core://Text",
+                  "value_expr": "Launcher"
+                },
+                "on_click": {
+                  "edge": "c-u4zg5a4d4t",
+                  "intent": "action.navigation.pop_to"
+                },
+                "type": "core://Tappable"
+              }
+            ],
+            "type": "core://Column"
+          }
+        ],
+        "type": "core://Column"
+      },
+      "title": "Launcher",
+      "type": "core://Page"
+    }
+  },
+  "home": {
+    "edges": [
+      "inbox",
+      "c-ki77kjxymj",
+      "c-r7jeifhpzm",
+      "c-u4zg5a4d4t"
+    ],
+    "element": {
+      "bind": {
+        "feeds": [
+          [
+            "recipes",
+            "all"
+          ]
+        ]
+      },
+      "icon": "dashboard",
+      "kind": "element",
+      "node": {
+        "id": "home",
+        "root": {
+          "children": [
+            {
+              "args": {
+                "title": "Home"
+              },
+              "children": [
+                {
+                  "content_description": "Notifications",
+                  "icon": "notifications",
+                  "on_click": {
+                    "intent": "action.navigation.open",
+                    "presentation": "Sheet",
+                    "ref": {
+                      "as": "inbox",
+                      "name": "@core/inbox",
+                      "pin": false
+                    }
+                  },
+                  "type": "core://IconButton"
+                }
+              ],
+              "ref": {
+                "name": "@core/header_bar",
+                "pin": false
+              },
+              "type": "core://Use"
+            },
+            {
+              "ref": {
+                "name": "c-ki77kjxymj",
+                "pin": false
+              },
+              "type": "core://Layout"
+            },
+            {
+              "content": {
+                "args": {
+                  "label": "Meals"
+                },
+                "ref": {
+                  "name": "@me/tile",
+                  "pin": false
+                },
+                "type": "core://Use"
+              },
+              "content_description": "Meals",
+              "on_click": {
+                "intent": "action.navigation.open",
+                "presentation": "Push",
+                "ref": {
+                  "name": "c-r7jeifhpzm",
+                  "pin": false
+                }
+              },
+              "type": "core://Tappable"
+            },
+            {
+              "content": {
+                "args": {
+                  "label": "All layouts"
+                },
+                "ref": {
+                  "name": "@me/tile",
+                  "pin": false
+                },
+                "type": "core://Use"
+              },
+              "content_description": "Launcher",
+              "on_click": {
+                "intent": "action.navigation.open",
+                "presentation": "Push",
+                "ref": {
+                  "name": "c-u4zg5a4d4t",
+                  "pin": false
+                }
+              },
+              "type": "core://Tappable"
+            }
+          ],
+          "type": "core://Column"
+        },
+        "title": "Home",
+        "type": "core://Page"
+      },
+      "title": "Home"
+    },
+    "history": [
+      {
+        "author": "pod",
+        "note": "Converted from layout home version 2",
+        "seq": 1
+      }
+    ],
+    "materialized": {
+      "id": "home",
+      "root": {
+        "children": [
+          {
+            "children": [
+              {
+                "style": "Title",
+                "type": "core://Text",
+                "value_expr": "Home"
+              },
+              {
+                "type": "core://Spacer"
+              },
+              {
+                "content_description": "Notifications",
+                "icon": "notifications",
+                "on_click": {
+                  "intent": "action.navigation.open",
+                  "layout": "inbox",
+                  "presentation": "Sheet"
+                },
+                "type": "core://IconButton"
+              }
+            ],
+            "padding_h_dp": 12,
+            "padding_v_dp": 4,
+            "type": "core://Row"
+          },
+          {
+            "layout": "c-ki77kjxymj",
+            "type": "core://Layout"
+          },
+          {
+            "content": {
+              "background": "${local://theme#card}",
+              "content": {
+                "children": [
+                  {
+                    "style": "Title",
+                    "type": "core://Text",
+                    "value_expr": "› Meals"
+                  }
+                ],
+                "spacing_dp": 4,
+                "type": "core://Column"
+              },
+              "corner_dp": 14,
+              "padding_h_dp": 12,
+              "padding_v_dp": 10,
+              "type": "core://Box"
+            },
+            "content_description": "Meals",
+            "on_click": {
+              "intent": "action.navigation.open",
+              "layout": "c-r7jeifhpzm",
+              "presentation": "Push"
+            },
+            "type": "core://Tappable"
+          },
+          {
+            "content": {
+              "background": "${local://theme#card}",
+              "content": {
+                "children": [
+                  {
+                    "style": "Title",
+                    "type": "core://Text",
+                    "value_expr": "› All layouts"
+                  }
+                ],
+                "spacing_dp": 4,
+                "type": "core://Column"
+              },
+              "corner_dp": 14,
+              "padding_h_dp": 12,
+              "padding_v_dp": 10,
+              "type": "core://Box"
+            },
+            "content_description": "Launcher",
+            "on_click": {
+              "intent": "action.navigation.open",
+              "layout": "c-u4zg5a4d4t",
+              "presentation": "Push"
+            },
+            "type": "core://Tappable"
+          }
+        ],
+        "type": "core://Column"
+      },
+      "title": "Home",
+      "type": "core://Page"
+    }
+  }
+}

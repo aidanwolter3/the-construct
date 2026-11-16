@@ -1,7 +1,7 @@
 //! Claude through MCP (decision `mcp-connector`), through the real host: OAuth
 //! discovery, registration, the pod-code page, the code exchange with PKCE, the
 //! scoped credential (only `/v1/mcp`), every tool against a pod with the
-//! made-up test recipes, and that rotation keeps and revocation ends the connection.
+//! made-up test dishes, and that rotation keeps and revocation ends the connection.
 
 mod construct;
 mod previews;
@@ -71,7 +71,7 @@ fn client() -> reqwest::Client {
 }
 
 impl Env {
-    /// An admin pod with the made-up test recipes (a seeded single-pod
+    /// An admin pod with the made-up test dishes (a seeded single-pod
     /// database, adopted); its pod token.
     async fn pod(&self, name: &str) -> String {
         let host = self.host.clone();
@@ -81,7 +81,7 @@ impl Env {
             let state = server::open_dir(old.path()).unwrap();
             state
                 .store()
-                .with_conn(source_recipes::db::seed_test_recipes)
+                .with_conn(source_collections::test_seed::seed_test_dishes)
                 .unwrap();
             drop(state);
             host.adopt(&name, &old.path().join("server.db"))
@@ -137,6 +137,48 @@ impl Env {
 
     /// The whole OAuth flow for a client redirecting to `redirect`, typing
     /// `pod_code`: the access token.
+    /// Layout `name` as a device of the construct draws it with
+    /// `bearer` (this build's features): `{workspace, entities, queries}`
+    /// (its element by name, the objects it reaches, materialized, and its
+    /// data).
+    async fn drawn(&self, name: &str, bearer: &str) -> Value {
+        let get = |path: String| async move {
+            let resp = client()
+                .get(format!("{}{path}", self.url))
+                .bearer_auth(bearer)
+                .header(protocol::FEATURES_HEADER, protocol::features_header())
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(resp.status(), StatusCode::OK, "{path}");
+            resp.json::<Value>().await.unwrap()
+        };
+        let el = get(format!("/v1/construct/names/{name}")).await["el"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        let objects: Value = client()
+            .post(format!("{}/v1/objects", self.url))
+            .bearer_auth(bearer)
+            .header(protocol::FEATURES_HEADER, protocol::features_header())
+            .json(&json!({ "have": [], "want": [el] }))
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        let objects: std::collections::BTreeMap<String, Arc<Value>> = objects["objects"]
+            .as_object()
+            .unwrap()
+            .iter()
+            .map(|(k, v)| (k.clone(), Arc::new(v.clone())))
+            .collect();
+        let node = construct_elements::materialize(&objects, &el).unwrap().node;
+        let data = get(format!("/v1/construct/data/{el}")).await;
+        json!({ "workspace": node, "entities": data["entities"], "queries": data["queries"] })
+    }
+
     async fn connect(&self, pod_code: &str) -> String {
         let redirect = "http://localhost:9999/cb";
         let reg: Value = client()
@@ -424,16 +466,25 @@ async fn claude_connects_with_oauth_and_the_pod_code() {
         "restore_version",
         "rename_layout",
         "delete_layout",
-        "set_hidden",
         "list_parts",
-        "rebase_context",
-        "dismiss_update",
         "delete_collection",
         "restore_collection",
     ] {
         assert!(names.contains(&want), "{want}: {names:?}");
     }
-    for path in ["/v1/workspaces/recipes", "/v1/apps", "/v1/auth/sign-ins"] {
+    for gone in [
+        "set_hidden",
+        "rebase_context",
+        "dismiss_update",
+        "switch_construct",
+    ] {
+        assert!(!names.contains(&gone), "{gone}: {names:?}");
+    }
+    for path in [
+        "/v1/construct",
+        "/v1/construct/names/home",
+        "/v1/auth/sign-ins",
+    ] {
         let (status, body) = env.get(path, &access).await;
         assert_eq!(status, StatusCode::FORBIDDEN, "{path}");
         assert_eq!(body["error"], "mcp_credential_scope");
@@ -471,7 +522,7 @@ async fn claude_connects_with_oauth_and_the_pod_code() {
         .unwrap();
     let (status, _) = env.rpc(Some(&access), "ping", json!({})).await;
     assert_eq!(status, StatusCode::OK);
-    let (status, _) = env.get("/v1/apps", &pod_code).await;
+    let (status, _) = env.get("/v1/construct", &pod_code).await;
     assert_eq!(status, StatusCode::UNAUTHORIZED, "the old pod code is gone");
     // The pod code itself also reaches the MCP endpoint.
     let (status, _) = env.rpc(Some(&new_code), "ping", json!({})).await;
@@ -491,11 +542,11 @@ async fn claude_connects_with_oauth_and_the_pod_code() {
     assert_eq!(status, StatusCode::UNAUTHORIZED);
 }
 
-/// The Kitchen-style layout over the recipes.
-fn recipes_layout(title: &str) -> Value {
+/// The Kitchen-style layout over the test dishes.
+fn dishes_layout(title: &str) -> Value {
     json!({"type": "core://Workspace", "id": "x", "title": title,
         "slots": [{"slot_id": "r", "provider_uri": "core://custom",
-          "content": {"type": "core://List", "query_key": "recipes:all",
+          "content": {"type": "core://List", "query_key": "collection:dishes",
             "item_template": {"type": "core://Text", "style": "Body", "value_expr": "$item.title"}}}]})
 }
 
@@ -507,16 +558,14 @@ async fn claude_builds_and_edits_a_custom_app_with_the_tools() {
 
     let (err, sources) = env.tool(&access, "list_data_sources", json!({})).await;
     assert!(!err, "{sources}");
-    let recipes = sources["sources"]
+    let collections = sources["sources"]
         .as_array()
         .unwrap()
         .iter()
-        .find(|s| s["id"] == "recipes")
+        .find(|s| s["id"] == "collections")
         .unwrap()
         .clone();
-    assert_eq!(recipes["feeds"][0]["name"], "all");
-    assert_eq!(recipes["signed_in"], true);
-    assert!(recipes["entities"][0]["fields"].as_array().unwrap().len() > 5);
+    assert_eq!(collections["signed_in"], true, "{collections}");
     let pixelfed = sources["sources"]
         .as_array()
         .unwrap()
@@ -537,7 +586,7 @@ async fn claude_builds_and_edits_a_custom_app_with_the_tools() {
     assert!(!err);
     // Every client node type but the three retired ones (decision
     // `layouts-not-apps`) and core://Workspace is plumbing; the workspace
-    // (issue #126), core://Use, core://Ref and the template nodes are
+    // (issue #126), core://Use and the template nodes are
     // porcelain (decision `plumbing-and-porcelain`).
     assert_eq!(
         vocab["plumbing"]["nodes"].as_array().unwrap().len(),
@@ -556,7 +605,7 @@ async fn claude_builds_and_edits_a_custom_app_with_the_tools() {
             .as_array()
             .unwrap()
             .iter()
-            .any(|c| c["name"] == "core:workspace"),
+            .any(|c| c["name"] == "@core/workspace"),
         "{vocab}"
     );
     let (err, parts) = env
@@ -570,37 +619,38 @@ async fn claude_builds_and_edits_a_custom_app_with_the_tools() {
         .iter()
         .map(|p| p["part"].as_str().unwrap())
         .collect();
-    assert!(names.contains(&"screen:post"), "{names:?}");
+    // A blueprint's parts are its slots (and those it declares).
+    assert!(names.contains(&"slot:feed"), "{names:?}");
 
     let (err, layout) = env
-        .tool(&access, "get_layout", json!({"app": "recipes"}))
+        .tool(&access, "get_layout", json!({"app": "events"}))
         .await;
     assert!(!err, "{layout}");
-    assert_eq!(layout["kind"], "builtin");
-    assert_eq!(layout["layout"]["type"], "core://Workspace");
+    assert_eq!(layout["name"], "@core/events");
+    assert_eq!(layout["layout"]["type"], "core://Page");
 
-    // Samples: the feed, then a recipe screen's data path with a real id.
+    // Samples: the feed, then a row screen's data path with a real id.
     let (err, sample) = env
         .tool(
             &access,
             "sample_data",
-            json!({"source": "recipes", "feed": "all", "limit": 3}),
+            json!({"source": "collections", "feed": "dishes", "limit": 3}),
         )
         .await;
     assert!(!err, "{sample}");
-    let listed = sample["queries"]["recipes:all"].as_array().unwrap();
+    let listed = sample["queries"]["collection:dishes"].as_array().unwrap();
     assert_eq!(listed.len(), 3);
     let first = listed[0]
         .as_str()
         .unwrap()
-        .strip_prefix("recipes://recipes/")
+        .strip_prefix("collections://dishes/")
         .unwrap()
         .to_owned();
     let (err, screen) = env
         .tool(
             &access,
             "sample_data",
-            json!({"source": "recipes", "path": format!("/v1/recipes/screens/recipe?id={first}")}),
+            json!({"source": "collections", "path": format!("/v1/collections/dishes/row?id={first}")}),
         )
         .await;
     assert!(!err, "{screen}");
@@ -609,14 +659,14 @@ async fn claude_builds_and_edits_a_custom_app_with_the_tools() {
             .as_object()
             .unwrap()
             .keys()
-            .any(|k| k.ends_with(":steps")),
+            .any(|k| k.ends_with(&format!(":row:{first}"))),
         "{screen}"
     );
     let (err, bad) = env
         .tool(
             &access,
             "sample_data",
-            json!({"source": "recipes", "path": "/v1/auth/sign-ins"}),
+            json!({"source": "collections", "path": "/v1/auth/sign-ins"}),
         )
         .await;
     assert!(err);
@@ -628,50 +678,54 @@ async fn claude_builds_and_edits_a_custom_app_with_the_tools() {
     assert_eq!(signed_out["error"], "signed_out");
 
     // Validation errors are something Claude can act on.
-    let mut wrong = recipes_layout("K");
+    let mut wrong = dishes_layout("K");
     wrong["slots"][0]["content"]["query_key"] = json!("timeline:home");
     let (err, v) = env
         .tool(
             &access,
             "validate_layout",
-            json!({"feeds": [["recipes", "all"]], "layout": wrong}),
+            json!({"feeds": [["collections", "dishes"]], "layout": wrong}),
         )
         .await;
     assert!(err);
-    assert_eq!(v["at"], "/slots/0/content/query_key");
+    // `at` points into the layout as clients draw it (the workspace's page).
+    assert!(v["at"].as_str().unwrap().ends_with("/query_key"), "{v}");
     assert!(
         v["allowed"]
             .as_array()
             .unwrap()
-            .contains(&json!("recipes:all"))
+            .iter()
+            .any(|k| k.as_str().is_some_and(|k| k.starts_with("collection:"))),
+        "{v}"
     );
 
-    // Create, patch, restore, rename, hide, delete.
+    // Create, patch, restore, rename, delete.
     let (err, created) = env
         .tool(
             &access,
             "create_layout",
-            json!({"title": "Dinner", "icon": "recipe", "feeds": [["recipes", "all"]],
-            "layout": recipes_layout("Dinner"), "note": "Just the recipes, please"}),
+            json!({"title": "Dinner", "icon": "recipe", "feeds": [["collections", "dishes"]],
+            "layout": dishes_layout("Dinner"), "note": "Just the dishes, please"}),
         )
         .await;
     assert!(!err, "{created}");
     let id = created["id"].as_str().unwrap().to_owned();
+    let first = created["version"].as_i64().unwrap();
     let (err, patched) = env
         .tool(
             &access,
             "update_layout",
-            json!({"app": id, "base_version": 1, "note": "Rename",
+            json!({"app": id, "base_version": first, "note": "Rename",
             "json_patch": [{"op": "replace", "path": "/title", "value": "Dinner tonight"}]}),
         )
         .await;
     assert!(!err, "{patched}");
-    assert_eq!(patched["version"], 2);
+    assert_eq!(patched["version"], first + 1);
     let (err, stale) = env
         .tool(
             &access,
             "update_layout",
-            json!({"app": id, "base_version": 1, "layout": recipes_layout("x")}),
+            json!({"app": id, "base_version": first, "layout": dishes_layout("x")}),
         )
         .await;
     assert!(err);
@@ -686,10 +740,14 @@ async fn claude_builds_and_edits_a_custom_app_with_the_tools() {
     assert!(err);
     assert_eq!(bad_patch["error"], "invalid_patch");
     let (err, restored) = env
-        .tool(&access, "restore_version", json!({"app": id, "version": 1}))
+        .tool(
+            &access,
+            "restore_version",
+            json!({"app": id, "version": first}),
+        )
         .await;
     assert!(!err, "{restored}");
-    assert_eq!(restored["version"], 3);
+    assert_eq!(restored["version"], first + 2);
     let (err, _) = env
         .tool(
             &access,
@@ -698,14 +756,16 @@ async fn claude_builds_and_edits_a_custom_app_with_the_tools() {
         )
         .await;
     assert!(!err);
-    let (err, _) = env
-        .tool(
-            &access,
-            "set_hidden",
-            json!({"app": "recipes", "hidden": true}),
-        )
-        .await;
-    assert!(!err);
+    for gone in [
+        "set_hidden",
+        "dismiss_update",
+        "rebase_context",
+        "switch_construct",
+    ] {
+        let (err, v) = env.tool(&access, gone, json!({"app": "events"})).await;
+        assert!(err, "{gone}");
+        assert_eq!(v["error"], "unknown_tool", "{gone}");
+    }
     let (err, apps) = env.tool(&access, "list_layouts", json!({})).await;
     assert!(!err);
     let rows = apps["layouts"].as_array().unwrap();
@@ -714,65 +774,60 @@ async fn claude_builds_and_edits_a_custom_app_with_the_tools() {
             .as_array()
             .unwrap()
             .iter()
-            .any(|a| a["id"] == "recipes" && a["hidden"] == true)
+            .any(|a| a["id"] == "events" && a["name"] == "@core/events")
     );
     assert!(
         rows.iter()
-            .any(|a| a["id"] == id.as_str() && a["kind"] == "custom" && a["title"] == "Supper")
+            .any(|a| a["id"] == id.as_str() && a["title"] == "Supper"),
+        "{apps}"
     );
-    // The history says Claude wrote it; the pod's clients see the app.
+    // The history says Claude wrote it; the pod's clients see the layout.
+    let (err, layout) = env.tool(&access, "get_layout", json!({"app": id})).await;
+    assert!(!err, "{layout}");
+    let history = layout["history"].as_array().unwrap();
+    assert!(history.iter().all(|v| v["author"] == "claude"), "{layout}");
+    assert_eq!(history.last().unwrap()["note"], "Just the dishes, please");
     let host_token = &pod_code;
-    let (status, history) = env
-        .get(&format!("/v1/apps/{id}/versions"), host_token)
+    let (status, name) = env
+        .get(&format!("/v1/construct/names/{id}"), host_token)
+        .await;
+    assert_eq!(status, StatusCode::OK, "{name}");
+    let (status, el) = env
+        .get(
+            &format!("/v1/objects/{}", name["el"].as_str().unwrap()),
+            host_token,
+        )
         .await;
     assert_eq!(status, StatusCode::OK);
-    let versions = history["versions"].as_array().unwrap();
-    assert!(
-        versions.iter().all(|v| v["author"] == "claude"),
-        "{history}"
-    );
-    assert_eq!(versions[2]["note"], "Just the recipes, please");
-    let (status, ws) = env.get(&format!("/v1/workspaces/{id}"), host_token).await;
-    assert_eq!(status, StatusCode::OK);
-    assert_eq!(ws["workspace"]["title"], "Dinner");
-    // Built-ins can't be edited or deleted.
+    assert_eq!(el["title"], "Supper");
+    assert_eq!(el["node"]["title"], "Dinner");
+    // Blueprints can't be edited or deleted.
     let (err, _) = env
         .tool(
             &access,
             "update_layout",
-            json!({"app": "recipes", "layout": recipes_layout("x")}),
+            json!({"app": "events", "layout": dishes_layout("x")}),
         )
         .await;
     assert!(err);
     let (err, _) = env.tool(&access, "delete_layout", json!({"app": id})).await;
     assert!(!err);
-    let (status, _) = env.get(&format!("/v1/workspaces/{id}"), host_token).await;
+    let (status, _) = env
+        .get(&format!("/v1/construct/names/{id}"), host_token)
+        .await;
     assert_eq!(status, StatusCode::NOT_FOUND);
-    // A copy of the recipes app: rebase_context hands over what to merge.
+    // `copied_from` is gone: a copy of a blueprint is a layout like any other.
     let (_, now) = env
-        .tool(&access, "get_layout", json!({"app": "recipes"}))
+        .tool(&access, "get_layout", json!({"app": "events"}))
         .await;
     let (err, copy) = env
         .tool(
             &access,
             "create_layout",
-            json!({"title": "My recipes", "feeds": [["recipes", "all"]], "layout": now["layout"],
-                "copied_from": {"app": "recipes", "version": now["version"]}}),
+            json!({"title": "My events", "feeds": [["collections", "events"]], "layout": now["layout"]}),
         )
         .await;
     assert!(!err, "{copy}");
-    let (err, ctx) = env
-        .tool(&access, "rebase_context", json!({"id": copy["id"]}))
-        .await;
-    assert!(!err, "{ctx}");
-    assert_eq!(ctx["id"], copy["id"]);
-    assert_eq!(ctx["copied_from"]["app"], "recipes");
-    assert_eq!(ctx["base"]["version"], ctx["builtin_latest"]["version"]);
-    let (err, not_copy) = env
-        .tool(&access, "rebase_context", json!({"app": "recipes"}))
-        .await;
-    assert!(err);
-    assert_eq!(not_copy["error"], "not_a_copy");
     // An unknown tool is an error result, not a protocol error.
     let (err, unknown) = env.tool(&access, "drop_tables", json!({})).await;
     assert!(err);
@@ -947,7 +1002,7 @@ async fn components_that_multiply_stop_at_the_work_budget() {
     // 2^24 copies of the text if nothing stopped it.
     let mut node = json!({"type": "core://Text", "style": "Body", "value_expr": "x"});
     for _ in 0..24 {
-        node = json!({"type": "core://Use", "component": "pod:dup", "children": [node]});
+        node = json!({"type": "core://Use", "ref": "@me/dup", "children": [node]});
     }
     let (err, x) = env.tool(&access, "expand", json!({"node": node})).await;
     assert!(err, "{x}");
@@ -958,7 +1013,7 @@ async fn components_that_multiply_stop_at_the_work_budget() {
         let uses: Vec<Value> = (0..16)
             .map(|_| match inner {
                 "" => json!({"type": "core://Text", "style": "Body", "value_expr": "$arg.t"}),
-                c => json!({"type": "core://Use", "component": c, "args": {"t": "$arg.t$arg.t"}}),
+                c => json!({"type": "core://Use", "ref": c, "args": {"t": "$arg.t$arg.t"}}),
             })
             .collect();
         json!({"doc": "Wide.", "params": [{"name": "t", "type": "text", "required": true, "doc": "Text"}],
@@ -979,13 +1034,13 @@ async fn components_that_multiply_stop_at_the_work_budget() {
             assert!(d.to_string().contains("too large"), "{d}");
             break;
         }
-        inner = format!("pod:wide{i}");
+        inner = format!("@me/wide{i}");
     }
     let (err, x) = env
         .tool(
             &access,
             "expand",
-            json!({"component": inner, "args": {"t": "y".repeat(1000)}}),
+            json!({"node": {"type": "core://Use", "ref": inner, "args": {"t": "y".repeat(1000)}}}),
         )
         .await;
     assert!(err, "{x}");
@@ -996,7 +1051,8 @@ async fn components_that_multiply_stop_at_the_work_budget() {
         .tool(
             &access,
             "expand",
-            json!({"component": "pod:dup", "children": [{"type": "core://Text", "style": "Body", "value_expr": "x"}]}),
+            json!({"node": {"type": "core://Use", "ref": "@me/dup",
+                "children": [{"type": "core://Text", "style": "Body", "value_expr": "x"}]}}),
         )
         .await;
     assert!(!err, "{x}");
@@ -1011,38 +1067,53 @@ async fn components_are_defined_used_and_expanded() {
     let env = env().await;
     let pod_code = env.pod("mine").await;
     let access = env.connect(&pod_code).await;
+    let use_ = |name: &str, args: Value, children: Value| json!({"node": {"type": "core://Use", "ref": name, "args": args, "children": children}});
 
     let (err, list) = env.tool(&access, "list_components", json!({})).await;
     assert!(!err, "{list}");
-    let names: Vec<&str> = list["components"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .filter_map(|c| c["name"].as_str())
-        .collect();
-    for want in [
-        "core:workspace",
-        "core:screen",
-        "core:card",
-        "core:section_header",
-        "core:pixelfed_sign_in",
-    ] {
-        assert!(names.contains(&want), "{want} in {names:?}");
-    }
-    assert!(
-        list["blueprints"]
+    let of_kind = |kind: &str| -> Vec<String> {
+        list["components"]
             .as_array()
             .unwrap()
             .iter()
-            .any(|b| b == "core:recipes")
-    );
+            .filter(|c| c["kind"] == kind)
+            .filter_map(|c| c["name"].as_str().map(str::to_owned))
+            .collect()
+    };
+    let components = of_kind("component");
+    for want in [
+        "@core/workspace",
+        "@core/screen",
+        "@core/card",
+        "@core/section_header",
+        "@core/pixelfed_sign_in",
+    ] {
+        assert!(
+            components.iter().any(|c| c == want),
+            "{want} in {components:?}"
+        );
+    }
+    assert!(of_kind("blueprint").iter().any(|b| b == "@core/events"));
 
     let (err, ws) = env
-        .tool(&access, "get_component", json!({"name": "core:workspace"}))
+        .tool(&access, "get_component", json!({"name": "@core/workspace"}))
         .await;
     assert!(!err, "{ws}");
-    assert_eq!(ws["definition"]["params"][0]["name"], "title");
-    let text = ws["examples"][0]["expanded"].to_string();
+    assert_eq!(ws["component"]["params"][0]["name"], "title");
+    let ex = &ws["component"]["examples"][0];
+    let (err, x) = env
+        .tool(
+            &access,
+            "expand",
+            use_(
+                "@core/workspace",
+                ex["args"].clone(),
+                ex["children"].clone(),
+            ),
+        )
+        .await;
+    assert!(!err, "{x}");
+    let text = x["expanded"].to_string();
     assert!(
         text.contains("core://Scroll") && !text.contains("$arg."),
         "{text}"
@@ -1053,7 +1124,11 @@ async fn components_are_defined_used_and_expanded() {
         .tool(
             &access,
             "expand",
-            json!({"component": "core:section_header", "args": {"text": "Hi", "divider": true}}),
+            use_(
+                "@core/section_header",
+                json!({"text": "Hi", "divider": true}),
+                json!([]),
+            ),
         )
         .await;
     assert!(!err, "{x}");
@@ -1066,11 +1141,11 @@ async fn components_are_defined_used_and_expanded() {
         .tool(
             &access,
             "expand",
-            json!({"component": "core:card", "args": {"nope": 1}}),
+            use_("@core/card", json!({"nope": 1}), json!([])),
         )
         .await;
     assert!(err, "{x}");
-    assert!(x.to_string().contains("no parameter 'nope'"), "{x}");
+    assert!(x.to_string().contains("nope"), "{x}");
 
     // What clients get for home: plumbing only.
     let (err, home) = env.tool(&access, "expand", json!({"id": "home"})).await;
@@ -1109,15 +1184,13 @@ async fn components_are_defined_used_and_expanded() {
         )
         .await;
     assert!(!err, "{d}");
-    assert_eq!(
-        (d["name"].as_str(), d["version"].as_i64()),
-        (Some("pod:greeting"), Some(1))
-    );
+    assert_eq!(d["name"], "@me/greeting");
+    let first = d["version"].as_i64().unwrap();
     let (err, d) = env
         .tool(
             &access,
             "define_component",
-            json!({"name": "pod:greeting", "component": greeting("x")}),
+            json!({"name": "@me/greeting", "component": greeting("x")}),
         )
         .await;
     assert!(err && d["error"] == "component_exists", "{d}");
@@ -1125,7 +1198,7 @@ async fn components_are_defined_used_and_expanded() {
         .tool(
             &access,
             "define_component",
-            json!({"name": "pod:bad", "component": greeting("$arg.nope")}),
+            json!({"name": "@me/bad", "component": greeting("$arg.nope")}),
         )
         .await;
     assert!(err && d["error"] == "invalid_component", "{d}");
@@ -1133,22 +1206,19 @@ async fn components_are_defined_used_and_expanded() {
         .tool(
             &access,
             "update_component",
-            json!({"name": "core:card", "component": greeting("x")}),
+            json!({"name": "@core/card", "component": greeting("x")}),
         )
         .await;
     assert!(err && d["error"] == "read_only", "{d}");
 
     // A layout uses it, and follows it.
     let layout = json!({"type": "core://Workspace", "title": "Home", "slots": [
-        {"slot_id": "hi", "content": {"type": "core://Use", "component": "pod:greeting", "args": {"who": "Ada"}}}]});
+        {"slot_id": "hi", "content": {"type": "core://Use", "ref": "@me/greeting", "args": {"who": "Ada"}}}]});
     let (err, v) = env
         .tool(&access, "validate_layout", json!({"layout": layout}))
         .await;
     assert!(!err, "{v}");
-    assert_eq!(
-        v["expanded"]["slots"][0]["content"]["value_expr"],
-        "Hello Ada"
-    );
+    assert!(v["expanded"].to_string().contains("Hello Ada"), "{v}");
     let (err, w) = env
         .tool(
             &access,
@@ -1161,47 +1231,54 @@ async fn components_are_defined_used_and_expanded() {
         .tool(
             &access,
             "update_component",
-            json!({"name": "pod:greeting", "component": greeting("Hi there $arg.who")}),
+            json!({"name": "@me/greeting", "component": greeting("Hi there $arg.who")}),
         )
         .await;
     assert!(!err, "{u}");
-    assert_eq!(u["layouts_updated"][0]["id"], "home", "{u}");
-    let (status, body) = env.get("/v1/workspaces/home", &pod_code).await;
-    assert_eq!(status, StatusCode::OK, "{body}");
+    assert!(
+        u["re_sealed"].as_array().unwrap().contains(&json!("home")),
+        "{u}"
+    );
+    let body = env.drawn("home", &pod_code).await;
     let text = body["workspace"].to_string();
     assert!(
         text.contains("Hi there Ada") && !text.contains("core://Use"),
         "{text}"
     );
-    // The pod's theme comes with it.
+    // The pod's theme comes with its data.
     assert_eq!(body["entities"]["core://theme"]["card_border"], "#E4E4EA");
 
     let (err, d) = env
-        .tool(&access, "delete_component", json!({"name": "pod:greeting"}))
+        .tool(&access, "delete_component", json!({"name": "@me/greeting"}))
         .await;
-    assert!(err && d["error"] == "component_in_use", "{d}");
-    assert_eq!(d["layouts"][0], "home");
+    assert!(err && d["error"] == "in_use", "{d}");
+    assert!(d["used_by"].to_string().contains("home"), "{d}");
     let (err, r) = env
         .tool(
             &access,
             "restore_component",
-            json!({"name": "greeting", "version": 1}),
+            json!({"name": "greeting", "version": first}),
         )
         .await;
-    assert!(!err && r["version"] == 3, "{r}");
+    assert!(!err, "{r}");
+    let text = env.drawn("home", &pod_code).await["workspace"].to_string();
+    assert!(
+        text.contains("Hello Ada"),
+        "home follows the restore: {text}"
+    );
 
     let (err, c) = env
-        .tool(&access, "copy_component", json!({"from": "core:card"}))
+        .tool(&access, "copy_component", json!({"from": "@core/card"}))
         .await;
     assert!(!err, "{c}");
-    assert_eq!(c["name"], "pod:card");
+    assert_eq!(c["name"], "@me/card");
     let (err, got) = env
-        .tool(&access, "get_component", json!({"name": "pod:card"}))
+        .tool(&access, "get_component", json!({"name": "@me/card"}))
         .await;
     assert!(!err);
-    assert_eq!(got["history"][0]["note"], "Copied from core:card v3");
+    assert_eq!(got["history"][0]["note"], "Copied from @core/card");
     let (err, d) = env
-        .tool(&access, "delete_component", json!({"name": "pod:card"}))
+        .tool(&access, "delete_component", json!({"name": "@me/card"}))
         .await;
     assert!(!err, "{d}");
 
@@ -1211,11 +1288,20 @@ async fn components_are_defined_used_and_expanded() {
         .tool(
             &access,
             "get_component",
-            json!({"name": "core:pixelfed_sign_in"}),
+            json!({"name": "@core/pixelfed_sign_in"}),
         )
         .await;
     assert!(!err, "{sign_in}");
-    let text = sign_in["examples"][1]["expanded"].to_string();
+    let ex = &sign_in["component"]["examples"][1];
+    let (err, x) = env
+        .tool(
+            &access,
+            "expand",
+            use_("@core/pixelfed_sign_in", ex["args"].clone(), json!([])),
+        )
+        .await;
+    assert!(!err, "{x}");
+    let text = x["expanded"].to_string();
     assert!(
         text.contains("Sign in with Pixelfed") && text.contains("$form.instance"),
         "{text}"
@@ -1224,11 +1310,11 @@ async fn components_are_defined_used_and_expanded() {
         .tool(
             &access,
             "copy_component",
-            json!({"from": "core:pixelfed_sign_in", "name": "pod:my_sign_in"}),
+            json!({"from": "@core/pixelfed_sign_in", "name": "my_sign_in"}),
         )
         .await;
     assert!(!err, "{c}");
-    assert_eq!(c["name"], "pod:my_sign_in");
+    assert_eq!(c["name"], "@me/my_sign_in");
 
     let (err, t) = env
         .tool(
@@ -1248,7 +1334,7 @@ async fn components_are_defined_used_and_expanded() {
         )
         .await;
     assert!(err && t["error"] == "invalid_theme", "{t}");
-    let (_, body) = env.get("/v1/workspaces/home", &pod_code).await;
+    let body = env.drawn("home", &pod_code).await;
     assert_eq!(
         body["entities"]["core://theme"]["card_border_dark"],
         "#101010"
@@ -1315,7 +1401,7 @@ async fn collections_are_deleted_once_no_layout_shows_them() {
         )
         .await;
     assert!(err && e["error"] == "collection_in_use", "{e}");
-    assert_eq!(e["used_by"][0]["app"], poem.as_str());
+    assert_eq!(e["used_by"][0]["layout"], poem.as_str());
     assert!(e["detail"].as_str().unwrap().contains("'Poem'"), "{e}");
 
     // The layout goes; home's feed is stale. Dropping it is an edit of
@@ -1420,15 +1506,15 @@ async fn agents_preview_a_layout_and_tap_it() {
         "slots": [{"slot_id": "r", "provider_uri": "core://custom", "content": {"type": "core://Column", "children": [
             {"type": "core://ChoiceChips", "field": "filter", "options": [
                 {"label": "All", "value": ""}, {"label": "Started", "value": "started"}]},
-            {"type": "core://List", "query_key": "recipes:all",
+            {"type": "core://List", "query_key": "collection:dishes",
              "item_template": {"type": "core://Tappable",
-                "on_click": {"intent": "action.navigation.open", "presentation": "Push", "target_uri": "recipes://recipes/$item.id"},
+                "on_click": {"intent": "action.navigation.open", "presentation": "Push", "target_uri": "collections://dishes/$item.id"},
                 "content": {"type": "core://Text", "style": "Body", "value_expr": "$item.title"}}}]}}]});
     let (err, created) = env
         .tool(
             &access,
             "create_layout",
-            json!({"title": "Recipes", "layout": layout, "feeds": [["recipes", "all"]]}),
+            json!({"title": "Recipes", "layout": layout, "feeds": [["collections", "dishes"]]}),
         )
         .await;
     assert!(!err, "{created}");
@@ -1496,14 +1582,14 @@ async fn agents_preview_a_layout_and_tap_it() {
     assert!(!err, "{text}");
     assert!(text.contains("not sent"), "{text}");
     assert!(
-        text.contains("recipes://recipes/"),
+        text.contains("collections://dishes/"),
         "bound to the item: {text}"
     );
 
     // 4. A draft layout, drawn with home's data, needs no saving.
     let draft = json!({"type": "core://Page", "id": "d", "root": {"type": "core://Column", "children": [
         {"type": "core://Text", "style": "Title", "value_expr": "Draft"},
-        {"type": "core://List", "query_key": "recipes:all",
+        {"type": "core://List", "query_key": "collection:dishes",
          "item_template": {"type": "core://Text", "style": "Body", "value_expr": "$item.title"}}]}});
     let (err, _, text) = preview_call(
         &env,
@@ -1581,7 +1667,7 @@ async fn previews_refuse_values_past_a_saved_layouts_bounds() {
     let access = env.connect(&pod_code).await;
     let icon = |size: u64| {
         json!({"type": "core://IconButton", "icon": "add", "content_description": "Add", "size_dp": size,
-               "on_click": {"intent": "action.navigation.open", "presentation": "Push", "target_uri": "recipes://recipes/1"}})
+               "on_click": {"intent": "action.navigation.open", "presentation": "Push", "target_uri": "collections://dishes/1"}})
     };
 
     // A draft.

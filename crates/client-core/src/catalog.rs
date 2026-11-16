@@ -1,13 +1,11 @@
-//! App catalog API (docs/DECISIONS.md D27, D32): blocking, read-only calls to
-//! the pod's public `/v1/apps` endpoints for the menu and the version picker,
-//! plus the session's sign-ins for Settings (`/v1/auth/sign-ins`).
+//! Pod calls for Settings: the session's sign-ins (`/v1/auth/sign-ins`), and
+//! the error type the engine's other pod calls (notifications, push) share.
 //! Each call runs on the caller's thread (never the UI thread) with the
 //! engine's base URL and returns the pod's JSON body unchanged.
 //!
-//! The endpoints are public, so no bearer is sent and a 401 (which the pod
-//! does not answer for them) is just an [`LayoutApiError::Unauthorized`]
-//! error: it never signs out. Clients cannot change layouts: the pod serves
-//! each app's latest version, and picking an older one is client-local.
+//! A 401 is just an [`LayoutApiError::Unauthorized`] error: it never signs
+//! out (the layout fetch does that). Layouts themselves come from the
+//! construct ([`crate::construct`], decision `one-layout-system`).
 
 use std::fmt;
 use std::time::Duration;
@@ -21,11 +19,8 @@ const CATALOG_HTTP_TIMEOUT: Duration = Duration::from_secs(15);
 
 /// `reason` of [`LayoutApiError::Offline`].
 pub const LAYOUTS_OFFLINE: &str = "Can't reach your pod. Check your connection and try again.";
-/// `reason` of a 401 (not expected: the app endpoints are public).
+/// `reason` of a 401.
 pub const LAYOUTS_UNAUTHORIZED: &str = "The pod refused this request.";
-/// `reason` when `GET /v1/apps` gets a 404 or a 2xx that is not the pod's
-/// apps JSON: the base URL is some other web server.
-pub const LAYOUTS_NOT_A_POD: &str = "This server doesn't look like a Construct pod.";
 
 /// `reason` when the pod has no `GET /v1/auth/sign-ins` (an older pod).
 pub const SIGN_INS_UNSUPPORTED: &str = "This pod can't list sign-ins yet.";
@@ -36,9 +31,9 @@ pub const SIGN_INS_UNSUPPORTED: &str = "This pod can't list sign-ins yet.";
 pub enum LayoutApiError {
     /// The pod could not be reached (transport error or timeout).
     Offline { reason: String },
-    /// HTTP 401 (not expected for these public endpoints).
+    /// HTTP 401.
     Unauthorized { reason: String },
-    /// HTTP 404: unknown app or version.
+    /// HTTP 404: an unknown layout or path.
     NotFound { reason: String },
     /// Any other non-2xx status, or an unusable response.
     Server { status: u16, reason: String },
@@ -85,15 +80,10 @@ fn error_for(status: u16, body: &str) -> LayoutApiError {
             reason: LAYOUTS_UNAUTHORIZED.to_owned(),
         },
         404 => LayoutApiError::NotFound {
-            reason: match code {
-                "version_not_found" => "That version doesn't exist.",
-                _ => "That app doesn't exist.",
-            }
-            .to_owned(),
+            reason: "That doesn't exist on your pod.".to_owned(),
         },
         _ => {
             let reason = match code {
-                "invalid_workspace_id" => "That isn't a valid app id.".to_owned(),
                 "invalid_request" => "The pod rejected the request.".to_owned(),
                 "" if status >= 500 => {
                     format!("The pod had a problem (HTTP {status}). Please try again.")
@@ -168,103 +158,6 @@ impl Inner {
 }
 
 impl ConstructEngine {
-    /// `GET /v1/apps?all=1`: `{"apps":[{id, title, icon, kind, hidden,
-    /// latest_version, updated_at}]}`, hidden apps included (`kind` and
-    /// `hidden` are missing from older pods, which ignore `all`). Blocking.
-    /// Every pod serves this list, so a 404 or a 2xx without an `apps` array
-    /// means the base URL is not a pod ([`LAYOUTS_NOT_A_POD`]), not that an
-    /// app is missing.
-    pub fn list_apps(&self) -> Result<String, LayoutApiError> {
-        match self.inner.catalog_get("/v1/apps?all=1") {
-            Ok(body) => {
-                let is_pod = serde_json::from_str::<Value>(&body)
-                    .is_ok_and(|v| v.get("apps").is_some_and(Value::is_array));
-                if is_pod {
-                    return Ok(body);
-                }
-                let start: String = body.trim().chars().take(200).collect();
-                eprintln!("[ConstructEngine] apps: GET /v1/apps is not a pod's list: {start}");
-                Err(LayoutApiError::Server {
-                    status: 200,
-                    reason: LAYOUTS_NOT_A_POD.to_owned(),
-                })
-            }
-            Err(LayoutApiError::NotFound { .. }) => Err(LayoutApiError::NotFound {
-                reason: LAYOUTS_NOT_A_POD.to_owned(),
-            }),
-            Err(e) => Err(e),
-        }
-    }
-
-    /// `GET /v1/apps/<id>/versions[?before=N&limit=L]`: one page of the app's
-    /// history, newest first (`{app_id, latest_version, versions:[{version,
-    /// created_at, source, note?, schema, compatible, incompatible?}],
-    /// next_before?}`; `compatible` is for this build's schema; pass
-    /// `next_before` as `before` for the next page). Blocking.
-    pub fn app_versions(
-        &self,
-        app_id: &str,
-        before: Option<i64>,
-        limit: Option<u32>,
-    ) -> Result<String, LayoutApiError> {
-        let mut query = Vec::new();
-        if let Some(b) = before {
-            query.push(format!("before={b}"));
-        }
-        if let Some(l) = limit {
-            query.push(format!("limit={l}"));
-        }
-        let mut path = format!("/v1/apps/{}/versions", segment(app_id));
-        if !query.is_empty() {
-            path = format!("{path}?{}", query.join("&"));
-        }
-        self.inner.catalog_get(&path)
-    }
-
-    /// `GET /v1/apps/<id>/versions/<n>`: `{app_id, version, created_at,
-    /// source, note?, layout}` (`layout` is the full `UiNode`). Blocking.
-    pub fn app_version(&self, app_id: &str, version: i64) -> Result<String, LayoutApiError> {
-        self.inner
-            .catalog_get(&format!("/v1/apps/{}/versions/{version}", segment(app_id)))
-    }
-
-    /// `DELETE /v1/custom-apps/<id>`: delete a custom app on the pod (every
-    /// device's engine on it hears `deleted`). Blocking.
-    pub fn delete_custom_app(&self, app_id: &str) -> Result<(), LayoutApiError> {
-        self.inner
-            .catalog_call(
-                reqwest::Method::DELETE,
-                &format!("/v1/custom-apps/{}", segment(app_id)),
-                None,
-            )
-            .map(|_| ())
-    }
-
-    /// `POST /v1/custom-apps/<id>/dismiss-update {version}`: stop showing
-    /// that the built-in this custom app was copied from has updates (up to
-    /// `version`). Blocking.
-    pub fn dismiss_update(&self, app_id: &str, version: i64) -> Result<(), LayoutApiError> {
-        self.inner
-            .catalog_call(
-                reqwest::Method::POST,
-                &format!("/v1/custom-apps/{}/dismiss-update", segment(app_id)),
-                Some(&serde_json::json!({ "version": version })),
-            )
-            .map(|_| ())
-    }
-
-    /// `PUT /v1/apps/<id>/hidden {hidden}`: hide an app from every device's
-    /// app list, or show it again. Blocking.
-    pub fn set_app_hidden(&self, app_id: &str, hidden: bool) -> Result<(), LayoutApiError> {
-        self.inner
-            .catalog_call(
-                reqwest::Method::PUT,
-                &format!("/v1/apps/{}/hidden", segment(app_id)),
-                Some(&serde_json::json!({ "hidden": hidden })),
-            )
-            .map(|_| ())
-    }
-
     /// `GET /v1/auth/sign-ins`: the sign-ins on this device's pod
     /// session, for Settings: `{"sign_ins":[{id, title, server?, username?,
     /// apps:[{id, title}]}], "providers":[{id, title, signed_in, intent,
@@ -305,19 +198,18 @@ mod tests {
             }
         );
         assert_eq!(
-            error_for(404, r#"{"error":"version_not_found"}"#).reason(),
-            "That version doesn't exist."
+            error_for(404, r#"{"error":"layout_not_found"}"#).reason(),
+            "That doesn't exist on your pod."
         );
         assert_eq!(
-            error_for(404, r#"{"error":"app_not_found"}"#).reason(),
-            "That app doesn't exist."
+            error_for(404, "").reason(),
+            "That doesn't exist on your pod."
         );
-        assert_eq!(error_for(404, "").reason(), "That app doesn't exist.");
         assert_eq!(
-            error_for(400, r#"{"error":"invalid_workspace_id"}"#),
+            error_for(400, r#"{"error":"invalid_request"}"#),
             LayoutApiError::Server {
                 status: 400,
-                reason: "That isn't a valid app id.".into()
+                reason: "The pod rejected the request.".into()
             }
         );
         assert_eq!(

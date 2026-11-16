@@ -16,8 +16,8 @@ use pod_core::layouts::LayoutSource;
 use pod_core::push::{PushSender, test_device_keys};
 use pod_core::session::session_hash;
 use pod_core::{
-    AppInfo, AppState, AuthPolicy, BoxFuture, Catalog, FeedSpec, Hydration, NewNotification, Pod,
-    PollCtx, PollOutcome, PollStatus, RequestCtx, Source, SourceManifest,
+    AppState, AuthPolicy, BlueprintInfo, BoxFuture, Catalog, FeedSpec, Hydration, NewNotification,
+    Pod, PollCtx, PollOutcome, PollStatus, RequestCtx, Source, SourceManifest,
 };
 use protocol::{DataBundle, Importance, NotificationChannel, PushPayload};
 use serde_json::{Value, json};
@@ -32,7 +32,7 @@ static FILES: &[LayoutSource] = &[LayoutSource {
         "content": {"type": "core://Text", "style": "Body", "value_expr": "hi"}}]}}"#,
 }];
 
-const BELL: AppInfo = AppInfo {
+const BELL: BlueprintInfo = BlueprintInfo {
     id: "bell",
     title: "Bell",
     icon: "photo",
@@ -54,7 +54,7 @@ impl Source for Bell {
     fn name(&self) -> &'static str {
         "bell"
     }
-    fn apps(&self) -> Vec<AppInfo> {
+    fn blueprints(&self) -> Vec<BlueprintInfo> {
         vec![BELL]
     }
     fn layout_files(&self) -> &'static [LayoutSource] {
@@ -178,7 +178,7 @@ fn the_catalog_checks_channels() {
         fn name(&self) -> &'static str {
             "wrong"
         }
-        fn apps(&self) -> Vec<AppInfo> {
+        fn blueprints(&self) -> Vec<BlueprintInfo> {
             vec![BELL]
         }
         fn layout_files(&self) -> &'static [LayoutSource] {
@@ -216,7 +216,7 @@ fn the_catalog_checks_channels() {
         fn name(&self) -> &'static str {
             "silent"
         }
-        fn apps(&self) -> Vec<AppInfo> {
+        fn blueprints(&self) -> Vec<BlueprintInfo> {
             vec![BELL]
         }
         fn layout_files(&self) -> &'static [LayoutSource] {
@@ -296,7 +296,7 @@ async fn notifications_are_stored_once_and_read() {
     let (status, list) = call(&p, "GET", "/v1/notifications", None, None).await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(list["unread_total"], 2);
-    assert_eq!(list["unread_by_app"]["bell"], 2);
+    assert_eq!(list["unread_by_layout"]["bell"], 2);
     let items = list["notifications"].as_array().unwrap();
     assert_eq!(items.len(), 3);
     assert_eq!(items.iter().filter(|n| n["read"] == true).count(), 1);
@@ -340,7 +340,7 @@ async fn notifications_are_stored_once_and_read() {
         &p,
         "POST",
         "/v1/notifications/read",
-        Some(json!({"all": true, "app": "bell"})),
+        Some(json!({"all": true, "layout": "bell"})),
         None,
     )
     .await;
@@ -545,7 +545,7 @@ async fn the_events_stream_carries_notifications() {
     let p = pod_with(None);
     let resp = pod_core::app(p.pod.clone())
         .oneshot(
-            Request::get("/v1/workspaces/bell/events")
+            Request::get("/v1/construct/events")
                 .header("authorization", format!("Bearer {}", p.token))
                 .header("x-construct-device", "device-0001")
                 .body(Body::empty())
@@ -555,7 +555,6 @@ async fn the_events_stream_carries_notifications() {
         .unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
     let mut body = resp.into_body();
-    read_until(&mut body, "event: layout").await;
     p.pod.notify(vec![note("live", "likes")]).await.unwrap();
     let text = read_until(&mut body, "event: notification").await;
     assert!(text.contains("title live"), "{text}");
@@ -570,17 +569,18 @@ async fn the_events_stream_carries_notifications() {
     .await;
     read_until(&mut body, "event: notifications_read").await;
 
-    // Without a session: layout events only.
+    // Without a session: no notifications.
     let resp = pod_core::app(p.pod.clone())
         .oneshot(
-            Request::get("/v1/workspaces/bell/events")
+            Request::get("/v1/construct/events")
                 .body(Body::empty())
                 .unwrap(),
         )
         .await
         .unwrap();
     let mut anon = resp.into_body();
-    read_until(&mut anon, "event: layout").await;
+    // It starts with home's root, as every stream does.
+    read_until(&mut anon, "event: construct").await;
     p.pod.notify(vec![note("private", "likes")]).await.unwrap();
     let got = tokio::time::timeout(Duration::from_millis(300), anon.frame()).await;
     assert!(got.is_err(), "an anonymous stream hears no notification");

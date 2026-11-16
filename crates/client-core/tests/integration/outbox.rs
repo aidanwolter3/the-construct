@@ -59,15 +59,28 @@ struct Counter {
     fault: Mutex<Option<(u16, u32)>>,
 }
 
-/// `GET /v1/workspaces/home`: the fixture with the current count.
-async fn workspace(State(c): State<Arc<Counter>>) -> Response {
+/// The construct's elements (content-addressed: one for every server here).
+static CONSTRUCT: std::sync::LazyLock<crate::construct_stub::Construct> =
+    std::sync::LazyLock::new(Default::default);
+
+/// Home's construct: the fixture with the current count.
+async fn workspace(
+    State(c): State<Arc<Counter>>,
+    method: axum::http::Method,
+    uri: axum::http::Uri,
+    body: axum::body::Bytes,
+) -> Response {
     let mut spec: WorkspaceSpec = serde_json::from_str(FIXTURE).unwrap();
     let count = *c.count.lock().unwrap();
     spec.entities
         .entry(URI.to_owned())
         .or_default()
         .set("count", count);
-    Json(spec).into_response()
+    let bundle = serde_json::to_string(&spec).unwrap();
+    crate::construct_stub::axum_answer(&CONSTRUCT, &method, &uri, &body, &mut |id| {
+        (id == "home").then(|| (200, bundle.clone()))
+    })
+    .unwrap_or_else(|| StatusCode::NOT_FOUND.into_response())
 }
 
 /// `POST /v1/counters/home/{increment,decrement}`: `{"ok":true,"count":n}`;
@@ -161,16 +174,17 @@ impl TestServer {
         let arrived = Arc::clone(&arrivals);
         let app = Router::new()
             .route("/healthz", get(|| async { "ok" }))
-            .route("/v1/workspaces/home", get(workspace))
             .route("/v1/counters/home/{op}", post(mutate))
             .route_layer(middleware::from_fn_with_state(Arc::clone(&counter), faults))
+            .fallback(workspace)
             .with_state(Arc::clone(&counter))
             .layer(middleware::from_fn(move |req: Request, next: Next| {
                 let log = Arc::clone(&log);
                 let arrived = Arc::clone(&arrived);
                 async move {
-                    let post = req.method() == axum::http::Method::POST;
                     let path = req.uri().path().to_string();
+                    // Mutations only: the construct's object fetches are reads.
+                    let post = req.method() == axum::http::Method::POST && path != "/v1/objects";
                     if post {
                         arrived.fetch_add(1, AtomicOrdering::SeqCst);
                         if !post_delay.is_zero() {
@@ -545,14 +559,16 @@ fn serve_dropping_posts() -> String {
             }
             let mut body = vec![0u8; content_length];
             let _ = reader.read_exact(&mut body);
-            if request_line.starts_with("POST ") {
+            let mut parts = request_line.split_whitespace();
+            let (method, path) = (parts.next().unwrap_or(""), parts.next().unwrap_or(""));
+            let answer =
+                CONSTRUCT.answer(method, path, &String::from_utf8_lossy(&body), &mut |id| {
+                    (id == "home").then(|| (200, FIXTURE.to_owned()))
+                });
+            if answer.is_none() && request_line.starts_with("POST ") {
                 continue; // dropped: connection closed with no response
             }
-            let body = if request_line.starts_with("GET /v1/workspaces/home ") {
-                FIXTURE
-            } else {
-                "ok"
-            };
+            let body = answer.map_or_else(|| "ok".to_owned(), |(_, b)| b);
             let _ = write!(
                 stream,
                 "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\
@@ -684,7 +700,7 @@ fn refetch_reapplies_pending_rows_over_fetched_entity() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// A server whose first `GET /v1/workspaces/home` blocks until `release`
+/// A server whose first home fetch (`GET /v1/construct`) blocks until `release`
 /// is signalled (`fetching` is signalled when it arrives), then serves the
 /// fixture. Answers /healthz and records every POST (on arrival, before the
 /// 200 reply). One thread per connection.
@@ -730,19 +746,27 @@ fn serve_held_fetch() -> HeldFetchServer {
                 }
                 let mut body = vec![0u8; content_length];
                 let _ = reader.read_exact(&mut body);
-                let body = if request_line.starts_with("POST ") {
-                    posts.lock().unwrap().push(request_line.trim().to_string());
-                    "{}"
-                } else if request_line.starts_with("GET /v1/workspaces/home ") {
+                let mut parts = request_line.split_whitespace();
+                let (method, path) = (parts.next().unwrap_or(""), parts.next().unwrap_or(""));
+                if request_line.starts_with("GET /v1/construct ") {
                     // Only the first fetch is held.
                     let held = release_rx.lock().unwrap().take();
                     if let Some(release) = held {
                         let _ = fetching_tx.send(());
                         let _ = release.recv_timeout(TIMEOUT);
                     }
-                    FIXTURE
+                }
+                let answer =
+                    CONSTRUCT.answer(method, path, &String::from_utf8_lossy(&body), &mut |id| {
+                        (id == "home").then(|| (200, FIXTURE.to_owned()))
+                    });
+                let body = if let Some((_, b)) = answer {
+                    b
+                } else if request_line.starts_with("POST ") {
+                    posts.lock().unwrap().push(request_line.trim().to_string());
+                    "{}".to_owned()
                 } else {
-                    "ok"
+                    "ok".to_owned()
                 };
                 let _ = write!(
                     stream,

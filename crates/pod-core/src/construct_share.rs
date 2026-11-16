@@ -10,9 +10,8 @@
 //! adopter's data in the adopter's own reference, so the shared objects keep
 //! their hashes and an owner's later revoke or delete can't break the copy.
 //!
-//! Everything here needs a switched pod (decision
-//! `content-addressed-construct`) and a host with a shelf; the MCP tools
-//! answer `not_switched` or `no_shelf` otherwise.
+//! Everything here needs a host with a shelf; the MCP tools answer
+//! `no_shelf` otherwise.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
@@ -500,7 +499,7 @@ impl Copier<'_> {
             .borrow_mut()
             .insert(probe.clone(), Arc::new(el.clone()));
         let (needs, features) =
-            super::convert::derive(self.pod.catalog(), &[], &self.objects, &probe, !component);
+            super::core::derive(self.pod.catalog(), &[], &self.objects, &probe, !component);
         el["needs"] = needs;
         let cid = object_id(&el);
         self.objects
@@ -874,7 +873,7 @@ pub fn tool_specs() -> Vec<Value> {
              element out (leave_out: its embed or link goes). Then call again with confirm: \
              <review_id>. keep_shared: true publishes later versions without asking while they \
              bring no new text or URLs. Revoking stops new versions; adopted copies keep drawing \
-             (tell the user so up front). Needs a handle (set_handle) and a switched pod.",
+             (tell the user so up front). Needs a handle (set_handle).",
             json!({
                 "name": { "type": "string", "description": "A layout id (home, c-…) or @me/<component>" },
                 "slug": { "type": "string", "description": "The publication's name under the handle (a-z, 0-9, -); default from the title" },
@@ -956,12 +955,6 @@ pub fn tool_specs() -> Vec<Value> {
 pub async fn tool(pod: &Pod, name: &str, args: &Value) -> Option<Result<Value, Value>> {
     if !tool_specs().iter().any(|t| t["name"] == name) {
         return None;
-    }
-    if !crate::construct_switched(pod).await {
-        return Some(Err(refuse(
-            "not_switched",
-            "sharing works on a pod switched to the construct (switch_construct)",
-        )));
     }
     if pod.shelf().is_none() {
         return Some(Err(refuse(
@@ -1537,7 +1530,7 @@ fn plan(pod: &Pod, conn: &Connection, inputs: &[Value], bindings: &Map<String, V
 /// The materialized root of a publication bound with `bind`, checked as a
 /// layout over the adopter's home feeds and `feeds`: the sources' own
 /// checks (fields a collection has) run too. Blocking; takes the store's
-/// connection itself (the checks read it), so call it holding none.
+/// connection itself, so call it holding none.
 fn check_bound(
     pod: &Pod,
     f: &Fetched,
@@ -1547,7 +1540,7 @@ fn check_bound(
     if f.publication.interface["kind"] == "component" {
         return Ok(());
     }
-    let (m, mut all) = pod.store().with_conn(|conn| {
+    pod.store().with_conn(|conn| {
         let objects = ConnObjects::new(conn);
         for (id, v, _) in &f.objects {
             objects
@@ -1557,19 +1550,39 @@ fn check_bound(
         }
         let m = construct_elements::materialize_with(&objects, &f.publication.root, bind)
             .map_err(|e| refuse("invalid_layout", e.to_string()))?;
-        Ok::<_, Value>((m, super::write::home_feeds(conn)))
-    })?;
-    for x in feeds {
-        if !all.contains(x) {
-            all.push(x.clone());
+        let mut all = super::write::home_feeds(conn);
+        for x in feeds {
+            if !all.contains(x) {
+                all.push(x.clone());
+            }
         }
-    }
-    crate::custom::check_layout(pod, "c-adopting", &all, &m.node)
-        .map(|_| ())
-        .map_err(|(_, b)| {
-            json!({ "error": "does_not_fit", "detail": "bound to these data sets the \
-            shared layout doesn't fit them", "check": b })
-        })
+        let misfit = |e: crate::validate::LayoutError| {
+            json!({ "error": "does_not_fit", "detail": "bound to these data sets the shared \
+                layout doesn't fit them", "check": { "detail": e.to_string(), "at": e.pointer,
+                "allowed": e.allowed } })
+        };
+        let sources = crate::layouts::feed_sources(pod, &all);
+        crate::validate::custom_layout(
+            m.node["id"].as_str().unwrap_or("c-adopting"),
+            &m.node,
+            &sources,
+        )
+        .map_err(misfit)?;
+        for (name, _) in &sources {
+            let Some((adapter, _)) = pod.catalog().source(name) else {
+                continue;
+            };
+            let names: Vec<String> = all
+                .iter()
+                .filter(|(s, _)| s == name)
+                .map(|(_, f)| f.clone())
+                .collect();
+            adapter
+                .check_custom_layout(conn, &names, &m.node)
+                .map_err(misfit)?;
+        }
+        Ok(())
+    })
 }
 
 /// The edge key an adoption is drawn under.
@@ -1687,7 +1700,7 @@ fn store_adoption(
     put_objects(conn, f)?;
     let p = &f.publication;
     let name = if mode == "fork" {
-        crate::custom::new_custom_id()
+        crate::layouts::new_layout_id()
     } else {
         p.name.clone()
     };

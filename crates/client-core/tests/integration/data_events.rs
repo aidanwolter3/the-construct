@@ -40,6 +40,22 @@ struct StubState {
     gone: AtomicBool,
     /// Part of every row's name: bumped to change the data.
     generation: AtomicUsize,
+    construct: crate::construct_stub::Construct,
+}
+
+/// Layouts `home` and `sub`, as bundles.
+fn layout(id: &str) -> crate::construct_stub::Answer {
+    match id {
+        "home" => Some((200, FIXTURE.to_owned())),
+        "sub" => {
+            let mut b: Value = serde_json::from_str(FIXTURE).unwrap();
+            b["workspace"]["id"] = json!("sub");
+            b["entities"] = json!({ "t://groceries/9": { "name": "nine" } });
+            b["queries"] = json!({});
+            Some((200, b.to_string()))
+        }
+        _ => None,
+    }
 }
 
 struct Stub {
@@ -63,8 +79,19 @@ impl Stub {
         Self { base, st }
     }
 
+    /// Requests for a data path, or fetches of a layout (`layout:<id>`).
     fn hits(&self, path: &str) -> usize {
-        self.st.hits.lock().unwrap().get(path).copied().unwrap_or(0)
+        match path.strip_prefix("layout:") {
+            Some(id) => self.st.construct.fetches(id),
+            None => self.st.hits.lock().unwrap().get(path).copied().unwrap_or(0),
+        }
+    }
+
+    /// Every request counted so far.
+    fn total(&self) -> usize {
+        self.st.hits.lock().unwrap().values().sum::<usize>()
+            + self.hits("layout:home")
+            + self.hits("layout:sub")
     }
 
     /// Ends every open events stream (the engine reconnects after its
@@ -101,43 +128,57 @@ fn handle(mut stream: TcpStream, st: &StubState) {
     if reader.read_line(&mut request_line).is_err() {
         return;
     }
+    let mut content_length = 0usize;
     loop {
         let mut line = String::new();
         match reader.read_line(&mut line) {
             Ok(0) | Err(_) => break,
             Ok(_) if line == "\r\n" || line == "\n" => break,
-            Ok(_) => {}
+            Ok(_) => {
+                if let Some((k, v)) = line.split_once(':')
+                    && k.eq_ignore_ascii_case("content-length")
+                {
+                    content_length = v.trim().parse().unwrap_or(0);
+                }
+            }
         }
     }
-    let path = request_line
-        .split_whitespace()
-        .nth(1)
-        .unwrap_or("")
-        .to_owned();
+    let mut body = vec![0u8; content_length];
+    let _ = std::io::Read::read_exact(&mut reader, &mut body);
+    let mut parts = request_line.split_whitespace();
+    let method = parts.next().unwrap_or("").to_owned();
+    let path = parts.next().unwrap_or("").to_owned();
     if path == "/healthz" {
         return respond(&mut stream, "200 OK", "ok");
     }
-    if path == "/v1/workspaces/home/events" {
+    if path == crate::construct_stub::EVENTS {
         return serve_events(stream, st);
     }
-    *st.hits.lock().unwrap().entry(path.clone()).or_default() += 1;
     let now = st.in_flight.fetch_add(1, Ordering::SeqCst) + 1;
     st.most_in_flight.fetch_max(now, Ordering::SeqCst);
-    if path != "/v1/workspaces/home" {
-        thread::sleep(SLOW);
+    if let Some((code, answer)) =
+        st.construct
+            .answer(&method, &path, &String::from_utf8_lossy(&body), &mut layout)
+    {
+        let status = format!("{code} {}", crate::construct_stub::reason(code));
+        respond(&mut stream, &status, &answer);
+        st.in_flight.fetch_sub(1, Ordering::SeqCst);
+        return;
     }
+    *st.hits.lock().unwrap().entry(path.clone()).or_default() += 1;
+    thread::sleep(SLOW);
     let generation = st.generation.load(Ordering::SeqCst);
     match path.as_str() {
-        "/v1/workspaces/home" => respond(&mut stream, "200 OK", FIXTURE),
-        "/v1/workspaces/sub" => {
-            let mut b: Value = serde_json::from_str(FIXTURE).unwrap();
-            b["workspace"]["id"] = json!("sub");
-            b["entities"] = json!({ "t://groceries/9": { "name": "nine" } });
-            b["queries"] = json!({});
-            respond(&mut stream, "200 OK", &b.to_string());
-        }
         "/v1/data/gone" if st.gone.load(Ordering::SeqCst) => {
             respond(&mut stream, "404 Not Found", "{}")
+        }
+        // Two answers listing the same key (each layout binding a feed
+        // carries its query keys).
+        "/v1/data/x" | "/v1/data/y" => {
+            let uri = format!("t://{}/1", &path[9..]);
+            let body = json!({ "entities": { &uri: { "name": format!("{uri} v{generation}") } },
+                "queries": { "list:shared": [uri] } });
+            respond(&mut stream, "200 OK", &body.to_string())
         }
         "/v1/data/gone" => respond(
             &mut stream,
@@ -155,8 +196,10 @@ fn handle(mut stream: TcpStream, st: &StubState) {
 fn serve_events(mut stream: TcpStream, st: &StubState) {
     let (tx, rx) = mpsc::channel::<String>();
     st.streams.lock().unwrap().push(tx);
-    let head = "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\n\
-                event: layout\ndata: {\"workspace_id\":\"home\",\"version\":1}\n\n";
+    let head = format!(
+        "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\n{}",
+        st.construct.event(&mut layout)
+    );
     if stream.write_all(head.as_bytes()).is_err() {
         return;
     }
@@ -199,7 +242,7 @@ fn ready(stub: &Stub) -> ConstructEngine {
         backoff_cap: Duration::from_secs(5),
     };
     let engine = ConstructEngine::init_with_config("", &stub.base, "home", config);
-    wait_until("the workspace", || stub.hits("/v1/workspaces/home") >= 1);
+    wait_until("the workspace", || stub.hits("layout:home") >= 1);
     for (path, _, _) in PATHS {
         engine.dispatch(&json!({ "intent": "action.data.load", "path": path }).to_string());
     }
@@ -216,11 +259,10 @@ fn ready(stub: &Stub) -> ConstructEngine {
 
 /// Settles: no request is under way, and none starts for a while.
 fn settle(stub: &Stub) {
-    let total = || -> usize { stub.st.hits.lock().unwrap().values().sum() };
     loop {
-        let before = total();
+        let before = stub.total();
         thread::sleep(SLOW * 3);
-        if total() == before && stub.st.in_flight.load(Ordering::SeqCst) == 0 {
+        if stub.total() == before && stub.st.in_flight.load(Ordering::SeqCst) == 0 {
             return;
         }
     }
@@ -246,21 +288,19 @@ fn scoped_data_event_reloads_only_the_matching_paths() {
         before("/v1/data/a"),
         before("/v1/data/b"),
         before("/v1/data/c"),
-        before("/v1/workspaces/sub"),
-        before("/v1/workspaces/home"),
+        before("layout:sub"),
+        before("layout:home"),
     );
     stub.data_event(groceries_changed());
     // a: an entity under the prefix; c: a query key under it; sub: a
     // layout holding one.
     wait_until("a reloaded", || stub.hits("/v1/data/a") == a + 1);
     wait_until("c reloaded", || stub.hits("/v1/data/c") == c + 1);
-    wait_until("sub reloaded", || {
-        stub.hits("/v1/workspaces/sub") == sub + 1
-    });
+    wait_until("sub reloaded", || stub.hits("layout:sub") == sub + 1);
     settle(&stub);
     assert_eq!(stub.hits("/v1/data/b"), b, "b holds only meals");
     assert_eq!(
-        stub.hits("/v1/workspaces/home"),
+        stub.hits("layout:home"),
         home,
         "the workspace holds no groceries"
     );
@@ -276,7 +316,7 @@ fn off_screen_matches_are_reloaded_when_shown_again() {
     let (a, c, sub) = (
         stub.hits("/v1/data/a"),
         stub.hits("/v1/data/c"),
-        stub.hits("/v1/workspaces/sub"),
+        stub.hits("layout:sub"),
     );
     stub.data_event(groceries_changed());
     wait_until("a reloaded", || stub.hits("/v1/data/a") == a + 1);
@@ -286,12 +326,12 @@ fn off_screen_matches_are_reloaded_when_shown_again() {
         c,
         "c is off screen: only marked stale"
     );
-    assert_eq!(stub.hits("/v1/workspaces/sub"), sub);
+    assert_eq!(stub.hits("layout:sub"), sub);
     // Back to a screen showing c: it is reloaded once; sub stays stale.
     engine.set_visible(vec!["/v1/data/c".into(), "layout:home".into()]);
     wait_until("c reloaded", || stub.hits("/v1/data/c") == c + 1);
     settle(&stub);
-    assert_eq!(stub.hits("/v1/workspaces/sub"), sub);
+    assert_eq!(stub.hits("layout:sub"), sub);
     // Shown again without a change: nothing to reload.
     engine.set_visible(vec!["/v1/data/a".into(), "layout:home".into()]);
     engine.set_visible(vec!["/v1/data/c".into(), "layout:home".into()]);
@@ -308,29 +348,19 @@ fn unscoped_data_event_reloads_everything_a_few_at_a_time() {
     engine.set_visible(vec!["/v1/data/a".into()]);
     settle(&stub);
     stub.st.most_in_flight.store(0, Ordering::SeqCst);
-    let before: Vec<usize> = [
-        "/v1/data/a",
-        "/v1/data/b",
-        "/v1/data/c",
-        "/v1/workspaces/sub",
-    ]
-    .iter()
-    .map(|p| stub.hits(p))
-    .collect();
-    let home = stub.hits("/v1/workspaces/home");
+    let before: Vec<usize> = ["/v1/data/a", "/v1/data/b", "/v1/data/c", "layout:sub"]
+        .iter()
+        .map(|p| stub.hits(p))
+        .collect();
+    let home = stub.hits("layout:home");
     stub.data_event(json!({ "workspace_id": "home" }));
-    for (p, n) in [
-        "/v1/data/a",
-        "/v1/data/b",
-        "/v1/data/c",
-        "/v1/workspaces/sub",
-    ]
-    .iter()
-    .zip(before)
+    for (p, n) in ["/v1/data/a", "/v1/data/b", "/v1/data/c", "layout:sub"]
+        .iter()
+        .zip(before)
     {
         wait_until(p, || stub.hits(p) == n + 1);
     }
-    wait_until("the workspace", || stub.hits("/v1/workspaces/home") > home);
+    wait_until("the workspace", || stub.hits("layout:home") > home);
     let most = stub.st.most_in_flight.load(Ordering::SeqCst);
     assert!(
         (2..=client_core::reload::PARALLEL_LOADS).contains(&most),
@@ -404,4 +434,68 @@ fn the_first_connection_reloads_nothing() {
     thread::sleep(SLOW * 4);
     assert_eq!(stub.st.event_conns.load(Ordering::SeqCst), 1);
     assert_eq!(stub.hits("/v1/data/a"), a);
+}
+
+fn shared(engine: &ConstructEngine) -> Value {
+    let q: Value = serde_json::from_str(&engine.snapshot().queries_json).unwrap();
+    q["list:shared"].clone()
+}
+
+fn load(engine: &ConstructEngine, path: &str) {
+    engine.dispatch(&json!({ "intent": "action.data.load", "path": path }).to_string());
+}
+
+/// Decision `newest-query-answer-wins`: a key two answers list is the newest
+/// answer's, whichever path sorts last.
+#[test]
+fn a_key_two_answers_list_is_the_newest_answers() {
+    let stub = Stub::start();
+    let engine = ready(&stub);
+    load(&engine, "/v1/data/y");
+    wait_until("y", || loaded(&engine, "/v1/data/y"));
+    load(&engine, "/v1/data/x");
+    wait_until("x", || shared(&engine) == json!(["t://x/1"]));
+    load(&engine, "/v1/data/y");
+    wait_until("y again", || shared(&engine) == json!(["t://y/1"]));
+}
+
+/// Decision `newest-query-answer-wins`: answers restored at launch are older
+/// than any fetched since, and are loaded again once shown.
+#[test]
+fn a_restored_answer_never_hides_a_fresh_one() {
+    let stub = Stub::start();
+    let dir = std::env::temp_dir().join(format!("construct-restored-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let config = || EngineConfig {
+        poll_interval: Duration::from_millis(100),
+        backoff_base: Duration::from_secs(5),
+        backoff_cap: Duration::from_secs(5),
+    };
+    let first =
+        ConstructEngine::init_with_config(dir.to_str().unwrap(), &stub.base, "home", config());
+    load(&first, "/v1/data/x");
+    wait_until("x", || loaded(&first, "/v1/data/x"));
+    load(&first, "/v1/data/y");
+    wait_until("y last", || shared(&first) == json!(["t://y/1"]));
+    drop(first);
+
+    let again =
+        ConstructEngine::init_with_config(dir.to_str().unwrap(), &stub.base, "home", config());
+    assert_eq!(
+        shared(&again),
+        json!(["t://y/1"]),
+        "both restored: path order"
+    );
+    let y = stub.hits("/v1/data/y");
+    load(&again, "/v1/data/x");
+    wait_until("the fresh x wins", || shared(&again) == json!(["t://x/1"]));
+    assert_eq!(stub.hits("/v1/data/y"), y, "y isn't shown");
+    again.set_visible(vec!["/v1/data/y".into(), "layout:home".into()]);
+    wait_until("y, shown, is loaded again", || {
+        stub.hits("/v1/data/y") == y + 1
+    });
+    wait_until("and is the newest", || shared(&again) == json!(["t://y/1"]));
+    drop(again);
+    let _ = std::fs::remove_dir_all(&dir);
 }

@@ -674,38 +674,26 @@ impl Host {
         store.set_pod_setting(key, value).map_err(|e| e.to_string())
     }
 
-    /// `server pods switch <name> [--dry-run | --revert]` (decision
-    /// `content-addressed-construct`): `mode` is `switch`, `dry_run` or
-    /// `revert`. Answers the pod's report.
-    pub fn switch_construct(&self, name: &str, mode: &str) -> Result<serde_json::Value, String> {
-        let pod = self
-            .store
-            .live_pod(
-                &self
-                    .store
-                    .pod_by_name(name)
-                    .map_err(|e| e.to_string())?
-                    .ok_or_else(|| format!("no pod named {name:?}"))?
-                    .id,
+    /// Whether pod `id` is on the construct (decision
+    /// `content-addressed-construct`): its `construct.switched` setting, read
+    /// without opening the pod (`None`: its database can't be read). A pod
+    /// the old layout system still holds is converted the next time it
+    /// opens.
+    pub fn pod_on_construct(&self, id: &str) -> Option<bool> {
+        let path = self.pod_dir(id).ok()?.join("server.db");
+        let conn = rusqlite::Connection::open_with_flags(
+            &path,
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
+        )
+        .ok()?;
+        let v: Option<String> = conn
+            .query_row(
+                "SELECT value FROM pod_settings WHERE key = ?1",
+                [pod_core::construct::SWITCHED_SETTING],
+                |r| r.get(0),
             )
-            .map_err(|e| e.to_string())?
-            .ok_or_else(|| format!("pod {name:?} has expired"))?;
-        let store =
-            Store::open(&self.pod_dir(&pod.id)?.join("server.db")).map_err(|e| e.to_string())?;
-        let state: Pod = Arc::new((self.factory)(store)?);
-        let rt = tokio::runtime::Builder::new_multi_thread()
-            .worker_threads(2)
-            .enable_all()
-            .build()
-            .map_err(|e| e.to_string())?;
-        let args = match mode {
-            "dry_run" => serde_json::json!({ "dry_run": true }),
-            "revert" => serde_json::json!({ "revert": true }),
-            "switch" => serde_json::json!({}),
-            other => return Err(format!("unknown switch mode {other:?}")),
-        };
-        rt.block_on(pod_core::construct::switch::tool(&state, &args))
-            .map_err(|e| e.to_string())
+            .ok();
+        Some(v.as_deref() == Some("1"))
     }
 
     pub fn notify_test(&self, name: &str) -> Result<String, String> {
@@ -963,6 +951,15 @@ impl Host {
         let host = self.clone();
         let pod_id = id.to_owned();
         let built = tokio::task::spawn_blocking(move || {
+            // What opening logs (a conversion's dry run) names the pod.
+            let name = host
+                .store
+                .live_pod(&pod_id)
+                .ok()
+                .flatten()
+                .map(|p| p.name)
+                .unwrap_or_default();
+            let _span = tracing::info_span!("pod", id = %pod_id, name = %name).entered();
             let path = host.pod_dir(&pod_id)?.join("server.db");
             if !path.is_file() {
                 return Err(format!("{} is missing", path.display()));
@@ -1291,10 +1288,11 @@ async fn dispatch(State(host): State<Arc<Host>>, mut req: Request) -> Response {
     }
 }
 
-/// A caller without a valid pod token: the "Open your pod" screen for a
-/// workspace, an empty app list, else 401 `pod_required`. A token the host
-/// does not know also gets `X-Construct-Session: invalid`, so the client
-/// forgets it.
+/// A caller without a valid pod token: a construct of one element, the
+/// "Open your pod" screen as home (`GET /v1/construct`, the name `home`,
+/// the object itself, and empty data), else 401 `pod_required`. A token
+/// the host does not know also gets `X-Construct-Session: invalid` (and a
+/// 401), so the client forgets it.
 fn no_pod(host: &Host, req: &Request, had_token: bool) -> Response {
     let path = req.uri().path();
     if had_token {
@@ -1308,19 +1306,22 @@ fn no_pod(host: &Host, req: &Request, had_token: bool) -> Response {
         }
         r
     };
-    if req.method() == Method::GET {
-        if let Some(id) = path.strip_prefix("/v1/workspaces/")
-            && !id.contains('/')
-        {
-            if let Some(r) = pod_core::layouts::reject_invalid_workspace_id(id) {
-                return r;
-            }
-            let hours = host.config.temporary.map(|t| t.hours);
-            return invalid(Json(screen::open_your_pod(id, hours)).into_response());
+    let el = screen::open_your_pod(host.config.temporary.map(|t| t.hours));
+    let id = construct_elements::object_id(&el);
+    let answer = match (req.method(), path) {
+        (&Method::GET, "/v1/construct") => Some(json!({ "root": id, "generation": 0 })),
+        (&Method::GET, p) if p == format!("/v1/construct/names/{}", pod_core::HOME_APP) => {
+            Some(json!({ "name": pod_core::HOME_APP, "el": id }))
         }
-        if path == "/v1/apps" {
-            return invalid(Json(json!({ "apps": [] })).into_response());
+        (&Method::POST, "/v1/objects") => Some(json!({ "objects": { &id: el }, "more": false })),
+        (&Method::GET, p) if p == format!("/v1/objects/{id}") => Some(el.clone()),
+        (&Method::GET, p) if p == format!("/v1/construct/data/{id}") => {
+            Some(json!({ "entities": {}, "queries": {} }))
         }
+        _ => None,
+    };
+    if let Some(v) = answer {
+        return invalid(Json(v).into_response());
     }
     invalid(json_error(
         StatusCode::UNAUTHORIZED,
@@ -1542,7 +1543,7 @@ mod tests {
             "[::1]",
             "[::1]:8080",
         ] {
-            assert!(check(Some(ok), "/v1/apps"), "{ok}");
+            assert!(check(Some(ok), "/v1/construct"), "{ok}");
         }
         for bad in [
             "evil.example",
@@ -1554,14 +1555,14 @@ mod tests {
             "[nope]:8080",
             "",
         ] {
-            assert!(!check(Some(bad), "/v1/apps"), "{bad}");
+            assert!(!check(Some(bad), "/v1/construct"), "{bad}");
         }
-        assert!(check(None, "/v1/apps"), "no Host: not a browser");
+        assert!(check(None, "/v1/construct"), "no Host: not a browser");
         assert!(
-            check(None, "http://localhost:8080/v1/apps"),
+            check(None, "http://localhost:8080/v1/construct"),
             "HTTP/2 authority"
         );
-        assert!(!check(None, "http://evil.example:8080/v1/apps"));
+        assert!(!check(None, "http://evil.example:8080/v1/construct"));
     }
 
     #[test]

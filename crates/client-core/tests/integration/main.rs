@@ -3,10 +3,10 @@
 //! Add a new test file as a module here.
 
 mod also;
-mod apps;
 mod attachments;
 mod auth;
 mod construct;
+mod construct_stub;
 mod data_events;
 mod engine;
 mod events;

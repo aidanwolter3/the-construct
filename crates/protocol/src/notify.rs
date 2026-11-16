@@ -3,10 +3,10 @@
 //! ready-made text and a navigation target the client resolves against that
 //! layout's routes. Nothing here names a source.
 //!
-//! Wire names (decision `source-adapters`): a channel's layout is sent as
-//! `layout` and, for clients built before, `app_id`; a notification's as
-//! `channel_layout` and `app_id` (its `layout` is the layout to open). Either
-//! name is read. `app_id` goes when issue #295 removes the old system.
+//! Wire names (decision `source-adapters`): a channel's layout is `layout`;
+//! a notification's is `channel_layout` (its `layout` is the layout to
+//! open). The old name `app_id` is no longer sent (issue #300) but is still
+//! read.
 
 use serde::{Deserialize, Serialize};
 
@@ -33,10 +33,9 @@ pub enum Importance {
 /// A kind of notification a layout sends ("Likes", "Comments"), declared by
 /// its source. Users turn channels on and off per device.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(try_from = "ChannelWire", into = "ChannelWire")]
 pub struct NotificationChannel {
-    /// The layout or blueprint the channel belongs to (wire `layout` and
-    /// `app_id`).
+    /// The layout or blueprint the channel belongs to.
+    #[serde(alias = "app_id")]
     pub layout: String,
     /// Unique within the layout; `[a-z0-9_]{1,32}`.
     pub id: String,
@@ -78,58 +77,14 @@ pub fn notification_layout_in(notification: &serde_json::Value) -> &str {
         .unwrap_or_default()
 }
 
-/// [`NotificationChannel`] as sent: the layout under both names.
-#[derive(Serialize, Deserialize)]
-struct ChannelWire {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    layout: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    app_id: Option<String>,
-    id: String,
-    title: String,
-    #[serde(default)]
-    description: String,
-    default_enabled: bool,
-    #[serde(default)]
-    importance: Importance,
-}
-
-impl TryFrom<ChannelWire> for NotificationChannel {
-    type Error = &'static str;
-    fn try_from(w: ChannelWire) -> Result<Self, Self::Error> {
-        Ok(Self {
-            layout: w.layout.or(w.app_id).ok_or("missing field `layout`")?,
-            id: w.id,
-            title: w.title,
-            description: w.description,
-            default_enabled: w.default_enabled,
-            importance: w.importance,
-        })
-    }
-}
-
-impl From<NotificationChannel> for ChannelWire {
-    fn from(c: NotificationChannel) -> Self {
-        Self {
-            app_id: Some(c.layout.clone()),
-            layout: Some(c.layout),
-            id: c.id,
-            title: c.title,
-            description: c.description,
-            default_enabled: c.default_enabled,
-            importance: c.importance,
-        }
-    }
-}
-
 /// One notification as the pod stores and serves it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(try_from = "NotificationWire", into = "NotificationWire")]
 pub struct Notification {
     /// Pod-assigned, sortable (newer ids sort later).
     pub id: String,
     /// The layout or blueprint whose channel it is, the
-    /// [`NotificationChannel::layout`] (wire `channel_layout` and `app_id`).
+    /// [`NotificationChannel::layout`].
+    #[serde(alias = "app_id")]
     pub channel_layout: String,
     pub channel: String,
     pub title: String,
@@ -156,72 +111,6 @@ pub struct Notification {
     pub read: bool,
 }
 
-/// [`Notification`] as sent: its channel's layout under both names.
-#[derive(Serialize, Deserialize)]
-struct NotificationWire {
-    id: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    channel_layout: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    app_id: Option<String>,
-    channel: String,
-    title: String,
-    #[serde(default)]
-    body: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    image_url: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    target_uri: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    layout: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    group_key: Option<String>,
-    created_at: i64,
-    #[serde(default)]
-    read: bool,
-}
-
-impl TryFrom<NotificationWire> for Notification {
-    type Error = &'static str;
-    fn try_from(w: NotificationWire) -> Result<Self, Self::Error> {
-        Ok(Self {
-            id: w.id,
-            channel_layout: w
-                .channel_layout
-                .or(w.app_id)
-                .ok_or("missing field `channel_layout`")?,
-            channel: w.channel,
-            title: w.title,
-            body: w.body,
-            image_url: w.image_url,
-            target_uri: w.target_uri,
-            layout: w.layout,
-            group_key: w.group_key,
-            created_at: w.created_at,
-            read: w.read,
-        })
-    }
-}
-
-impl From<Notification> for NotificationWire {
-    fn from(n: Notification) -> Self {
-        Self {
-            id: n.id,
-            app_id: Some(n.channel_layout.clone()),
-            channel_layout: Some(n.channel_layout),
-            channel: n.channel,
-            title: n.title,
-            body: n.body,
-            image_url: n.image_url,
-            target_uri: n.target_uri,
-            layout: n.layout,
-            group_key: n.group_key,
-            created_at: n.created_at,
-            read: n.read,
-        }
-    }
-}
-
 /// `GET /v1/notifications`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct NotificationList {
@@ -229,7 +118,7 @@ pub struct NotificationList {
     pub unread_total: u32,
     /// `channel_layout -> unread count` (layouts with none are left out).
     #[serde(default)]
-    pub unread_by_app: std::collections::BTreeMap<String, u32>,
+    pub unread_by_layout: std::collections::BTreeMap<String, u32>,
     /// Pass as `before` for the next (older) page; absent on the last page.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub next_before: Option<String>,
@@ -246,8 +135,9 @@ pub struct NotificationEvent {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ReadEvent {
     pub unread_total: u32,
+    /// `channel_layout -> unread count`, as [`NotificationList`]'s.
     #[serde(default)]
-    pub unread_by_app: std::collections::BTreeMap<String, u32>,
+    pub unread_by_layout: std::collections::BTreeMap<String, u32>,
 }
 
 /// The decrypted body of a Web Push message the pod sends (D52).
@@ -292,30 +182,23 @@ mod tests {
         assert_eq!(serde_json::from_value::<PushPayload>(v).unwrap(), p);
     }
 
-    /// Installed clients read `app_id`: it is sent beside the new name, and
-    /// either name is read (decision `source-adapters`).
+    /// The old name `app_id` is read but no longer sent (issue #300).
     #[test]
-    fn layouts_go_under_both_names() {
+    fn layouts_go_under_their_names() {
         let n = r#"{"id":"1","app_id":"events","channel":"matches","title":"t","created_at":1}"#;
         let n: Notification = serde_json::from_str(n).unwrap();
         assert_eq!(n.channel_layout, "events");
         let v = serde_json::to_value(&n).unwrap();
-        assert_eq!(
-            (&v["channel_layout"], &v["app_id"]),
-            (&"events".into(), &"events".into())
-        );
-        let mut v = v;
-        v.as_object_mut().unwrap().remove("app_id");
+        assert_eq!(v["channel_layout"], "events");
+        assert!(v.get("app_id").is_none(), "{v}");
         assert_eq!(serde_json::from_value::<Notification>(v).unwrap(), n);
 
         let c = r#"{"app_id":"events","id":"matches","title":"Matches","default_enabled":true}"#;
         let c: NotificationChannel = serde_json::from_str(c).unwrap();
         assert_eq!(c.layout, "events");
         let v = serde_json::to_value(&c).unwrap();
-        assert_eq!(
-            (&v["layout"], &v["app_id"]),
-            (&"events".into(), &"events".into())
-        );
+        assert_eq!(v["layout"], "events");
+        assert!(v.get("app_id").is_none(), "{v}");
         let missing = r#"{"id":"m","title":"M","default_enabled":true}"#;
         assert!(serde_json::from_str::<NotificationChannel>(missing).is_err());
     }

@@ -10,7 +10,7 @@ publish.workspace = true
 
 [dependencies]
 server = { path = "../server" }
-source-recipes = { path = "../source-recipes", features = ["test-seed"] }
+source-collections = { path = "../source-collections", features = ["test-seed"] }
 fake-pixelfed = { path = "../../fake-pixelfed" }
 client-core.workspace = true
 serde_json.workspace = true

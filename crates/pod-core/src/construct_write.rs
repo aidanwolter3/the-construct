@@ -1,11 +1,12 @@
-//! Writes on a switched pod (decision `content-addressed-construct`): the
+//! Writes of the construct (decision `content-addressed-construct`): the
 //! MCP layout and component tools, over elements and names.
 //!
-//! A write normalizes what the author wrote ([`normalize`]: the old
-//! spellings `component`, `core://Ref` and `layout: <id>` become references,
-//! and every reference is sealed with where its name points now), refuses a
-//! cycle, checks a layout as clients will draw it, stores the element, moves
-//! the name and re-seals every name that follows it, transitively.
+//! A write normalizes what the author wrote ([`normalize`]: the other
+//! spellings `"component": "core:<name>"` / `"pod:<name>"` and `"layout":
+//! <id>` become references, and every reference is sealed with where its
+//! name points now), refuses a cycle, checks a layout as clients will draw
+//! it, stores the element, moves the name and re-seals every name that
+//! follows it, transitively.
 
 use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
@@ -17,9 +18,10 @@ use rusqlite::Connection;
 use serde_json::{Map, Value, json};
 
 use super::store as cstore;
-use super::{CONSTRUCT_EVENT_ID, CORE_PREFIX, ME_PREFIX, blueprint_name, component_name};
+use super::{CORE_PREFIX, ME_PREFIX, blueprint_name, component_name};
 use crate::Pod;
 use crate::adapter::Catalog;
+pub use crate::layouts::home_feeds;
 
 /// The objects of a store connection, with ones not stored yet on top.
 pub struct ConnObjects<'a> {
@@ -41,23 +43,21 @@ impl Objects for ConnObjects<'_> {
         if let Some(v) = self.extra.borrow().get(id) {
             return Some(v.clone());
         }
-        cstore::object(self.conn, id).ok().flatten().map(|(v, _)| v)
+        // Objects are immutable (an id is their hash), so one read serves
+        // every later lookup: expanding a layout looks up a component once
+        // per use, and parsing it each time made large layouts slow.
+        let v = cstore::object(self.conn, id)
+            .ok()
+            .flatten()
+            .map(|(v, _)| v)?;
+        self.extra.borrow_mut().insert(id.to_owned(), v.clone());
+        Some(v)
     }
 }
 
 /// A refused write's answer.
 fn refuse(error: &str, detail: impl Into<String>) -> Value {
     json!({ "error": error, "detail": detail.into() })
-}
-
-/// Home's feeds: its `bind`.
-pub fn home_feeds(conn: &Connection) -> Vec<(String, String)> {
-    cstore::name(conn, crate::HOME_APP)
-        .ok()
-        .flatten()
-        .and_then(|h| cstore::object(conn, &h).ok().flatten())
-        .and_then(|(v, _)| serde_json::from_value(v["bind"]["feeds"].clone()).ok())
-        .unwrap_or_default()
 }
 
 /// What the author wrote, with references sealed (see the module docs).
@@ -120,10 +120,7 @@ fn walk_object(
 ) -> Result<Value, Value> {
     let ty = o.get("type").and_then(Value::as_str);
     let mut out = Map::new();
-    let is_use = matches!(
-        ty,
-        Some(crate::components::USE_TYPE | crate::parts::REF_TYPE)
-    );
+    let is_use = ty == Some(crate::components::USE_TYPE);
     let site = if is_use {
         Some(Site::Use)
     } else if ty == Some("core://Layout") {
@@ -134,8 +131,7 @@ fn walk_object(
         None
     };
     for (k, c) in o {
-        if site == Some(Site::Use) && matches!(k.as_str(), "component" | "version" | "app" | "part")
-        {
+        if site == Some(Site::Use) && matches!(k.as_str(), "component" | "version") {
             continue;
         }
         if k == "ref" && site.is_some() {
@@ -160,20 +156,10 @@ fn walk_object(
         Some(r)
     } else if site == Site::Use {
         let version = o.get("version").and_then(Value::as_i64);
-        let name = if ty == Some(crate::parts::REF_TYPE) {
-            let app = o.get("app").and_then(Value::as_str).unwrap_or("");
-            let part = o.get("part").and_then(Value::as_str).unwrap_or("");
-            if part.is_empty() || part == crate::parts::LAYOUT_PART {
-                blueprint_name(app)
-            } else {
-                format!("{CORE_PREFIX}{app}/{part}")
-            }
-        } else {
-            let c = o.get("component").and_then(Value::as_str).unwrap_or("");
-            component_name(c).ok_or_else(|| {
-                refuse("invalid_use", format!("core://Use needs \"ref\" (a name) or \"component\" (core:<name> or pod:<name>), not {c:?}"))
-            })?
-        };
+        let c = o.get("component").and_then(Value::as_str).unwrap_or("");
+        let name = component_name(c).ok_or_else(|| {
+            refuse("invalid_use", format!("core://Use needs \"ref\": a name (@core/<component>, @me/<component>, @core/<blueprint>, @core/<blueprint>/<part>), not {c:?}"))
+        })?;
         let el = match version {
             Some(n) => at_seq(conn, &name, n)?,
             None => None,
@@ -194,7 +180,7 @@ fn walk_object(
                         pin: false,
                         as_: None,
                     })
-                } else if catalog.is_app(l) {
+                } else if catalog.is_blueprint(l) {
                     Some(Ref {
                         name: blueprint_name(l),
                         el: None,
@@ -217,6 +203,9 @@ fn walk_object(
     };
     if let Some(r) = r {
         let mut r = sealed_ref(conn, &r)?;
+        if site == Site::Use {
+            check_args(conn, &r, o)?;
+        }
         // A blueprint's whole layout keeps its key as the edge.
         if site != Site::Use && r.as_.is_none() && r.name.starts_with(CORE_PREFIX) {
             r.as_ = Some(r.name.trim_start_matches(CORE_PREFIX).to_owned());
@@ -227,6 +216,82 @@ fn walk_object(
         out.insert("type".into(), json!(crate::components::USE_TYPE));
     }
     Ok(Value::Object(out))
+}
+
+/// Element `id`'s component definition, if it is one. An id is its
+/// content's hash, so a parsed definition never goes stale: it is kept
+/// (a bounded few per thread), since a layout often uses one large
+/// component many times and each use is checked.
+fn use_def(
+    conn: &Connection,
+    id: &str,
+) -> Result<Option<Arc<construct_elements::def::Def>>, Value> {
+    type Defs = BTreeMap<String, Option<Arc<construct_elements::def::Def>>>;
+    thread_local! {
+        static DEFS: RefCell<Defs> = const { RefCell::new(BTreeMap::new()) };
+    }
+    if let Some(d) = DEFS.with(|m| m.borrow().get(id).cloned()) {
+        return Ok(d);
+    }
+    let Some((el, _)) = cstore::object(conn, id).map_err(store_err)? else {
+        return Ok(None);
+    };
+    let def = construct_elements::materialize::element_def(&el)
+        .ok()
+        .flatten()
+        .map(Arc::new);
+    DEFS.with(|m| {
+        let mut m = m.borrow_mut();
+        if m.len() >= 256 {
+            m.clear();
+        }
+        m.insert(id.to_owned(), def.clone());
+    });
+    Ok(def)
+}
+
+/// A use's arguments against its component's parameters: none it doesn't
+/// have, every required one given (their values may be bindings, so their
+/// types are checked where they are drawn).
+fn check_args(conn: &Connection, r: &Ref, use_: &Map<String, Value>) -> Result<(), Value> {
+    let Some(id) = &r.el else {
+        return Ok(());
+    };
+    let Some(def) = use_def(conn, id)? else {
+        return Ok(());
+    };
+    let args = match use_.get("args") {
+        None | Some(Value::Null) => Map::new(),
+        Some(Value::Object(m)) => m.clone(),
+        Some(other) => {
+            return Err(refuse(
+                "invalid_use",
+                format!("{}: \"args\" is an object, not {other}", r.name),
+            ));
+        }
+    };
+    let names: Vec<&str> = def.params.iter().map(|p| p.name.as_str()).collect();
+    if let Some(k) = args.keys().find(|k| !names.contains(&k.as_str())) {
+        return Err(refuse(
+            "invalid_use",
+            format!(
+                "{}: no parameter '{k}' (parameters: {})",
+                r.name,
+                names.join(", ")
+            ),
+        ));
+    }
+    if let Some(p) = def
+        .params
+        .iter()
+        .find(|p| p.required && args.get(&p.name).is_none_or(Value::is_null))
+    {
+        return Err(refuse(
+            "invalid_use",
+            format!("{}: '{}' is required", r.name, p.name),
+        ));
+    }
+    Ok(())
 }
 
 /// The names `v`'s unpinned references follow.
@@ -308,7 +373,7 @@ pub fn put(
         .extra
         .borrow_mut()
         .insert(probe.clone(), Arc::new(el.clone()));
-    let (needs, features) = super::convert::derive(catalog, &feeds, &objects, &probe, layout);
+    let (needs, features) = super::core::derive(catalog, &feeds, &objects, &probe, layout);
     // An author may add to the needs, never take away.
     el["needs"] = union(&el["needs"], &needs);
     let id = object_id(&el);
@@ -505,8 +570,7 @@ pub fn reseal_followers(
                 .extra
                 .borrow_mut()
                 .insert(probe.clone(), Arc::new(v.clone()));
-            let (needs, features) =
-                super::convert::derive(catalog, &feeds, &objects, &probe, layout);
+            let (needs, features) = super::core::derive(catalog, &feeds, &objects, &probe, layout);
             v["needs"] = union(&v["needs"], &needs);
             let id = object_id(&v);
             cstore::put_object(conn, &id, &v, &features)?;
@@ -514,7 +578,7 @@ pub fn reseal_followers(
                 conn,
                 &f,
                 &id,
-                super::convert::AUTHOR_POD,
+                crate::layouts::AUTHOR_POD,
                 Some(&format!("Re-sealed: {n} moved")),
             )? {
                 out.push((f.clone(), seq));
@@ -525,26 +589,91 @@ pub fn reseal_followers(
     Ok(out)
 }
 
-/// Announce moves to the event streams (old clients' `layout` events for
-/// layouts, and `construct` on home's streams).
+/// Announce moves to the event streams (`event: construct`).
 pub fn publish(pod: &Pod, moved: &[(String, i64)]) {
     super::state(pod)
         .roots
         .lock()
         .unwrap_or_else(|e| e.into_inner())
         .clear();
-    for (name, seq) in moved {
-        if super::is_layout_name(name) {
-            pod.publish_layout(name, *seq);
-        }
-    }
     if !moved.is_empty() {
         let g = pod
             .store()
             .with_conn(cstore::generation)
             .unwrap_or_default();
-        pod.publish_layout(CONSTRUCT_EVENT_ID, g);
+        pod.publish_construct(g);
     }
+}
+
+/// A layout as clients draw it: what checks of the pod's data read on a
+/// switched pod ([`live_layouts`]).
+#[derive(Debug, Clone)]
+pub struct LiveLayout {
+    /// Its name (a pod layout's id, or `@core/<blueprint>`).
+    pub name: String,
+    pub title: String,
+    pub icon: String,
+    /// Its name's history seq (what `get_layout` calls its version).
+    pub version: i64,
+    /// Its element materialized: components expanded, its inputs filled in
+    /// with what the first use site reaching it from home binds.
+    pub node: Value,
+}
+
+/// Every layout of a switched pod as clients draw it: each one home
+/// reaches (breadth first, bound as the engine binds it), then each of the
+/// pod's layouts home doesn't reach, unbound. A layout bound two ways is
+/// listed for each. Elements that can't be materialized are left out.
+pub fn live_layouts(conn: &Connection) -> rusqlite::Result<Vec<LiveLayout>> {
+    let objects = ConnObjects::new(conn);
+    let mut out = Vec::new();
+    let mut seen = BTreeSet::new();
+    let mut named = BTreeSet::new();
+    let mut queue = VecDeque::new();
+    if let Some(h) = cstore::name(conn, crate::HOME_APP)? {
+        queue.push_back((crate::HOME_APP.to_owned(), h, Map::new()));
+    }
+    // Then the layouts home doesn't reach (opened by name), unbound.
+    let mut unreached = false;
+    loop {
+        while let Some((name, el, inputs)) = queue.pop_front() {
+            if seen.len() > 10_000 {
+                break;
+            }
+            if !seen.insert(construct_elements::instance_id(&el, &inputs)) {
+                continue;
+            }
+            let Some(v) = objects.object(&el) else {
+                continue;
+            };
+            let Ok(m) = construct_elements::materialize_with(&objects, &el, &inputs) else {
+                continue;
+            };
+            for e in &m.edges {
+                if let Some(t) = &e.el {
+                    queue.push_back((e.name.clone(), t.clone(), e.bind.clone()));
+                }
+            }
+            named.insert(name.clone());
+            out.push(LiveLayout {
+                version: cstore::last_seq(conn, &name)?,
+                title: v["title"].as_str().unwrap_or("").to_owned(),
+                icon: v["icon"].as_str().unwrap_or("").to_owned(),
+                name,
+                node: m.node,
+            });
+        }
+        if unreached {
+            break;
+        }
+        unreached = true;
+        for (name, h) in cstore::names(conn)? {
+            if super::is_layout_name(&name) && !named.contains(&name) {
+                queue.push_back((name, h, Map::new()));
+            }
+        }
+    }
+    Ok(out)
 }
 
 /// A layout element as written: its node normalized, its title and icon.
@@ -601,10 +730,28 @@ fn check_layout(
             format!("it uses {x}, which isn't stored"),
         ));
     }
-    let sources = crate::custom::feed_sources(pod, feeds);
-    crate::validate::custom_layout(id, &m.node, &sources)
-        .map(|_| ())
-        .map_err(|e| json!({ "error": "invalid_layout", "detail": e.to_json() }))
+    let sources = crate::layouts::feed_sources(pod, feeds);
+    let invalid = |e: crate::validate::LayoutError| {
+        json!({ "error": "invalid_layout", "detail": e.to_string(), "at": e.pointer,
+                "allowed": e.allowed })
+    };
+    crate::validate::custom_layout(id, &m.node, &sources).map_err(invalid)?;
+    // Each source's own checks (decision `collections`): e.g. that the
+    // bindings name fields its stored definitions have.
+    for (name, _) in &sources {
+        let Some((adapter, _)) = pod.catalog().source(name) else {
+            continue;
+        };
+        let names: Vec<String> = feeds
+            .iter()
+            .filter(|(s, _)| s == name)
+            .map(|(_, f)| f.clone())
+            .collect();
+        adapter
+            .check_custom_layout(conn, &names, &m.node)
+            .map_err(invalid)?;
+    }
+    Ok(())
 }
 
 fn str_arg<'a>(args: &'a Value, k: &str) -> Result<&'a str, Value> {
@@ -621,20 +768,12 @@ fn note_arg(args: &Value, default: &str) -> String {
         .filter(|n| !n.is_empty())
         .unwrap_or(default)
         .chars()
-        .take(crate::custom::MAX_NOTE_CHARS)
+        .take(crate::layouts::MAX_NOTE_CHARS)
         .collect()
 }
 
-/// The MCP tools on a switched pod; `None`: the tool works as on any pod.
+/// The MCP layout and component tools; `None`: not one of them.
 pub async fn mcp(pod: &Pod, name: &str, args: &Value) -> Option<Result<Value, Value>> {
-    let refused_old = |what: &str| {
-        Some(Err(refuse(
-            "construct_switched",
-            format!(
-                "{what} is part of the old layout system; this pod is switched to the construct"
-            ),
-        )))
-    };
     match name {
         "list_layouts" => Some(run(pod, args, list_layouts).await),
         "get_layout" => Some(run(pod, args, get_layout).await),
@@ -645,6 +784,7 @@ pub async fn mcp(pod: &Pod, name: &str, args: &Value) -> Option<Result<Value, Va
         "rename_layout" => Some(run_write(pod, args, rename_layout).await),
         "delete_layout" => Some(run_write(pod, args, delete_layout).await),
         "list_components" => Some(run(pod, args, list_components).await),
+        "list_parts" => Some(run(pod, args, list_parts).await),
         "get_component" => Some(run(pod, args, get_component).await),
         "define_component" => {
             Some(run_write(pod, args, |p, c, a| put_component(p, c, a, false)).await)
@@ -656,9 +796,6 @@ pub async fn mcp(pod: &Pod, name: &str, args: &Value) -> Option<Result<Value, Va
         "restore_component" => Some(run_write(pod, args, restore_component).await),
         "delete_component" => Some(run_write(pod, args, delete_component).await),
         "expand" => Some(run(pod, args, expand).await),
-        "set_hidden" => refused_old("Hiding a layout (launcher membership is home's links)"),
-        "dismiss_update" => refused_old("An update notice (names follow their blueprints)"),
-        "rebase_context" => refused_old("Rebasing a copy (reference the blueprint's name instead)"),
         _ => None,
     }
 }
@@ -680,7 +817,7 @@ pub(crate) async fn run_write(
     + Send
     + 'static,
 ) -> Result<Value, Value> {
-    crate::custom::allow_write(pod).map_err(|(s, b)| {
+    crate::layouts::allow_write(pod).map_err(|(s, b)| {
         let mut b = b;
         b["status"] = json!(s.as_u16());
         b
@@ -742,7 +879,7 @@ fn list_layouts(pod: &Pod, conn: &Connection, _: &Value) -> Result<Value, Value>
     layouts.sort_by_key(|r| r["id"] != json!(crate::HOME_APP));
     let blueprints: Vec<Value> = pod
         .catalog()
-        .apps()
+        .blueprints()
         .filter(|a| !a.dev || pod.show_dev_apps())
         .map(|a| {
             json!({ "id": a.id, "name": blueprint_name(a.id), "title": a.title, "icon": a.icon,
@@ -753,8 +890,8 @@ fn list_layouts(pod: &Pod, conn: &Connection, _: &Value) -> Result<Value, Value>
         "construct": cstore::name(conn, crate::HOME_APP).map_err(store_err)?,
         "layouts": layouts,
         "blueprints": blueprints,
-        "note": "This pod is switched to the construct: layouts are names that point to elements; \
-                 reference others with \"ref\": \"<name>\" (layouts by id, @core/<blueprint>, \
+        "note": "Layouts are names that point to elements; reference others with \"ref\": \
+                 \"<name>\" (layouts by id, @core/<blueprint>, @core/<blueprint>/<part>, \
                  @core/<component>, @me/<component>).",
     }))
 }
@@ -799,7 +936,7 @@ fn get_layout(pod: &Pod, conn: &Connection, args: &Value) -> Result<Value, Value
     Ok(out)
 }
 
-/// Home's feeds with `more` added (at most [`crate::custom::MAX_HOME_FEEDS`]).
+/// Home's feeds with `more` added (at most [`crate::layouts::MAX_HOME_FEEDS`]).
 fn grown_feeds(
     pod: &Pod,
     conn: &Connection,
@@ -808,7 +945,7 @@ fn grown_feeds(
     if more.is_null() {
         return Ok(None);
     }
-    let asked = crate::custom::check_feeds(pod, more).map_err(|(_, b)| b)?;
+    let asked = crate::layouts::check_feeds(pod, more, crate::layouts::MAX_FEEDS)?;
     let mut feeds = home_feeds(conn);
     let before = feeds.len();
     for f in asked {
@@ -816,13 +953,70 @@ fn grown_feeds(
             feeds.push(f);
         }
     }
-    if feeds.len() > crate::custom::MAX_HOME_FEEDS {
+    if feeds.len() > crate::layouts::MAX_HOME_FEEDS {
         return Err(refuse(
             "too_many_feeds",
-            format!("home binds at most {} feeds", crate::custom::MAX_HOME_FEEDS),
+            format!(
+                "home binds at most {} feeds",
+                crate::layouts::MAX_HOME_FEEDS
+            ),
         ));
     }
     Ok((feeds.len() != before).then_some(feeds))
+}
+
+/// Drop home's feeds of sources this build doesn't have (decision
+/// `remove-recipes-source`): a removed source's feed would otherwise stay
+/// in home's `bind` for good, since the tools only grow it. Answers the
+/// feeds dropped. Blocking; run when the pod opens, on a switched pod.
+pub fn drop_unknown_feeds(
+    store: &crate::store::Store,
+    catalog: &Catalog,
+) -> Result<Vec<(String, String)>, String> {
+    let mut refused = None;
+    let dropped = store
+        .transaction(|tx| {
+            let feeds = home_feeds(tx);
+            let (keep, gone): (Vec<_>, Vec<_>) = feeds
+                .into_iter()
+                .partition(|(s, _)| catalog.source(s).is_some());
+            if gone.is_empty() {
+                return Ok(gone);
+            }
+            let Some(h) = cstore::name(tx, crate::HOME_APP)? else {
+                return Ok(Vec::new());
+            };
+            let Some((el, _)) = cstore::object(tx, &h)? else {
+                return Ok(Vec::new());
+            };
+            let mut el = (*el).clone();
+            el["bind"]["feeds"] = json!(keep);
+            let note = format!(
+                "Home no longer binds {} (no such source)",
+                gone.iter()
+                    .map(|(s, f)| format!("{s}/{f}"))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            );
+            if let Err(e) = put(
+                tx,
+                catalog,
+                crate::HOME_APP,
+                el,
+                true,
+                crate::layouts::AUTHOR_POD,
+                &note,
+            ) {
+                refused = Some(e);
+                return Err(rusqlite::Error::QueryReturnedNoRows);
+            }
+            Ok(gone)
+        })
+        .map_err(|e| match refused.take() {
+            Some(r) => r.to_string(),
+            None => e.to_string(),
+        })?;
+    Ok(dropped)
 }
 
 /// Give home these feeds (a new home element).
@@ -845,7 +1039,7 @@ pub(crate) fn set_home_feeds(
         crate::HOME_APP,
         el,
         true,
-        crate::custom::AUTHOR_CLAUDE,
+        crate::layouts::AUTHOR_CLAUDE,
         "Home binds more feeds",
     )
 }
@@ -861,7 +1055,7 @@ fn create_layout(
         .filter(|t| !t.is_empty())
         .unwrap_or("Layout")
         .chars()
-        .take(crate::custom::MAX_TITLE_CHARS)
+        .take(crate::layouts::MAX_TITLE_CHARS)
         .collect::<String>();
     let icon = args["icon"].as_str().unwrap_or("dashboard").to_owned();
     if !args["layout"].is_object() {
@@ -870,11 +1064,30 @@ fn create_layout(
             "\"layout\" is the layout's root node",
         ));
     }
+    let count = cstore::names(conn)
+        .map_err(store_err)?
+        .iter()
+        .filter(|(n, _)| super::is_layout_name(n))
+        .count();
+    if count >= pod.writes.caps.layouts {
+        return Err(refuse(
+            "too_many_layouts",
+            format!(
+                "a pod has at most {} layouts; delete one it no longer needs",
+                pod.writes.caps.layouts
+            ),
+        ));
+    }
+    let icon = if crate::layouts::LAYOUT_ICONS.contains(&icon.as_str()) {
+        icon
+    } else {
+        "dashboard".to_owned()
+    };
     let mut moved = Vec::new();
     if let Some(f) = grown_feeds(pod, conn, &args["feeds"])? {
         moved.extend(set_home_feeds(pod, conn, &f)?);
     }
-    let id = crate::custom::new_custom_id();
+    let id = crate::layouts::new_layout_id();
     let el = layout_element(
         conn,
         pod.catalog(),
@@ -892,7 +1105,7 @@ fn create_layout(
         &id,
         el,
         true,
-        crate::custom::AUTHOR_CLAUDE,
+        crate::layouts::AUTHOR_CLAUDE,
         &note,
     )?);
     let seq = cstore::last_seq(conn, &id).map_err(store_err)?;
@@ -919,7 +1132,10 @@ fn current_layout(conn: &Connection, id: &str) -> Result<(String, Arc<Value>), V
     Ok((h, el))
 }
 
-fn update_layout(
+/// `update_layout` on a switched pod, in the caller's transaction: also how
+/// Collections' `apply_change` edits layouts along with a collection. The
+/// caller announces the moves with [`publish`] after committing.
+pub fn update_layout(
     pod: &Pod,
     conn: &Connection,
     args: &Value,
@@ -966,7 +1182,7 @@ fn update_layout(
         &id,
         new,
         true,
-        crate::custom::AUTHOR_CLAUDE,
+        crate::layouts::AUTHOR_CLAUDE,
         &note,
     )?);
     let seq = cstore::last_seq(conn, &id).map_err(store_err)?;
@@ -981,7 +1197,17 @@ fn validate_layout(pod: &Pod, conn: &Connection, args: &Value) -> Result<Value, 
         None => home_feeds(conn),
     };
     check_layout(pod, conn, id, &el, &feeds)?;
-    Ok(json!({ "ok": true, "layout": el["node"] }))
+    // What clients would draw.
+    let objects = ConnObjects::new(conn);
+    let eid = object_id(&el);
+    objects
+        .extra
+        .borrow_mut()
+        .insert(eid.clone(), Arc::new(el.clone()));
+    let expanded = construct_elements::materialize(&objects, &eid)
+        .map(|m| m.node)
+        .unwrap_or(Value::Null);
+    Ok(json!({ "ok": true, "layout": el["node"], "expanded": expanded }))
 }
 
 fn restore_version(
@@ -1000,7 +1226,7 @@ fn restore_version(
         conn,
         &id,
         &hash,
-        crate::custom::AUTHOR_CLAUDE,
+        crate::layouts::AUTHOR_CLAUDE,
         Some(&format!("Restored version {n}")),
     )
     .map_err(store_err)?
@@ -1032,7 +1258,7 @@ fn rename_layout(
     {
         el["title"] = json!(
             t.chars()
-                .take(crate::custom::MAX_TITLE_CHARS)
+                .take(crate::layouts::MAX_TITLE_CHARS)
                 .collect::<String>()
         );
     }
@@ -1040,11 +1266,32 @@ fn rename_layout(
         el["icon"] = json!(i);
     }
     let mut moved = Vec::new();
-    if let Some(f) = grown_feeds(pod, conn, &args["feeds"])? {
-        moved.extend(set_home_feeds(pod, conn, &f)?);
-        if id == crate::HOME_APP {
-            el = (*current_layout(conn, &id)?.1).clone();
+    if id == crate::HOME_APP && !args["feeds"].is_null() {
+        // Home's feeds are replaced: one may go once no layout binds it.
+        let feeds =
+            crate::layouts::check_feeds(pod, &args["feeds"], crate::layouts::MAX_HOME_FEEDS)?;
+        let dropped: Vec<(String, String)> = home_feeds(conn)
+            .into_iter()
+            .filter(|f| !feeds.contains(f))
+            .collect();
+        if !dropped.is_empty() {
+            for l in crate::layouts::pod_layouts(conn).map_err(store_err)? {
+                let Some(node) = crate::layouts::materialized(conn, &l.element) else {
+                    continue;
+                };
+                if let Some((s, f)) =
+                    crate::layouts::bound_feeds(pod.catalog(), &dropped, &node).first()
+                {
+                    return Err(
+                        json!({ "error": "feed_in_use", "feed": [s, f], "layout": l.id,
+                        "detail": format!("layout '{}' ({}) shows {s}/{f}", l.title, l.id) }),
+                    );
+                }
+            }
         }
+        el["bind"] = json!({ "feeds": feeds });
+    } else if let Some(f) = grown_feeds(pod, conn, &args["feeds"])? {
+        moved.extend(set_home_feeds(pod, conn, &f)?);
     }
     moved.extend(put(
         conn,
@@ -1052,7 +1299,7 @@ fn rename_layout(
         &id,
         el,
         true,
-        crate::custom::AUTHOR_CLAUDE,
+        crate::layouts::AUTHOR_CLAUDE,
         "Renamed",
     )?);
     let seq = cstore::last_seq(conn, &id).map_err(store_err)?;
@@ -1078,9 +1325,14 @@ fn delete_layout(
             "detail": "take the links and embeds to it out of these first" }));
     }
     let mut moved = Vec::new();
-    if let Some(seq) =
-        cstore::move_name(conn, &id, "", crate::custom::AUTHOR_CLAUDE, Some("Deleted"))
-            .map_err(store_err)?
+    if let Some(seq) = cstore::move_name(
+        conn,
+        &id,
+        "",
+        crate::layouts::AUTHOR_CLAUDE,
+        Some("Deleted"),
+    )
+    .map_err(store_err)?
     {
         moved.push((id.clone(), seq));
     }
@@ -1090,6 +1342,12 @@ fn delete_layout(
 
 /// A component's name: `@me/<name>` from `name`, `pod:name` or `@me/name`.
 fn me_name(raw: &str) -> Result<String, Value> {
+    if raw.starts_with(CORE_PREFIX) || raw.starts_with(crate::components::CORE) {
+        return Err(refuse(
+            "read_only",
+            "@core/ components ship with the server; copy_component makes one of your own",
+        ));
+    }
     let bare = raw
         .strip_prefix(ME_PREFIX)
         .or_else(|| raw.strip_prefix(crate::components::POD))
@@ -1190,7 +1448,7 @@ fn put_component(
         &name,
         el,
         false,
-        crate::custom::AUTHOR_CLAUDE,
+        crate::layouts::AUTHOR_CLAUDE,
         &note,
     )?;
     let seq = cstore::last_seq(conn, &name).map_err(store_err)?;
@@ -1206,7 +1464,11 @@ fn copy_component(
     args: &Value,
 ) -> Result<(Value, Vec<(String, i64)>), Value> {
     let from = any_component_name(str_arg(args, "from").or_else(|_| str_arg(args, "component"))?)?;
-    let to = me_name(str_arg(args, "name")?)?;
+    // Without a name, the copy takes the bare name of what it copies.
+    let to = match args["name"].as_str().filter(|n| !n.is_empty()) {
+        Some(n) => me_name(n)?,
+        None => me_name(from.rsplit('/').next().unwrap_or(&from))?,
+    };
     let h = cstore::name(conn, &from)
         .map_err(store_err)?
         .ok_or_else(|| refuse("component_not_found", format!("no component '{from}'")))?;
@@ -1226,13 +1488,10 @@ fn copy_component(
         &to,
         el,
         false,
-        crate::custom::AUTHOR_CLAUDE,
+        crate::layouts::AUTHOR_CLAUDE,
         &format!("Copied from {from}"),
     )?;
-    Ok((
-        json!({ "ok": true, "name": to, "copied_from": from }),
-        moved,
-    ))
+    Ok((json!({ "ok": true, "name": to, "from": from }), moved))
 }
 
 fn restore_component(
@@ -1254,7 +1513,7 @@ fn restore_component(
         conn,
         &name,
         &hash,
-        crate::custom::AUTHOR_CLAUDE,
+        crate::layouts::AUTHOR_CLAUDE,
         Some(&format!("Restored version {n}")),
     )
     .map_err(store_err)?
@@ -1287,7 +1546,7 @@ fn delete_component(
         conn,
         &name,
         "",
-        crate::custom::AUTHOR_CLAUDE,
+        crate::layouts::AUTHOR_CLAUDE,
         Some("Deleted"),
     )
     .map_err(store_err)?
@@ -1321,6 +1580,43 @@ fn list_components(_pod: &Pod, conn: &Connection, _: &Value) -> Result<Value, Va
     }
     Ok(json!({ "components": out,
         "use": "{\"type\": \"core://Use\", \"ref\": \"<name>\", \"args\": {...}, \"children\": [...]}" }))
+}
+
+/// MCP `list_parts {layout?}`: the parts of blueprints a layout can use
+/// whole (`@core/<blueprint>/<part>`: each slot of its newest file and the
+/// parts it declares), with each part's node when `with_layouts`.
+fn list_parts(pod: &Pod, conn: &Connection, args: &Value) -> Result<Value, Value> {
+    let only = args["layout"].as_str().or(args["app"].as_str());
+    let with = args["with_layouts"].as_bool() == Some(true);
+    let mut out = Vec::new();
+    for b in pod.catalog().blueprints() {
+        if only.is_some_and(|o| o != b.id) || (b.dev && !pod.show_dev_apps()) {
+            continue;
+        }
+        let prefix = format!("{}/", blueprint_name(b.id));
+        let mut parts = Vec::new();
+        for (n, h) in cstore::names(conn).map_err(store_err)? {
+            let Some(part) = n.strip_prefix(&prefix) else {
+                continue;
+            };
+            let mut row = json!({ "name": n, "part": part, "element": h });
+            if with && let Some((el, _)) = cstore::object(conn, &h).map_err(store_err)? {
+                row["node"] = el["node"].clone();
+            }
+            parts.push(row);
+        }
+        out.push(json!({ "layout": b.id, "name": blueprint_name(b.id), "title": b.title, "parts": parts }));
+    }
+    if let Some(o) = only
+        && out.is_empty()
+    {
+        return Err(refuse(
+            "unknown_blueprint",
+            format!("no blueprint '{o}' (list_layouts lists them)"),
+        ));
+    }
+    Ok(json!({ "layouts": out,
+        "use": "{\"type\": \"core://Use\", \"ref\": \"@core/<blueprint>/<part>\"} draws a part where it stands, and follows its blueprint" }))
 }
 
 fn get_component(_pod: &Pod, conn: &Connection, args: &Value) -> Result<Value, Value> {
@@ -1385,4 +1681,14 @@ pub fn draft_plumbing(pod: &Pod, node: &Value) -> Result<Value, Value> {
             .map(|m| m.node)
             .map_err(|e| refuse("invalid_layout", e.to_string()))
     })
+}
+
+/// Set home's feeds to `feeds` (a source dropping one it no longer has, such
+/// as a deleted collection), as a write of the construct.
+pub async fn set_home_feeds_to(pod: &Pod, feeds: Vec<(String, String)>) -> Result<Value, Value> {
+    run_write(pod, &json!({}), move |p, c, _| {
+        let moved = set_home_feeds(p, c, &feeds)?;
+        Ok((json!({ "ok": true }), moved))
+    })
+    .await
 }

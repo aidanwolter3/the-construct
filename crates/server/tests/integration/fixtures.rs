@@ -59,13 +59,20 @@ fn check_or_write(name: &str, want: &str) {
     );
 }
 
+/// This build's `@core/` elements.
+fn core() -> pod_core::construct::core::Core {
+    pod_core::construct::core::load(&server::catalog()).unwrap()
+}
+
+/// Blueprint `id`'s newest file as this build's clients draw it.
+fn newest(id: &str) -> Value {
+    let core = core();
+    let el = core.current(&format!("@core/{id}")).unwrap();
+    construct_elements::materialize(&core, el).unwrap().node
+}
+
 fn newest_layout() -> UiNode {
-    server::layouts::parse_files(&server::catalog(), &server::layout_files())
-        .unwrap()
-        .into_iter()
-        .rfind(|f| f.app_id == "pixelfed")
-        .unwrap()
-        .layout
+    serde_json::from_value(newest("pixelfed")).unwrap()
 }
 
 /// Every string field holding a proxied media URL back to the fake's own URL
@@ -139,8 +146,9 @@ async fn feed_fixture_is_the_pods_feed() {
         queries: data.queries,
     };
     let mut v = serde_json::to_value(&spec).unwrap();
-    // Through text, so f32 fields are not widened (see layouts::node_value).
-    v["workspace"] = plumbing(&spec.workspace);
+    // As the construct materializes it (not through the types, which
+    // leave defaults out).
+    v["workspace"] = newest("pixelfed");
     check_or_write(
         "pixelfed_feed_bundle.json",
         &(serde_json::to_string_pretty(&v).unwrap() + "\n"),
@@ -228,9 +236,8 @@ async fn screen_data_fixture_is_the_pods_comments_data() {
 /// `core://Page` it expands to (decision `plumbing-and-porcelain`), anything
 /// else as it is.
 fn plumbing(layout: &UiNode) -> Value {
-    let state = server::state_in_memory();
     let v = server::layouts::node_value(layout);
-    let page = server::porcelain::to_plumbing(state.store(), state.catalog(), &v).unwrap();
+    let page = pod_core::construct::core::plumbing(&core(), &v).unwrap();
     assert!(!page.to_string().contains("core://Use"), "{page}");
     page
 }
@@ -241,12 +248,7 @@ fn plumbing(layout: &UiNode) -> Value {
 #[test]
 fn shell_blueprints() {
     for id in ["shell", "settings", "inbox"] {
-        let file = server::layouts::parse_files(&server::catalog(), &server::layout_files())
-            .unwrap()
-            .into_iter()
-            .rfind(|f| f.app_id == id)
-            .unwrap();
-        let page = plumbing(&file.layout);
+        let page = newest(id);
         assert_eq!(page["type"], "core://Page");
         let mut text = serde_json::to_string_pretty(&page).unwrap();
         text.push('\n');

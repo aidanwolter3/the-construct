@@ -424,43 +424,65 @@ impl AppState {
             .catalog()
             .adapters()
             .iter()
-            .filter(|a| a.notifies_custom_apps())
+            .filter(|a| a.notifies_layouts())
             .collect();
         if senders.is_empty() {
             return out;
         }
-        let live: Vec<String> = match self.store().with_conn(crate::custom::custom_apps_on) {
-            Ok(apps) => apps.into_iter().map(|a| a.id).collect(),
+        let live: Vec<String> = match self.store().with_conn(crate::layouts::pod_layouts) {
+            Ok(layouts) => layouts.into_iter().map(|a| a.id).collect(),
             Err(e) => {
-                tracing::error!(error = %e, "custom apps could not be read");
+                tracing::error!(error = %e, "the pod's layouts could not be read");
                 return out;
             }
         };
         for a in senders {
-            for c in a.custom_notification_channels(self.store(), self.catalog()) {
+            for c in a.layout_notification_channels(self.store(), self.catalog()) {
                 let fits = live.contains(&c.layout)
                     && valid_channel_id(&c.id)
                     && !out.iter().any(|o| o.layout == c.layout && o.id == c.id);
                 if fits {
                     out.push(c);
                 } else {
-                    tracing::warn!(adapter = a.name(), app = %c.layout, channel = %c.id,
-                        "custom app channel dropped");
+                    tracing::warn!(adapter = a.name(), layout = %c.layout, channel = %c.id,
+                        "layout channel dropped");
                 }
             }
         }
         out
     }
 
-    /// The apps notifications may belong to: built-in apps and live custom
-    /// apps.
-    fn app_ids(&self) -> Vec<String> {
-        let mut ids: Vec<String> = self.catalog().apps().map(|a| a.id.to_owned()).collect();
-        match self.store().with_conn(crate::custom::custom_apps_on) {
-            Ok(apps) => ids.extend(apps.into_iter().map(|a| a.id)),
-            Err(e) => tracing::error!(error = %e, "custom apps could not be read"),
+    /// The layouts notifications may belong to: blueprints and the pod's
+    /// live layouts.
+    fn layout_ids(&self) -> Vec<String> {
+        let mut ids: Vec<String> = self
+            .catalog()
+            .blueprints()
+            .map(|a| a.id.to_owned())
+            .collect();
+        match self.store().with_conn(crate::layouts::pod_layouts) {
+            Ok(layouts) => ids.extend(layouts.into_iter().map(|a| a.id)),
+            Err(e) => tracing::error!(error = %e, "the pod's layouts could not be read"),
         }
         ids
+    }
+
+    /// Set each notification's `layout`: the pod's layout built on the
+    /// blueprint its channel belongs to, else that blueprint (or layout).
+    fn target_layouts(
+        &self,
+        conn: &rusqlite::Connection,
+        items: &mut [Notification],
+    ) -> rusqlite::Result<()> {
+        let map = crate::layouts::layouts_for_blueprints(self.catalog(), conn)?;
+        for n in items {
+            n.layout = Some(
+                map.get(&n.channel_layout)
+                    .cloned()
+                    .unwrap_or_else(|| n.channel_layout.clone()),
+            );
+        }
+        Ok(())
     }
 
     pub fn subscribe_notifications(&self) -> tokio::sync::broadcast::Receiver<NotifyEvent> {
@@ -565,7 +587,7 @@ impl AppState {
             return Ok((Vec::new(), Vec::new()));
         }
         items.sort_by_key(|n| n.created_at);
-        let apps = self.app_ids();
+        let apps = self.layout_ids();
         let (inserted, (unread_total, _)) = blocking(self, move |s| {
             s.transaction(|tx| Ok((insert_on(tx, &items)?, unread_on(tx, &apps)?)))
         })
@@ -576,8 +598,12 @@ impl AppState {
             .map(|(n, _)| n.clone())
             .collect();
         if !fresh.is_empty() {
-            let map = blocking(self, crate::custom::layouts_for_blueprints).await?;
-            crate::custom::target_layouts(&map, &mut fresh);
+            let p = self.clone();
+            fresh = blocking(self, move |s| {
+                s.with_conn(|c| p.target_layouts(c, &mut fresh))?;
+                Ok(fresh)
+            })
+            .await?;
         }
         if !fresh.is_empty() {
             tracing::info!(count = fresh.len(), "new notifications");
@@ -889,7 +915,7 @@ fn bad_request(detail: &str) -> Response {
     )
 }
 
-/// `GET /v1/notifications?limit=0..=100 (50)&before=<id>&app=<app id>`:
+/// `GET /v1/notifications?limit=0..=100 (50)&before=<id>&layout=<layout id>`:
 /// newest first, with unread counts (`limit=0`: counts only).
 async fn list(
     State(state): State<Pod>,
@@ -909,13 +935,17 @@ async fn list(
         Some(Ok(n)) if n >= 1 => n,
         Some(_) => return bad_request("before is a notification id"),
     };
-    let app = q.get("app").cloned();
-    let apps = state.app_ids();
+    let app = q.get("layout").cloned();
+    let apps = state.layout_ids();
     if let Some(a) = &app
         && !apps.contains(a)
     {
-        return json_error(StatusCode::NOT_FOUND, json!({ "error": "app_not_found" }));
+        return json_error(
+            StatusCode::NOT_FOUND,
+            json!({ "error": "layout_not_found" }),
+        );
     }
+    let p = state.clone();
     let result = blocking(&state, move |s| {
         s.with_conn(|c| {
             let mut rows: Vec<Notification> = {
@@ -932,12 +962,12 @@ async fn list(
             Ok((rows, total, by_app))
         })
         .and_then(|(mut rows, total, by_app)| {
-            crate::custom::target_layouts(&crate::custom::layouts_for_blueprints(s)?, &mut rows);
+            s.with_conn(|c| p.target_layouts(c, &mut rows))?;
             Ok((rows, total, by_app))
         })
     })
     .await;
-    let (mut rows, unread_total, unread_by_app) = match result {
+    let (mut rows, unread_total, unread_by_layout) = match result {
         Ok(r) => r,
         Err(e) => return e.into_response(),
     };
@@ -951,14 +981,14 @@ async fn list(
     Json(NotificationList {
         notifications: rows,
         unread_total,
-        unread_by_app,
+        unread_by_layout,
         next_before,
     })
     .into_response()
 }
 
 /// `POST /v1/notifications/read {"ids": ["12", …]}` or `{"all": true,
-/// "app"?: "<app id>"}` -> `{unread_total, unread_by_app}`; announced as a
+/// "layout"?: "<layout id>"}` -> `{unread_total, unread_by_layout}`; announced as a
 /// `notifications_read` event on the pod's streams.
 async fn mark_read(State(state): State<Pod>, headers: HeaderMap, body: Bytes) -> Response {
     if let Err(r) = session_of(&state, &headers).await {
@@ -988,13 +1018,13 @@ async fn mark_read(State(state): State<Pod>, headers: HeaderMap, body: Bytes) ->
     };
     let all = payload.get("all").and_then(Value::as_bool) == Some(true);
     let app = payload
-        .get("app")
+        .get("layout")
         .and_then(Value::as_str)
         .map(str::to_owned);
     if ids.is_none() && !all {
         return bad_request("send ids or all: true");
     }
-    let apps = state.app_ids();
+    let apps = state.layout_ids();
     let result = blocking(&state, move |s| {
         s.transaction(|tx| {
             let now = now_secs();
@@ -1017,10 +1047,10 @@ async fn mark_read(State(state): State<Pod>, headers: HeaderMap, body: Bytes) ->
     })
     .await;
     match result {
-        Ok((unread_total, unread_by_app)) => {
+        Ok((unread_total, unread_by_layout)) => {
             let ev = ReadEvent {
                 unread_total,
-                unread_by_app,
+                unread_by_layout,
             };
             let _ = state.notifier.tx.send(NotifyEvent::Read(ev.clone()));
             Json(ev).into_response()

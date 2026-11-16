@@ -7,7 +7,7 @@
 use std::sync::Arc;
 
 use client_core::{MemoryStore, SecureStore};
-use e2e::{Harness, TIMEOUT, wait_signed_in, wait_until};
+use e2e::{Harness, wait_signed_in, wait_signed_out};
 use serde_json::{Value, json};
 
 const CAROUSEL: &str = "781254316723458049";
@@ -25,12 +25,7 @@ fn a_like_on_the_upstream_becomes_an_unread_notification() {
 
     let store = Arc::new(MemoryStore::new());
     let engine = h.engine(&store);
-    wait_until("the signed-out bundle", TIMEOUT, || {
-        engine
-            .snapshot()
-            .workspace_json
-            .contains("Sign in with Pixelfed")
-    });
+    wait_signed_out(&engine);
     engine.dispatch(&h.login_intent());
     wait_signed_in(&engine);
     let raw = store
@@ -88,7 +83,7 @@ fn a_like_on_the_upstream_becomes_an_unread_notification() {
     let list = pod(reqwest::Method::GET, "/v1/notifications", None);
     assert_eq!(list["unread_total"], 1, "{list}");
     let n = &list["notifications"][0];
-    assert_eq!(n["app_id"], "pixelfed");
+    assert_eq!(n["channel_layout"], "pixelfed");
     assert_eq!(n["channel"], "likes");
     assert_eq!(n["title"], "Alice Lumen liked your post");
     assert_eq!(n["target_uri"], format!("pixelfed://posts/{CAROUSEL}"));

@@ -133,12 +133,15 @@ async fn a_second_pod_adopts_a_published_layout_and_keeps_it_after_a_revoke() {
     )
     .await;
 
-    // Sharing needs a switched pod: an unswitched one answers as before.
-    let e = refused(&env, &c, "set_handle", json!({"handle": "cam"})).await;
-    assert_eq!(e["error"], "not_switched", "{e}");
-    for p in [&a, &b] {
-        ok(&env, p, "switch_construct", json!({})).await;
-    }
+    // A third pod sees nothing of the first's until it has a link.
+    let e = refused(
+        &env,
+        &c,
+        "describe_publication",
+        json!({"link": "share-nothing"}),
+    )
+    .await;
+    assert_eq!(e["error"], "unknown_link", "{e}");
 
     let list = ok(
         &env,

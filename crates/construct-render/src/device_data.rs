@@ -1,5 +1,5 @@
-//! The device data the shared UI gives layouts (`local:layouts`,
-//! `local://inbox`, `local://connection`, …), built from the pod's
+//! The device data the shared UI gives layouts (`local://inbox`,
+//! `local:notifications`, `local://connection`, …), built from the pod's
 //! answers. The clients (`crate::remote`, `crate::engine`) and the pod's
 //! layout previews build it the same way: a preview draws a layout as a
 //! device with the user's data would.
@@ -9,20 +9,15 @@ use serde_json::{Value, json};
 use std::collections::HashMap;
 
 /// The pod paths [`device`] and the clients read.
-pub const LAYOUTS_PATH: &str = "/v1/apps?all=1";
 pub const NOTIFICATIONS_PATH: &str = "/v1/notifications?limit=50";
 pub const CHANNELS_PATH: &str = "/v1/notifications/channels";
 pub const SIGN_INS_PATH: &str = "/v1/auth/sign-ins";
 
-/// The path of a layout's versions ([`versions_bundle`]).
-pub fn versions_path(app: &str) -> String {
-    format!("/v1/apps/{app}/versions?limit=100")
-}
-
-/// The device data a device on `base` gives a layout besides its list of
-/// layouts: connection, session, device, inbox and server; and, when
+/// The device data a device on `base` gives a layout: connection,
+/// session, device, inbox and server; and, when
 /// `needs` (a layout's JSON) binds them, the notifications, their channels
-/// and the sign-ins, read with `get` (a pod path's JSON answer).
+/// and the sign-ins, read with `get` (a pod path's JSON answer); `titles`
+/// name their layouts.
 pub fn device(
     base: &str,
     needs: &str,
@@ -81,72 +76,6 @@ pub fn needs_channels(needs: &str) -> bool {
 /// Whether a layout binds the sign-ins or the providers to sign in with.
 pub fn needs_sign_ins(needs: &str) -> bool {
     needs.contains("local:sign_ins") || needs.contains("local:providers")
-}
-
-/// The device data of the pod's layouts (`GET /v1/apps?all=1`'s answer),
-/// as the shared UI builds it: `local:layouts` (hidden ones left out),
-/// `local:all_layouts`, `local:apps`, and an entity for each. Every
-/// layout's title goes into `titles`.
-pub fn layouts_bundle(v: &Value, titles: &mut HashMap<String, String>) -> DataBundle {
-    let mut out = DataBundle::default();
-    let (mut listed, mut all) = (Vec::new(), Vec::new());
-    for a in v["apps"].as_array().into_iter().flatten() {
-        let Some(id) = a["id"].as_str() else {
-            continue;
-        };
-        titles.insert(id.to_owned(), a["title"].as_str().unwrap_or(id).to_owned());
-        if id == "home" {
-            continue;
-        }
-        let hidden = a["hidden"].as_bool().unwrap_or(false);
-        let mut e = EntityRecord::new();
-        e.set("id", id);
-        e.set("title", a["title"].as_str().unwrap_or(id));
-        e.set("icon", a["icon"].as_str().unwrap_or(""));
-        e.set(
-            "kind",
-            if a["kind"] == "custom" {
-                "custom"
-            } else {
-                "blueprint"
-            },
-        );
-        let latest = a["latest_version"].as_i64();
-        e.set(
-            "detail",
-            latest.map(|v| format!("v{v}")).unwrap_or_default(),
-        );
-        e.set(
-            "version",
-            latest.map(|v| format!("v{v} · latest")).unwrap_or_default(),
-        );
-        e.set("unread", 0);
-        e.set("hidden", hidden);
-        for prefix in ["local://layouts/", "local://apps/"] {
-            out.entities.insert(format!("{prefix}{id}"), e.clone());
-        }
-        all.push(format!("local://layouts/{id}"));
-        if !hidden {
-            listed.push(id.to_owned());
-        }
-    }
-    let mut count = EntityRecord::new();
-    count.set("count", listed.len());
-    out.entities.insert("local://layouts".into(), count.clone());
-    out.entities.insert("local://apps".into(), count);
-    out.queries.insert(
-        "local:layouts".into(),
-        listed
-            .iter()
-            .map(|i| format!("local://layouts/{i}"))
-            .collect(),
-    );
-    out.queries.insert(
-        "local:apps".into(),
-        listed.iter().map(|i| format!("local://apps/{i}")).collect(),
-    );
-    out.queries.insert("local:all_layouts".into(), all);
-    out
 }
 
 /// The device data every layout gets: `local://connection` and
@@ -281,75 +210,6 @@ pub fn sign_ins_bundle(v: &Value) -> DataBundle {
     out
 }
 
-/// `local://versions` and `local:versions` for a layout of a
-/// `GET /v1/apps/<id>/versions` answer, newest first; `pinned`: the version
-/// picked on this device.
-pub fn versions_bundle(
-    app: &str,
-    v: &Value,
-    pinned: Option<i64>,
-    title: &str,
-    now: i64,
-) -> DataBundle {
-    let list = v["versions"].as_array().cloned().unwrap_or_default();
-    let newest = list
-        .iter()
-        .find(|x| x["compatible"].as_bool().unwrap_or(true))
-        .and_then(|x| x["version"].as_i64());
-    let mut out = DataBundle::default();
-    let mut uris = Vec::new();
-    for x in &list {
-        let n = x["version"].as_i64().unwrap_or(0);
-        let detail = match (x["incompatible"].as_str(), x["note"].as_str()) {
-            (Some(i), note) => {
-                let why = match i {
-                    "update_required" => "Needs a newer version of the app",
-                    "retired" => "Made for an older version of the app",
-                    _ => "This version of the app can't show it",
-                };
-                note.map_or(why.to_owned(), |n| format!("{why} · {n}"))
-            }
-            (None, Some(note)) => note.to_owned(),
-            (None, None) => match x["source"].as_str().unwrap_or("") {
-                "file" => "Published",
-                "seed" => "Built-in",
-                "agent" => "AI edit",
-                "rollback" => "Rollback",
-                "restore" => "Restore",
-                "manual" => "Manual edit",
-                "switch" => "Layout switch",
-                _ => "Edit",
-            }
-            .to_owned(),
-        };
-        let uri = format!("local://versions/{app}/{n}");
-        insert(
-            &mut out,
-            &uri,
-            json!({
-                "app_id": app, "version": n, "label": format!("v{n}"), "detail": detail,
-                "when": version_time_label(
-                    x["created_at"].as_i64().or_else(|| x["created_at"].as_str().and_then(parse_rfc3339)).unwrap_or(0),
-                    now,
-                ),
-                "compatible": x["compatible"].as_bool().unwrap_or(true),
-                "showing": match pinned { Some(p) => p == n, None => Some(n) == newest },
-            }),
-        );
-        uris.push(uri);
-    }
-    out.queries.insert("local:versions".into(), uris);
-    insert(
-        &mut out,
-        "local://versions",
-        json!({
-            "app_id": app, "app_title": title,
-            "pinned": pinned.map(|p| p.to_string()).unwrap_or_default(), "loading": false,
-        }),
-    );
-    out
-}
-
 pub fn now_secs() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -398,59 +258,6 @@ pub fn time_label(at: i64, now: i64) -> String {
     }
 }
 
-/// Seconds since 1970 of an RFC 3339 UTC time (`2026-11-06T10:54:30Z`, or
-/// with an offset).
-pub fn parse_rfc3339(s: &str) -> Option<i64> {
-    let n = |r: std::ops::Range<usize>| s.get(r)?.parse::<i64>().ok();
-    let (y, mo, d) = (n(0..4)?, n(5..7)?, n(8..10)?);
-    let (h, mi, sec) = (n(11..13)?, n(14..16)?, n(17..19)?);
-    // Days from civil (the inverse of `civil`).
-    let y2 = if mo <= 2 { y - 1 } else { y };
-    let era = y2.div_euclid(400);
-    let yoe = y2 - era * 400;
-    let mp = (mo + 9) % 12;
-    let doy = (153 * mp + 2) / 5 + d - 1;
-    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
-    let days = era * 146_097 + doe - 719_468;
-    let mut t = days * 86_400 + h * 3_600 + mi * 60 + sec;
-    // An offset after the seconds (and any fraction): +hh:mm or -hh:mm.
-    let rest = s.get(19..).unwrap_or("");
-    if let Some(i) = rest.find(['+', '-']) {
-        let sign = if rest.as_bytes()[i] == b'-' { -1 } else { 1 };
-        let off = &rest[i + 1..];
-        let oh = off
-            .get(0..2)
-            .and_then(|v| v.parse::<i64>().ok())
-            .unwrap_or(0);
-        let om = off
-            .get(3..5)
-            .and_then(|v| v.parse::<i64>().ok())
-            .unwrap_or(0);
-        t -= sign * (oh * 3_600 + om * 60);
-    }
-    Some(t)
-}
-
-/// A version's time, as the shared UI's `versionTimeLabel`: "just now",
-/// "5 min ago", "3 h ago", "yesterday", "4 days ago", else the date.
-pub fn version_time_label(at: i64, now: i64) -> String {
-    if at <= 0 {
-        return String::new();
-    }
-    let d = (now - at).max(0);
-    match d {
-        0..60 => "just now".into(),
-        60..3_600 => format!("{} min ago", d / 60),
-        3_600..86_400 => format!("{} h ago", d / 3_600),
-        86_400..172_800 => "yesterday".into(),
-        172_800..2_592_000 => format!("{} days ago", d / 86_400),
-        _ => {
-            let (y, m, day) = civil(at.div_euclid(86_400));
-            format!("{} {day}, {y}", MONTHS[m as usize - 1])
-        }
-    }
-}
-
 /// The inbox's day header ("Today", "Yesterday", "Thursday, Nov 5").
 pub fn day_label(at: i64, now: i64) -> String {
     let (a, n) = (at.div_euclid(86_400), now.div_euclid(86_400));
@@ -485,8 +292,5 @@ mod tests {
         assert_eq!(day_label(thu, thu + 60), "Today");
         assert_eq!(day_label(thu, thu + 86_400), "Yesterday");
         assert_eq!(day_label(thu, thu + 3 * 86_400), "Thursday, Nov 5");
-        assert_eq!(parse_rfc3339("2026-11-05T12:00:00Z"), Some(thu));
-        assert_eq!(parse_rfc3339("2026-11-05T05:00:00-07:00"), Some(thu));
-        assert_eq!(version_time_label(thu, thu + 7_200), "2 h ago");
     }
 }

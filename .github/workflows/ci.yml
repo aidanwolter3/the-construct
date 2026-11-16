@@ -94,6 +94,7 @@ jobs:
       # (CONSTRUCT_REQUIRE_GPU below fails them instead of skipping when no adapter is found).
       - run: scripts/check_decisions.sh
       - run: scripts/check_test_data.sh
+      - run: scripts/check_old_names.sh
       - run: cargo clippy --workspace --all-targets -- -D warnings
       # The engine's window and viewer code (features off in the workspace build).
       - run: cargo clippy -p construct-render --features viewer --all-targets -- -D warnings

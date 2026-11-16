@@ -91,10 +91,6 @@ pub enum Step {
     },
     OpenSettings,
     OpenInbox,
-    PinVersion {
-        layout: String,
-        version: Option<u32>,
-    },
     Notify {
         app: String,
         channel: String,
@@ -141,7 +137,6 @@ impl Step {
             Step::OpenLayout { .. } => "open-layout",
             Step::OpenSettings => "open-settings",
             Step::OpenInbox => "open-inbox",
-            Step::PinVersion { .. } => "pin-version",
             Step::Notify { .. } => "notify",
             Step::ToggleChannel(_) => "toggle-channel",
             Step::Construct(_) => "construct",
@@ -171,7 +166,7 @@ pub struct Line {
 
 const COMMANDS: &str = "shot, click, type, pick, swipe-left, swipe-right, swipe-down, swipe-up, drag-down, \
     drag-card, scroll-to, back, wait, idle, assert-text, assert-no-text, wait-text, assert-link, wait-images, screen, \
-    offline, online, publish-version, open-layout, open-settings, open-inbox, pin-version, notify, toggle-channel";
+    offline, online, publish-version, open-layout, open-settings, open-inbox, notify, toggle-channel";
 
 /// Parses a script; the error names the entry and what it needs.
 pub fn parse(script: &str) -> Result<Vec<Line>, String> {
@@ -339,35 +334,6 @@ pub fn parse(script: &str) -> Result<Vec<Line>, String> {
             }
             "open-settings" => none(Step::OpenSettings)?,
             "open-inbox" => none(Step::OpenInbox)?,
-            "pin-version" => {
-                let a = need("a layout id and a version number or 'latest'")?;
-                let parts: Vec<&str> = a.split_whitespace().collect();
-                let bad = || {
-                    format!(
-                        "{}: 'pin-version' needs '<layout id> <version|latest>'",
-                        at()
-                    )
-                };
-                if parts.len() != 2 {
-                    return Err(bad());
-                }
-                let version = if parts[1].eq_ignore_ascii_case("latest") {
-                    None
-                } else {
-                    Some(
-                        parts[1]
-                            .trim_start_matches('v')
-                            .parse::<u32>()
-                            .ok()
-                            .filter(|v| *v >= 1)
-                            .ok_or_else(bad)?,
-                    )
-                };
-                Step::PinVersion {
-                    layout: parts[0].to_owned(),
-                    version,
-                }
-            }
             "construct" => Step::Construct(need("a construct file (crates/construct-sim/data/…)")?),
             "notify" => {
                 let a = need("'<layout> <channel> <title>'")?;

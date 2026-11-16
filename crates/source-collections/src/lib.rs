@@ -66,6 +66,8 @@ pub mod quantity;
 pub mod refs;
 pub mod remind;
 pub mod share;
+#[cfg(any(test, feature = "test-seed"))]
+pub mod test_seed;
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -82,7 +84,7 @@ use pod_core::layouts::LayoutSource;
 use pod_core::store::{Step, Store};
 use pod_core::validate::LayoutError;
 use pod_core::{
-    AppInfo, BoxFuture, Catalog, EntityDoc, FeedSpec, Hydration, PathSpec, Pod, PollCtx,
+    BlueprintInfo, BoxFuture, Catalog, EntityDoc, FeedSpec, Hydration, PathSpec, Pod, PollCtx,
     PollOutcome, RequestCtx, Source, SourceManifest,
 };
 use protocol::NotificationChannel;
@@ -384,7 +386,7 @@ impl Source for CollectionsAdapter {
         NAME
     }
 
-    fn apps(&self) -> Vec<AppInfo> {
+    fn blueprints(&self) -> Vec<BlueprintInfo> {
         Vec::new()
     }
 
@@ -485,11 +487,11 @@ impl Source for CollectionsAdapter {
         Box::pin(async {})
     }
 
-    fn notifies_custom_apps(&self) -> bool {
+    fn notifies_layouts(&self) -> bool {
         true
     }
 
-    fn custom_notification_channels(
+    fn layout_notification_channels(
         &self,
         store: &Store,
         catalog: &Catalog,
@@ -532,18 +534,15 @@ impl Source for CollectionsAdapter {
 
     fn check_custom_layout(
         &self,
-        pod: &Pod,
+        conn: &rusqlite::Connection,
         feeds: &[String],
         layout: &Value,
     ) -> Result<(), LayoutError> {
-        let defs = pod
-            .store()
-            .with_conn(db::all_defs)
-            .map_err(|e| LayoutError {
-                pointer: String::new(),
-                message: format!("collections could not be read: {e}"),
-                allowed: Vec::new(),
-            })?;
+        let defs = db::all_defs(conn).map_err(|e| LayoutError {
+            pointer: String::new(),
+            message: format!("collections could not be read: {e}"),
+            allowed: Vec::new(),
+        })?;
         let defs: HashMap<String, Definition> =
             defs.into_iter().map(|(_, d)| (d.name.clone(), d)).collect();
         bindings::check(layout, feeds, &defs)

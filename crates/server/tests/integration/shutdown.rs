@@ -46,14 +46,14 @@ fn sse_ends_cleanly_on(signal: &str) {
     let mut s = connect(port);
     s.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
     s.write_all(
-        b"GET /v1/workspaces/pixelfed_sample_no_login/events HTTP/1.1\r\nHost: localhost\r\n\
+        b"GET /v1/construct/events HTTP/1.1\r\nHost: localhost\r\n\
           Accept: text/event-stream\r\n\r\n",
     )
     .unwrap();
     // Wait for the first event so the stream is definitely open.
     let mut got = Vec::new();
     let mut buf = [0u8; 4096];
-    while !String::from_utf8_lossy(&got).contains("event: layout") {
+    while !String::from_utf8_lossy(&got).contains("event: construct") {
         let n = s.read(&mut buf).expect("first event");
         assert!(n > 0, "closed early: {}", String::from_utf8_lossy(&got));
         got.extend_from_slice(&buf[..n]);

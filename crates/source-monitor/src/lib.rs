@@ -25,8 +25,8 @@ use std::time::Duration;
 use pod_core::metrics::{self, Gauge, Series};
 use pod_core::store::Store;
 use pod_core::{
-    AppInfo, BoxFuture, Catalog, EntityDoc, FeedSpec, Hydration, NewNotification, Pod, PollCtx,
-    PollOutcome, RequestCtx, Source, SourceManifest,
+    BlueprintInfo, BoxFuture, Catalog, EntityDoc, FeedSpec, Hydration, NewNotification, Pod,
+    PollCtx, PollOutcome, RequestCtx, Source, SourceManifest,
 };
 use protocol::{DataBundle, EntityRecord, Importance, NotificationChannel};
 use serde_json::{Value, json};
@@ -175,7 +175,7 @@ impl Source for MonitorAdapter {
         NAME
     }
 
-    fn apps(&self) -> Vec<AppInfo> {
+    fn blueprints(&self) -> Vec<BlueprintInfo> {
         Vec::new()
     }
 
@@ -225,11 +225,11 @@ impl Source for MonitorAdapter {
         })
     }
 
-    fn notifies_custom_apps(&self) -> bool {
+    fn notifies_layouts(&self) -> bool {
         true
     }
 
-    fn custom_notification_channels(
+    fn layout_notification_channels(
         &self,
         store: &Store,
         catalog: &Catalog,
@@ -292,14 +292,14 @@ impl Source for MonitorAdapter {
 
 /// The layout that gets the "Server warnings" channel, when the pod may
 /// read the source: the one layout the `overview` feed belongs to
-/// ([`pod_core::custom::feed_owners`], decision `notification-owner`), or
+/// ([`pod_core::layouts::feed_owners`], decision `notification-owner`), or
 /// none. Every layout has home's feeds (decision `layouts-not-apps`), so
 /// "has the feed" would be every layout. Blocking.
 pub fn monitored_app(store: &Store, catalog: &Catalog) -> rusqlite::Result<Option<String>> {
     if store.pod_setting(ENABLED_SETTING)?.as_deref() != Some("1") {
         return Ok(None);
     }
-    Ok(pod_core::custom::feed_owners(store, catalog, NAME)?.remove(OVERVIEW_FEED))
+    Ok(pod_core::layouts::feed_owners(store, catalog, NAME)?.remove(OVERVIEW_FEED))
 }
 
 fn channel(app: &str) -> NotificationChannel {

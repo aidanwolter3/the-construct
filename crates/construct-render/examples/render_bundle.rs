@@ -1,6 +1,7 @@
 //! `render_bundle <bundle.json>... --out <dir> [--scale 3]`: draws workspace
-//! bundles (`{workspace, entities, queries}`, as `GET /v1/workspaces/<id>`
-//! answers) on the CPU at 390 × 844 and writes `<name>.png`.
+//! bundles (`{workspace, entities, queries}`: a layout materialized with its
+//! data, as the simulator's fixtures hold it) on the CPU at 390 × 844 and
+//! writes `<name>.png`.
 
 use construct_render::Viewport;
 use construct_render::interact::Session;

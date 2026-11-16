@@ -6,7 +6,7 @@
 use std::collections::HashMap;
 
 use axum::http::StatusCode;
-use pod_core::custom::{self, Writer};
+use pod_core::layouts::{self as pod_layouts, SourceUse};
 use pod_core::{BoxFuture, Pod};
 use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
@@ -16,12 +16,11 @@ use crate::db::{self, Row};
 use crate::model::{self, Definition, Write};
 use crate::{Caps, CollectionsAdapter, KEEP_SECS, NAME, fail, refusable};
 
-pub const INSTRUCTIONS: &str = "Data a custom app keeps itself (a todo list, a reading log) lives in \
-Collections: define_collection declares typed fields, and any custom app can then list the collection \
+pub const INSTRUCTIONS: &str = "Data a layout keeps itself (a todo list, a reading log) lives in \
+Collections: define_collection declares typed fields, and any layout can then list the collection \
 as a feed ([\"collections\", \"<name>\"]) and add, change and delete rows with the usual mutation \
-intents (describe_collection gives ready-made layout snippets). Change a collection with apply_change, \
-sending the app layout changes that go with it in the same call: nothing applies if any app would \
-break. add_row adds one row the user just asked for (\"log that I had the oil changed\") at once. \
+intents (describe_collection gives ready-made layout snippets). Change a collection with apply_change: \
+nothing applies if any layout would break (change that layout with update_layout first). add_row adds one row the user just asked for (\"log that I had the oil changed\") at once. \
 edit_rows changes rows directly (imports, backfills; all of them in one call, from inline edits or a file \
 by url): it first answers a preview, which you must show the user (the count and the sample) before \
 calling again with just its confirm token; every edit \
@@ -70,7 +69,7 @@ collection:<c>:images:<row>, entities {image, thumbnail, page, title, source, n,
 with an ordinary update (payload {id: \"$item.row_id\", <field>: \"$item.image\"}) into a plain field the \
 displayed picture prefers (an expr compute: entity.my_photo ? entity.my_photo : entity.found_photo). \
 every_minutes schedules fills; on_open_minutes fills when the app opens and the data is older; upcoming \
-(a date field) drops past items; zone places times without an offset; details reads each new row's own \
+(a date field) drops past items; zone places times without an offset and moves UTC (Z) times to its clock; details reads each new row's own \
 page. A page whose content a script builds (the raw HTML has no items) or that answers a plain fetch with \
 a bot check takes render: true (or {wait_for: <CSS selector>, timeout_seconds?: 5..=45}) on a url or url_field \
 filler (and on collections_preview): the server's headless browser loads it, waits for the network to go quiet \
@@ -134,15 +133,11 @@ pub fn tools() -> Vec<Value> {
     let order = json!({ "description": "A field, or a list of fields (first key first), rows are listed by (else oldest first). A choice sorts by the order of its options; empty values last.",
         "anyOf": [{ "type": "string" }, { "type": "array", "items": { "type": "string" } }] });
     let filler = json!({ "type": "object",
-        "description": "A filler: what keeps rows current from the web (decision collection-fillers); each writes only its own rows. kind \"fetch\" (a recipe, no model call per fill): {kind, title?, url (one page) | url_field (a text field holding each row's own page; that row is filled from it) | query_field (a text field holding each row's web search, e.g. its name: the row's item is searched with the pod's web_search jack and a model fills its fields from the results with extract llm, or with extract images (no model; Brave or SearXNG) its first image result fills map {field: image (the picture's URL) | thumbnail | page (where it is) | title | source (the site)}; people may add rows), extract: events (an ics feed or a page's schema.org events: items {id, title, start, end, venue, description, url, tickets_url}) | json | embedded-json (a page's <script id=script, default __NEXT_DATA__>) | jsonld (schema.org objects of types, e.g. [\"Product\"]) | rss (items {title, link, description, published, updated, id, author, category}) | ics (VEVENT properties lowercase: summary, dtstart, location, ...) | selectors (CSS) | llm (a model reads each changed page's text: fields? [names] and hint? instead of map), items? (json/embedded-json: a path to the list; selectors: a CSS selector per item), types?, script?, zone? (IANA, for times without an offset), map: {field: path} (paths: a.b, a[0], a[*]; a list key is looked into, so offers.price works; a path may end in filters: \"description | link\" the first link in it (Google redirects unwrapped), \"description | text\" its text without HTML; selectors: a CSS selector inside the item, sel@attr for an attribute, @attr for the item's own), headers? {name: value, value may be \"Bearer {secret:<name>}\"}, details? {link: a mapped field with the row's page, extract, types?, map: {field: path} (fields not in map), text?: a field for the page's text when nothing is found; or extract \"llm\" with fields: [names] and hint?: a model reads the page's text for those fields}: read each new row's own page, once (a model call per new row with llm)}. kind \"agent\" (a model with web search and fetch answers the rows; costs model calls): {kind, title?, prompt, fields? (default every field that isn't computed), max_searches? (default 5, at most 20), max_fetches? (default 10, at most 30), fills_per_day? (default 4)}. Both: mode? replace (default: its rows are the latest answer; rows it no longer lists are deleted; they can't be added or deleted by hand) | upsert (adds and updates rows by key, keeps others; people may add rows), key? (a mapped field identifying a row; with replace, rows keep their ids and unfilled fields), upcoming? (a mapped date or datetime field: past items are left out), every_minutes? (fetch: 15..10080; agent: 60..10080), on_open_minutes? (1..1440: fill when an app showing it opens and the last fill is older); url_field and query_field fillers also take refresh? (once: fill a row when its URL or query first appears or changes; every: on each fill, skipping pages whose text didn't change; default every for url_field, once for query_field) and on_empty? (keep, the default: a row whose page or search yields nothing, or is blocked, keeps its values; clear). Every request goes through the pod's host policy (spacing, a daily cap per site, a shared backoff after a site blocks the pod). Values are coerced to the fields' types (prices like \"$1,299\" and feed dates are read); a value that doesn't fit is skipped. Filled fields can't be set by hand." });
+        "description": "A filler: what keeps rows current from the web (decision collection-fillers); each writes only its own rows. kind \"fetch\" (a recipe, no model call per fill): {kind, title?, url (one page) | url_field (a text field holding each row's own page; that row is filled from it) | query_field (a text field holding each row's web search, e.g. its name: the row's item is searched with the pod's web_search jack and a model fills its fields from the results with extract llm, or with extract images (no model; Brave or SearXNG) its first image result fills map {field: image (the picture's URL) | thumbnail | page (where it is) | title | source (the site)}; people may add rows), extract: events (an ics feed or a page's schema.org events: items {id, title, start, end, venue, description, url, tickets_url}) | json | embedded-json (a page's <script id=script, default __NEXT_DATA__>) | jsonld (schema.org objects of types, e.g. [\"Product\"]) | rss (items {title, link, description, published, updated, id, author, category}) | ics (VEVENT properties lowercase: summary, dtstart, location, ...) | selectors (CSS) | llm (a model reads each changed page's text: fields? [names] and hint? instead of map), items? (json/embedded-json: a path to the list; selectors: a CSS selector per item), types?, script?, zone? (IANA, for times without an offset; UTC times move to its clock), map: {field: path} (paths: a.b, a[0], a[*]; a list key is looked into, so offers.price works; a path may end in filters: \"description | link\" the first link in it (Google redirects unwrapped), \"description | text\" its text without HTML; selectors: a CSS selector inside the item, sel@attr for an attribute, @attr for the item's own), headers? {name: value, value may be \"Bearer {secret:<name>}\"}, details? {link: a mapped field with the row's page, extract, types?, map: {field: path} (fields not in map), text?: a field for the page's text when nothing is found; or extract \"llm\" with fields: [names] and hint?: a model reads the page's text for those fields}: read each new row's own page, once (a model call per new row with llm)}. kind \"agent\" (a model with web search and fetch answers the rows; costs model calls): {kind, title?, prompt, fields? (default every field that isn't computed), max_searches? (default 5, at most 20), max_fetches? (default 10, at most 30), fills_per_day? (default 4)}. Both: mode? replace (default: its rows are the latest answer; rows it no longer lists are deleted; they can't be added or deleted by hand) | upsert (adds and updates rows by key, keeps others; people may add rows), key? (a mapped field identifying a row; with replace, rows keep their ids and unfilled fields), upcoming? (a mapped date or datetime field: past items are left out), every_minutes? (fetch: 15..10080; agent: 60..10080), on_open_minutes? (1..1440: fill when an app showing it opens and the last fill is older); url_field and query_field fillers also take refresh? (once: fill a row when its URL or query first appears or changes; every: on each fill, skipping pages whose text didn't change; default every for url_field, once for query_field) and on_empty? (keep, the default: a row whose page or search yields nothing, or is blocked, keeps its values; clear). Every request goes through the pod's host policy (spacing, a daily cap per site, a shared backoff after a site blocks the pod). Values are coerced to the fields' types (prices like \"$1,299\" and feed dates are read); a value that doesn't fit is skipped. Filled fields can't be set by hand." });
     let alert = json!({ "type": "object",
         "description": "An alert: notify once when a row matches. {name?, any?: [phrases] (one must appear), all?: [phrases], none?: [phrases], fields?: [text fields searched; default all text fields], filler?: a filler id (only its rows), days?: [mon..sun], within_days?, date_field? (default the first date or datetime field; past rows stop matching), title?, body? (templates: {field}, {start_text}, {alert}, {filler}), label?, app?}" });
     let action = json!({ "type": "object",
         "description": "An insert-from-query action of this collection (the parent): {name ([a-z][a-z0-9_]*), title?, params?: [{name, type: text|number|ref, collection? (ref), optional?}], source: {collection, where?: [{field, equals} | {field, empty: true|false}]}, scale?: {times, per}, match: {<field of this collection>: value}, create?: {<field>: value}, update?: {<field>: value}, reset_when?: [{field, equals} | {field, empty}], child?: {collection, values: {<field of the child collection>: value | {from: value, scaled: true}}}}. A value is a literal (a string starting with $ as {value: \"...\"}) or a binding: \"$param.<name>\" (a call's parameter: text; a number; a ref param is given as a row id or {\"<unique field>\": value} and binds the id), \"$row.<field>\" (the source row; through refs \"$row.<ref>.<field>\", up to 4 names; \"$row.id\", \"$row.<ref>.id\") and, only in child.values, \"$parent.id\" or \"$parent.<field>\". A call: for each live row of source.collection matching every where condition (equals compares as text ignoring case and spacing, a ref by its id; empty: false keeps rows where the field has a value), in that collection's order: the match values are computed (a row with an empty match value is skipped and reported); the live row of this collection whose match fields all equal them is found (the oldest, also one made earlier in the same call), else created with match and create values; a found row first, when it matches every reset_when condition, has its children deleted (the child rows whose $parent.id field points at it; once per call), then gets the update values (once per call). Then, with child, a row of child.collection is added with child.values; exactly one of them is a ref field to this collection set to \"$parent.id\". A value with scaled: true (a number or quantity field) is multiplied by scale.times / scale.per when both read as numbers above 0 (a number, a quantity's amount, or the first number in text such as \"Serves 4\"), else by 1; text read into a quantity field is parsed first, and text that doesn't parse is added unscaled and listed in the answer's unparsed. Fields required without a default must be given (match or create for a parent; child.values for a child). A delete action {name, title?, params?, source: {collection: <this collection>, where?}, delete: true} (the only action whose source is its own collection; no match, create, update, reset_when, scale or child) instead deletes every live row of this collection matching where, as a row delete does (restorable; lookups, counts and rollups that read the collection follow), e.g. {name: \"clear_bag\", title: \"Clear the bag\", source: {collection: \"groceries\", where: [{field: \"done\", equals: true}]}, delete: true}. Every call is one edit across both collections (undo_edit reverts it: rows it made are deleted, rows it changed or deleted come back, rows changed since are left alone and listed; computed totals follow). Example (grocery list from recipe lines; on groceries): {name: \"add_recipe\", title: \"Add a recipe to groceries\", params: [{name: \"meal\", type: \"ref\", collection: \"meals\"}, {name: \"servings\", type: \"number\", optional: true}], source: {collection: \"recipe_lines\", where: [{field: \"meal\", equals: \"$param.meal\"}, {field: \"ingredient\", empty: false}]}, scale: {times: \"$param.servings\", per: \"$row.meal.servings\"}, match: {ingredient: \"$row.ingredient\"}, create: {name: \"$row.ingredient.name\", done: false}, update: {done: false}, reset_when: [{field: \"done\", equals: true}], child: {collection: \"grocery_entries\", values: {grocery: \"$parent.id\", quantity: {from: \"$row.amount\", scaled: true}, recipe: \"$row.meal\"}}}. Run it with run_action, or from a layout: {intent: \"action.mutation.optimistic\", entity_uri: \"$item.uri\", field: \"adding\", value_expr: \"true\", endpoint: \"/v1/collections/<collection>/actions/<name>\", payload: {<param>: \"$item.id\" or \"$form?.<field>\", client_id: \"$nonce\"}} (field is a view flag on the device only; the payload's keys must be params or client_id; a repeated client_id is applied once; the new rows arrive through the feed)." });
-    let apps = json!({ "type": "array", "description": "Custom app layouts that change with it: [{app, layout | json_patch, base_version?, note?}]",
-        "items": { "type": "object", "properties": { "app": { "type": "string" }, "layout": { "type": "object" },
-            "json_patch": { "type": "array", "items": { "type": "object" } }, "base_version": { "type": "integer" }, "note": { "type": "string" } },
-            "required": ["app"] } });
     vec![
         tool(
             "list_collections",
@@ -171,15 +166,15 @@ pub fn tools() -> Vec<Value> {
         ),
         tool(
             "apply_change",
-            "Change a collection's definition and the custom apps that show it in one step. changes: [{op: add_field, name, type, options?, collection?, unique?, optional?, default?, compute?} | {op: rename_field, field, to} | {op: remove_field, field} | {op: restore_field, field} | {op: update_field, field, type?, options?, collection?, unique?, optional?, default?, compute?} | {op: set_action, action} | {op: remove_action, action: name} | {op: recompute_field, field} | {op: set_order, field?: name or [names], descending?} | {op: set_title, title} | {op: add_reminder, field, title, body?, at?, unless?, label?, app?} | {op: update_reminder, reminder: id, ...} | {op: remove_reminder, reminder: id} | {op: set_filler, filler} | {op: remove_filler, filler: id} | {op: add_alert, ...} | {op: update_alert, alert: id, ...} | {op: remove_alert, alert: id}]. set_filler adds a filler (as define_collection's fillers), or changes the one filler.id names, and starts its fill; remove_filler stops one (its rows stay, no longer locked; its alerts go). add_alert notifies once per row when a row matches (as define_collection's alerts). describe_collection lists fillers and alerts with their ids. A reminder notifies the user once per row when its date field is reached: on that date at at (HH:MM, default 09:00) in the pod's time zone (set_time_zone), unless the row then has unless {field, equals} (e.g. {field: \"done\", equals: true}); dates before the day it was added never notify, and a reminder more than 7 days late is dropped. title and body are the notification's text with {field} replaced by the row's value; label names it in the user's notification settings (default \"<Title>: <field>\"); app (a custom app id) is the app it comes from and opens, default the oldest custom app with the collection as a feed (with none, nothing is sent). describe_collection lists reminders with their ids. compute (one kind or a list tried in order: {kind: \"expr\", expr}, {kind: \"lookup\", from, collection, key, value, match?, learn?}, {kind: \"count\", from, collection, key, where?} or {kind: \"model\", from, prompt}, as in define_collection) is computed for existing rows too (a model only fills empty ones); null stops computing and keeps the values. Lookups and counts are live: a change to the rows of the collection they read recomputes the rows it affects at once, cascading. recompute_field computes the field again for every row (a row only the model could answer keeps its value), e.g. after changing a lookup's match. Fields and actions are as in define_collection. update_field {type: \"ref\", collection} turns a text field into a ref: each value becomes the id of the row of that collection whose id or unique text field equals it (ignoring case and spacing; make the target's name field unique first); values that match no row are kept aside and reported in conversions (set_aside, samples). unique: true fails while live rows share a value (the error lists them). set_action adds an action or replaces the one of that name; remove_action removes it. A collection can't be deleted while another collection's ref, lookup, count, rollup or action names it. Every custom app using Collections is checked against the new definition; if any would break, nothing applies and the error names the app and the binding. Renamed fields keep their old name as an alias; removed fields are hidden and restorable for 30 days; type changes convert row by row and keep values that don't convert aside.",
+            "Change a collection's definition and the layouts that show it in one step. changes: [{op: add_field, name, type, options?, collection?, unique?, optional?, default?, compute?} | {op: rename_field, field, to} | {op: remove_field, field} | {op: restore_field, field} | {op: update_field, field, type?, options?, collection?, unique?, optional?, default?, compute?} | {op: set_action, action} | {op: remove_action, action: name} | {op: recompute_field, field} | {op: set_order, field?: name or [names], descending?} | {op: set_title, title} | {op: add_reminder, field, title, body?, at?, unless?, label?, app?} | {op: update_reminder, reminder: id, ...} | {op: remove_reminder, reminder: id} | {op: set_filler, filler} | {op: remove_filler, filler: id} | {op: add_alert, ...} | {op: update_alert, alert: id, ...} | {op: remove_alert, alert: id}]. set_filler adds a filler (as define_collection's fillers), or changes the one filler.id names, and starts its fill; remove_filler stops one (its rows stay, no longer locked; its alerts go). add_alert notifies once per row when a row matches (as define_collection's alerts). describe_collection lists fillers and alerts with their ids. A reminder notifies the user once per row when its date field is reached: on that date at at (HH:MM, default 09:00) in the pod's time zone (set_time_zone), unless the row then has unless {field, equals} (e.g. {field: \"done\", equals: true}); dates before the day it was added never notify, and a reminder more than 7 days late is dropped. title and body are the notification's text with {field} replaced by the row's value; label names it in the user's notification settings (default \"<Title>: <field>\"); app (a layout id) is the layout it comes from and opens, default the oldest layout that shows the collection (with none, nothing is sent). describe_collection lists reminders with their ids. compute (one kind or a list tried in order: {kind: \"expr\", expr}, {kind: \"lookup\", from, collection, key, value, match?, learn?}, {kind: \"count\", from, collection, key, where?} or {kind: \"model\", from, prompt}, as in define_collection) is computed for existing rows too (a model only fills empty ones); null stops computing and keeps the values. Lookups and counts are live: a change to the rows of the collection they read recomputes the rows it affects at once, cascading. recompute_field computes the field again for every row (a row only the model could answer keeps its value), e.g. after changing a lookup's match. Fields and actions are as in define_collection. update_field {type: \"ref\", collection} turns a text field into a ref: each value becomes the id of the row of that collection whose id or unique text field equals it (ignoring case and spacing; make the target's name field unique first); values that match no row are kept aside and reported in conversions (set_aside, samples). unique: true fails while live rows share a value (the error lists them). set_action adds an action or replaces the one of that name; remove_action removes it. A collection can't be deleted while another collection's ref, lookup, count, rollup or action names it. Every layout using Collections is checked, as devices draw it, against the new definition; if any would break, nothing applies and the error names the layout and the binding. apps: [{app, layout | json_patch, base_version?}] edits layouts in the same step (app is a layout id; base_version is the version get_layout shows). Renamed fields keep their old name as an alias; removed fields are hidden and restorable for 30 days; type changes convert row by row and keep values that don't convert aside.",
             json!({ "collection": collection, "base_version": { "type": "integer", "description": "The definition version you read" },
-                    "changes": { "type": "array", "items": { "type": "object" } }, "apps": apps, "note": note }),
+                    "changes": { "type": "array", "items": { "type": "object" } }, "note": note }),
             &["collection", "changes"],
         ),
         tool(
             "restore_collection_version",
-            "Make an older definition current again (appends a copy): removed fields come back with their data, fields added since are soft-removed, types convert back (values kept aside return). Pass the app layouts that change with it, as for apply_change.",
-            json!({ "collection": collection, "version": { "type": "integer" }, "apps": apps, "note": note }),
+            "Make an older definition current again (appends a copy): removed fields come back with their data, fields added since are soft-removed, types convert back (values kept aside return). Every layout that shows it must still fit it, as for apply_change.",
+            json!({ "collection": collection, "version": { "type": "integer" }, "note": note }),
             &["collection", "version"],
         ),
         tool(
@@ -309,7 +304,7 @@ fn note_arg(args: &Value, default: &str) -> String {
         .filter(|n| !n.is_empty())
         .unwrap_or(default)
         .chars()
-        .take(custom::MAX_NOTE_CHARS)
+        .take(pod_layouts::MAX_NOTE_CHARS)
         .collect()
 }
 
@@ -324,28 +319,30 @@ fn missing(name: &str) -> Value {
             "detail": "list_collections lists them; define_collection makes one" })
 }
 
-/// The layouts that use collection `name`: `(app id, title, version)` of
-/// each one whose latest layout binds it (its query key, a row URI or a
-/// data path).
-fn users(apps: &[(custom::CustomApp, i64, Value)], name: &str) -> Vec<Value> {
+/// The layouts that use collection `name`: `(layout id, title, version)` of
+/// each one whose element binds it (its query key, a row URI or a data
+/// path).
+fn users(apps: &[SourceUse], name: &str) -> Vec<Value> {
     let key = db::query_key(name);
     let scheme = format!("collections://{name}/");
     let route = format!("/v1/collections/{name}/");
     // Not by feeds: every layout reports home's (decision `layouts-not-apps`).
+    // A layout bound two ways is listed once.
+    let mut seen = std::collections::BTreeSet::new();
     apps.iter()
-        .filter(|(_, _, layout)| {
-            let text = layout.to_string();
+        .filter(|u| {
+            let text = u.node.to_string();
             text.contains(&format!("\"{key}\"")) || text.contains(&scheme) || text.contains(&route)
         })
-        .map(|(a, v, _)| json!({ "app": a.id, "title": a.title, "version": v }))
+        .filter(|u| seen.insert(u.layout.id.clone()))
+        .map(|u| json!({ "layout": u.layout.id, "title": u.layout.title, "version": u.version }))
         .collect()
 }
 
 async fn list(pod: &Pod) -> Result<Value, Value> {
-    let p = pod.clone();
     let (out, deleted) = pod
         .blocking(move |s| {
-            let apps = custom::apps_using(s, p.catalog(), NAME)?;
+            let apps = pod_layouts::layouts_with_source(s, NAME)?;
             s.with_conn(|c| {
                 let others = db::defs_by_name(c)?;
                 let live = db::all_defs(c)?
@@ -504,7 +501,7 @@ async fn define(pod: &Pod, adapter: &CollectionsAdapter, args: &Value) -> Result
             tx,
             &stored,
             &note,
-            custom::AUTHOR_CLAUDE,
+            pod_layouts::AUTHOR_CLAUDE,
             now,
         )?))
     })
@@ -612,10 +609,9 @@ async fn describe(pod: &Pod, args: &Value) -> Result<Value, Value> {
     let name = str_arg(args, "collection")?.to_owned();
     let version = args["version"].as_i64();
     let lookup = name.clone();
-    let p = pod.clone();
     let found = pod
         .blocking(move |s| {
-            let apps = custom::apps_using(s, p.catalog(), NAME)?;
+            let apps = pod_layouts::layouts_with_source(s, NAME)?;
             s.with_conn(|c| {
                 let Some((latest, def)) = db::latest_def(c, &lookup)? else {
                     return Ok(None);
@@ -1121,13 +1117,11 @@ async fn preview_mcp(
 
 // ---------- change sets ----------
 
-/// The app edits of a change set, `[{app, layout | json_patch,
-/// base_version?, note?}]`, as `update_layout` bodies.
-async fn app_bodies(
-    pod: &Pod,
-    args: &Value,
-    note: &str,
-) -> Result<Vec<(custom::CustomApp, Value)>, Value> {
+/// The layout edits of a change set, as construct
+/// `update_layout` arguments (`base_version` is the name's history seq,
+/// as `get_layout` shows it): checked and written in the change set's
+/// transaction.
+fn construct_edits(args: &Value, note: &str) -> Result<Vec<Value>, Value> {
     let Some(items) = args.get("apps").filter(|a| !a.is_null()) else {
         return Ok(Vec::new());
     };
@@ -1136,54 +1130,96 @@ async fn app_bodies(
             "\"apps\" is a list of {app, layout | json_patch, base_version?}",
         ));
     };
-    let mut out = Vec::new();
+    let mut out: Vec<Value> = Vec::new();
     for (i, item) in items.iter().enumerate() {
-        let id = item["app"].as_str().unwrap_or("").to_owned();
-        let lookup = id.clone();
-        let found = pod
-            .blocking(move |s| {
-                let app = s.with_conn(|c| custom::custom_app_on(c, &lookup))?;
-                let latest = s.app_latest(&lookup)?;
-                Ok((app, latest))
-            })
-            .await
-            .map_err(db_err)?;
-        let (Some(app), Some((latest, json_text))) = found else {
-            return Err(
-                json!({ "error": "app_not_found", "at": format!("/apps/{i}"), "app": id, "status": 404,
-                "detail": "only custom apps change in a change set" }),
-            );
+        let Some(id) = item["app"].as_str().filter(|a| !a.is_empty()) else {
+            return Err(bad(format!("apps[{i}]: \"app\" is a layout id")));
         };
-        if out
-            .iter()
-            .any(|(a, _): &(custom::CustomApp, Value)| a.id == app.id)
-        {
+        if out.iter().any(|a| a["app"] == id) {
             return Err(bad(format!("app '{id}' is listed twice")));
         }
-        let mut body = item.clone();
-        if let Some(patch) = item.get("json_patch").filter(|p| !p.is_null()) {
-            let mut doc: Value = serde_json::from_str(&json_text).unwrap_or(Value::Null);
-            pod_core::mcp::apply_patch(&mut doc, patch).map_err(|e| {
-                json!({ "error": "invalid_patch", "app": id, "detail": e, "latest_version": latest.version, "status": 400 })
-            })?;
-            body["layout"] = doc;
-            if body.get("base_version").is_none_or(Value::is_null) {
-                body["base_version"] = json!(latest.version);
-            }
-        } else if !item["layout"].is_object() {
+        if item.get("json_patch").is_none_or(Value::is_null) && !item["layout"].is_object() {
             return Err(bad(format!("apps[{i}]: pass \"layout\" or \"json_patch\"")));
         }
-        if body.get("note").is_none_or(Value::is_null) {
-            body["note"] = json!(note);
+        let mut a = item.clone();
+        if a.get("note").is_none_or(Value::is_null) {
+            a["note"] = json!(note);
         }
-        out.push((app, body));
+        out.push(a);
     }
     Ok(out)
 }
 
-/// Apply `planned` (a new definition of `name`, from `base`) with the app
-/// edits of `args["apps"]`, atomically: every custom app using Collections
-/// must fit the new definition, else nothing applies.
+/// A layout that a change of a collection would break.
+fn breaks_layout(
+    id: &str,
+    title: &str,
+    in_change_set: bool,
+    e: &pod_core::validate::LayoutError,
+) -> Value {
+    json!({
+        "error": "breaks_layout", "status": 422, "layout": id, "title": title,
+        "in_change_set": in_change_set,
+        "at": e.pointer, "allowed": e.allowed,
+        "detail": format!("layout '{title}' ({id}) would break: {}{}",
+            if e.pointer.is_empty() { String::new() } else { format!("{}: ", e.pointer) }, e.message),
+        "fix": "change that layout in the same apply_change (apps: [{app, layout | json_patch}]), or change the collection differently",
+    })
+}
+
+/// Inside the change set's transaction: write `edits`
+/// to the construct (as `update_layout` does), then check every layout as
+/// clients draw it against `defs`. `Ok(Err(_))`: refused; roll back.
+#[allow(clippy::type_complexity)]
+fn construct_commit(
+    tx: &rusqlite::Transaction<'_>,
+    pod: &Pod,
+    edits: &[Value],
+    defs: &HashMap<String, Definition>,
+) -> rusqlite::Result<Result<(Vec<(String, i64)>, Vec<(String, i64)>), Value>> {
+    use pod_core::construct::write as cwrite;
+    let mut versions = Vec::new();
+    let mut moved = Vec::new();
+    for a in edits {
+        let id = a["app"].as_str().unwrap_or("").to_owned();
+        match cwrite::update_layout(pod, tx, a) {
+            Ok((answer, m)) => {
+                versions.push((id, answer["version"].as_i64().unwrap_or(0)));
+                moved.extend(m);
+            }
+            Err(mut b) => {
+                let status = match b["error"].as_str() {
+                    Some("stale_base") => 409,
+                    Some("layout_not_found" | "not_found") => 404,
+                    Some("invalid_layout") => 422,
+                    _ => 400,
+                };
+                b["app"] = json!(id);
+                b["status"] = json!(status);
+                return Ok(Err(b));
+            }
+        }
+    }
+    let feeds: Vec<String> = cwrite::home_feeds(tx)
+        .into_iter()
+        .filter(|(s, _)| s == NAME)
+        .map(|(_, f)| f)
+        .collect();
+    if feeds.is_empty() {
+        return Ok(Ok((versions, moved)));
+    }
+    for l in cwrite::live_layouts(tx)? {
+        if let Err(e) = crate::bindings::check(&l.node, &feeds, defs) {
+            let edited = versions.iter().any(|(a, _)| *a == l.name);
+            return Ok(Err(breaks_layout(&l.name, &l.title, edited, &e)));
+        }
+    }
+    Ok(Ok((versions, moved)))
+}
+
+/// Apply `planned` (a new definition of `name`, from `base`) with the layout
+/// edits of `args["apps"]`, atomically: every layout using Collections must
+/// fit the new definition as devices draw it, else nothing applies.
 async fn commit(
     pod: &Pod,
     caps: crate::Caps,
@@ -1193,31 +1229,15 @@ async fn commit(
     args: &Value,
     note: String,
 ) -> Result<Value, Value> {
-    let bodies = app_bodies(pod, args, &note).await?;
-    // Stage the app edits: the core's checks now, ours below.
-    let mut staged = Vec::new();
-    let mut edited: HashMap<String, Value> = HashMap::new();
-    for (app, body) in &bodies {
-        let (s, expanded) = custom::stage_layout(pod, app, body).map_err(|(status, mut b)| {
-            b["app"] = json!(app.id);
-            b["status"] = json!(status.as_u16());
-            b
-        })?;
-        edited.insert(app.id.clone(), expanded);
-        staged.push(s);
-    }
-    // Every app using Collections, against the new definitions.
+    // The layout edits, and the check of every layout as devices draw it,
+    // happen in the change set's transaction below.
+    let edits = construct_edits(args, &note)?;
     let catalog_apps = {
-        let pod2 = pod.clone();
-        pod.blocking(move |s| {
-            let apps = custom::apps_using(s, pod2.catalog(), NAME)?;
-            let defs = s.with_conn(db::all_defs)?;
-            Ok((apps, defs))
-        })
-        .await
-        .map_err(db_err)?
+        pod.blocking(move |s| s.with_conn(db::all_defs))
+            .await
+            .map_err(db_err)?
     };
-    let (apps, defs) = catalog_apps;
+    let defs = catalog_apps;
     let mut new_defs: HashMap<String, Definition> =
         defs.into_iter().map(|(_, d)| (d.name.clone(), d)).collect();
     new_defs.insert(name.to_owned(), planned.def.clone());
@@ -1229,32 +1249,6 @@ async fn commit(
         model::check_lookups(d, &new_defs)
             .map_err(|e| json!({ "error": "invalid_change", "detail": e, "status": 400 }))?;
     }
-    for (app, _, latest) in &apps {
-        let layout = edited.get(&app.id).unwrap_or(latest);
-        let feeds: Vec<String> = app
-            .feeds
-            .iter()
-            .filter(|(s, _)| s == NAME)
-            .map(|(_, f)| f.clone())
-            .collect();
-        if let Err(e) = crate::bindings::check(layout, &feeds, &new_defs) {
-            return Err(json!({
-                "error": "breaks_app", "status": 422, "app": app.id, "title": app.title,
-                "in_change_set": edited.contains_key(&app.id),
-                "at": e.pointer, "allowed": e.allowed,
-                "detail": format!("app '{}' ({}) would break: {}{}", app.title, app.id,
-                    if e.pointer.is_empty() { String::new() } else { format!("{}: ", e.pointer) }, e.message),
-                "fix": "change that app's layout in the same apply_change (apps: [{app, layout | json_patch}]), or change the collection differently",
-            }));
-        }
-    }
-    // Apps in the change set that don't use Collections are fine too.
-    if !staged.is_empty() {
-        custom::allow_write(pod).map_err(|(status, mut b)| {
-            b["status"] = json!(status.as_u16());
-            b
-        })?;
-    }
     let pod2 = pod.clone();
     let def = planned.def.clone();
     let convert = planned.convert.clone();
@@ -1263,14 +1257,14 @@ async fn commit(
     let coll = name.to_owned();
     let others = new_defs.clone();
     let created = planned.created.clone();
-    let (version, conversions, versions, jobs) = refusable(pod, move |tx| {
+    let (version, conversions, versions, moved, jobs) = refusable(pod, move |tx| {
         let current = db::latest_def(tx, &coll)?.map(|(v, _)| v);
         if current != Some(base) {
             return Ok(Err(json!({ "error": "stale_base", "status": 409, "latest_version": current,
                 "detail": "the collection changed since that version; describe_collection and reapply" })));
         }
         let now = pod_core::util::now_secs();
-        let version = db::append_def(tx, &def, &note, custom::AUTHOR_CLAUDE, now)?;
+        let version = db::append_def(tx, &def, &note, pod_layouts::AUTHOR_CLAUDE, now)?;
         let mut conversions = Vec::new();
         for id in &convert {
             if let Some(f) = def.by_id(id) {
@@ -1305,22 +1299,14 @@ async fn commit(
         for id in &to_recompute {
             jobs.extend(crate::compute::backfill(tx, &def, id, true, caps.rows, now, caps)?);
         }
-        let mut versions = Vec::new();
-        for s in &staged {
-            match custom::commit_staged(tx, &pod2, s, Writer::Claude)? {
-                Ok(v) => versions.push((s.id.clone(), v)),
-                Err((status, mut b)) => {
-                    b["status"] = json!(status.as_u16());
-                    return Ok(Err(b));
-                }
-            }
-        }
-        Ok(Ok((version, conversions, versions, jobs)))
+        let (versions, moved) = match construct_commit(tx, &pod2, &edits, &others)? {
+            Ok(vm) => vm,
+            Err(b) => return Ok(Err(b)),
+        };
+        Ok(Ok((version, conversions, versions, moved, jobs)))
     })
     .await?;
-    for (app, v) in &versions {
-        pod.publish_layout(app, *v);
-    }
+    pod_core::construct::write::publish(pod, &moved);
     pod.publish_data_all(NAME);
     let computing = jobs.len();
     crate::compute::spawn(pod, name, jobs);
@@ -1372,7 +1358,7 @@ fn create_rules(
             tx,
             d,
             "Rules learned for a model field",
-            custom::AUTHOR_CLAUDE,
+            pod_layouts::AUTHOR_CLAUDE,
             now,
         )?;
     }
@@ -1419,13 +1405,13 @@ async fn apply_change(
     for r in &planned.def.reminders {
         if let Some(app) = r.app.clone() {
             let exists = pod
-                .blocking(move |s| s.with_conn(|c| custom::custom_app_on(c, &app)))
+                .blocking(move |s| s.with_conn(|c| pod_layouts::pod_layout(c, &app)))
                 .await
                 .map_err(db_err)?
                 .is_some();
             if !exists {
                 return Err(json!({ "error": "invalid_change", "status": 400,
-                    "detail": format!("reminder '{}': no custom app '{}' (list_apps lists them)", r.id, r.app.as_deref().unwrap_or("")) }));
+                    "detail": format!("reminder '{}': no layout '{}' (list_layouts lists them)", r.id, r.app.as_deref().unwrap_or("")) }));
             }
         }
     }
@@ -1489,12 +1475,11 @@ async fn delete(pod: &Pod, caps: Caps, args: &Value) -> Result<Value, Value> {
             ),
         ));
     }
-    let p = pod.clone();
     let (apps, others, home) = pod
         .blocking(move |s| {
-            let apps = custom::apps_using(s, p.catalog(), NAME)?;
+            let apps = pod_layouts::layouts_with_source(s, NAME)?;
             let (others, home) = s.with_conn(|c| -> rusqlite::Result<_> {
-                Ok((db::defs_by_name(c)?, custom::home_feeds_on(c)?))
+                Ok((db::defs_by_name(c)?, pod_layouts::home_feeds(c)))
             })?;
             Ok((apps, others, home))
         })
@@ -1508,7 +1493,7 @@ async fn delete(pod: &Pod, caps: Caps, args: &Value) -> Result<Value, Value> {
                 format!(
                     "'{}' ({})",
                     u["title"].as_str().unwrap_or(""),
-                    u["app"].as_str().unwrap_or("")
+                    u["layout"].as_str().unwrap_or("")
                 )
             })
             .collect();
@@ -1543,14 +1528,9 @@ async fn delete(pod: &Pod, caps: Caps, args: &Value) -> Result<Value, Value> {
     // exist fails validation, so a stale feed would block home's saves.
     let feed = (NAME.to_owned(), name.clone());
     let mut dropped_feed = false;
-    if let Some(feeds) = home.filter(|f| f.contains(&feed)) {
-        let rest: Vec<_> = feeds.into_iter().filter(|f| *f != feed).collect();
-        custom::patch(pod, pod_core::HOME_APP, &json!({ "feeds": rest }))
-            .await
-            .map_err(|(s, mut b)| {
-                b["status"] = json!(s.as_u16());
-                b
-            })?;
+    if home.contains(&feed) {
+        let rest: Vec<_> = home.into_iter().filter(|f| *f != feed).collect();
+        pod_core::construct::write::set_home_feeds_to(pod, rest).await?;
         dropped_feed = true;
     }
     let target = name.clone();

@@ -1,15 +1,17 @@
 //! Layout previews for agents (decision `rust-render-engine`): the MCP tools
 //! `render_layout_preview` and `dispatch_virtual_interaction`. A preview is
-//! a layout as the owner's device gets it (`GET /v1/workspaces/<id>`, run
-//! through the pod's own router for the owner), laid out and drawn by
+//! a layout as the owner's device gets it (its element sealed and
+//! materialized, decision `content-addressed-construct`, with its data from
+//! `GET /v1/construct/data/<element>`, run through the pod's own router for
+//! the owner), laid out and drawn by
 //! `construct-render` on the CPU, returned as a WebP image with the semantic
 //! tree (ids, bounds, text, what a tap does). It is kept for a while so taps,
 //! scrolls and typing can change its device state and draw it again.
 //!
 //! A preview behaves as a device with the user's data (decision
 //! `previews-read-like-a-device`): the device data a client builds
-//! (`local:layouts`, `local://inbox`, …) comes from the pod, and a screen's
-//! data path, a layout a tap opens and a layout's versions are read through
+//! (`local://inbox`, `local:notifications`, …) comes from the pod, and a
+//! screen's data path and a layout a tap opens are read through
 //! [`Reader`]. Nothing here writes: a tap that would change the pod or reach
 //! the platform (a mutation, a create, a sign-in, a device command) is
 //! reported as not sent.
@@ -179,7 +181,7 @@ fn is_layout_id(id: &str) -> bool {
 }
 
 /// Whether `path` is a data path some data source of the pod declares
-/// (`SourceManifest::data_paths`, e.g. `/v1/recipes/screens/recipe?id=x`):
+/// (`SourceManifest::data_paths`, e.g. `/v1/collections/todos/row?id=x`):
 /// the only paths a preview's screens and `action.data.load` may read.
 fn is_data_path(pod: &Pod, path: &str) -> bool {
     let plain = path.len() <= 512
@@ -252,7 +254,18 @@ fn forwarded(headers: &HeaderMap) -> HeaderMap {
     h
 }
 
-/// A layout's bundle as a client gets it: plumbing, entities, queries.
+/// `s` percent-encoded for a query string.
+fn query_value(s: &str) -> String {
+    s.bytes()
+        .map(|b| match b {
+            b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'-' | b'_' | b'.' => (b as char).to_string(),
+            _ => format!("%{b:02X}"),
+        })
+        .collect()
+}
+
+/// A layout's bundle as a client gets it: plumbing (its element sealed for
+/// this build and materialized), entities, queries.
 pub(crate) async fn fetch(
     pod: &Pod,
     headers: &HeaderMap,
@@ -262,15 +275,42 @@ pub(crate) async fn fetch(
         return Err(json!({ "error": "unknown_layout", "id": id,
             "detail": "not a layout id: home, a c-... id from list_layouts, or a blueprint" }));
     }
-    let v = get(pod, &forwarded(headers), &format!("/v1/workspaces/{id}"))
+    let (p, lookup) = (pod.clone(), id.to_owned());
+    let client = protocol::ClientCaps::from_header(&protocol::features_header());
+    let served = tokio::task::spawn_blocking(move || {
+        crate::construct::http::serve_layout(&p, &lookup, &client)
+    })
+    .await
+    .map_err(|e| json!({ "error": "layout_not_loaded", "id": id, "detail": e.to_string() }))?
+    .map_err(|e| json!({ "error": "layout_not_loaded", "id": id, "detail": e.to_string() }))?
+    .ok_or_else(
+        || json!({ "error": "layout_not_loaded", "id": id, "detail": "no layout has that name" }),
+    )?;
+    let mut path = format!("/v1/construct/data/{}", served.element);
+    if !served.inputs.is_empty() {
+        path.push_str("?bind=");
+        path.push_str(&query_value(
+            &Value::Object(served.inputs.clone()).to_string(),
+        ));
+    }
+    let data: DataBundle = get(pod, &forwarded(headers), &path)
         .await
         .map_err(|mut e| {
             e["error"] = json!("layout_not_loaded");
             e["id"] = json!(id);
             e
+        })
+        .and_then(|v| {
+            serde_json::from_value(v).map_err(
+                |e| json!({ "error": "layout_not_loaded", "id": id, "detail": e.to_string() }),
+            )
         })?;
-    serde_json::from_value(v)
-        .map_err(|e| json!({ "error": "layout_not_loaded", "id": id, "detail": e.to_string() }))
+    Ok(WorkspaceSpec {
+        version: crate::BUNDLE_VERSION.into(),
+        workspace: served.layout,
+        entities: data.entities,
+        queries: data.queries,
+    })
 }
 
 /// Reads the pod for a preview's session as the owner's device would
@@ -285,8 +325,6 @@ struct Reader {
     base: String,
     /// Layout titles by id, for device data rows.
     titles: Mutex<HashMap<String, String>>,
-    /// Versions picked in this preview (`pin_version`), by layout.
-    pins: Mutex<HashMap<String, i64>>,
 }
 
 impl Reader {
@@ -301,7 +339,6 @@ impl Reader {
             rt,
             base,
             titles: Mutex::default(),
-            pins: Mutex::default(),
         }
     }
 
@@ -323,19 +360,19 @@ impl Reader {
             })
     }
 
-    /// The device's list of layouts (`local:layouts`, `local:all_layouts`,
-    /// `local:apps` and their entities).
-    fn layouts(&self) -> DataBundle {
-        match self.get(device_data::LAYOUTS_PATH) {
-            Ok(v) => {
-                let mut titles = self.titles.lock().unwrap_or_else(|p| p.into_inner());
-                device_data::layouts_bundle(&v, &mut titles)
-            }
-            Err(e) => {
-                tracing::debug!(error = %e, "preview: layouts");
-                DataBundle::default()
-            }
+    /// The titles of the pod's layouts and blueprints, for device data rows
+    /// (a notification's or channel's layout).
+    fn layouts(&self) {
+        let mut titles: HashMap<String, String> = self
+            .pod
+            .catalog()
+            .blueprints()
+            .map(|b| (b.id.to_owned(), b.title.to_owned()))
+            .collect();
+        if let Ok(layouts) = self.pod.store().with_conn(crate::layouts::pod_layouts) {
+            titles.extend(layouts.into_iter().map(|l| (l.id, l.title)));
         }
+        *self.titles.lock().unwrap_or_else(|p| p.into_inner()) = titles;
     }
 
     /// The rest of the device data for what `needs` (layouts' JSON) binds.
@@ -348,27 +385,6 @@ impl Reader {
             record(json!({ "platform": "android", "notification_permission": "granted" })),
         );
         d
-    }
-
-    fn versions(&self, app: &str) -> Result<DataBundle, String> {
-        if !is_layout_id(app) {
-            return Err(format!("{app:?} is not a layout id"));
-        }
-        let v = self.get(&device_data::versions_path(app))?;
-        let pinned = self.pins.lock().ok().and_then(|p| p.get(app).copied());
-        let title = self
-            .titles
-            .lock()
-            .ok()
-            .and_then(|t| t.get(app).cloned())
-            .unwrap_or_else(|| app.to_owned());
-        Ok(device_data::versions_bundle(
-            app,
-            &v,
-            pinned,
-            &title,
-            device_data::now_secs(),
-        ))
     }
 }
 
@@ -398,26 +414,6 @@ impl Loader for Reader {
         }
         serde_json::from_value(self.get(path)?).map_err(|e| format!("{path}: {e}"))
     }
-
-    fn device(&self, command: &str, app: &str, id: &str) -> Option<Result<DataBundle, String>> {
-        match command {
-            "show_versions" => Some(self.versions(app)),
-            "pin_version" => {
-                let n = id.parse::<i64>().ok()?;
-                if let Ok(mut p) = self.pins.lock() {
-                    p.insert(app.to_owned(), n);
-                }
-                Some(self.versions(app))
-            }
-            "follow_latest" => {
-                if let Ok(mut p) = self.pins.lock() {
-                    p.remove(app);
-                }
-                Some(self.versions(app))
-            }
-            _ => None,
-        }
-    }
 }
 
 fn record(v: Value) -> EntityRecord {
@@ -426,10 +422,8 @@ fn record(v: Value) -> EntityRecord {
 
 /// Every feed of home's (what any layout may bind), merged into `data`.
 async fn home_feed_data(pod: &Pod, headers: &HeaderMap, data: &mut DataBundle) {
-    let feeds = crate::blocking(pod, |s| s.with_conn(crate::custom::home_feeds_on))
+    let feeds = crate::blocking(pod, |s| Ok(s.with_conn(crate::layouts::home_feeds)))
         .await
-        .ok()
-        .flatten()
         .unwrap_or_default();
     let owner = crate::mcp::owner(pod).await;
     let forwarded = forwarded(headers);
@@ -905,24 +899,16 @@ pub(crate) async fn render_layout_preview(pod: &Pod, headers: &HeaderMap, args: 
     let (id, root, mut data) = if args["layout"].is_object() {
         let node = args["layout"].clone();
         let p = pod.clone();
-        let switched = crate::construct_switched(pod).await;
-        let expanded = crate::blocking(pod, move |s| {
-            // A switched pod's draft names elements (decision
-            // `content-addressed-construct`).
-            if switched {
-                return Ok(
-                    crate::construct::write::draft_plumbing(&p, &node).map_err(|e| {
-                        crate::validate::LayoutError {
-                            pointer: String::new(),
-                            message: e["detail"].to_string(),
-                            allowed: Vec::new(),
-                        }
-                    }),
-                );
-            }
+        let expanded = crate::blocking(pod, move |_| {
+            // A draft names elements (decision `content-addressed-construct`).
             Ok(
-                crate::parts::expand(s, p.catalog(), &node, None, crate::parts::Mode::Strict)
-                    .map(|v| crate::porcelain::to_plumbing(s, p.catalog(), &v).unwrap_or(v)),
+                crate::construct::write::draft_plumbing(&p, &node).map_err(|e| {
+                    crate::validate::LayoutError {
+                        pointer: String::new(),
+                        message: e["detail"].to_string(),
+                        allowed: Vec::new(),
+                    }
+                }),
             )
         })
         .await;
@@ -1004,8 +990,7 @@ pub(crate) async fn render_layout_preview(pod: &Pod, headers: &HeaderMap, args: 
         for l in layouts.values() {
             needs.push_str(&serde_json::to_string(l).unwrap_or_default());
         }
-        let list = reader.layouts();
-        merge(&mut data, list.entities, list.queries);
+        reader.layouts();
         let device = reader.device(&needs);
         merge(&mut data, device.entities, device.queries);
         data.entities.extend(injected.data.entities);
@@ -1151,7 +1136,7 @@ mod tests {
             "home/events",
             "home?x=1",
             "home events",
-            "../v1/apps",
+            "../v1/construct",
             "Home",
             "home#x",
             "%2e%2e",

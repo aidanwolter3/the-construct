@@ -81,120 +81,6 @@
                     {
                       "style": "Label",
                       "type": "core://Text",
-                      "value_expr": "Layouts"
-                    }
-                  ],
-                  "padding_h_dp": 16,
-                  "padding_v_dp": 8,
-                  "type": "core://Column"
-                },
-                {
-                  "empty_text": "Only home so far. Ask your agent to build something.",
-                  "item_template": {
-                    "content": {
-                      "children": [
-                        {
-                          "style": "Body",
-                          "type": "core://Text",
-                          "value_expr": "$item.title"
-                        },
-                        {
-                          "type": "core://Spacer"
-                        },
-                        {
-                          "style": "Secondary",
-                          "type": "core://Text",
-                          "value_expr": "$item.version"
-                        }
-                      ],
-                      "padding_h_dp": 16,
-                      "padding_v_dp": 10,
-                      "spacing_dp": 8,
-                      "type": "core://Row"
-                    },
-                    "content_description": "Versions of $item.title",
-                    "on_click": {
-                      "intent": "action.sequence",
-                      "steps": [
-                        {
-                          "app": "$item.id",
-                          "command": "show_versions",
-                          "intent": "action.device"
-                        },
-                        {
-                          "intent": "action.navigation.open",
-                          "presentation": "Push",
-                          "target_uri": "settings://versions/$item.id"
-                        }
-                      ]
-                    },
-                    "type": "core://Tappable"
-                  },
-                  "query_key": "local:layouts",
-                  "type": "core://List"
-                },
-                {
-                  "group_by": {
-                    "field": "hidden",
-                    "header": {
-                      "children": [
-                        {
-                          "style": "Secondary",
-                          "type": "core://Text",
-                          "value_expr": "Hidden"
-                        }
-                      ],
-                      "padding_h_dp": 16,
-                      "padding_v_dp": 4,
-                      "type": "core://Column"
-                    }
-                  },
-                  "item_template": {
-                    "align": "Center",
-                    "children": [
-                      {
-                        "style": "Body",
-                        "type": "core://Text",
-                        "value_expr": "$item.title"
-                      },
-                      {
-                        "type": "core://Spacer"
-                      },
-                      {
-                        "label": "Show",
-                        "on_click": {
-                          "app": "$item.id",
-                          "command": "unhide_layout",
-                          "intent": "action.device"
-                        },
-                        "type": "core://Button"
-                      }
-                    ],
-                    "padding_h_dp": 16,
-                    "padding_v_dp": 4,
-                    "spacing_dp": 8,
-                    "type": "core://Row"
-                  },
-                  "query_key": "local:all_layouts",
-                  "type": "core://List",
-                  "where": {
-                    "equals": "true",
-                    "field": "hidden"
-                  }
-                }
-              ],
-              "type": "core://Column"
-            },
-            {
-              "children": [
-                {
-                  "type": "core://Divider"
-                },
-                {
-                  "children": [
-                    {
-                      "style": "Label",
-                      "type": "core://Text",
                       "value_expr": "Sign-ins"
                     }
                   ],
@@ -399,7 +285,7 @@
                           "on_click": {
                             "intent": "action.navigation.open",
                             "presentation": "Push",
-                            "target_uri": "settings://notifications/$item.app_id"
+                            "target_uri": "settings://notifications/$item.layout"
                           },
                           "type": "core://Tappable"
                         },
@@ -471,198 +357,6 @@
     "type": "core://Column"
   },
   "screens": [
-    {
-      "id": "versions",
-      "root": {
-        "children": [
-          {
-            "children": [
-              {
-                "content_description": "Back",
-                "icon": "arrow_back",
-                "on_click": {
-                  "intent": "action.navigation.back"
-                },
-                "tag": "screen-back",
-                "type": "core://IconButton"
-              },
-              {
-                "style": "Title",
-                "type": "core://Text",
-                "value_expr": "${local://versions#app_title}"
-              },
-              {
-                "content": {
-                  "size_dp": 16,
-                  "type": "core://Progress"
-                },
-                "type": "core://Conditional",
-                "value": "${local://screen#loading}"
-              },
-              {
-                "size_dp": 12,
-                "type": "core://Spacer"
-              }
-            ],
-            "padding_v_dp": 4,
-            "spacing_dp": 0,
-            "type": "core://Row"
-          },
-          {
-            "type": "core://Divider"
-          },
-          {
-            "content": {
-              "children": [
-                {
-                  "children": [
-                    {
-                      "type": "core://Spacer"
-                    },
-                    {
-                      "label": "Hide from the list",
-                      "on_click": {
-                        "intent": "action.sequence",
-                        "steps": [
-                          {
-                            "app": "$route.id",
-                            "command": "hide_layout",
-                            "intent": "action.device"
-                          },
-                          {
-                            "intent": "action.navigation.back"
-                          }
-                        ]
-                      },
-                      "type": "core://Button"
-                    },
-                    {
-                      "label": "Delete",
-                      "on_click": {
-                        "confirm_label": "Delete",
-                        "intent": "action.confirm",
-                        "message": "It goes from every device.",
-                        "then": {
-                          "intent": "action.sequence",
-                          "steps": [
-                            {
-                              "app": "$route.id",
-                              "command": "delete_layout",
-                              "intent": "action.device"
-                            },
-                            {
-                              "intent": "action.navigation.back"
-                            }
-                          ]
-                        },
-                        "title": "Delete this layout?"
-                      },
-                      "type": "core://Button"
-                    }
-                  ],
-                  "padding_h_dp": 16,
-                  "padding_v_dp": 8,
-                  "spacing_dp": 8,
-                  "type": "core://Row"
-                },
-                {
-                  "content": {
-                    "children": [
-                      {
-                        "style": "Body",
-                        "type": "core://Text",
-                        "value_expr": "Showing v${local://versions#pinned} on this device"
-                      },
-                      {
-                        "type": "core://Spacer"
-                      },
-                      {
-                        "label": "Show latest",
-                        "on_click": {
-                          "app": "$route.id",
-                          "command": "follow_latest",
-                          "intent": "action.device"
-                        },
-                        "type": "core://Button"
-                      }
-                    ],
-                    "padding_h_dp": 16,
-                    "padding_v_dp": 8,
-                    "spacing_dp": 8,
-                    "type": "core://Row"
-                  },
-                  "type": "core://Conditional",
-                  "value": "${local://versions#pinned}"
-                },
-                {
-                  "empty_text": "Loading versions…",
-                  "item_template": {
-                    "content": {
-                      "children": [
-                        {
-                          "children": [
-                            {
-                              "align": "Center",
-                              "children": [
-                                {
-                                  "style": "Body",
-                                  "type": "core://Text",
-                                  "value_expr": "$item.label · $item.when"
-                                },
-                                {
-                                  "content": {
-                                    "icon": "check",
-                                    "text": "Showing",
-                                    "tone": "Neutral",
-                                    "type": "core://Chip"
-                                  },
-                                  "type": "core://Conditional",
-                                  "value": "$item.showing"
-                                }
-                              ],
-                              "spacing_dp": 8,
-                              "type": "core://Row"
-                            },
-                            {
-                              "style": "Secondary",
-                              "type": "core://Text",
-                              "value_expr": "$item.detail"
-                            }
-                          ],
-                          "orientation": "Vertical",
-                          "padding_dp": 0,
-                          "type": "core://Container"
-                        }
-                      ],
-                      "padding_h_dp": 16,
-                      "padding_v_dp": 8,
-                      "spacing_dp": 8,
-                      "type": "core://Row"
-                    },
-                    "content_description": "Show $item.label",
-                    "on_click": {
-                      "app": "$route.id",
-                      "command": "pin_version",
-                      "id": "$item.version",
-                      "intent": "action.device"
-                    },
-                    "type": "core://Tappable"
-                  },
-                  "query_key": "local:versions",
-                  "type": "core://List"
-                }
-              ],
-              "type": "core://Column"
-            },
-            "follow_end": true,
-            "type": "core://Scroll"
-          }
-        ],
-        "type": "core://Column"
-      },
-      "route": "settings://versions/{id}",
-      "title": "${local://versions#app_title}"
-    },
     {
       "id": "notifications",
       "root": {
@@ -742,10 +436,10 @@
                                 "checked": "$item.enabled",
                                 "content_description": "$item.title",
                                 "on_click": {
-                                  "app": "$item.app_id",
                                   "command": "toggle_channel",
                                   "id": "$item.id",
-                                  "intent": "action.device"
+                                  "intent": "action.device",
+                                  "layout": "$item.layout"
                                 },
                                 "type": "core://Switch"
                               }
@@ -777,8 +471,8 @@
                   "query_key": "local:channels",
                   "type": "core://List",
                   "where": {
-                    "equals": "$route.app",
-                    "field": "app_id"
+                    "equals": "$route.layout",
+                    "field": "layout"
                   }
                 }
               ],
@@ -790,7 +484,7 @@
         ],
         "type": "core://Column"
       },
-      "route": "settings://notifications/{app}",
+      "route": "settings://notifications/{layout}",
       "title": "Notifications"
     },
     {

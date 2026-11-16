@@ -10,8 +10,8 @@ publish.workspace = true
 
 [dependencies]
 pod-core = { path = "../pod-core" }
-protocol = { workspace = true }
 construct-elements.workspace = true
+protocol = { workspace = true }
 serde_json.workspace = true
 rusqlite.workspace = true
 axum = { version = "0.8", features = ["http2"] }

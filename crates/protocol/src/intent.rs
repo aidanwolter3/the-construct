@@ -164,16 +164,15 @@ pub enum ActionIntent {
     /// Feature `device_action`: something the device does itself, named by
     /// `command` ([`DEVICE_COMMANDS`]): `refresh`, `leave_pod`
     /// (forget the pod on this device), `open_notification` (`id`),
-    /// `mark_all_read`, `toggle_channel` (`app`, `id`: a notification
+    /// `mark_all_read`, `toggle_channel` (`layout`, `id`: a notification
     /// channel), `sign_in` (`id`: a sign-in provider; `value`: another
-    /// server), `sign_out`, `set_server` (`id`: a server option),
-    /// `show_versions` (`app`, a layout: load its versions as device data),
-    /// `pin_version` (`id`: a version of that app, shown on this device),
-    /// `follow_latest` (that app follows its newest version again);
+    /// server), `sign_out`, `set_server` (`id`: a server option) (the
+    /// commands of layout versions went with the old layout system, issue
+    /// #300: a device always draws the construct's current hash);
     /// feature `device_inbox_paging`: `load_older_notifications` (the next
     /// page into `local:notifications`), `mark_read` (`id`: a notification);
-    /// feature `device_layout_controls`: `hide_layout`, `unhide_layout` and
-    /// `delete_layout` (`app`: a layout);
+    /// feature `device_layout_controls` (removed): `hide_layout`,
+    /// `unhide_layout` and `delete_layout` (`layout`);
     /// feature `device_notification_permission`:
     /// `request_notification_permission` (the OS prompt for notifications,
     /// or the app's notification settings once the prompt can't show; does
@@ -183,9 +182,10 @@ pub enum ActionIntent {
     #[serde(rename = "action.device")]
     Device {
         command: String,
-        /// The layout a command names (`layout` on the wire is accepted too).
-        #[serde(default, alias = "layout", skip_serializing_if = "Option::is_none")]
-        app: Option<String>,
+        /// The layout a command names (`toggle_channel`'s); the old name
+        /// `app` is read too.
+        #[serde(default, alias = "app", skip_serializing_if = "Option::is_none")]
+        layout: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         id: Option<String>,
         /// A command's free value: for `sign_in`, the server to sign in to
@@ -247,7 +247,7 @@ impl ActionIntent {
 }
 
 /// The `action.device` commands this build knows.
-pub const DEVICE_COMMANDS: [&str; 17] = [
+pub const DEVICE_COMMANDS: [&str; 14] = [
     "refresh",
     "leave_pod",
     "open_notification",
@@ -256,9 +256,6 @@ pub const DEVICE_COMMANDS: [&str; 17] = [
     "sign_in",
     "sign_out",
     "set_server",
-    "show_versions",
-    "pin_version",
-    "follow_latest",
     "load_older_notifications",
     "mark_read",
     "hide_layout",
@@ -267,21 +264,19 @@ pub const DEVICE_COMMANDS: [&str; 17] = [
     "request_notification_permission",
 ];
 
-/// The `action.device` commands that need an `app`, and those that need an
-/// `id`.
-pub const DEVICE_COMMANDS_WITH_APP: [&str; 5] = [
+/// The `action.device` commands that need a `layout`, and those that need
+/// an `id`.
+pub const DEVICE_COMMANDS_WITH_APP: [&str; 4] = [
     "toggle_channel",
-    "show_versions",
     "hide_layout",
     "unhide_layout",
     "delete_layout",
 ];
-pub const DEVICE_COMMANDS_WITH_ID: [&str; 6] = [
+pub const DEVICE_COMMANDS_WITH_ID: [&str; 5] = [
     "open_notification",
     "toggle_channel",
     "sign_in",
     "set_server",
-    "pin_version",
     "mark_read",
 ];
 

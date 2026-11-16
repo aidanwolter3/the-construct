@@ -15,11 +15,15 @@ use serde_json::Value;
 
 const FIXTURE: &str = include_str!("../../../protocol/tests/data/counter_home_bundle.json");
 const TIMEOUT: Duration = Duration::from_secs(10);
+/// The fixture's construct (elements are content-addressed: one for every
+/// server here).
+static CONSTRUCT: std::sync::LazyLock<crate::construct_stub::Construct> =
+    std::sync::LazyLock::new(Default::default);
 
 const INCREMENT: &str = r#"{"intent":"action.mutation.optimistic","entity_uri":"core://counters/home","field":"count","value_expr":"entity.count + 1","rollback_value":0,"endpoint":"/v1/counters/home/increment","payload":{}}"#;
 const RESET: &str = r#"{"intent":"action.mutation.optimistic","entity_uri":"core://counters/home","field":"count","value_expr":"0","rollback_value":0,"endpoint":"/v1/counters/home/reset","payload":{}}"#;
 
-/// Serve the counter fixture at `/v1/workspaces/home` (404 elsewhere).
+/// Serve the counter fixture as home's construct (404 elsewhere).
 /// POSTs (outbox flushes) get 503, so queued rows stay PENDING in these
 /// tests; tests/outbox.rs covers flushing against the real server.
 /// Returns the base URL.
@@ -60,17 +64,28 @@ fn handle(mut stream: TcpStream) {
     }
     let mut body_buf = vec![0u8; content_length];
     let _ = std::io::Read::read_exact(&mut reader, &mut body_buf);
-    let (status, body) = if request_line.starts_with("POST ") {
+    let mut parts = request_line.split_whitespace();
+    let (method, path) = (parts.next().unwrap_or(""), parts.next().unwrap_or(""));
+    let answer = CONSTRUCT.answer(
+        method,
+        path,
+        &String::from_utf8_lossy(&body_buf),
+        &mut |id| (id == "home").then(|| (200, FIXTURE.to_owned())),
+    );
+    let (status, body) = if let Some((code, body)) = &answer {
         (
-            "503 Service Unavailable",
+            format!("{code} {}", crate::construct_stub::reason(*code)),
+            body.as_str(),
+        )
+    } else if request_line.starts_with("POST ") {
+        (
+            "503 Service Unavailable".to_owned(),
             "fixture server does not accept mutations",
         )
-    } else if request_line.starts_with("GET /v1/workspaces/home ") {
-        ("200 OK", FIXTURE)
     } else if request_line.starts_with("GET /healthz ") {
-        ("200 OK", "ok")
+        ("200 OK".to_owned(), "ok")
     } else {
-        ("404 Not Found", "not found")
+        ("404 Not Found".to_owned(), "not found")
     };
     let resp = format!(
         "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
@@ -511,7 +526,7 @@ fn remembered_form_values_survive_a_restart_per_app() {
     assert_eq!(root["view"], "cards");
     assert_eq!(home.remembered_form_values("post")["view"], "grid");
     // Another app on the same storage has its own values.
-    let other = ConstructEngine::init_with_workspace(storage, base, "recipes");
+    let other = ConstructEngine::init_with_workspace(storage, base, "events");
     assert!(other.remembered_form_values("").is_empty());
     // None forgets.
     home.remember_form_value("", "view", None);

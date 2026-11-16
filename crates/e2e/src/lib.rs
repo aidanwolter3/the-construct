@@ -33,7 +33,8 @@ use server::{AppState, PixelfedConfig, WithPixelfed};
 use tokio::runtime::Runtime;
 use tokio::task::JoinHandle;
 
-pub const WORKSPACE: &str = "pixelfed";
+/// The blueprint the engines' layout uses ([`Harness::workspace`]).
+pub const BLUEPRINT: &str = "pixelfed";
 pub const LIKE_ENDPOINT: &str = "/v1/pixelfed/posts/like";
 pub const BOOKMARK_ENDPOINT: &str = "/v1/pixelfed/posts/bookmark";
 const LIKE_COUNT_EXPR: &str = "entity.is_liked ? entity.like_count - 1 : entity.like_count + 1";
@@ -274,15 +275,25 @@ pub struct Hit {
     pub at: Instant,
 }
 
+/// Held by a harness on an upstream other tests share (an external fake or a
+/// real Pixelfed): each test resets or signs in to it, and one test's reset
+/// would end another's sign-in, so they take turns.
+static SHARED_UPSTREAM: Mutex<()> = Mutex::new(());
+
 /// Upstream + pod + switchable proxy, on one Tokio runtime. Dropping it stops everything.
 pub struct Harness {
     pub upstream: Upstream,
     pub pod_state: Arc<AppState>,
     /// The URL engines use (through the proxy).
     pub pod_url: String,
+    /// The pod's layout of the Pixelfed blueprint (home binding its feed):
+    /// what [`Self::engine`] shows.
+    pub workspace: String,
     hits: Arc<Mutex<Vec<Hit>>>,
     proxy: Proxy,
     rt: Option<Runtime>,
+    /// [`SHARED_UPSTREAM`], while this harness uses a shared upstream.
+    _turn: Option<std::sync::MutexGuard<'static, ()>>,
 }
 
 impl Harness {
@@ -297,6 +308,8 @@ impl Harness {
     }
 
     pub fn start(choice: UpstreamChoice) -> Self {
+        let turn = (!matches!(choice, UpstreamChoice::Fake))
+            .then(|| SHARED_UPSTREAM.lock().unwrap_or_else(|p| p.into_inner()));
         let rt = tokio::runtime::Builder::new_multi_thread()
             .worker_threads(2)
             .enable_all()
@@ -338,6 +351,7 @@ impl Harness {
         let pod_state = Arc::new(
             server::state_in_memory().with_pixelfed(PixelfedConfig::new(upstream.url(), None)),
         );
+        let workspace = rt.block_on(server::testing::use_blueprint(&pod_state, BLUEPRINT));
         let hits: Arc<Mutex<Vec<Hit>>> = Arc::default();
         let log = Arc::clone(&hits);
         let app = server::app(Arc::clone(&pod_state)).layer(middleware::from_fn(
@@ -369,13 +383,15 @@ impl Harness {
             upstream,
             pod_state,
             pod_url: format!("http://{}", proxy.addr),
+            workspace,
             hits,
             proxy,
             rt: Some(rt),
+            _turn: turn,
         }
     }
 
-    /// An engine on the `pixelfed` workspace with an in-memory cache, this upstream's
+    /// An engine on the Pixelfed layout ([`Self::workspace`]) with an in-memory cache, this upstream's
     /// browser and a loopback redirect on a random port.
     pub fn engine(&self, store: &Arc<MemoryStore>) -> ConstructEngine {
         self.engine_with(store, Some(self.upstream.browser()))
@@ -386,7 +402,7 @@ impl Harness {
         store: &Arc<MemoryStore>,
         opener: Option<Arc<dyn UrlOpener>>,
     ) -> ConstructEngine {
-        self.engine_on(store, opener, WORKSPACE)
+        self.engine_on(store, opener, &self.workspace)
     }
 
     /// An engine on app `workspace` (same cache and redirect as [`Self::engine`]).
@@ -827,6 +843,15 @@ pub fn feed(snap: &StateSnapshot) -> Vec<String> {
 /// The post entity `pixelfed://posts/<id>`.
 pub fn post(snap: &StateSnapshot, id: &str) -> Value {
     entities(snap)[format!("pixelfed://posts/{id}")].clone()
+}
+
+/// The Pixelfed layout drawn signed out: its data says so
+/// (`core://sources/pixelfed`).
+pub fn wait_signed_out(engine: &ConstructEngine) {
+    wait_until("the signed-out bundle", TIMEOUT, || {
+        let s = engine.snapshot();
+        s.workspace_json != "null" && entities(&s)["core://sources/pixelfed"]["signed_in"] == false
+    });
 }
 
 pub fn wait_signed_in(engine: &ConstructEngine) {

@@ -1,5 +1,7 @@
 # Layouts page the inbox, mark one notification read, hide and delete layouts, and pins survive a restart
 
+Superseded in part by [one-layout-system](one-layout-system.md): hiding and deleting layouts from a device, `local:all_layouts` and pins are gone; inbox paging and marking read stay.
+
 Date: 2026-11-05. Related: [layouts-not-apps](layouts-not-apps.md), [blueprints-and-home](blueprints-and-home.md),
 [named-vocabulary](named-vocabulary.md), [named-migrations](named-migrations.md),
 [remembered-form-values](remembered-form-values.md). Issues #133 and #136.

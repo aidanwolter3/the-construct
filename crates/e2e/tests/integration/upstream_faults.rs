@@ -7,8 +7,8 @@ use std::time::Duration;
 
 use client_core::{ConstructEngine, MemoryStore};
 use e2e::{
-    Harness, LIKE_ENDPOINT, TIMEOUT, auth, feed, fresh_post, like_intent, post, wait_flushed,
-    wait_signed_in, wait_until, wait_upstream,
+    Harness, LIKE_ENDPOINT, TIMEOUT, auth, entities, feed, fresh_post, like_intent, post,
+    wait_flushed, wait_signed_in, wait_until, wait_upstream,
 };
 use fake_pixelfed::FaultRule;
 use serde_json::Value;
@@ -171,11 +171,11 @@ fn expired_upstream_token_is_refreshed_transparently() {
     wait_until("the refetch", TIMEOUT, || {
         h.hits()[before..]
             .iter()
-            .any(|x| x.path == "/v1/workspaces/pixelfed")
+            .any(|x| x.path.starts_with("/v1/construct/data/"))
     });
     let fetch = h.hits()[before..]
         .iter()
-        .find(|x| x.path == "/v1/workspaces/pixelfed")
+        .find(|x| x.path.starts_with("/v1/construct/data/"))
         .unwrap()
         .status;
     assert_eq!(fetch, 200);
@@ -236,7 +236,8 @@ fn upstream_reset_between_runs() {
     engine.refresh();
     wait_until("signed out after the upstream wipe", TIMEOUT, || {
         let s = engine.snapshot();
-        auth(&s)["state"] == "signed_out" && s.workspace_json.contains("Sign in with Pixelfed")
+        auth(&s)["state"] == "signed_out"
+            && entities(&s)["core://sources/pixelfed"]["signed_in"] == false
     });
     engine.dispatch(&h.login_intent());
     wait_signed_in(&engine);

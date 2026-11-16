@@ -1,5 +1,6 @@
 //! The core with test adapters only (D40): the catalog's checks, a
-//! layout-only app, sign-in gating, adapter routes and migrations, logout.
+//! layout-only blueprint, sign-in gating of a source's data, adapter routes
+//! and migrations, logout.
 
 use std::sync::Arc;
 
@@ -15,7 +16,7 @@ use pod_core::layouts::LayoutSource;
 use pod_core::session::session_hash;
 use pod_core::store::{Step, open_session_on};
 use pod_core::{
-    AppInfo, AppState, AuthPolicy, BoxFuture, Catalog, FeedSpec, Hydration, Pod, RequestCtx,
+    AppState, AuthPolicy, BlueprintInfo, BoxFuture, Catalog, FeedSpec, Hydration, Pod, RequestCtx,
     SignInProvider, Source, SourceManifest, StaticAdapter,
 };
 use protocol::{DataBundle, EntityRecord, WorkspaceSpec};
@@ -47,7 +48,7 @@ static GATED_FILES: &[LayoutSource] = &[LayoutSource {
     text: layout!("gated"),
 }];
 
-const OPEN: AppInfo = AppInfo {
+const OPEN: BlueprintInfo = BlueprintInfo {
     id: "open",
     title: "Open",
     icon: "photo",
@@ -55,7 +56,7 @@ const OPEN: AppInfo = AppInfo {
     auth: AuthPolicy::Public,
     feeds: &[("open", "all")],
 };
-const GATED: AppInfo = AppInfo {
+const GATED: BlueprintInfo = BlueprintInfo {
     id: "gated",
     title: "Gated",
     icon: "photo",
@@ -90,7 +91,7 @@ impl Source for Gated {
     fn name(&self) -> &'static str {
         "gated"
     }
-    fn apps(&self) -> Vec<AppInfo> {
+    fn blueprints(&self) -> Vec<BlueprintInfo> {
         vec![GATED]
     }
     fn layout_files(&self) -> &'static [LayoutSource] {
@@ -119,9 +120,11 @@ impl Source for Gated {
         SourceManifest {
             feeds: &[FeedSpec {
                 name: "all",
-                query_keys: &[],
+                query_keys: &["gated:all"],
                 doc: "",
             }],
+            sign_in: Some("test"),
+            entity_schemes: &["gated"],
             ..SourceManifest::new("T")
         }
     }
@@ -191,7 +194,7 @@ fn the_catalog_refuses_bad_adapter_sets() {
     ));
     assert_eq!(
         err(vec![open_app(), other_name]),
-        "app 'open' is served by two adapters"
+        "blueprint 'open' is shipped by two adapters"
     );
     let needs_unknown = Arc::new(StaticAdapter::new(
         "gated",
@@ -209,63 +212,113 @@ fn the_catalog_refuses_bad_adapter_sets() {
         "app 'gated' requires sign-in 'test', which no adapter provides"
     );
     assert!(Catalog::new(vec![open_app(), Arc::new(Gated)]).is_ok());
-    assert!(Catalog::empty().apps().next().is_none());
+    assert!(Catalog::empty().blueprints().next().is_none());
 }
 
 #[tokio::test]
-async fn a_layout_only_app_is_served_and_listed() {
+async fn a_layout_only_blueprint_is_drawn_by_its_key() {
     let state = state();
-    let (status, body, headers) = get_json(&state, "/v1/workspaces/open", None).await;
-    assert_eq!(status, StatusCode::OK);
-    assert_eq!(headers["x-construct-layout-version"], "1");
+    let router = pod_core::app(state.clone());
+    let (status, body) = pod_core::testing::layout_for(&router, "open", None).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
     assert_eq!(body["workspace"]["id"], "open");
-    assert_eq!(body["entities"]["core://test/x"]["n"], 1);
-    // A bearer that is not a session is ignored by a public app.
-    let (status, _, _) = get_json(&state, "/v1/workspaces/open", Some("stale")).await;
-    assert_eq!(status, StatusCode::OK);
-    let (_, apps, _) = get_json(&state, "/v1/apps?blueprints=1", None).await;
-    let ids: Vec<&str> = apps["apps"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|a| a["id"].as_str().unwrap())
-        .collect();
-    assert_eq!(ids, ["open", "gated"]);
-    let (status, _, _) = get_json(&state, "/v1/workspaces/nope", None).await;
+    assert_eq!(body["workspace"]["type"], "core://Page");
+    // A bearer the pod doesn't know is told so.
+    let (status, _) = pod_core::testing::layout_for(&router, "open", Some("stale")).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    let (status, _) = pod_core::testing::layout_for(&router, "nope", None).await;
     assert_eq!(status, StatusCode::NOT_FOUND);
 }
 
+/// One MCP tool call with the pod token: its structured result.
+async fn tool(state: &Arc<AppState>, name: &str, args: Value) -> Value {
+    let body = json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+        "params": {"name": name, "arguments": args}});
+    let resp = pod_core::app(state.clone())
+        .oneshot(
+            Request::post("/v1/mcp")
+                .header("authorization", "Bearer pod")
+                .header("content-type", "application/json")
+                .body(Body::from(body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+    let v: Value = serde_json::from_slice(&bytes).unwrap();
+    assert_ne!(v["result"]["isError"], true, "{v}");
+    v["result"]["structuredContent"].clone()
+}
+
+static SHELL_FILES: &[LayoutSource] = &[LayoutSource {
+    dir: "layouts",
+    app_id: "shell",
+    name: "0001",
+    text: layout!("shell"),
+}];
+
+/// The home blueprint: a pod's home (and so its feeds) needs one.
+fn shell() -> Arc<dyn Source> {
+    let data = WorkspaceSpec {
+        version: "1.0.0".into(),
+        workspace: protocol::UiNode::Unknown(Value::Null),
+        entities: Default::default(),
+        queries: Default::default(),
+    };
+    let info = BlueprintInfo {
+        id: "shell",
+        title: "Home",
+        icon: "dashboard",
+        dev: false,
+        auth: AuthPolicy::Public,
+        feeds: &[],
+    };
+    Arc::new(StaticAdapter::new("shell", info, SHELL_FILES, &data))
+}
+
 #[tokio::test]
-async fn an_app_that_requires_a_sign_in_is_served_only_with_it() {
-    let state = state();
+async fn a_source_that_needs_a_sign_in_is_loaded_only_with_it() {
+    let state = Arc::new(
+        AppState::in_memory(vec![open_app(), Arc::new(Gated), shell()]).with_dev_apps(true),
+    );
     let store = state.store();
+    store.create_pinned_session(&session_hash("pod")).unwrap();
     store
         .transaction(|tx| open_session_on(tx, &session_hash("good"), "test", 86_400))
         .unwrap();
     store.create_session(&session_hash("bare")).unwrap();
-    // No bearer: the signed-out screen, 200, no layout version.
-    let (status, body, headers) = get_json(&state, "/v1/workspaces/gated", None).await;
-    assert_eq!(status, StatusCode::OK);
-    assert_eq!(body["workspace"]["id"], "gated");
-    assert!(body["entities"].as_object().is_none_or(|e| e.is_empty()));
-    assert!(!headers.contains_key("x-construct-layout-version"));
-    // A stale bearer: 401 + the screen, so the client drops it.
-    let (status, body, headers) = get_json(&state, "/v1/workspaces/gated", Some("stale")).await;
+    let made = tool(&state, "create_layout", json!({"title": "Gated", "feeds": [["gated", "all"]],
+        "layout": {"type": "core://Page", "title": "G", "root": {"type": "core://List",
+            "query_key": "gated:all",
+            "item_template": {"type": "core://Text", "style": "Body", "value_expr": "${gated://me#sign_ins}"}}}})).await;
+    let id = made["id"].as_str().unwrap().to_owned();
+    let router = pod_core::app(state.clone());
+    let layout = |bearer: Option<&'static str>| {
+        let (router, id) = (router.clone(), id.clone());
+        async move { pod_core::testing::layout_for(&router, &id, bearer).await }
+    };
+    // No bearer, or a session without the sign-in (D46: it keeps its
+    // session): the layout without the source's data, which says so.
+    for bearer in [None, Some("bare")] {
+        let (status, body) = layout(bearer).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert!(body["entities"].get("gated://me").is_none(), "{body}");
+        assert_eq!(
+            body["entities"]["core://sources/gated"]["signed_in"], false,
+            "{body}"
+        );
+    }
+    // A stale bearer: 401, so the client drops it.
+    let (status, _) = layout(Some("stale")).await;
     assert_eq!(status, StatusCode::UNAUTHORIZED);
-    assert_eq!(headers["x-construct-session"], "invalid");
-    assert_eq!(body["workspace"]["id"], "gated");
-    // A valid session without the sign-in keeps its session (D46): 200 + the screen.
-    let (status, body, headers) = get_json(&state, "/v1/workspaces/gated", Some("bare")).await;
-    assert_eq!(status, StatusCode::OK);
-    assert!(!headers.contains_key("x-construct-session"));
-    assert_eq!(body["workspace"]["id"], "gated");
-    let (status, _, _) = get_json(&state, "/v1/workspaces/gated/events", Some("stale")).await;
-    assert_eq!(status, StatusCode::UNAUTHORIZED, "stale events");
-    // Signed in: the adapter's data under the layout; it saw the session.
-    let (status, body, headers) = get_json(&state, "/v1/workspaces/gated", Some("good")).await;
-    assert_eq!(status, StatusCode::OK);
-    assert_eq!(headers["x-construct-layout-version"], "1");
+    // Signed in: the source's data; it saw the session.
+    let (status, body) = layout(Some("good")).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
     assert_eq!(body["entities"]["gated://me"]["sign_ins"], "test");
+    assert_eq!(
+        body["entities"]["core://sources/gated"]["signed_in"], true,
+        "{body}"
+    );
 }
 
 #[tokio::test]
@@ -343,7 +396,7 @@ async fn sign_ins_lists_the_session_sign_ins() {
             "apps": [{ "id": "gated", "title": "Gated" }],
         }], "providers": [{ "id": "test", "title": "Test service", "signed_in": true }] })
     );
-    // A dev app is listed only when dev apps are shown, like `GET /v1/apps`.
+    // A dev blueprint is listed only when dev apps are shown.
     let hidden = Arc::new(AppState::in_memory(vec![open_app(), Arc::new(Gated)]));
     hidden
         .store()
@@ -359,10 +412,28 @@ async fn sign_ins_lists_the_session_sign_ins() {
 #[test]
 fn the_core_names_no_source() {
     let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
-    for entry in std::fs::read_dir(&src).unwrap() {
-        let path = entry.unwrap().path();
-        let name = path.file_name().unwrap().to_str().unwrap().to_owned();
-        if name == "store.rs" {
+    let mut files = Vec::new();
+    let mut dirs = vec![src.clone()];
+    while let Some(d) = dirs.pop() {
+        for entry in std::fs::read_dir(&d).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                dirs.push(path);
+            } else {
+                files.push(path);
+            }
+        }
+    }
+    for path in files {
+        let name = path
+            .strip_prefix(&src)
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .to_owned();
+        // The core's migration steps are frozen history (the Pixelfed
+        // tables of the first builds).
+        if name == "store.rs" || name == "migrations/core.rs" {
             continue;
         }
         let text = std::fs::read_to_string(&path).unwrap();
@@ -373,7 +444,7 @@ fn the_core_names_no_source() {
             }
             // `std::collections` is not the Collections source.
             let code = code.replace("std::collections", "");
-            for app in ["pixelfed", "recipes", "collections"] {
+            for app in ["pixelfed", "collections"] {
                 assert!(
                     !code.to_ascii_lowercase().contains(app),
                     "src/{name}:{}: the core must not name a source: {line}",
@@ -391,7 +462,7 @@ impl Source for Shipping {
     fn name(&self) -> &'static str {
         "shipping"
     }
-    fn apps(&self) -> Vec<AppInfo> {
+    fn blueprints(&self) -> Vec<BlueprintInfo> {
         Vec::new()
     }
     fn layout_files(&self) -> &'static [LayoutSource] {
@@ -433,8 +504,8 @@ macro_rules! component {
 static GREETING: &[ComponentSource] = &[component!("test_greeting", "hi")];
 static TAKEN: &[ComponentSource] = &[component!("card", "not the core's")];
 
-/// Issue #135: an adapter's server components are recorded with the core's
-/// as `core:<name>`; a name another crate ships stops the start.
+/// Issue #135: an adapter's server components are named with the core's
+/// (`@core/<name>`); a name another crate ships stops the start.
 #[test]
 fn adapters_ship_server_components() {
     let state = AppState::try_new(
@@ -442,11 +513,17 @@ fn adapters_ship_server_components() {
         vec![Arc::new(Shipping(GREETING))],
     )
     .unwrap();
-    let (version, def) = pod_core::components::latest(state.store(), "core:test_greeting")
+    let el = state
+        .store()
+        .with_conn(|c| pod_core::construct::store::name(c, "@core/test_greeting"))
         .unwrap()
-        .expect("recorded");
-    assert_eq!(version, 1);
-    assert_eq!(def["template"]["value_expr"], "hi");
+        .expect("named");
+    let (def, _) = state
+        .store()
+        .with_conn(|c| pod_core::construct::store::object(c, &el))
+        .unwrap()
+        .unwrap();
+    assert_eq!(def["node"]["value_expr"], "hi");
     let err = Catalog::new(vec![Arc::new(Shipping(TAKEN))]).err().unwrap();
     assert_eq!(
         err,

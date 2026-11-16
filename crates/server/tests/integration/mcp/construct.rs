@@ -1,9 +1,8 @@
 //! The content-addressed construct (decision `content-addressed-construct`)
-//! through the real host and MCP: a pod with several layouts and `pod:`
-//! components is converted in a dry run with no differences, switched
-//! (installed clients' endpoints answer as before), edited (one component
-//! edit re-seals what follows it, and a client holding the old objects is
-//! sent only the changed ones), and reverted.
+//! through the real host and MCP: a pod with several layouts and `@me/`
+//! components is drawn by name, edited (one component edit re-seals what
+//! follows it, and a client holding the old objects is sent only the
+//! changed ones), and refuses cycles; and bindings between layouts.
 
 use std::collections::BTreeSet;
 
@@ -62,11 +61,11 @@ async fn build(env: &Env, access: &str) -> (String, String, String) {
         .await;
     assert!(!err, "{d}");
     let (err, c) = env
-        .tool(access, "create_layout", json!({"title": "Coming up", "feeds": [["recipes", "all"]],
+        .tool(access, "create_layout", json!({"title": "Coming up", "feeds": [["collections", "dishes"]],
             "layout": {"type": "core://Page", "title": "Coming up", "root": {"type": "core://Column",
                 "padding_h_dp": 16, "children": [
                     {"type": "core://Use", "component": "core:section_header", "args": {"text": "Next"}},
-                    {"type": "core://List", "query_key": "recipes:all", "item_template":
+                    {"type": "core://List", "query_key": "collection:dishes", "item_template":
                         {"type": "core://Text", "style": "Body", "value_expr": "$item.title"}}]}}}))
         .await;
     assert!(!err, "{c}");
@@ -74,11 +73,11 @@ async fn build(env: &Env, access: &str) -> (String, String, String) {
     let (err, b) = env
         .tool(access, "create_layout", json!({"title": "Recipes",
             "layout": {"type": "core://Workspace", "title": "Recipes", "slots": [
-                {"slot_id": "main", "provider_uri": "recipes://all", "content": {"type": "core://Column", "children": [
+                {"slot_id": "main", "provider_uri": "core://custom", "content": {"type": "core://Column", "children": [
                     {"type": "core://Use", "component": "pod:tile", "args": {"label": "All recipes"}, "children": [
                         {"type": "core://Text", "style": "Secondary", "value_expr": "From your book"}]},
                     {"type": "core://Layout", "layout": c, "presentation": "Inline"},
-                    {"type": "core://List", "query_key": "recipes:all", "item_template":
+                    {"type": "core://List", "query_key": "collection:dishes", "item_template":
                         {"type": "core://Use", "component": "core:card", "children": [
                             {"type": "core://Text", "style": "Title", "value_expr": "$item.title"}]}}]}}]}}))
         .await;
@@ -116,54 +115,31 @@ fn reachable(objects: &serde_json::Map<String, Value>) -> BTreeSet<String> {
 }
 
 #[tokio::test]
-async fn a_pod_is_switched_after_a_clean_dry_run_and_reverted() {
+async fn a_pods_construct_is_edited_and_resealed() {
     let env = env().await;
     let pod_code = env.pod("mine").await;
     let access = env.connect(&pod_code).await;
     let (a, b, c) = build(&env, &access).await;
 
-    // Before: the old system, and no construct.
-    let (s, body) = get(&env, "/v1/construct", &pod_code).await;
-    assert_eq!(s, StatusCode::CONFLICT, "{body}");
-    assert_eq!(body["error"], "not_switched");
-    let mut before = Vec::new();
-    for id in ["home", &a, &b, &c] {
-        let (s, body) = get(&env, &format!("/v1/workspaces/{id}"), &pod_code).await;
-        assert_eq!(s, StatusCode::OK, "{id}: {body}");
-        before.push(body);
-    }
-
-    // The dry run changes nothing and finds no difference.
-    let (err, dry) = env
-        .tool(&access, "switch_construct", json!({"dry_run": true}))
-        .await;
-    assert!(!err, "{dry}");
-    assert_eq!(dry["changed"], false);
-    assert_eq!(dry["layouts_compared"], 4, "{dry:#}");
-    assert_eq!(dry["layouts_different"], 0, "{dry:#}");
-    let (s, _) = get(&env, "/v1/construct", &pod_code).await;
-    assert_eq!(s, StatusCode::CONFLICT, "a dry run switches nothing");
-
-    // The switch: installed clients' endpoints draw the same.
-    let (err, sw) = env.tool(&access, "switch_construct", json!({})).await;
-    assert!(!err, "{sw}");
-    assert_eq!(sw["switched"], true);
+    // Every pod is on the construct (issue #300): its root, and each
+    // layout by name.
     let (s, root) = get(&env, "/v1/construct", &pod_code).await;
     assert_eq!(s, StatusCode::OK, "{root}");
     let root = root["root"].as_str().unwrap().to_owned();
     assert!(root.starts_with("e1-"), "{root}");
-    for (i, id) in ["home", &a, &b, &c].into_iter().enumerate() {
-        let (s, body) = get(&env, &format!("/v1/workspaces/{id}"), &pod_code).await;
-        assert_eq!(s, StatusCode::OK, "{id}: {body}");
-        assert_eq!(
-            body["workspace"], before[i]["workspace"],
-            "{id} draws the same"
-        );
-        assert_eq!(
-            body["queries"], before[i]["queries"],
-            "{id} has the same data"
-        );
+    let mut before = Vec::new();
+    for id in ["home", &a, &b, &c] {
+        before.push(env.drawn(id, &pod_code).await);
     }
+    assert!(before[1]["workspace"].to_string().contains("Recipes"));
+    assert_eq!(
+        before[3]["queries"]["collection:dishes"]
+            .as_array()
+            .map(Vec::len),
+        Some(8),
+        "{}",
+        before[3]
+    );
 
     // The objects a device fetches: everything from the root at first.
     let (s, all) = post(
@@ -203,23 +179,28 @@ async fn a_pod_is_switched_after_a_clean_dry_run_and_reverted() {
     // The tile, the layouts that use it (B, A, home), nothing else: C and
     // every server component and blueprint stay.
     assert_eq!(changed.len(), 4, "{changed:?}");
-    let (_, a_now) = get(&env, &format!("/v1/workspaces/{a}"), &pod_code).await;
+    let a_now = env.drawn(&a, &pod_code).await;
     assert!(
         a_now["workspace"].to_string().contains("› Recipes"),
         "{a_now}"
     );
-    let (_, c_now) = get(&env, &format!("/v1/workspaces/{c}"), &pod_code).await;
+    let c_now = env.drawn(&c, &pod_code).await;
     assert_eq!(
         c_now["workspace"], before[3]["workspace"],
         "C doesn't use the tile"
     );
 
-    // Writes of the old system are refused; MCP writes the construct.
-    let (err, h) = env
-        .tool(&access, "set_hidden", json!({"app": a, "hidden": true}))
-        .await;
-    assert!(err, "{h}");
-    assert_eq!(h["error"], "construct_switched");
+    // The old system's tools are gone.
+    for gone in [
+        "set_hidden",
+        "switch_construct",
+        "rebase_context",
+        "dismiss_update",
+    ] {
+        let (err, h) = env.tool(&access, gone, json!({"app": a})).await;
+        assert!(err, "{h}");
+        assert_eq!(h["error"], "unknown_tool", "{gone}");
+    }
 
     // A cycle is refused.
     let (err, cyc) = env
@@ -229,22 +210,6 @@ async fn a_pod_is_switched_after_a_clean_dry_run_and_reverted() {
         .await;
     assert!(err, "{cyc}");
     assert_eq!(cyc["error"], "cycle", "{cyc}");
-
-    // Revert: the old system answers as before the switch.
-    let (err, rv) = env
-        .tool(&access, "switch_construct", json!({"revert": true}))
-        .await;
-    assert!(!err, "{rv}");
-    let (s, _) = get(&env, "/v1/construct", &pod_code).await;
-    assert_eq!(s, StatusCode::CONFLICT);
-    for (i, id) in ["home", &a, &b, &c].into_iter().enumerate() {
-        let (s, body) = get(&env, &format!("/v1/workspaces/{id}"), &pod_code).await;
-        assert_eq!(s, StatusCode::OK, "{id}: {body}");
-        assert_eq!(
-            body["workspace"], before[i]["workspace"],
-            "{id} is as it was"
-        );
-    }
 }
 
 /// Bindings between layouts (issue #301): one layout reads its list from an
@@ -276,10 +241,6 @@ async fn a_layout_embedded_with_bind_draws_what_its_use_site_binds() {
         )
         .await;
     }
-    let (err, sw) = env.tool(&access, "switch_construct", json!({})).await;
-    assert!(!err, "{sw}");
-    assert!(sw["home_bindings"].is_object(), "{sw}");
-
     // A shelf lists whatever its use site binds to `items`.
     let shelf = ok("create_layout", json!({"title": "Shelf",
         "feeds": [["collections", "books"], ["collections", "films"]],
@@ -407,4 +368,150 @@ async fn a_layout_embedded_with_bind_draws_what_its_use_site_binds() {
         .await;
     assert!(err, "{e}");
     assert_eq!(e["error"], "unbound_input", "{e}");
+}
+
+/// Issue #310: Collections' `apply_change` edits the
+/// construct's layouts in the same step as the collection, and a change is
+/// checked against the construct's layouts as clients draw them (a bound
+/// one too), never the old tables.
+#[tokio::test]
+async fn a_change_set_edits_and_checks_the_constructs_layouts() {
+    let env = env().await;
+    let pod_code = env.pod("mine").await;
+    let access = env.connect(&pod_code).await;
+    let ok = |name: &'static str, args: Value| {
+        let (env, access) = (&env, &access);
+        async move {
+            let (err, v) = env.tool(access, name, args).await;
+            assert!(!err, "{name}: {v}");
+            v
+        }
+    };
+    let refused = |name: &'static str, args: Value| {
+        let (env, access) = (&env, &access);
+        async move {
+            let (err, v) = env.tool(access, name, args).await;
+            assert!(err, "{name}: {v}");
+            v
+        }
+    };
+    ok(
+        "define_collection",
+        json!({"name": "books", "fields": [{"name": "title", "type": "text"},
+            {"name": "author", "type": "text"}]}),
+    )
+    .await;
+    ok(
+        "add_row",
+        json!({"collection": "books", "values": {"title": "The Glass Orchard", "author": "Ida Vell"}}),
+    )
+    .await;
+    let page = |query: &str, row: &str| {
+        json!({"type": "core://Page", "title": "Books", "root": {"type": "core://List",
+            "query_key": query,
+            "item_template": {"type": "core://Text", "style": "Body", "value_expr": row}}})
+    };
+    let id = |v: Value| v["id"].as_str().unwrap().to_owned();
+    // One layout reads the collection itself; another reads what home binds.
+    let list = id(ok(
+        "create_layout",
+        json!({"title": "Books", "feeds": [["collections", "books"]],
+            "layout": page("collection:books", "$item.title")}),
+    )
+    .await);
+    let shelf = id(ok(
+        "create_layout",
+        json!({"title": "Shelf", "layout": page("$in.items", "$item.title by $item.author")}),
+    )
+    .await);
+    ok(
+        "update_layout",
+        json!({"app": "home", "layout": {"type": "core://Page", "title": "Home",
+        "root": {"type": "core://Column", "children": [
+            {"type": "core://Layout", "ref": list},
+            {"type": "core://Layout", "ref": shelf, "bind": {"items": "collection:books"}}]}}}),
+    )
+    .await;
+    let version = |l: &str| {
+        let (env, access, l) = (&env, &access, l.to_owned());
+        async move {
+            let (err, v) = env.tool(access, "get_layout", json!({"app": l})).await;
+            assert!(!err, "{v}");
+            v["version"].as_i64().unwrap()
+        }
+    };
+    let (list_v, shelf_v) = (version(&list).await, version(&shelf).await);
+
+    // Removing a field the bound shelf shows is refused, naming it.
+    let e = refused(
+        "apply_change",
+        json!({"collection": "books", "changes": [{"op": "remove_field", "field": "author"}]}),
+    )
+    .await;
+    assert_eq!(e["error"], "breaks_layout", "{e}");
+    assert_eq!(e["layout"], shelf, "{e}");
+    assert_eq!(e["in_change_set"], false, "{e}");
+    assert!(
+        e["detail"].as_str().unwrap().contains("$item.author"),
+        "{e}"
+    );
+    // The collection reports the construct's layouts as its users.
+    let d = ok("describe_collection", json!({"collection": "books"})).await;
+    assert_eq!(d["latest_version"], 1, "{d}");
+    let users: Vec<&str> = d["used_by"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|u| u["layout"].as_str())
+        .collect();
+    assert!(
+        users.contains(&list.as_str()) && users.contains(&shelf.as_str()),
+        "{d}"
+    );
+
+    // With the shelf changed in the same step, it applies: the construct's
+    // layout moves (its history seq + 1), the collection with it.
+    let r = ok(
+        "apply_change",
+        json!({"collection": "books", "note": "No authors",
+        "changes": [{"op": "remove_field", "field": "author"}],
+        "apps": [{"app": shelf, "base_version": shelf_v, "json_patch": [{"op": "replace",
+            "path": "/root/item_template/value_expr", "value": "$item.title"}]}]}),
+    )
+    .await;
+    assert_eq!(r["version"], 2, "{r}");
+    assert_eq!(r["apps"][0]["app"], shelf, "{r}");
+    assert_eq!(r["apps"][0]["version"], shelf_v + 1, "{r}");
+    let (_, got) = env.tool(&access, "get_layout", json!({"app": shelf})).await;
+    assert_eq!(got["version"], shelf_v + 1, "{got}");
+    assert_eq!(
+        got["layout"]["root"]["item_template"]["value_expr"], "$item.title",
+        "{got}"
+    );
+    assert_eq!(version(&list).await, list_v, "untouched");
+
+    // A base that isn't the name's seq refuses the whole step.
+    let e = refused(
+        "apply_change",
+        json!({"collection": "books",
+        "changes": [{"op": "add_field", "name": "read", "type": "bool", "default": false}],
+        "apps": [{"app": list, "base_version": list_v + 5, "json_patch": [{"op": "replace",
+            "path": "/title", "value": "My books"}]}]}),
+    )
+    .await;
+    assert_eq!(e["error"], "stale_base", "{e}");
+    assert_eq!(e["latest_version"], list_v, "{e}");
+    let d = ok("describe_collection", json!({"collection": "books"})).await;
+    assert_eq!(d["latest_version"], 2, "nothing applied: {d}");
+    // An edit the construct refuses refuses the change too.
+    let e = refused(
+        "apply_change",
+        json!({"collection": "books",
+        "changes": [{"op": "add_field", "name": "read", "type": "bool", "default": false}],
+        "apps": [{"app": "c-nothingabc", "layout": page("collection:books", "$item.title")}]}),
+    )
+    .await;
+    assert_eq!(e["error"], "layout_not_found", "{e}");
+    let d = ok("describe_collection", json!({"collection": "books"})).await;
+    assert_eq!(d["latest_version"], 2, "nothing applied: {d}");
 }

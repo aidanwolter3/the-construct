@@ -147,7 +147,8 @@ async fn create_app(pod: &Pod, title: &str, layout: Value) -> String {
 
 /// The app's rows as served: `[(title, entity)]`.
 async fn todos(pod: &Pod, app: &str) -> Vec<(String, Value)> {
-    let (status, ws) = call(pod, "GET", &format!("/v1/workspaces/{app}"), "phone", None).await;
+    let (status, ws) =
+        pod_core::testing::layout_for(&pod_core::app(pod.clone()), app, Some("phone")).await;
     assert_eq!(status, StatusCode::OK, "{ws}");
     ws["queries"]["collection:todos"]
         .as_array()
@@ -180,18 +181,17 @@ async fn a_todo_app_adds_ticks_and_removes_todos() {
     // The delete leaves rollback_value out; it is served as null, so builds
     // that require the field still read the layout (decision
     // `optional-rollback-value`).
-    let (_, ws) = call(&pod, "GET", &format!("/v1/workspaces/{app}"), "phone", None).await;
+    let (_, ws) =
+        pod_core::testing::layout_for(&pod_core::app(pod.clone()), &app, Some("phone")).await;
     let served = ws.to_string();
     assert_eq!(
         served.matches(r#""rollback_value":false"#).count(),
         1,
         "{served}"
     );
-    assert_eq!(
-        served.matches(r#""rollback_value":null"#).count(),
-        1,
-        "{served}"
-    );
+    // The delete's is left out as written (a device reads it as null,
+    // decision `optional-rollback-value`).
+    assert_eq!(served.matches(r#""rollback_value""#).count(), 1, "{served}");
 
     let (s, milk) = add(&pod, json!({"title": "Milk", "client_id": "n1"})).await;
     assert_eq!(s, StatusCode::OK, "{milk}");
@@ -311,7 +311,7 @@ async fn a_write_on_one_device_reloads_the_app_on_every_device() {
     let app = create_app(&pod, "Todos", todo_layout("")).await;
     let mut laptop = pod_core::app(pod.clone())
         .oneshot(
-            Request::get(format!("/v1/workspaces/{app}/events"))
+            Request::get("/v1/construct/events")
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -321,18 +321,23 @@ async fn a_write_on_one_device_reloads_the_app_on_every_device() {
     assert!(
         sse_text(&mut laptop, Duration::from_millis(200))
             .await
-            .contains("event: layout")
+            .contains("event: construct")
     );
     add(&pod, json!({"title": "Milk"})).await;
     let t = sse_text(&mut laptop, Duration::from_millis(300)).await;
-    assert!(t.contains("event: data") && t.contains(&app), "{t}");
+    // The event names home, whose feeds the device loads.
+    let _ = app;
+    assert!(
+        t.contains("event: data") && t.contains(r#""workspace_id":"home""#),
+        "{t}"
+    );
 }
 
-/// An events stream of `app` for device `device`.
-async fn device_stream(pod: &Pod, app: &str, device: &str) -> Body {
+/// The construct's events stream for device `device`.
+async fn device_stream(pod: &Pod, device: &str) -> Body {
     let mut body = pod_core::app(pod.clone())
         .oneshot(
-            Request::get(format!("/v1/workspaces/{app}/events"))
+            Request::get("/v1/construct/events")
                 .header(protocol::DEVICE_HEADER, device)
                 .body(Body::empty())
                 .unwrap(),
@@ -343,7 +348,7 @@ async fn device_stream(pod: &Pod, app: &str, device: &str) -> Body {
     assert!(
         sse_text(&mut body, Duration::from_millis(200))
             .await
-            .contains("event: layout")
+            .contains("event: construct")
     );
     body
 }
@@ -366,8 +371,8 @@ async fn a_write_names_its_rows_and_skips_the_device_that_made_it() {
     let app = create_app(&pod, "Todos", todo_layout("")).await;
     let (_, made) = add(&pod, json!({"title": "Milk"})).await;
     let id = made["id"].as_str().unwrap().to_owned();
-    let mut laptop = device_stream(&pod, &app, "laptop-0001").await;
-    let mut phone = device_stream(&pod, &app, "phone-0001").await;
+    let mut laptop = device_stream(&pod, "laptop-0001").await;
+    let mut phone = device_stream(&pod, "phone-0001").await;
     // The phone ticks it.
     let resp = pod_core::app(pod.clone())
         .oneshot(
@@ -383,7 +388,9 @@ async fn a_write_names_its_rows_and_skips_the_device_that_made_it() {
     let seen = data_events(&sse_text(&mut laptop, Duration::from_millis(300)).await);
     assert_eq!(seen.len(), 1, "{seen:?}");
     let e = &seen[0];
-    assert_eq!(e["workspace_id"], app.as_str());
+    // Home's stream: the event names home, whose feeds hold the rows.
+    let _ = &app;
+    assert_eq!(e["workspace_id"], "home");
     assert_eq!(e["source"], "collections");
     assert_eq!(e["changes"], json!([{"collection": "todos", "rows": [id]}]));
     assert_eq!(e["uri_prefixes"], json!(["collections://todos/"]));
@@ -485,15 +492,8 @@ async fn bindings_must_fit_the_collection() {
     assert_eq!(d["definition"]["fields"][1]["name"], "done");
     // Only clients that draw dates and counts get it.
     let hinted = hinted["id"].as_str().unwrap();
-    let (_, v) = call(
-        &pod,
-        "GET",
-        &format!("/v1/apps/{hinted}/versions"),
-        "phone",
-        None,
-    )
-    .await;
-    let features = v["versions"][0]["features"].as_array().unwrap();
+    let v = ok(&pod, "expand", json!({"id": hinted})).await;
+    let features = v["features"].as_array().unwrap();
     for f in ["count", "date_format", "todo_icons", "list", "row"] {
         assert!(features.contains(&json!(f)), "{f}: {v}");
     }
@@ -506,19 +506,19 @@ async fn a_change_set_adds_and_renames_with_the_app_and_old_writes_still_land() 
     let app = create_app(&pod, "Todos", todo_layout("· due $item.due")).await;
     add(&pod, json!({"title": "Milk", "due": "2026-11-05"})).await;
 
-    // The app must change with the rename: alone, the rename would keep
-    // working through the alias, so check that the new layout uses it.
+    // The layout changes with the rename, in the same step: alone, the
+    // rename would keep working through the alias, so check that the new
+    // layout uses it.
     let r = ok(&pod, "apply_change", json!({"collection": "todos", "base_version": 1,
         "note": "Priority, and due is now deadline",
         "changes": [
             {"op": "add_field", "name": "priority", "type": "choice", "options": ["low", "high"], "default": "low"},
             {"op": "rename_field", "field": "due", "to": "deadline"}],
-        "apps": [{"app": app, "json_patch": [{"op": "replace",
-            "path": "/slots/1/content/item_template/children/1/value_expr",
-            "value": "$item.title · $item.priority · due $item.deadline"}]}]})).await;
+        "apps": [{"app": app, "layout": todo_layout("· $item.priority · due $item.deadline")}]})).await;
     assert_eq!(r["version"], 2);
-    assert_eq!(r["apps"][0]["app"], app);
-    let (_, ws) = call(&pod, "GET", &format!("/v1/workspaces/{app}"), "phone", None).await;
+    assert_eq!(r["apps"][0]["app"], app.as_str(), "{r}");
+    let (_, ws) =
+        pod_core::testing::layout_for(&pod_core::app(pod.clone()), &app, Some("phone")).await;
     assert!(ws["workspace"].to_string().contains("$item.deadline"));
     let rows = todos(&pod, &app).await;
     assert_eq!(
@@ -565,17 +565,15 @@ async fn a_change_that_would_break_another_app_is_refused_whole() {
         &pod,
         "apply_change",
         json!({"collection": "todos",
-        "changes": [{"op": "remove_field", "field": "due"}],
-        "apps": [{"app": list, "layout": todo_layout("")}]}),
+        "changes": [{"op": "remove_field", "field": "due"}]}),
     )
     .await;
     assert!(err, "{e}");
-    assert_eq!(e["error"], "breaks_app");
-    assert_eq!(e["app"], calendar);
-    assert_eq!(e["in_change_set"], false);
+    assert_eq!(e["error"], "breaks_layout");
+    assert_eq!(e["layout"], calendar);
     assert!(e["detail"].as_str().unwrap().contains("$item.due"), "{e}");
     assert!(e["detail"].as_str().unwrap().contains("Calendar"), "{e}");
-    // Nothing applied: the definition and both apps are unchanged.
+    // Nothing applied: the definition and both layouts are unchanged.
     let d = ok(&pod, "describe_collection", json!({"collection": "todos"})).await;
     assert_eq!(d["latest_version"], 1);
     let apps = ok(&pod, "list_layouts", json!({})).await;
@@ -584,17 +582,23 @@ async fn a_change_that_would_break_another_app_is_refused_whole() {
             .as_array()
             .unwrap()
             .iter()
-            .all(|a| a["latest_version"] == 1),
+            .filter(|a| a["id"] == list.as_str() || a["id"] == calendar.as_str())
+            .all(|a| a["version"] == 1),
         "{apps}"
     );
     assert_eq!(d["used_by"].as_array().unwrap().len(), 2);
-    // With the calendar changed too, it applies.
+    // With the calendar changed first, it applies.
+    ok(
+        &pod,
+        "update_layout",
+        json!({"app": calendar, "layout": todo_layout("")}),
+    )
+    .await;
     ok(
         &pod,
         "apply_change",
         json!({"collection": "todos",
-        "changes": [{"op": "remove_field", "field": "due"}],
-        "apps": [{"app": calendar, "layout": todo_layout("")}]}),
+        "changes": [{"op": "remove_field", "field": "due"}]}),
     )
     .await;
     // Also checked on a plain edit: a layout can't bind a removed field.
@@ -996,7 +1000,7 @@ async fn a_collection_is_deleted_restored_and_purged() {
     let (err, e) = tool(&pod, "delete_collection", json!({"collection": "todos"})).await;
     assert!(err, "{e}");
     assert_eq!(e["error"], "collection_in_use");
-    assert_eq!(e["used_by"][0]["app"], app.as_str());
+    assert_eq!(e["used_by"][0]["layout"], app.as_str());
     assert!(e["detail"].as_str().unwrap().contains("'Todos'"), "{e}");
 
     // Refused while another collection's lookup reads it.
@@ -1030,7 +1034,7 @@ async fn a_collection_is_deleted_restored_and_purged() {
 
     let home_feeds = |pod: Pod| async move {
         pod.store()
-            .with_conn(pod_core::custom::home_feeds_on)
+            .with_conn(|c| Ok::<_, rusqlite::Error>(Some(pod_core::layouts::home_feeds(c))))
             .unwrap()
     };
     let had_feed = home_feeds(pod.clone())

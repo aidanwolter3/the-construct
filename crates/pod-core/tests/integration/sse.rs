@@ -1,4 +1,5 @@
-//! The events stream's session handling (security audit #31, M1 and M2):
+//! The construct's events stream's session handling (security audit #31,
+//! M1 and M2):
 //! a stream ends once its session is revoked (logout, a pod token rotation
 //! from another process, expiry) and forwards nothing private after that,
 //! and one session token may hold only a few streams open.
@@ -16,20 +17,31 @@ use pod_core::layouts::LayoutSource;
 use pod_core::session::session_hash;
 use pod_core::store::Store;
 use pod_core::{
-    AppInfo, AppState, AuthPolicy, BoxFuture, FeedSpec, Hydration, NewNotification, Pod,
+    AppState, AuthPolicy, BlueprintInfo, BoxFuture, FeedSpec, Hydration, NewNotification, Pod,
     RequestCtx, Source, SourceManifest,
 };
 use protocol::{DataBundle, Importance, NotificationChannel};
 use tower::ServiceExt;
 
-static FILES: &[LayoutSource] = &[LayoutSource {
-    dir: "layouts",
-    app_id: "bell",
-    name: "0001",
-    text: r#"{"note": "First", "schema": 1, "layout": {"type": "core://Workspace", "id": "bell",
+static FILES: &[LayoutSource] = &[
+    LayoutSource {
+        dir: "layouts",
+        app_id: "bell",
+        name: "0001",
+        text: r#"{"note": "First", "schema": 1, "layout": {"type": "core://Workspace", "id": "bell",
         "title": "T", "slots": [{"slot_id": "main", "provider_uri": "core://test",
         "content": {"type": "core://Text", "style": "Body", "value_expr": "hi"}}]}}"#,
-}];
+    },
+    // The home blueprint: the pod's home, the construct's root.
+    LayoutSource {
+        dir: "layouts",
+        app_id: "shell",
+        name: "0001",
+        text: r#"{"note": "First", "layout": {"type": "core://Workspace", "id": "shell",
+        "title": "Home", "slots": [{"slot_id": "main", "provider_uri": "core://test",
+        "content": {"type": "core://Text", "style": "Body", "value_expr": "home"}}]}}"#,
+    },
+];
 
 struct Bell;
 
@@ -37,15 +49,25 @@ impl Source for Bell {
     fn name(&self) -> &'static str {
         "bell"
     }
-    fn apps(&self) -> Vec<AppInfo> {
-        vec![AppInfo {
-            id: "bell",
-            title: "Bell",
-            icon: "photo",
-            dev: false,
-            auth: AuthPolicy::Public,
-            feeds: &[("bell", "all")],
-        }]
+    fn blueprints(&self) -> Vec<BlueprintInfo> {
+        vec![
+            BlueprintInfo {
+                id: "bell",
+                title: "Bell",
+                icon: "photo",
+                dev: false,
+                auth: AuthPolicy::Public,
+                feeds: &[("bell", "all")],
+            },
+            BlueprintInfo {
+                id: "shell",
+                title: "Home",
+                icon: "dashboard",
+                dev: false,
+                auth: AuthPolicy::Public,
+                feeds: &[],
+            },
+        ]
     }
     fn layout_files(&self) -> &'static [LayoutSource] {
         FILES
@@ -95,7 +117,7 @@ fn state() -> AppState {
 }
 
 async fn open_stream(pod: &Pod, token: Option<&str>) -> Response {
-    let mut req = Request::get("/v1/workspaces/bell/events");
+    let mut req = Request::get("/v1/construct/events");
     if let Some(t) = token {
         req = req.header("authorization", format!("Bearer {t}"));
     }
@@ -124,7 +146,7 @@ async fn read_to_end(body: &mut Body) -> String {
     }
 }
 
-/// Read the first event (the current version) off a fresh stream.
+/// Read the first event (the construct's root) off a fresh stream.
 async fn first_event(body: &mut Body) {
     let frame = tokio::time::timeout(Duration::from_secs(5), body.frame())
         .await
@@ -132,7 +154,7 @@ async fn first_event(body: &mut Body) {
         .expect("stream ended")
         .unwrap();
     let text = String::from_utf8_lossy(frame.data_ref().unwrap()).into_owned();
-    assert!(text.contains("event: layout"), "{text}");
+    assert!(text.contains("event: construct"), "{text}");
 }
 
 #[tokio::test]

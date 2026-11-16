@@ -586,6 +586,7 @@ dependencies = [
  "serde_json",
  "server",
  "sha2 0.10.9",
+ "source-collections",
  "tempfile",
  "tokio",
 ]
@@ -691,6 +692,7 @@ dependencies = [
  "base64 0.22.1",
  "bytemuck",
  "client-core",
+ "construct-elements",
  "cosmic-text",
  "getrandom 0.3.4",
  "glyphon",
@@ -1135,7 +1137,7 @@ dependencies = [
  "reqwest",
  "serde_json",
  "server",
- "source-recipes",
+ "source-collections",
  "tokio",
  "tower",
 ]
@@ -4080,6 +4082,7 @@ version = "0.1.0"
 dependencies = [
  "axum",
  "base64 0.22.1",
+ "construct-elements",
  "fake-pixelfed",
  "futures-util",
  "getrandom 0.3.4",
@@ -4097,7 +4100,6 @@ dependencies = [
  "source-events",
  "source-monitor",
  "source-pixelfed",
- "source-recipes",
  "source-shell",
  "tempfile",
  "tokio",
@@ -4418,23 +4420,6 @@ dependencies = [
  "tempfile",
  "tokio",
  "tracing",
-]
-
-[[package]]
-name = "source-recipes"
-version = "0.1.0"
-dependencies = [
- "axum",
- "http-body-util",
- "pod-core",
- "protocol",
- "rusqlite",
- "serde",
- "serde_json",
- "source-recipes",
- "tempfile",
- "tokio",
- "tower",
 ]
 
 [[package]]

@@ -1,7 +1,8 @@
 //! A live session run by the engine (`construct_render::engine`, feature
-//! `remote`) against a small stub of a pod: home and the layouts list come
-//! from the engine's cache offline, a tap's write waits in the outbox until
-//! the pod is back, a `layout` event redraws the open session, a layout opens
+//! `remote`) against a small stub of a pod (its construct served from
+//! bundles, `construct_stub`): home comes from the engine's cache offline, a
+//! tap's write waits in the outbox until the pod is back, a new root on the
+//! construct's events redraws the open session, a layout opens
 //! again after leaving the pod and opening it again, and signing
 //! in to an upstream runs the engine's flow (a loopback redirect on the
 //! desktop, a link that opens the app on a phone).
@@ -115,8 +116,6 @@ struct Pod {
     /// Closes every connection unanswered: the pod can't be reached.
     down: AtomicBool,
     posts: AtomicUsize,
-    /// `PUT /v1/apps/<id>/hidden` bodies, by path.
-    hidden: Mutex<Vec<(String, String)>>,
     streams: Mutex<Vec<mpsc::Sender<String>>>,
     base: Mutex<String>,
     /// Home has the sign-in buttons ([`sign_in_buttons`]).
@@ -134,8 +133,64 @@ struct Pod {
     /// Home is [`staples_home`].
     staples: AtomicBool,
     /// As a pod host: a request without a session gets the "Open your pod"
-    /// screen for any layout; with one, home and the layout `garden`.
+    /// screen as home; with one, home and the layout `garden`.
     pod_code: AtomicBool,
+    construct: crate::construct_stub::Construct,
+}
+
+impl Pod {
+    /// Layout `id`'s bundle for a caller with a session or not (`bearer`).
+    fn layout(&self, id: &str, bearer: bool) -> crate::construct_stub::Answer {
+        let version = self.version.load(Ordering::SeqCst);
+        if self.pod_code.load(Ordering::SeqCst) {
+            let screen = |title: &str, children: Vec<Value>| {
+                let mut all =
+                    vec![json!({ "type": "core://Text", "value_expr": title, "style": "Title" })];
+                all.extend(children);
+                json!({ "version": "1.0.0", "workspace": { "type": "core://Column", "children": all },
+                    "entities": {}, "queries": {} })
+                .to_string()
+            };
+            return match (id, bearer) {
+                ("home", false) => Some((
+                    200,
+                    screen(
+                        "Open your pod",
+                        vec![
+                            json!({ "type": "core://TextField", "field": "pod_token", "placeholder": "Pod code" }),
+                            json!({ "type": "core://Button", "label": "Open pod", "on_click": {
+                                "intent": "action.auth.session", "path": "/v1/pods/open",
+                                "payload": { "token": "$form.pod_token" } } }),
+                        ],
+                    ),
+                )),
+                (_, false) => Some((401, r#"{"error":"pod_required"}"#.to_owned())),
+                ("home", true) => Some((200, screen("Home", vec![]))),
+                ("garden", true) => Some((200, screen("Garden", vec![]))),
+                _ => None,
+            };
+        }
+        match id {
+            "home" => {
+                let count = *self.count.lock().unwrap();
+                let mut home = if self.compose.load(Ordering::SeqCst) {
+                    compose_home()
+                } else if self.staples.load(Ordering::SeqCst) {
+                    staples_home(count)
+                } else {
+                    home(version, count)
+                };
+                if self.sign_in.load(Ordering::SeqCst) {
+                    home["workspace"]["children"]
+                        .as_array_mut()
+                        .unwrap()
+                        .extend(sign_in_buttons());
+                }
+                Some((200, home.to_string()))
+            }
+            _ => None,
+        }
+    }
 }
 
 struct Stub {
@@ -160,10 +215,13 @@ impl Stub {
         Stub { base, pod }
     }
 
-    /// A new home version, announced on the event streams.
+    /// A new home version, its root announced on the event streams.
     fn publish(&self, version: u64) {
         self.pod.version.store(version, Ordering::SeqCst);
-        let event = format!("event: layout\ndata: {{\"version\":{version}}}\n\n");
+        let event = self
+            .pod
+            .construct
+            .event(&mut |id| self.pod.layout(id, true));
         for tx in self.pod.streams.lock().unwrap().iter() {
             let _ = tx.send(event.clone());
         }
@@ -207,61 +265,20 @@ fn handle(stream: TcpStream, pod: &Pod) {
             body.len()
         );
     };
-    let version = pod.version.load(Ordering::SeqCst);
-    if pod.pod_code.load(Ordering::SeqCst) {
-        let screen = |title: &str, children: Vec<Value>| {
-            let mut all =
-                vec![json!({ "type": "core://Text", "value_expr": title, "style": "Title" })];
-            all.extend(children);
-            json!({ "version": "1.0.0", "workspace": { "type": "core://Column", "children": all },
-                "entities": {}, "queries": {} })
-            .to_string()
-        };
-        match (method.as_str(), path.as_str()) {
-            ("POST", "/v1/pods/open") => {
-                send(&mut out, "200 OK", "", r#"{"session_token":"pod-session"}"#)
-            }
-            ("GET", p)
-                if p.starts_with("/v1/workspaces/") && !p.ends_with("/events") && !bearer =>
-            {
-                let open = screen(
-                    "Open your pod",
-                    vec![
-                        json!({ "type": "core://TextField", "field": "pod_token", "placeholder": "Pod code" }),
-                        json!({ "type": "core://Button", "label": "Open pod", "on_click": {
-                            "intent": "action.auth.session", "path": "/v1/pods/open",
-                            "payload": { "token": "$form.pod_token" } } }),
-                    ],
-                );
-                send(&mut out, "200 OK", "", &open)
-            }
-            ("GET", "/v1/workspaces/home") => send(&mut out, "200 OK", "", &screen("Home", vec![])),
-            ("GET", "/v1/workspaces/garden") => {
-                send(&mut out, "200 OK", "", &screen("Garden", vec![]))
-            }
-            _ => send(&mut out, "404 Not Found", "", "{}"),
-        }
+    if let Some((code, answer)) =
+        pod.construct
+            .answer(&method, &path, &String::from_utf8_lossy(&body), &mut |id| {
+                pod.layout(id, bearer)
+            })
+    {
+        let status = format!("{code} {}", crate::construct_stub::reason(code));
+        send(&mut out, &status, "", &answer);
         return;
     }
     match (method.as_str(), path.as_str()) {
         ("GET", "/healthz") => send(&mut out, "200 OK", "", "{}"),
-        ("GET", "/v1/workspaces/home") => {
-            let count = *pod.count.lock().unwrap();
-            let header = format!("X-Construct-Layout-Version: {version}\r\n");
-            let mut home = if pod.compose.load(Ordering::SeqCst) {
-                compose_home()
-            } else if pod.staples.load(Ordering::SeqCst) {
-                staples_home(count)
-            } else {
-                home(version, count)
-            };
-            if pod.sign_in.load(Ordering::SeqCst) {
-                home["workspace"]["children"]
-                    .as_array_mut()
-                    .unwrap()
-                    .extend(sign_in_buttons());
-            }
-            send(&mut out, "200 OK", &header, &home.to_string());
+        ("POST", "/v1/pods/open") if pod.pod_code.load(Ordering::SeqCst) => {
+            send(&mut out, "200 OK", "", r#"{"session_token":"pod-session"}"#)
         }
         ("POST", "/v1/uploads") => {
             let mut uploads = pod.uploads.lock().unwrap();
@@ -274,10 +291,11 @@ fn handle(stream: TcpStream, pod: &Pod) {
             pod.created.lock().unwrap().push(v);
             send(&mut out, "200 OK", "", "{}");
         }
-        ("GET", "/v1/workspaces/home/events") => {
+        ("GET", crate::construct_stub::EVENTS) => {
+            let first = pod.construct.event(&mut |id| pod.layout(id, bearer));
             let _ = write!(
                 out,
-                "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nCache-Control: no-cache\r\n\r\n: open\n\n"
+                "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nCache-Control: no-cache\r\n\r\n: open\n\n{first}"
             );
             let _ = out.flush();
             let (tx, rx) = mpsc::channel::<String>();
@@ -290,22 +308,6 @@ fn handle(stream: TcpStream, pod: &Pod) {
                     return;
                 }
             }
-        }
-        ("GET", "/v1/apps/home/versions/1") => {
-            let v = json!({ "app_id": "home", "version": 1, "layout": home(1, 0)["workspace"] });
-            send(&mut out, "200 OK", "", &v.to_string());
-        }
-        ("PUT", p) if p.ends_with("/hidden") => {
-            let b = String::from_utf8_lossy(&body).into_owned();
-            pod.hidden.lock().unwrap().push((p.to_owned(), b));
-            send(&mut out, "200 OK", "", "{}");
-        }
-        ("GET", p) if p.starts_with("/v1/apps") => {
-            let apps = json!({ "apps": [
-                { "id": "home", "title": "Home", "kind": "custom", "latest_version": version },
-                { "id": "garden", "title": "Garden", "kind": "custom", "latest_version": 3 }
-            ] });
-            send(&mut out, "200 OK", "", &apps.to_string());
         }
         ("POST", "/v1/auth/pixelfed/app") => {
             pod.registered
@@ -410,25 +412,14 @@ fn opens_from_the_cache_offline_and_sends_the_write_once_back() {
         let pod = PodEngine::open_with(&stub.base, Some(&dir), store.clone(), config());
         let mut s = pod.session(construct_render::Viewport::PHONE);
         wait_until("home", || shows(&mut s, "Home v1"));
-        wait_until("the layouts list", || {
-            s.poll();
-            s.data
-                .queries
-                .get("local:layouts")
-                .is_some_and(|q| !q.is_empty())
-        });
     }
-    // The pod can't be reached: a new start shows home and its layouts as
-    // last seen, at once.
+    // The pod can't be reached: a new start shows home as last seen, at
+    // once.
     stub.pod.down.store(true, Ordering::SeqCst);
     let pod = PodEngine::open_with(&stub.base, Some(&dir), store, config());
     let mut s = pod.session(construct_render::Viewport::PHONE);
     assert!(shows(&mut s, "Home v1"), "drew {:?}", texts(&mut s));
     assert!(shows(&mut s, "Count 0"));
-    assert_eq!(
-        s.data.queries["local:layouts"],
-        vec!["local://layouts/garden".to_owned()]
-    );
 
     // A tap offline changes the count here and waits in the outbox.
     let out = s.tap(&Target::Text("Add one".into())).unwrap();
@@ -460,7 +451,7 @@ fn opens_from_the_cache_offline_and_sends_the_write_once_back() {
 }
 
 #[test]
-fn a_layout_event_redraws_the_open_session() {
+fn a_new_root_redraws_the_open_session() {
     let stub = Stub::start();
     let dir = storage("events");
     let pod = PodEngine::open_with(&stub.base, Some(&dir), store(&stub.base), config());
@@ -643,35 +634,6 @@ fn without_a_way_to_sign_in_the_tap_is_not_sent() {
 }
 
 #[test]
-fn a_pinned_home_stays_on_its_version_until_following_the_latest() {
-    let stub = Stub::start();
-    stub.pod.version.store(2, Ordering::SeqCst);
-    let dir = storage("pins");
-    let pod = PodEngine::open_with(&stub.base, Some(&dir), store(&stub.base), config());
-    let mut s = pod.session(construct_render::Viewport::PHONE);
-    wait_until("home", || shows(&mut s, "Home v2"));
-    let device = |command: &str| json!({ "intent": "action.device", "command": command, "app": "home", "id": "1" });
-    s.dispatch(&device("pin_version")).unwrap();
-    assert!(shows(&mut s, "Home v1"), "drew {:?}", texts(&mut s));
-    // A new version published meanwhile doesn't replace the pinned one.
-    wait_until("the event stream", || {
-        !stub.pod.streams.lock().unwrap().is_empty()
-    });
-    stub.publish(3);
-    thread::sleep(Duration::from_millis(500));
-    assert!(shows(&mut s, "Home v1"), "drew {:?}", texts(&mut s));
-    // The engine keeps the pin: a new start draws it too.
-    let again = PodEngine::open_with(&stub.base, Some(&dir), store(&stub.base), config());
-    assert!(shows(
-        &mut again.session(construct_render::Viewport::PHONE),
-        "Home v1"
-    ));
-    s.dispatch(&device("follow_latest")).unwrap();
-    wait_until("the latest home", || shows(&mut s, "Home v3"));
-    let _ = std::fs::remove_dir_all(&dir);
-}
-
-#[test]
 fn leaving_the_pod_and_opening_it_again_shows_its_layouts() {
     let stub = Stub::start();
     stub.pod.pod_code.store(true, Ordering::SeqCst);
@@ -710,33 +672,6 @@ fn leaving_the_pod_and_opening_it_again_shows_its_layouts() {
         s.poll();
         shows(&mut s, "Garden")
     });
-    let _ = std::fs::remove_dir_all(&dir);
-}
-
-#[test]
-fn hiding_a_layout_goes_to_the_pod() {
-    let stub = Stub::start();
-    let dir = storage("hide");
-    let pod = PodEngine::open_with(&stub.base, Some(&dir), store(&stub.base), config());
-    let mut s = pod.session(construct_render::Viewport::PHONE);
-    wait_until("home", || shows(&mut s, "Home v1"));
-    let out = s
-        .dispatch(&json!({ "intent": "action.device", "command": "hide_layout", "app": "garden" }))
-        .unwrap();
-    assert!(
-        out.effects.contains(&Effect::Device {
-            command: "hide_layout".into()
-        }),
-        "{:?}",
-        out.effects
-    );
-    assert_eq!(
-        stub.pod.hidden.lock().unwrap()[0],
-        (
-            "/v1/apps/garden/hidden".to_owned(),
-            r#"{"hidden":true}"#.to_owned()
-        )
-    );
     let _ = std::fs::remove_dir_all(&dir);
 }
 

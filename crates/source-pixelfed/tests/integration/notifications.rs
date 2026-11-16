@@ -468,7 +468,7 @@ async fn the_scheduler_path_stores_and_serves_them() {
     pod.poll_due().await;
     let list = pod_call(&pod_url, "GET", "/v1/notifications", None).await;
     assert_eq!(list["unread_total"], 1, "{list}");
-    assert_eq!(list["unread_by_app"]["pixelfed"], 1);
+    assert_eq!(list["unread_by_layout"]["pixelfed"], 1);
     let newest = &list["notifications"][0];
     assert_eq!(newest["channel"], "comments");
     // A reply to our comment 504: the thread of its post, at the reply.

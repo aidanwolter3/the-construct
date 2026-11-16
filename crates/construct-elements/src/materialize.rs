@@ -393,9 +393,11 @@ impl Mat<'_> {
                 }
             }
         }
-        let node = el.get("node").cloned().unwrap_or(Value::Null);
+        // Borrowed, not cloned: a large component used many times would be
+        // copied whole at each use, even where it takes a small branch.
+        let node = el.get("node").unwrap_or(&Value::Null);
         let inner = Scope { args, children };
-        let mut out = self.walk(&node, at, depth + 1, Some(&inner))?;
+        let mut out = self.walk(node, at, depth + 1, Some(&inner))?;
         // A whole layout used at a root keeps the user's id and title.
         if let Out::One(Value::Object(x)) = &mut out {
             for k in ["id", "title"] {

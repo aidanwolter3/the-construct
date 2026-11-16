@@ -26,7 +26,7 @@ Run these before pushing; CI runs the same and keeps `main` green:
 ```bash
 cargo fmt --all && cargo clippy --workspace --all-targets -- -D warnings && cargo test --workspace
 cargo clippy -p construct-render --features viewer --all-targets -- -D warnings   # the window and viewer code
-scripts/check_decisions.sh && scripts/check_test_data.sh
+scripts/check_decisions.sh && scripts/check_test_data.sh && scripts/check_old_names.sh
 scripts/sim_scenarios.sh /tmp/sim         # the simulator's scenarios (look at the PNGs for UI changes)
 # Needs an Android SDK and NDK (not in cloud sessions; CI builds it): the APK, Java bridge and JNI names
 scripts/android_native.sh
@@ -91,7 +91,7 @@ To try it from a script, make a temporary pod (24 hours, deleted afterwards):
 
 ```bash
 token=$(curl -fsS -X POST https://the-construct-pod.fly.dev/v1/pods/temporary | jq -r .session_token)
-curl -fsS -H "Authorization: Bearer $token" https://the-construct-pod.fly.dev/v1/apps | jq
+curl -fsS -H "Authorization: Bearer $token" https://the-construct-pod.fly.dev/v1/construct | jq
 ```
 
 Never put pod codes or tokens in git or files.

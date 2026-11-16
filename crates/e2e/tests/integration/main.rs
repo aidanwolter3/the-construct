@@ -3,7 +3,7 @@
 //! Add a new test file as a module here.
 
 mod collections;
-mod custom_apps;
+mod custom_layouts;
 mod notifications;
 mod suite;
 mod upstream_faults;
