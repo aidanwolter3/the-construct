@@ -185,14 +185,7 @@ impl Shared {
         {
             let mut news = lock(&self.news);
             match news.as_mut() {
-                Some(n) => {
-                    n.data.entities.extend(c.data.entities);
-                    n.data.queries.extend(c.data.queries);
-                    for (id, root) in c.layouts {
-                        n.layouts.retain(|(i, _)| *i != id);
-                        n.layouts.push((id, root));
-                    }
-                }
+                Some(n) => n.absorb(c),
                 None => *news = Some(c),
             }
         }
