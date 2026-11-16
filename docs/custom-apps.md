@@ -156,7 +156,8 @@ never writes code: it declares typed fields (`text`, `number`, `bool`, `date`, `
   only when no rule matches, and its answers and hand edits become rules; a learning lookup naming a collection that
   doesn't exist makes it (its `key` text, its `value` of the field's type). `{kind: "count", from, collection, key,
   where?: [{field, equals}]}` (a number field's only kind) is the number of live rows of `collection` whose `key`
-  equals this row's `from` (ignoring case and spacing) and that match every condition (the field's value as text,
+  equals this row's `from` (ignoring case and spacing; a `datetime` key by the day it falls on, its stored wall
+  clock, so a date counts the events that start on it) and that match every condition (the field's value as text,
   as a layout `where` compares: `"true"`, `"false"`, a number or text). Lookups and counts are **live**: when rows
   of the collection they read are created, changed, deleted or restored, the rows whose answer could change are
   computed again in the same write and reach devices through the normal change feed, cascading (a count's `where`
@@ -278,6 +279,19 @@ A collection can keep itself current from the web (decision
   and the next 14 days, whole days. The default title is `<server> · <tool>`.
   An answer like the last one writes nothing. `collections_preview {collection, filler}` calls the tool and shows
   the rows; `mcp_call_tool` shows a tool's raw answer to write `items` and `map` from.
+- **`range`** (no web, no model): one row per step of a window of dates that moves with today in the pod's zone
+  (decision [`range-filler`](decisions/range-filler.md)): `{kind: "range", from, to, step, map, key}`. `from` and
+  `to` are `{today}`, `{today+N}` or `{today-N}`; `step` is `day` (the default), `week` (Monday to Sunday, from the
+  week `from` falls in) or `month` (likewise). `map` gives each field a part of the step: `date` (its first day,
+  `YYYY-MM-DD`), `end` (its last day), `weekday` (`Mon`), `weekday_long` (`Monday`), `day` (`16`), `month` (`Nov`),
+  `month_long` (`November`), `year`, `week` (the ISO week number) or `index` (0 for the window's first step). At
+  most 200 rows. Give `key` the date field so a day keeps its row (and its hand-set unfilled fields) as the window
+  moves; a day that leaves the window is deleted. It fills hourly unless `every_minutes` says otherwise, and a fill
+  on the same day writes nothing. Its use is as a spine: `count` or `lookup` fields over other collections keyed by
+  the date (`{kind: "count", from: "date", collection: "workouts", key: "date"}`) make a calendar's days, a habit
+  tracker's rows or a monthly budget's months, and a layout lists each day with the other collections' rows on it
+  (a `core://List` inside the day's template, `where` its date). Fields it doesn't fill (a day's note, a tick) are
+  people's to edit.
 - **`agent`** (costs model calls): a prompt; a model with web search answers rows that fit the fields, within a
   daily budget. With the `web_search` jack plugged it searches and reads pages with the pod's own tools; it reads
   only pages it has seen (a URL in the prompt or the rows, a search result, or a link on a page it read), so a page

@@ -240,6 +240,11 @@ fn wave_step(
             else {
                 continue;
             };
+            // A count by a datetime field matches by the day it falls on.
+            let count_kind = match c {
+                Compute::Count { key, .. } => tdef.by_id(key).map(|f| f.kind),
+                _ => None,
+            };
             let (key, relevant) = match c {
                 Compute::Lookup { key, value, .. } => {
                     (key, live_changed || differs(key) || differs(value))
@@ -274,6 +279,8 @@ fn wave_step(
                 // A lookup through a ref matches the read row's own id.
                 let k = if key == model::ROW_ID {
                     Some(ch.id.clone())
+                } else if let Some(kind) = count_kind {
+                    lookup::count_key(kind, &value_of(tdef, key, side))
                 } else {
                     lookup::text_of(&value_of(tdef, key, side))
                 };
