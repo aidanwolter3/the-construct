@@ -133,7 +133,9 @@ never writes code: it declares typed fields (`text`, `number`, `bool`, `date`, `
 
 - **Change sets.** `apply_change` sends a collection change together with the app layouts that go with it. Every
   custom app using Collections is checked against the new definition; if one would break, nothing applies and the
-  error names the app and binding.
+  error names the app and binding. On a pod switched to the construct the layouts are the construct's: the edits
+  are written as `update_layout` writes them (`base_version` is the version `get_layout` shows) in the same step,
+  and every layout is checked as clients draw it, bound with what home passes it.
 - **Safe schema changes.** Fields have permanent ids. A rename keeps the old name as an alias; a removal hides the
   field and keeps its data 30 days (`restore_field`); a type change converts row by row and keeps what doesn't
   convert aside. A write made under an older definition (an offline device) still lands.

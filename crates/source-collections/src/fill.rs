@@ -465,7 +465,7 @@ fn normalize_date(s: &str) -> Option<String> {
 /// `v` made readable as a value of `kind` where web data commonly differs:
 /// prices with currency signs and thousands separators, feed and calendar
 /// dates, schema.org enumeration URLs for choices, and a datetime without an
-/// offset placed in `zone`.
+/// offset placed in `zone` (a UTC one moved to `zone`'s clock).
 fn normalize(kind: Kind, v: Value, zone: Option<&web_extract::when::Zone>) -> Value {
     let Value::String(s) = &v else { return v };
     match kind {
@@ -484,6 +484,9 @@ fn normalize(kind: Kind, v: Value, zone: Option<&web_extract::when::Zone>) -> Va
         }
         Kind::Date => normalize_date(s).map_or(v, |d| json!(d)),
         Kind::Datetime => match (web_extract::when::When::parse(s), zone) {
+            // A UTC time (`Z`) is an instant, not the source's wall clock:
+            // shown on `zone`'s clock (a site's own offset stays).
+            (Some(w), Some(z)) if w.offset_min == Some(0) => json!(w.shifted_to(Some(z)).stored()),
             (Some(w), Some(z)) => json!(w.placed_in(z).stored()),
             _ => v,
         },
@@ -2457,6 +2460,25 @@ mod tests {
             ),
             json!("2026-11-06T19:30+01:00"),
             "a given offset stays"
+        );
+        assert_eq!(
+            normalize(
+                Kind::Datetime,
+                json!("2026-11-16T23:30:00.000Z"),
+                Some(&denver)
+            ),
+            json!("2026-11-16T16:30-07:00"),
+            "a UTC time shows on the zone's clock"
+        );
+        assert_eq!(
+            normalize(Kind::Datetime, json!("2026-07-11T01:30Z"), Some(&denver)),
+            json!("2026-07-10T19:30-06:00"),
+            "in daylight saving too"
+        );
+        assert_eq!(
+            normalize(Kind::Datetime, json!("2026-11-16T23:30Z"), None),
+            json!("2026-11-16T23:30Z"),
+            "without a zone it stays"
         );
         assert_eq!(
             normalize(Kind::Choice, json!("https://schema.org/InStock"), None),
