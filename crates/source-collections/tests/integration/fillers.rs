@@ -1168,11 +1168,20 @@ async fn a_range_fills_a_row_per_day_without_the_web() {
     ok(
         &pod,
         "define_collection",
+        json!({"name": "meetups", "fields": [
+        {"name": "title", "type": "text"}, {"name": "start", "type": "datetime"}]}),
+    )
+    .await;
+    ok(
+        &pod,
+        "define_collection",
         json!({"name": "days", "order_by": "date", "fields": [
         {"name": "date", "type": "date", "optional": true},
         {"name": "weekday", "type": "text", "optional": true},
         {"name": "plans", "type": "number", "default": 0,
-         "compute": {"kind": "count", "from": "date", "collection": "plans", "key": "date"}}],
+         "compute": {"kind": "count", "from": "date", "collection": "plans", "key": "date"}},
+        {"name": "meetups", "type": "number", "default": 0,
+         "compute": {"kind": "count", "from": "date", "collection": "meetups", "key": "start"}}],
         "fillers": [{"kind": "range", "from": "{today-1}", "to": "{today+6}",
             "map": {"date": "date", "weekday": "weekday"}, "key": "date"}]}),
     )
@@ -1207,6 +1216,49 @@ async fn a_range_fills_a_row_per_day_without_the_web() {
     let days = rows(&pod, "days").await;
     assert_eq!(days[1]["plans"], json!(2), "{days:?}");
     assert_eq!(days[2]["plans"], json!(0), "{days:?}");
+    // A datetime key counts on the day it falls on (its own wall clock).
+    let tomorrow = days[2]["date"].as_str().unwrap().to_owned();
+    let added = ok(
+        &pod,
+        "add_row",
+        json!({"collection": "meetups",
+        "values": {"title": "Board games", "start": format!("{tomorrow}T19:30-07:00")}}),
+    )
+    .await;
+    ok(
+        &pod,
+        "add_row",
+        json!({"collection": "meetups",
+        "values": {"title": "Late show", "start": format!("{tomorrow}T23:30-07:00")}}),
+    )
+    .await;
+    let days = rows(&pod, "days").await;
+    assert_eq!(
+        (&days[1]["meetups"], &days[2]["meetups"]),
+        (&json!(0), &json!(2)),
+        "{days:?}"
+    );
+    // Moving one to today moves its count, live.
+    let id = added["id"].as_str().unwrap();
+    let pv = ok(
+        &pod,
+        "edit_rows",
+        json!({"collection": "meetups", "edits": [
+        {"op": "update", "id": id, "values": {"start": format!("{today}T08:00-07:00")}}]}),
+    )
+    .await;
+    ok(
+        &pod,
+        "edit_rows",
+        json!({"collection": "meetups", "confirm": pv["confirm"]}),
+    )
+    .await;
+    let days = rows(&pod, "days").await;
+    assert_eq!(
+        (&days[1]["meetups"], &days[2]["meetups"]),
+        (&json!(1), &json!(1)),
+        "{days:?}"
+    );
     // The same day again writes nothing; the rows keep their ids.
     let ids: Vec<_> = days.iter().map(|d| d["id"].clone()).collect();
     let fid = filler_ids(&pod, "days").await.remove(0);

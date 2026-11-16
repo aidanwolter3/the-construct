@@ -75,6 +75,27 @@ pub fn text_of(v: &Value) -> Option<String> {
     (!s.is_empty()).then_some(s)
 }
 
+/// The key a count matches a row by: its key field's text, and for a
+/// datetime field the day it falls on (`YYYY-MM-DD`, its stored wall clock),
+/// so a date counts the rows that start on it (decision `range-filler`).
+pub fn count_key(kind: crate::model::Kind, v: &Value) -> Option<String> {
+    let s = text_of(v)?;
+    if kind == crate::model::Kind::Datetime
+        && let Some(day) = s.get(..10).filter(|d| {
+            d.bytes().enumerate().all(|(i, b)| {
+                if i == 4 || i == 7 {
+                    b == b'-'
+                } else {
+                    b.is_ascii_digit()
+                }
+            })
+        })
+    {
+        return Some(day.to_owned());
+    }
+    Some(s)
+}
+
 /// A regex key compiled with the limits.
 fn compile(key: &str) -> Result<Regex, String> {
     if key.chars().count() > MAX_PATTERN_CHARS {

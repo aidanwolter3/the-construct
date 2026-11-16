@@ -43,6 +43,11 @@ keyed by the date say what falls on each day, and a layout lists the days with e
 `core://Conditional` `date: Today`. The same spine makes a habit tracker (a row per day to tick), a weekly planner
 or a monthly budget.
 
+A day's events are usually stored as `datetime` (an event's `start`), and a `count` compared keys as text, so
+`2026-11-19` never matched `2026-11-19T19:30-07:00`. A count whose `key` is a `datetime` field now matches by the
+day the value falls on (its stored wall clock, which fillers already place in their zone), in the full recount and
+in the live follow-up of a changed row. A date key and text keys compare as before.
+
 Consequences: no protocol change and no client build; the definition gains a filler kind (stored in the
 collection's definition JSON, so no migration). Not done: a window anchored somewhere other than today (a fixed
 season), steps other than day, week and month, and a merged collection, which stays open for when one list must

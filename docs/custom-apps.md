@@ -156,7 +156,8 @@ never writes code: it declares typed fields (`text`, `number`, `bool`, `date`, `
   only when no rule matches, and its answers and hand edits become rules; a learning lookup naming a collection that
   doesn't exist makes it (its `key` text, its `value` of the field's type). `{kind: "count", from, collection, key,
   where?: [{field, equals}]}` (a number field's only kind) is the number of live rows of `collection` whose `key`
-  equals this row's `from` (ignoring case and spacing) and that match every condition (the field's value as text,
+  equals this row's `from` (ignoring case and spacing; a `datetime` key by the day it falls on, its stored wall
+  clock, so a date counts the events that start on it) and that match every condition (the field's value as text,
   as a layout `where` compares: `"true"`, `"false"`, a number or text). Lookups and counts are **live**: when rows
   of the collection they read are created, changed, deleted or restored, the rows whose answer could change are
   computed again in the same write and reach devices through the normal change feed, cascading (a count's `where`
