@@ -77,6 +77,47 @@ const MIGRATIONS: &[Step] = &[
          expires_at   INTEGER NOT NULL
      );",
     ),
+    // 4 (decision `sharing`): the shelf. Owner handles (unique on the
+    // server), publications (`link` is the share link; one live
+    // publication per name) and the objects of their current versions,
+    // the only objects other pods can read.
+    Step::sql(
+        "sharing",
+        "CREATE TABLE handles (
+         pod_id     TEXT PRIMARY KEY NOT NULL REFERENCES pods(id),
+         handle     TEXT NOT NULL UNIQUE,
+         created_at INTEGER NOT NULL
+     );
+     CREATE TABLE publications (
+         link        TEXT PRIMARY KEY NOT NULL,
+         name        TEXT NOT NULL,
+         owner_pod   TEXT NOT NULL REFERENCES pods(id),
+         source      TEXT NOT NULL,
+         visibility  TEXT NOT NULL CHECK (visibility IN ('link', 'public')),
+         version     INTEGER NOT NULL,
+         root        TEXT NOT NULL,
+         interface   TEXT NOT NULL,
+         approved    TEXT NOT NULL,
+         keep_shared INTEGER NOT NULL DEFAULT 0,
+         pending     TEXT,
+         created_at  INTEGER NOT NULL,
+         updated_at  INTEGER NOT NULL,
+         revoked_at  INTEGER
+     );
+     CREATE UNIQUE INDEX publications_live_name ON publications(name) WHERE revoked_at IS NULL;
+     CREATE INDEX publications_owner ON publications(owner_pod);
+     CREATE TABLE shelf_objects (
+         hash     TEXT PRIMARY KEY NOT NULL,
+         bytes    BLOB NOT NULL,
+         features TEXT NOT NULL DEFAULT '',
+         size     INTEGER NOT NULL
+     );
+     CREATE TABLE publication_objects (
+         link TEXT NOT NULL REFERENCES publications(link),
+         hash TEXT NOT NULL,
+         PRIMARY KEY (link, hash)
+     );",
+    ),
 ];
 
 /// What a credential is for (`credentials.kind`).
@@ -192,7 +233,7 @@ impl HostStore {
         })
     }
 
-    fn conn(&self) -> std::sync::MutexGuard<'_, Connection> {
+    pub(crate) fn conn(&self) -> std::sync::MutexGuard<'_, Connection> {
         self.conn.lock().unwrap_or_else(|e| e.into_inner())
     }
 
@@ -539,6 +580,7 @@ impl HostStore {
         let tx = conn.transaction()?;
         tx.execute("DELETE FROM credentials WHERE pod_id = ?1", [pod_id])?;
         tx.execute("DELETE FROM oauth_codes WHERE pod_id = ?1", [pod_id])?;
+        crate::shelf::forget_pod(&tx, pod_id)?;
         tx.execute("DELETE FROM pods WHERE id = ?1", [pod_id])?;
         tx.commit()
     }

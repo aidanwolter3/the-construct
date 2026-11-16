@@ -39,6 +39,11 @@ A bearer the pod no longer knows gets 401 with `X-Construct-Session: invalid`, a
 server with many pods, a caller without a pod token is answered a one-element construct (a page that asks for a pod)
 on these read calls, and `401 pod_required` elsewhere.
 
+Objects are answered only from the pod's own store: an element another pod shared is readable only after this pod
+adopted it (MCP `adopt`, decision [`sharing`](decisions/sharing.md)), and knowing another pod's hash grants
+nothing. An adopted element is drawn like any other; its edge's `bind` maps its inputs to this pod's data (a
+collection name, and field inputs `<input>__<field>` to this pod's field names).
+
 **Events.**
 
 | Event | Data | When |

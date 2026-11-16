@@ -5,6 +5,7 @@
 
 mod construct;
 mod previews;
+mod sharing;
 
 use std::sync::Arc;
 
