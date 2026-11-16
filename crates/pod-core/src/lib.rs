@@ -185,10 +185,14 @@ impl AppState {
     /// instead of panicking.
     pub fn try_new(store: Store, adapters: Vec<Arc<dyn Source>>) -> Result<Self, String> {
         let catalog = Catalog::new(adapters)?;
+        // Every source's tables first: one source's open may write another's
+        // (Events creates its collection in Collections' tables).
         for a in catalog.adapters() {
             store
                 .migrate_adapter(a.name(), a.migrations())
                 .map_err(|e| format!("migrating the '{}' adapter's tables: {e}", a.name()))?;
+        }
+        for a in catalog.adapters() {
             a.on_open(&store)
                 .map_err(|e| format!("opening the '{}' adapter's data: {e}", a.name()))?;
         }

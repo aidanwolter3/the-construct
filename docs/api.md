@@ -31,7 +31,7 @@ that uses only those.
 | `GET /v1/construct` | `{root, generation}`: home's element for the client's features. |
 | `POST /v1/objects {have: [ids], want: [ids]}` | `{objects: {id: object}, more}`: what `want` reaches that `have` doesn't list, `want`'s order first; `more` when one answer couldn't carry all (ask again). |
 | `GET /v1/objects/{id}` | One object (an id is `e1-` and the base32 SHA-256 of its canonical JSON): `{kind, title, icon, node, bind?, needs}`. A layout's `title` and `icon` are what devices show for it. |
-| `GET /v1/construct/data/{id}?bind=<JSON>` | `{entities, queries}`: the data of the home feeds element `id` needs; with `bind` (a use site's bindings, `{"items": "collection:books"}`), also those its bound tree reads. Only home's feeds are loaded. An upstream that fails answers its source's `core://sources/<id>` entity with an `error`. |
+| `GET /v1/construct/data/{id}?bind=<JSON>` | `{entities, queries}`: the data of the home feeds element `id` needs (its `needs.feeds` and those of home's feeds its tree binds now, so a blueprint opened by its key gets the feeds home binds for it); with `bind` (a use site's bindings, `{"items": "collection:books"}`), also those its bound tree reads. Only home's feeds are loaded. An upstream that fails answers its source's `core://sources/<id>` entity with an `error`. |
 | `GET /v1/construct/names/{name}` | `{name, el}`: a layout's element (by its name, or a blueprint's key) for the client's features: a notification's layout that home doesn't reach is opened this way. `404 unknown_name`. |
 | `GET /v1/construct/events` | Server-sent events, below. |
 
