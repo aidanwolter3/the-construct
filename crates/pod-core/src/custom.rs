@@ -1703,7 +1703,7 @@ pub fn apps_using(
     source: &str,
 ) -> rusqlite::Result<Vec<(CustomApp, i64, Value)>> {
     let mut out = Vec::new();
-    if store.with_conn(|c| crate::construct::switched_on(c))? {
+    if store.with_conn(crate::construct::switched_on)? {
         return store.with_conn(|c| {
             let feeds = crate::construct::write::home_feeds(c);
             if !feeds.iter().any(|(s, _)| s == source) {
