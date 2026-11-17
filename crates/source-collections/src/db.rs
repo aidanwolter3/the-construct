@@ -114,6 +114,12 @@ CREATE TABLE collections_field_writers (
 /// The writer [`note_writes`] records for a model's computed answer.
 pub const WRITER_MODEL: &str = "model";
 
+/// The writer of a value that came from other rows: a lookup, count or
+/// rollup's recompute ([`crate::follow`]), or a value an action copied from
+/// a row that a filler or a model wrote ([`crate::actions`]). Untrusted, as
+/// a filler's or a model's writes are (issue #289).
+pub const WRITER_DERIVED: &str = "derived";
+
 /// The writer [`note_writes`] records for filler `id`'s writes.
 pub fn filler_writer(id: &str) -> String {
     format!("filler:{id}")
@@ -180,6 +186,77 @@ pub fn field_writers(
         out.entry(row).or_default().insert(field, writer);
     }
     Ok(out)
+}
+
+/// The fields of row `row_id` of `collection` that a filler or a model
+/// wrote last: `field id -> writer` ([`field_writers`] for one row).
+pub fn row_writers(
+    conn: &Connection,
+    collection: &str,
+    row_id: &str,
+) -> rusqlite::Result<std::collections::BTreeMap<String, String>> {
+    let mut stmt = conn.prepare_cached(
+        "SELECT field_id, writer FROM collections_field_writers
+         WHERE collection = ?1 AND row_id = ?2",
+    )?;
+    stmt.query_map([collection, row_id], |r| Ok((r.get(0)?, r.get(1)?)))?
+        .collect()
+}
+
+/// Record `writer` for field `field_id` of row `row_id` (one field of
+/// [`note_writes`]).
+pub fn note_field_writer(
+    tx: &Connection,
+    collection: &str,
+    row_id: &str,
+    field_id: &str,
+    writer: &str,
+    now: i64,
+) -> rusqlite::Result<()> {
+    tx.execute(
+        "INSERT OR REPLACE INTO collections_field_writers
+         (collection, row_id, field_id, writer, at) VALUES (?1, ?2, ?3, ?4, ?5)",
+        params![collection, row_id, field_id, writer, now],
+    )?;
+    Ok(())
+}
+
+/// Who last wrote field `id` of a row of `def` whose records are `writers`
+/// ([`row_writers`]), as a guard on that text reads it (issue #289): its
+/// record, else [`WRITER_DERIVED`] for a field computed from other rows (a
+/// lookup, count or rollup, whose sources a filler may have written), else,
+/// for an expression, the first untrusted writer of the fields it reads.
+/// `None`: a person (or Claude).
+pub fn writer_of(
+    def: &Definition,
+    writers: &std::collections::BTreeMap<String, String>,
+    id: &str,
+) -> Option<String> {
+    fn go(
+        def: &Definition,
+        writers: &std::collections::BTreeMap<String, String>,
+        id: &str,
+        seen: &mut Vec<String>,
+    ) -> Option<String> {
+        if let Some(w) = writers.get(id) {
+            return Some(w.clone());
+        }
+        if seen.iter().any(|s| s == id) {
+            return None;
+        }
+        seen.push(id.to_owned());
+        let field = def.by_id(id)?;
+        if field.compute.iter().any(|c| c.reads().is_some()) {
+            return Some(WRITER_DERIVED.to_owned());
+        }
+        field
+            .compute
+            .iter()
+            .filter(|c| matches!(c, model::Compute::Expr { .. }))
+            .flat_map(model::Compute::sources)
+            .find_map(|s| go(def, writers, &s, seen))
+    }
+    go(def, writers, id, &mut Vec::new())
 }
 
 const STAGED: &str = "

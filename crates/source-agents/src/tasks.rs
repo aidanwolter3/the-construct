@@ -235,7 +235,8 @@ struct Task {
     values: Named,
     /// The filler that made it.
     filler: Option<String>,
-    /// Field name -> the filler or model that wrote it last.
+    /// Name a run reads -> the filler, model or other rows
+    /// ([`cdb::WRITER_DERIVED`]) that wrote it last.
     untrusted: BTreeMap<String, String>,
 }
 
@@ -264,11 +265,16 @@ fn tasks(
             .into_iter()
             .map(|r| {
                 let values = model::row_entity(&def, &r.id, &r.values, "", "");
-                let untrusted = writers
-                    .remove(&r.id)
-                    .unwrap_or_default()
-                    .into_iter()
-                    .filter_map(|(fid, w)| def.by_id(&fid).map(|f| (f.name.clone(), w)))
+                // By the name a run reads (an alias too), through the
+                // field's id (issue #289).
+                let row_writers = writers.remove(&r.id).unwrap_or_default();
+                let untrusted = TRUSTED_FIELDS
+                    .iter()
+                    .filter_map(|name| {
+                        let f = def.field(name)?;
+                        let w = cdb::writer_of(&def, &row_writers, &f.id)?;
+                        Some(((*name).to_owned(), w))
+                    })
                     .collect();
                 Task {
                     id: r.id,
@@ -315,6 +321,7 @@ fn untrusted_origin(def: &model::Definition, t: &Task) -> Option<String> {
             Some(f) if !f.title.is_empty() => format!("the filler {}", f.title),
             _ => format!("the filler {id}"),
         },
+        None if w == cdb::WRITER_DERIVED => "a value from other rows".to_owned(),
         None => "a model".to_owned(),
     };
     if let Some(f) = &t.filler {
