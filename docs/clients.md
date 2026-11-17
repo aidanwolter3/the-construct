@@ -103,9 +103,13 @@ the next reload picks up, a phone-sized window and logging out.
   goes through a hidden input, Escape is Back.
 - **On staging**: `https://the-construct-pod.fly.dev/web` takes an admin pod's code, or a temporary pod's
   (`POST /v1/pods/temporary`); the image builds the client into `/web` (`deploy/pod.Dockerfile`).
-- **Public links**: with `CONSTRUCT_PUBLIC_WEB=1` too (staging has it), `/s/<link>` draws a pod's public copy for anyone, read-only:
-  no code, no cookie, nothing that writes (decision [`public-web-links`](decisions/public-web-links.md)). A link a
-  layout opens (`action.link.open`) opens in a new tab.
+- **Public links**: with `CONSTRUCT_PUBLIC_WEB=1` too (staging has it), `/s/<link>` (or a chosen `/@<handle>/<slug>`)
+  draws a pod's public copy for anyone, read-only: no code, no cookie, nothing that writes (decisions
+  [`public-web-links`](decisions/public-web-links.md),
+  [`public-links-share-the-closure`](decisions/public-links-share-the-closure.md)). A row that opens a layout the
+  copy carries pushes it from the copy, with the row's params, and Back (Escape) returns; a link a layout opens
+  (`action.link.open`) opens in a new tab. `construct_render::public::session` builds the page's session and reads
+  every copy format a server has served.
 - **Not yet**: drags of cards, pagers and sheets; photo picking; upstream sign-ins (Pixelfed); notifications and an
   offline cache; screen readers (the canvas has no accessibility tree yet). It sends the features it can draw minus
   `media_picker`, `auth_login` and `device_notification_permission`, so the pod serves older versions without them.

@@ -1532,6 +1532,253 @@ mod web {
         assert_eq!(after.status(), StatusCode::NOT_FOUND);
     }
 
+    /// Decision `public-links-share-the-closure`: a list whose rows push
+    /// their recipe screen is shared whole; each recipe carries only its
+    /// rows; a screen reading `$route.id` shares with `params`; a short
+    /// path answers the same copy; with public pages off, links answer that
+    /// sharing is paused.
+    #[tokio::test]
+    async fn a_public_link_carries_the_screens_its_rows_open() {
+        // Off: a link answers that sharing is paused, not a 404.
+        let (off, _off_files) = web_env().await;
+        let paused = client()
+            .get(off.url("/s/pub-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(paused.status(), StatusCode::SERVICE_UNAVAILABLE);
+        assert!(paused.text().await.unwrap().contains("Sharing is paused"));
+
+        let files = tempfile::tempdir().unwrap();
+        std::fs::write(
+            files.path().join("index.html"),
+            "<title>The Construct</title>",
+        )
+        .unwrap();
+        let env = env_with(HostConfig {
+            web: Some(WebConfig {
+                dir: files.path().to_owned(),
+            }),
+            public_web: true,
+            ..HostConfig::default()
+        })
+        .await;
+        env.create("cook").await;
+        let key = mcp_key(&env, "cook").await;
+        for (name, fields) in [
+            (
+                "meals",
+                json!([{ "name": "name", "type": "text" }, { "name": "notes", "type": "text", "optional": true }]),
+            ),
+            (
+                "lines",
+                json!([{ "name": "meal_id", "type": "text" }, { "name": "thing", "type": "text" }]),
+            ),
+        ] {
+            let def = tool(
+                &env,
+                &key,
+                "define_collection",
+                json!({ "name": name, "fields": fields }),
+            )
+            .await;
+            assert!(def.get("error").is_none(), "{def}");
+        }
+        let mut meals = Vec::new();
+        for (meal, things) in [
+            ("Lentil soup", ["Red lentils", "Cumin"]),
+            ("Shakshuka", ["Eggs", "Tomatoes"]),
+        ] {
+            let row = tool(
+                &env,
+                &key,
+                "add_row",
+                json!({ "collection": "meals",
+                "values": { "name": meal, "notes": "only for me" } }),
+            )
+            .await;
+            let id = row["id"]
+                .as_str()
+                .unwrap_or_else(|| panic!("{row}"))
+                .to_owned();
+            for t in things {
+                tool(
+                    &env,
+                    &key,
+                    "add_row",
+                    json!({ "collection": "lines",
+                    "values": { "meal_id": id, "thing": t } }),
+                )
+                .await;
+            }
+            meals.push(id);
+        }
+        let recipe = tool(&env, &key, "create_layout", json!({ "title": "Recipe",
+            "feeds": [["collections", "meals"], ["collections", "lines"]],
+            "layout": { "type": "core://Page", "id": "recipe", "title": "Recipe", "root":
+              { "type": "core://Column", "children": [
+                { "type": "core://Text", "style": "Title", "value_expr": "${collections://meals/$route.id#name}" },
+                { "type": "core://List", "query_key": "collection:lines",
+                  "where": [{ "field": "meal_id", "equals": "$route.id" }],
+                  "empty_text": "No ingredients yet",
+                  "item_template": { "type": "core://Text", "style": "Body", "value_expr": "$item.thing" } } ] } } })).await;
+        let recipe = recipe["id"]
+            .as_str()
+            .unwrap_or_else(|| panic!("{recipe}"))
+            .to_owned();
+        let list = tool(&env, &key, "create_layout", json!({ "title": "Meals",
+            "feeds": [["collections", "meals"], ["collections", "lines"]],
+            "layout": { "type": "core://Page", "id": "meals", "title": "Meals", "root":
+              { "type": "core://List", "query_key": "collection:meals", "item_template":
+                { "type": "core://Tappable", "content": { "type": "core://Text", "style": "Body", "value_expr": "$item.name" },
+                  "on_click": { "intent": "action.navigation.open", "ref": recipe,
+                    "params": { "id": "$item.id" }, "presentation": "Push" } } } } })).await;
+        let list = list["id"]
+            .as_str()
+            .unwrap_or_else(|| panic!("{list}"))
+            .to_owned();
+        tool(
+            &env,
+            &key,
+            "update_layout",
+            json!({ "id": "home", "layout": { "type": "core://Page",
+            "id": "home", "title": "Home", "root": { "type": "core://Layout", "ref": list } } }),
+        )
+        .await;
+
+        // The recipe screen alone, with params: one meal and its lines.
+        let review = tool(
+            &env,
+            &key,
+            "share_publicly",
+            json!({ "layout": recipe, "params": { "id": meals[0] } }),
+        )
+        .await;
+        assert_eq!(review["anyone_with_the_link_reads"]["rows"], 3, "{review}");
+        let shared = tool(
+            &env,
+            &key,
+            "share_publicly",
+            json!({ "layout": recipe,
+            "params": { "id": meals[0] }, "confirm": review["review_id"] }),
+        )
+        .await;
+        let link = shared["link"]
+            .as_str()
+            .unwrap_or_else(|| panic!("{shared}"))
+            .to_owned();
+        let view = client()
+            .get(env.url(&format!("/s/{link}/view")))
+            .send()
+            .await
+            .unwrap()
+            .text()
+            .await
+            .unwrap();
+        assert!(
+            view.contains("Cumin") && !view.contains("Eggs") && !view.contains("Shakshuka"),
+            "{view}"
+        );
+        // Other params are another link.
+        let other = tool(
+            &env,
+            &key,
+            "share_publicly",
+            json!({ "layout": recipe, "params": { "id": meals[1] } }),
+        )
+        .await;
+        assert_ne!(other["review_id"], review["review_id"]);
+
+        // The list: its rows push the recipe, which comes along.
+        let missing = tool(
+            &env,
+            &key,
+            "share_publicly",
+            json!({ "layout": list, "slug": "our-meals" }),
+        )
+        .await;
+        assert_eq!(missing["error"], "no_handle", "{missing}");
+        tool(&env, &key, "set_handle", json!({ "handle": "cook" })).await;
+        let review = tool(
+            &env,
+            &key,
+            "share_publicly",
+            json!({ "layout": list, "slug": "our-meals" }),
+        )
+        .await;
+        let layouts = review["anyone_with_the_link_reads"]["layouts"]
+            .as_array()
+            .unwrap_or_else(|| panic!("{review}"));
+        assert_eq!(layouts.len(), 2, "{review}");
+        assert!(
+            !review["anyone_with_the_link_reads"]["fields"]
+                .as_array()
+                .unwrap()
+                .contains(&json!("notes"))
+        );
+        let shared = tool(
+            &env,
+            &key,
+            "share_publicly",
+            json!({ "layout": list, "slug": "our-meals",
+            "confirm": review["review_id"] }),
+        )
+        .await;
+        assert!(
+            shared["short_url"]
+                .as_str()
+                .is_some_and(|u| u.ends_with("/@cook/our-meals")),
+            "{shared}"
+        );
+        let link = shared["link"].as_str().unwrap().to_owned();
+        let view: Value = client()
+            .get(env.url(&format!("/s/{link}/view")))
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        assert_eq!(view["format"], 2);
+        assert!(view["layouts"][&recipe].is_object(), "{view}");
+        assert!(
+            view["node"].to_string().contains(&recipe),
+            "the push stays: {view}"
+        );
+        let text = view.to_string();
+        assert!(
+            text.contains("Eggs") && text.contains("Cumin") && !text.contains("only for me"),
+            "{text}"
+        );
+        let short: Value = client()
+            .get(env.url("/@cook/our-meals/view"))
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        assert_eq!(short, view);
+        let page = client()
+            .get(env.url("/@cook/our-meals"))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(page.status(), StatusCode::OK);
+        assert_eq!(
+            client()
+                .get(env.url("/@cook/nope/view"))
+                .send()
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::NOT_FOUND
+        );
+        // The short path holds the handle.
+        let renamed = tool(&env, &key, "set_handle", json!({ "handle": "chef" })).await;
+        assert_eq!(renamed["error"], "handle_in_use", "{renamed}");
+    }
+
     /// A temporary pod (anyone can make one) can't share a public page,
     /// even where the server serves them.
     #[tokio::test]

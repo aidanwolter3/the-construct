@@ -163,6 +163,14 @@ const MIGRATIONS: &[Step] = &[
      );
      CREATE INDEX public_copies_owner ON public_copies(owner_pod);",
     ),
+    // 8 (decision `public-links-share-the-closure`): a public copy's
+    // chosen short path, `/@<handle>/<slug>`, one live per pod and slug.
+    Step::sql(
+        "public_copies_slug",
+        "ALTER TABLE public_copies ADD COLUMN slug TEXT;
+     CREATE UNIQUE INDEX public_copies_live_slug ON public_copies(owner_pod, slug)
+         WHERE slug IS NOT NULL AND revoked_at IS NULL;",
+    ),
 ];
 
 /// What a credential is for (`credentials.kind`).

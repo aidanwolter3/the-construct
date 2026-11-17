@@ -41,7 +41,7 @@ settings are logged at startup.
 | `CONSTRUCT_OPEN_POD` | `dev` on loopback, else unset | Callers without a pod token use this pod. Development only; `off` disables it. Refused on a non-loopback address (unless the next variable is set) and always on Fly. Only requests whose `Host` is `localhost`, `*.localhost` or an IP address use it, so a DNS-rebinding page can't. |
 | `CONSTRUCT_WEB` | unset | `1`: serve the web client at `/web` (decision [`web-client`](decisions/web-client.md), [clients.md](clients.md#web)), take its session cookie, and proxy images for it. Unset, none of these exist. |
 | `CONSTRUCT_WEB_DIR` | `target/web` | Where `scripts/web_build.sh` put the web client. |
-| `CONSTRUCT_PUBLIC_WEB` | unset | `1` (with `CONSTRUCT_WEB=1`): admin pods (not temporary ones) may share public links, a layout's copy anyone can open at `/s/<link>` (decision [`public-web-links`](decisions/public-web-links.md)). Unset, the tools aren't listed and `/s/` doesn't exist. |
+| `CONSTRUCT_PUBLIC_WEB` | unset | `1` (with `CONSTRUCT_WEB=1`): admin pods (not temporary ones) may share public links, a layout's copy anyone can open at `/s/<link>` or a chosen `/@<handle>/<slug>` (decisions [`public-web-links`](decisions/public-web-links.md), [`public-links-share-the-closure`](decisions/public-links-share-the-closure.md)). Unset, the tools aren't listed and `/s/…` and `/@…` answer 503 "Sharing is paused on this server"; the stored copies stay, and setting it again brings every link back. The links `share_publicly` answers start with `CONSTRUCT_PUBLIC_URL` when it is set. |
 | `CONSTRUCT_INSECURE_OPEN_POD_ON_NETWORK` | unset | `1` allows the open pod on a non-loopback address: everyone who can reach the server gets that pod and its sign-ins. Only on a network you trust. |
 | `CONSTRUCT_TEMP_PODS` | unset | `1`: anyone may create a temporary pod (`POST /v1/pods/temporary`). |
 | `CONSTRUCT_TEMP_POD_HOURS` | `24` | Temporary pod lifetime (1..=720). |
@@ -130,6 +130,7 @@ server pods revoke-mcp <name>                  # disconnect every Claude credent
 server pods monitoring <name> on|off           # let this pod's apps read server-wide monitoring data
 server pods adopt <name> <path/to/server.db>   # turn a pre-pods single-user database into a pod
 server pods remove-adopted [dir]               # delete the originals adopt left behind
+server backup <dir>                            # a consistent copy of host.db and every pod's database
 ```
 
 `list` shows, for each pod, whether it is on the content-addressed construct (`construct yes`), and for a temporary
@@ -209,6 +210,47 @@ Counts live in memory and restart from zero.
   [`server-monitoring-alerts`](decisions/server-monitoring-alerts.md)).
 - **Prometheus:** with `CONSTRUCT_METRICS_ADDR`, `GET /metrics` on that address serves the same counters as
   `construct_*` metrics.
+
+## Backups and restore
+
+Everything a server keeps is in `CONSTRUCT_DATA_DIR`: `host.db` (pods, credentials, the shelf, public links) and
+`pods/<id>/server.db` (each pod's data, uploads included). Public links are shared with people who expect them to
+keep working (decision [`public-links-share-the-closure`](decisions/public-links-share-the-closure.md)), so staging
+keeps two kinds of backup:
+
+- **Volume snapshots** (Fly): the volume `pod_data` is snapshotted daily and each snapshot kept 5 days
+  (`scheduled_snapshots`, `snapshot_retention` in `deploy/fly/pod.toml`, Fly's defaults). They cover losing the
+  machine or the volume. To restore one, make a volume from it and a machine on that volume:
+
+  ```bash
+  fly volumes list -a the-construct-pod                         # the volume's id (vol_…)
+  fly volumes snapshots list <vol id>                           # pick a snapshot (vs_…)
+  fly volumes create pod_data -a the-construct-pod --snapshot-id <vs id> --region dfw --size 1
+  fly machine list -a the-construct-pod                         # the running machine's id
+  fly machine stop <machine id> -a the-construct-pod
+  fly machine clone <machine id> -a the-construct-pod --attach-volume <new vol id>:/data
+  ```
+
+  then, once the new machine's server looks right, destroy the old machine and its volume
+  (`fly machine destroy <machine id>`, `fly volumes destroy <old vol id>`); later deploys update the new one.
+- **`server backup <dir>`**: a consistent copy (SQLite `VACUUM INTO`, safe while the server runs and writes) of
+  `host.db` and every pod's `server.db`, into a new or empty folder. Make one before a risky migration or deploy,
+  and keep a copy off the machine:
+
+  ```bash
+  fly ssh console -a the-construct-pod -C "/server backup /data/backups/$(date -u +%F)"
+  fly ssh console -a the-construct-pod -C "tar -C /data/backups -czf /tmp/backup.tgz $(date -u +%F)"
+  fly ssh sftp get -a the-construct-pod /tmp/backup.tgz ./construct-backup.tgz
+  ```
+
+  The backup takes room on the same 1 GB volume: delete old ones (`rm -r /data/backups/<date>`).
+  **To restore it**, put its folder at `<data dir>/restore` (on Fly: `mv /data/backups/<date> /data/restore`, or
+  upload one with `fly ssh sftp put` and unpack it there) and restart the server (`fly machine restart`). On start,
+  before any database opens, the server moves the current `host.db` and `pods/` to `<data dir>/replaced-<unix time>`
+  and the backup into their place, and logs `restored the data from a backup`. Delete the replaced folder once the
+  restored server looks right.
+
+Nothing copies the data off Fly automatically yet: that needs object storage (a new paid service and a secret).
 
 ## Deploying
 

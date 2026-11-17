@@ -70,10 +70,15 @@ primary_region = "dfw"
   port = 9091
   path = "/metrics"
 
+# The volume holds every pod's database and host.db (public links, the shelf). Fly snapshots it daily and
+# keeps each snapshot 5 days (its defaults, spelled out); restore and `server backup` copies: docs/server.md
+# "Backups and restore".
 [mounts]
   source = "pod_data"
   destination = "/data"
   initial_size = "1gb"
+  scheduled_snapshots = true
+  snapshot_retention = 5
 
 [http_service]
   internal_port = 8080

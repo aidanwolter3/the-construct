@@ -175,6 +175,8 @@ pub enum ShelfError {
     HandleTaken,
     /// The pod's publications carry its handle.
     HandleInUse,
+    /// Another live public link of the pod has the slug.
+    SlugTaken,
     Store(String),
 }
 
@@ -188,6 +190,10 @@ impl ShelfError {
             ShelfError::HandleInUse => refuse(
                 "handle_in_use",
                 "this pod's publications carry its handle: revoke them before changing it",
+            ),
+            ShelfError::SlugTaken => refuse(
+                "slug_taken",
+                "another live public link of this pod has that slug: pick another",
             ),
             ShelfError::Store(e) => refuse("shelf_error", e.clone()),
         }
@@ -234,6 +240,10 @@ pub trait Shelf: Send + Sync {
     }
     /// A live public copy by its link.
     fn public_by_link(&self, _link: &str) -> Result<Option<PublicCopy>, ShelfError> {
+        Ok(None)
+    }
+    /// A live public copy by its short path, `/@<handle>/<slug>`.
+    fn public_by_slug(&self, _handle: &str, _slug: &str) -> Result<Option<PublicCopy>, ShelfError> {
         Ok(None)
     }
     /// Revoke the pod's live public link: its copy leaves the host. False

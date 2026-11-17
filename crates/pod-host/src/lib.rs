@@ -18,6 +18,7 @@
 //! without a token from one named pod, like the single-pod server before D46.
 
 pub mod app_links;
+pub mod backup;
 pub mod db;
 pub mod limits;
 pub mod oauth;
@@ -1101,6 +1102,8 @@ pub fn app(host: Arc<Host>) -> Router {
     };
     if host.config.public_links() {
         web = web.merge(web::public_routes());
+    } else {
+        web = web.merge(web::paused_routes());
     }
     Router::new()
         .route("/healthz", get(|| async { "ok" }))
