@@ -1348,10 +1348,11 @@ async fn dispatch(State(host): State<Arc<Host>>, mut req: Request) -> Response {
             );
         }
         Some((id, CredentialKind::Web)) => {
-            if from_cookie && let Some(t) = &token {
-                if let Ok(v) = HeaderValue::from_str(&format!("Bearer {t}")) {
-                    req.headers_mut().insert(header::AUTHORIZATION, v);
-                }
+            if from_cookie
+                && let Some(t) = &token
+                && let Ok(v) = HeaderValue::from_str(&format!("Bearer {t}"))
+            {
+                req.headers_mut().insert(header::AUTHORIZATION, v);
             }
             Some(id)
         }
