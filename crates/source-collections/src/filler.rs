@@ -1352,9 +1352,11 @@ pub fn parse(
                 ));
             }
             let fields = match o.get("fields") {
+                // Not the user's toggles (a bool with a default, e.g.
+                // `seen`): those stay settable by hand on its rows.
                 None | Some(Value::Null) => def
                     .live_fields()
-                    .filter(|f| !f.computed())
+                    .filter(|f| !f.computed() && !is_toggle(f))
                     .map(|f| f.id.clone())
                     .collect(),
                 Some(Value::Array(a)) => {
@@ -1783,8 +1785,35 @@ fn check_one(def: &Definition, f: &Filler, max_fills_per_day: u32) -> Result<(),
     Ok(())
 }
 
+/// A bool field with a default: a switch the user flips (seen, done,
+/// going), not something a filler should answer.
+fn is_toggle(f: &crate::model::Field) -> bool {
+    f.kind == crate::model::Kind::Bool && f.default.is_some()
+}
+
+/// Warnings for the MCP answer: an agent filler that lists a toggle in its
+/// `fields` locks it on that filler's rows, so the app's buttons that set it
+/// are refused there.
+pub fn toggle_warnings(def: &Definition) -> Vec<String> {
+    let mut out = Vec::new();
+    for f in def.fillers.iter().filter(|f| f.is_agent()) {
+        for id in f.filled() {
+            if let Some(x) = def.live_fields().find(|x| x.id == id)
+                && is_toggle(x)
+            {
+                out.push(format!(
+                    "the filler '{}' fills '{}' (a bool with a default), so it can't be set by hand on that filler's rows; leave it out of the filler's fields if the user flips it",
+                    f.title, x.name
+                ));
+            }
+        }
+    }
+    out
+}
+
 /// Whether an app's or `edit_rows`' write to `def`'s rows may happen: it
-/// may not set a field any filler fills; a row a `replace` filler owns
+/// may not set a field the row's own filler fills, nor one a per-row filler
+/// fills (it fills every row); a row a `replace` filler owns
 /// can't be deleted or restored by hand; and rows can't be added when every
 /// filler owns its rows. `op`: create, update, delete, restore;
 /// `row_filler`: the filler that wrote the row (an update, delete or
@@ -1813,9 +1842,16 @@ pub fn check_write(
             f.title
         ));
     }
+    // A list filler writes only its own rows, so its fields are locked only
+    // there; a per-row filler (`url_field`, `query_field`) fills every row
+    // with a source, so its fields are locked everywhere.
+    let own = row_filler.and_then(|id| find(def, id));
     for name in write.keys() {
         if let Some(x) = def.field(name)
-            && let Some(f) = def.fillers.iter().find(|f| f.filled().contains(&x.id))
+            && let Some(f) = own
+                .into_iter()
+                .chain(def.fillers.iter().filter(|f| f.per_row()))
+                .find(|f| f.filled().contains(&x.id))
         {
             return Err(format!(
                 "'{}' is filled by the filler '{}', so it can't be set by hand",
@@ -2035,7 +2071,11 @@ mod tests {
         .unwrap()];
         let w = |v: Value| v.as_object().unwrap().clone();
         assert!(check_write(&def, &w(json!({"bought": true})), "update", Some("s1")).is_ok());
-        assert!(check_write(&def, &w(json!({"price": 3})), "update", None).is_err());
+        assert!(check_write(&def, &w(json!({"price": 3})), "update", Some("s1")).is_err());
+        assert!(
+            check_write(&def, &w(json!({"price": 3})), "update", None).is_ok(),
+            "a person's row isn't the list filler's"
+        );
         assert!(
             check_write(&def, &w(json!({})), "create", None).is_err(),
             "replace owns its rows"
@@ -2065,6 +2105,65 @@ mod tests {
             .is_ok()
         );
         assert!(check_write(&def, &w(json!({"about": "x"})), "create", None).is_err());
+        assert!(
+            check_write(&def, &w(json!({"about": "x"})), "update", None).is_err(),
+            "a per-row filler fills every row"
+        );
+        assert!(check_write(&def, &w(json!({"about": "x"})), "update", Some("s1")).is_err());
+    }
+
+    #[test]
+    fn a_row_may_set_a_field_only_another_filler_fills() {
+        let mut def = products();
+        let list = |id: &str, map: Value| {
+            parse(
+                &def,
+                &json!({"kind": "fetch", "url": "https://a.example", "extract": "json", "mode": "upsert", "key": "name", "map": map}),
+                id.into(),
+                false,
+            )
+            .unwrap()
+        };
+        let a = list("s1", json!({"name": "n", "price": "p"}));
+        let b = list("s2", json!({"name": "n", "bought": "b"}));
+        def.fillers = vec![a, b];
+        let w = |v: Value| v.as_object().unwrap().clone();
+        // `bought` is only B's: A's rows and people's rows may set it.
+        assert!(check_write(&def, &w(json!({"bought": true})), "update", Some("s1")).is_ok());
+        assert!(check_write(&def, &w(json!({"bought": true})), "update", None).is_ok());
+        assert!(check_write(&def, &w(json!({"bought": true})), "update", Some("s2")).is_err());
+        assert!(check_write(&def, &w(json!({"price": 3})), "update", Some("s2")).is_ok());
+        assert!(check_write(&def, &w(json!({"price": 3})), "update", Some("s1")).is_err());
+        assert!(check_write(&def, &w(json!({"bought": true})), "create", None).is_ok());
+    }
+
+    #[test]
+    fn agent_fillers_leave_toggles_alone() {
+        let mut def = products();
+        let all = parse(
+            &def,
+            &json!({"kind": "agent", "prompt": "monitors"}),
+            "s1".into(),
+            false,
+        )
+        .unwrap();
+        let bought = def.field("bought").unwrap().id.clone();
+        assert!(
+            !all.filled().contains(&bought),
+            "the default fields skip toggles"
+        );
+        def.fillers = vec![all];
+        assert!(toggle_warnings(&def).is_empty());
+        def.fillers = vec![
+            parse(
+                &def,
+                &json!({"kind": "agent", "prompt": "monitors", "fields": ["name", "bought"]}),
+                "s1".into(),
+                false,
+            )
+            .unwrap(),
+        ];
+        assert!(toggle_warnings(&def)[0].contains("'bought'"));
     }
 
     #[test]

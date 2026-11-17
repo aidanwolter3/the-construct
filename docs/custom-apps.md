@@ -327,7 +327,8 @@ A collection can keep itself current from the web (decision
   tracker's rows or a monthly budget's months, and a layout lists each day with the other collections' rows on it
   (a `core://List` inside the day's template, `where` its date). Fields it doesn't fill (a day's note, a tick) are
   people's to edit.
-- **`agent`** (costs model calls): a prompt; a model with web search answers rows that fit the fields, within a
+- **`agent`** (costs model calls): a prompt; a model with web search answers rows that fit the fields (default
+  every field but computed ones and toggles), within a
   daily budget. With the `web_search` jack plugged it searches and reads pages with the pod's own tools; it reads
   only pages it has seen (a URL in the prompt or the rows, a search result, or a link on a page it read), so a page
   can't have it send the rows elsewhere in a URL (decision [`web-fetch-provenance`](decisions/web-fetch-provenance.md)).
@@ -335,8 +336,12 @@ A collection can keep itself current from the web (decision
   daily cap per site, and a shared backoff after a site blocks the pod as an automated visitor). Model work runs
   through the agent module (`crates/agent`): the `model` jack, daily budgets per feature, retries.
 - **Modes:** `replace` (the filler's rows are its latest answer, kept stable by `key`, or without one by pairing
-  each item with the row it most resembles on the same `upcoming` day) or `upsert` by `key`. Filled fields can't be
-  edited by hand.
+  each item with the row it most resembles on the same `upcoming` day) or `upsert` by `key`.
+- **Locks:** a field a filler fills can't be set by hand on that filler's rows (409 `filled_by_filler`); on other
+  fillers' rows and people's rows it stays editable, since the filler never writes them. A per-row filler
+  (`url_field`, `query_field`) fills every row with a source, so its fields are locked on every row, creates
+  included. An `agent` filler without `fields` fills every field but computed ones and toggles (a bool with a
+  default, like `seen` or `done`); listing a toggle in `fields` locks it on its rows, and the MCP answer warns.
 - **Who wrote a field:** a row a filler made carries its id (`collections_rows.filler`), and every field a filler
   or a model's computed answer wrote last is recorded in `collections_field_writers` (`filler:<id>` or `model`); a
   person's (or Claude's) write of the field clears it. A value from other rows carries their writer too: a live
