@@ -51,6 +51,11 @@ const RESERVED_HANDLES: &[&str] = &[
 ];
 /// The most elements one publication may carry.
 const MAX_ELEMENTS: usize = 500;
+/// The most bytes of elements one publication may carry: the shelf is the
+/// host's, outside every pod's storage quota.
+const MAX_PUBLICATION_BYTES: usize = 1 << 20;
+/// The most live publications a pod may have on the shelf.
+pub const MAX_PUBLICATIONS: usize = 20;
 
 /// The field input of field `field` of data input `input`.
 pub fn field_input(input: &str, field: &str) -> String {
@@ -728,6 +733,21 @@ pub fn prepare(
         .collect();
     // The root first.
     objects.sort_by_key(|(id, _, _)| id != &root);
+    let bytes: usize = objects
+        .iter()
+        .map(|(_, v, _)| construct_elements::canonical(v).len())
+        .sum();
+    if bytes > MAX_PUBLICATION_BYTES {
+        return Err(refuse(
+            "too_large",
+            format!(
+                "a publication carries at most {} KiB of elements (this one is {} KiB): \
+                 leave some out",
+                MAX_PUBLICATION_BYTES >> 10,
+                bytes.div_ceil(1024)
+            ),
+        ));
+    }
     let mut flags = c.flags;
     flags.dedup();
     Ok(Prepared {
@@ -1207,6 +1227,20 @@ fn publish_blocking(pod: &Pod, args: &Value) -> Result<Value, Value> {
             format!(
                 "{full} already publishes '{}': pick another slug",
                 other.source
+            ),
+        ));
+    }
+    let live = mine.iter().filter(|p| p.revoked_at.is_none());
+    if !mine
+        .iter()
+        .any(|p| p.name == full && p.revoked_at.is_none())
+        && live.count() >= MAX_PUBLICATIONS
+    {
+        return Err(refuse(
+            "too_many_publications",
+            format!(
+                "a pod keeps at most {MAX_PUBLICATIONS} live publications: revoke one first \
+                 (revoke_publication)"
             ),
         ));
     }

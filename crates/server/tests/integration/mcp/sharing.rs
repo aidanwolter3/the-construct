@@ -359,3 +359,90 @@ async fn a_second_pod_adopts_a_published_layout_and_keeps_it_after_a_revoke() {
     assert_eq!(s, StatusCode::OK, "{mine}");
     assert!(mine.to_string().contains("Fix the gate"), "{mine}");
 }
+
+/// Publishes layout `id` (the review, then confirm) -> the answer, or the
+/// refusal.
+async fn publish(env: &Env, access: &str, id: &str) -> Value {
+    let (err, review) = env.tool(access, "publish", json!({"name": id})).await;
+    if err {
+        return review;
+    }
+    ok(
+        env,
+        access,
+        "publish",
+        json!({"name": id, "confirm": review["review_id"]}),
+    )
+    .await
+}
+
+/// A layout `title` drawing `root`, created -> its id.
+async fn layout(env: &Env, access: &str, title: &str, root: Value) -> String {
+    ok(
+        env,
+        access,
+        "create_layout",
+        json!({"title": title, "layout": {"type": "core://Page", "title": title, "root": root}}),
+    )
+    .await["id"]
+        .as_str()
+        .unwrap()
+        .to_owned()
+}
+
+/// The shelf is the host's, outside every pod's storage quota: a pod keeps
+/// at most 20 live publications, each of at most 1 MiB of elements.
+#[tokio::test]
+async fn a_pod_keeps_only_so_much_on_the_shelf() {
+    let env = env().await;
+    let ann = env.pod("ann").await;
+    let a = env.connect(&ann).await;
+    ok(&env, &a, "set_handle", json!({"handle": "ann"})).await;
+    let mut ids = Vec::new();
+    for i in 0..21 {
+        let t = format!("Note {i}");
+        let root = json!({"type": "core://Text", "style": "Body", "value_expr": t});
+        ids.push(layout(&env, &a, &t, root).await);
+    }
+    let mut links = Vec::new();
+    for id in &ids[..20] {
+        let p = publish(&env, &a, id).await;
+        assert_eq!(p["published"], true, "{p}");
+        links.push(p["link"].as_str().unwrap().to_owned());
+    }
+    let e = publish(&env, &a, &ids[20]).await;
+    assert_eq!(e["error"], "too_many_publications", "{e}");
+    // A new version of a live one still goes; revoking one makes room.
+    let p = publish(&env, &a, &ids[0]).await;
+    assert_eq!(p["published"], true, "{p}");
+    ok(&env, &a, "revoke_publication", json!({"name": links[0]})).await;
+    let p = publish(&env, &a, &ids[20]).await;
+    assert_eq!(p["published"], true, "{p}");
+
+    // Twenty components with 60 KiB of doc each (the doc isn't drawn, so the
+    // layout's expansion stays small): more than one publication carries.
+    ok(&env, &a, "revoke_publication", json!({"name": links[1]})).await;
+    let mut uses = Vec::new();
+    for i in 0..20 {
+        ok(
+            &env,
+            &a,
+            "define_component",
+            json!({"name": format!("long{i}"), "component": {
+                "doc": format!("{i}{}", "x".repeat(60 << 10)),
+                "examples": [{"args": {}, "note": "a word"}],
+                "template": {"type": "core://Text", "style": "Body", "value_expr": "Hi"}}}),
+        )
+        .await;
+        uses.push(json!({"type": "core://Use", "ref": format!("@me/long{i}")}));
+    }
+    let long = layout(
+        &env,
+        &a,
+        "Long",
+        json!({"type": "core://Column", "children": uses}),
+    )
+    .await;
+    let e = publish(&env, &a, &long).await;
+    assert_eq!(e["error"], "too_large", "{e}");
+}
