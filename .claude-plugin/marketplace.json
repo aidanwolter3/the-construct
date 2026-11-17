@@ -1,0 +1,12 @@
+{
+  "name": "the-construct",
+  "owner": { "name": "aidanwolter3" },
+  "description": "Claude Code plugins used while developing The Construct.",
+  "plugins": [
+    {
+      "name": "afk",
+      "source": "./plugins/afk",
+      "description": "/afk: keep working without the user, then report progress and state."
+    }
+  ]
+}

@@ -112,6 +112,11 @@ Habits that avoid known traps:
 - Rust is pinned in `rust-toolchain.toml` (CI uses the same file), so local clippy matches CI. Bump it in its own
   PR.
 
+**Plugins**: the repo is also a Claude Code plugin marketplace (`.claude-plugin/marketplace.json`, plugins in
+`plugins/`). `.claude/settings.json` enables them for sessions in this repo, cloud ones included; `afk` gives
+`/afk` (keep working without the developer, then summarize). On a Mac, install once for every project with
+`/plugin marketplace add aidanwolter3/the-construct` and `/plugin install afk@the-construct`.
+
 **Staging** needs a pod token: make a temporary one with
 `curl -fsS -X POST -H "X-Construct-Client: claude-session $CLAUDE_CODE_SESSION_ID" https://the-construct-pod.fly.dev/v1/pods/temporary | jq -r .session_token`
 and send it as `Authorization: Bearer <token>`; in the simulator, click "Try a temporary pod". Staging holds 50
@@ -152,6 +157,13 @@ connector); a new session started after that sees the new tools.
   (`.claude/skills/ticket`).
 
 ## House rules
+
+- **Change what the user actually sees.** A request about "my notifications" or "the shopping screen" is about
+  the element their pod's home reaches there, which may be the user's own copy of a blueprint (copies don't
+  follow blueprints). Before changing a blueprint, look at what real pods draw (on staging, MCP `list_layouts`:
+  `reached` and `copy_of`, decision `trace-from-home`), and say which pods' copies the change won't reach; a fix
+  for one user's screen may be an edit of their copy instead (or as well). Agents without the repo get the same
+  rule from the pod's MCP instructions.
 
 - No model names in commit messages or docs prose.
 - Keep docs current: a change to behaviour, configuration or vocabulary updates the guide in `docs/` that covers

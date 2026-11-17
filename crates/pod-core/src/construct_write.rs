@@ -860,6 +860,15 @@ pub(crate) async fn run_write(
 fn list_layouts(pod: &Pod, conn: &Connection, _: &Value) -> Result<Value, Value> {
     let mut layouts = Vec::new();
     let names = cstore::names(conn).map_err(store_err)?;
+    let reach = super::trace::from_home(conn).map_err(store_err)?;
+    let shown_blueprints: Vec<(&str, &str)> = pod
+        .catalog()
+        .blueprints()
+        .filter(|a| !a.dev || pod.show_dev_apps())
+        .map(|a| (a.id, a.title))
+        .collect();
+    // Blueprint name -> the pod's layouts that use it.
+    let mut used_by: BTreeMap<String, Vec<String>> = BTreeMap::new();
     for (n, h) in &names {
         if !super::is_layout_name(n) {
             continue;
@@ -870,7 +879,19 @@ fn list_layouts(pod: &Pod, conn: &Connection, _: &Value) -> Result<Value, Value>
             "id": n, "name": n, "element": h, "version": seq,
             "title": el.as_ref().map(|e| e["title"].clone()),
             "icon": el.as_ref().map(|e| e["icon"].clone()),
+            "reached": super::trace::reached(&reach, n),
         });
+        let uses = el
+            .as_ref()
+            .map(|e| super::trace::names_used(e))
+            .unwrap_or_default();
+        for u in &uses {
+            used_by.entry(u.clone()).or_default().push(n.clone());
+        }
+        let title = el.as_ref().and_then(|e| e["title"].as_str()).unwrap_or("");
+        if let Some(bp) = super::trace::copy_of(title, &uses, shown_blueprints.iter().copied()) {
+            row["copy_of"] = json!(bp);
+        }
         if n == crate::HOME_APP {
             row["feeds"] = json!(home_feeds(conn));
         }
@@ -882,8 +903,29 @@ fn list_layouts(pod: &Pod, conn: &Connection, _: &Value) -> Result<Value, Value>
         .blueprints()
         .filter(|a| !a.dev || pod.show_dev_apps())
         .map(|a| {
-            json!({ "id": a.id, "name": blueprint_name(a.id), "title": a.title, "icon": a.icon,
-            "feeds": a.feeds.iter().map(|(s, f)| json!([s, f])).collect::<Vec<_>>() })
+            let name = blueprint_name(a.id);
+            let mut row = json!({ "id": a.id, "name": name, "title": a.title, "icon": a.icon,
+            "feeds": a.feeds.iter().map(|(s, f)| json!([s, f])).collect::<Vec<_>>() });
+            if let Some(p) = reach.get(&name) {
+                row["reached"] = json!(super::trace::describe(p));
+            }
+            let users: Vec<&String> = used_by
+                .iter()
+                .filter(|(u, _)| **u == name || u.starts_with(&format!("{name}/")))
+                .flat_map(|(_, l)| l)
+                .collect();
+            if !users.is_empty() {
+                row["used_by"] = json!(users);
+            }
+            let copies: Vec<&Value> = layouts
+                .iter()
+                .filter(|l| l["copy_of"] == json!(name))
+                .map(|l| &l["id"])
+                .collect();
+            if !copies.is_empty() {
+                row["copies"] = json!(copies);
+            }
+            row
         })
         .collect();
     Ok(json!({
@@ -892,7 +934,10 @@ fn list_layouts(pod: &Pod, conn: &Connection, _: &Value) -> Result<Value, Value>
         "blueprints": blueprints,
         "note": "Layouts are names that point to elements; reference others with \"ref\": \
                  \"<name>\" (layouts by id, @core/<blueprint>, @core/<blueprint>/<part>, \
-                 @core/<component>, @me/<component>).",
+                 @core/<component>, @me/<component>). reached is how the user gets to each from \
+                 home (the shortest path, each step's field, presentation and label); change what \
+                 the user sees there. copy_of names the blueprint a layout looks copied from: it \
+                 doesn't follow that blueprint, so a change to the blueprint doesn't reach it.",
     }))
 }
 
@@ -925,6 +970,17 @@ fn get_layout(pod: &Pod, conn: &Connection, args: &Value) -> Result<Value, Value
     });
     if name == crate::HOME_APP {
         out["feeds"] = json!(home_feeds(conn));
+    }
+    let reach = super::trace::from_home(conn).map_err(store_err)?;
+    out["reached"] = super::trace::reached(&reach, &name);
+    let uses = super::trace::names_used(&el);
+    let title = el["title"].as_str().unwrap_or("");
+    if let Some(bp) = super::trace::copy_of(
+        title,
+        &uses,
+        pod.catalog().blueprints().map(|a| (a.id, a.title)),
+    ) {
+        out["copy_of"] = json!(bp);
     }
     if args["expanded"].as_bool() == Some(true) {
         let objects = ConnObjects::new(conn);

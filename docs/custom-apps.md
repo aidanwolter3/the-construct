@@ -32,6 +32,14 @@ for: one layout is a `core://Layout` as home's one slot; with more, home lists t
 a card-sized region, or show it as a sheet or side panel while a condition holds. `@core/settings` and `@core/inbox`
 are Settings and the inbox. Snippets for each are in `describe_vocabulary`. Home can't be deleted.
 
+**What the user sees is what home reaches** (decision [`trace-from-home`](decisions/trace-from-home.md)).
+`list_layouts` and `get_layout` give each layout `reached`: the shortest path from home, each step with the field
+that takes it, its presentation and its label (`home → (on_swipe_down, Overlay from top) → c-…`), or "not reached
+from home". A pod layout titled like a blueprint it doesn't reference gets `copy_of: "@core/<blueprint>"`: it is
+the blueprint as it was when copied, and doesn't follow it; a blueprint row lists its `copies`, the layouts that
+`use` it (`used_by`) and its own `reached`. The pod's MCP instructions tell agents to change the element home
+actually reaches, not the blueprint it may have started from.
+
 ## The pod's layouts
 
 A layout of the pod is a name (`c-` and 10 characters, except `home`) pointing to an element with a title, an icon
@@ -229,7 +237,7 @@ never writes code: it declares typed fields (`text`, `number`, `bool`, `date`, `
   ref's row by a unique field). A preview checks the whole set and lists every invalid edit by `/edits/<i>` or the
   file's line (decision [`bulk-row-edits`](decisions/bulk-row-edits.md)). `add_row` writes one row the user just
   asked for at once, undoable the same way (decision [`collections-add-row`](decisions/collections-add-row.md)).
-- **Limits per pod:** 20 collections, 40 fields each, 5,000 rows and 4 MiB of values in all, 5,000 rows per edit or action call (8 MiB per imported file, refused as soon as it holds more rows or a CSV line over 1,000 cells),
+- **Limits per pod:** 50 collections (decision `more-collections-per-pod`), 40 fields each, 5,000 rows and 4 MiB of values in all, 5,000 rows per edit or action call (8 MiB per imported file, refused as soon as it holds more rows or a CSV line over 1,000 cells),
   4,000 characters per text value.
 
 - **Retention.** A collection may keep only its newest rows (`keep: {rows, days}` in its definition): when a write
