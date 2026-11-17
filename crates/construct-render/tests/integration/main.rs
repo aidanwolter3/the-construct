@@ -18,4 +18,5 @@ mod main_axis;
 mod media;
 mod reuse;
 mod swipe_cards;
+mod text_styles;
 mod writes;

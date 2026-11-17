@@ -180,7 +180,10 @@ pub enum UiNode {
     /// or plain text. `format` (feature `date_format`) draws the dates it
     /// binds for the viewer ([`TextFormat`]); `count` (feature `count`)
     /// puts a count of a query's entities in place of `$count`
-    /// ([`TextCount`]).
+    /// ([`TextCount`]). `weight`, `caps` and `max_lines` (features
+    /// `text_weight`, `text_caps`, `text_max_lines`, decision
+    /// `text-weight-caps-lines`) restyle it; a client without them ignores
+    /// them and draws the text in its style.
     #[serde(rename = "core://Text")]
     Text {
         value_expr: String,
@@ -189,6 +192,18 @@ pub enum UiNode {
         format: Option<TextFormat>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         count: Option<TextCount>,
+        /// Draws the text at this weight instead of its style's own
+        /// ([`TextWeight`]).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        weight: Option<TextWeight>,
+        /// Draws the text in capitals, slightly spaced out ([`CAPS_TRACKING`]):
+        /// a small eyebrow label ("MOVE OFTEN · THIS WEEK").
+        #[serde(default, skip_serializing_if = "is_false")]
+        caps: bool,
+        /// At most this many lines (1..=[`MAX_TEXT_LINES`]); a longer text
+        /// ends in an ellipsis on the last one.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        max_lines: Option<u8>,
     },
     #[serde(rename = "core://Button")]
     Button {
@@ -338,9 +353,14 @@ pub enum UiNode {
     /// With `date` (feature `conditional_date`), the value is a date or a
     /// date and time, compared with the device's clock ([`DateTest`]);
     /// `time` (a binding such as `$item.ends`) adds a wall-clock time to a
-    /// bare date.
+    /// bare date. With `count` (feature `conditional_count`) the test is
+    /// whether a query has an entity ([`QueryCount`]) and `value` is unused;
+    /// `not` (feature `conditional_not`) shows the content only while the
+    /// test fails (decision `text-weight-caps-lines`).
     #[serde(rename = "core://Conditional")]
     Conditional {
+        /// Always written (older clients require it), "" with `count`.
+        #[serde(default)]
         value: String,
         content: Box<UiNode>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -349,6 +369,13 @@ pub enum UiNode {
         date: Option<DateTest>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         time: Option<String>,
+        /// Inverts the test: the content shows while `value` is not truthy,
+        /// doesn't equal `equals`, the date test fails, or the `count`
+        /// query is empty.
+        #[serde(default, skip_serializing_if = "is_false")]
+        not: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        count: Option<QueryCount>,
     },
     /// A swipeable pager over entities: `items` is a binding to a list of
     /// entity URIs (`"$item.media_uris"`) or a literal list; each is drawn with
@@ -1073,6 +1100,47 @@ pub struct TextCount {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub zero_text: Option<String>,
 }
+
+/// `core://Conditional` `count` (feature `conditional_count`): the
+/// content shows while `queries[query_key]` has at least one entity that
+/// matches every `where` (as a `core://Text` [`TextCount`]'s), or, with
+/// `not`, while it has none. While the query is not loaded it shows
+/// nothing either way.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct QueryCount {
+    pub query_key: String,
+    #[serde(rename = "where", default, skip_serializing_if = "Vec::is_empty")]
+    pub where_: Vec<ListWhere>,
+}
+
+/// `core://Text` `weight` (feature `text_weight`): the weight its face is
+/// drawn at, instead of the style's own (`Label` is bold, the others
+/// regular).
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum TextWeight {
+    Regular,
+    Medium,
+    SemiBold,
+    Bold,
+}
+
+impl TextWeight {
+    /// The CSS / OpenType weight: 400, 500, 600 or 700.
+    pub fn value(self) -> u16 {
+        match self {
+            TextWeight::Regular => 400,
+            TextWeight::Medium => 500,
+            TextWeight::SemiBold => 600,
+            TextWeight::Bold => 700,
+        }
+    }
+}
+
+/// The letter spacing of a `core://Text` with `caps`, in ems.
+pub const CAPS_TRACKING: f32 = 0.07;
+
+/// The most lines a `core://Text` `max_lines` may keep.
+pub const MAX_TEXT_LINES: u8 = 20;
 
 /// One `core://ChoiceChips` option: `label` is drawn, `value` is stored.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]

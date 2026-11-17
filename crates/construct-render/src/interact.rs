@@ -1239,11 +1239,7 @@ impl Session {
             .find(|f| f.field == field)?
             .clone();
         let value = self.form.get(field).cloned().unwrap_or_default();
-        let ty = crate::style::Type {
-            face: fb.face,
-            size: fb.size,
-            line_height: fb.line_height,
-        };
+        let ty = crate::style::Type::new(fb.face, fb.size, fb.line_height);
         let stops = self.field_stops(&fb, &value, ty);
         Some((fb, stops))
     }
@@ -2839,11 +2835,7 @@ impl Session {
             return;
         };
         let value = self.form.get(&e.field).cloned().unwrap_or_default();
-        let ty = crate::style::Type {
-            face: fb.face,
-            size: fb.size,
-            line_height: fb.line_height,
-        };
+        let ty = crate::style::Type::new(fb.face, fb.size, fb.line_height);
         let stops = self.field_stops(&fb, &value, ty);
         let (ox, oy) = (fb.rect[0], fb.rect[1]);
         let stop = |b: usize| {
@@ -2996,6 +2988,8 @@ impl Session {
                 face: label.face,
                 size: label.size,
                 line_height: label.line_height,
+                tracking: 0.0,
+                max_lines: 0,
                 color: theme.on_background,
                 rect: [ix + pad, y + (h - th) / 2.0, *tw, *th],
                 clip: all,

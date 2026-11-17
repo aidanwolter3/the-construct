@@ -7,7 +7,6 @@ use cosmic_text::{SwashCache, SwashContent};
 use image::RgbaImage;
 
 use crate::scene::{Draw, IconRun, QuadInstance, Scene, TextRun};
-use crate::style::Type;
 use crate::text::TextEngine;
 use std::collections::HashMap;
 
@@ -342,11 +341,7 @@ impl CpuRenderer {
         s: f32,
         engine: &mut TextEngine,
     ) {
-        let ty = Type {
-            face: t.face,
-            size: t.size,
-            line_height: t.line_height,
-        };
+        let ty = t.ty();
         let buffer = engine.buffer(&t.text, ty, Some(t.rect[2] + 0.5), s);
         let ox = (t.rect[0] * s).round();
         let oy = (t.rect[1] * s).round();

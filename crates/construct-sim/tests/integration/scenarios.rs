@@ -214,6 +214,29 @@ fn a_session_unlocks_at_the_minute_it_is_over() {
     assert_ok(&results);
 }
 
+/// Text weights, capitals and line limits, and conditionals that invert
+/// or test a query (decision `text-weight-caps-lines`).
+#[test]
+fn text_styles_and_query_conditionals() {
+    let (mut runner, results) = run(
+        "text_styles",
+        "assert-text Move often · this week; assert-text Still to do; \
+         assert-no-text All done for the week; assert-text Nothing archived yet; \
+         assert-text 2 unread messages; assert-no-text Inbox clear; shot light; mode dark; shot dark",
+        &out_dir("text-styles"),
+    );
+    assert_ok(&results);
+    let scene = runner.session.scene().unwrap();
+    let drawn: Vec<&str> = scene.texts().map(|t| t.text.as_str()).collect();
+    assert!(drawn.contains(&"MOVE OFTEN · THIS WEEK"), "{drawn:?}");
+    let notes = scene
+        .texts()
+        .find(|t| t.text.starts_with("Walk along"))
+        .unwrap();
+    assert_eq!(notes.max_lines, 2);
+    assert_eq!(notes.rect[3], 2.0 * notes.line_height);
+}
+
 #[test]
 fn a_home_embeds_a_whole_layout_and_centres_its_tiles() {
     let (mut runner, results) = run(

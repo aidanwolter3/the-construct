@@ -1,7 +1,7 @@
 //! Colours, the theme and type styles: the values the Compose renderer uses
 //! (Material 3 defaults and the pod's theme tokens), so both draw alike.
 
-use protocol::{EntityRecord, TextStyle};
+use protocol::{EntityRecord, TextStyle, TextWeight};
 use std::collections::BTreeMap;
 
 /// A linear-blend RGBA colour, each channel 0..=1 (sRGB-encoded values;
@@ -199,28 +199,82 @@ impl Theme {
     }
 }
 
-/// Which bundled face a run uses.
+/// Which bundled face a run uses: a family (Instrument Sans or Lora) at a
+/// weight. Every weight has its own font file (decision
+/// `text-weight-caps-lines`), so none is synthesised.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize)]
 pub enum Face {
     Sans,
+    SansMedium,
+    SansSemiBold,
     SansBold,
     Serif,
+    SerifMedium,
+    SerifSemiBold,
+    SerifBold,
 }
 
-/// A text style's face and metrics (logical points), as Material 3 types.
+impl Face {
+    /// Whether it is the serif family (Lora).
+    pub fn serif(self) -> bool {
+        matches!(
+            self,
+            Face::Serif | Face::SerifMedium | Face::SerifSemiBold | Face::SerifBold
+        )
+    }
+
+    /// Its weight: 400, 500, 600 or 700.
+    pub fn weight(self) -> u16 {
+        match self {
+            Face::Sans | Face::Serif => 400,
+            Face::SansMedium | Face::SerifMedium => 500,
+            Face::SansSemiBold | Face::SerifSemiBold => 600,
+            Face::SansBold | Face::SerifBold => 700,
+        }
+    }
+
+    /// The same family at `weight` (a `core://Text` `weight`).
+    pub fn with_weight(self, weight: TextWeight) -> Face {
+        match (self.serif(), weight) {
+            (false, TextWeight::Regular) => Face::Sans,
+            (false, TextWeight::Medium) => Face::SansMedium,
+            (false, TextWeight::SemiBold) => Face::SansSemiBold,
+            (false, TextWeight::Bold) => Face::SansBold,
+            (true, TextWeight::Regular) => Face::Serif,
+            (true, TextWeight::Medium) => Face::SerifMedium,
+            (true, TextWeight::SemiBold) => Face::SerifSemiBold,
+            (true, TextWeight::Bold) => Face::SerifBold,
+        }
+    }
+}
+
+/// A text style's face and metrics (logical points), as Material 3 types,
+/// with a `core://Text`'s own letter spacing (`tracking`, in ems: `caps`)
+/// and line limit (`max_lines`, 0 for none).
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Type {
     pub face: Face,
     pub size: f32,
     pub line_height: f32,
+    pub tracking: f32,
+    pub max_lines: u8,
+}
+
+impl Type {
+    /// A face at a size, with no letter spacing or line limit.
+    pub const fn new(face: Face, size: f32, line_height: f32) -> Type {
+        Type {
+            face,
+            size,
+            line_height,
+            tracking: 0.0,
+            max_lines: 0,
+        }
+    }
 }
 
 pub fn type_for(style: TextStyle) -> Type {
-    let t = |face, size, line_height| Type {
-        face,
-        size,
-        line_height,
-    };
+    let t = Type::new;
     match style {
         TextStyle::Headline => t(Face::Sans, 28.0, 36.0),
         TextStyle::Title => t(Face::Sans, 22.0, 28.0),
@@ -233,25 +287,13 @@ pub fn type_for(style: TextStyle) -> Type {
 }
 
 /// Body text, for labels of controls (buttons, fields).
-pub const LABEL_LARGE: Type = Type {
-    face: Face::SansBold,
-    size: 14.0,
-    line_height: 20.0,
-};
+pub const LABEL_LARGE: Type = Type::new(Face::SansBold, 14.0, 20.0);
 
 /// Material `labelSmall` (what the shared UI names unsupported nodes in).
-pub const LABEL_SMALL: Type = Type {
-    face: Face::Sans,
-    size: 11.0,
-    line_height: 16.0,
-};
+pub const LABEL_SMALL: Type = Type::new(Face::Sans, 11.0, 16.0);
 
 /// Chips' labels (Material `labelLarge`, regular weight).
-pub const CHIP_LABEL: Type = Type {
-    face: Face::Sans,
-    size: 14.0,
-    line_height: 20.0,
-};
+pub const CHIP_LABEL: Type = Type::new(Face::Sans, 14.0, 20.0);
 
 #[cfg(test)]
 mod tests {

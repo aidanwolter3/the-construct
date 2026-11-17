@@ -21,6 +21,9 @@ pub fn open_your_pod(temporary_hours: Option<u64>) -> Value {
             style: TextStyle::Body,
             format: None,
             count: None,
+            weight: None,
+            caps: false,
+            max_lines: None,
         },
         UiNode::TextField {
             field: TOKEN_FIELD.into(),
@@ -48,6 +51,9 @@ pub fn open_your_pod(temporary_hours: Option<u64>) -> Value {
                 style: TextStyle::Body,
                 format: None,
                 count: None,
+                weight: None,
+                caps: false,
+                max_lines: None,
             },
             UiNode::Button {
                 label: "Try a temporary pod".into(),

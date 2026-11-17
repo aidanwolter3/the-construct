@@ -14,10 +14,11 @@ pub mod intent;
 pub mod notify;
 
 pub use ast::{
-    Align, BorderStyle, ChoiceOption, DateFormat, DateTest, DockTab, DrawerPage, EmbedPresentation,
-    GroupBy, ICON_PATH_PREFIX, ICONS, ImageShape, Indent, Justify, ListBinding, ListFilter,
-    ListFocus, ListWhere, MAX_ICON_PATH, NODE_TYPES, Orientation, PageScreen, Screen, SlotSpec,
-    TextCount, TextFormat, TextStyle, Tone, UiNode, WhereClause, icon_path,
+    Align, BorderStyle, CAPS_TRACKING, ChoiceOption, DateFormat, DateTest, DockTab, DrawerPage,
+    EmbedPresentation, GroupBy, ICON_PATH_PREFIX, ICONS, ImageShape, Indent, Justify, ListBinding,
+    ListFilter, ListFocus, ListWhere, MAX_ICON_PATH, MAX_TEXT_LINES, NODE_TYPES, Orientation,
+    PageScreen, QueryCount, Screen, SlotSpec, TextCount, TextFormat, TextStyle, TextWeight, Tone,
+    UiNode, WhereClause, icon_path,
 };
 pub use bundle::{DataBundle, EntityRecord, WorkspaceSpec};
 pub use features::{
