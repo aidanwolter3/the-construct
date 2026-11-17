@@ -1330,15 +1330,25 @@ async fn components_are_defined_used_and_expanded() {
         .tool(
             &access,
             "set_theme",
-            json!({"theme": {"nope": {"dark": "#101010"}}}),
+            json!({"theme": {"Not A Name": {"dark": "#101010"}}}),
         )
         .await;
     assert!(err && t["error"] == "invalid_theme", "{t}");
+    // A token of the pod's own (decision custom-theme-tokens).
+    let (err, t) = env
+        .tool(
+            &access,
+            "set_theme",
+            json!({"theme": {"dock": {"light": "#1C1B19", "dark": "#2A2B27"}}}),
+        )
+        .await;
+    assert!(!err, "{t}");
+    assert_eq!(t["tokens"]["dock"], "the pod's own token");
     let body = env.drawn("home", &pod_code).await;
-    assert_eq!(
-        body["entities"]["core://theme"]["card_border_dark"],
-        "#101010"
-    );
+    let theme = &body["entities"]["core://theme"];
+    assert_eq!(theme["card_border_dark"], "#101010");
+    assert_eq!(theme["dock"], "#1C1B19");
+    assert_eq!(theme["dock_dark"], "#2A2B27");
 }
 
 /// Issue #107: a collection a layout no longer shows is deleted, whether
