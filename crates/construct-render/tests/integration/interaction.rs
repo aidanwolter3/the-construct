@@ -786,3 +786,41 @@ fn going_back_leaves_what_is_under_it_laid_out() {
     s.scene().unwrap();
     assert!(s.take_work().laid_out > 0);
 }
+
+/// The band above a pinned node, where it rests below the top of its view
+/// (a column's padding), shows the page's own background, not the theme's,
+/// while a white card scrolls under it.
+#[test]
+fn band_above_a_pinned_node_is_the_page_background() {
+    let rows: Vec<_> = (0..40)
+        .map(
+            |i| json!({ "type": "core://Text", "value_expr": format!("Row {i}"), "style": "Body" }),
+        )
+        .collect();
+    let page: protocol::UiNode = serde_json::from_value(json!({
+        "type": "core://Page", "id": "p", "root": {
+            "type": "core://Box", "fill": true, "background": "#00FF00",
+            "content": { "type": "core://Scroll", "content": {
+                "type": "core://Column", "padding_v_dp": 8, "children": [
+                    { "type": "core://Spacer", "size_dp": 10 },
+                    { "type": "core://Sticky", "content": { "type": "core://Box",
+                        "background": "#00FF00",
+                        "content": { "type": "core://Text", "value_expr": "Filters", "style": "Body" } } },
+                    { "type": "core://Box", "background": "#FFFFFF",
+                        "content": { "type": "core://Column", "children": rows } } ] } } } }))
+    .unwrap();
+    let mut s = Session::new(
+        "p",
+        page,
+        Default::default(),
+        Viewport {
+            width: 300.0,
+            height: 400.0,
+            scale: 1.0,
+        },
+    );
+    s.scroll_by(None, 200.0).unwrap();
+    let img = s.render_cpu().unwrap();
+    // Between the view's top and the pinned filters (resting at 18 points).
+    assert_eq!(img.get_pixel(20, 10).0, [0, 255, 0, 255]);
+}

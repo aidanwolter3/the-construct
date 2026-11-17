@@ -152,7 +152,9 @@ images move but keep their size, since each size is cut anew). A mouse wheel not
 `card`, and each mode takes only its own token values from `core://theme` (`<token>`, `<token>_dark`), any token
 the pod sends included. The renderer's own controls (a switch, `core://Button`) draw `accent` in light mode once the pod sets it, else Material's purple; an off switch follows `muted_surface` and `muted_text` once set, and an optional token of the pod's own, `on_accent`, is what goes on the accent fill (decision `controls-follow-the-theme`). `core://Sticky` pins at the top of its scrolling view, over the page
 background, until its parent scrolls away; one that rests within 24 points of the view's top (a column's padding)
-pins where it rests, so it never moves (the Compose UI moved it up to the top first).
+pins where it rests, so it never moves (the Compose UI moved it up to the top first); the band between the view's
+top and where it rests is filled with the nearest opaque background around it (a page `core://Box`'s `background`,
+else the theme's), so the content scrolling under it doesn't show there.
 
 ## The desktop viewer
 

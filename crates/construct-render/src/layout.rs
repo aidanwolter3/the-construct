@@ -3027,7 +3027,7 @@ const CARD_TINT: f32 = 0.10;
 const CARD_TINT_PAST: f32 = 0.22;
 
 /// A sticky node pinned at the top of its scrolling view: drawn after the
-/// view's other content, over the page background.
+/// view's other content, over the background behind it.
 struct Pinned {
     elem: usize,
     origin: (f32, f32),
@@ -3035,6 +3035,8 @@ struct Pinned {
     parent_sem: Option<usize>,
     /// The top of the view it is pinned in (the band above it is filled).
     view_top: f32,
+    /// What fills that band: the background behind the node.
+    backdrop: Rgba,
 }
 
 /// A sticky node this close to the top of its view when nothing is
@@ -3051,6 +3053,9 @@ struct At {
     scrolled: f32,
     /// The parent's box (a sticky node stays inside it).
     parent: [f32; 4],
+    /// The nearest opaque background around it (a page's `core://Box`
+    /// `background`, or the theme's): what shows behind it.
+    backdrop: Rgba,
 }
 
 /// A laid-out frame: the taffy tree and what each node paints. Scrolling
@@ -3168,6 +3173,7 @@ impl Laid {
             scroll_top: None,
             scrolled: 0.0,
             parent: [offset.0, offset.1, vp.width, vp.height],
+            backdrop: self.theme.background,
         };
         let mut pinned = Vec::new();
         self.emit_at(
@@ -3326,6 +3332,7 @@ impl Laid {
                     clip,
                     parent_sem,
                     view_top: top,
+                    backdrop: at.backdrop,
                 });
                 return;
             }
@@ -3372,6 +3379,10 @@ impl Laid {
             scroll_top: at.scroll_top,
             scrolled: at.scrolled,
             parent: rect,
+            backdrop: match &e.paint {
+                Paint::Quad { bg, .. } if bg.0[3] >= 0.999 => *bg,
+                _ => at.backdrop,
+            },
         };
         let mut own_pins = Vec::new();
         let scrolls = e.scrolls && e.sem.is_some();
@@ -3429,7 +3440,7 @@ impl Laid {
                 // Over the content scrolling under it, up to the view's top.
                 let above = (r[1] - p.view_top).clamp(0.0, STICKY_REST);
                 let band = [r[0], r[1] - above, r[2], r[3] + above];
-                let mut q = QuadInstance::fill(band, self.theme.background, 0.0);
+                let mut q = QuadInstance::fill(band, p.backdrop, 0.0);
                 q.clip = p.clip;
                 scene.draws.push(Draw::Quad(q));
             }
@@ -3437,6 +3448,7 @@ impl Laid {
                 scroll_top: None,
                 scrolled: 0.0,
                 parent: rect,
+                backdrop: p.backdrop,
             };
             let mut none = Vec::new();
             self.emit_at(
