@@ -33,7 +33,9 @@ clients have no outbox). Images whose path ends in `/storage/<file>` or `/v1/pix
 Default bundles: `pixelfed_sample_no_login` (`pixelfed_sample_bundle.json`), `pixelfed` (`pixelfed_feed_bundle.json`,
 the default workspace), `events` (`events_bundle.json`) and `c-kitchen2dm` (`custom_kitchen_bundle.json`); any other
 bundle with `--fixture`. `theme_home_bundle.json`, `theme_groceries_bundle.json` and `theme_log_bundle.json` are
-hand-written pages drawn only with theme tokens (a home, a shopping list, a log), for checking both modes. Every bundle's layout is what a pod serves this build: a workspace as the `core://Page` it
+hand-written pages drawn only with theme tokens (a home, a shopping list, a log), for checking both modes.
+`text_styles_bundle.json` (workspace `text_styles`, the `text-styles` scenario) is a hand-written page of text
+weights, capitals and line limits, and conditionals with `not` and `count`. Every bundle's layout is what a pod serves this build: a workspace as the `core://Page` it
 expands to. `UPDATE_FIXTURES=1 cargo test -p server --test integration fixtures::` writes the Pixelfed ones and the
 blueprints from the pod (and the hand-written ones from their sources in `crates/server/tests/data/simulator/`; the
 test fails when one is stale); edit the source and rerun it.

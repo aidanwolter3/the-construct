@@ -7,9 +7,19 @@ use std::collections::{BTreeMap, HashMap};
 
 use crate::style::{Face, Type};
 
-const SANS: &[u8] = include_bytes!("../fonts/InstrumentSans-Regular.ttf");
-const SANS_BOLD: &[u8] = include_bytes!("../fonts/InstrumentSans-Bold.ttf");
-const SERIF: &[u8] = include_bytes!("../fonts/Lora-Regular.ttf");
+/// Each face at the four weights a `core://Text` `weight` names (400, 500,
+/// 600, 700): static cuts of the families' variable fonts, so no weight is
+/// synthesised (decision `text-weight-caps-lines`).
+const FACES: [&[u8]; 8] = [
+    include_bytes!("../fonts/InstrumentSans-Regular.ttf"),
+    include_bytes!("../fonts/InstrumentSans-Medium.ttf"),
+    include_bytes!("../fonts/InstrumentSans-SemiBold.ttf"),
+    include_bytes!("../fonts/InstrumentSans-Bold.ttf"),
+    include_bytes!("../fonts/Lora-Regular.ttf"),
+    include_bytes!("../fonts/Lora-Medium.ttf"),
+    include_bytes!("../fonts/Lora-SemiBold.ttf"),
+    include_bytes!("../fonts/Lora-Bold.ttf"),
+];
 /// Symbols the faces above lack (♥, ✓, ★, arrows, fractions such as ⅓):
 /// cosmic-text falls back to any loaded font that has a glyph, so these fill
 /// those gaps. The bold cut holds only fractions, superscripts and
@@ -81,13 +91,17 @@ pub fn nearest_stop(stops: &[CaretStop], x: f32, y: f32) -> Option<CaretStop> {
         .copied()
 }
 
+/// What a measurement depends on: the text, its face, size, wrap width,
+/// scale, letter spacing and line limit.
+type MeasureKey = (String, Face, u32, u32, u32, u32, u8);
+
 /// Fonts, shaping and a measurement cache. Measuring happens at the frame's
 /// scale (device pixels), so line breaks match what is drawn.
 pub struct TextEngine {
     fonts: FontSystem,
     sans: String,
     serif: String,
-    cache: HashMap<(String, Face, u32, u32, u32), Measured>,
+    cache: HashMap<MeasureKey, Measured>,
 }
 
 impl Default for TextEngine {
@@ -99,7 +113,7 @@ impl Default for TextEngine {
 impl TextEngine {
     pub fn new() -> TextEngine {
         let mut db = fontdb::Database::new();
-        for data in [SANS, SANS_BOLD, SERIF] {
+        for data in FACES {
             db.load_font_data(data.to_vec());
         }
         let family = |sans: bool| {
@@ -126,27 +140,91 @@ impl TextEngine {
         &mut self.fonts
     }
 
-    fn attrs(&self, face: Face) -> Attrs<'_> {
-        match face {
-            Face::Sans => Attrs::new().family(Family::Name(&self.sans)),
-            Face::SansBold => Attrs::new()
-                .family(Family::Name(&self.sans))
-                .weight(Weight::BOLD),
-            Face::Serif => Attrs::new().family(Family::Name(&self.serif)),
+    fn attrs(&self, ty: Type) -> Attrs<'_> {
+        let family = if ty.face.serif() {
+            &self.serif
+        } else {
+            &self.sans
+        };
+        let attrs = Attrs::new()
+            .family(Family::Name(family))
+            .weight(Weight(ty.face.weight()));
+        if ty.tracking == 0.0 {
+            attrs
+        } else {
+            attrs.letter_spacing(ty.tracking)
         }
     }
 
-    /// A shaped buffer for `text` at `scale` (device pixels per point),
-    /// wrapping at `max_width` points when set.
-    pub fn buffer(&mut self, text: &str, ty: Type, max_width: Option<f32>, scale: f32) -> Buffer {
+    /// `text` shaped as it is: every line, wrapping at `max_width` points.
+    fn shape(&mut self, text: &str, ty: Type, max_width: Option<f32>, scale: f32) -> Buffer {
         let metrics = Metrics::new(ty.size * scale, ty.line_height * scale);
         let mut buffer = Buffer::new(&mut self.fonts, metrics);
         buffer.set_size(max_width.map(|w| w * scale), None);
-        let attrs = self.attrs(ty.face);
-        let attrs = attrs.clone();
+        let attrs = self.attrs(ty);
         buffer.set_text(text, &attrs, Shaping::Advanced, None);
         buffer.shape_until_scroll(&mut self.fonts, false);
         buffer
+    }
+
+    /// A shaped buffer for `text` at `scale` (device pixels per point),
+    /// wrapping at `max_width` points when set. With `ty.max_lines`, a text
+    /// that takes more lines is cut so that it ends, in an ellipsis, on the
+    /// last of them ([`TextEngine::fitted`]).
+    pub fn buffer(&mut self, text: &str, ty: Type, max_width: Option<f32>, scale: f32) -> Buffer {
+        let buffer = self.shape(text, ty, max_width, scale);
+        let lines = usize::from(ty.max_lines);
+        if lines == 0 || buffer.layout_runs().count() <= lines {
+            return buffer;
+        }
+        let fitted = self.fitted(text, ty, max_width, scale, &buffer);
+        self.shape(&fitted, ty, max_width, scale)
+    }
+
+    /// `text` cut to `ty.max_lines` lines (it takes more in `buffer`): the
+    /// longest start of it that, followed by an ellipsis, still fits.
+    fn fitted(
+        &mut self,
+        text: &str,
+        ty: Type,
+        max_width: Option<f32>,
+        scale: f32,
+        buffer: &Buffer,
+    ) -> String {
+        let lines = usize::from(ty.max_lines);
+        // Where the last line that may be kept ends: no longer start fits.
+        let mut para = vec![0usize];
+        para.extend(text.match_indices('\n').map(|(i, _)| i + 1));
+        let end = buffer
+            .layout_runs()
+            .take(lines)
+            .map(|run| {
+                let base = para.get(run.line_i).copied().unwrap_or(0);
+                base + run.glyphs.iter().map(|g| g.end).max().unwrap_or(0)
+            })
+            .max()
+            .unwrap_or(0)
+            .min(text.len());
+        let cuts: Vec<usize> = text
+            .char_indices()
+            .map(|(i, _)| i)
+            .filter(|i| *i <= end)
+            .chain(text.is_char_boundary(end).then_some(end))
+            .collect();
+        let with_ellipsis = |n: usize| format!("{}\u{2026}", text[..n].trim_end());
+        // The longest cut that fits, by bisection (a longer start never
+        // takes fewer lines).
+        let (mut lo, mut hi) = (0usize, cuts.len());
+        while lo + 1 < hi {
+            let mid = (lo + hi) / 2;
+            let shaped = self.shape(&with_ellipsis(cuts[mid]), ty, max_width, scale);
+            if shaped.layout_runs().count() <= lines {
+                lo = mid;
+            } else {
+                hi = mid;
+            }
+        }
+        with_ellipsis(cuts.get(lo).copied().unwrap_or(0))
     }
 
     /// Where a caret can stand in `text` laid out as it is drawn (wrapped
@@ -251,6 +329,8 @@ impl TextEngine {
             ty.size.to_bits(),
             max_width.map_or(u32::MAX, |w| w.max(0.0).floor() as u32),
             scale.to_bits(),
+            ty.tracking.to_bits(),
+            ty.max_lines,
         );
         if let Some(m) = self.cache.get(&key) {
             return *m;

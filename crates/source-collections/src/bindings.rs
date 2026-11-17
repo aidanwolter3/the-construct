@@ -10,8 +10,8 @@
 //!   `collection:<c>` or one of its views, `collection:<c>:view:<v>` (the
 //!   view must exist), and its `filter.fields`, `group_by.field`,
 //!   `where.field` (or each `where[].field`);
-//! - a `core://Text` `count`'s `where[].field` when its `query_key` is
-//!   `collection:<c>`;
+//! - a `core://Text` or `core://Conditional` `count`'s `where[].field` when
+//!   its `query_key` is `collection:<c>`;
 //! - `${collections://<c>/...#<f>}`;
 //! - a mutation of `collections://<c>/...` (or of `$item.uri` in such a
 //!   list): its `field`, `also[].field` and `entity.<f>` in `value_expr`;
@@ -202,7 +202,8 @@ impl<'a> Checker<'a> {
                 inner = Some(def);
                 self.list_fields(map, at, def)?;
             } else if let Some(conds) = map.get("where").and_then(Value::as_array) {
-                // A core://Text count: every condition names a field.
+                // A core://Text or core://Conditional count: every
+                // condition names a field.
                 for (i, w) in conds.iter().enumerate() {
                     if let Some(f) = w["field"].as_str() {
                         self.bindable(&format!("{at}/where/{i}/field"), def, f, "the count")?;
@@ -573,6 +574,14 @@ mod tests {
         let other = json!({"type": "core://Text", "style": "Label", "value_expr": "$count",
             "count": {"query_key": "collection:groceries"}});
         assert!(check(&other, &[], &defs()).is_err());
+        // A conditional's count names fields the same way.
+        let cond = |field: &str| {
+            json!({"type": "core://Conditional", "content": {"type": "core://Divider"},
+                "count": {"query_key": "collection:todos", "where": [{"field": field, "equals": "false"}]}})
+        };
+        assert_eq!(check(&cond("done"), &[], &defs()), Ok(()));
+        let e = check(&cond("finished"), &[], &defs()).unwrap_err();
+        assert_eq!(e.pointer, "/count/where/0/field");
     }
 
     #[test]

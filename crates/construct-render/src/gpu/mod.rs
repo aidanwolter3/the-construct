@@ -15,7 +15,6 @@ use image::RgbaImage;
 use wgpu::util::DeviceExt;
 
 use crate::scene::{Draw, QuadInstance, Scene, TextRun};
-use crate::style::Type;
 use crate::text::TextEngine;
 
 /// Why the GPU couldn't draw.
@@ -159,7 +158,7 @@ pub struct RenderStats {
 
 /// A text run's shape: its text, face, size, line height, wrap width and
 /// scale (the floats as bits).
-type ShapeKey = (String, crate::style::Face, u32, u32, u32, u32);
+type ShapeKey = (String, crate::style::Face, u32, u32, u32, u32, (u32, u8));
 
 /// Shaped runs not drawn for this many frames are dropped once the cache
 /// holds more than [`SHAPED_MAX`].
@@ -502,6 +501,7 @@ impl Renderer {
                 t.line_height.to_bits(),
                 (t.rect[2] + 0.5).to_bits(),
                 s.to_bits(),
+                (t.tracking.to_bits(), t.max_lines),
             )
         };
         // Shape at the frame's scale, as the CPU path does; runs drawn
@@ -513,11 +513,7 @@ impl Renderer {
                     Some(e) => e.1 = frame_no,
                     None => {
                         let started = std::time::Instant::now();
-                        let ty = Type {
-                            face: t.face,
-                            size: t.size,
-                            line_height: t.line_height,
-                        };
+                        let ty = t.ty();
                         let b = text.buffer(&t.text, ty, Some(t.rect[2] + 0.5), s);
                         self.shaped.insert(k, (b, frame_no));
                         stats.shaped = stats.shaped.saturating_add(1);

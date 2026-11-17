@@ -4,7 +4,7 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::style::{Face, Rgba};
+use crate::style::{Face, Rgba, Type};
 
 /// One instanced quad: a rounded rectangle with an optional border and drop
 /// shadow, in logical points. The GPU vertex buffer holds these as they are
@@ -88,11 +88,38 @@ pub struct TextRun {
     pub face: Face,
     pub size: f32,
     pub line_height: f32,
+    /// Letter spacing in ems (a `core://Text` with `caps`).
+    #[serde(skip_serializing_if = "is_zero")]
+    pub tracking: f32,
+    /// At most this many lines, the last ending in an ellipsis (0: no limit).
+    #[serde(skip_serializing_if = "is_zero_u8")]
+    pub max_lines: u8,
     #[serde(skip)]
     pub color: Rgba,
     pub rect: [f32; 4],
     #[serde(skip)]
     pub clip: [f32; 4],
+}
+
+impl TextRun {
+    /// How it is shaped.
+    pub fn ty(&self) -> Type {
+        Type {
+            face: self.face,
+            size: self.size,
+            line_height: self.line_height,
+            tracking: self.tracking,
+            max_lines: self.max_lines,
+        }
+    }
+}
+
+fn is_zero(v: &f32) -> bool {
+    *v == 0.0
+}
+
+fn is_zero_u8(v: &u8) -> bool {
+    *v == 0
 }
 
 /// A named icon (`crate::icons`) drawn in a square box, tinted.

@@ -498,9 +498,23 @@ fn check_values(node: &UiNode) -> Result<(), String> {
         UiNode::Progress { size_dp: Some(s) } => check_dp("progress size_dp", *s, MAX_SIZE_DP),
         UiNode::Text {
             value_expr,
-            count: Some(count),
+            count,
+            max_lines,
             ..
-        } => check_count(value_expr, count),
+        } => {
+            if let Some(n) = max_lines
+                && !(1..=protocol::MAX_TEXT_LINES).contains(n)
+            {
+                return Err(format!(
+                    "text max_lines {n} (1..={})",
+                    protocol::MAX_TEXT_LINES
+                ));
+            }
+            match count {
+                Some(count) => check_count(value_expr, count),
+                None => Ok(()),
+            }
+        }
         UiNode::List {
             indent,
             filter,
@@ -575,8 +589,21 @@ fn check_values(node: &UiNode) -> Result<(), String> {
             Ok(())
         }
         UiNode::Conditional {
-            value, date, time, ..
+            value,
+            date,
+            time,
+            equals,
+            count,
+            ..
         } => {
+            if let Some(c) = count {
+                if !value.trim().is_empty() || equals.is_some() || date.is_some() {
+                    return Err("a conditional with count tests the query alone: \
+                         leave out value, equals and date"
+                        .into());
+                }
+                return check_where("conditional count", &c.query_key, &c.where_);
+            }
             if time.is_some() && date.is_none() {
                 return Err("a conditional's time goes with a date (Past, Today or Future)".into());
             }
@@ -719,24 +746,31 @@ fn check_values(node: &UiNode) -> Result<(), String> {
 /// A `core://Text` `count` (feature `count`) names a query, its `where`
 /// fields, and is shown: the text has a `$count` (or a `zero_text`).
 fn check_count(value_expr: &str, count: &protocol::TextCount) -> Result<(), String> {
-    if count.query_key.trim().is_empty() {
-        return Err("text count needs a query_key".into());
+    check_where("text count", &count.query_key, &count.where_)?;
+    if !value_expr.contains("$count") && count.zero_text.is_none() {
+        return Err("text count is set but value_expr has no $count (e.g. \"$count left\")".into());
     }
-    if count.where_.iter().any(|w| w.field.trim().is_empty()) {
-        return Err("text count where needs a field".into());
+    Ok(())
+}
+
+/// A count's query and its `where` (a `core://Text` or
+/// `core://Conditional` `count`): a query key, a field in every condition,
+/// and `older_than` durations that read.
+fn check_where(what: &str, query_key: &str, conds: &[protocol::ListWhere]) -> Result<(), String> {
+    if query_key.trim().is_empty() {
+        return Err(format!("{what} needs a query_key"));
     }
-    if let Some(bad) = count
-        .where_
+    if conds.iter().any(|w| w.field.trim().is_empty()) {
+        return Err(format!("{what} where needs a field"));
+    }
+    if let Some(bad) = conds
         .iter()
         .filter_map(|w| w.older_than.as_deref())
         .find(|d| protocol::ast::duration_secs(d).is_none())
     {
         return Err(format!(
-            "text count where older_than '{bad}' is not a duration such as 30m, 12h, 1d or 2w"
+            "{what} where older_than '{bad}' is not a duration such as 30m, 12h, 1d or 2w"
         ));
-    }
-    if !value_expr.contains("$count") && count.zero_text.is_none() {
-        return Err("text count is set but value_expr has no $count (e.g. \"$count left\")".into());
     }
     Ok(())
 }
@@ -1515,6 +1549,51 @@ mod tests {
         let dated = json!({"type": "core://Text", "style": "Body", "value_expr": "Due $item.due",
             "format": {"date": "Relative", "past": "Overdue"}});
         assert_eq!(check_values(&node(dated)), Ok(()));
+    }
+
+    #[test]
+    fn text_lines_and_conditional_counts_are_checked() {
+        let text = |extra: Value| {
+            let mut v = json!({"type": "core://Text", "style": "Caption", "value_expr": "Hi"});
+            v.as_object_mut()
+                .unwrap()
+                .extend(extra.as_object().unwrap().clone());
+            node(v)
+        };
+        let styled = json!({"weight": "SemiBold", "caps": true, "max_lines": 2});
+        assert_eq!(check_values(&text(styled)), Ok(()));
+        assert_eq!(check_values(&text(json!({"max_lines": 20}))), Ok(()));
+        for bad in [0, 21] {
+            let e = check_values(&text(json!({"max_lines": bad}))).unwrap_err();
+            assert!(e.contains("max_lines"), "{e}");
+        }
+
+        let cond = |extra: Value| {
+            let mut v =
+                json!({"type": "core://Conditional", "content": {"type": "core://Divider"}});
+            v.as_object_mut()
+                .unwrap()
+                .extend(extra.as_object().unwrap().clone());
+            node(v)
+        };
+        let count = json!({"query_key": "collection:todos",
+            "where": [{"field": "done", "equals": "false"}]});
+        assert_eq!(check_values(&cond(json!({"count": count}))), Ok(()));
+        assert_eq!(
+            check_values(&cond(json!({"count": count, "not": true}))),
+            Ok(())
+        );
+        let inverted = json!({"value": "${local://inbox#unread}", "equals": "0", "not": true});
+        assert_eq!(check_values(&cond(inverted)), Ok(()));
+        for bad in [
+            json!({"count": {"query_key": " "}}),
+            json!({"count": {"query_key": "q", "where": [{"field": "", "equals": "x"}]}}),
+            json!({"count": {"query_key": "q", "where": [{"field": "f", "older_than": "soon"}]}}),
+            json!({"count": count, "value": "$item.title"}),
+            json!({"count": count, "equals": "x"}),
+        ] {
+            assert!(check_values(&cond(bad.clone())).is_err(), "{bad}");
+        }
     }
 
     #[test]
