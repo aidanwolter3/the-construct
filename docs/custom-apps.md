@@ -129,6 +129,7 @@ never writes code: it declares typed fields (`text`, `number`, `bool`, `date`, `
 | A layout uses (for collection `<c>`) | |
 |---|---|
 | feed `["collections", "<c>"]` | Rows `collections://<c>/<id>` under the query `collection:<c>`, with every field plus `id`, `deleted`, `created_at`, `updated_at`. A `datetime` field `<f>` also comes as `<f>_date` (`2026-11-06`), `<f>_time` (`7:30 PM`, empty for a date alone), `<f>_day` (`Fri Nov 6`) and `<f>_text` (`Fri Nov 6 · 7:30 PM`), on the value's own wall clock. |
+| feed `["collections", "<c>"]`, a view | Each of the collection's views as its own query, `collection:<c>:view:<v>`: the rows it keeps, in its order (see **Views** below). |
 | `GET /v1/collections/<c>/rows` | The same, as a screen's data path. |
 | `GET /v1/collections/<c>/row?id=<id>` | One row (`collection:<c>:row:<id>`). |
 | `POST /v1/collections/<c>/create {<field>: …, client_id?}` | For `action.mutation.create`; a repeated `client_id` answers the same row. |
@@ -168,6 +169,19 @@ never writes code: it declares typed fields (`text`, `number`, `bool`, `date`, `
   empties (or takes the next match's id) and comes back on restore. Decisions [`collection-computed-fields`](decisions/collection-computed-fields.md),
   [`collection-lookups`](decisions/collection-lookups.md) and
   [`live-computed-fields`](decisions/live-computed-fields.md).
+- **Views.** A collection's `views` (`define_collection`, or `apply_change` `set_view` / `remove_view`) are small
+  derived lists served beside the whole list, each as `collection:<c>:view:<name>` (bind a `core://List`'s
+  `query_key` to it; `$item.<field>` is checked as for the whole list, and a layout naming a view that doesn't
+  exist is refused with the ones that do). A view is `{name, where?, date?, order_by?, descending?, limit?}`:
+  every `where` `{field, equals}` must match (as text, as a layout `where` compares), `date: {field, from_days?,
+  to_days?}` keeps rows whose date or datetime falls that many days from today in the pod's time zone (0 today,
+  1..7 next week, negative the past; a datetime by its local date; empty dates never match), `order_by` (else the
+  collection's order) sorts, and `limit` (1–200) keeps the first rows. E.g. the next three: `{name: "upcoming",
+  date: {field: "start", from_days: 0}, order_by: "start", limit: 3}`. At most 10 per collection; fields are kept
+  by id (a rename keeps the view), and removing a field a view reads is refused until the view changes. Views are
+  worked out when the list is served; devices are told to reload dated ones just after the pod's local midnight
+  (on the Collections poll, which runs while a device is signed in). Decision
+  [`collection-views`](decisions/collection-views.md).
 - **References.** A field `{type: "ref", collection}` holds the id of a row of that collection. Writes give the id
   or `{"<unique field>": value}` (`{"meal": {"name": "Harvest Soup"}}`), resolved to the id; anything that names
   no live row is refused. Rows serve the id; a layout reads through it with

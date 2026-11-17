@@ -68,6 +68,7 @@ pub mod remind;
 pub mod share;
 #[cfg(any(test, feature = "test-seed"))]
 pub mod test_seed;
+pub mod views;
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -155,8 +156,9 @@ pub const MANIFEST: SourceManifest = SourceManifest {
             "collection:{collection}",
             "collection:{collection}:fillers",
             "collection:{collection}:alerted",
+            "collection:{collection}:view:{view}",
         ],
-        doc: "The rows of one collection, in its order (list the collection's name as the feed: [\"collections\", \"todos\"]).",
+        doc: "The rows of one collection, in its order (list the collection's name as the feed: [\"collections\", \"todos\"]); each of its views (define_collection views, apply_change set_view) as collection:<name>:view:<view>, the rows it keeps in its order.",
     }],
     data_paths: &[
         PathSpec {
@@ -165,8 +167,9 @@ pub const MANIFEST: SourceManifest = SourceManifest {
                 "collection:{collection}",
                 "collection:{collection}:fillers",
                 "collection:{collection}:alerted",
+                "collection:{collection}:view:{view}",
             ],
-            doc: "The rows of one collection (for a screen's data).",
+            doc: "The rows of one collection (for a screen's data), with its views.",
         },
         PathSpec {
             pattern: "/v1/collections/{collection}/fillers/{filler}",
@@ -524,6 +527,11 @@ impl Source for CollectionsAdapter {
                 next.min(remind::MAX_WAIT)
             } else {
                 next
+            };
+            // Views with a date window change at the pod's midnight.
+            let next = match views::refresh_at_midnight(pod, pod_core::util::now_secs()).await {
+                Some(midnight) => next.min(midnight),
+                None => next,
             };
             PollOutcome {
                 next_in: Some(next),

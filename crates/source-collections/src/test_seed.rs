@@ -39,6 +39,7 @@ pub fn seed_test_dishes(conn: &Connection) -> rusqlite::Result<()> {
         alerts: Vec::new(),
         system: None,
         actions: Vec::new(),
+        views: Vec::new(),
         order_by: Vec::new(),
         descending: false,
     };

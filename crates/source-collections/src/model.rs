@@ -500,6 +500,10 @@ pub struct Definition {
     /// [`crate::actions`]).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub actions: Vec<crate::actions::Action>,
+    /// Named derived lists of its rows, each served as its own query key
+    /// (decision `collection-views`, [`crate::views`]).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub views: Vec<crate::views::View>,
 }
 
 /// The built-in app a system collection belongs to.
@@ -743,6 +747,7 @@ impl Definition {
             "fillers": self.fillers.iter().map(|f| f.describe(self)).collect::<Vec<_>>(),
             "alerts": self.alerts.iter().map(|a| a.describe(self)).collect::<Vec<_>>(),
             "actions": self.actions.iter().map(|a| crate::actions::describe(self, a, others)).collect::<Vec<_>>(),
+            "views": self.views.iter().map(|v| v.describe(self)).collect::<Vec<_>>(),
             "system_app": self.system.as_ref().map(|s| s.app.clone()),
         })
     }
@@ -965,6 +970,7 @@ pub fn rules_to_create(
             alerts: Vec::new(),
             system: None,
             actions: Vec::new(),
+            views: Vec::new(),
             order_by: Vec::new(),
             descending: false,
         });
@@ -2005,6 +2011,7 @@ pub fn check_definition(def: &Definition, max_fields: usize) -> Result<(), Strin
     crate::remind::check(def)?;
     crate::filler::check(def, u32::MAX)?;
     crate::alerts::check(def)?;
+    crate::views::check(def)?;
     if def.order_by.len() > MAX_ORDER_KEYS {
         return Err(format!(
             "rows are ordered by at most {MAX_ORDER_KEYS} fields"
@@ -2313,6 +2320,7 @@ mod tests {
             alerts: Vec::new(),
             system: None,
             actions: Vec::new(),
+            views: Vec::new(),
         }
     }
 

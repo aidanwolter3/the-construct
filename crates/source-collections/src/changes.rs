@@ -20,6 +20,8 @@
 //! | `{op: add_alert, ...}`, `{op: update_alert, alert, ...}`, `{op: remove_alert, alert}` | notify when a row matches ([`crate::alerts`]) |
 //! | `{op: set_action, action}` | add an insert-from-query action, or replace the one of that name ([`crate::actions`]) |
 //! | `{op: remove_action, action}` | remove the action of that name |
+//! | `{op: set_view, view}` | add a view, or replace the one of that name ([`crate::views`]) |
+//! | `{op: remove_view, view}` | remove the view of that name |
 //!
 //! A system collection (one a built-in app owns) refuses renaming, removing
 //! and retyping its fields.
@@ -359,9 +361,18 @@ fn apply_op(
                 ));
             }
         }
+        "set_view" => {
+            let spec = op.get("view").filter(|v| v.is_object()).ok_or_else(|| {
+                "set_view needs \"view\": a view spec {name, where?, date?, order_by?, descending?, limit?}"
+                    .to_owned()
+            })?;
+            let v = crate::views::parse(def, spec)?;
+            crate::views::set(def, v)?;
+        }
+        "remove_view" => crate::views::remove(def, arg("view"))?,
         other => {
             return Err(format!(
-                "unknown op '{other}' (add_field, rename_field, remove_field, restore_field, update_field, recompute_field, set_order, set_title, add_reminder, update_reminder, remove_reminder, set_filler, remove_filler, add_alert, update_alert, remove_alert, set_action, remove_action)"
+                "unknown op '{other}' (add_field, rename_field, remove_field, restore_field, update_field, recompute_field, set_order, set_title, add_reminder, update_reminder, remove_reminder, set_filler, remove_filler, add_alert, update_alert, remove_alert, set_action, remove_action, set_view, remove_view)"
             ));
         }
     }
@@ -464,6 +475,18 @@ pub fn restore(
         .cloned()
         .collect();
     def.alerts = keep;
+    // So do views that read a field that is gone again.
+    let views: Vec<crate::views::View> = def
+        .views
+        .iter()
+        .filter(|v| {
+            v.sources()
+                .iter()
+                .all(|id| def.by_id(id).is_some_and(Field::live))
+        })
+        .cloned()
+        .collect();
+    def.views = views;
     model::check_definition(&def, max_fields)?;
     Ok(Planned {
         convert: to_convert(current, &def),
@@ -520,6 +543,7 @@ mod tests {
             alerts: Vec::new(),
             system: None,
             actions: Vec::new(),
+            views: Vec::new(),
         }
     }
 
@@ -720,5 +744,71 @@ mod tests {
         v2p.fields[2].purged = true;
         let r = restore(&v2p, &v1, 9, 10).unwrap();
         assert!(r.def.field("due").is_none());
+    }
+
+    #[test]
+    fn views_are_set_replaced_and_removed() {
+        let upcoming = json!({"op": "set_view", "view": {"name": "upcoming",
+            "where": {"field": "done", "equals": false},
+            "date": {"field": "due", "from_days": 0}, "order_by": "due", "limit": 3}});
+        let p = plan_(&todos(), &[upcoming], 0, 99, 10).unwrap();
+        assert_eq!(p.def.views.len(), 1);
+        assert_eq!(p.def.views[0].order_by, ["f3"]);
+        // Same name: replaced.
+        let p = plan_(
+            &p.def,
+            &[json!({"op": "set_view", "view": {"name": "upcoming", "limit": 5}})],
+            0,
+            99,
+            10,
+        )
+        .unwrap();
+        assert_eq!(p.def.views.len(), 1);
+        assert_eq!(p.def.views[0].limit, Some(5));
+        assert!(p.def.views[0].date.is_none());
+        // A rename keeps it (ids); removing the field it reads is refused.
+        let dated = json!({"op": "set_view", "view": {"name": "soon",
+            "date": {"field": "due", "from_days": 0, "to_days": 7}}});
+        let p = plan_(
+            &p.def,
+            &[
+                dated,
+                json!({"op": "rename_field", "field": "due", "to": "deadline"}),
+            ],
+            0,
+            99,
+            10,
+        )
+        .unwrap();
+        assert_eq!(p.def.views[1].describe(&p.def)["date"]["field"], "deadline");
+        let (_, e) = plan_(
+            &p.def,
+            &[json!({"op": "remove_field", "field": "deadline"})],
+            0,
+            99,
+            10,
+        )
+        .unwrap_err();
+        assert!(e.contains("view 'soon' reads 'deadline'"), "{e}");
+        let p = plan_(
+            &p.def,
+            &[json!({"op": "remove_view", "view": "soon"})],
+            0,
+            99,
+            10,
+        )
+        .unwrap();
+        assert_eq!(crate::views::names(&p.def), ["upcoming"]);
+        let (_, e) = plan_(
+            &p.def,
+            &[json!({"op": "remove_view", "view": "soon"})],
+            0,
+            99,
+            10,
+        )
+        .unwrap_err();
+        assert!(e.contains("no view 'soon' (views: upcoming)"), "{e}");
+        let (_, e) = plan_(&p.def, &[json!({"op": "set_view"})], 0, 99, 10).unwrap_err();
+        assert!(e.contains("set_view needs"), "{e}");
     }
 }
