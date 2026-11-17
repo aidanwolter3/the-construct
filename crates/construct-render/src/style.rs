@@ -41,6 +41,35 @@ impl Rgba {
     pub fn to_u8(self) -> [u8; 4] {
         self.0.map(|c| (c.clamp(0.0, 1.0) * 255.0).round() as u8)
     }
+
+    /// Relative luminance (WCAG: linear light, 0 black to 1 white), alpha
+    /// ignored.
+    pub fn luminance(self) -> f32 {
+        let lin = |c: f32| {
+            let c = c.clamp(0.0, 1.0);
+            if c <= 0.04045 {
+                c / 12.92
+            } else {
+                ((c + 0.055) / 1.055).powf(2.4)
+            }
+        };
+        let [r, g, b, _] = self.0;
+        0.2126 * lin(r) + 0.7152 * lin(g) + 0.0722 * lin(b)
+    }
+
+    /// Light enough for dark icons over it (Android's "light" system bars):
+    /// dark text reads better on it than white does (WCAG contrast).
+    pub fn is_light(self) -> bool {
+        // Equal contrast with black and white at L = 0.179.
+        self.luminance() > 0.179
+    }
+
+    /// Black at `a` over this colour (a scrim).
+    pub fn dimmed(self, a: f32) -> Rgba {
+        let [r, g, b, al] = self.0;
+        let k = 1.0 - a.clamp(0.0, 1.0);
+        Rgba([r * k, g * k, b * k, al])
+    }
 }
 
 /// The theme tokens with their light and dark defaults: the same table as
@@ -250,7 +279,7 @@ impl Face {
 
 /// A text style's face and metrics (logical points), as Material 3 types,
 /// with a `core://Text`'s own letter spacing (`tracking`, in ems: `caps`)
-/// and line limit (`max_lines`, 0 for none).
+/// line limit (`max_lines`, 0 for none) and line through it (`strike`).
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Type {
     pub face: Face,
@@ -258,10 +287,11 @@ pub struct Type {
     pub line_height: f32,
     pub tracking: f32,
     pub max_lines: u8,
+    pub strike: bool,
 }
 
 impl Type {
-    /// A face at a size, with no letter spacing or line limit.
+    /// A face at a size, with no letter spacing, line limit or strike.
     pub const fn new(face: Face, size: f32, line_height: f32) -> Type {
         Type {
             face,
@@ -269,6 +299,7 @@ impl Type {
             line_height,
             tracking: 0.0,
             max_lines: 0,
+            strike: false,
         }
     }
 }

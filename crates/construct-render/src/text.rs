@@ -432,6 +432,32 @@ impl TextEngine {
     }
 }
 
+/// How high a `core://Text` `strike` line sits above each line's baseline,
+/// in ems: through the middle of its lowercase letters.
+pub const STRIKE_RISE: f32 = 0.3;
+
+/// The lines a `core://Text` with `strike` draws through `buffer` (shaped
+/// at `scale` for `ty`): one per laid-out line that has glyphs, from its
+/// first glyph's left to its last glyph's right, 1 dp thick and
+/// [`STRIKE_RISE`] above its baseline. Device pixels, whole, from the
+/// buffer's origin (x, y, width, height), so the CPU and the GPU renderer
+/// draw the same pixels.
+pub fn strike_lines(buffer: &Buffer, ty: Type, scale: f32) -> Vec<[i32; 4]> {
+    let thick = scale.round().max(1.0) as i32;
+    buffer
+        .layout_runs()
+        .filter_map(|run| {
+            let left = run.glyphs.iter().map(|g| g.x).reduce(f32::min)?;
+            let right = run.glyphs.iter().map(|g| g.x + g.w).reduce(f32::max)?;
+            let x = left.round() as i32;
+            let w = (right.round() as i32 - x).max(0);
+            let mid = run.line_y.round() - STRIKE_RISE * ty.size * scale;
+            let y = (mid - thick as f32 / 2.0).round() as i32;
+            (w > 0).then_some([x, y, w, thick])
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

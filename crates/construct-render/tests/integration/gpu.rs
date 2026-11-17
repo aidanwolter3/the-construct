@@ -118,6 +118,24 @@ fn gpu_quad_matches_the_cpu_sdf() {
 }
 
 #[test]
+fn gpu_strike_matches_the_cpu() {
+    let Some(mut surface) = surface() else {
+        return;
+    };
+    let (scene, mut text) = crate::text_styles::struck_scene();
+    let gpu = surface.render(&scene, &mut text).unwrap();
+    let cpu = construct_render::cpu::CpuRenderer::new().render(&scene, &mut text);
+    let ratio = diff_ratio(&gpu, &cpu, 24);
+    assert!(ratio < 0.002, "{:.4}% differ", ratio * 100.0);
+    // The line is drawn: a row dark across the struck text.
+    let run = scene.texts().nth(1).unwrap().clone();
+    let (dark, _) = crate::text_styles::longest_dark_row(&gpu, &run, scene.scale);
+    let (plain, _) =
+        crate::text_styles::longest_dark_row(&gpu, scene.texts().next().unwrap(), scene.scale);
+    assert!(dark > plain * 3, "{dark} vs {plain}");
+}
+
+#[test]
 fn gpu_snapshot_latency() {
     let Some(mut surface) = surface() else {
         return;

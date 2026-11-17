@@ -228,6 +228,14 @@ pub enum Compute {
         #[serde(rename = "where", default, skip_serializing_if = "Vec::is_empty")]
         conditions: Vec<Condition>,
     },
+    /// What the row an entity URI names serves as `value` (a field or a
+    /// derived name such as `alert_matched`, by name: the row may be of any
+    /// collection): field `from` (an id) holds the URI
+    /// (`collections://<c>/<id>`). Empty while it names no live row, or the
+    /// row serves no `value` (decision `notifications-in-a-collection`:
+    /// a notification follows its subject). Live: computed again when that
+    /// row changes or its collection's definition does ([`crate::follow`]).
+    Subject { from: String, value: String },
 }
 
 /// What a `rollup` computes.
@@ -307,6 +315,7 @@ impl Compute {
             Compute::Lookup { .. } => "lookup",
             Compute::Count { .. } => "count",
             Compute::Rollup { .. } => "rollup",
+            Compute::Subject { .. } => "subject",
         }
     }
 
@@ -330,7 +339,9 @@ impl Compute {
                 .filter(|id| id != ROW_ID)
                 .collect(),
             Compute::Model { from, .. } => from.clone(),
-            Compute::Lookup { from, .. } | Compute::Count { from, .. } => vec![from.clone()],
+            Compute::Lookup { from, .. }
+            | Compute::Count { from, .. }
+            | Compute::Subject { from, .. } => vec![from.clone()],
             // The row's own id: no field.
             Compute::Rollup { .. } => Vec::new(),
         }
@@ -360,7 +371,7 @@ impl Compute {
             Compute::Lookup { collection, .. }
             | Compute::Count { collection, .. }
             | Compute::Rollup { collection, .. } => Some(collection),
-            Compute::Expr { .. } | Compute::Model { .. } => None,
+            Compute::Expr { .. } | Compute::Model { .. } | Compute::Subject { .. } => None,
         }
     }
 }
@@ -625,6 +636,9 @@ impl Definition {
             Compute::Model { from, prompt } => {
                 let from: Vec<String> = from.iter().map(|id| self.name_of(id)).collect();
                 json!({ "kind": "model", "from": from, "prompt": prompt })
+            }
+            Compute::Subject { from, value } => {
+                json!({ "kind": "subject", "from": self.name_of(from), "value": value })
             }
             Compute::Lookup {
                 from,
@@ -1014,13 +1028,32 @@ fn parse_compute(
     };
     let shape = || {
         format!(
-            "field '{name}': compute is {{kind: \"expr\", expr}}, {{kind: \"model\", from, prompt}}, {{kind: \"lookup\", from, collection, key, value, match?, learn?}}, {{kind: \"lookup\", via, value}}, {{kind: \"count\", from, collection, key, where?}}, {{kind: \"rollup\", collection, via, op, field?, where?}}, a list of those (tried in order) or null"
+            "field '{name}': compute is {{kind: \"expr\", expr}}, {{kind: \"model\", from, prompt}}, {{kind: \"lookup\", from, collection, key, value, match?, learn?}}, {{kind: \"lookup\", via, value}}, {{kind: \"count\", from, collection, key, where?}}, {{kind: \"rollup\", collection, via, op, field?, where?}}, {{kind: \"subject\", from, value}}, a list of those (tried in order) or null"
         )
     };
     let Value::Object(o) = v else {
         return Err(shape());
     };
     match o.get("kind").and_then(Value::as_str) {
+        Some("subject") => {
+            let from = o.get("from").and_then(Value::as_str).unwrap_or("").trim();
+            let value = o.get("value").and_then(Value::as_str).unwrap_or("").trim();
+            if from.is_empty() || value.is_empty() {
+                return Err(format!(
+                    "field '{name}': a subject compute is {{kind: \"subject\", from: <a text field holding an entity URI such as collections://<c>/<id>>, value: <a field or derived name that row serves, e.g. alert_matched>}}"
+                ));
+            }
+            let from = field_id(from)?;
+            if def.by_id(&from).is_some_and(|f| f.kind != Kind::Text) {
+                return Err(format!(
+                    "field '{name}': a subject compute reads a text field holding an entity URI"
+                ));
+            }
+            Ok(Compute::Subject {
+                from,
+                value: value.to_owned(),
+            })
+        }
         Some("expr") => {
             let text = o.get("expr").and_then(Value::as_str).unwrap_or("");
             let parsed = crate::expr::parse(text)

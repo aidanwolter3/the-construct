@@ -623,7 +623,32 @@ pub fn append_def(
         "DELETE FROM collections_defs WHERE name = ?1 AND version <= ?2",
         params![def.name, version - MAX_DEF_VERSIONS],
     )?;
+    // What its rows serve may have changed (an alert edited): the subject
+    // computes that read them follow ([`crate::subject`]).
+    tx.prepare_cached(DEFS_CHANGED)?.execute([])?;
+    tx.execute(
+        "INSERT OR IGNORE INTO temp.collections_defs_changed (name) VALUES (?1)",
+        [&def.name],
+    )?;
     Ok(version)
+}
+
+/// The definitions changed since the last [`take_defs_changed`] (a
+/// temporary table, as [`take_changed`]'s).
+const DEFS_CHANGED: &str =
+    "CREATE TEMP TABLE IF NOT EXISTS collections_defs_changed (name TEXT PRIMARY KEY)";
+
+/// The collections whose definitions changed since the last call (and
+/// forget them).
+pub fn take_defs_changed(conn: &Connection) -> rusqlite::Result<Vec<String>> {
+    conn.prepare_cached(DEFS_CHANGED)?.execute([])?;
+    let out: Vec<String> = conn
+        .prepare_cached("SELECT name FROM temp.collections_defs_changed")?
+        .query_map([], |r| r.get(0))?
+        .collect::<rusqlite::Result<_>>()?;
+    conn.prepare_cached("DELETE FROM temp.collections_defs_changed")?
+        .execute([])?;
+    Ok(out)
 }
 
 // ---------- rows ----------

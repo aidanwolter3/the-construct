@@ -180,10 +180,10 @@ pub enum UiNode {
     /// or plain text. `format` (feature `date_format`) draws the dates it
     /// binds for the viewer ([`TextFormat`]); `count` (feature `count`)
     /// puts a count of a query's entities in place of `$count`
-    /// ([`TextCount`]). `weight`, `caps` and `max_lines` (features
-    /// `text_weight`, `text_caps`, `text_max_lines`, decision
-    /// `text-weight-caps-lines`) restyle it; a client without them ignores
-    /// them and draws the text in its style.
+    /// ([`TextCount`]). `weight`, `caps`, `max_lines` and `strike`
+    /// (features `text_weight`, `text_caps`, `text_max_lines`,
+    /// `text_strike`, decision `text-weight-caps-lines`) restyle it; a
+    /// client without them ignores them and draws the text in its style.
     #[serde(rename = "core://Text")]
     Text {
         value_expr: String,
@@ -204,6 +204,10 @@ pub enum UiNode {
         /// ends in an ellipsis on the last one.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         max_lines: Option<u8>,
+        /// Draws a line through the text (strikethrough), in its own
+        /// colour: a bought item on a shopping list.
+        #[serde(default, skip_serializing_if = "is_false")]
+        strike: bool,
     },
     #[serde(rename = "core://Button")]
     Button {

@@ -172,6 +172,17 @@ impl crate::window::Platform for Android {
         night_mode(&self.0)
     }
 
+    fn system_bars(&self, light_status: bool, light_nav: bool) {
+        log(&format!(
+            "system bars over light colours: status {light_status}, navigation {light_nav}"
+        ));
+        if let Err(e) = with_activity(&self.0, |env, activity| {
+            crate::bridge::system_bars(env, activity, light_status, light_nav)
+        }) {
+            log(&format!("system bars: {e}"));
+        }
+    }
+
     fn pick_images(&self, max: u32) -> bool {
         with_activity(&self.0, |env, activity| {
             crate::bridge::pick_images(env, activity, max)
