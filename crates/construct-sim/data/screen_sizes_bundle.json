@@ -1,0 +1,138 @@
+{
+ "version": "1.0.0",
+ "workspace": {
+  "type": "core://Page",
+  "id": "screen_sizes",
+  "title": "Recipes",
+  "root": {
+   "type": "core://Box",
+   "fill": true,
+   "background": "${local://theme#page}",
+   "content": {
+    "type": "core://Scroll",
+    "content": {
+     "type": "core://Column",
+     "max_width_dp": 1040,
+     "padding_h_dp": 16,
+     "padding_v_dp": 16,
+     "spacing_dp": 12,
+     "children": [
+      {
+       "type": "core://Text",
+       "style": "Headline",
+       "value_expr": "Recipes"
+      },
+      {
+       "type": "core://Text",
+       "style": "Secondary",
+       "value_expr": "${local://device#size_class} window, ${local://device#width_dp} points wide"
+      },
+      {
+       "type": "core://Conditional",
+       "value": "${local://device#size_class}",
+       "equals": "expanded",
+       "content": {
+        "type": "core://Text",
+        "style": "Body",
+        "value_expr": "Shown only on a wide window"
+       }
+      },
+      {
+       "type": "core://List",
+       "query_key": "recipes",
+       "min_column_dp": 240,
+       "spacing_dp": 12,
+       "item_template": {
+        "type": "core://Tappable",
+        "tag": "recipe:$item.id",
+        "content_description": "$item.title",
+        "on_click": {
+         "intent": "action.navigation.back"
+        },
+        "content": {
+         "type": "core://Box",
+         "border_color": "${local://theme#card_border}",
+         "background": "${local://theme#card}",
+         "corner_dp": 14,
+         "padding_h_dp": 14,
+         "padding_v_dp": 12,
+         "content": {
+          "type": "core://Column",
+          "spacing_dp": 2,
+          "children": [
+           {
+            "type": "core://Text",
+            "style": "Label",
+            "value_expr": "$item.title"
+           },
+           {
+            "type": "core://Text",
+            "style": "Secondary",
+            "value_expr": "$item.cuisine \u00b7 $item.minutes min"
+           }
+          ]
+         }
+        }
+       }
+      }
+     ]
+    }
+   }
+  }
+ },
+ "entities": {
+  "demo://recipes/1": {
+   "id": "1",
+   "title": "Lentil soup",
+   "cuisine": "Lebanese",
+   "minutes": 40
+  },
+  "demo://recipes/2": {
+   "id": "2",
+   "title": "Shakshuka",
+   "cuisine": "Tunisian",
+   "minutes": 30
+  },
+  "demo://recipes/3": {
+   "id": "3",
+   "title": "Mushroom risotto",
+   "cuisine": "Italian",
+   "minutes": 45
+  },
+  "demo://recipes/4": {
+   "id": "4",
+   "title": "Green curry",
+   "cuisine": "Thai",
+   "minutes": 35
+  },
+  "demo://recipes/5": {
+   "id": "5",
+   "title": "Black bean tacos",
+   "cuisine": "Mexican",
+   "minutes": 25
+  },
+  "demo://recipes/6": {
+   "id": "6",
+   "title": "Miso salmon",
+   "cuisine": "Japanese",
+   "minutes": 20
+  },
+  "demo://recipes/7": {
+   "id": "7",
+   "title": "Ratatouille",
+   "cuisine": "French",
+   "minutes": 60
+  }
+ },
+ "queries": {
+  "recipes": [
+   "demo://recipes/1",
+   "demo://recipes/2",
+   "demo://recipes/3",
+   "demo://recipes/4",
+   "demo://recipes/5",
+   "demo://recipes/6",
+   "demo://recipes/7"
+  ]
+ }
+}

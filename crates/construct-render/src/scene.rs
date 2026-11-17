@@ -94,6 +94,10 @@ pub struct TextRun {
     /// At most this many lines, the last ending in an ellipsis (0: no limit).
     #[serde(skip_serializing_if = "is_zero_u8")]
     pub max_lines: u8,
+    /// A line through each of its lines, in its colour (`core://Text`
+    /// `strike`).
+    #[serde(skip_serializing_if = "is_false")]
+    pub strike: bool,
     #[serde(skip)]
     pub color: Rgba,
     pub rect: [f32; 4],
@@ -110,6 +114,7 @@ impl TextRun {
             line_height: self.line_height,
             tracking: self.tracking,
             max_lines: self.max_lines,
+            strike: self.strike,
         }
     }
 }
@@ -120,6 +125,10 @@ fn is_zero(v: &f32) -> bool {
 
 fn is_zero_u8(v: &u8) -> bool {
     *v == 0
+}
+
+fn is_false(v: &bool) -> bool {
+    !*v
 }
 
 /// A named icon (`crate::icons`) drawn in a square box, tinted.

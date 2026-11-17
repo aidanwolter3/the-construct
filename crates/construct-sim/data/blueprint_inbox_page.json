@@ -167,6 +167,10 @@
                   "field": "channel_enabled"
                 },
                 {
+                  "equals": "true",
+                  "field": "subject_alert_matched"
+                },
+                {
                   "equals": "",
                   "field": "read_at",
                   "not": true,
@@ -380,6 +384,10 @@
                           {
                             "equals": "true",
                             "field": "channel_enabled"
+                          },
+                          {
+                            "equals": "true",
+                            "field": "subject_alert_matched"
                           },
                           {
                             "equals": "",

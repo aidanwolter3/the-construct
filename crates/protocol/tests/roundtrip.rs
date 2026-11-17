@@ -28,6 +28,7 @@ fn post_template(author_tag: Option<String>, items: ListBinding) -> UiNode {
         padding_v_dp: 0,
         align: Align::Start,
         justify: Justify::Start,
+        max_width_dp: 0,
         children: vec![
             UiNode::Row {
                 align: None,
@@ -52,6 +53,7 @@ fn post_template(author_tag: Option<String>, items: ListBinding) -> UiNode {
                         weight: None,
                         caps: false,
                         max_lines: None,
+                        strike: false,
                     },
                 ],
             },
@@ -158,6 +160,7 @@ fn full_workspace() -> UiNode {
                             weight: None,
                             caps: false,
                             max_lines: None,
+                            strike: false,
                         },
                         UiNode::Button {
                             label: "Back".into(),
@@ -189,6 +192,7 @@ fn full_workspace() -> UiNode {
                             padding_h_dp: 0,
                             focus: None,
                             stack: false,
+                            min_column_dp: 0,
                         },
                         UiNode::List {
                             query_key: "timeline:pinned".into(),
@@ -217,6 +221,7 @@ fn full_workspace() -> UiNode {
                                     weight: None,
                                     caps: false,
                                     max_lines: None,
+                                    strike: false,
                                 }),
                             }),
                             where_: Some(
@@ -233,6 +238,7 @@ fn full_workspace() -> UiNode {
                             padding_h_dp: 12,
                             focus: None,
                             stack: false,
+                            min_column_dp: 0,
                         },
                     ],
                 },
@@ -841,6 +847,7 @@ fn text_format_and_count_round_trip_and_need_their_features() {
             weight: None,
             caps: false,
             max_lines: None,
+            strike: false,
         }
     );
     assert_eq!(serde_json::to_string(&parsed).unwrap(), wire);
@@ -880,6 +887,7 @@ fn text_weight_caps_and_lines_round_trip_and_still_draw_without_their_features()
             weight: Some(protocol::TextWeight::SemiBold),
             caps: true,
             max_lines: Some(2),
+            strike: false,
         }
     );
     assert_eq!(serde_json::to_string(&parsed).unwrap(), wire);
@@ -926,9 +934,38 @@ fn text_weight_caps_and_lines_round_trip_and_still_draw_without_their_features()
             weight: None,
             caps: false,
             max_lines: None,
+            strike: false,
             ..
         }
     ));
+}
+
+#[test]
+fn text_strike_round_trips_and_still_draws_without_its_feature() {
+    let wire = r#"{"type":"core://Text","value_expr":"$item.name","style":"Body","strike":true}"#;
+    let parsed: UiNode = serde_json::from_str(wire).unwrap();
+    assert!(matches!(parsed, UiNode::Text { strike: true, .. }));
+    assert_eq!(serde_json::to_string(&parsed).unwrap(), wire);
+    // false is not written: a plain text is unchanged.
+    let plain: UiNode = serde_json::from_value(
+        json!({"type": "core://Text", "value_expr": "Milk", "style": "Body", "strike": false}),
+    )
+    .unwrap();
+    assert_eq!(
+        serde_json::to_string(&plain).unwrap(),
+        r#"{"type":"core://Text","value_expr":"Milk","style":"Body"}"#
+    );
+    // It doesn't gate the layout: a client without it draws plain text.
+    assert!(protocol::FEATURES.contains(&"text_strike"));
+    assert!(additive_features(&parsed).is_empty());
+    let mut old = protocol::ClientCaps::this_build();
+    old.features.remove("text_strike");
+    assert_eq!(
+        old.can_draw(&protocol::required_features(&parsed)),
+        protocol::Compatibility::Compatible
+    );
+    let unknown: UiNode = serde_json::from_str(&wire.replace("\"strike\"", "\"crossed\"")).unwrap();
+    assert!(matches!(unknown, UiNode::Text { strike: false, .. }));
 }
 
 #[test]

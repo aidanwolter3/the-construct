@@ -1277,3 +1277,87 @@ async fn a_range_fills_a_row_per_day_without_the_web() {
     .await;
     assert!(err, "{e}");
 }
+
+/// Decision `notifications-follow-their-alerts`: a notification says
+/// whether the row it is about still matches an alert
+/// (`subject_alert_matched`, live), so a layout can filter on it; the
+/// counts and the old list leave out the ones that don't. Narrowing the
+/// alert hides it, widening it back shows it again.
+#[tokio::test]
+async fn a_notification_follows_whether_its_alert_still_matches() {
+    let base = serve(Arc::new(Site::default())).await;
+    let agent = Arc::new(FakeAgent::default());
+    *agent.page_rows.lock().unwrap() = vec![
+        json!({"title": "Jazz night", "start": "2099-12-04T20:00", "venue": "Basement bar"}),
+        json!({"title": "Disco", "start": "2099-12-05T21:00", "venue": "Basement bar"}),
+    ];
+    let pod = pod_with(Some(agent.clone()));
+    ok(
+        &pod,
+        "define_collection",
+        json!({"name": "shows", "order_by": "start", "fields": [
+            {"name": "title", "type": "text", "optional": true},
+            {"name": "start", "type": "datetime", "optional": true},
+            {"name": "venue", "type": "text", "optional": true}],
+        "fillers": [{"kind": "fetch", "title": "Bar", "url": format!("{base}/plain"), "extract": "llm",
+            "fields": ["title", "start", "venue"], "zone": "America/Denver", "upcoming": "start"}]}),
+    )
+    .await;
+    settle(&pod, "shows").await;
+    let filler = filler_ids(&pod, "shows").await.remove(0);
+    let added = ok(
+        &pod,
+        "apply_change",
+        json!({"collection": "shows", "changes": [{"op": "add_alert", "any": ["jazz"], "filler": filler}]}),
+    )
+    .await;
+    ok(
+        &pod,
+        "create_layout",
+        json!({"title": "Shows", "feeds": [["collections", "shows"]],
+            "layout": {"type": "core://Workspace", "id": "x", "title": "Shows", "slots": [
+                {"slot_id": "list", "provider_uri": "core://custom", "content": {
+                    "type": "core://List", "query_key": "collection:shows",
+                    "item_template": {"type": "core://Text", "style": "Body",
+                        "value_expr": "$item.title"}}}]}}),
+    )
+    .await;
+    source_collections::alerts::run(&pod, None).await;
+    assert_eq!(pod.stored_notifications().unwrap().len(), 1);
+    let note = |pod: Pod| async move {
+        rows(&pod, "notifications")
+            .await
+            .into_iter()
+            .find(|r| r["title"] == "Jazz night")
+            .unwrap()
+    };
+    let n = note(pod.clone()).await;
+    assert_eq!(n["subject_alert_matched"], true, "{n}");
+    assert!(
+        n["subject"]
+            .as_str()
+            .unwrap()
+            .starts_with("collections://shows/")
+    );
+    let alert = ok(&pod, "describe_collection", json!({"collection": "shows"})).await["definition"]
+        ["alerts"][0]["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let _ = added;
+    let edit = |any: &str| json!({"collection": "shows", "changes": [{"op": "update_alert", "alert": alert, "any": [any]}]});
+
+    // Narrowed: the jazz night no longer matches; hidden from the counts.
+    ok(&pod, "apply_change", edit("disco")).await;
+    let n = note(pod.clone()).await;
+    assert_eq!(n["subject_alert_matched"], false, "{n}");
+    assert!(pod.stored_notifications().unwrap().is_empty());
+    let (_, list) = call(&pod, "GET", "/v1/notifications", None).await;
+    assert_eq!(list["unread_total"], 0, "{list}");
+
+    // Widened back: it shows again.
+    ok(&pod, "apply_change", edit("jazz")).await;
+    assert_eq!(note(pod.clone()).await["subject_alert_matched"], true);
+    let (_, list) = call(&pod, "GET", "/v1/notifications", None).await;
+    assert_eq!(list["unread_total"], 1, "{list}");
+}

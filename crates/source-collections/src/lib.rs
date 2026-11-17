@@ -67,6 +67,7 @@ pub mod quantity;
 pub mod refs;
 pub mod remind;
 pub mod share;
+pub mod subject;
 #[cfg(any(test, feature = "test-seed"))]
 pub mod test_seed;
 pub mod views;
@@ -485,6 +486,9 @@ impl Source for CollectionsAdapter {
                 // Model answers that failed, asked again when due (issue
                 // #230): on the pod's start and hourly after.
                 compute::retry_failed(&pod, pod_core::util::now_secs()).await;
+                // Subject computes whose answer changes with time alone (an
+                // alert's window of days), hourly.
+                subject::refresh(&pod).await;
                 drop(pod);
                 tokio::time::sleep(std::time::Duration::from_secs(3600)).await;
             }

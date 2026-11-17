@@ -159,7 +159,39 @@ pub fn notifications_definition(channels: &Definition) -> Definition {
         let a = crate::actions::parse(&def, &spec, &defs).expect("a valid action");
         def.actions.push(a);
     }
+    with_subject_matched(&mut def);
     def
+}
+
+/// The field naming whether the row a notification is about still matches
+/// an alert of its collection.
+pub const SUBJECT_MATCHED: &str = "subject_alert_matched";
+
+/// Add [`SUBJECT_MATCHED`] to `def` unless it has it: a bool, true unless
+/// the notification's subject row is served with `alert_matched` false
+/// (decision `notifications-follow-their-alerts`). Answers whether it was
+/// added.
+fn with_subject_matched(def: &mut Definition) -> bool {
+    if def.field(SUBJECT_MATCHED).is_some() {
+        return false;
+    }
+    let Some(from) = def.field("subject").map(|f| f.id.clone()) else {
+        return false;
+    };
+    let id = format!("f{}", def.next_field);
+    let mut f = model::parse_field(
+        &json!({"name": SUBJECT_MATCHED, "type": "bool", "default": true}),
+        id,
+        4_000,
+    )
+    .expect("a valid field");
+    f.compute = vec![Compute::Subject {
+        from,
+        value: "alert_matched".into(),
+    }];
+    def.fields.push(f);
+    def.next_field += 1;
+    true
 }
 
 /// Create both collections unless the pod has them; a new
@@ -194,7 +226,64 @@ pub fn ensure(tx: &Transaction<'_>, now: i64) -> rusqlite::Result<(Definition, D
             d
         }
     };
+    let notifications = upgrade(tx, notifications, now)?;
     Ok((notifications, channels))
+}
+
+/// A pod's `notifications` from before [`SUBJECT_MATCHED`]: the field is
+/// added, notifications handed over from the core without a `subject` get
+/// their `target_uri` as one when it names a collection row, and every row
+/// is computed.
+fn upgrade(tx: &Transaction<'_>, mut def: Definition, now: i64) -> rusqlite::Result<Definition> {
+    if !with_subject_matched(&mut def) {
+        return Ok(def);
+    }
+    db::append_def(
+        tx,
+        &def,
+        "Notifications follow their alerts: subject_alert_matched",
+        pod_core::layouts::AUTHOR_POD,
+        now,
+    )?;
+    let (Some(subject), Some(target)) = (
+        def.field("subject").map(|f| f.id.clone()),
+        def.field("target_uri").map(|f| f.id.clone()),
+    ) else {
+        return Ok(def);
+    };
+    for mut row in db::all_rows(tx, NOTIFICATIONS, true)? {
+        let has = row
+            .values
+            .get(&subject)
+            .and_then(Value::as_str)
+            .is_some_and(|s| !s.is_empty());
+        let to = row
+            .values
+            .get(&target)
+            .and_then(Value::as_str)
+            .filter(|t| t.starts_with("collections://"))
+            .map(str::to_owned);
+        if !has && let Some(t) = to {
+            row.values.insert(subject.clone(), json!(t));
+            db::save_row_values(tx, NOTIFICATIONS, &row)?;
+        }
+    }
+    crate::subject::follow(
+        tx,
+        &HashSet::new(),
+        &HashSet::new(),
+        true,
+        now,
+        crate::Caps::default().text_chars,
+    )?;
+    Ok(def)
+}
+
+/// Whether the notification row is shown at all: its channel's switch and
+/// its subject's alert ([`SUBJECT_MATCHED`]) are layouts' to filter on;
+/// the counts and the old list leave out what fails the latter here.
+fn subject_matches(def: &Definition, row: &Row) -> bool {
+    Names(def).flag(row, SUBJECT_MATCHED, true)
 }
 
 /// [`ensure`] on `store` (when the pod opens).
@@ -772,6 +861,7 @@ impl NotificationStore for InboxStore {
             };
             Ok(rows[start..]
                 .iter()
+                .filter(|r| subject_matches(defn, r))
                 .map(|r| to_notification(defn, r))
                 .filter(|n| {
                     (q.layouts.is_empty() || q.layouts.contains(&n.channel_layout))
@@ -795,6 +885,9 @@ impl NotificationStore for InboxStore {
             let mut by = BTreeMap::new();
             let mut total = 0u32;
             for r in db::all_rows(conn, NOTIFICATIONS, false)? {
+                if !subject_matches(defn, &r) {
+                    continue;
+                }
                 let n = to_notification(defn, &r);
                 if !n.read
                     && layouts.contains(&n.channel_layout)

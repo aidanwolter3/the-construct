@@ -46,6 +46,7 @@ pub fn default_bundle(workspace: &str) -> Option<&'static str> {
         "week_sessions" => "week_sessions_bundle.json",
         "tiles_home" => "tiles_home_bundle.json",
         "tiles_priorities" => "tiles_priorities_bundle.json",
+        "screen_sizes" => "screen_sizes_bundle.json",
         "text_styles" => "text_styles_bundle.json",
         // A home on the construct, before its first `construct` step
         // (decision `content-addressed-construct`).
@@ -330,6 +331,7 @@ impl FixturePod {
             });
             e["channel_enabled"] = json!(channel.is_none_or(|c| c["enabled"] != false));
             e["channel_title"] = channel.map_or(json!(""), |c| c["title"].clone());
+            e["subject_alert_matched"] = json!(true);
             set(&mut out, &uri, e);
             rows.push(uri);
         }

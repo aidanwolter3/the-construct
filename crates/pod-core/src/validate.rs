@@ -25,6 +25,11 @@ pub const MIN_SWIPE_THRESHOLD_DP: u16 = 24;
 pub const MAX_CHOICES: usize = 50;
 /// Most columns of a `core://List` grid.
 pub const MAX_COLUMNS: u16 = 6;
+/// A `core://List`'s narrowest and widest automatic column
+/// (`min_column_dp`, decision `screen-sizes`).
+pub const COLUMN_DP_RANGE: std::ops::RangeInclusive<u16> = 80..=1024;
+/// Widest `core://Column` `max_width_dp`.
+pub const MAX_WIDTH_DP: u16 = 2048;
 /// Most items a `core://MediaPicker` may hold, and most lines of a
 /// multi-line `core://TextField` (schema 9, D51).
 pub const MAX_MEDIA_ITEMS: u32 = 10;
@@ -490,6 +495,9 @@ fn check_values(node: &UiNode) -> Result<(), String> {
             padding_v_dp,
             ..
         } => {
+            if let UiNode::Column { max_width_dp, .. } = node {
+                check_dp("max_width_dp", *max_width_dp, MAX_WIDTH_DP)?;
+            }
             check_dp("spacing_dp", *spacing_dp, MAX_PADDING_DP)?;
             check_dp("padding_h_dp", *padding_h_dp, MAX_PADDING_DP)?;
             check_dp("padding_v_dp", *padding_v_dp, MAX_PADDING_DP)
@@ -525,10 +533,18 @@ fn check_values(node: &UiNode) -> Result<(), String> {
             padding_h_dp,
             focus,
             stack,
+            min_column_dp,
             ..
         } => {
-            if *stack && (*columns > 1 || group_by.is_some()) {
+            if *stack && (*columns > 1 || *min_column_dp > 0 || group_by.is_some()) {
                 return Err("a stacked list (a deck) has no columns or group_by".into());
+            }
+            if *min_column_dp > 0 && !COLUMN_DP_RANGE.contains(min_column_dp) {
+                return Err(format!(
+                    "list min_column_dp {min_column_dp} (from {} to {})",
+                    COLUMN_DP_RANGE.start(),
+                    COLUMN_DP_RANGE.end()
+                ));
             }
             if let Some(f) = focus {
                 if f.uri.trim().is_empty() {

@@ -153,6 +153,21 @@ pub fn settle(tx: &Connection, now: i64, caps: Caps) -> rusqlite::Result<Followe
     let mut out = Followed::default();
     let mut defs: Option<HashMap<String, Definition>> = None;
     let mut deps: HashMap<String, Vec<Dep>> = HashMap::new();
+    // Definitions changed in this transaction (an alert edited): what their
+    // rows serve may have changed, so the subject computes that read them
+    // follow (decision `notifications-in-a-collection`).
+    let changed_defs: HashSet<String> = db::take_defs_changed(tx)?.into_iter().collect();
+    let subjects = crate::subject::any(tx)?;
+    if subjects && !changed_defs.is_empty() {
+        crate::subject::follow(
+            tx,
+            &HashSet::new(),
+            &changed_defs,
+            false,
+            now,
+            caps.text_chars,
+        )?;
+    }
     for wave in 0.. {
         let changed = db::take_changed(tx)?;
         if changed.is_empty() {
@@ -167,6 +182,14 @@ pub fn settle(tx: &Connection, now: i64, caps: Caps) -> rusqlite::Result<Followe
         // A row that went takes its notifications with it; `read_at`
         // follows `read` (decision `notifications-in-a-collection`).
         crate::inbox::follow_changes(tx, &changed, now)?;
+        // A row read by subject computes: they follow it.
+        if subjects && wave < MAX_WAVES {
+            let uris: HashSet<String> = changed
+                .iter()
+                .map(|ch| db::row_uri(&ch.collection, &ch.id))
+                .collect();
+            crate::subject::follow(tx, &uris, &HashSet::new(), false, now, caps.text_chars)?;
+        }
         if wave >= MAX_WAVES {
             tracing::warn!(
                 rows = changed.len(),
@@ -309,7 +332,7 @@ fn wave_step(
                         || field.as_deref().is_some_and(differs)
                         || conditions.iter().any(|w| differs(&w.field)),
                 ),
-                Compute::Expr { .. } | Compute::Model { .. } => continue,
+                Compute::Expr { .. } | Compute::Model { .. } | Compute::Subject { .. } => continue,
             };
             if !relevant {
                 continue;
@@ -353,7 +376,9 @@ fn wave_step(
                     Compute::Rollup { .. } => {
                         return Some((f, Rows::Ids(ks.iter().cloned().collect())));
                     }
-                    Compute::Expr { .. } | Compute::Model { .. } => return None,
+                    Compute::Expr { .. } | Compute::Model { .. } | Compute::Subject { .. } => {
+                        return None;
+                    }
                 };
                 let ms = ks
                     .iter()
