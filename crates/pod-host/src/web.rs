@@ -108,6 +108,10 @@ pub(crate) fn public_routes() -> Router<Arc<Host>> {
         .route("/@{handle}/{slug}/", get(short_variant))
         .route("/%40{handle}/{slug}", get(short_variant))
         .route("/%40{handle}/{slug}/", get(short_variant))
+        // Under /web, where the owner's own app lives.
+        .route("/web/s/{link}", get(link_slash))
+        .route("/web/@{handle}/{slug}", get(short_variant))
+        .route("/web/%40{handle}/{slug}", get(short_variant))
 }
 
 /// A permanent redirect to `path` (the page's own address).
@@ -122,7 +126,7 @@ fn moved(path: String) -> Response {
     }
 }
 
-/// `/s/<link>/`: the link without its trailing slash.
+/// `/s/<link>/` (or under `/web`): the link at its own address.
 async fn link_slash(Path(link): Path<String>) -> Response {
     if !pod_core::public_copy::is_link(&link) {
         return not_found();
@@ -130,8 +134,8 @@ async fn link_slash(Path(link): Path<String>) -> Response {
     moved(format!("/s/{link}"))
 }
 
-/// `/@<handle>/<slug>/`, `/%40<handle>/<slug>` (and any case): the short
-/// path as `/@<handle>/<slug>`.
+/// `/@<handle>/<slug>/`, `/%40<handle>/<slug>`, under `/web`, in any case:
+/// the short path as `/@<handle>/<slug>`.
 async fn short_variant(Path((handle, slug)): Path<(String, String)>) -> Response {
     let (handle, slug) = (handle.to_ascii_lowercase(), slug.to_ascii_lowercase());
     if !pod_core::construct::share::valid_handle(&handle) || !pod_core::public_copy::is_slug(&slug)

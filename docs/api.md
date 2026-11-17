@@ -116,7 +116,7 @@ answers it 403 `web_credential_scope`. Rotating the pod code ends every browser'
 [`public-links-share-the-closure`](decisions/public-links-share-the-closure.md)), only with `CONSTRUCT_WEB=1` and
 `CONSTRUCT_PUBLIC_WEB=1`; anyone with the link reads them, and they never reach the pod. Each route also answers at a
 chosen short path, `/@<handle>/<slug>` (and `…/view`, `…/image`). With `CONSTRUCT_PUBLIC_WEB` unset they answer 503,
-a page saying sharing is paused, and the copies stay stored. A page address with a trailing slash, `%40` for `@` or capitals redirects (308) to its own address:
+a page saying sharing is paused, and the copies stay stored. A page address with a trailing slash, `%40` for `@`, capitals or a `/web` prefix redirects (308) to its own address:
 
 | Route | |
 |---|---|

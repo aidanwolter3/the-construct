@@ -1794,6 +1794,11 @@ mod web {
                 "/@cook/our-meals".to_owned(),
             ),
             ("/@Cook/our-meals".to_owned(), "/@cook/our-meals".to_owned()),
+            (
+                "/web/@cook/our-meals".to_owned(),
+                "/@cook/our-meals".to_owned(),
+            ),
+            (format!("/web/s/{link}"), format!("/s/{link}")),
             (format!("/s/{link}/"), format!("/s/{link}")),
         ] {
             let r = no_redirects.get(env.url(&from)).send().await.unwrap();
