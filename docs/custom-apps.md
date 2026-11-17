@@ -62,7 +62,8 @@ from home's feeds (a new home element without them), so home's scope holds no fe
 - **Plumbing.** A layout may be a `core://Page` (any node as its root, its own header and Back) instead of a
   `core://Workspace`; the app then draws nothing around it ([layouts.md](layouts.md#structure-of-a-page)).
 - **Theme.** `${local://theme#card_border}` and the other tokens are the pod's colours for the app's mode; MCP
-  `set_theme` changes them. Use a token wherever a colour goes (`page`, `card`, `muted_text`, …): a fixed `#RRGGBB`
+  `set_theme` changes them and can add up to 40 named colours of the pod's own (decision `custom-theme-tokens`).
+  Use a token wherever a colour goes (`page`, `card`, `muted_text`, …): a fixed `#RRGGBB`
   stays the same in dark mode, and layout writes answer `warnings` for each (decision `dark-palette`).
 - **Device data.** `${local://connection#label}`, `${local://inbox#unread}` and the other
   [device data](layouts.md#device-data) need no feed.

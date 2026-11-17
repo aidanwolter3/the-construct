@@ -189,28 +189,78 @@ fn is_hex(c: &str) -> bool {
     c.len() == 7 && c.starts_with('#') && c[1..].bytes().all(|b| b.is_ascii_hexdigit())
 }
 
-/// The pod's theme: every token with its light and dark colour (defaults
-/// where the pod set none). Blocking.
+/// At most this many tokens of the pod's own (decision
+/// `custom-theme-tokens`).
+pub const MAX_CUSTOM_TOKENS: usize = 40;
+
+/// Whether `name` can be a token of the pod's own: `[a-z][a-z0-9_]{0,31}`,
+/// not a built-in token and not ending in `_dark` (the flat form's key for
+/// a token's dark value).
+pub fn custom_token_name(name: &str) -> Result<(), String> {
+    let ok = name.len() <= 32
+        && name.starts_with(|c: char| c.is_ascii_lowercase())
+        && name
+            .bytes()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_');
+    if !ok {
+        return Err(format!(
+            "'{name}' isn't a token name: a lowercase letter, then up to 31 lowercase letters, digits or _"
+        ));
+    }
+    if name.ends_with("_dark") {
+        return Err(format!(
+            "'{name}' ends in _dark, which names a token's dark value; set {{\"{}\": {{\"dark\": ...}}}} instead",
+            name.trim_end_matches("_dark")
+        ));
+    }
+    Ok(())
+}
+
+fn is_builtin(token: &str) -> bool {
+    THEME_TOKENS.iter().any(|t| t.0 == token)
+}
+
+/// The pod's theme: every built-in token with its light and dark colour
+/// (defaults where the pod set none), then the pod's own tokens, each with
+/// both values (one set mode stands in for the other). Blocking.
 pub fn theme(store: &Store) -> rusqlite::Result<serde_json::Map<String, Value>> {
     let set: Value = store
         .pod_setting(THEME_SETTING)?
         .and_then(|t| serde_json::from_str(&t).ok())
         .unwrap_or(Value::Null);
-    Ok(THEME_TOKENS
+    let colour = |t: &str, mode: &str| {
+        set[t][mode]
+            .as_str()
+            .filter(|c| is_hex(c))
+            .map(str::to_owned)
+    };
+    let mut out: serde_json::Map<String, Value> = THEME_TOKENS
         .iter()
         .map(|(t, light, dark, _)| {
-            let pick = |mode: &str, d: &str| {
-                set[*t][mode]
-                    .as_str()
-                    .filter(|c| is_hex(c))
-                    .unwrap_or(d)
-                    .to_owned()
-            };
-            (
-                (*t).to_owned(),
-                json!({ "light": pick("light", light), "dark": pick("dark", dark) }),
-            )
+            let light = colour(t, "light").unwrap_or_else(|| (*light).to_owned());
+            let dark = colour(t, "dark").unwrap_or_else(|| (*dark).to_owned());
+            ((*t).to_owned(), json!({ "light": light, "dark": dark }))
         })
+        .collect();
+    if let Some(m) = set.as_object() {
+        for t in m.keys().filter(|t| !is_builtin(t)) {
+            let (light, dark) = (colour(t, "light"), colour(t, "dark"));
+            if let Some(either) = light.clone().or_else(|| dark.clone()) {
+                let light = light.unwrap_or_else(|| either.clone());
+                let dark = dark.unwrap_or(either);
+                out.insert(t.clone(), json!({ "light": light, "dark": dark }));
+            }
+        }
+    }
+    Ok(out)
+}
+
+/// The pod's own tokens' names, in name order. Blocking.
+pub fn custom_tokens(store: &Store) -> rusqlite::Result<Vec<String>> {
+    Ok(theme(store)?
+        .keys()
+        .filter(|t| !is_builtin(t))
+        .cloned()
         .collect())
 }
 
@@ -235,8 +285,10 @@ fn theme_set(store: &Store) -> rusqlite::Result<serde_json::Map<String, Value>> 
 }
 
 /// Change tokens: `{token: {light?, dark?}}`, or the flat form the bundle
-/// carries (`{token: "#RRGGBB", token_dark: "#RRGGBB"}`); `Err`: what is
-/// wrong. Blocking.
+/// carries (`{token: "#RRGGBB", token_dark: "#RRGGBB"}`); `{token: null}`
+/// removes one of the pod's own tokens or puts a built-in back to its
+/// defaults. A name that isn't built in adds a token of the pod's own
+/// (decision `custom-theme-tokens`). `Err`: what is wrong. Blocking.
 pub fn set_theme(store: &Store, changes: &Value) -> Result<serde_json::Map<String, Value>, String> {
     let Some(changes) = changes.as_object() else {
         return Err("\"theme\" is {token: {light?, dark?}}".into());
@@ -248,15 +300,19 @@ pub fn set_theme(store: &Store, changes: &Value) -> Result<serde_json::Map<Strin
             _ if v.is_string() => (key.as_str(), Some("light")),
             _ => (key.as_str(), None),
         };
-        if !THEME_TOKENS.iter().any(|t| t.0 == token) {
-            return Err(format!(
-                "no token '{token}' (tokens: {})",
-                THEME_TOKENS
-                    .iter()
-                    .map(|t| t.0)
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            ));
+        if v.is_null() {
+            set.remove(key.as_str());
+            continue;
+        }
+        if !is_builtin(token) {
+            custom_token_name(token)?;
+            if !set.contains_key(token)
+                && set.keys().filter(|t| !is_builtin(t)).count() >= MAX_CUSTOM_TOKENS
+            {
+                return Err(format!(
+                    "a pod has at most {MAX_CUSTOM_TOKENS} tokens of its own; remove one with {{\"<token>\": null}}"
+                ));
+            }
         }
         let slot = set.entry(token.to_owned()).or_insert_with(|| json!({}));
         if !slot.is_object() {
@@ -280,6 +336,13 @@ pub fn set_theme(store: &Store, changes: &Value) -> Result<serde_json::Map<Strin
             }
         }
     }
+    // A token of the pod's own with neither colour isn't kept.
+    set.retain(|t, v| {
+        is_builtin(t)
+            || ["light", "dark"]
+                .iter()
+                .any(|m| v.get(*m).is_some_and(Value::is_string))
+    });
     store
         .set_pod_setting(THEME_SETTING, &Value::Object(set).to_string())
         .map_err(|e| e.to_string())?;
@@ -305,7 +368,8 @@ mod tests {
         assert_eq!(stored.len(), 3, "{stored:?}");
         assert!(stored["accent"].get("dark").is_none());
         for bad in [
-            json!({"nope": "#101010"}),
+            json!({"Nope": "#101010"}),
+            json!({"9lives": "#101010"}),
             json!({"card_dark": "white"}),
             json!({"card": 3}),
         ] {
@@ -314,6 +378,45 @@ mod tests {
         let e = theme_entity(&store).unwrap();
         assert_eq!(e.get_str("card_dark"), Some("#101012"));
         assert_eq!(e.get_str("highlight"), Some("#FFF3CF"));
+    }
+
+    #[test]
+    fn a_pod_defines_its_own_tokens() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(&dir.path().join("server.db")).unwrap();
+        let t = set_theme(
+            &store,
+            &json!({"dock": {"light": "#1C1B19", "dark": "#2A2B27"}, "eat": "#4F7F3B", "move_dark": "#8DB4E6"}),
+        )
+        .unwrap();
+        assert_eq!(t["dock"], json!({"light": "#1C1B19", "dark": "#2A2B27"}));
+        // One mode set: it stands in for the other.
+        assert_eq!(t["eat"], json!({"light": "#4F7F3B", "dark": "#4F7F3B"}));
+        assert_eq!(t["move"], json!({"light": "#8DB4E6", "dark": "#8DB4E6"}));
+        assert_eq!(custom_tokens(&store).unwrap(), vec!["dock", "eat", "move"]);
+        let e = theme_entity(&store).unwrap();
+        assert_eq!(e.get_str("dock"), Some("#1C1B19"));
+        assert_eq!(e.get_str("dock_dark"), Some("#2A2B27"));
+        assert_eq!(e.get_str("eat_dark"), Some("#4F7F3B"));
+        // A name ending in _dark is the flat form's dark key, never a token.
+        assert!(set_theme(&store, &json!({"shade_dark": {"light": "#101010"}})).is_err());
+        // null removes a token of the pod's own, and resets a built-in.
+        set_theme(&store, &json!({"accent": "#112233"})).unwrap();
+        let t = set_theme(&store, &json!({"eat": null, "accent": null})).unwrap();
+        assert!(t.get("eat").is_none());
+        assert_eq!(t["accent"]["light"], "#4A2C82");
+        // The cap counts only the pod's own tokens.
+        let many: serde_json::Map<String, Value> = (0..MAX_CUSTOM_TOKENS)
+            .map(|i| (format!("t{i}"), json!("#101010")))
+            .collect();
+        assert!(set_theme(&store, &Value::Object(many)).is_err());
+        // Existing ones can still change at the cap.
+        let fill: serde_json::Map<String, Value> = (0..MAX_CUSTOM_TOKENS - 2)
+            .map(|i| (format!("t{i}"), json!("#101010")))
+            .collect();
+        set_theme(&store, &Value::Object(fill)).unwrap();
+        assert!(set_theme(&store, &json!({"dock": "#000000"})).is_ok());
+        assert!(set_theme(&store, &json!({"one_more": "#000000"})).is_err());
     }
 
     #[test]
