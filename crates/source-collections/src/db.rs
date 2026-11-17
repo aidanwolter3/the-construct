@@ -40,6 +40,7 @@
 //!   restored or purged after [`crate::KEEP_SECS`].
 
 use std::cmp::Ordering;
+use std::collections::HashSet;
 
 use pod_core::store::Step;
 use protocol::{DataBundle, EntityRecord};
@@ -861,15 +862,29 @@ pub fn alert_uri(collection: &str, id: &str) -> String {
     format!("collections://{collection}/alerts/{id}")
 }
 
+/// What a filler's entity needs besides its definition and state.
+#[derive(Debug, Clone, Copy)]
+pub struct FillerNow<'a> {
+    pub now: i64,
+    pub off: crate::fill::Off,
+    /// Today in the pod's zone (`YYYY-MM-DD`).
+    pub today: &'a str,
+    /// The collection's fillers filling now.
+    pub filling: &'a HashSet<String>,
+}
+
 /// A filler as an entity, for an app's list of sites: its title, kind,
-/// URL, health (`state`, `detail`, `failing`) and its alerts' names.
+/// URL, health (`state`, `detail`, `failing`), whether a fill of it is
+/// running (`refreshing`), whether "check now" can fill it today
+/// (`can_check`: false once an agent filled its `fills_per_day` times
+/// today) and its alerts' names.
 pub fn filler_record(
     def: &Definition,
     f: &crate::filler::Filler,
     st: &crate::fill::State,
-    now: i64,
-    off: crate::fill::Off,
+    at: FillerNow,
 ) -> EntityRecord {
+    let FillerNow { now, off, .. } = at;
     let (state, detail) = crate::fill::health_state(f, st, now, off, true);
     let names: Vec<String> = crate::alerts::of_filler(def, &f.id)
         .map(|a| a.name.clone())
@@ -889,6 +904,11 @@ pub fn filler_record(
         ("state", json!(state)),
         ("detail", json!(detail)),
         ("failing", json!(matches!(state, "failing" | "empty"))),
+        ("refreshing", json!(at.filling.contains(&f.id))),
+        (
+            "can_check",
+            json!(!off.stops(f) && !crate::fill::spent_today(f, st, at.today)),
+        ),
         ("alert_count", json!(names.len())),
         ("alerts_text", json!(alerts_text)),
     ] {
@@ -923,7 +943,11 @@ fn fills_off(conn: &Connection) -> rusqlite::Result<crate::fill::Off> {
 /// fillers also `collection:<name>:fillers`, with alerts
 /// `collection:<name>:alerted` (the rows an alert matches), and each view
 /// as `collection:<name>:view:<view>` (decision `collection-views`).
-pub fn bundle(conn: &Connection, def: &Definition) -> rusqlite::Result<DataBundle> {
+pub fn bundle(
+    conn: &Connection,
+    def: &Definition,
+    filling: &HashSet<String>,
+) -> rusqlite::Result<DataBundle> {
     let now = pod_core::util::now_secs();
     let mut data = DataBundle::default();
     let mut list = Vec::new();
@@ -956,13 +980,20 @@ pub fn bundle(conn: &Connection, def: &Definition) -> rusqlite::Result<DataBundl
     }
     if !def.fillers.is_empty() {
         let off = fills_off(conn)?;
+        let today = crate::fill::today_on(conn, now)?;
+        let at = FillerNow {
+            now,
+            off,
+            today: &today,
+            filling,
+        };
         let states = crate::fill::states(conn, def)?;
         let mut keys = Vec::new();
         for f in &def.fillers {
             let uri = filler_uri(&def.name, &f.id);
             let st = states.get(&f.id).cloned().unwrap_or_default();
             data.entities
-                .insert(uri.clone(), filler_record(def, f, &st, now, off));
+                .insert(uri.clone(), filler_record(def, f, &st, at));
             keys.push(uri);
         }
         data.queries.insert(fillers_key(&def.name), keys);
@@ -977,6 +1008,7 @@ pub fn filler_bundle(
     conn: &Connection,
     def: &Definition,
     filler: &str,
+    filling: &HashSet<String>,
 ) -> rusqlite::Result<Option<DataBundle>> {
     let Some(f) = crate::filler::find(def, filler) else {
         return Ok(None);
@@ -984,11 +1016,18 @@ pub fn filler_bundle(
     let now = pod_core::util::now_secs();
     let off = fills_off(conn)?;
     let st = crate::fill::state(conn, &def.name, &f.id)?;
+    let today = crate::fill::today_on(conn, now)?;
+    let at = FillerNow {
+        now,
+        off,
+        today: &today,
+        filling,
+    };
     let base = format!("collection:{}:filler:{}", def.name, f.id);
     let mut data = DataBundle::default();
     let uri = filler_uri(&def.name, &f.id);
     data.entities
-        .insert(uri.clone(), filler_record(def, f, &st, now, off));
+        .insert(uri.clone(), filler_record(def, f, &st, at));
     data.queries.insert(base.clone(), vec![uri]);
     let mut list = Vec::new();
     for r in rows(conn, def)?

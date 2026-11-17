@@ -349,9 +349,9 @@ A collection can keep itself current from the web (decision
 
 | A layout uses | |
 |---|---|
-| feed `["collections", "<c>"]` | Also `collection:<c>:fillers` (each filler's title, URL, state, health and alerts) and `collection:<c>:alerted`. |
+| feed `["collections", "<c>"]` | Also `collection:<c>:fillers` (each filler's title, URL, state, health and alerts; `refreshing` while a fill of it runs, `can_check` false once an agent filled its `fills_per_day` times today) and `collection:<c>:alerted`. A fill's start and end reload the data holding its filler (scoped `event: data`). |
 | `GET /v1/collections/<c>/fillers/<f>` | A filler, its rows and its alerts. |
-| `POST /v1/collections/<c>/refresh {filler?}` | Fill now. |
+| `POST /v1/collections/<c>/refresh {filler?}` | Fill now (in the background; the filler's `refreshing` shows it). One agent filler whose fills for today are spent: 429 `checked_today`, and nothing is recorded as a failure. |
 
 MCP tools: `collections_preview` (try a recipe without storing anything), `collections_status`,
 `collections_refresh`, `collections_set_secret`; `apply_change` ops `set_filler`, `remove_filler`, `add_alert`,
