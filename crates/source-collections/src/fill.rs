@@ -959,6 +959,32 @@ pub fn is_busy(pod: &Pod, collection: &str) -> bool {
         .any(|k| k.starts_with(&prefix))
 }
 
+/// The fillers of `collection` filling now (their ids).
+pub fn filling(pod: &Pod, collection: &str) -> HashSet<String> {
+    let prefix = format!("{collection}/");
+    pod.local::<Busy>()
+        .0
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .iter()
+        .filter_map(|k| k.strip_prefix(prefix.as_str()))
+        .map(str::to_owned)
+        .collect()
+}
+
+/// Tell clients that filler `filler` of `collection` changed (a fill of it
+/// started or ended): they reload the data holding its entity (decision
+/// `scoped-data-events`), so a site's screen shows `refreshing` and its
+/// health as they are.
+pub fn publish_filler(pod: &Pod, collection: &str, filler: &str) {
+    let scope = pod_core::layouts::DataScope {
+        uri_prefixes: vec![db::filler_uri(collection, filler)],
+        query_prefixes: Vec::new(),
+        detail: Map::new(),
+    };
+    pod.publish_data_scoped(NAME, scope, None);
+}
+
 /// The pod's host policy (decision `web-and-agent-modules`): every
 /// request to a website goes through it.
 fn hosts(pod: &Pod) -> std::sync::Arc<web_extract::hosts::Hosts> {
@@ -1041,6 +1067,25 @@ pub fn today(store: &pod_core::store::Store, now: i64) -> String {
     pod_core::tz::jiff::Timestamp::from_second(now)
         .map(|t| t.to_zoned(tz).date().to_string())
         .unwrap_or_default()
+}
+
+/// [`today`] read through a connection.
+pub fn today_on(conn: &Connection, now: i64) -> rusqlite::Result<String> {
+    let tz = pod_core::store::pod_setting_on(conn, pod_core::tz::TIME_ZONE_SETTING)?
+        .and_then(|n| pod_core::tz::parse(&n).ok())
+        .unwrap_or(pod_core::tz::jiff::tz::TimeZone::UTC);
+    Ok(pod_core::tz::jiff::Timestamp::from_second(now)
+        .map(|t| t.to_zoned(tz).date().to_string())
+        .unwrap_or_default())
+}
+
+/// Whether an agent filler already filled its `fills_per_day` times on
+/// `today` (`YYYY-MM-DD`), so another fill today would be refused.
+pub fn spent_today(f: &Filler, st: &State, today: &str) -> bool {
+    let Source::Agent { fills_per_day, .. } = &f.source else {
+        return false;
+    };
+    st.day.as_deref() == Some(today) && st.day_fills >= i64::from(*fills_per_day)
 }
 
 /// Whether fillers may run on this pod.
@@ -2032,7 +2077,7 @@ pub async fn fill(pod: &Pod, collection: &str, filler_id: &str, force: bool) -> 
             return Outcome::Busy;
         }
     }
-    let _guard = BusyGuard(&busy, key);
+    let guard = BusyGuard(&busy, key);
     let (name, fid) = (collection.to_owned(), filler_id.to_owned());
     let read = pod
         .blocking(move |s| s.with_conn(|c| Ok((db::latest_def(c, &name)?, state(c, &name, &fid)?))))
@@ -2047,6 +2092,8 @@ pub async fn fill(pod: &Pod, collection: &str, filler_id: &str, force: bool) -> 
             "collection '{collection}' has no filler '{filler_id}'"
         ));
     };
+    // Its screen shows it filling (`refreshing`).
+    publish_filler(pod, collection, filler_id);
     let now = pod_core::util::now_secs();
     let mut day = None;
     let off = off(pod).await;
@@ -2299,11 +2346,15 @@ pub async fn fill(pod: &Pod, collection: &str, filler_id: &str, force: bool) -> 
     let _ = pod
         .blocking(move |s| s.with_conn(|c| save_state(c, &name, &fid, &st2)))
         .await;
+    // Done: clients reload with `refreshing` false and the new health.
+    drop(guard);
     if let Outcome::Filled { stored, .. } = &outcome
         && stored.changed()
     {
         pod.publish_data_all(NAME);
         crate::alerts::run(pod, Some(collection.to_owned())).await;
+    } else {
+        publish_filler(pod, collection, filler_id);
     }
     crate::compute::spawn(pod, collection, jobs);
     if let Outcome::Failed(e) = &outcome {

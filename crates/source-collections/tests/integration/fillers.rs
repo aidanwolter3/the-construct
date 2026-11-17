@@ -1021,8 +1021,42 @@ async fn an_agent_upserts_within_its_budget() {
     assert_eq!(s, StatusCode::OK);
     *agent.rows.lock().unwrap() =
         vec![json!({"name": "Acme 27", "price": 299, "url": "https://shop.example/acme"})];
+    // The site's entity: not filling, and it can be checked today.
+    let site_path = format!("/v1/collections/monitors/fillers/{filler}");
+    let site_key = format!("collection:monitors:filler:{filler}");
+    let site = listed(&get_data(&pod, &site_path).await, &site_key).remove(0);
+    assert_eq!(
+        (site["refreshing"].clone(), site["can_check"].clone()),
+        (json!(false), json!(true)),
+        "{site}"
+    );
     let out = fill::fill(&pod, "monitors", &filler, true).await;
     assert!(matches!(out, Outcome::Filled { .. }), "{out:?}");
+    // Its two fills today are spent: "check now" says so instead of
+    // failing, and the site stays healthy.
+    let site = listed(&get_data(&pod, &site_path).await, &site_key).remove(0);
+    assert_eq!(
+        (site["can_check"].clone(), site["state"].clone()),
+        (json!(false), json!("ok")),
+        "{site}"
+    );
+    let (s, b) = call(
+        &pod,
+        "POST",
+        "/v1/collections/monitors/refresh",
+        Some(json!({"filler": filler})),
+    )
+    .await;
+    assert_eq!(
+        (s, b["error"].clone()),
+        (StatusCode::TOO_MANY_REQUESTS, json!("checked_today")),
+        "{b}"
+    );
+    let site = listed(&get_data(&pod, &site_path).await, &site_key).remove(0);
+    assert_eq!(
+        site["state"], "ok",
+        "a refused check isn't a failure: {site}"
+    );
     let r = rows(&pod, "monitors").await;
     assert_eq!(r.len(), 2, "upsert keeps rows the answer leaves out");
     assert_eq!(
