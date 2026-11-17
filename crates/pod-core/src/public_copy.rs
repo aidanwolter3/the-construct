@@ -441,7 +441,7 @@ fn shelf(pod: &Pod) -> Result<(String, std::sync::Arc<dyn Shelf>), Value> {
     if !shelf.public_links_enabled() {
         return Err(refuse(
             "public_links_off",
-            "this server doesn't serve public links (CONSTRUCT_PUBLIC_WEB is off)",
+            "this pod can't share public links: the server doesn't serve them (CONSTRUCT_PUBLIC_WEB), or the pod is a temporary one",
         ));
     }
     Ok((id.to_owned(), shelf.clone()))

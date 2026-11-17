@@ -5,7 +5,8 @@ The desktop and Android apps draw layouts with the Rust renderer (`crates/constr
 a NativeActivity APK on Android. Both open your pod: the one opened last, else the pod's sign-in screen (a pod code,
 or **Try a temporary pod**) on the staging server, `https://the-construct-pod.fly.dev`. Renderer details, the
 Android bridge and push are in [rendering.md](rendering.md). A web client (`crates/construct-web`, below) draws the same
-renderer in a browser; it is off unless the server is started with `CONSTRUCT_WEB=1`.
+renderer in a browser, served only where the server runs with `CONSTRUCT_WEB=1`, as staging does:
+`https://the-construct-pod.fly.dev/web`.
 
 ## Desktop
 
@@ -89,7 +90,9 @@ code form, a wrong code, home drawn, the cookie, a reload, a phone-sized window 
 - **Fonts and images** are fetched, not built in: the faces before the first frame, the symbol and emoji fallbacks
   after it (`/web/fonts/<file>`). Images of other sites go through the pod's proxy (`/web/image`).
 - **Input**: click or tap, the wheel and touch drags scroll, typing goes through a hidden input, Escape is Back.
-- **Public links**: with `CONSTRUCT_PUBLIC_WEB=1` too, `/s/<link>` draws a pod's public copy for anyone, read-only:
+- **On staging**: `https://the-construct-pod.fly.dev/web` takes an admin pod's code, or a temporary pod's
+  (`POST /v1/pods/temporary`); the image builds the client into `/web` (`deploy/pod.Dockerfile`).
+- **Public links**: with `CONSTRUCT_PUBLIC_WEB=1` too (staging has it), `/s/<link>` draws a pod's public copy for anyone, read-only:
   no code, no cookie, nothing that writes (decision [`public-web-links`](decisions/public-web-links.md)). A link a
   layout opens (`action.link.open`) opens in a new tab.
 - **Not yet**: drags of cards, pagers and sheets; photo picking; upstream sign-ins (Pixelfed); notifications and an
