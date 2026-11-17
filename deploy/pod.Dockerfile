@@ -41,7 +41,15 @@ RUN cargo build --release --locked -p server \
 
 FROM ${RUNTIME_IMAGE}
 # Chromium (and fonts, so pages lay out as they do for people) for rendered fillers; CA certificates for it.
-RUN apt-get update \
+# Chromium loads untrusted pages, so it must stay current (decision `browser-sandbox`): a builder reuses this
+# layer until its inputs change, and CHROMIUM_REFRESH is one. CI's deploy sets it to the ISO week
+# (ci.yml, which also deploys weekly), so this layer is rebuilt at least once a week with Debian's latest
+# Chromium and security updates (the `upgrade`, for a base digest older than them). By hand, pass
+# `--build-arg CHROMIUM_REFRESH=$(date -u +%G-W%V)` too.
+ARG CHROMIUM_REFRESH=unset
+RUN echo "packages as of ${CHROMIUM_REFRESH}" \
+    && apt-get update \
+    && DEBIAN_FRONTEND=noninteractive apt-get upgrade -y \
     && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
         chromium ca-certificates fonts-liberation \
     && rm -rf /var/lib/apt/lists/*

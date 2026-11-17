@@ -5,6 +5,8 @@ name: CI
 #   APK, the macOS app) come from release.yml.
 # Push to main (or a manual run on main): if Rust checks pass, deploy the pod to Fly.io staging,
 #   https://the-construct-pod.fly.dev   (deploy/fly/pod.toml)
+# Weekly on main too, so the pod image's Chromium and Debian packages are rebuilt current even in a week with no
+#   push (CHROMIUM_REFRESH in deploy/pod.Dockerfile, decision `browser-sandbox`).
 # The fake Pixelfed it talks to deploys from its own workflow (fake-pixelfed.yml).
 # The deploy needs the repo secret FLY_API_TOKEN_POD (an app-scoped Fly deploy token); without it
 # the deploy steps are skipped, not failed.
@@ -16,6 +18,8 @@ on:
   push:
     branches: [main]
   workflow_dispatch:
+  schedule:
+    - cron: "17 9 * * 1"
 
 concurrency:
   group: ci-${{ github.ref }}
@@ -165,7 +169,7 @@ jobs:
 
   deploy:
     name: Deploy to Fly.io staging
-    if: (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main'
+    if: (github.event_name == 'push' || github.event_name == 'workflow_dispatch' || github.event_name == 'schedule') && github.ref == 'refs/heads/main'
     needs: rust
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -190,7 +194,10 @@ jobs:
         if: steps.secrets.outputs.pod == 'true'
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN_POD }}
-        run: flyctl deploy . --config deploy/fly/pod.toml --dockerfile deploy/pod.Dockerfile --remote-only --ha=false
+        # The ISO week: Chromium's apt layer is rebuilt once a week (decision `browser-sandbox`).
+        run: >-
+          flyctl deploy . --config deploy/fly/pod.toml --dockerfile deploy/pod.Dockerfile --remote-only --ha=false
+          --build-arg CHROMIUM_REFRESH="$(date -u +%G-W%V)"
       - name: Smoke test
         if: steps.secrets.outputs.pod == 'true'
         run: |
