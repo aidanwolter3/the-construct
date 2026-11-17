@@ -706,6 +706,7 @@ dependencies = [
  "serde_json",
  "taffy",
  "web-push-native",
+ "web-time",
  "wgpu",
  "winit",
  "zeno",
@@ -721,6 +722,21 @@ dependencies = [
  "protocol",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "construct-web"
+version = "0.1.0"
+dependencies = [
+ "construct-elements",
+ "construct-render",
+ "image",
+ "js-sys",
+ "protocol",
+ "serde_json",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
+ "web-sys",
 ]
 
 [[package]]
@@ -2096,10 +2112,12 @@ dependencies = [
  "jiff-static",
  "jiff-tzdb",
  "jiff-tzdb-platform",
+ "js-sys",
  "log",
  "portable-atomic",
  "portable-atomic-util",
  "serde_core",
+ "wasm-bindgen",
  "windows-link",
 ]
 
@@ -3266,6 +3284,7 @@ dependencies = [
  "getrandom 0.3.4",
  "pod-core",
  "protocol",
+ "reqwest",
  "rusqlite",
  "serde_json",
  "sha2 0.10.9",

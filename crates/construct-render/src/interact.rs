@@ -13,13 +13,13 @@
 //! hears of later (another device, an agent) comes in through
 //! [`Loader::changes`] on the next frame.
 
+use crate::time::{Duration, Instant};
 use image::RgbaImage;
 use protocol::{DataBundle, PageScreen, UiNode};
 use serde::Serialize;
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
 
 use crate::cpu::CpuRenderer;
 use crate::layout::{Input, Laid, Pressed, RenderError, SceneBuilder, Viewport};
@@ -743,6 +743,8 @@ pub struct Session {
     /// Data merged in so far (a count), to tell whether an open brought
     /// any: one that didn't leaves what is laid out as it is.
     merges: u64,
+    /// Scenes built so far ([`Session::scenes_built`]).
+    scenes_built: u64,
     /// Spinners turn from here.
     spin_from: Instant,
     /// Whether the frame kept draws a spinner (it turns).
@@ -922,6 +924,7 @@ impl Session {
             pressed: None,
             prepared: None,
             merges: 0,
+            scenes_built: 0,
             spin_from: Instant::now(),
             spinning: false,
             handles: Vec::new(),
@@ -2829,6 +2832,7 @@ impl Session {
         self.edit_overlay(&mut scene, &theme);
         self.spinning = scene.spinning;
         self.scene = Some(scene);
+        self.scenes_built += 1;
         self.work.build += building.elapsed();
         Ok(self.scene.as_ref().expect("just built"))
     }
@@ -3032,6 +3036,13 @@ impl Session {
         let scene = self.scene.as_ref().expect("built");
         self.cpu.images = Some(self.images.clone());
         Ok(self.cpu.render(scene, &mut self.builder.text))
+    }
+
+    /// How many scenes have been built: a client that rasterizes only a
+    /// new scene (the web client, decision `web-client`) compares it after
+    /// [`Session::scene`].
+    pub fn scenes_built(&self) -> u64 {
+        self.scenes_built
     }
 
     /// The fonts, for a GPU renderer drawing this session's scenes.
@@ -4487,7 +4498,7 @@ fn new_nonce() -> String {
         let mut h = std::collections::hash_map::RandomState::new().build_hasher();
         h.write_u64(n);
         h.write_u64(i);
-        if let Ok(t) = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH) {
+        if let Ok(t) = crate::time::SystemTime::now().duration_since(crate::time::UNIX_EPOCH) {
             h.write_u128(t.as_nanos());
         }
         out.push_str(&format!("{:016x}", h.finish()));

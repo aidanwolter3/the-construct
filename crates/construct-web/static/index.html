@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>The Construct</title>
+  <link rel="stylesheet" href="/web/style.css">
+  <script type="module" src="/web/app.js"></script>
+</head>
+<body>
+  <main id="sign-in" hidden>
+    <form id="code-form" autocomplete="on">
+      <h1>The Construct</h1>
+      <p>Open your pod with its code. It stays open in this browser until you log out.</p>
+      <label for="code">Pod code</label>
+      <input id="code" name="code" type="password" autocomplete="current-password" required
+             placeholder="cpod_…" spellcheck="false">
+      <button type="submit">Open my pod</button>
+      <p id="code-error" role="alert"></p>
+    </form>
+  </main>
+  <p id="loading" role="status">Opening your pod…</p>
+  <canvas id="construct" aria-label="Your pod"></canvas>
+  <input id="construct-input" aria-hidden="true" autocomplete="off" autocapitalize="off" spellcheck="false">
+  <button id="log-out" type="button" hidden>Log out</button>
+</body>
+</html>

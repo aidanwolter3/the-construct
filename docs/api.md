@@ -96,6 +96,22 @@ The other way round, the pod is a client of remote MCP servers (decision [`mcp-j
 `GET /v1/mcp-servers/callback?code&state` *public* is where a server's OAuth sign-in comes back to (on a host,
 under the pod's public prefix); it answers a short HTML page. See [custom-apps.md](custom-apps.md#mcp-servers).
 
+## Web client
+
+Only with `CONSTRUCT_WEB=1` (decision [`web-client`](decisions/web-client.md)); without it these paths are the pod's
+like any other.
+
+| Route | |
+|---|---|
+| `GET /web`, `GET /web/<file>`, `GET /web/fonts/<file>` *public* | The page, the built client and the renderer's fonts, from `CONSTRUCT_WEB_DIR` (plain file names only). The page's policy allows only its own scripts and WebAssembly. |
+| `POST /web/session {code}` *public* | With `x-construct-client: web` (else 403 `web_client_only`): a new session of the pod `code` opens, as the cookie `construct_web` (`HttpOnly; SameSite=Strict; Path=/`, `Secure` behind HTTPS, as long as `CONSTRUCT_SESSION_TTL_DAYS`) -> `{ok}`; 401 `pod_not_found`; rate-limited like `POST /v1/pods/open`. |
+| `POST /web/logout` | Deletes the cookie's session and clears the cookie. |
+| `GET /web/image?url=<url>` | With the cookie: an image of a public `http(s)` site, passed on (images only, at most 10 MiB); 400 for other URLs. |
+
+The cookie stands for its session on every other route, but only on requests with `x-construct-client: web` and,
+where the browser sends `Sec-Fetch-Site`, `same-origin`; a pod code put in the cookie is not taken, and `/v1/mcp`
+answers it 403 `web_credential_scope`. Rotating the pod code ends every browser's session.
+
 ## Development and test routes
 
 | Call | Answer |

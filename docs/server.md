@@ -39,6 +39,8 @@ settings are logged at startup.
 | Variable | Default | Meaning |
 |---|---|---|
 | `CONSTRUCT_OPEN_POD` | `dev` on loopback, else unset | Callers without a pod token use this pod. Development only; `off` disables it. Refused on a non-loopback address (unless the next variable is set) and always on Fly. Only requests whose `Host` is `localhost`, `*.localhost` or an IP address use it, so a DNS-rebinding page can't. |
+| `CONSTRUCT_WEB` | unset | `1`: serve the web client at `/web` (decision [`web-client`](decisions/web-client.md), [clients.md](clients.md#web)), take its session cookie, and proxy images for it. Unset, none of these exist. |
+| `CONSTRUCT_WEB_DIR` | `target/web` | Where `scripts/web_build.sh` put the web client. |
 | `CONSTRUCT_INSECURE_OPEN_POD_ON_NETWORK` | unset | `1` allows the open pod on a non-loopback address: everyone who can reach the server gets that pod and its sign-ins. Only on a network you trust. |
 | `CONSTRUCT_TEMP_PODS` | unset | `1`: anyone may create a temporary pod (`POST /v1/pods/temporary`). |
 | `CONSTRUCT_TEMP_POD_HOURS` | `24` | Temporary pod lifetime (1..=720). |

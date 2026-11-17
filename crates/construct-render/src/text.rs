@@ -10,6 +10,26 @@ use crate::style::{Face, Type};
 /// Each face at the four weights a `core://Text` `weight` names (400, 500,
 /// 600, 700): static cuts of the families' variable fonts, so no weight is
 /// synthesised (decision `text-weight-caps-lines`).
+/// Their files in `fonts/`, in the same order: a web build fetches them by
+/// name instead of carrying them (decision `web-client`).
+pub const FACE_FILES: [&str; 8] = [
+    "InstrumentSans-Regular.ttf",
+    "InstrumentSans-Medium.ttf",
+    "InstrumentSans-SemiBold.ttf",
+    "InstrumentSans-Bold.ttf",
+    "Lora-Regular.ttf",
+    "Lora-Medium.ttf",
+    "Lora-SemiBold.ttf",
+    "Lora-Bold.ttf",
+];
+/// The fallbacks' files (below), which a web build loads after the first
+/// frame.
+pub const FALLBACK_FILES: [&str; 3] = [
+    "DejaVuSans-Symbols.ttf",
+    "DejaVuSans-Bold-Fractions.ttf",
+    "NotoEmoji-Regular.ttf",
+];
+#[cfg(not(target_arch = "wasm32"))]
 const FACES: [&[u8]; 8] = [
     include_bytes!("../fonts/InstrumentSans-Regular.ttf"),
     include_bytes!("../fonts/InstrumentSans-Medium.ttf"),
@@ -24,10 +44,33 @@ const FACES: [&[u8]; 8] = [
 /// cosmic-text falls back to any loaded font that has a glyph, so these fill
 /// those gaps. The bold cut holds only fractions, superscripts and
 /// subscripts, so a bold amount ("⅓ cup") keeps a bold fraction.
+#[cfg(not(target_arch = "wasm32"))]
 const SYMBOLS: &[u8] = include_bytes!("../fonts/DejaVuSans-Symbols.ttf");
+#[cfg(not(target_arch = "wasm32"))]
 const SYMBOLS_BOLD: &[u8] = include_bytes!("../fonts/DejaVuSans-Bold-Fractions.ttf");
 /// Emoji and symbols DejaVu lacks (⏰, 📅), drawn as monochrome outlines.
+#[cfg(not(target_arch = "wasm32"))]
 const EMOJI: &[u8] = include_bytes!("../fonts/NotoEmoji-Regular.ttf");
+
+/// Fonts added at run time, for every text engine: a web build's fetched
+/// faces before its first frame, then its fallbacks (decision
+/// `web-client`). An engine made earlier loads the ones it lacks before it
+/// next shapes, and measures again.
+static ADDED: std::sync::Mutex<Vec<std::sync::Arc<Vec<u8>>>> = std::sync::Mutex::new(Vec::new());
+
+/// Adds a font (a file's bytes) to every text engine, made now or later.
+pub fn add_font(bytes: Vec<u8>) {
+    ADDED
+        .lock()
+        .unwrap_or_else(|p| p.into_inner())
+        .push(std::sync::Arc::new(bytes));
+}
+
+/// The fonts added from `from` on.
+fn added_since(from: usize) -> Vec<std::sync::Arc<Vec<u8>>> {
+    let added = ADDED.lock().unwrap_or_else(|p| p.into_inner());
+    added.get(from..).map(<[_]>::to_vec).unwrap_or_default()
+}
 
 /// A measured text: its size in logical points.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -102,6 +145,8 @@ pub struct TextEngine {
     sans: String,
     serif: String,
     cache: HashMap<MeasureKey, Measured>,
+    /// How many of the fonts added at run time ([`add_font`]) are loaded.
+    added: usize,
 }
 
 impl Default for TextEngine {
@@ -113,7 +158,13 @@ impl Default for TextEngine {
 impl TextEngine {
     pub fn new() -> TextEngine {
         let mut db = fontdb::Database::new();
+        #[cfg(not(target_arch = "wasm32"))]
         for data in FACES {
+            db.load_font_data(data.to_vec());
+        }
+        // A web build's faces are the ones added before its first engine.
+        let added = added_since(0);
+        for data in &added {
             db.load_font_data(data.to_vec());
         }
         let family = |sans: bool| {
@@ -125,6 +176,7 @@ impl TextEngine {
         let sans = family(true);
         let serif = family(false);
         // The fallbacks, loaded after the faces are named.
+        #[cfg(not(target_arch = "wasm32"))]
         for data in [SYMBOLS, SYMBOLS_BOLD, EMOJI] {
             db.load_font_data(data.to_vec());
         }
@@ -133,11 +185,38 @@ impl TextEngine {
             sans,
             serif,
             cache: HashMap::new(),
+            added: added.len(),
         }
     }
 
     pub fn font_system(&mut self) -> &mut FontSystem {
+        self.catch_up();
         &mut self.fonts
+    }
+
+    /// Loads the fonts added since this engine last looked ([`add_font`]);
+    /// a measurement made without them is measured again.
+    fn catch_up(&mut self) {
+        let new = added_since(self.added);
+        if new.is_empty() {
+            return;
+        }
+        self.added += new.len();
+        let db = self.fonts.db_mut();
+        for data in &new {
+            db.load_font_data(data.to_vec());
+        }
+        if self.sans.is_empty() || self.serif.is_empty() {
+            let family = |sans: bool| {
+                db.faces()
+                    .find(|f| f.weight.0 == 400 && f.families[0].0.contains("Sans") == sans)
+                    .map(|f| f.families[0].0.clone())
+                    .unwrap_or_default()
+            };
+            self.sans = family(true);
+            self.serif = family(false);
+        }
+        self.cache.clear();
     }
 
     fn attrs(&self, ty: Type) -> Attrs<'_> {
@@ -158,6 +237,7 @@ impl TextEngine {
 
     /// `text` shaped as it is: every line, wrapping at `max_width` points.
     fn shape(&mut self, text: &str, ty: Type, max_width: Option<f32>, scale: f32) -> Buffer {
+        self.catch_up();
         let metrics = Metrics::new(ty.size * scale, ty.line_height * scale);
         let mut buffer = Buffer::new(&mut self.fonts, metrics);
         buffer.set_size(max_width.map(|w| w * scale), None);
@@ -323,6 +403,7 @@ impl TextEngine {
         max_width: Option<f32>,
         scale: f32,
     ) -> Measured {
+        self.catch_up();
         let key = (
             text.to_owned(),
             ty.face,
@@ -356,6 +437,21 @@ mod tests {
     use super::*;
     use crate::style::{LABEL_LARGE, type_for};
     use protocol::TextStyle;
+
+    #[test]
+    fn a_font_added_later_is_loaded_and_measured_again() {
+        // A copy of a loaded face (so other tests, which share the added
+        // fonts, measure the same): the engine loads it on its next
+        // measure and drops what it measured before.
+        let mut t = TextEngine::new();
+        let ty = crate::style::type_for(protocol::TextStyle::Body);
+        let _ = t.measure("before", ty, None, 1.0);
+        let before = t.added;
+        add_font(include_bytes!("../fonts/Lora-Regular.ttf").to_vec());
+        let _ = t.measure("after", ty, None, 1.0);
+        assert!(t.added > before);
+        assert_eq!(t.cache.len(), 1, "measured again after the font came");
+    }
 
     #[test]
     fn longer_text_is_wider_and_wraps() {

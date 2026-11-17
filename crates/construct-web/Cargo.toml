@@ -1,0 +1,31 @@
+[package]
+name = "construct-web"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+# The web client (decision `web-client`): construct-render in a browser,
+# drawn by its CPU rasterizer into a canvas. `scripts/web_build.sh` builds
+# it with wasm-bindgen; the server serves it at /web with CONSTRUCT_WEB=1.
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+protocol = { workspace = true }
+construct-elements = { workspace = true }
+construct-render = { path = "../construct-render", default-features = false }
+serde_json.workspace = true
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wasm-bindgen = "0.2"
+wasm-bindgen-futures = "0.4"
+js-sys = "0.3"
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp", "gif"] }
+web-sys = { version = "0.3", features = [
+    "console", "Window", "Document", "Element", "HtmlElement", "HtmlCanvasElement", "HtmlInputElement",
+    "CanvasRenderingContext2d", "ImageData", "CssStyleDeclaration", "DomTokenList", "Location",
+    "Request", "RequestInit", "Response", "Headers", "ReadableStream", "ReadableStreamDefaultReader",
+    "TextDecoder", "TextDecodeOptions", "EventTarget", "Event", "PointerEvent", "MouseEvent",
+    "WheelEvent", "KeyboardEvent",
+] }

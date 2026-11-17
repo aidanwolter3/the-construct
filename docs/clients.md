@@ -4,7 +4,8 @@ The desktop and Android apps draw layouts with the Rust renderer (`crates/constr
 (`crates/client-core`), decision `rust-clients`: `construct-viewer` on the desktop (`The Construct.app` on macOS) and
 a NativeActivity APK on Android. Both open your pod: the one opened last, else the pod's sign-in screen (a pod code,
 or **Try a temporary pod**) on the staging server, `https://the-construct-pod.fly.dev`. Renderer details, the
-Android bridge and push are in [rendering.md](rendering.md).
+Android bridge and push are in [rendering.md](rendering.md). A web client (`crates/construct-web`, below) draws the same
+renderer in a browser; it is off unless the server is started with `CONSTRUCT_WEB=1`.
 
 ## Desktop
 
@@ -59,6 +60,40 @@ machine's) can't be updated in place: `adb uninstall org.theconstruct.android` f
 The server is picked on the sign-in screen and in Settings (`local:servers`: Staging, Local emulator
 `http://10.0.2.2:8080`, Local USB `http://127.0.0.1:8080` with `adb reverse tcp:8080 tcp:8080`, and the saved
 server when it is another). The APK is built for arm64-v8a only.
+
+## Web
+
+A prototype (decision [`web-client`](decisions/web-client.md)): `crates/construct-web` is the renderer compiled to
+WebAssembly and drawn into a `<canvas>` by its CPU rasterizer. The server serves it at `/web` only with
+`CONSTRUCT_WEB=1`, from `CONSTRUCT_WEB_DIR` (default `target/web`):
+
+```bash
+rustup target add wasm32-unknown-unknown
+cargo install wasm-bindgen-cli --locked --version <the wasm-bindgen version in Cargo.lock>
+scripts/web_build.sh                                    # into target/web
+CONSTRUCT_WEB=1 CONSTRUCT_OPEN_POD=off cargo run -p server -- serve --pod-code cpod_localtest123
+# then open http://127.0.0.1:8080/web and type the code
+```
+
+`scripts/web_e2e.sh` does this on a spare port with a throwaway pod and drives the page in Chromium (Playwright): the
+code form, a wrong code, home drawn, the cookie, a reload, a phone-sized window and logging out.
+
+- **Signing in**: the page asks for the pod code and posts it to `POST /web/session`, which answers a session cookie
+  (`HttpOnly`, `SameSite=Strict`): an ordinary session of the pod, which expires and which **Log out** ends. The code
+  is not kept in the browser. The cookie works only on requests that carry `x-construct-client: web` and never for
+  `/v1/mcp` ([api.md](api.md#web-client)).
+- **What it draws**: the layouts home reaches, fetched with home's root (`POST /v1/objects`) and materialized in the
+  browser; their data comes in the background (`/v1/construct/data/…`) and the events stream keeps them current (an
+  agent's edit or a new row appears without a reload). It draws the window's size: `local://device#size_class` and
+  the rest of decision `screen-sizes` follow the browser window, and `local://device#platform` is `web`.
+- **Fonts and images** are fetched, not built in: the faces before the first frame, the symbol and emoji fallbacks
+  after it (`/web/fonts/<file>`). Images of other sites go through the pod's proxy (`/web/image`).
+- **Input**: click or tap, the wheel and touch drags scroll, typing goes through a hidden input, Escape is Back.
+- **Not yet**: drags of cards, pagers and sheets; photo picking; upstream sign-ins (Pixelfed); notifications and an
+  offline cache; screen readers (the canvas has no accessibility tree yet). It sends the features it can draw minus
+  `media_picker`, `auth_login` and `device_notification_permission`, so the pod serves older versions without them.
+  The CPU rasterizer redraws the whole window on each frame, about 50 ms at 1280 × 800 and 90 ms at twice that
+  density, so scrolling a long page is not smooth; the renderer's GPU path is the way past that.
 
 ## Releases
 
