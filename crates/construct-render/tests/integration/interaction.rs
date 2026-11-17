@@ -521,6 +521,41 @@ fn a_pressed_tappable_is_drawn_pressed_until_let_go() {
     assert!(s.pressed().is_none());
 }
 
+/// Rows grouped in a rounded card: a pressed first or last row is rounded
+/// where it meets the card's corners, and square where it meets a row.
+#[test]
+fn a_pressed_row_in_a_rounded_card_is_rounded_at_the_cards_corners() {
+    let row = |tag: &str, text: &str| {
+        json!({ "type": "core://Tappable", "tag": tag,
+            "on_click": { "intent": "action.navigation.back" },
+            "content": { "type": "core://Row", "padding_h_dp": 16, "padding_v_dp": 12, "children": [
+                { "type": "core://Text", "value_expr": text, "style": "Body" },
+                { "type": "core://Spacer" } ] } })
+    };
+    let root: protocol::UiNode = serde_json::from_value(json!({
+        "type": "core://Column", "padding_h_dp": 20, "children": [{
+            "type": "core://Box", "corner_dp": 16, "background": "#ffffff",
+            "content": { "type": "core://Column", "children": [
+                row("first", "Eat well"), row("middle", "Sleep"), row("last", "Walk") ] } }] }))
+    .unwrap();
+    let mut s = Session::new("home", root, Default::default(), Viewport::PHONE);
+    let mut wash = |text: &str| {
+        let t = s.scene().unwrap().find_text(text).unwrap().bounds;
+        assert!(s.press(t[0] + 1.0, t[1] + 1.0));
+        let scene = s.scene().unwrap();
+        let q = scene
+            .quads()
+            .find(|q| q.bg_color[3] > 0.0 && q.bg_color[3] < 0.2)
+            .expect("a wash")
+            .radii;
+        s.release_press();
+        q
+    };
+    assert_eq!(wash("Eat well"), [16.0, 16.0, 0.0, 0.0]);
+    assert_eq!(wash("Sleep"), [0.0; 4]);
+    assert_eq!(wash("Walk"), [0.0, 0.0, 16.0, 16.0]);
+}
+
 #[test]
 fn a_spinner_turns_while_the_session_animates() {
     let root: protocol::UiNode = serde_json::from_value(json!({
