@@ -58,5 +58,5 @@ mod pacing;
 mod picked;
 
 pub use interact::{Effect, Outcome, Session, Target};
-pub use layout::{Input, RenderError, SceneBuilder, Viewport};
+pub use layout::{Input, NO_PANELS, Panel, Panels, RenderError, SceneBuilder, Viewport};
 pub use scene::{QuadInstance, Scene, SemanticNode, Tap};

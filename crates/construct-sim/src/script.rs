@@ -45,6 +45,9 @@ pub enum Step {
     /// A finger held down on a node (drawn pressed) until `release` or a
     /// `click`.
     Press(String),
+    /// The mouse resting over a node (drawn hovered), until another
+    /// `hover` or `click`.
+    Hover(String),
     Release,
     Type {
         target: String,
@@ -113,6 +116,7 @@ impl Step {
             Step::Shot(_) => "shot",
             Step::Click(_) => "click",
             Step::Press(_) => "press",
+            Step::Hover(_) => "hover",
             Step::Release => "release",
             Step::Type { .. } => "type",
             Step::Pick(_) => "pick",
@@ -204,6 +208,7 @@ pub fn parse(script: &str) -> Result<Vec<Line>, String> {
             "shot" => Step::Shot(need("a name")?),
             "click" => Step::Click(need("the text to click")?),
             "press" => Step::Press(need(target)?),
+            "hover" => Step::Hover(need(target)?),
             "type" => {
                 let a = need("a target and the text to type")?;
                 let (target, text) = split_type_arg(&a).ok_or_else(|| {

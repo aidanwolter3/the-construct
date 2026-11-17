@@ -530,6 +530,23 @@ impl App {
         }
     }
 
+    /// The mouse moved: what it rests over is drawn hovered, and the
+    /// pointer is a hand over something tappable.
+    #[cfg(not(target_os = "android"))]
+    fn hover(&mut self) {
+        let session = &mut self.controller.session;
+        if session.hover(self.cursor.0, self.cursor.1)
+            && let Some(s) = &self.surface
+        {
+            s.window.set_cursor(if session.hovering() {
+                winit::window::CursorIcon::Pointer
+            } else {
+                winit::window::CursorIcon::Default
+            });
+            s.window.request_redraw();
+        }
+    }
+
     /// The press ended (lifted, cancelled, or turned into a drag).
     fn release_press(&mut self) {
         if self.controller.session.release_press()
@@ -1052,6 +1069,17 @@ impl ApplicationHandler for App {
             WindowEvent::RedrawRequested => self.draw(),
             WindowEvent::CursorMoved { position, .. } => {
                 self.cursor = (position.x as f32 / scale, position.y as f32 / scale);
+                #[cfg(not(target_os = "android"))]
+                self.hover();
+            }
+            #[cfg(not(target_os = "android"))]
+            WindowEvent::CursorLeft { .. } => {
+                if self.controller.session.hover_end()
+                    && let Some(s) = &self.surface
+                {
+                    s.window.set_cursor(winit::window::CursorIcon::Default);
+                    s.window.request_redraw();
+                }
             }
             WindowEvent::MouseInput {
                 state: ElementState::Pressed,

@@ -22,7 +22,9 @@ use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 
 use crate::cpu::CpuRenderer;
-use crate::layout::{Input, Laid, Pressed, RenderError, SceneBuilder, Viewport};
+use crate::layout::{
+    Input, Laid, NO_PANELS, Panel, Panels, Pressed, RenderError, SceneBuilder, Viewport, panel_id,
+};
 use crate::scene::{Draw, QuadInstance, Scene, SemanticNode, Tap};
 use crate::style::Rgba;
 
@@ -313,6 +315,11 @@ struct Entry {
     /// An action from outside its `follow_end` scrolling views ran: they
     /// follow their content to the end once it is laid out.
     follow: bool,
+    /// The layouts open as panels beside its panel hosts (decision
+    /// `wide-screen-panels`).
+    panels: Panels,
+    /// Its panel hosts as last laid out ([`Laid::panel_hosts`]).
+    panel_hosts: Vec<String>,
 }
 
 impl Entry {
@@ -349,6 +356,8 @@ impl Entry {
             screen: false,
             screen_id: String::new(),
             follow: false,
+            panels: Panels::new(),
+            panel_hosts: Vec::new(),
         }
     }
 }
@@ -627,9 +636,20 @@ fn merge(into: &mut DataBundle, from: DataBundle) {
     into.queries.extend(from.queries);
 }
 
-/// [`merge`] that keeps the entities and queries `into` already has as they
-/// are: true when any of them is new or different. A loader's news carry
-/// all its data each time (the engine's snapshots), most of it unchanged.
+/// A push (`action.navigation.open` of a layout, no screen, not as a sheet,
+/// panel or overlay) or a Back: what a panel host turns into panels.
+fn panel_intent(intent: &Value) -> bool {
+    match intent["intent"].as_str() {
+        Some("action.navigation.back") => intent["frame"] != true,
+        Some("action.navigation.open") => {
+            intent["layout"].as_str().is_some_and(|l| !l.is_empty())
+                && intent["target_uri"].as_str().is_none_or(str::is_empty)
+                && intent["presentation"].as_str().is_none_or(|p| p == "Push")
+        }
+        _ => false,
+    }
+}
+
 /// Whether an intent only opens or closes layouts and screens
 /// (`action.navigation.open`, `action.navigation.back`): it changes nothing
 /// already laid out, unless it merges data in.
@@ -645,6 +665,9 @@ fn navigates_only(intent: &Value) -> bool {
     )
 }
 
+/// [`merge`] that keeps the entities and queries `into` already has as they
+/// are: true when any of them is new or different. A loader's news carry
+/// all its data each time (the engine's snapshots), most of it unchanged.
 fn merge_changed(into: &mut DataBundle, from: DataBundle) -> bool {
     let mut changed = false;
     for (uri, e) in from.entities {
@@ -737,6 +760,9 @@ pub struct Session {
     caret_shown: Option<bool>,
     /// The `core://Tappable` held down, drawn pressed until it is let go.
     pressed: Option<Pressed>,
+    /// The `core://Tappable` the mouse rests over (a pointer that hovers:
+    /// desktop and web), drawn with a light wash.
+    hovered: Option<Pressed>,
     /// What the pressed row opens, opened out of sight and laid out while
     /// the finger is down ([`Session::prepare_at`]).
     prepared: Option<Prepared>,
@@ -922,6 +948,7 @@ impl Session {
             edit: None,
             caret_shown: None,
             pressed: None,
+            hovered: None,
             prepared: None,
             merges: 0,
             scenes_built: 0,
@@ -1335,6 +1362,7 @@ impl Session {
             .map(|n| Pressed {
                 id: n.id,
                 at: (x, y),
+                hover: false,
             });
         // A new touch: what an earlier one prepared is dropped.
         self.prepared = None;
@@ -1368,7 +1396,10 @@ impl Session {
         let Some(bound) = self.bind_form(&intent) else {
             return false;
         };
-        if bound["intent"] != "action.navigation.open" || self.loads_screen_data(&bound) {
+        if bound["intent"] != "action.navigation.open"
+            || self.loads_screen_data(&bound)
+            || (panel_intent(&bound) && self.panel_slot_of(&node).is_some())
+        {
             return false;
         }
         let before = self.stack.len();
@@ -1423,6 +1454,44 @@ impl Session {
             self.scene = None;
         }
         was
+    }
+
+    /// The mouse moved to a point (a pointer that hovers; touch screens
+    /// never call it): the `core://Tappable` under it is drawn with a light
+    /// wash. Returns whether that changed (the window draws again).
+    pub fn hover(&mut self, x: f32, y: f32) -> bool {
+        let hovered = self
+            .find(&Target::Point(x, y))
+            .ok()
+            .flatten()
+            .filter(|n| n.node_type == "core://Tappable")
+            .map(|n| Pressed {
+                id: n.id,
+                at: (x, y),
+                hover: true,
+            });
+        let changed = hovered.as_ref().map(|h| &h.id) != self.hovered.as_ref().map(|h| &h.id);
+        self.hovered = hovered;
+        if changed {
+            self.scene = None;
+        }
+        changed
+    }
+
+    /// The mouse left the window: nothing is hovered. Returns whether
+    /// something was.
+    pub fn hover_end(&mut self) -> bool {
+        let was = self.hovered.take().is_some();
+        if was {
+            self.scene = None;
+        }
+        was
+    }
+
+    /// Whether the mouse rests over something tappable (the pointer shows a
+    /// hand).
+    pub fn hovering(&self) -> bool {
+        self.hovered.is_some()
     }
 
     /// What is drawn pressed (tests and the simulator read it).
@@ -2526,6 +2595,7 @@ impl Session {
                 item: e.item.as_deref(),
                 insets,
                 focused: self.focused.as_deref(),
+                panels: &e.panels,
             },
             prev,
         )?;
@@ -2552,6 +2622,10 @@ impl Session {
             }
             e.follow = !moved && !laid.follow_end.is_empty();
         }
+        // Panels beside a host no longer drawn (another view picked, a
+        // narrower window) close.
+        e.panels.retain(|h, _| laid.panel_hosts.contains(h));
+        e.panel_hosts.clone_from(&laid.panel_hosts);
         e.laid = Some((laid, size));
         Ok(())
     }
@@ -2657,7 +2731,11 @@ impl Session {
             let (frame, content, entry_insets) = self.frame_rects(i);
             let e = &self.stack[i];
             // Only the top layout's nodes can be pressed, as tapped.
-            let pressed = self.pressed.as_ref().filter(|_| i >= top_group);
+            let pressed = self
+                .pressed
+                .as_ref()
+                .or(self.hovered.as_ref())
+                .filter(|_| i >= top_group);
             if i == top_group {
                 keep_from = scene.semantics.len();
             }
@@ -3261,6 +3339,11 @@ impl Session {
                 vec![Effect::Focused { field }]
             }
             Some(Tap::Intent { intent }) => match self.bind_form(&intent) {
+                Some(bound) if panel_intent(&bound) && self.panel_slot_of(&node).is_some() => {
+                    let mut out = Vec::new();
+                    self.in_panels(&node, &bound, &mut out);
+                    out
+                }
                 Some(bound) => {
                     self.mark_follow(px, py);
                     match prepared.filter(|p| p.intent == bound) {
@@ -3761,6 +3844,9 @@ impl Session {
                     }
                     _ => out.push(Effect::Nothing),
                 }
+            }
+            "action.navigation.back" if intent["frame"] != true && self.close_panel() => {
+                out.push(Effect::Back);
             }
             "action.navigation.back" => {
                 let top = self.top_index();
@@ -4277,11 +4363,113 @@ impl Session {
             item: None,
             insets: [0.0; 4],
             focused: None,
+            panels: &NO_PANELS,
         })?;
         let (w, h) = (self.viewport.width, self.viewport.height);
         let y = h - self.insets[2] - laid.used_height();
         laid.emit_into(scene, &BTreeMap::new(), (0.0, y), [0.0, 0.0, w, h], None);
         Ok(())
+    }
+
+    /// Where a node of the top entry sits among the panel hosts it laid
+    /// out: the host (the semantic id of its content) and the column, 0
+    /// for the host's own content and k + 1 for panel k. The innermost
+    /// host when they nest.
+    fn panel_slot(&self, id: &str) -> Option<(String, usize)> {
+        let e = &self.stack[self.top_index()];
+        let under = |prefix: &str| {
+            id.strip_prefix(prefix)
+                .is_some_and(|rest| rest.is_empty() || rest.starts_with('/'))
+        };
+        e.panel_hosts
+            .iter()
+            .filter_map(|h| {
+                if under(h) {
+                    return Some((h.clone(), 0));
+                }
+                let open = e.panels.get(h).map_or(0, Vec::len);
+                (0..open)
+                    .find(|&k| under(&panel_id(h, k)))
+                    .map(|k| (h.clone(), k + 1))
+            })
+            .max_by_key(|(h, _)| h.len())
+    }
+
+    /// [`Session::panel_slot`] of a node of the current scene: its own id's,
+    /// else its nearest ancestor's (a `tag` replaces a node's own id).
+    fn panel_slot_of(&self, node: &SemanticNode) -> Option<(String, usize)> {
+        let sems = &self.scene.as_ref()?.semantics;
+        let mut at = Some(node);
+        while let Some(n) = at {
+            if let Some(slot) = self.panel_slot(&n.id) {
+                return Some(slot);
+            }
+            at = n.parent.and_then(|i| sems.get(i));
+        }
+        None
+    }
+
+    /// A push or Back tapped inside a panel host: the push opens a panel
+    /// right of the column it came from (closing those past it), and Back
+    /// in a panel closes it and those past it.
+    fn in_panels(&mut self, node: &SemanticNode, intent: &Value, out: &mut Vec<Effect>) {
+        let Some((host, slot)) = self.panel_slot_of(node) else {
+            return;
+        };
+        let ti = self.top_index();
+        if intent["intent"] == "action.navigation.back" {
+            if let Some(open) = self.stack[ti].panels.get_mut(&host) {
+                open.truncate(slot.saturating_sub(1));
+            }
+            out.push(Effect::Back);
+            return;
+        }
+        let Some(layout) = intent["layout"].as_str() else {
+            return;
+        };
+        if self.layout_root(layout, out).is_none() {
+            return;
+        }
+        let route = intent["params"]
+            .as_object()
+            .map(|m| {
+                m.iter()
+                    .map(|(k, v)| (k.clone(), crate::bind::render(v)))
+                    .collect()
+            })
+            .unwrap_or_default();
+        let open = self.stack[ti].panels.entry(host).or_default();
+        open.truncate(slot);
+        open.push(Panel {
+            layout: layout.to_owned(),
+            route,
+        });
+        self.load_inline_layouts();
+        out.push(Effect::Opened {
+            layout: layout.to_owned(),
+        });
+    }
+
+    /// System Back with panels open on the top entry: the rightmost panel
+    /// of a host drawn now closes. False when none is open.
+    fn close_panel(&mut self) -> bool {
+        let ti = self.top_index();
+        let e = &mut self.stack[ti];
+        let host = e
+            .panel_hosts
+            .iter()
+            .rev()
+            .find(|h| e.panels.get(*h).is_some_and(|p| !p.is_empty()))
+            .cloned();
+        match host.and_then(|h| e.panels.get_mut(&h)) {
+            Some(open) => {
+                open.pop();
+                // What is laid out changed, not only what is stacked.
+                e.relay();
+                true
+            }
+            None => false,
+        }
     }
 
     /// A layout's root: given, or loaded (its data merged).
@@ -4348,6 +4536,8 @@ impl Session {
             screen: true,
             screen_id: screen.id.clone(),
             follow: false,
+            panels: Panels::new(),
+            panel_hosts: Vec::new(),
         });
         out.push(Effect::OpenedScreen {
             screen: screen.id.clone(),
@@ -4419,8 +4609,15 @@ impl Session {
                 push_new(&mut shown, Shown::Data(d.clone()));
             }
             push_new(&mut shown, Shown::Layout(e.id.clone()));
-            // Inline layouts, and theirs (each once).
+            // Inline layouts and panels, and theirs (each once).
             let mut roots = vec![&e.root];
+            for p in e.panels.values().flatten() {
+                if push_new(&mut shown, Shown::Layout(p.layout.clone()))
+                    && let Some(r) = self.layouts.get(&p.layout)
+                {
+                    roots.push(r);
+                }
+            }
             while let Some(root) = roots.pop() {
                 for n in root.walk() {
                     if let UiNode::Layout {
@@ -4449,10 +4646,14 @@ impl Session {
             return;
         }
         let top = &self.stack[self.top_index()];
-        let wanted: Vec<String> = top
-            .root
-            .walk()
-            .into_iter()
+        let panels = top
+            .panels
+            .values()
+            .flatten()
+            .filter_map(|p| self.layouts.get(&p.layout));
+        let wanted: Vec<String> = std::iter::once(&top.root)
+            .chain(panels)
+            .flat_map(UiNode::walk)
             .filter_map(|n| match n {
                 UiNode::Layout {
                     layout,

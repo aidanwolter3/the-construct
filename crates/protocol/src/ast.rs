@@ -662,6 +662,13 @@ pub enum UiNode {
         /// (start, end).
         #[serde(default, skip_serializing_if = "Option::is_none")]
         size_dp: Option<u16>,
+        /// Feature `layout_panels`: inline, on an expanded screen, a layout
+        /// opened (pushed) from inside it opens as a panel beside it rather
+        /// than over the whole screen (decision `wide-screen-panels`).
+        /// Elsewhere, and on a client without the feature, it pushes as
+        /// always.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        panels: bool,
     },
 
     // Feature `gesture` (crates/protocol/features/gesture.md)
