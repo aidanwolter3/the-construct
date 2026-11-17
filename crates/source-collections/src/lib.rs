@@ -129,7 +129,7 @@ pub struct Caps {
 impl Default for Caps {
     fn default() -> Self {
         Self {
-            collections: 20,
+            collections: 50,
             fields: 40,
             rows: 5_000,
             bytes: 4 * 1024 * 1024,

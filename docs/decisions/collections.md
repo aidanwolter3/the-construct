@@ -1,5 +1,7 @@
 # Custom apps keep their own data in Collections, one generic data source that Claude declares data in
 
+The cap of 20 collections below is now 50: [more-collections-per-pod](more-collections-per-pod.md).
+
 Extended by [collection-reminders](collection-reminders.md) (reminders, open question 3 below).
 Extended by [bulk-row-edits](bulk-row-edits.md) (a kept preview confirmed by its token, edits from a file, 5,000
 rows per edit), which amends "at most 500 rows" below.
