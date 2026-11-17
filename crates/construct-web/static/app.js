@@ -30,7 +30,6 @@ async function run() {
   await init();
   await start();
   $("loading").hidden = true;
-  $("log-out").hidden = false;
 }
 
 $("code-form").addEventListener("submit", async (e) => {
@@ -48,11 +47,6 @@ $("code-form").addEventListener("submit", async (e) => {
   } else {
     $("code-error").textContent = "That code didn't open a pod.";
   }
-});
-
-$("log-out").addEventListener("click", async () => {
-  await fetch("/web/logout", { method: "POST", headers: web });
-  location.reload();
 });
 
 run().catch((e) => {

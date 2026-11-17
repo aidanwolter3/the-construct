@@ -694,10 +694,23 @@ impl App {
         let out = self.controller.handle(e);
         // A link opens in a new tab, not over the pod.
         for effect in out.iter().flat_map(|o| &o.effects) {
-            if let construct_render::interact::Effect::OpenLink { url } = effect
-                && (url.starts_with("https://") || url.starts_with("http://"))
-            {
-                let _ = window().open_with_url_and_target_and_features(url, "_blank", "noopener");
+            match effect {
+                construct_render::interact::Effect::OpenLink { url }
+                    if url.starts_with("https://") || url.starts_with("http://") =>
+                {
+                    let _ =
+                        window().open_with_url_and_target_and_features(url, "_blank", "noopener");
+                }
+                // Settings' "Leave pod on this device": this browser logs
+                // out (its session ends; the pod code still works) and asks
+                // for a code again.
+                construct_render::interact::Effect::LeftPod => {
+                    spawn_local(async {
+                        let _ = request("POST", "/web/logout", None).await;
+                        let _ = window().location().reload();
+                    });
+                }
+                _ => {}
             }
         }
         self.sync_input();
