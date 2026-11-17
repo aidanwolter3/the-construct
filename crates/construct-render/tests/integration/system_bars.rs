@@ -95,3 +95,24 @@ fn without_a_page_box_the_theme_background_shows() {
     assert_eq!(img.get_pixel(50, 5).0[..3], bg[..3]);
     assert_eq!(scene.bars, [scene.background; 2]);
 }
+
+#[test]
+fn dark_mode_takes_the_dark_page_and_light_icons() {
+    // The page token follows the mode: in dark mode the insets take the
+    // dark page and the bars get light icons.
+    let page = || page_box("${local://theme#page}", text());
+    let mut light = session(page());
+    let light_bars = light.scene().unwrap().bars;
+    assert!(light_bars.iter().all(|&c| Rgba(c).is_light()));
+
+    let mut s = session(page());
+    s.set_dark(true);
+    let img = s.render_cpu().unwrap();
+    let bars = s.scene().unwrap().bars;
+    assert_ne!(bars, light_bars);
+    assert!(bars.iter().all(|&c| !Rgba(c).is_light()), "{bars:?}");
+    let dark = Rgba(bars[0]).to_u8();
+    for y in [2, 50, 98] {
+        assert_eq!(img.get_pixel(50, y).0[..3], dark[..3], "y = {y}");
+    }
+}
