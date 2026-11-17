@@ -728,12 +728,14 @@ dependencies = [
 name = "construct-web"
 version = "0.1.0"
 dependencies = [
+ "base64 0.22.1",
  "construct-elements",
  "construct-render",
  "image",
  "js-sys",
  "protocol",
  "serde_json",
+ "sha2 0.10.9",
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "web-sys",

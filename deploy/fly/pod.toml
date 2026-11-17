@@ -29,8 +29,9 @@ primary_region = "dfw"
   # The sign-in screen's server box accepts any public HTTPS Pixelfed instance (D45).
   PIXELFED_ALLOWED_INSTANCES = "*"
   # The Android app's sign-in redirect is a verified App Link on this host (decision
-  # android-app-link-sign-in-redirect); construct://oauth stays accepted for older builds.
-  PIXELFED_EXTRA_REDIRECTS = "https://the-construct-pod.fly.dev/oauth/android"
+  # android-app-link-sign-in-redirect); construct://oauth stays accepted for older builds. The web client's
+  # redirect is its own page, /web (decision web-upstream-sign-in).
+  PIXELFED_EXTRA_REDIRECTS = "https://the-construct-pod.fly.dev/oauth/android,https://the-construct-pod.fly.dev/web"
   # Signing certs whose Android builds may open that link, served in /.well-known/assetlinks.json.
   # Not secret (every APK carries its cert), so they can live here; unset, the endpoint is 404 and
   # Android 12+ builds keep construct://oauth. Get a fingerprint with
