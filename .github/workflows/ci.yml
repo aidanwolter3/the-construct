@@ -167,6 +167,35 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
+  web:
+    name: Web client (wasm)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    # The web client (decision `web-client`): construct-web built for wasm32 with the wasm-bindgen CLI pinned to
+    # Cargo.lock's version, as scripts/web_build.sh builds it, and a size budget on the gzipped WebAssembly. It isn't
+    # deployed: the server serves it only with CONSTRUCT_WEB=1.
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false # no job pushes; keep GITHUB_TOKEN out of .git/config
+      - name: Install the pinned Rust (rust-toolchain.toml) and the wasm32 target
+        run: rustup toolchain install && rustup target add wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          key: web
+      - name: Install the wasm-bindgen CLI at Cargo.lock's version
+        run: |
+          v=$(grep -A1 '^name = "wasm-bindgen"$' Cargo.lock | grep version | cut -d'"' -f2)
+          [ "$(wasm-bindgen --version 2>/dev/null | cut -d' ' -f2)" = "$v" ] || cargo install --locked wasm-bindgen-cli --version "$v"
+      - name: Clippy on the browser-only code
+        run: cargo clippy -p construct-web -p construct-render --no-default-features --target wasm32-unknown-unknown -- -D warnings
+      - run: scripts/web_build.sh target/web
+      - name: Size budget (gzipped WebAssembly at most 2.5 MiB)
+        run: |
+          size=$(gzip -9 -c target/web/construct_web_bg.wasm | wc -c)
+          echo "gzipped: $size bytes"
+          [ "$size" -le 2621440 ]
+
   deploy:
     name: Deploy to Fly.io staging
     if: (github.event_name == 'push' || github.event_name == 'workflow_dispatch' || github.event_name == 'schedule') && github.ref == 'refs/heads/main'

@@ -78,6 +78,18 @@ pub fn needs_sign_ins(needs: &str) -> bool {
     needs.contains("local:sign_ins") || needs.contains("local:providers")
 }
 
+/// `local://device#platform`: `android`, `web` (a browser, decision
+/// `web-client`) or `desktop`.
+pub fn platform() -> &'static str {
+    if cfg!(target_os = "android") {
+        "android"
+    } else if cfg!(target_arch = "wasm32") {
+        "web"
+    } else {
+        "desktop"
+    }
+}
+
 /// The device data every layout gets: `local://connection` and
 /// `local://session` as given, the device and the server.
 pub fn base_device(base: &str, connection: Value, session: Value) -> DataBundle {
@@ -87,7 +99,7 @@ pub fn base_device(base: &str, connection: Value, session: Value) -> DataBundle 
     insert(
         &mut out,
         "local://device",
-        json!({ "platform": if cfg!(target_os = "android") { "android" } else { "desktop" },
+        json!({ "platform": platform(),
                 "notification_permission": "" }),
     );
     insert(
@@ -211,8 +223,8 @@ pub fn sign_ins_bundle(v: &Value) -> DataBundle {
 }
 
 pub fn now_secs() -> i64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
+    crate::time::SystemTime::now()
+        .duration_since(crate::time::UNIX_EPOCH)
         .map_or(0, |d| d.as_secs() as i64)
 }
 

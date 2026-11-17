@@ -149,7 +149,9 @@ impl Session {
     /// to [`Session::picked`] through [`Session::poll`]. False where there is
     /// none (Android picks through its platform).
     pub fn pick_here(&mut self, max: u32) -> bool {
-        if cfg!(target_os = "android") || self.loader.is_none() {
+        // Android picks through its platform; a browser has no file dialog
+        // here yet.
+        if cfg!(any(target_os = "android", target_arch = "wasm32")) || self.loader.is_none() {
             return false;
         }
         let answered = self.answered.clone();

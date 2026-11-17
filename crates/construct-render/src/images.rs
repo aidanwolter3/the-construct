@@ -186,12 +186,18 @@ impl ImageStore {
         };
         self.lock().cutting.insert(key.clone());
         let store = self.clone();
-        std::thread::spawn(move || {
+        let work = move || {
             let out = Arc::new(cut(&src, key.1.max(1), key.2.max(1), key.3 as f32));
             store.lock().cutting.remove(&key);
             store.keep(key, out);
             store.wake();
-        });
+        };
+        // A browser has no threads (decision `web-client`): it cuts the
+        // image now, and draws it from the next frame.
+        #[cfg(target_arch = "wasm32")]
+        work();
+        #[cfg(not(target_arch = "wasm32"))]
+        std::thread::spawn(work);
         false
     }
 

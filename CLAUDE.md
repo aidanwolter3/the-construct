@@ -33,7 +33,8 @@ issues. `docs/history/` is archived; don't treat it as current.
   previews, `construct-viewer` (desktop; `scripts/macos_app.sh` bundles the Mac app) and the Android app
   (NativeActivity; `scripts/android_native.sh` builds and installs it, `android/` its manifest, resources and Java
   bridge, which only forwards to Rust: decision `android-native-bridge`) ([docs/rendering.md](docs/rendering.md),
-  [docs/clients.md](docs/clients.md)); `crates/construct-sim` the headless simulator over it
+  [docs/clients.md](docs/clients.md)); `crates/construct-web` the web client (that renderer in a browser, served at
+  `/web` only with `CONSTRUCT_WEB=1`; `scripts/web_build.sh` builds it); `crates/construct-sim` the headless simulator over it
   ([docs/simulator.md](docs/simulator.md)).
 - `fake-pixelfed/` the fake upstream (primary test target); `crates/e2e` the end-to-end suite.
 - `crates/source-*/layouts/<blueprint>/NNNN.json` layout versions; `crates/protocol/features/` the named vocabulary

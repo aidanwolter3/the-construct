@@ -27,6 +27,7 @@ pub mod scene;
 pub mod scroll;
 pub mod style;
 pub mod text;
+pub mod time;
 pub mod viewer;
 
 #[cfg(feature = "gpu")]

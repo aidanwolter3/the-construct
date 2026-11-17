@@ -136,3 +136,23 @@ fn the_window_size_is_device_data() {
     assert!(scene.find_text("expanded 1280").is_some());
     assert!(scene.find_text("Side panel").is_some());
 }
+
+/// The window's size is written into the device data on each frame; a
+/// screen that didn't change is not laid out again for it (a window that
+/// animates would otherwise hold its slides back forever).
+#[test]
+fn the_window_size_doesnt_lay_a_still_screen_out_again() {
+    let spec = json!({ "type": "core://Text", "style": "Body",
+        "value_expr": "${local://device#size_class}" });
+    let root: UiNode = serde_json::from_value(spec).unwrap();
+    let mut s = Session::new("home", root, DataBundle::default(), Viewport::PHONE);
+    s.animate = true;
+    s.scene().unwrap();
+    let _ = s.take_work();
+    let built = s.scenes_built();
+    for _ in 0..3 {
+        s.scene().unwrap();
+    }
+    assert_eq!(s.take_work().laid_out, 0);
+    assert_eq!(s.scenes_built(), built, "nothing changed: no new scene");
+}

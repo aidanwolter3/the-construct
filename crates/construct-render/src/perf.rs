@@ -10,7 +10,7 @@
 //! a slow frame. Only timings and counts are logged: no text, ids of
 //! entities or other data from the pod.
 
-use std::time::{Duration, Instant};
+use crate::time::{Duration, Instant};
 
 /// A long burst (a spinner on screen) is summed up this often.
 pub const WINDOW: Duration = Duration::from_secs(5);

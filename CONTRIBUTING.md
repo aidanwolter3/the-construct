@@ -28,6 +28,9 @@ cargo fmt --all && cargo clippy --workspace --all-targets -- -D warnings && carg
 cargo clippy -p construct-render --features viewer --all-targets -- -D warnings   # the window and viewer code
 scripts/check_decisions.sh && scripts/check_test_data.sh && scripts/check_old_names.sh
 scripts/sim_scenarios.sh /tmp/sim         # the simulator's scenarios (look at the PNGs for UI changes)
+# The web client (decision `web-client`): the browser-only code, its build, and Chromium driving it
+cargo clippy -p construct-web -p construct-render --no-default-features --target wasm32-unknown-unknown -- -D warnings
+scripts/web_build.sh && scripts/web_e2e.sh
 # Needs an Android SDK and NDK (not in cloud sessions; CI builds it): the APK, Java bridge and JNI names
 scripts/android_native.sh
 ```

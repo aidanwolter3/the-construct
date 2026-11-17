@@ -1050,3 +1050,232 @@ async fn a_local_pod_keeps_the_codes_it_was_given() {
     let other: &'static str = Box::leak(other.into_boxed_str());
     assert!(ensure(other, None).await.is_err());
 }
+
+/// The web client's routes and cookie (decision `web-client`).
+mod web {
+    use super::*;
+    use server::host::web::WebConfig;
+
+    /// A server with the web client on, serving a page from a directory.
+    async fn web_env() -> (Env, tempfile::TempDir) {
+        let files = tempfile::tempdir().unwrap();
+        std::fs::write(
+            files.path().join("index.html"),
+            "<!doctype html><title>t</title>",
+        )
+        .unwrap();
+        std::fs::create_dir(files.path().join("fonts")).unwrap();
+        std::fs::write(files.path().join("fonts/Face.ttf"), b"font").unwrap();
+        std::fs::write(files.path().join("secret.txt"), b"no").unwrap();
+        let env = env_with(HostConfig {
+            web: Some(WebConfig {
+                dir: files.path().to_owned(),
+            }),
+            ..HostConfig::default()
+        })
+        .await;
+        (env, files)
+    }
+
+    /// `POST /web/session` as the page sends it: the cookie, if any.
+    async fn open(env: &Env, code: &str, client_header: bool) -> (StatusCode, Option<String>) {
+        let mut req = client()
+            .post(env.url("/web/session"))
+            .json(&json!({ "code": code }));
+        if client_header {
+            req = req.header("x-construct-client", "web");
+        }
+        let resp = req.send().await.unwrap();
+        let cookie = resp
+            .headers()
+            .get("set-cookie")
+            .map(|v| v.to_str().unwrap().to_owned());
+        (resp.status(), cookie)
+    }
+
+    /// A request with the cookie: its status.
+    async fn with_cookie(
+        env: &Env,
+        path: &str,
+        cookie: &str,
+        extra: &[(&str, &str)],
+    ) -> StatusCode {
+        let mut req = client().get(env.url(path)).header("cookie", cookie);
+        for (k, v) in extra {
+            req = req.header(*k, *v);
+        }
+        req.send().await.unwrap().status()
+    }
+
+    const WEB: (&str, &str) = ("x-construct-client", "web");
+
+    #[tokio::test]
+    async fn without_the_switch_there_is_no_web_client() {
+        let env = env().await;
+        let code = env.create("off").await;
+        // No page: the path is the pod's, which wants a pod.
+        assert_eq!(
+            client().get(env.url("/web")).send().await.unwrap().status(),
+            StatusCode::UNAUTHORIZED
+        );
+        let (status, _) = open(&env, &code, true).await;
+        assert_eq!(
+            status,
+            StatusCode::UNAUTHORIZED,
+            "no route: the pod answers pod_required"
+        );
+        // A cookie means nothing.
+        assert_eq!(
+            with_cookie(
+                &env,
+                "/v1/auth/sign-ins",
+                &format!("construct_web={code}"),
+                &[WEB]
+            )
+            .await,
+            StatusCode::UNAUTHORIZED
+        );
+    }
+
+    #[tokio::test]
+    async fn the_page_and_its_files_are_served_and_nothing_else() {
+        let (env, _files) = web_env().await;
+        let resp = client().get(env.url("/web")).send().await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let csp = resp.headers()["content-security-policy"]
+            .to_str()
+            .unwrap()
+            .to_owned();
+        assert!(
+            csp.contains("script-src 'self' 'wasm-unsafe-eval'"),
+            "{csp}"
+        );
+        let status = |p: &'static str| {
+            let url = env.url(p);
+            async move { client().get(url).send().await.unwrap().status() }
+        };
+        assert_eq!(status("/web/fonts/Face.ttf").await, StatusCode::OK);
+        assert_eq!(status("/web/secret.txt").await, StatusCode::NOT_FOUND);
+        assert_eq!(
+            status("/web/fonts/..%2Fsecret.txt").await,
+            StatusCode::NOT_FOUND
+        );
+        assert_eq!(status("/web/.hidden.js").await, StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn a_pod_code_becomes_a_session_cookie_that_reaches_only_the_pod() {
+        let (env, _files) = web_env().await;
+        let code = env.create("browser").await;
+        // Only the web client may ask, and only with a real code.
+        assert_eq!(open(&env, &code, false).await.0, StatusCode::FORBIDDEN);
+        assert_eq!(
+            open(&env, "cpod_wrong", true).await.0,
+            StatusCode::UNAUTHORIZED
+        );
+        let (status, set) = open(&env, &code, true).await;
+        assert_eq!(status, StatusCode::OK);
+        let set = set.expect("a cookie");
+        assert!(
+            set.contains("HttpOnly") && set.contains("SameSite=Strict"),
+            "{set}"
+        );
+        let cookie = set.split(';').next().unwrap().to_owned();
+        assert!(!cookie.contains(&code), "the cookie is not the pod code");
+
+        assert_eq!(
+            with_cookie(&env, "/v1/auth/sign-ins", &cookie, &[WEB]).await,
+            StatusCode::OK
+        );
+        // Not without the web client's header, nor from another site.
+        assert_eq!(
+            with_cookie(&env, "/v1/auth/sign-ins", &cookie, &[]).await,
+            StatusCode::UNAUTHORIZED
+        );
+        assert_eq!(
+            with_cookie(
+                &env,
+                "/v1/auth/sign-ins",
+                &cookie,
+                &[WEB, ("sec-fetch-site", "cross-site")]
+            )
+            .await,
+            StatusCode::UNAUTHORIZED
+        );
+        // Never the pod's MCP endpoint.
+        let mcp = client()
+            .post(env.url("/v1/mcp"))
+            .header("cookie", &cookie)
+            .header("x-construct-client", "web")
+            .json(&json!({ "jsonrpc": "2.0", "id": 1, "method": "tools/list" }))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(mcp.status(), StatusCode::FORBIDDEN);
+        // A pod code put in the cookie is not taken.
+        assert_eq!(
+            with_cookie(
+                &env,
+                "/v1/auth/sign-ins",
+                &format!("construct_web={code}"),
+                &[WEB]
+            )
+            .await,
+            StatusCode::UNAUTHORIZED
+        );
+
+        // Logging out ends this browser's session; the pod code still opens the pod.
+        let out = client()
+            .post(env.url("/web/logout"))
+            .header("cookie", &cookie)
+            .header("x-construct-client", "web")
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(out.status(), StatusCode::OK);
+        assert!(
+            out.headers()["set-cookie"]
+                .to_str()
+                .unwrap()
+                .contains("Max-Age=0")
+        );
+        assert_eq!(
+            with_cookie(&env, "/v1/auth/sign-ins", &cookie, &[WEB]).await,
+            StatusCode::UNAUTHORIZED
+        );
+        assert_eq!(
+            get(&env.url("/v1/auth/sign-ins"), Some(&code)).await.0,
+            StatusCode::OK
+        );
+    }
+
+    #[tokio::test]
+    async fn the_image_proxy_needs_a_session_and_a_public_url() {
+        let (env, _files) = web_env().await;
+        let code = env.create("images").await;
+        let cookie = open(&env, &code, true).await.1.unwrap();
+        let cookie = cookie.split(';').next().unwrap().to_owned();
+        let img = |q: &str, c: Option<&str>| {
+            let mut req = client()
+                .get(env.url(&format!("/web/image?url={q}")))
+                .header("x-construct-client", "web");
+            if let Some(c) = c {
+                req = req.header("cookie", c);
+            }
+            async move { req.send().await.unwrap().status() }
+        };
+        assert_eq!(
+            img("https%3A%2F%2Fexample.org%2Fa.png", None).await,
+            StatusCode::UNAUTHORIZED
+        );
+        // The pod's own network is out of reach.
+        assert_eq!(
+            img("http%3A%2F%2F127.0.0.1%3A8080%2Fhealthz", Some(&cookie)).await,
+            StatusCode::BAD_REQUEST
+        );
+        assert_eq!(
+            img("file%3A%2F%2F%2Fetc%2Fpasswd", Some(&cookie)).await,
+            StatusCode::BAD_REQUEST
+        );
+    }
+}

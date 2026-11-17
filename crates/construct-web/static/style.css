@@ -1,0 +1,17 @@
+html, body { margin: 0; height: 100%; overflow: hidden; background: #fbf9fc; color: #1c1b1f;
+  font: 16px/1.4 system-ui, sans-serif; }
+@media (prefers-color-scheme: dark) { html, body { background: #141317; color: #e6e1e5; } }
+canvas#construct { display: block; touch-action: none; }
+#construct-input { position: fixed; left: -1000px; top: 0; opacity: 0; width: 1px; height: 1px; }
+#loading { position: fixed; inset: 0; display: grid; place-items: center; margin: 0; }
+#loading[hidden] { display: none; }
+#sign-in { display: grid; place-items: center; height: 100%; padding: 16px; box-sizing: border-box; }
+#sign-in[hidden] { display: none; }
+form { width: min(360px, 100%); display: grid; gap: 10px; }
+h1 { margin: 0 0 4px; font-size: 28px; font-weight: 500; }
+input#code { font: inherit; padding: 12px; border: 1px solid #c9c5d0; border-radius: 10px; background: transparent;
+  color: inherit; }
+button { font: inherit; padding: 12px; border: 0; border-radius: 10px; background: #6750a4; color: #fff;
+  cursor: pointer; }
+#code-error { color: #b3261e; min-height: 1.4em; margin: 0; }
+#log-out { position: fixed; right: 12px; bottom: 12px; padding: 6px 12px; font-size: 13px; opacity: 0.7; }

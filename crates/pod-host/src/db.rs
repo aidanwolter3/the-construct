@@ -125,6 +125,25 @@ const MIGRATIONS: &[Step] = &[
         "pod_creators",
         "ALTER TABLE pods ADD COLUMN created_by TEXT;",
     ),
+    // 6 (decision `web-client`): a third credential kind, `web`: a browser's
+    // cookie, made when the pod code was typed on the web page, standing for
+    // an ordinary (expiring) session of its pod. The CHECK changes, so the
+    // table is rebuilt with every row kept, as in step 3.
+    Step::sql(
+        "web_credentials",
+        "CREATE TABLE credentials_v6 (
+         token_hash TEXT PRIMARY KEY NOT NULL,
+         pod_id     TEXT NOT NULL REFERENCES pods(id),
+         kind       TEXT NOT NULL CHECK (kind IN ('pod_token', 'mcp', 'web')),
+         created_at INTEGER NOT NULL,
+         label      TEXT
+     );
+     INSERT INTO credentials_v6 (token_hash, pod_id, kind, created_at, label)
+         SELECT token_hash, pod_id, kind, created_at, label FROM credentials;
+     DROP TABLE credentials;
+     ALTER TABLE credentials_v6 RENAME TO credentials;
+     CREATE INDEX credentials_pod ON credentials(pod_id);",
+    ),
 ];
 
 /// What a credential is for (`credentials.kind`).
@@ -134,14 +153,17 @@ pub enum CredentialKind {
     PodToken,
     /// Claude's (decision `mcp-connector`): only the pod's `/v1/mcp`.
     Mcp,
+    /// A browser's (decision `web-client`): its session cookie, which the
+    /// host turns into the pod session it stands for; never `/v1/mcp`.
+    Web,
 }
 
 impl CredentialKind {
     fn parse(s: &str) -> Self {
-        if s == "mcp" {
-            CredentialKind::Mcp
-        } else {
-            CredentialKind::PodToken
+        match s {
+            "mcp" => CredentialKind::Mcp,
+            "web" => CredentialKind::Web,
+            _ => CredentialKind::PodToken,
         }
     }
 }
@@ -305,6 +327,24 @@ impl HostStore {
             params![token_hash, pod_id, now_secs(), label],
         )?;
         Ok(())
+    }
+
+    /// Adds a browser's credential (decision `web-client`).
+    pub fn insert_web_credential(&self, pod_id: &str, token_hash: &str) -> rusqlite::Result<()> {
+        self.conn().execute(
+            "INSERT INTO credentials (token_hash, pod_id, kind, created_at)
+             VALUES (?1, ?2, 'web', ?3)",
+            params![token_hash, pod_id, now_secs()],
+        )?;
+        Ok(())
+    }
+
+    /// Forgets a browser's credential (it logged out); true if there was one.
+    pub fn delete_web_credential(&self, token_hash: &str) -> rusqlite::Result<bool> {
+        Ok(self.conn().execute(
+            "DELETE FROM credentials WHERE token_hash = ?1 AND kind = 'web'",
+            [token_hash],
+        )? > 0)
     }
 
     pub fn insert_mcp_credential(
@@ -499,10 +539,11 @@ impl HostStore {
     pub fn replace_token(&self, pod_id: &str, token_hash: &str) -> rusqlite::Result<()> {
         let mut conn = self.conn();
         let tx = conn.transaction()?;
-        // Only the pod token: Claude's MCP credentials stay (revoke them
-        // with `server pods revoke-mcp`).
+        // The pod token and the browsers it opened (decision `web-client`):
+        // Claude's MCP credentials stay (revoke them with `server pods
+        // revoke-mcp`).
         tx.execute(
-            "DELETE FROM credentials WHERE pod_id = ?1 AND kind = 'pod_token'",
+            "DELETE FROM credentials WHERE pod_id = ?1 AND kind IN ('pod_token', 'web')",
             [pod_id],
         )?;
         tx.execute(

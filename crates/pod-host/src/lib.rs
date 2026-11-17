@@ -23,6 +23,7 @@ pub mod limits;
 pub mod oauth;
 pub mod screen;
 pub mod shelf;
+pub mod web;
 
 use std::collections::HashMap;
 use std::net::SocketAddr;
@@ -188,6 +189,9 @@ pub struct HostConfig {
     /// themselves (`CONSTRUCT_OAUTH_CLIENT_ID`, `_SECRET`, `_REDIRECT_URIS`;
     /// decision `oauth-preregistered-client`).
     pub oauth_client: Option<oauth::StaticClient>,
+    /// The web client (`CONSTRUCT_WEB=1`, decision `web-client`): its page,
+    /// its session cookie and its image proxy. Off: none of them exist.
+    pub web: Option<web::WebConfig>,
 }
 
 impl HostConfig {
@@ -223,6 +227,7 @@ impl HostConfig {
             public_url: var("CONSTRUCT_PUBLIC_URL"),
             android: app_links::AndroidAppLinks::from_env(),
             oauth_client: oauth::StaticClient::from_env(),
+            web: web::WebConfig::from_env(),
         }
     }
 }
@@ -1067,6 +1072,11 @@ impl Host {
 /// The host's router: its own routes, then every other request forwarded to
 /// the caller's pod.
 pub fn app(host: Arc<Host>) -> Router {
+    let web = if host.config.web.is_some() {
+        web::routes()
+    } else {
+        Router::new()
+    };
     Router::new()
         .route("/healthz", get(|| async { "ok" }))
         .route(screen::OPEN_PATH, post(open_with_token))
@@ -1095,6 +1105,7 @@ pub fn app(host: Arc<Host>) -> Router {
         .route("/oauth/token", post(oauth::token))
         .route(app_links::ASSET_LINKS_PATH, get(app_links::asset_links))
         .route(app_links::REDIRECT_PATH, get(app_links::redirect_page))
+        .merge(web)
         .fallback(dispatch)
         .with_state(host.clone())
         .layer(axum::middleware::map_response_with_state(
@@ -1293,9 +1304,17 @@ async fn dispatch(State(host): State<Arc<Host>>, mut req: Request) -> Response {
     // Headers only the host (or the pod itself) may set.
     req.headers_mut().remove(pod_core::CREDENTIAL_HEADER);
     req.headers_mut().remove(pod_core::session::INTERNAL_HEADER);
-    let token = bearer(req.headers()).map(str::to_owned);
+    let mut token = bearer(req.headers()).map(str::to_owned);
+    // The web client's session cookie (decision `web-client`): taken only
+    // with the web client on, from the web client, and only as a `web`
+    // credential, which goes to the pod as the session it stands for.
+    let from_cookie = token.is_none();
+    if from_cookie {
+        token = web::cookie_token(&host, req.headers());
+    }
     let credential = match &token {
         Some(t) => match host.credential(t).await {
+            Ok(Some((_, kind))) if from_cookie && kind != CredentialKind::Web => None,
             Ok(found) => found,
             Err(r) => return *r,
         },
@@ -1320,6 +1339,23 @@ async fn dispatch(State(host): State<Arc<Host>>, mut req: Request) -> Response {
             );
         }
         Some((id, CredentialKind::PodToken)) => Some(id),
+        Some((_, CredentialKind::Web)) if is_mcp => {
+            metrics::inc(metrics::AUTH_FAILURES, &[("kind", "web_scope")]);
+            return json_error(
+                StatusCode::FORBIDDEN,
+                json!({ "error": "web_credential_scope",
+                        "detail": "a browser's session doesn't reach the pod's MCP endpoint" }),
+            );
+        }
+        Some((id, CredentialKind::Web)) => {
+            if from_cookie
+                && let Some(t) = &token
+                && let Ok(v) = HeaderValue::from_str(&format!("Bearer {t}"))
+            {
+                req.headers_mut().insert(header::AUTHORIZATION, v);
+            }
+            Some(id)
+        }
         None if is_mcp => return oauth::mcp_unauthorized(&host, req.headers()),
         None => None,
     };
