@@ -59,6 +59,15 @@ function check(ok, what) {
   const logs = [];
   page.on('pageerror', (e) => errors.push(e.message));
   page.on('console', (m) => logs.push(m.text()));
+  // Images and fonts are fetched by the same code: without this header the pod ignores the cookie and every proxied
+  // image is refused (401).
+  const bareGets = [];
+  page.on('request', (r) => {
+    const p = new URL(r.url()).pathname;
+    if ((p.startsWith('/web/fonts/') || p === '/web/image') && r.headers()['x-construct-client'] !== 'web') {
+      bareGets.push(p);
+    }
+  });
   await page.goto(base + '/web');
   await page.waitForSelector('#sign-in:not([hidden])', { timeout: 15000 });
   check(true, 'without a session the page asks for the pod code');
@@ -75,6 +84,7 @@ function check(ok, what) {
   await page.waitForTimeout(1000);
   check(logs.some((l) => l.startsWith('drawing on the GPU')), 'it draws on the GPU (WebGL2): ' +
     (logs.find((l) => l.startsWith('drawing on') || l.startsWith('no GPU')) || 'no word'));
+  check(bareGets.length === 0, 'fonts and images are fetched as the web client (' + bareGets.join(', ') + ')');
   await page.screenshot({ path: out + '/web-home-desktop.png' });
   const lit = await drawn(page);
   check(lit > 60, `home is drawn (${lit} sampled pixels differ from the background)`);
