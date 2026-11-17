@@ -61,6 +61,10 @@ A `core://Text` with `caps` is drawn upper-cased with 0.07 em letter spacing (co
 semantic text stays as written. `max_lines` is applied where text is shaped (`TextEngine::buffer`), so measuring
 and both renderers agree: a text that takes more lines is cut to the longest start that, followed by "…", still
 fits that many (found by bisection); screen readers get the whole text.
+`strike` draws a line through each laid-out line (decision `text-strike`): 1 dp thick, in the text's colour, from
+its first glyph to its last, 0.3 em above the baseline. `text::strike_lines` works the lines out from the shaped
+buffer in whole device pixels; the CPU renderer fills them and the GPU renderer draws each as a solid custom glyph
+(id `u16::MAX`, past the image ids) of the text's own area, so both draw the same pixels.
 
 ## Semantic ids
 

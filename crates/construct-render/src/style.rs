@@ -250,7 +250,7 @@ impl Face {
 
 /// A text style's face and metrics (logical points), as Material 3 types,
 /// with a `core://Text`'s own letter spacing (`tracking`, in ems: `caps`)
-/// and line limit (`max_lines`, 0 for none).
+/// line limit (`max_lines`, 0 for none) and line through it (`strike`).
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Type {
     pub face: Face,
@@ -258,10 +258,11 @@ pub struct Type {
     pub line_height: f32,
     pub tracking: f32,
     pub max_lines: u8,
+    pub strike: bool,
 }
 
 impl Type {
-    /// A face at a size, with no letter spacing or line limit.
+    /// A face at a size, with no letter spacing, line limit or strike.
     pub const fn new(face: Face, size: f32, line_height: f32) -> Type {
         Type {
             face,
@@ -269,6 +270,7 @@ impl Type {
             line_height,
             tracking: 0.0,
             max_lines: 0,
+            strike: false,
         }
     }
 }
