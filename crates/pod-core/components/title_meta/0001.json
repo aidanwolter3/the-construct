@@ -1,0 +1,56 @@
+{
+  "note": "First version: the bold title over one muted line that list items and messages repeat",
+  "component": {
+    "doc": "A bold title with one muted line under it (a name and its details, a heading and a sentence): Label text over Secondary text in muted_text, 2 dp apart. For a row led by an icon use core:icon_row.",
+    "params": [
+      {
+        "name": "title",
+        "type": "text",
+        "doc": "The title (bindings allowed, such as $item.name).",
+        "required": true
+      },
+      {
+        "name": "meta",
+        "type": "text",
+        "doc": "The muted line under it (bindings allowed, such as $item.store · $item.price).",
+        "required": true
+      }
+    ],
+    "template": {
+      "type": "core://Column",
+      "spacing_dp": 2,
+      "children": [
+        {
+          "type": "core://Text",
+          "value_expr": "$arg.title",
+          "style": "Label"
+        },
+        {
+          "type": "core://Box",
+          "content_color": "${local://theme#muted_text}",
+          "content": {
+            "type": "core://Text",
+            "value_expr": "$arg.meta",
+            "style": "Secondary"
+          }
+        }
+      ]
+    },
+    "examples": [
+      {
+        "args": {
+          "title": "$item.name",
+          "meta": "$item.store · $item.price"
+        },
+        "note": "an item in a list: its name and where it comes from"
+      },
+      {
+        "args": {
+          "title": "All caught up",
+          "meta": "Nothing new since you last looked."
+        },
+        "note": "a short message at the end of a list"
+      }
+    ]
+  }
+}
