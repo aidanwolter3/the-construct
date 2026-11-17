@@ -160,6 +160,9 @@ never writes code: it declares typed fields (`text`, `number`, `bool`, `date`, `
 - **Computed fields.** A field's `compute` is one kind or a list tried in order: `expr` (a small expression over
   the row; `entity.id` reads the row's own id), `lookup` (the value of the best-matching row of another
   collection, kept as editable rules: the longest key wins, then the oldest row; deleted rows never match), `count`
+  `subject` (`{kind: "subject", from, value}`: what the row an entity URI in text field `from` names serves as
+  `value`, a field or a derived name such as `alert_matched`, whatever its collection; live like a lookup, and when
+  that collection's definition changes; decision `notifications-follow-their-alerts`)
   and `model` (a model's answer, in the background: the inputs waiting for a field go up to 50 to a call, and one
   whose answer fails is asked again hourly with backoff, at most 5 times; `describe_collection` counts what is
   retrying or gave up, and `recompute_field` starts again). With `[lookup (learn: true), model]` the model is asked

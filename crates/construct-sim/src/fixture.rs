@@ -331,6 +331,7 @@ impl FixturePod {
             });
             e["channel_enabled"] = json!(channel.is_none_or(|c| c["enabled"] != false));
             e["channel_title"] = channel.map_or(json!(""), |c| c["title"].clone());
+            e["subject_alert_matched"] = json!(true);
             set(&mut out, &uri, e);
             rows.push(uri);
         }
