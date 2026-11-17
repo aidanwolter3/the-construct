@@ -509,6 +509,78 @@ async fn temporary_pods_are_capped_and_swept() {
     assert_eq!(status, StatusCode::OK);
 }
 
+/// Who made a temporary pod is recorded (address, the caller's label, its
+/// User-Agent), and the pod can delete itself with its own token, freeing
+/// its slot and its files at once; an admin pod can't be deleted this way.
+#[tokio::test]
+async fn temporary_pods_record_their_creator_and_delete_themselves() {
+    let env = env_with(HostConfig {
+        temporary: Some(TemporaryPods {
+            hours: 2,
+            max_live: 1,
+        }),
+        // As on staging: the address is the one Fly's proxy reports.
+        trust_fly_client_ip: true,
+        ..HostConfig::default()
+    })
+    .await;
+    let made = |label: &'static str| {
+        client()
+            .post(env.url("/v1/pods/temporary"))
+            .header("fly-client-ip", "198.51.100.7")
+            .header("x-construct-client", label)
+            .header("user-agent", "smoke/1.0")
+            .send()
+    };
+    let resp = made("ci-smoke-test \"run 7\"").await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body: Value = resp.json().await.unwrap();
+    let token = body["session_token"].as_str().unwrap().to_owned();
+    let name = body["pod"].as_str().unwrap().to_owned();
+    let pod = env.host.store().pod_by_name(&name).unwrap().unwrap();
+    assert_eq!(
+        env.host.store().created_by(&pod.id).unwrap().as_deref(),
+        Some(r#"ip 198.51.100.7, client "ci-smoke-test run 7", agent "smoke/1.0""#)
+    );
+    // Full: the cap is one.
+    assert_eq!(
+        made("again").await.unwrap().status(),
+        StatusCode::SERVICE_UNAVAILABLE
+    );
+
+    let delete = |bearer: Option<String>| {
+        let mut req = client().delete(env.url("/v1/pods/temporary"));
+        if let Some(t) = bearer {
+            req = req.bearer_auth(t);
+        }
+        req.send()
+    };
+    assert_eq!(
+        delete(None).await.unwrap().status(),
+        StatusCode::UNAUTHORIZED
+    );
+    let admin = env.create("me").await;
+    let resp = delete(Some(admin.clone())).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+    let (status, _, _) = get(&env.url("/v1/construct"), Some(&admin)).await;
+    assert_eq!(status, StatusCode::OK, "the admin pod is untouched");
+
+    let resp = delete(Some(token.clone())).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body: Value = resp.json().await.unwrap();
+    assert_eq!(body["deleted"], name.as_str());
+    // Gone now, not at the next sweep: token, row and files.
+    let (status, _, _) = get(&env.url("/v1/construct"), Some(&token)).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    assert!(env.host.store().pod_by_name(&name).unwrap().is_none());
+    assert_eq!(
+        delete(Some(token)).await.unwrap().status(),
+        StatusCode::UNAUTHORIZED
+    );
+    // Its slot is free again.
+    assert_eq!(made("next").await.unwrap().status(), StatusCode::OK);
+}
+
 /// The rollout: a single-pod `server.db` from before D46 (here with the
 /// made-up test dishes) becomes an admin pod with everything in it.
 #[tokio::test]

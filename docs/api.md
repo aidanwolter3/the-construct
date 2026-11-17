@@ -12,7 +12,8 @@ and `X-Construct-Device` (a client-made device id, used by notifications).
 | Call | Answer |
 |---|---|
 | `POST /v1/pods/open {"token": "cpod_…"}` *public* | `{session_token}`; 401 `pod_not_found`. 10 tries a minute per client address (IPv4 address or IPv6 /64), 50 per IPv6 /48. |
-| `POST /v1/pods/temporary` *public* | `{session_token, expires_at, pod}`; 404 when disabled, 429, 503 `temporary_pods_full` or `low_disk_space`. |
+| `POST /v1/pods/temporary` *public* | `{session_token, expires_at, pod}`; 404 when disabled, 429, 503 `temporary_pods_full` or `low_disk_space`. The caller's address, its `X-Construct-Client` label and its `User-Agent` are recorded with the pod. |
+| `DELETE /v1/pods/temporary` | With a temporary pod's token: deletes that pod now (slot and files) -> `{deleted}`; 401 without a live pod token, 403 `not_temporary` for an admin pod. |
 | `GET /v1/auth/sign-ins` | Every upstream sign-in on the pod, and the ones it offers. |
 | `POST /v1/auth/logout` | Deletes the session and its sign-ins. |
 | `GET /healthz` *public* | `ok`. |

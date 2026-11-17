@@ -1069,7 +1069,10 @@ pub fn app(host: Arc<Host>) -> Router {
     Router::new()
         .route("/healthz", get(|| async { "ok" }))
         .route(screen::OPEN_PATH, post(open_with_token))
-        .route(screen::TEMPORARY_PATH, post(temporary_pod))
+        .route(
+            screen::TEMPORARY_PATH,
+            post(temporary_pod).delete(delete_temporary_pod),
+        )
         .route("/v1/p/{pod_id}/{*rest}", get(public_route))
         .route(
             "/.well-known/oauth-protected-resource",
@@ -1191,7 +1194,16 @@ pub(crate) fn client_keys(
     peer: Option<SocketAddr>,
     trust_fly: bool,
 ) -> ClientKeys {
-    let ip = trust_fly
+    ClientKeys::of(client_ip(req_headers, peer, trust_fly))
+}
+
+/// The caller's address: `Fly-Client-IP` behind Fly, else the peer.
+fn client_ip(
+    req_headers: &HeaderMap,
+    peer: Option<SocketAddr>,
+    trust_fly: bool,
+) -> Option<std::net::IpAddr> {
+    trust_fly
         .then(|| {
             req_headers
                 .get("fly-client-ip")
@@ -1199,8 +1211,58 @@ pub(crate) fn client_keys(
                 .and_then(|v| v.trim().parse::<std::net::IpAddr>().ok())
         })
         .flatten()
-        .or_else(|| peer.map(|p| p.ip()));
-    ClientKeys::of(ip)
+        .or_else(|| peer.map(|p| p.ip()))
+}
+
+/// The header a caller names itself with when it makes a temporary pod
+/// (`ci-smoke-test`, `claude-session <id>`): recorded with the pod, so the
+/// operator can tell their own callers from strangers'. Anyone can send any
+/// label; it is a hint next to the address, not proof.
+pub const CLIENT_LABEL_HEADER: &str = "x-construct-client";
+
+/// Who asked for a temporary pod, as `server pods list` and the log show it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PodCreator {
+    pub ip: Option<std::net::IpAddr>,
+    /// [`CLIENT_LABEL_HEADER`], printable ASCII, at most 80 characters.
+    pub client: Option<String>,
+    /// `User-Agent`, the same way, at most 120 characters.
+    pub agent: Option<String>,
+}
+
+impl PodCreator {
+    pub fn of(req_headers: &HeaderMap, peer: Option<SocketAddr>, trust_fly: bool) -> Self {
+        let text = |name: &str, max: usize| {
+            let v = req_headers.get(name)?.to_str().ok()?;
+            // Printable ASCII without quotes, so a line stays one line.
+            let clean: String = v
+                .chars()
+                .filter(|c| (' '..='~').contains(c) && *c != '"')
+                .take(max)
+                .collect();
+            let clean = clean.trim();
+            (!clean.is_empty()).then(|| clean.to_owned())
+        };
+        Self {
+            ip: client_ip(req_headers, peer, trust_fly),
+            client: text(CLIENT_LABEL_HEADER, 80),
+            agent: text(header::USER_AGENT.as_str(), 120),
+        }
+    }
+
+    /// `ip 203.0.113.7, client "ci-smoke-test", agent "curl/8.5.0"`.
+    pub fn describe(&self) -> String {
+        let ip = self
+            .ip
+            .map_or_else(|| "unknown".to_owned(), |ip| ip.to_string());
+        let quoted =
+            |v: &Option<String>| v.as_deref().map_or("-".to_owned(), |v| format!("\"{v}\""));
+        format!(
+            "ip {ip}, client {}, agent {}",
+            quoted(&self.client),
+            quoted(&self.agent)
+        )
+    }
 }
 
 pub(crate) fn peer(req: &Request) -> Option<SocketAddr> {
@@ -1392,8 +1454,10 @@ async fn temporary_pod(State(host): State<Arc<Host>>, req: Request) -> Response 
         );
     };
     let keys = client_keys(req.headers(), peer(&req), host.config.trust_fly_client_ip);
+    let creator = PodCreator::of(req.headers(), peer(&req), host.config.trust_fly_client_ip);
+    let created_by = creator.describe();
     if !host.temp_creates.allow(&keys) {
-        tracing::warn!("temporary pod creation rate-limited");
+        tracing::warn!(created_by = %created_by, "temporary pod creation rate-limited");
         metrics::inc(metrics::RATE_LIMITED, &[("limit", "temporary_pod")]);
         return rate_limited();
     }
@@ -1405,29 +1469,33 @@ async fn temporary_pod(State(host): State<Arc<Host>>, req: Request) -> Response 
             json!({ "error": "low_disk_space" }),
         );
     }
+    let record = created_by.clone();
     let made = host
         .blocking(move |h| {
             // The cap check and the creation are one step, so a burst can't
             // overshoot the cap.
             let _one_at_a_time = h.temp_lock.lock().unwrap_or_else(|e| e.into_inner());
             if h.store.live_temporary_count().map_err(|e| e.to_string())? >= temp.max_live {
-                return Ok(None);
+                return Ok::<_, String>(None);
             }
             let mut suffix = [0u8; 4];
             getrandom::fill(&mut suffix).expect("OS random number generator");
             let name = format!("temp-{}", hex(&suffix));
-            h.create_pod(
+            let pod = h.create_pod(
                 &name,
                 PodKind::Temporary,
                 Some(Duration::from_secs(temp.hours * 3600)),
                 &h.config.temporary_pod_settings,
-            )
-            .map(Some)
+            )?;
+            h.store
+                .set_created_by(&pod.id, &record)
+                .map_err(|e| e.to_string())?;
+            Ok(Some(pod))
         })
         .await;
     match made {
         Ok(Ok(Some(pod))) => {
-            tracing::info!(pod = %pod.name, "temporary pod created");
+            tracing::info!(pod = %pod.name, created_by = %created_by, "temporary pod created");
             metrics::inc(metrics::TEMPORARY_PODS, &[("outcome", "created")]);
             Json(json!({
                 "session_token": pod.token,
@@ -1437,6 +1505,7 @@ async fn temporary_pod(State(host): State<Arc<Host>>, req: Request) -> Response 
             .into_response()
         }
         Ok(Ok(None)) => {
+            tracing::warn!(created_by = %created_by, "temporary pod refused: the cap is reached");
             metrics::inc(metrics::TEMPORARY_PODS, &[("outcome", "full")]);
             json_error(
                 StatusCode::SERVICE_UNAVAILABLE,
@@ -1445,6 +1514,60 @@ async fn temporary_pod(State(host): State<Arc<Host>>, req: Request) -> Response 
         }
         Ok(Err(e)) => {
             tracing::error!(error = %e, "cannot create a temporary pod");
+            json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                json!({ "error": "host_error" }),
+            )
+        }
+        Err(r) => *r,
+    }
+}
+
+/// `DELETE /v1/pods/temporary`: the temporary pod whose pod token is the
+/// bearer deletes itself now (a smoke test or a session that is done with
+/// it frees its slot instead of holding it for its whole lifetime) ->
+/// `{deleted: <name>}`. 401 without a live pod token, 403 `not_temporary`
+/// for an admin pod (those are deleted with `server pods delete`).
+async fn delete_temporary_pod(State(host): State<Arc<Host>>, req: Request) -> Response {
+    let Some(token) = bearer(req.headers()).map(str::to_owned) else {
+        return json_error(StatusCode::UNAUTHORIZED, json!({ "error": "unauthorized" }));
+    };
+    let credential = match host.credential(&token).await {
+        Ok(found) => found,
+        Err(r) => return *r,
+    };
+    let Some((pod_id, CredentialKind::PodToken)) = credential else {
+        metrics::inc(metrics::AUTH_FAILURES, &[("kind", "unknown_token")]);
+        return json_error(StatusCode::UNAUTHORIZED, json!({ "error": "unauthorized" }));
+    };
+    let gone = host
+        .blocking(move |h| {
+            let pod = h
+                .store
+                .live_pod(&pod_id)
+                .map_err(|e| e.to_string())?
+                .ok_or("expired meanwhile")?;
+            if pod.kind != PodKind::Temporary {
+                return Ok(Err(pod.name));
+            }
+            h.store.expire_pod(&pod.id).map_err(|e| e.to_string())?;
+            // Its files go now rather than at the next sweep.
+            h.sweep();
+            Ok::<_, String>(Ok(pod.name))
+        })
+        .await;
+    match gone {
+        Ok(Ok(Ok(name))) => {
+            tracing::info!(pod = %name, "temporary pod deleted by its own token");
+            metrics::inc(metrics::TEMPORARY_PODS, &[("outcome", "deleted")]);
+            Json(json!({ "deleted": name })).into_response()
+        }
+        Ok(Ok(Err(name))) => {
+            tracing::warn!(pod = %name, "refused to delete an admin pod over HTTP");
+            json_error(StatusCode::FORBIDDEN, json!({ "error": "not_temporary" }))
+        }
+        Ok(Err(e)) => {
+            tracing::error!(error = %e, "cannot delete a temporary pod");
             json_error(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 json!({ "error": "host_error" }),

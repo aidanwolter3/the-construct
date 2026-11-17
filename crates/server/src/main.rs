@@ -269,10 +269,15 @@ fn pods(args: &[&str]) -> Result<(), String> {
             println!("Revoked {n} MCP credential(s) of pod '{name}'; Claude is disconnected.");
         }
         ["list"] => {
+            let now = server::util::now_secs();
             for p in host.store().pods().map_err(|e| e.to_string())? {
-                let expires = p
-                    .expires_at
-                    .map_or_else(|| "-".to_owned(), |t| t.to_string());
+                // A deleted pod stops at once (no tokens, no slot) and the
+                // server's sweeper removes it within 5 minutes.
+                let expires = match p.expires_at {
+                    None => "-".to_owned(),
+                    Some(t) if t <= now => "deleted (files go within 5 min)".to_owned(),
+                    Some(t) => t.to_string(),
+                };
                 let mcp = host.store().mcp_credentials(&p.id).map_or(0, |c| c.len());
                 // Whether it is on the construct (a pod the old layout
                 // system holds converts when it next opens).
@@ -288,6 +293,9 @@ fn pods(args: &[&str]) -> Result<(), String> {
                     p.id,
                     p.created_at
                 );
+                if let Ok(Some(by)) = host.store().created_by(&p.id) {
+                    println!("{:<24} created by {by}", "");
+                }
             }
         }
         _ => {

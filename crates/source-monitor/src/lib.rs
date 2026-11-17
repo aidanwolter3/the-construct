@@ -129,6 +129,10 @@ pub struct MonitorConfig {
     pub server_errors_per_hour: u64,
     /// Failed or refused model calls per day before a warning.
     pub llm_failures_per_day: u64,
+    /// Live temporary pods, as a percentage of the most allowed, at which
+    /// the check warns (80: at 40 of 50), so there is time to clean up
+    /// before new ones are refused.
+    pub temporary_pods_percent: u64,
 }
 
 impl Default for MonitorConfig {
@@ -138,13 +142,15 @@ impl Default for MonitorConfig {
             llm_tokens_per_day: 1_000_000,
             server_errors_per_hour: 10,
             llm_failures_per_day: 5,
+            temporary_pods_percent: 80,
         }
     }
 }
 
 impl MonitorConfig {
-    /// From `CONSTRUCT_MONITOR_AUTH_FAILURES_PER_HOUR` and
-    /// `CONSTRUCT_MONITOR_LLM_TOKENS_PER_DAY` (defaults otherwise).
+    /// From `CONSTRUCT_MONITOR_AUTH_FAILURES_PER_HOUR`,
+    /// `CONSTRUCT_MONITOR_LLM_TOKENS_PER_DAY` and
+    /// `CONSTRUCT_MONITOR_TEMP_PODS_PERCENT` (1..=100; defaults otherwise).
     pub fn from_env() -> Self {
         let num = |k: &str| std::env::var(k).ok().and_then(|v| v.trim().parse().ok());
         let d = Self::default();
@@ -153,6 +159,9 @@ impl MonitorConfig {
                 .unwrap_or(d.auth_failures_per_hour),
             llm_tokens_per_day: num("CONSTRUCT_MONITOR_LLM_TOKENS_PER_DAY")
                 .unwrap_or(d.llm_tokens_per_day),
+            temporary_pods_percent: num("CONSTRUCT_MONITOR_TEMP_PODS_PERCENT")
+                .filter(|p| (1..=100).contains(p))
+                .unwrap_or(d.temporary_pods_percent),
             ..d
         }
     }
@@ -529,13 +538,23 @@ pub fn checks(series: &[Series], gauges: &[Gauge], cfg: &MonitorConfig) -> Vec<C
     let max = gauge(gauges, "construct_temporary_pods_max", None);
     let (_, refused_pods) = sum(series, TEMPORARY_PODS, "outcome", &["full", "low_disk"]);
     let (_, made) = sum(series, TEMPORARY_PODS, "outcome", &["created"]);
+    // Warn before the cap: at `temporary_pods_percent` of it, rounded up.
+    let near = |m: f64| {
+        (m * cfg.temporary_pods_percent as f64 / 100.0)
+            .ceil()
+            .max(1.0)
+    };
     out.push(Check {
         id: "temporary_pods",
         title: "Temporary pods",
-        warn: refused_pods > 0 || matches!((live, max), (Some(l), Some(m)) if l >= m),
+        warn: refused_pods > 0 || matches!((live, max), (Some(l), Some(m)) if l >= near(m)),
         detail: match (live, max) {
             (Some(l), Some(m)) => {
-                format!("{l} of {m} in use; {made} made and {refused_pods} refused in the last day")
+                format!(
+                    "{l} of {m} in use (warns at {}); {made} made and {refused_pods} refused \
+                     in the last day",
+                    near(m)
+                )
             }
             _ => "turned off on this server".to_owned(),
         },
@@ -752,6 +771,30 @@ mod tests {
             .filter(|c| c.warn)
             .map(|c| c.id)
             .collect()
+    }
+
+    #[test]
+    fn temporary_pods_warn_before_the_cap() {
+        let with_live = |n: f64| {
+            let mut g = quiet_gauges();
+            g[0].series[1].1 = n;
+            g
+        };
+        assert!(warned(&[], &with_live(39.0)).is_empty());
+        assert_eq!(warned(&[], &with_live(40.0)), ["temporary_pods"]);
+        let c = checks(&[], &with_live(40.0), &MonitorConfig::default());
+        let t = c.iter().find(|c| c.id == "temporary_pods").unwrap();
+        assert_eq!(
+            t.detail,
+            "40 of 50 in use (warns at 40); 0 made and 0 refused in the last day"
+        );
+        // Configurable: at 100 it warns only when full.
+        let full_only = MonitorConfig {
+            temporary_pods_percent: 100,
+            ..MonitorConfig::default()
+        };
+        let c = checks(&[], &with_live(49.0), &full_only);
+        assert!(!c.iter().any(|c| c.id == "temporary_pods" && c.warn));
     }
 
     #[test]
