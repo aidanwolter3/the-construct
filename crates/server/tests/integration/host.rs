@@ -1484,4 +1484,33 @@ mod web {
             .unwrap();
         assert_eq!(after.status(), StatusCode::NOT_FOUND);
     }
+
+    /// A temporary pod (anyone can make one) can't share a public page,
+    /// even where the server serves them.
+    #[tokio::test]
+    async fn a_temporary_pod_cannot_share_publicly() {
+        let files = tempfile::tempdir().unwrap();
+        std::fs::write(
+            files.path().join("index.html"),
+            "<title>The Construct</title>",
+        )
+        .unwrap();
+        let env = env_with(HostConfig {
+            web: Some(WebConfig {
+                dir: files.path().to_owned(),
+            }),
+            public_web: true,
+            temporary: Some(TemporaryPods {
+                hours: 1,
+                max_live: 2,
+            }),
+            ..HostConfig::default()
+        })
+        .await;
+        let (status, body) = post(&env.url("/v1/pods/temporary"), None, json!({})).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        let token = body["session_token"].as_str().unwrap().to_owned();
+        let answer = tool(&env, &token, "share_publicly", json!({ "layout": "home" })).await;
+        assert_eq!(answer["error"], "public_links_off", "{answer}");
+    }
 }

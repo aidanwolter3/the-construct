@@ -189,7 +189,7 @@ and the inbox are layouts too. Platform code is thin:
   fixtures or a live pod. It is how UI changes are checked; see [simulator.md](simulator.md).
 - **Agents' previews**: the pod draws a layout on the CPU for its MCP tools `render_layout_preview` and
   `dispatch_virtual_interaction`.
-- **Web** (`crates/construct-web`, a prototype served only with `CONSTRUCT_WEB=1`): the renderer compiled to
+- **Web** (`crates/construct-web`, a prototype served only with `CONSTRUCT_WEB=1`, as on staging): the renderer compiled to
   WebAssembly, drawn into a canvas on the CPU over the pod's HTTP API, signed in with a session cookie (decision
   [`web-client`](decisions/web-client.md)).
 

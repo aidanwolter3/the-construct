@@ -131,9 +131,10 @@ share screen.
 
 ### Public links for people without a pod
 
-Where the server serves them (`CONSTRUCT_PUBLIC_WEB=1`, decision [`public-web-links`](decisions/public-web-links.md)),
-Claude can make a page anyone can open in a browser: a copy of a layout and the Collections rows it shows,
-read-only. The tools are listed only on such a server.
+Where the server serves them (`CONSTRUCT_PUBLIC_WEB=1`, as staging does; decision
+[`public-web-links`](decisions/public-web-links.md)), Claude can make a page anyone can open in a browser: a copy of
+a layout and the Collections rows it shows, read-only. The tools are listed only on such a server, and only for an
+admin pod: a temporary pod can't share a public page (decision [`web-on-staging`](decisions/web-on-staging.md)).
 
 - `share_publicly {layout}` answers a review and shares nothing: every text and value a visitor would read, every
   URL, the rows and fields that go (only the fields the layout reads), and what was taken out (controls that write

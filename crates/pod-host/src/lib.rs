@@ -1002,14 +1002,15 @@ impl Host {
             let guard = pod_core::disk::DiskGuard::new(&host.dir, storage.min_free_disk_bytes);
             let store = Store::open(&path).map_err(|e| e.to_string())?;
             store.set_max_bytes(max_bytes).map_err(|e| e.to_string())?;
-            Ok((host.factory)(store)?
+            let state = (host.factory)(store)?
                 .with_upload_quota_bytes(Some(quota))
-                .with_disk_guard(Some(guard)))
+                .with_disk_guard(Some(guard));
+            Ok((state, kind))
         })
         .await
         .map_err(|e| e.to_string())
         .and_then(|r| r);
-        let state = built.map_err(|e| {
+        let (state, kind) = built.map_err(|e| {
             tracing::error!(pod = id, error = %e, "cannot open pod");
             Box::new(json_error(
                 StatusCode::SERVICE_UNAVAILABLE,
@@ -1024,8 +1025,11 @@ impl Host {
         state.set_shelf(
             id,
             Arc::new(
+                // Not temporary pods: anyone can make one, and a public page
+                // under this server's name must come from a pod someone
+                // was given (decision `public-web-links`).
                 shelf::HostShelf::new(self.store.clone())
-                    .with_public_links(self.config.public_links()),
+                    .with_public_links(self.config.public_links() && kind == PodKind::Admin),
             ),
         );
         let pod: Pod = Arc::new(state);

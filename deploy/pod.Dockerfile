@@ -39,6 +39,20 @@ COPY fake-pixelfed ./fake-pixelfed
 RUN cargo build --release --locked -p server \
     && cp target/release/server /server
 
+# The web client (decision `web-client`): construct-web for wasm32 and its JavaScript glue, with the wasm-bindgen
+# CLI at Cargo.lock's version, as scripts/web_build.sh builds it (CI's web job runs the same); served at /web from
+# CONSTRUCT_WEB_DIR. Its dependencies are compiled with it (a minute or two of the build).
+FROM chef AS web
+RUN rustup target add wasm32-unknown-unknown
+COPY Cargo.lock ./
+RUN v=$(grep -A1 '^name = "wasm-bindgen"$' Cargo.lock | grep version | cut -d'"' -f2) \
+    && cargo install wasm-bindgen-cli --locked --version "$v"
+COPY Cargo.toml Cargo.lock ./
+COPY crates ./crates
+COPY fake-pixelfed ./fake-pixelfed
+COPY scripts/web_build.sh ./scripts/web_build.sh
+RUN scripts/web_build.sh /web
+
 FROM ${RUNTIME_IMAGE}
 # Chromium (and fonts, so pages lay out as they do for people) for rendered fillers; CA certificates for it.
 # Chromium loads untrusted pages, so it must stay current (decision `browser-sandbox`): a builder reuses this
@@ -54,7 +68,9 @@ RUN echo "packages as of ${CHROMIUM_REFRESH}" \
         chromium ca-certificates fonts-liberation \
     && rm -rf /var/lib/apt/lists/*
 COPY --from=build /server /server
+COPY --from=web /web /web
 ENV CONSTRUCT_ADDR=0.0.0.0:8080 \
+    CONSTRUCT_WEB_DIR=/web \
     CONSTRUCT_DATA_DIR=/data \
     CONSTRUCT_BROWSER=/usr/bin/chromium \
     RUST_LOG=info

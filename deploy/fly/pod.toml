@@ -43,6 +43,10 @@ primary_region = "dfw"
   # visitors try staging. Temporary pods only reach the fake Pixelfed; real use
   # (and real Pixelfed servers) goes in admin pods (D46).
   CONSTRUCT_TEMP_PODS = "1"
+  # The web client at /web (decision `web-client`; the image carries it in /web) and public
+  # links at /s/<link> (decision `public-web-links`). Temporary pods can't share public links.
+  CONSTRUCT_WEB = "1"
+  CONSTRUCT_PUBLIC_WEB = "1"
   # Storage on the 1 GB volume below (decision `pod-storage-limits`; these are
   # the defaults, spelled out). Each temporary pod's uploads stay under 25 MiB
   # and an admin pod's under 500 MiB; whatever the total, uploads and new
