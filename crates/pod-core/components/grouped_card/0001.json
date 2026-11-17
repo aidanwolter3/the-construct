@@ -1,0 +1,80 @@
+{
+  "note": "First version: rows grouped in one rounded card",
+  "component": {
+    "doc": "Rows grouped in one rounded card on the page (a list, a settings group): the card colour with a card_border edge, its children in a column. Rows bring their own core://Divider between them; a core://List inside works too.",
+    "params": [
+      {
+        "name": "corner",
+        "type": "number",
+        "doc": "Corner radius in dp.",
+        "default": 18
+      }
+    ],
+    "children": true,
+    "template": {
+      "type": "core://Box",
+      "background": "${local://theme#card}",
+      "border_color": "${local://theme#card_border}",
+      "corner_dp": "$arg.corner",
+      "content": {
+        "type": "core://Column",
+        "children": [
+          {
+            "type": "core://Children"
+          }
+        ]
+      }
+    },
+    "examples": [
+      {
+        "args": {},
+        "children": [
+          {
+            "type": "core://Use",
+            "component": "core:list_row",
+            "args": {
+              "title": "Notifications",
+              "trailing": "On"
+            }
+          },
+          {
+            "type": "core://Divider"
+          },
+          {
+            "type": "core://Use",
+            "component": "core:list_row",
+            "args": {
+              "title": "Time zone",
+              "trailing": "Lisbon"
+            }
+          }
+        ],
+        "note": "a settings group of two rows"
+      },
+      {
+        "args": {
+          "corner": 12
+        },
+        "children": [
+          {
+            "type": "core://List",
+            "data": "collections://notes",
+            "item": {
+              "type": "core://Column",
+              "padding_h_dp": 16,
+              "padding_v_dp": 12,
+              "children": [
+                {
+                  "type": "core://Text",
+                  "value_expr": "$item.title",
+                  "style": "Body"
+                }
+              ]
+            }
+          }
+        ],
+        "note": "a list of notes, tighter corners"
+      }
+    ]
+  }
+}

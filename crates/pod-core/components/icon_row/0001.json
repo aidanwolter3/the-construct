@@ -1,0 +1,135 @@
+{
+  "note": "First version: a list row led by a tinted icon",
+  "component": {
+    "doc": "A list row: core:tinted_icon, a bold title with one muted line under it while meta is set, then optional quiet trailing text and a ›. Wrap it in core://Tappable to open something; put a core://Divider between rows (core:grouped_card holds them).",
+    "params": [
+      {
+        "name": "icon",
+        "type": "text",
+        "doc": "An icon name or path:<svg path> (24x24, filled).",
+        "required": true
+      },
+      {
+        "name": "tint",
+        "type": "text",
+        "doc": "The icon's colour (#RRGGBB or a binding).",
+        "default": "${local://theme#accent}"
+      },
+      {
+        "name": "tint_bg",
+        "type": "text",
+        "doc": "The circle behind the icon (#RRGGBB or a binding).",
+        "default": "${local://theme#accent_surface}"
+      },
+      {
+        "name": "title",
+        "type": "text",
+        "doc": "The row's title (bindings allowed).",
+        "required": true
+      },
+      {
+        "name": "meta",
+        "type": "text",
+        "doc": "One muted line under the title (bindings allowed); left out while empty.",
+        "default": ""
+      },
+      {
+        "name": "trailing",
+        "type": "text",
+        "doc": "Short muted text at the end (a date, an amount); left out while empty.",
+        "default": ""
+      },
+      {
+        "name": "chevron",
+        "type": "bool",
+        "doc": "Show a › at the end, for a row that opens something.",
+        "default": false
+      }
+    ],
+    "template": {
+      "type": "core://Row",
+      "align": "Center",
+      "spacing_dp": 14,
+      "padding_h_dp": 16,
+      "padding_v_dp": 12,
+      "children": [
+        {
+          "type": "core://Use",
+          "component": "core:tinted_icon",
+          "args": {
+            "icon": "$arg.icon",
+            "tint": "$arg.tint",
+            "tint_bg": "$arg.tint_bg"
+          }
+        },
+        {
+          "type": "core://Column",
+          "spacing_dp": 2,
+          "children": [
+            {
+              "type": "core://Text",
+              "value_expr": "$arg.title",
+              "style": "Label"
+            },
+            {
+              "type": "core://Conditional",
+              "value": "$arg.meta",
+              "content": {
+                "type": "core://Text",
+                "value_expr": "$arg.meta",
+                "style": "Secondary"
+              }
+            }
+          ]
+        },
+        {
+          "type": "core://Spacer"
+        },
+        {
+          "type": "core://Conditional",
+          "value": "$arg.trailing",
+          "content": {
+            "type": "core://Text",
+            "value_expr": "$arg.trailing",
+            "style": "Secondary"
+          }
+        },
+        {
+          "type": "core://IfArg",
+          "arg": "chevron",
+          "then": {
+            "type": "core://Box",
+            "content_color": "${local://theme#muted_text}",
+            "content": {
+              "type": "core://Text",
+              "value_expr": "›",
+              "style": "Title"
+            }
+          }
+        }
+      ]
+    },
+    "examples": [
+      {
+        "args": {
+          "icon": "flight",
+          "title": "Weekend in Porto",
+          "meta": "Mar 3–5",
+          "trailing": "Mar 3"
+        },
+        "note": "a trip in a log"
+      },
+      {
+        "args": {
+          "icon": "shopping_cart",
+          "tint": "${local://theme#error}",
+          "tint_bg": "${local://theme#error_surface}",
+          "title": "$item.title",
+          "meta": "$item.due_text",
+          "chevron": true
+        },
+        "note": "an overdue item from the list that opens"
+      }
+    ]
+  }
+}
