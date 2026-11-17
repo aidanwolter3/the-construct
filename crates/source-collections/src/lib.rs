@@ -584,6 +584,15 @@ impl Source for CollectionsAdapter {
         bindings::check(layout, feeds, &defs)
     }
 
+    /// A public link may carry rows (decision `public-web-links`): the
+    /// owner's own data, reviewed before it goes.
+    fn public_data(&self) -> pod_core::public_copy::PublicData {
+        pod_core::public_copy::PublicData {
+            uris: vec!["collections://"],
+            queries: vec!["collection:"],
+        }
+    }
+
     fn share_inputs(
         &self,
         conn: &rusqlite::Connection,

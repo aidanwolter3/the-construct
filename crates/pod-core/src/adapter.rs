@@ -314,6 +314,14 @@ pub trait Source: Any + Send + Sync {
     /// names a reference that can't become an input (one row's URI).
     /// Default: the tree names none of this source's data.
     /// `conn` is the pod's store connection, held by the caller.
+    /// The data of this source a public link may carry (decision
+    /// `public-web-links`): its entities' URI prefixes and its queries' key
+    /// prefixes. Default: none, so a layout that draws this source's data
+    /// can't be shared publicly.
+    fn public_data(&self) -> crate::public_copy::PublicData {
+        crate::public_copy::PublicData::default()
+    }
+
     fn share_inputs(
         &self,
         conn: &rusqlite::Connection,

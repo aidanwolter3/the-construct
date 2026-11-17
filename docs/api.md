@@ -112,6 +112,18 @@ The cookie stands for its session on every other route, but only on requests wit
 where the browser sends `Sec-Fetch-Site`, `same-origin`; a pod code put in the cookie is not taken, and `/v1/mcp`
 answers it 403 `web_credential_scope`. Rotating the pod code ends every browser's session.
 
+**Public links** (decision [`public-web-links`](decisions/public-web-links.md)), only with `CONSTRUCT_WEB=1` and
+`CONSTRUCT_PUBLIC_WEB=1`; anyone with the link reads them, and they never reach the pod:
+
+| Route | |
+|---|---|
+| `GET /s/<link>` *public* | The web client's page for the copy, titled with its title (`og:title`, `noindex`). |
+| `GET /s/<link>/view` *public* | The copy: `{title, node, data, item?}`, the plumbing a visitor's page draws and the rows it shows. 404 once revoked. |
+| `GET /s/<link>/image?url=<url>` *public* | An image the copy names, passed on as `/web/image` does; a URL the copy doesn't name is 404. |
+
+Pods make and revoke them with the MCP tools `share_publicly`, `list_public_links` and `unshare_publicly`
+([custom-apps.md](custom-apps.md#public-links-for-people-without-a-pod)).
+
 ## Development and test routes
 
 | Call | Answer |

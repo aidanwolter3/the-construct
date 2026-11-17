@@ -450,7 +450,8 @@ impl Loader for WebLoader {
 /// Downloads images for the session: the pod's own through `fetch`, others
 /// through the pod's image proxy (a canvas can't read another site's pixels
 /// without CORS, decision `web-client`).
-fn fetch_images(store: &construct_render::images::ImageStore) {
+fn fetch_images(store: &construct_render::images::ImageStore, proxy: &str) {
+    let proxy = proxy.to_owned();
     let origin = window().location().origin().unwrap_or_default();
     let s = store.clone();
     store.set_fetcher(move |url| {
@@ -458,7 +459,7 @@ fn fetch_images(store: &construct_render::images::ImageStore) {
         let path = if url.starts_with('/') || url.starts_with(&origin) {
             url.clone()
         } else {
-            format!("/web/image?url={}", crate::construct::encode(&url))
+            format!("{proxy}?url={}", crate::construct::encode(&url))
         };
         spawn_local(async move {
             let img = image_bytes(&path).await.and_then(|b| {
@@ -553,7 +554,15 @@ impl App {
     }
 
     fn event(&mut self, e: Event) {
-        self.controller.handle(e);
+        let out = self.controller.handle(e);
+        // A link opens in a new tab, not over the pod.
+        for effect in out.iter().flat_map(|o| &o.effects) {
+            if let construct_render::interact::Effect::OpenLink { url } = effect
+                && (url.starts_with("https://") || url.starts_with("http://"))
+            {
+                let _ = window().open_with_url_and_target_and_features(url, "_blank", "noopener");
+            }
+        }
         self.sync_input();
         wake();
     }
@@ -622,6 +631,43 @@ const LONG_PRESS: Duration = Duration::from_millis(500);
 
 /// Starts the app in the page's `<canvas id="construct">`.
 pub async fn start() -> Result<(), JsValue> {
+    load_fonts(&construct_render::text::FACE_FILES).await;
+    let loader = WebLoader::default();
+    loader.load_device().await;
+    loader
+        .load_root()
+        .await
+        .map_err(|e| JsValue::from_str(&e))?;
+    let (root, data) = loader.layout(HOME).map_err(|e| JsValue::from_str(&e))?;
+    let mut session = Session::new(HOME, root, data, Viewport::PHONE);
+    session.loader = Some(Box::new(loader.clone()));
+    fetch_images(&session.images, "/web/image");
+    loader.listen();
+    mount(session)
+}
+
+/// A public link's page (decision `public-web-links`): its copy, drawn
+/// read-only with no pod behind it (nothing it draws can write).
+pub async fn start_public(link: &str) -> Result<(), JsValue> {
+    load_fonts(&construct_render::text::FACE_FILES).await;
+    let base = format!("/s/{}", crate::construct::encode(link));
+    let copy = get_json(&format!("{base}/view"))
+        .await
+        .map_err(|_| JsValue::from_str("This page isn't shared any more."))?;
+    let root: UiNode = serde_json::from_value(copy["node"].clone())
+        .map_err(|e| JsValue::from_str(&e.to_string()))?;
+    let data: DataBundle = serde_json::from_value(copy["data"].clone()).unwrap_or_default();
+    let mut session = Session::new("public", root, data, Viewport::PHONE);
+    if let Some(item) = copy["item"].as_str() {
+        session.set_root(Default::default(), Some(item.to_owned()));
+    }
+    fetch_images(&session.images, &format!("{base}/image"));
+    mount(session)
+}
+
+/// Puts a session on the page's canvas and runs it.
+fn mount(session: Session) -> Result<(), JsValue> {
+    session.images.set_waker(wake);
     let doc = window().document().ok_or("no document")?;
     let canvas: HtmlCanvasElement = doc
         .get_element_by_id("construct")
@@ -635,20 +681,6 @@ pub async fn start() -> Result<(), JsValue> {
         .get_element_by_id("construct-input")
         .ok_or("no input")?
         .dyn_into()?;
-
-    load_fonts(&construct_render::text::FACE_FILES).await;
-    let loader = WebLoader::default();
-    loader.load_device().await;
-    loader
-        .load_root()
-        .await
-        .map_err(|e| JsValue::from_str(&e))?;
-    let (root, data) = loader.layout(HOME).map_err(|e| JsValue::from_str(&e))?;
-    let mut session = Session::new(HOME, root, data, Viewport::PHONE);
-    session.loader = Some(Box::new(loader.clone()));
-    fetch_images(&session.images);
-    session.images.set_waker(wake);
-    loader.listen();
 
     let app = Rc::new(RefCell::new(App {
         controller: Controller::new(session),

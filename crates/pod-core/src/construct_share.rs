@@ -212,7 +212,33 @@ pub trait Shelf: Send + Sync {
     /// Revoke the pod's live publication `name` (its objects leave the
     /// shelf); the revoked publication, if there was one.
     fn revoke(&self, pod: &str, name: &str) -> Result<Option<Publication>, ShelfError>;
+
+    /// Whether the host serves public links (`CONSTRUCT_PUBLIC_WEB=1`,
+    /// decision `public-web-links`).
+    fn public_links_enabled(&self) -> bool {
+        false
+    }
+    /// Put a public copy: a new link, or the next copy of a live one (by
+    /// `link`); answers it as stored.
+    fn put_public(&self, _c: PublicCopy) -> Result<PublicCopy, ShelfError> {
+        Err(ShelfError::Store("public links are off".into()))
+    }
+    /// A pod's public copies, revoked ones too, newest first.
+    fn public_of_pod(&self, _pod: &str) -> Result<Vec<PublicCopy>, ShelfError> {
+        Ok(Vec::new())
+    }
+    /// A live public copy by its link.
+    fn public_by_link(&self, _link: &str) -> Result<Option<PublicCopy>, ShelfError> {
+        Ok(None)
+    }
+    /// Revoke the pod's live public link: its copy leaves the host. False
+    /// when there was none.
+    fn revoke_public(&self, _pod: &str, _link: &str) -> Result<bool, ShelfError> {
+        Ok(false)
+    }
 }
+
+pub use crate::public_copy::PublicCopy;
 
 fn refuse(error: &str, detail: impl Into<String>) -> Value {
     json!({ "error": error, "detail": detail.into() })

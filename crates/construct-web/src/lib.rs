@@ -22,3 +22,11 @@ pub fn merge(into: &mut DataBundle, from: DataBundle) {
 pub async fn start() -> Result<(), wasm_bindgen::JsValue> {
     web::start().await
 }
+
+/// A public link's page (decision `public-web-links`) calls this with its
+/// link.
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen::prelude::wasm_bindgen]
+pub async fn start_public(link: String) -> Result<(), wasm_bindgen::JsValue> {
+    web::start_public(&link).await
+}

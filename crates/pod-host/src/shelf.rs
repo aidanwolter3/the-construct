@@ -6,7 +6,7 @@
 use std::sync::Arc;
 
 use pod_core::construct::share::{
-    NewVersion, Publication, Shelf, ShelfError, VISIBILITY_LINK, new_link,
+    NewVersion, PublicCopy, Publication, Shelf, ShelfError, VISIBILITY_LINK, new_link,
 };
 use pod_core::util::now_secs;
 use rusqlite::{Connection, OptionalExtension, params};
@@ -17,13 +17,43 @@ use crate::db::HostStore;
 /// [`Shelf`] over the host's store.
 pub struct HostShelf {
     store: Arc<HostStore>,
+    /// The host serves public links (decision `public-web-links`).
+    public: bool,
 }
 
 impl HostShelf {
     pub fn new(store: Arc<HostStore>) -> Self {
-        Self { store }
+        Self {
+            store,
+            public: false,
+        }
+    }
+
+    /// With public links on (`CONSTRUCT_PUBLIC_WEB=1`).
+    pub fn with_public_links(mut self, on: bool) -> Self {
+        self.public = on;
+        self
     }
 }
+
+fn public_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<PublicCopy> {
+    let rows: String = r.get(3)?;
+    let copy: String = r.get(5)?;
+    Ok(PublicCopy {
+        link: r.get(0)?,
+        owner_pod: r.get(1)?,
+        layout: r.get(2)?,
+        rows: serde_json::from_str(&rows).unwrap_or_default(),
+        title: r.get(4)?,
+        copy: serde_json::from_str(&copy).unwrap_or(Value::Null),
+        created_at: r.get(6)?,
+        updated_at: r.get(7)?,
+        revoked_at: r.get(8)?,
+    })
+}
+
+const PUBLIC_COLUMNS: &str =
+    "link, owner_pod, layout, rows, title, copy, created_at, updated_at, revoked_at";
 
 fn err(e: rusqlite::Error) -> ShelfError {
     ShelfError::Store(e.to_string())
@@ -81,6 +111,7 @@ pub(crate) fn forget_pod(conn: &Connection, pod_id: &str) -> rusqlite::Result<()
         [pod_id],
     )?;
     conn.execute("DELETE FROM publications WHERE owner_pod = ?1", [pod_id])?;
+    conn.execute("DELETE FROM public_copies WHERE owner_pod = ?1", [pod_id])?;
     conn.execute("DELETE FROM handles WHERE pod_id = ?1", [pod_id])?;
     collect_garbage(conn)?;
     Ok(())
@@ -317,6 +348,73 @@ impl Shelf for HostShelf {
         tx.commit().map_err(err)?;
         Ok(p)
     }
+
+    fn public_links_enabled(&self) -> bool {
+        self.public
+    }
+
+    fn put_public(&self, c: PublicCopy) -> Result<PublicCopy, ShelfError> {
+        let conn = self.store.conn();
+        let now = now_secs();
+        let rows = serde_json::to_string(&c.rows).unwrap_or_default();
+        let copy = c.copy.to_string();
+        conn.execute(
+            "INSERT INTO public_copies (link, owner_pod, layout, rows, title, copy, created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?7)
+             ON CONFLICT(link) DO UPDATE SET title = ?5, copy = ?6, updated_at = ?7
+             WHERE owner_pod = ?2 AND revoked_at IS NULL",
+            params![c.link, c.owner_pod, c.layout, rows, c.title, copy, now],
+        )
+        .map_err(err)?;
+        conn.query_row(
+            &format!("SELECT {PUBLIC_COLUMNS} FROM public_copies WHERE link = ?1"),
+            [&c.link],
+            public_row,
+        )
+        .map_err(err)
+    }
+
+    fn public_of_pod(&self, pod: &str) -> Result<Vec<PublicCopy>, ShelfError> {
+        let conn = self.store.conn();
+        let mut stmt = conn
+            .prepare(&format!(
+                "SELECT {PUBLIC_COLUMNS} FROM public_copies WHERE owner_pod = ?1 ORDER BY created_at DESC"
+            ))
+            .map_err(err)?;
+        let rows = stmt
+            .query_map([pod], public_row)
+            .map_err(err)?
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(err)?;
+        Ok(rows)
+    }
+
+    fn public_by_link(&self, link: &str) -> Result<Option<PublicCopy>, ShelfError> {
+        self.store
+            .conn()
+            .query_row(
+                &format!(
+                    "SELECT {PUBLIC_COLUMNS} FROM public_copies WHERE link = ?1 AND revoked_at IS NULL"
+                ),
+                [link],
+                public_row,
+            )
+            .optional()
+            .map_err(err)
+    }
+
+    fn revoke_public(&self, pod: &str, link: &str) -> Result<bool, ShelfError> {
+        let n = self
+            .store
+            .conn()
+            .execute(
+                "UPDATE public_copies SET revoked_at = ?3, updated_at = ?3, copy = 'null'
+                 WHERE link = ?1 AND owner_pod = ?2 AND revoked_at IS NULL",
+                params![link, pod, now_secs()],
+            )
+            .map_err(err)?;
+        Ok(n > 0)
+    }
 }
 
 #[cfg(test)]
@@ -404,5 +502,53 @@ mod tests {
         store.delete_pod("a").unwrap();
         assert!(s.by_link(&p.link).unwrap().is_none());
         assert!(s.handle("a").unwrap().is_none());
+    }
+
+    /// Decision `public-web-links`: a copy is kept per link, updated in
+    /// place, readable by its link while live, gone once revoked or its pod is.
+    #[test]
+    fn public_copies_update_revoke_and_go_with_their_pod() {
+        let (shelf, store) = shelf();
+        assert!(!shelf.public_links_enabled());
+        let shelf = shelf.with_public_links(true);
+        let copy = |text: &str| PublicCopy {
+            link: "pub-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".into(),
+            owner_pod: "a".into(),
+            layout: "c-recipes".into(),
+            rows: vec![],
+            title: "Recipes".into(),
+            copy: json!({ "title": "Recipes", "node": { "type": "core://Text", "value_expr": text } }),
+            created_at: 0,
+            updated_at: 0,
+            revoked_at: None,
+        };
+        let first = shelf.put_public(copy("one")).unwrap();
+        assert!(first.created_at > 0);
+        shelf.put_public(copy("two")).unwrap();
+        let live = shelf.public_by_link(&first.link).unwrap().unwrap();
+        assert_eq!(live.copy["node"]["value_expr"], "two");
+        assert_eq!(shelf.public_of_pod("a").unwrap().len(), 1);
+        // Another pod can't revoke it, nor write over it.
+        assert!(!shelf.revoke_public("b", &first.link).unwrap());
+        let mut theirs = copy("hijacked");
+        theirs.owner_pod = "b".into();
+        let _ = shelf.put_public(theirs);
+        assert_eq!(
+            shelf.public_by_link(&first.link).unwrap().unwrap().copy["node"]["value_expr"],
+            "two"
+        );
+        assert!(shelf.revoke_public("a", &first.link).unwrap());
+        assert!(shelf.public_by_link(&first.link).unwrap().is_none());
+        let listed = shelf.public_of_pod("a").unwrap();
+        assert!(listed[0].revoked_at.is_some() && listed[0].copy.is_null());
+        // A deleted pod takes its copies.
+        shelf
+            .put_public(PublicCopy {
+                link: "pub-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".into(),
+                ..copy("x")
+            })
+            .unwrap();
+        forget_pod(&store.conn(), "a").unwrap();
+        assert!(shelf.public_of_pod("a").unwrap().is_empty());
     }
 }

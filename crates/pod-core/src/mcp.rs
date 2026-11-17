@@ -224,6 +224,10 @@ pub fn core_tool_names() -> Vec<String> {
 /// The core's tools, then every adapter's ([`crate::Source::mcp_tools`]).
 fn all_tools(pod: &Pod) -> Vec<Value> {
     let mut out = tools();
+    // Public links, where the host serves them (decision `public-web-links`).
+    if pod.shelf().is_some_and(|(_, s)| s.public_links_enabled()) {
+        out.extend(crate::public_copy::tool_specs());
+    }
     for a in pod.catalog().adapters() {
         out.extend(a.mcp_tools());
     }
@@ -459,6 +463,10 @@ async fn call_tool(pod: &Pod, headers: &HeaderMap, params: &Value) -> Value {
         _ => {}
     }
     if let Some(r) = crate::mcp_servers::call(pod, headers, name, &args).await {
+        return tool_result(r);
+    }
+    // Public links (decision `public-web-links`).
+    if let Some(r) = crate::public_copy::tool(pod, headers, name, &args).await {
         return tool_result(r);
     }
     // Sharing between the server's pods (decision `sharing`).

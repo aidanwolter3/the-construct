@@ -89,6 +89,9 @@ code form, a wrong code, home drawn, the cookie, a reload, a phone-sized window 
 - **Fonts and images** are fetched, not built in: the faces before the first frame, the symbol and emoji fallbacks
   after it (`/web/fonts/<file>`). Images of other sites go through the pod's proxy (`/web/image`).
 - **Input**: click or tap, the wheel and touch drags scroll, typing goes through a hidden input, Escape is Back.
+- **Public links**: with `CONSTRUCT_PUBLIC_WEB=1` too, `/s/<link>` draws a pod's public copy for anyone, read-only:
+  no code, no cookie, nothing that writes (decision [`public-web-links`](decisions/public-web-links.md)). A link a
+  layout opens (`action.link.open`) opens in a new tab.
 - **Not yet**: drags of cards, pagers and sheets; photo picking; upstream sign-ins (Pixelfed); notifications and an
   offline cache; screen readers (the canvas has no accessibility tree yet). It sends the features it can draw minus
   `media_picker`, `auth_login` and `device_notification_permission`, so the pod serves older versions without them.
