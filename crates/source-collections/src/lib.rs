@@ -222,7 +222,7 @@ pub const MANIFEST: SourceManifest = SourceManifest {
     ],
     entities: &[EntityDoc {
         uri: "collections://{collection}/{id}",
-        doc: "A row of a collection: every field by name (see describe_collection), and the system fields; a ref field holds the id of the row it points at (read through it with ${collections://<target>/$item.<ref>#<field>}); a quantity field also as <name>_text (1 1/2 cups); a datetime field also as <name>_date (YYYY-MM-DD), <name>_time (7:30 PM) and <name>_text (Fri Nov 6 · 7:30 PM); with fillers filler_id and filler_title; with alerts alert_matched and alert_names. A filler is collections://{collection}/fillers/{id} (title, kind, url, state, detail, failing, alerts_text), an alert collections://{collection}/alerts/{id} (name, summary).",
+        doc: "A row of a collection: every field by name (see describe_collection), and the system fields; a ref field holds the id of the row it points at (read through it with ${collections://<target>/$item.<ref>#<field>}); a quantity field also as <name>_text (1 1/2 cups); a datetime field also as <name>_date (YYYY-MM-DD), <name>_time (7:30 PM) and <name>_text (Fri Nov 6 · 7:30 PM); with fillers filler_id and filler_title; with alerts alert_matched and alert_names. A filler is collections://{collection}/fillers/{id} (title, kind, url, state, detail, failing, alerts_text; refreshing: a fill of it is running, and clients are told when one starts and ends; can_check: false once an agent filled its fills_per_day times today, when POST /v1/collections/{collection}/refresh {filler} answers 429 checked_today), an alert collections://{collection}/alerts/{id} (name, summary).",
         fields: &[
             (
                 "id",
@@ -440,6 +440,7 @@ impl Source for CollectionsAdapter {
         Box::pin(async move {
             let name = feed.to_owned();
             let now = pod_core::util::now_secs();
+            let filling = fill::filling(pod, &name);
             let found = pod
                 .blocking(move |s| {
                     inbox::prepare_for(s, &name)?;
@@ -447,7 +448,7 @@ impl Source for CollectionsAdapter {
                         Some((_, def)) => {
                             // Opening an app fills a stale collection.
                             let due = fill::due_on_open(&def, &fill::states(c, &def)?, now);
-                            Ok(Some((db::bundle(c, &def)?, due)))
+                            Ok(Some((db::bundle(c, &def, &filling)?, due)))
                         }
                         None => Ok(None),
                     })
@@ -1139,12 +1140,30 @@ async fn refresh_route(
         }
     };
     let only = body["filler"].as_str().map(str::to_owned);
-    let name = collection.clone();
+    let (name, one) = (collection.clone(), only.clone());
+    let now = pod_core::util::now_secs();
     let found = pod
-        .blocking(move |s| s.with_conn(|c| db::latest_def(c, &name)))
+        .blocking(move |s| {
+            s.with_conn(|c| {
+                let Some((v, def)) = db::latest_def(c, &name)? else {
+                    return Ok(None);
+                };
+                // A "check now" of one agent filler that already filled
+                // its fills_per_day times today would only fail (and
+                // count as a failure): say so instead.
+                let spent = match one.as_deref().and_then(|f| filler::find(&def, f)) {
+                    Some(f) => {
+                        let st = fill::state(c, &name, &f.id)?;
+                        fill::spent_today(f, &st, &fill::today_on(c, now)?)
+                    }
+                    None => false,
+                };
+                Ok(Some(((v, def), spent)))
+            })
+        })
         .await;
     match found {
-        Ok(Some((_, def))) if !def.fillers.is_empty() => {
+        Ok(Some(((_, def), spent))) if !def.fillers.is_empty() => {
             if let Some(f) = &only
                 && filler::find(&def, f).is_none()
             {
@@ -1152,6 +1171,13 @@ async fn refresh_route(
                     StatusCode::NOT_FOUND,
                     "filler_not_found",
                     format!("collection '{collection}' has no filler '{f}'"),
+                ));
+            }
+            if spent {
+                return refusal(fail(
+                    StatusCode::TOO_MANY_REQUESTS,
+                    "checked_today",
+                    "this filler already filled as many times today as its fills_per_day allows",
                 ));
             }
             fill::spawn(&pod, &collection, only.as_deref(), true);
@@ -1172,10 +1198,11 @@ async fn filler_route(
     Path((collection, filler)): Path<(String, String)>,
 ) -> Response {
     let (name, f) = (collection.clone(), filler.clone());
+    let filling = fill::filling(&pod, &collection);
     let found = pod
         .blocking(move |s| {
             s.with_conn(|c| match db::latest_def(c, &name)? {
-                Some((_, def)) => db::filler_bundle(c, &def, &f).map(Some),
+                Some((_, def)) => db::filler_bundle(c, &def, &f, &filling).map(Some),
                 None => Ok(None),
             })
         })
@@ -1251,11 +1278,12 @@ async fn row_screen_route(
 
 async fn rows_route(State(pod): State<Pod>, Path(collection): Path<String>) -> Response {
     let name = collection.clone();
+    let filling = fill::filling(&pod, &collection);
     let found = pod
         .blocking(move |s| {
             inbox::prepare_for(s, &name)?;
             s.with_conn(|c| match db::latest_def(c, &name)? {
-                Some((_, def)) => db::bundle(c, &def).map(Some),
+                Some((_, def)) => db::bundle(c, &def, &filling).map(Some),
                 None => Ok(None),
             })
         })

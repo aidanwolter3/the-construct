@@ -220,8 +220,10 @@ reports (`getRootWindowInsets`: system bars, camera cutout and keyboard, logged 
 under the bars is each screen's own page, not a fixed colour: for the top full-screen layout (the root or a pushed
 screen) the scene paints its page colour into the insets, edge by edge (`Laid::edge_colors`: the opaque, square box
 drawn last across that whole edge, outside any scrolling view: a `core://Box` with `fill` and a `background` such as
-`${local://theme#page}`, or a coloured header across the top), else the theme's background shows there. Sheets and
-panels draw as before (a bottom sheet's surface reaches the bottom edge). The scene's `bars` are the colours under the
+`${local://theme#page}`, or a coloured header across the top), else the theme's background shows there. A sheet,
+shade or panel is drawn on its own layout's page colour too (where the page meets the handle strip, or the top for a
+panel; else the theme's surface), so its handle strip and the bars over it match its page; the handle is a tint of
+that colour. The scene's `bars` are the colours under the
 status bar and the navigation bar (dimmed by a dialog's or sheet's scrim, covered by a sheet); when either changes
 between light and dark (WCAG luminance), the window calls `Platform::system_bars` and Android sets the bars' icons
 (`ConstructActivity.setLightBars`: `APPEARANCE_LIGHT_STATUS_BARS` and `APPEARANCE_LIGHT_NAVIGATION_BARS`, the

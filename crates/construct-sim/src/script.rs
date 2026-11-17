@@ -79,6 +79,9 @@ pub enum Step {
     Screen(Screen),
     /// `mode dark` or `mode light`: the system's mode (light at start).
     Dark(bool),
+    /// `insets <top> <right> <bottom> <left>` (points): the space a phone's
+    /// system bars, cutout or keyboard cover (none at start).
+    Insets([f32; 4]),
     /// `clock YYYY-MM-DDTHH:MM`: the device's wall clock stops there (in
     /// seconds since the epoch).
     Clock(i64),
@@ -130,6 +133,7 @@ impl Step {
             Step::WaitImages(_) => "wait-images",
             Step::Screen(_) => "screen",
             Step::Dark(_) => "mode",
+            Step::Insets(_) => "insets",
             Step::Clock(_) => "clock",
             Step::Offline => "offline",
             Step::Online => "online",
@@ -305,6 +309,18 @@ pub fn parse(script: &str) -> Result<Vec<Line>, String> {
                 "light" => Step::Dark(false),
                 _ => return Err(format!("{}: 'mode' takes dark or light", at())),
             },
+            "insets" => {
+                let a = need("'<top> <right> <bottom> <left>' (points)")?;
+                let v: Vec<f32> = a
+                    .split_whitespace()
+                    .map(str::parse)
+                    .collect::<Result<_, _>>()
+                    .map_err(|_| format!("{}: 'insets' takes four numbers", at()))?;
+                match v.as_slice() {
+                    &[t, r, b, l] if v.iter().all(|x| *x >= 0.0) => Step::Insets([t, r, b, l]),
+                    _ => return Err(format!("{}: 'insets' takes four numbers, 0 or more", at())),
+                }
+            }
             "clock" => Step::Clock(
                 construct_render::dates::wall_time(&need("a time YYYY-MM-DDTHH:MM")?)
                     .ok_or_else(|| format!("{}: 'clock' takes a time YYYY-MM-DDTHH:MM", at()))?,

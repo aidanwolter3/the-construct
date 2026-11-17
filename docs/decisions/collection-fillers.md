@@ -79,8 +79,11 @@ collection side by side.
   (letters and digits, ignoring case) and, with `upcoming`, it falls on the same day. A refill that rewords a
   title or description, or adds and drops items, so keeps the other rows' ids, unfilled fields, `details` and the
   alerts already sent for them; next week's show of the same name is a new row.
-- **Locks:** fields a filler writes can't be set by apps or `edit_rows`; a `replace` filler's rows can't be added,
-  deleted or restored by hand. Computed fields compute on filled rows as after any write.
+- **Locks:** fields a filler writes can't be set by apps or `edit_rows` on that filler's own rows (a per-row
+  `url_field` / `query_field` filler fills every row, so on every row); other rows keep them editable, since a
+  filler never writes another's rows (a lock on every row once made the Events screen's "Mark as seen" dead after
+  an agent filler listed `seen`). An agent filler's default `fields` leave out toggles (bools with a default). A
+  `replace` filler's rows can't be added, deleted or restored by hand. Computed fields compute on filled rows as after any write.
 - **When:** `every_minutes` (fetch 15…10080, agent 60…10080) through the adapter's poll; `on_open_minutes`, and an
   overdue schedule, when an app showing the collection opens; `collections_refresh`; a layout's
   `POST /v1/collections/<c>/refresh {filler?}`; and after a filler is set. Failures back off (doubling from the

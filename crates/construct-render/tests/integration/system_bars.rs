@@ -116,3 +116,61 @@ fn dark_mode_takes_the_dark_page_and_light_icons() {
         assert_eq!(img.get_pixel(50, y).0[..3], dark[..3], "y = {y}");
     }
 }
+
+/// A home on a dark page with a layout on a cream page, opened over it as
+/// `presentation` (from `edge`).
+fn over_home(intent: Value) -> Session {
+    let mut s = session(page_box("#202833", text()));
+    let shade: protocol::UiNode = serde_json::from_value(json!({
+        "type": "core://Page", "id": "shade", "root": page_box("#F6F5F1", text()) }))
+    .unwrap();
+    s.layouts.insert("shade".into(), shade);
+    s.dispatch(&intent).unwrap();
+    s
+}
+
+#[test]
+fn a_shade_from_the_top_is_its_page_to_the_handle_and_under_the_status_bar() {
+    let cream = "#F6F5F1";
+    let mut s = over_home(
+        json!({ "intent": "action.navigation.open", "layout": "shade",
+        "presentation": "Overlay", "edge": "top" }),
+    );
+    let img = s.render_cpu().unwrap();
+    // The shade is 85 points tall: under the status bar, its page, and the
+    // handle strip at its bottom (beside the handle) are all cream.
+    for y in [2, 12, 50, 72, 82] {
+        assert_eq!(img.get_pixel(10, y).0[..3], rgb(cream), "y = {y}");
+    }
+    // The handle shows on it, darker than the page.
+    let pill = img.get_pixel(50, 85 - 12 + 2).0;
+    assert!(pill[0] < rgb(cream)[0] - 10, "{pill:?}");
+    let bars = s.scene().unwrap().bars;
+    assert_eq!(bars[0], Rgba::hex(cream).unwrap().0);
+}
+
+#[test]
+fn a_bottom_sheet_and_a_panel_take_their_page_under_the_bars() {
+    let cream = "#F6F5F1";
+    let mut s = over_home(
+        json!({ "intent": "action.navigation.open", "layout": "shade",
+        "presentation": "Sheet" }),
+    );
+    let img = s.render_cpu().unwrap();
+    // The handle strip at the sheet's top (15 points down), its page and
+    // the navigation bar under it.
+    for y in [20, 50, 90, 98] {
+        assert_eq!(img.get_pixel(10, y).0[..3], rgb(cream), "y = {y}");
+    }
+    assert_eq!(s.scene().unwrap().bars[1], Rgba::hex(cream).unwrap().0);
+
+    let mut s = over_home(
+        json!({ "intent": "action.navigation.open", "layout": "shade",
+        "presentation": "Panel" }),
+    );
+    let img = s.render_cpu().unwrap();
+    // The panel (86 points wide, from the start): its page under both bars.
+    for y in [2, 50, 98] {
+        assert_eq!(img.get_pixel(40, y).0[..3], rgb(cream), "y = {y}");
+    }
+}
