@@ -554,11 +554,22 @@ fn check_values(node: &UiNode) -> Result<(), String> {
                 if conds.is_empty() {
                     return Err("list where needs at least one condition".into());
                 }
-                if conds
+                if conds.iter().any(|w| {
+                    w.field.trim().is_empty()
+                        || (w.equals.trim().is_empty() && w.older_than.is_none())
+                }) {
+                    return Err(
+                        "list where needs a field and a value (equals or older_than)".into(),
+                    );
+                }
+                if let Some(bad) = conds
                     .iter()
-                    .any(|w| w.field.trim().is_empty() || w.equals.trim().is_empty())
+                    .filter_map(|w| w.older_than.as_deref())
+                    .find(|d| protocol::ast::duration_secs(d).is_none())
                 {
-                    return Err("list where needs a field and a value".into());
+                    return Err(format!(
+                        "list where older_than '{bad}' is not a duration such as 30m, 12h, 1d or 2w"
+                    ));
                 }
             }
             Ok(())
@@ -713,6 +724,16 @@ fn check_count(value_expr: &str, count: &protocol::TextCount) -> Result<(), Stri
     }
     if count.where_.iter().any(|w| w.field.trim().is_empty()) {
         return Err("text count where needs a field".into());
+    }
+    if let Some(bad) = count
+        .where_
+        .iter()
+        .filter_map(|w| w.older_than.as_deref())
+        .find(|d| protocol::ast::duration_secs(d).is_none())
+    {
+        return Err(format!(
+            "text count where older_than '{bad}' is not a duration such as 30m, 12h, 1d or 2w"
+        ));
     }
     if !value_expr.contains("$count") && count.zero_text.is_none() {
         return Err("text count is set but value_expr has no $count (e.g. \"$count left\")".into());

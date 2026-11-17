@@ -14,4 +14,5 @@ protocol = { workspace = true }
 serde.workspace = true
 serde_json.workspace = true
 image = { version = "0.25", default-features = false, features = ["png", "webp"] }
+jiff = "0.2"
 

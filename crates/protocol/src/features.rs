@@ -16,7 +16,8 @@
 use std::collections::BTreeSet;
 
 use crate::{
-    ActionIntent, Align, Justify, Position, PresentationMode, TextStyle, UiNode, WhereClause,
+    ActionIntent, Align, Justify, ListWhere, Position, PresentationMode, TextStyle, UiNode,
+    WhereClause,
 };
 
 include!(concat!(env!("OUT_DIR"), "/features.rs"));
@@ -193,8 +194,11 @@ fn node_features(node: &UiNode, out: &mut BTreeSet<&'static str>) {
             if format.is_some() {
                 add(feature::DATE_FORMAT);
             }
-            if count.is_some() {
+            if let Some(c) = count {
                 add(feature::COUNT);
+                if c.where_.iter().any(ListWhere::uses_age) {
+                    add(feature::LIST_WHERE_AGE);
+                }
             }
         }
         UiNode::Button { .. } => add(feature::BUTTON),
@@ -223,6 +227,9 @@ fn node_features(node: &UiNode, out: &mut BTreeSet<&'static str>) {
                 add(feature::LIST_WHERE);
                 if matches!(w, WhereClause::All(_)) {
                     add(feature::LIST_WHERE_ALL);
+                }
+                if w.conditions().iter().any(ListWhere::uses_age) {
+                    add(feature::LIST_WHERE_AGE);
                 }
             }
             if *columns > 1 || *spacing_dp > 0 || *padding_h_dp > 0 {
@@ -992,6 +999,39 @@ mod tests {
             serde_json::to_value(ws(true)).unwrap()["title_scrolls"],
             true
         );
+    }
+
+    /// Decision `notifications-in-a-collection`: an `older_than` or `not`
+    /// condition needs `list_where_age`, in a list or a count.
+    #[test]
+    fn an_age_condition_needs_its_feature() {
+        let w = json!([{"field": "read_at", "older_than": "1d", "not": true}]);
+        let n = node(json!({"type": "core://List", "query_key": "q", "where": w,
+            "item_template": {"type": "core://Divider"}}));
+        assert_eq!(
+            required_features(&n),
+            [
+                "divider",
+                "list",
+                "list_where",
+                "list_where_age",
+                "list_where_all"
+            ]
+        );
+        // `equals` is always written: builds before the feature need it.
+        assert_eq!(
+            serde_json::to_value(&n).unwrap()["where"],
+            json!([{"field": "read_at", "equals": "", "older_than": "1d", "not": true}])
+        );
+        let t = node(
+            json!({"type": "core://Text", "style": "Body", "value_expr": "$count",
+            "count": {"query_key": "q", "where": [{"field": "read_at", "older_than": "1d"}]}}),
+        );
+        assert_eq!(required_features(&t), ["count", "list_where_age", "text"]);
+        assert_eq!(crate::ast::duration_secs("1d"), Some(86_400));
+        assert_eq!(crate::ast::duration_secs(" 30m "), Some(1_800));
+        assert_eq!(crate::ast::duration_secs("2x"), None);
+        assert_eq!(crate::ast::duration_secs("d"), None);
     }
 
     /// Decision `list-where-all`: a list `where` of several conditions

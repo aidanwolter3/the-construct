@@ -544,6 +544,7 @@ mod tests {
             system: None,
             actions: Vec::new(),
             views: Vec::new(),
+            keep: None,
         }
     }
 

@@ -136,7 +136,7 @@ never writes code: it declares typed fields (`text`, `number`, `bool`, `date`, `
 | `POST /v1/collections/<c>/update {id, <field>: …}` | For `action.mutation.optimistic`; an id `pending-<nonce>` finds a row whose create was just sent. |
 | `POST /v1/collections/<c>/delete {id}` | Sets `deleted`; hide such rows at once with `where: {field: "deleted", equals: "false"}`, or, with another filter, `where: [{field: "deleted", equals: "false"}, {field: "category", equals: "$form.tab"}]` (every condition must match). |
 | `GET /v1/collections/<c>/export` | Everything, deleted rows and kept-aside values included. |
-| `POST /v1/collections/<c>/actions/<a> {<param>: …, client_id?}` | Runs an insert-from-query or delete action, sent with `action.mutation.optimistic` (its `field` a view flag, e.g. `adding` on `$item.uri`); the new (or deleted) rows arrive through the feed; a repeated `client_id` is applied once. |
+| `POST /v1/collections/<c>/actions/<a> {<param>: …, client_id?}` | Runs an insert-from-query, update or delete action, sent with `action.mutation.optimistic` (its `field` a view flag, e.g. `adding` on `$item.uri`); the new (or deleted) rows arrive through the feed; a repeated `client_id` is applied once. |
 
 `describe_collection` gives ready-made layout snippets for all of these.
 
@@ -211,7 +211,10 @@ never writes code: it declares typed fields (`text`, `number`, `bool`, `date`, `
   its own collection, no `match`, `create`, `update`, `reset_when`, `scale` or `child`) instead deletes every live row
   matching `where`, as a row delete does: a one-tap "Clear bag", `{"name": "clear_bag", "title": "Clear the bag",
   "source": {"collection": "groceries", "where": [{"field": "done", "equals": true}]}, "delete": true}`; the answer
-  says how many it `deleted`. A call is one edit across both collections, undone with `undo_edit`; `run_action`
+  says how many it `deleted`. An update action (its source its own collection, only `update`) writes `update` to
+  every live row matching `where`, as a row update does: `{"name": "mark_all_read", "source": {"collection":
+  "notifications", "where": [{"field": "read", "equals": false}]}, "update": {"read": true}}`; the answer says how
+  many it `updated`. A call is one edit across both collections, undone with `undo_edit`; `run_action`
   runs one over MCP. Decision
   [`collection-primitives`](decisions/collection-primitives.md).
 - **Reminders.** `apply_change {op: add_reminder, field: "due", title: "Due today: {title}", unless: {field:
@@ -228,6 +231,12 @@ never writes code: it declares typed fields (`text`, `number`, `bool`, `date`, `
 - **Limits per pod:** 20 collections, 40 fields each, 5,000 rows and 4 MiB of values in all, 5,000 rows per edit or action call (8 MiB per imported file, refused as soon as it holds more rows or a CSV line over 1,000 cells),
   4,000 characters per text value.
 
+- **Retention.** A collection may keep only its newest rows (`keep: {rows, days}` in its definition): when a write
+  settles, rows beyond the newest `rows` live ones, or created more than `days` ago, go for good. The pod's
+  `notifications` keeps 500 of 30 days.
+- **Notifications** are the system collections `notifications` and `notification_channels` (decision
+  [`notifications-in-a-collection`](decisions/notifications-in-a-collection.md), [notifications.md](notifications.md)):
+  every pod has them, layouts bind them, and they don't count against the limits above.
 - **Deleting.** `delete_collection` removes a collection once no layout binds it and no other collection's ref,
   lookup, count, rollup or action names it (the refusal names them); home's feed for it is dropped too. It is restorable with `restore_collection`
   for 30 days, then purged (decision [`collection-delete`](decisions/collection-delete.md)); sooner when what the

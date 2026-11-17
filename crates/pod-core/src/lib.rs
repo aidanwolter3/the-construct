@@ -23,6 +23,7 @@ pub mod metrics;
 pub mod migrations;
 pub mod net;
 pub mod notify;
+pub mod notify_store;
 pub mod porcelain;
 pub mod preview;
 pub mod push;
@@ -58,6 +59,7 @@ pub use adapter::{
     SignInProvider, SignInStart, Source,
 };
 pub use notify::{NewNotification, PollCtx, PollOutcome, PollStatus};
+pub use notify_store::{ListQuery, NotificationStore, ReadSel, ToStore};
 pub use session::{Caller, Session};
 pub use source::{EntityDoc, FeedSpec, PathSpec, SourceManifest};
 pub use static_app::StaticAdapter;

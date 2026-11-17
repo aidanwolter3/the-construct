@@ -293,6 +293,46 @@ impl FixturePod {
             list.push(uri);
         }
         out.queries.insert("local:notifications".into(), list);
+        // The pod's `notifications` collection, as Collections serves it
+        // (decision `notifications-in-a-collection`): what the inbox reads.
+        let mut rows = Vec::new();
+        for n in &s.notifications {
+            let id = n["id"].as_str().unwrap_or_default();
+            let at = n["created_at"].as_i64().unwrap_or(now);
+            let read = n["read"].as_bool().unwrap_or(true);
+            let layout = protocol::notification_layout_in(n);
+            let channel = s
+                .channels
+                .iter()
+                .find(|c| protocol::channel_layout_in(c) == layout && c["id"] == n["channel"]);
+            let when = |f: &str| {
+                jiff::Timestamp::from_second(at)
+                    .map(|t| {
+                        t.to_zoned(jiff::tz::TimeZone::system())
+                            .strftime(f)
+                            .to_string()
+                    })
+                    .unwrap_or_default()
+            };
+            let uri = format!("collections://notifications/{id}");
+            let mut e = n.clone();
+            e["uri"] = json!(uri);
+            e["layout"] = json!(layout);
+            e["at"] = json!(when("%Y-%m-%dT%H:%M:%S%:z"));
+            e["at_date"] = json!(when("%Y-%m-%d"));
+            e["at_day"] = json!(when("%a %b %-d"));
+            e["at_time"] = json!(when("%-I:%M %p"));
+            e["read_at"] = json!(if read {
+                when("%Y-%m-%dT%H:%M:%S%:z")
+            } else {
+                String::new()
+            });
+            e["channel_enabled"] = json!(channel.is_none_or(|c| c["enabled"] != false));
+            e["channel_title"] = channel.map_or(json!(""), |c| c["title"].clone());
+            set(&mut out, &uri, e);
+            rows.push(uri);
+        }
+        out.queries.insert("collection:notifications".into(), rows);
         set(
             &mut out,
             "local://inbox",

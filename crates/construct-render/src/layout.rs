@@ -1861,26 +1861,20 @@ impl<'i> Build<'_, 'i> {
                 };
                 // Each condition's value once (it binds the form, not the
                 // item); a blank one matches everything.
-                let wants: Vec<(&String, String)> = where_
-                    .as_ref()
-                    .map(|w| {
-                        w.conditions()
-                            .iter()
-                            .map(|c| (&c.field, ctx.text(&c.equals)))
-                            .filter(|(_, want)| !want.trim().is_empty())
-                            .collect()
-                    })
-                    .unwrap_or_default();
+                let wants = Where::of(where_.as_ref().map_or(&[][..], |w| w.conditions()), &ctx);
+                let (now, zone) = (self.now, self.zone.clone());
+                let mut next = None;
                 let mut uris: Vec<&String> = all
                     .iter()
                     .filter(|u| {
                         ctx.entity(u).is_some_and(|e| {
-                            wants.iter().all(|(field, want)| {
-                                e.get(field.as_str()).is_some_and(|v| matches_text(v, want))
-                            })
+                            wants
+                                .iter()
+                                .all(|w| w.matches(e, now, zone.as_ref(), &mut next))
                         })
                     })
                     .collect();
+                self.changes_at = earliest(self.changes_at, next);
                 let mut no_match = None;
                 if let Some(f) = filter {
                     let q = fold(&ctx.text(&f.value));
@@ -2742,20 +2736,83 @@ impl<'i> Build<'_, 'i> {
         }
     }
 
-    fn count(&self, c: &protocol::TextCount, ctx: &Ctx) -> Option<usize> {
+    fn count(&mut self, c: &protocol::TextCount, ctx: &Ctx) -> Option<usize> {
         let list = ctx.query(&c.query_key)?;
-        Some(
-            list.iter()
-                .filter_map(|u| ctx.entity(u))
-                .filter(|e| {
-                    c.where_.iter().all(|w| {
-                        let want = ctx.text(&w.equals);
-                        want.trim().is_empty()
-                            || e.get(&w.field).map(render).as_deref() == Some(want.as_str())
-                    })
-                })
-                .count(),
-        )
+        let wants = Where::of(&c.where_, ctx);
+        let (now, zone) = (self.now, self.zone.clone());
+        let mut next = None;
+        let n = list
+            .iter()
+            .filter_map(|u| ctx.entity(u))
+            .filter(|e| {
+                wants
+                    .iter()
+                    .all(|w| w.matches(e, now, zone.as_ref(), &mut next))
+            })
+            .count();
+        self.changes_at = earliest(self.changes_at, next);
+        Some(n)
+    }
+}
+
+/// One `where` condition as a frame tests it: its `equals` read once (it
+/// binds the form, not the item), and its age (feature `list_where_age`).
+struct Where<'a> {
+    field: &'a str,
+    want: String,
+    /// `Some`: an `older_than` condition, in seconds (`None` inside: a
+    /// duration that doesn't read, which matches nothing).
+    older: Option<Option<i64>>,
+    not: bool,
+}
+
+impl<'a> Where<'a> {
+    /// The conditions that test anything (a blank `equals` matches
+    /// everything, `not` or not).
+    fn of(conds: &'a [protocol::ListWhere], ctx: &Ctx) -> Vec<Self> {
+        conds
+            .iter()
+            .map(|c| Where {
+                field: &c.field,
+                want: ctx.text(&c.equals),
+                older: c.older_than.as_deref().map(protocol::ast::duration_secs),
+                not: c.not,
+            })
+            .filter(|w| w.older.is_some() || !w.want.trim().is_empty())
+            .collect()
+    }
+
+    /// Whether entity `e` passes at `now` (local minutes); an age
+    /// condition notes in `next` the minute its answer changes.
+    fn matches(
+        &self,
+        e: &protocol::EntityRecord,
+        now: i64,
+        zone: Option<&jiff::tz::TimeZone>,
+        next: &mut Option<i64>,
+    ) -> bool {
+        let v = e.get(self.field);
+        let hit = match self.older {
+            None => v.is_some_and(|v| matches_text(v, &self.want)),
+            Some(None) => false,
+            Some(Some(secs)) => {
+                let at = v
+                    .and_then(Value::as_str)
+                    .and_then(|t| crate::dates::moment(t, "", zone))
+                    .map(|m| m.day * 1_440 + m.minute.unwrap_or(0));
+                match at {
+                    Some(at) => {
+                        let from = at + (secs + 59) / 60;
+                        if from > now {
+                            *next = earliest(*next, Some(from));
+                        }
+                        from <= now
+                    }
+                    None => false,
+                }
+            }
+        };
+        hit != self.not
     }
 }
 

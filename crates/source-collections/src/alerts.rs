@@ -786,6 +786,7 @@ pub fn plan(
                         target_uri: Some(db::row_uri(&def.name, &row.id)),
                         group_key: Some(a.id.clone()),
                         created_at: now,
+                        subject: Some(db::row_uri(&def.name, &row.id)),
                         quiet: false,
                     },
                     [def.name.clone(), a.id.clone(), row.id.clone()],
@@ -871,6 +872,7 @@ mod tests {
             system: None,
             actions: Vec::new(),
             views: Vec::new(),
+            keep: None,
         }
     }
 

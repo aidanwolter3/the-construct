@@ -9,7 +9,7 @@
 //! means: it has an app id, a channel the app's adapter declared, ready-made
 //! text and a navigation target in the app's own layout routes.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -28,6 +28,7 @@ use protocol::{
 use rusqlite::{Connection, OptionalExtension, params};
 use serde_json::{Value, json};
 
+use crate::notify_store::{ChannelId, CoreStore, ListQuery, NotificationStore, ReadSel, ToStore};
 use crate::push::{PushError, Subscription};
 use crate::session::{Caller, sign_in_required};
 use crate::util::now_secs;
@@ -54,8 +55,8 @@ pub const MAX_BACKOFF_SECS: i64 = 3600;
 pub const MAX_PUSH_FAILURES: i64 = 5;
 /// Web Push deliveries per pod per minute.
 pub const PUSH_PER_MINUTE: u32 = 60;
-const DEFAULT_LIMIT: i64 = 50;
-const MAX_LIMIT: i64 = 100;
+const DEFAULT_LIMIT: usize = 50;
+const MAX_LIMIT: usize = 100;
 const MAX_TITLE: usize = 200;
 const MAX_BODY: usize = 1000;
 
@@ -79,6 +80,10 @@ pub struct NewNotification {
     pub group_key: Option<String>,
     /// Unix seconds (when it happened upstream).
     pub created_at: i64,
+    /// The entity it is about (an entity URI), when there is one: the
+    /// notification goes when that does ([`AppState::notifications_gone`];
+    /// decision `notifications-in-a-collection`).
+    pub subject: Option<String>,
     /// Store it as already read and announce nothing (a first poll's
     /// backlog, so the inbox has history without a burst of alerts).
     pub quiet: bool,
@@ -146,89 +151,7 @@ fn truncate(s: &str, max: usize) -> String {
     out
 }
 
-// ---------- store ----------
-
-fn row_to_notification(r: &rusqlite::Row<'_>) -> rusqlite::Result<Notification> {
-    Ok(Notification {
-        id: r.get::<_, i64>(0)?.to_string(),
-        channel_layout: r.get(1)?,
-        channel: r.get(2)?,
-        title: r.get(3)?,
-        body: r.get(4)?,
-        image_url: r.get(5)?,
-        target_uri: r.get(6)?,
-        layout: None,
-        group_key: r.get(7)?,
-        created_at: r.get(8)?,
-        read: r.get::<_, Option<i64>>(9)?.is_some(),
-    })
-}
-
-const NOTIFICATION_COLS: &str =
-    "id, layout, channel, title, body, image_url, target_uri, group_key, created_at, read_at";
-
-/// Unread counts per app, for the apps in `apps`.
-fn unread_on(conn: &Connection, apps: &[String]) -> rusqlite::Result<(u32, BTreeMap<String, u32>)> {
-    let mut stmt = conn.prepare_cached(
-        "SELECT layout, COUNT(*) FROM notifications WHERE read_at IS NULL GROUP BY layout",
-    )?;
-    let mut by_app = BTreeMap::new();
-    let mut total = 0u32;
-    for row in stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))? {
-        let (app, n) = row?;
-        if apps.contains(&app) {
-            let n = u32::try_from(n).unwrap_or(u32::MAX);
-            total = total.saturating_add(n);
-            by_app.insert(app, n);
-        }
-    }
-    Ok((total, by_app))
-}
-
-/// Insert `items` (oldest first), returning the rows that were new.
-fn insert_on(
-    conn: &Connection,
-    items: &[NewNotification],
-) -> rusqlite::Result<Vec<(Notification, bool)>> {
-    let now = now_secs();
-    let mut out = Vec::new();
-    for n in items {
-        let changed = conn.execute(
-            "INSERT OR IGNORE INTO notifications (layout, channel, dedupe_key, title, body, image_url,
-                 target_uri, group_key, created_at, inserted_at, read_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
-            params![
-                n.layout,
-                n.channel,
-                n.dedupe_key,
-                n.title,
-                n.body,
-                n.image_url,
-                n.target_uri,
-                n.group_key,
-                n.created_at,
-                now,
-                n.quiet.then_some(now),
-            ],
-        )?;
-        if changed == 1 {
-            let id = conn.last_insert_rowid();
-            let row = conn.query_row(
-                &format!("SELECT {NOTIFICATION_COLS} FROM notifications WHERE id = ?1"),
-                [id],
-                row_to_notification,
-            )?;
-            out.push((row, n.quiet));
-        }
-    }
-    // Retention: the newest KEEP_COUNT that arrived in the last KEEP_SECS.
-    conn.execute(
-        "DELETE FROM notifications WHERE inserted_at < ?1
-             OR id <= (SELECT id FROM notifications ORDER BY id DESC LIMIT 1 OFFSET ?2)",
-        params![now - KEEP_SECS, KEEP_COUNT],
-    )?;
-    Ok(out)
-}
+// ---------- devices ----------
 
 /// Devices of sessions that no longer exist go (with their choices).
 fn prune_devices_on(conn: &Connection) -> rusqlite::Result<()> {
@@ -243,26 +166,11 @@ fn prune_devices_on(conn: &Connection) -> rusqlite::Result<()> {
     Ok(())
 }
 
-/// The channel choices of a device: `(layout, channel) -> enabled`.
-fn device_prefs_on(
-    conn: &Connection,
-    device: &str,
-) -> rusqlite::Result<HashMap<(String, String), bool>> {
-    let mut stmt = conn.prepare_cached(
-        "SELECT layout, channel, enabled FROM device_channel_prefs WHERE device_id = ?1",
-    )?;
-    stmt.query_map([device], |r| {
-        Ok(((r.get(0)?, r.get(1)?), r.get::<_, i64>(2)? != 0))
-    })?
-    .collect()
-}
-
 /// A device that may get a Web Push delivery.
 #[derive(Debug, Clone)]
 struct PushTarget {
     device: String,
     sub: Subscription,
-    prefs: HashMap<(String, String), bool>,
 }
 
 /// Devices with a subscription whose session is still valid.
@@ -280,20 +188,17 @@ fn push_targets_on(conn: &Connection, ttl_secs: i64) -> rusqlite::Result<Vec<Pus
         })?
         .collect::<rusqlite::Result<_>>()?
     };
-    rows.into_iter()
-        .map(|(device, endpoint, p256dh, auth)| {
-            let prefs = device_prefs_on(conn, &device)?;
-            Ok(PushTarget {
-                device,
-                sub: Subscription {
-                    endpoint,
-                    p256dh,
-                    auth,
-                },
-                prefs,
-            })
+    Ok(rows
+        .into_iter()
+        .map(|(device, endpoint, p256dh, auth)| PushTarget {
+            device,
+            sub: Subscription {
+                endpoint,
+                p256dh,
+                auth,
+            },
         })
-        .collect()
+        .collect())
 }
 
 /// Whether any device with a valid session was seen recently (a reason to
@@ -467,22 +372,95 @@ impl AppState {
         ids
     }
 
-    /// Set each notification's `layout`: the pod's layout built on the
-    /// blueprint its channel belongs to, else that blueprint (or layout).
-    fn target_layouts(
-        &self,
-        conn: &rusqlite::Connection,
-        items: &mut [Notification],
-    ) -> rusqlite::Result<()> {
-        let map = crate::layouts::layouts_for_blueprints(self.catalog(), conn)?;
-        for n in items {
-            n.layout = Some(
-                map.get(&n.channel_layout)
-                    .cloned()
-                    .unwrap_or_else(|| n.channel_layout.clone()),
-            );
+    /// Where the pod keeps its notifications: the first source that offers
+    /// a store ([`crate::Source::notification_store`]), else the core's
+    /// own tables.
+    pub fn notification_store(&self) -> Arc<dyn NotificationStore> {
+        self.catalog()
+            .adapters()
+            .iter()
+            .find_map(|a| a.notification_store())
+            .unwrap_or_else(|| Arc::new(CoreStore))
+    }
+
+    /// Every declared channel, and those switched off pod-wide (by the
+    /// user, or by default). Tells the store which channels there are.
+    /// Blocking.
+    pub fn channel_states(
+        self: &Pod,
+    ) -> rusqlite::Result<(Vec<NotificationChannel>, HashSet<ChannelId>)> {
+        let channels = self.notification_channels();
+        let store = self.notification_store();
+        store.channels_declared(self, &channels)?;
+        let switches = store.switches(self)?;
+        let hidden = channels
+            .iter()
+            .filter(|c| {
+                !switches
+                    .get(&(c.layout.clone(), c.id.clone()))
+                    .copied()
+                    .unwrap_or(c.default_enabled)
+            })
+            .map(|c| (c.layout.clone(), c.id.clone()))
+            .collect();
+        Ok((channels, hidden))
+    }
+
+    /// The unread counts of what is shown (switched-off channels left
+    /// out). Blocking.
+    fn unread_now(self: &Pod) -> rusqlite::Result<ReadEvent> {
+        let (_, hidden) = self.channel_states()?;
+        let (unread_total, unread_by_layout) =
+            self.notification_store()
+                .unread(self, &self.layout_ids(), &hidden)?;
+        Ok(ReadEvent {
+            unread_total,
+            unread_by_layout,
+        })
+    }
+
+    /// Tell every open events stream the unread counts now (a
+    /// `notifications_read` event), after a store changed notifications
+    /// itself: a row edited or deleted, a channel switched.
+    pub async fn announce_unread(self: &Pod) {
+        let p = self.clone();
+        if let Ok(ev) = blocking(self, move |_| p.unread_now()).await {
+            let _ = self.notifier.tx.send(NotifyEvent::Read(ev));
         }
-        Ok(())
+    }
+
+    /// The entities `subjects` (URIs) are gone: their notifications go
+    /// too (decision `notifications-in-a-collection`). For sources whose
+    /// things disappear upstream (a deleted post); a store that keeps its
+    /// own rows may remove them as they go.
+    pub async fn notifications_gone(self: &Pod, subjects: Vec<String>) -> Result<usize, ApiError> {
+        if subjects.is_empty() {
+            return Ok(0);
+        }
+        let p = self.clone();
+        let n = blocking(self, move |_| {
+            p.notification_store().remove_about(&p, &subjects)
+        })
+        .await?;
+        if n > 0 {
+            self.announce_unread().await;
+        }
+        Ok(n)
+    }
+
+    /// Every stored notification, newest first, switched off or not (for
+    /// tooling and tests). Blocking.
+    pub fn stored_notifications(self: &Pod) -> rusqlite::Result<Vec<Notification>> {
+        self.notification_store().list(
+            self,
+            &ListQuery {
+                before: None,
+                layout: None,
+                limit: usize::MAX - 1,
+                layouts: Vec::new(),
+                hidden: HashSet::new(),
+            },
+        )
     }
 
     pub fn subscribe_notifications(&self) -> tokio::sync::broadcast::Receiver<NotifyEvent> {
@@ -587,24 +565,35 @@ impl AppState {
             return Ok((Vec::new(), Vec::new()));
         }
         items.sort_by_key(|n| n.created_at);
-        let apps = self.layout_ids();
-        let (inserted, (unread_total, _)) = blocking(self, move |s| {
-            s.transaction(|tx| Ok((insert_on(tx, &items)?, unread_on(tx, &apps)?)))
+        let p = self.clone();
+        let (inserted, hidden, unread_total) = blocking(self, move |s| {
+            let open = s.with_conn(|c| crate::layouts::layouts_for_blueprints(p.catalog(), c))?;
+            let items: Vec<ToStore> = items
+                .into_iter()
+                .map(|item| ToStore {
+                    open: open
+                        .get(&item.layout)
+                        .cloned()
+                        .unwrap_or_else(|| item.layout.clone()),
+                    item,
+                })
+                .collect();
+            let (_, hidden) = p.channel_states()?;
+            let store = p.notification_store();
+            let inserted = store.insert(&p, &items)?;
+            let (unread_total, _) = store.unread(&p, &p.layout_ids(), &hidden)?;
+            Ok((inserted, hidden, unread_total))
         })
         .await?;
-        let mut fresh: Vec<Notification> = inserted
+        // A switched-off channel's are stored (a layout may still show
+        // them) but alert no one.
+        let fresh: Vec<Notification> = inserted
             .iter()
-            .filter(|(_, quiet)| !quiet)
+            .filter(|(n, quiet)| {
+                !quiet && !hidden.contains(&(n.channel_layout.clone(), n.channel.clone()))
+            })
             .map(|(n, _)| n.clone())
             .collect();
-        if !fresh.is_empty() {
-            let p = self.clone();
-            fresh = blocking(self, move |s| {
-                s.with_conn(|c| p.target_layouts(c, &mut fresh))?;
-                Ok(fresh)
-            })
-            .await?;
-        }
         if !fresh.is_empty() {
             tracing::info!(count = fresh.len(), "new notifications");
         }
@@ -638,24 +627,11 @@ impl AppState {
             Ok(t) => t,
             Err(_) => return deliveries,
         };
-        let channels = self.notification_channels();
         for t in targets {
             if self.device_is_live(&t.device) {
                 continue;
             }
             for n in &fresh {
-                let enabled = t
-                    .prefs
-                    .get(&(n.channel_layout.clone(), n.channel.clone()))
-                    .copied()
-                    .unwrap_or_else(|| {
-                        channels.iter().any(|c| {
-                            c.layout == n.channel_layout && c.id == n.channel && c.default_enabled
-                        })
-                    });
-                if !enabled {
-                    continue;
-                }
                 if !self.take_push_budget() {
                     tracing::warn!("push budget for this minute used up; delivery skipped");
                     return deliveries;
@@ -916,7 +892,8 @@ fn bad_request(detail: &str) -> Response {
 }
 
 /// `GET /v1/notifications?limit=0..=100 (50)&before=<id>&layout=<layout id>`:
-/// newest first, with unread counts (`limit=0`: counts only).
+/// newest first, with unread counts (`limit=0`: counts only). Switched-off
+/// channels are left out of both.
 async fn list(
     State(state): State<Pod>,
     headers: HeaderMap,
@@ -925,20 +902,20 @@ async fn list(
     if let Err(r) = session_of(&state, &headers).await {
         return *r;
     }
-    let limit = match q.get("limit").map(|v| v.trim().parse::<i64>()) {
+    let limit = match q.get("limit").map(|v| v.trim().parse::<usize>()) {
         None => DEFAULT_LIMIT,
-        Some(Ok(n)) if (0..=MAX_LIMIT).contains(&n) => n,
+        Some(Ok(n)) if n <= MAX_LIMIT => n,
         Some(_) => return bad_request("limit is 0..=100"),
     };
-    let before = match q.get("before").map(|v| v.trim().parse::<i64>()) {
-        None => i64::MAX,
-        Some(Ok(n)) if n >= 1 => n,
+    let before = match q.get("before").map(|v| v.trim().to_owned()) {
+        None => None,
+        Some(b) if !b.is_empty() && b.len() <= 64 => Some(b),
         Some(_) => return bad_request("before is a notification id"),
     };
-    let app = q.get("layout").cloned();
-    let apps = state.layout_ids();
-    if let Some(a) = &app
-        && !apps.contains(a)
+    let layout = q.get("layout").cloned();
+    let layouts = state.layout_ids();
+    if let Some(a) = &layout
+        && !layouts.contains(a)
     {
         return json_error(
             StatusCode::NOT_FOUND,
@@ -946,33 +923,46 @@ async fn list(
         );
     }
     let p = state.clone();
-    let result = blocking(&state, move |s| {
-        s.with_conn(|c| {
-            let mut rows: Vec<Notification> = {
-                let mut stmt = c.prepare_cached(&format!(
-                    "SELECT {NOTIFICATION_COLS} FROM notifications
-                     WHERE id < ?1 AND (?2 IS NULL OR layout = ?2)
-                     ORDER BY id DESC LIMIT ?3"
-                ))?;
-                stmt.query_map(params![before, app, limit + 1], row_to_notification)?
-                    .collect::<rusqlite::Result<_>>()?
-            };
-            rows.retain(|n| apps.contains(&n.channel_layout));
-            let (total, by_app) = unread_on(c, &apps)?;
-            Ok((rows, total, by_app))
-        })
-        .and_then(|(mut rows, total, by_app)| {
-            s.with_conn(|c| p.target_layouts(c, &mut rows))?;
-            Ok((rows, total, by_app))
-        })
+    let result = blocking(&state, move |_| {
+        let (_, hidden) = p.channel_states()?;
+        let store = p.notification_store();
+        let (total, by) = store.unread(&p, &layouts, &hidden)?;
+        let mut rows = if limit == 0 {
+            Vec::new()
+        } else {
+            store.list(
+                &p,
+                &ListQuery {
+                    before,
+                    layout,
+                    limit,
+                    layouts,
+                    hidden,
+                },
+            )?
+        };
+        // The layout each opens, where the store doesn't say.
+        if rows.iter().any(|n| n.layout.is_none()) {
+            let open = p
+                .store()
+                .with_conn(|c| crate::layouts::layouts_for_blueprints(p.catalog(), c))?;
+            for n in rows.iter_mut().filter(|n| n.layout.is_none()) {
+                n.layout = Some(
+                    open.get(&n.channel_layout)
+                        .cloned()
+                        .unwrap_or_else(|| n.channel_layout.clone()),
+                );
+            }
+        }
+        Ok((rows, total, by))
     })
     .await;
     let (mut rows, unread_total, unread_by_layout) = match result {
         Ok(r) => r,
         Err(e) => return e.into_response(),
     };
-    let more = rows.len() as i64 > limit;
-    rows.truncate(limit as usize);
+    let more = rows.len() > limit;
+    rows.truncate(limit);
     let next_before = if more {
         rows.last().map(|n| n.id.clone())
     } else {
@@ -998,14 +988,14 @@ async fn mark_read(State(state): State<Pod>, headers: HeaderMap, body: Bytes) ->
         Ok(v) => v,
         Err(e) => return e.into_response(),
     };
-    let ids: Option<Vec<i64>> = match payload.get("ids") {
+    let ids: Option<Vec<String>> = match payload.get("ids") {
         None => None,
         Some(Value::Array(a)) if a.len() <= 500 => {
-            let parsed: Option<Vec<i64>> = a
+            let parsed: Option<Vec<String>> = a
                 .iter()
                 .map(|v| match v {
-                    Value::String(s) => s.parse().ok(),
-                    Value::Number(n) => n.as_i64(),
+                    Value::String(s) if !s.is_empty() && s.len() <= 64 => Some(s.clone()),
+                    Value::Number(n) => n.as_i64().map(|n| n.to_string()),
                     _ => None,
                 })
                 .collect();
@@ -1017,41 +1007,23 @@ async fn mark_read(State(state): State<Pod>, headers: HeaderMap, body: Bytes) ->
         Some(_) => return bad_request("ids is a list of up to 500 ids"),
     };
     let all = payload.get("all").and_then(Value::as_bool) == Some(true);
-    let app = payload
+    let layout = payload
         .get("layout")
         .and_then(Value::as_str)
         .map(str::to_owned);
-    if ids.is_none() && !all {
-        return bad_request("send ids or all: true");
-    }
-    let apps = state.layout_ids();
-    let result = blocking(&state, move |s| {
-        s.transaction(|tx| {
-            let now = now_secs();
-            if let Some(ids) = ids {
-                for id in ids {
-                    tx.execute(
-                        "UPDATE notifications SET read_at = ?2 WHERE id = ?1 AND read_at IS NULL",
-                        params![id, now],
-                    )?;
-                }
-            } else {
-                tx.execute(
-                    "UPDATE notifications SET read_at = ?1
-                     WHERE read_at IS NULL AND (?2 IS NULL OR layout = ?2)",
-                    params![now, app],
-                )?;
-            }
-            unread_on(tx, &apps)
-        })
+    let sel = match ids {
+        Some(ids) => ReadSel::Ids(ids),
+        None if all => ReadSel::All(layout),
+        None => return bad_request("send ids or all: true"),
+    };
+    let p = state.clone();
+    let result = blocking(&state, move |_| {
+        p.notification_store().mark_read(&p, &sel)?;
+        p.unread_now()
     })
     .await;
     match result {
-        Ok((unread_total, unread_by_layout)) => {
-            let ev = ReadEvent {
-                unread_total,
-                unread_by_layout,
-            };
+        Ok(ev) => {
             let _ = state.notifier.tx.send(NotifyEvent::Read(ev.clone()));
             Json(ev).into_response()
         }
@@ -1060,27 +1032,21 @@ async fn mark_read(State(state): State<Pod>, headers: HeaderMap, body: Bytes) ->
 }
 
 /// `GET /v1/notifications/channels` -> `{"channels": [NotificationChannel +
-/// "enabled"]}`: every app's channels, `enabled` for the calling device
-/// ([`DEVICE_HEADER`]; the default without one).
+/// "enabled"]}`: every layout's channels and whether each is on (for the
+/// whole pod; decision `notifications-in-a-collection`).
 async fn channels(State(state): State<Pod>, headers: HeaderMap) -> Response {
     if let Err(r) = session_of(&state, &headers).await {
         return *r;
     }
-    let prefs = match device_id(&headers) {
-        Some(d) => match blocking(&state, move |s| s.with_conn(|c| device_prefs_on(c, &d))).await {
-            Ok(p) => p,
-            Err(e) => return e.into_response(),
-        },
-        None => HashMap::new(),
+    let p = state.clone();
+    let (channels, hidden) = match blocking(&state, move |_| p.channel_states()).await {
+        Ok(c) => c,
+        Err(e) => return e.into_response(),
     };
-    let list: Vec<Value> = state
-        .notification_channels()
+    let list: Vec<Value> = channels
         .into_iter()
         .map(|c| {
-            let enabled = prefs
-                .get(&(c.layout.clone(), c.id.clone()))
-                .copied()
-                .unwrap_or(c.default_enabled);
+            let enabled = !hidden.contains(&(c.layout.clone(), c.id.clone()));
             let mut v = serde_json::to_value(&c).unwrap_or_default();
             v["enabled"] = json!(enabled);
             v
@@ -1228,8 +1194,10 @@ async fn delete_device(
     }
 }
 
-/// `PUT /v1/devices/{id}/channels {"<layout>.<channel>": bool, …}`: the
-/// device's channel choices (unknown channels are refused).
+/// `PUT /v1/devices/{id}/channels {"<layout>.<channel>": bool, …}`: turn
+/// channels on or off, for the whole pod (decision
+/// `notifications-in-a-collection`; the path names the calling device, as
+/// before). Unknown channels are refused.
 async fn set_channels(
     State(state): State<Pod>,
     Path(id): Path<String>,
@@ -1258,29 +1226,28 @@ async fn set_channels(
         };
         choices.push((c.layout.clone(), c.id.clone(), enabled));
     }
+    let p = state.clone();
     let result = blocking(&state, move |s| {
-        s.transaction(|tx| {
-            let exists = tx
-                .query_row("SELECT 1 FROM devices WHERE id = ?1", [&id], |_| Ok(()))
-                .optional()?
-                .is_some();
-            if !exists {
-                return Ok(false);
-            }
-            for (app, channel, enabled) in &choices {
-                tx.execute(
-                    "INSERT INTO device_channel_prefs (device_id, layout, channel, enabled)
-                     VALUES (?1, ?2, ?3, ?4)
-                     ON CONFLICT(device_id, layout, channel) DO UPDATE SET enabled = excluded.enabled",
-                    params![id, app, channel, i64::from(*enabled)],
-                )?;
-            }
-            Ok(true)
-        })
+        let exists = s.with_conn(|c| {
+            Ok::<bool, rusqlite::Error>(
+                c.query_row("SELECT 1 FROM devices WHERE id = ?1", [&id], |_| Ok(()))
+                    .optional()?
+                    .is_some(),
+            )
+        })?;
+        if !exists {
+            return Ok(false);
+        }
+        p.notification_store().channels_declared(&p, &known)?;
+        p.notification_store().set_switches(&p, &choices)?;
+        Ok(true)
     })
     .await;
     match result {
-        Ok(true) => Json(json!({ "ok": true })).into_response(),
+        Ok(true) => {
+            state.announce_unread().await;
+            Json(json!({ "ok": true })).into_response()
+        }
         Ok(false) => json_error(
             StatusCode::NOT_FOUND,
             json!({ "error": "device_not_found" }),

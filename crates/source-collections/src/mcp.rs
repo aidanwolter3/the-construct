@@ -25,7 +25,13 @@ edit_rows changes rows directly (imports, backfills; all of them in one call, fr
 by url): it first answers a preview, which you must show the user (the count and the sample) before \
 calling again with just its confirm token; every edit \
 can be undone with undo_edit. delete_collection deletes a collection the user no longer wants once no layout \
-shows it (restore_collection brings it back for 30 days). Any field may be computed from the row's other fields \
+shows it (restore_collection brings it back for 30 days). The pod's notifications are the system \
+collection notifications (one row per notification: title, body, channel_layout, channel, layout, target_uri, \
+subject, at, read, read_at, and channel_enabled and channel_title from its channel; the newest 500 of 30 days; \
+actions mark_all_read and clear_read) and its channels notification_channels (key \"<layout>.<channel>\", title, \
+enabled: the pod-wide switch, remove_with_subject: whether a notification goes when the row it is about is \
+deleted): bind, filter, edit or delete them like any collection (the inbox blueprint shows notifications \
+whose channel_enabled is true, read ones older than a day in a closed section). Any field may be computed from the row's other fields \
 whenever they change: compute: {kind: \"expr\", expr} evaluates a small expression at once (entity.<field>, \
 entity.id (the row's id), literals, + joins text or adds numbers, -, !, c ? a : b, parentheses); compute: {kind: \"lookup\", from, \
 collection, key, value, match: exact|contains|regex, learn?} takes the value of the best matching row of \
@@ -93,7 +99,8 @@ holds an amount and a unit parsed from text (\"1 1/2 cups\"), served also as <na
 quantities, converting units. An action (define_collection actions, apply_change set_action) is a named \
 insert-from-query: for each row of a source collection matching where, it finds or creates a row of this collection \
 by match and adds a child row to another collection (or, with delete: true, deletes the rows of this collection \
-matching where, e.g. a grocery list's \"Clear bag\"); run it with run_action, or from a layout with \
+matching where, e.g. a grocery list's \"Clear bag\"; or, with only update, updates them, e.g. the \
+notifications' \"Mark all read\"); run it with run_action, or from a layout with \
 action.mutation.optimistic posting to /v1/collections/<collection>/actions/<action>; undo_edit reverts a call.";
 
 fn tool(name: &str, description: &str, properties: Value, required: &[&str]) -> Value {
@@ -139,7 +146,7 @@ pub fn tools() -> Vec<Value> {
     let view = json!({ "type": "object",
         "description": "A view: a small derived list of the rows, served as its own query key collection:<collection>:view:<name> beside collection:<collection> (bind a core://List's query_key to it; $item.<field> works as for the whole list). {name ([a-z][a-z0-9_]*, unique in the collection), where?: {field, equals} or a list (all must match; compared as text, as a list's where: true, false, numbers), date?: {field (a date or datetime field), from_days?, to_days?}: the row's date (a datetime by its date in the pod's time zone, set_time_zone) from from_days to to_days days after today (0 today, -1 yesterday; either bound open; empty dates never match), order_by?: field or [fields] (else the collection's order), descending?, limit? (1..=200)}. At most 10 per collection. Examples: {name: \"upcoming\", date: {field: \"start\", from_days: 0}, order_by: \"start\", limit: 3}; {name: \"today\", date: {field: \"day\", from_days: 0, to_days: 0}}; {name: \"next_week\", date: {field: \"day\", from_days: 1, to_days: 7}}. Dated views move at the pod's midnight." });
     let action = json!({ "type": "object",
-        "description": "An insert-from-query action of this collection (the parent): {name ([a-z][a-z0-9_]*), title?, params?: [{name, type: text|number|ref, collection? (ref), optional?}], source: {collection, where?: [{field, equals} | {field, empty: true|false}]}, scale?: {times, per}, match: {<field of this collection>: value}, create?: {<field>: value}, update?: {<field>: value}, reset_when?: [{field, equals} | {field, empty}], child?: {collection, values: {<field of the child collection>: value | {from: value, scaled: true}}}}. A value is a literal (a string starting with $ as {value: \"...\"}) or a binding: \"$param.<name>\" (a call's parameter: text; a number; a ref param is given as a row id or {\"<unique field>\": value} and binds the id), \"$row.<field>\" (the source row; through refs \"$row.<ref>.<field>\", up to 4 names; \"$row.id\", \"$row.<ref>.id\") and, only in child.values, \"$parent.id\" or \"$parent.<field>\". A call: for each live row of source.collection matching every where condition (equals compares as text ignoring case and spacing, a ref by its id; empty: false keeps rows where the field has a value), in that collection's order: the match values are computed (a row with an empty match value is skipped and reported); the live row of this collection whose match fields all equal them is found (the oldest, also one made earlier in the same call), else created with match and create values; a found row first, when it matches every reset_when condition, has its children deleted (the child rows whose $parent.id field points at it; once per call), then gets the update values (once per call). Then, with child, a row of child.collection is added with child.values; exactly one of them is a ref field to this collection set to \"$parent.id\". A value with scaled: true (a number or quantity field) is multiplied by scale.times / scale.per when both read as numbers above 0 (a number, a quantity's amount, or the first number in text such as \"Serves 4\"), else by 1; text read into a quantity field is parsed first, and text that doesn't parse is added unscaled and listed in the answer's unparsed. Fields required without a default must be given (match or create for a parent; child.values for a child). A delete action {name, title?, params?, source: {collection: <this collection>, where?}, delete: true} (the only action whose source is its own collection; no match, create, update, reset_when, scale or child) instead deletes every live row of this collection matching where, as a row delete does (restorable; lookups, counts and rollups that read the collection follow), e.g. {name: \"clear_bag\", title: \"Clear the bag\", source: {collection: \"groceries\", where: [{field: \"done\", equals: true}]}, delete: true}. Every call is one edit across both collections (undo_edit reverts it: rows it made are deleted, rows it changed or deleted come back, rows changed since are left alone and listed; computed totals follow). Example (grocery list from recipe lines; on groceries): {name: \"add_recipe\", title: \"Add a recipe to groceries\", params: [{name: \"meal\", type: \"ref\", collection: \"meals\"}, {name: \"servings\", type: \"number\", optional: true}], source: {collection: \"recipe_lines\", where: [{field: \"meal\", equals: \"$param.meal\"}, {field: \"ingredient\", empty: false}]}, scale: {times: \"$param.servings\", per: \"$row.meal.servings\"}, match: {ingredient: \"$row.ingredient\"}, create: {name: \"$row.ingredient.name\", done: false}, update: {done: false}, reset_when: [{field: \"done\", equals: true}], child: {collection: \"grocery_entries\", values: {grocery: \"$parent.id\", quantity: {from: \"$row.amount\", scaled: true}, recipe: \"$row.meal\"}}}. Run it with run_action, or from a layout: {intent: \"action.mutation.optimistic\", entity_uri: \"$item.uri\", field: \"adding\", value_expr: \"true\", endpoint: \"/v1/collections/<collection>/actions/<name>\", payload: {<param>: \"$item.id\" or \"$form?.<field>\", client_id: \"$nonce\"}} (field is a view flag on the device only; the payload's keys must be params or client_id; a repeated client_id is applied once; the new rows arrive through the feed)." });
+        "description": "An insert-from-query action of this collection (the parent): {name ([a-z][a-z0-9_]*), title?, params?: [{name, type: text|number|ref, collection? (ref), optional?}], source: {collection, where?: [{field, equals} | {field, empty: true|false}]}, scale?: {times, per}, match: {<field of this collection>: value}, create?: {<field>: value}, update?: {<field>: value}, reset_when?: [{field, equals} | {field, empty}], child?: {collection, values: {<field of the child collection>: value | {from: value, scaled: true}}}}. A value is a literal (a string starting with $ as {value: \"...\"}) or a binding: \"$param.<name>\" (a call's parameter: text; a number; a ref param is given as a row id or {\"<unique field>\": value} and binds the id), \"$row.<field>\" (the source row; through refs \"$row.<ref>.<field>\", up to 4 names; \"$row.id\", \"$row.<ref>.id\") and, only in child.values, \"$parent.id\" or \"$parent.<field>\". A call: for each live row of source.collection matching every where condition (equals compares as text ignoring case and spacing, a ref by its id; empty: false keeps rows where the field has a value), in that collection's order: the match values are computed (a row with an empty match value is skipped and reported); the live row of this collection whose match fields all equal them is found (the oldest, also one made earlier in the same call), else created with match and create values; a found row first, when it matches every reset_when condition, has its children deleted (the child rows whose $parent.id field points at it; once per call), then gets the update values (once per call). Then, with child, a row of child.collection is added with child.values; exactly one of them is a ref field to this collection set to \"$parent.id\". A value with scaled: true (a number or quantity field) is multiplied by scale.times / scale.per when both read as numbers above 0 (a number, a quantity's amount, or the first number in text such as \"Serves 4\"), else by 1; text read into a quantity field is parsed first, and text that doesn't parse is added unscaled and listed in the answer's unparsed. Fields required without a default must be given (match or create for a parent; child.values for a child). An update action {name, title?, params?, source: {collection: <this collection>, where?}, update: {field: value}} (no match, create, reset_when, scale or child) writes update to every live row of this collection matching where, as a row update does, e.g. {name: \"mark_all_read\", source: {collection: \"notifications\", where: [{field: \"read\", equals: false}]}, update: {read: true}}. A delete action {name, title?, params?, source: {collection: <this collection>, where?}, delete: true} (no match, create, update, reset_when, scale or child) instead deletes every live row of this collection matching where, as a row delete does (restorable; lookups, counts and rollups that read the collection follow), e.g. {name: \"clear_bag\", title: \"Clear the bag\", source: {collection: \"groceries\", where: [{field: \"done\", equals: true}]}, delete: true}. Every call is one edit across both collections (undo_edit reverts it: rows it made are deleted, rows it changed or deleted come back, rows changed since are left alone and listed; computed totals follow). Example (grocery list from recipe lines; on groceries): {name: \"add_recipe\", title: \"Add a recipe to groceries\", params: [{name: \"meal\", type: \"ref\", collection: \"meals\"}, {name: \"servings\", type: \"number\", optional: true}], source: {collection: \"recipe_lines\", where: [{field: \"meal\", equals: \"$param.meal\"}, {field: \"ingredient\", empty: false}]}, scale: {times: \"$param.servings\", per: \"$row.meal.servings\"}, match: {ingredient: \"$row.ingredient\"}, create: {name: \"$row.ingredient.name\", done: false}, update: {done: false}, reset_when: [{field: \"done\", equals: true}], child: {collection: \"grocery_entries\", values: {grocery: \"$parent.id\", quantity: {from: \"$row.amount\", scaled: true}, recipe: \"$row.meal\"}}}. Run it with run_action, or from a layout: {intent: \"action.mutation.optimistic\", entity_uri: \"$item.uri\", field: \"adding\", value_expr: \"true\", endpoint: \"/v1/collections/<collection>/actions/<name>\", payload: {<param>: \"$item.id\" or \"$form?.<field>\", client_id: \"$nonce\"}} (field is a view flag on the device only; the payload's keys must be params or client_id; a repeated client_id is applied once; the new rows arrive through the feed)." });
     vec![
         tool(
             "list_collections",
@@ -412,6 +419,7 @@ async fn define(pod: &Pod, adapter: &CollectionsAdapter, args: &Value) -> Result
         views: Vec::new(),
         order_by: Vec::new(),
         descending: args["descending"].as_bool().unwrap_or(false),
+        keep: None,
     };
     // After every field exists: a compute may read a later one.
     let mut others = pod
@@ -504,7 +512,7 @@ async fn define(pod: &Pod, adapter: &CollectionsAdapter, args: &Value) -> Result
                 "detail": "change it with apply_change (describe_collection shows it)" }),
             ));
         }
-        if db::all_defs(tx)?.len() >= caps.collections {
+        if db::all_defs(tx)?.iter().filter(|(_, d)| !crate::inbox::is_inbox(&d.name)).count() >= caps.collections {
             return Ok(Err(fail(
                 StatusCode::CONFLICT,
                 "too_many_collections",
@@ -1383,7 +1391,12 @@ fn create_rules(
             }
             None => {}
         }
-        if db::all_defs(tx)?.len() >= caps.collections {
+        if db::all_defs(tx)?
+            .iter()
+            .filter(|(_, d)| !crate::inbox::is_inbox(&d.name))
+            .count()
+            >= caps.collections
+        {
             return Ok(Err(fail(
                 StatusCode::CONFLICT,
                 "too_many_collections",
@@ -1603,7 +1616,7 @@ async fn restore(pod: &Pod, caps: crate::Caps, args: &Value) -> Result<Value, Va
             return Ok(Err(json!({ "error": "collection_not_found", "collection": target, "status": 404,
                 "detail": "no deleted collection has this name (list_collections lists deleted ones)" })));
         };
-        if db::all_defs(tx)?.len() >= caps.collections {
+        if db::all_defs(tx)?.iter().filter(|(_, d)| !crate::inbox::is_inbox(&d.name)).count() >= caps.collections {
             return Ok(Err(fail(
                 StatusCode::CONFLICT,
                 "too_many_collections",

@@ -47,6 +47,7 @@ pub fn definition() -> Definition {
         system: Some(system()),
         actions: Vec::new(),
         views: Vec::new(),
+        keep: None,
     }
 }
 

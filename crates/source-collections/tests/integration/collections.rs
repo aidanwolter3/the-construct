@@ -1054,7 +1054,14 @@ async fn a_collection_is_deleted_restored_and_purged() {
         );
     }
     let l = ok(&pod, "list_collections", json!({})).await;
-    assert_eq!(l["collections"], json!([]));
+    // Only the pod's own notification collections are left.
+    let names: Vec<&str> = l["collections"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|c| c["name"].as_str())
+        .collect();
+    assert_eq!(names, ["notification_channels", "notifications"]);
     let gone = l["deleted"].as_array().unwrap();
     let todos_gone = gone.iter().find(|c| c["name"] == "todos").expect("listed");
     assert_eq!(todos_gone["rows"], 1);
@@ -1077,8 +1084,13 @@ async fn a_collection_is_deleted_restored_and_purged() {
     // Restored with its rows.
     ok(&pod, "restore_collection", json!({"collection": "todos"})).await;
     let l = ok(&pod, "list_collections", json!({})).await;
-    assert_eq!(l["collections"][0]["name"], "todos");
-    assert_eq!(l["collections"][0]["rows"], 1);
+    let todos = l["collections"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| c["name"] == "todos")
+        .expect("listed");
+    assert_eq!(todos["rows"], 1);
     assert!(
         l.get("deleted")
             .is_none_or(|d| d.as_array().unwrap().iter().all(|c| c["name"] != "todos")),

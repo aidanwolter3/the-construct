@@ -289,15 +289,11 @@ async fn a_review_reminder_reaches_the_inbox_without_push() {
     })
     .await;
     // Quiet: stored already read, so it is in the inbox and never pushed.
-    let read: Option<i64> = pod
-        .store()
-        .with_conn(|c| {
-            c.query_row(
-                "SELECT read_at FROM notifications WHERE title LIKE 'Still waiting%'",
-                [],
-                |r| r.get(0),
-            )
-        })
-        .unwrap();
-    assert!(read.is_some(), "inbox only, no push");
+    let read = pod
+        .stored_notifications()
+        .unwrap()
+        .into_iter()
+        .find(|n| n.title.starts_with("Still waiting"))
+        .map(|n| n.read);
+    assert_eq!(read, Some(true), "inbox only, no push");
 }

@@ -792,14 +792,13 @@ async fn event_sites_fill_one_collection_and_alerts_notify_once() {
     .await;
     let app_id = app["id"].as_str().unwrap().to_owned();
     source_collections::alerts::run(&pod, None).await;
-    let sent: Vec<(String, String)> = pod
-        .store()
-        .with_conn(|c| {
-            let mut stmt = c.prepare("SELECT layout, title FROM notifications ORDER BY title")?;
-            stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
-                .collect::<rusqlite::Result<Vec<_>>>()
-        })
-        .unwrap();
+    let mut sent: Vec<(String, String)> = pod
+        .stored_notifications()
+        .unwrap()
+        .into_iter()
+        .map(|n| (n.channel_layout, n.title))
+        .collect();
+    sent.sort_by(|a, b| a.1.cmp(&b.1));
     assert_eq!(
         sent,
         vec![
@@ -809,10 +808,8 @@ async fn event_sites_fill_one_collection_and_alerts_notify_once() {
     );
     // Once.
     source_collections::alerts::run(&pod, None).await;
-    let n: i64 = pod
-        .store()
-        .with_conn(|c| c.query_row("SELECT COUNT(*) FROM notifications", [], |r| r.get(0)))
-        .unwrap();
+    let n = pod.stored_notifications().unwrap().len();
+
     assert_eq!(n, 2);
     // A filler's alerts go with it.
     ok(
@@ -869,15 +866,7 @@ async fn a_reworded_refill_keeps_its_rows_and_doesnt_notify_again() {
     )
     .await;
     source_collections::alerts::run(&pod, None).await;
-    let notified = |pod: &Pod| {
-        pod.store()
-            .with_conn(|c| {
-                c.query_row("SELECT COUNT(*) FROM notifications", [], |r| {
-                    r.get::<_, i64>(0)
-                })
-            })
-            .unwrap()
-    };
+    let notified = |pod: &Pod| pod.stored_notifications().unwrap().len();
     assert_eq!(notified(&pod), 1);
     let jazz = rows(&pod, "shows").await[0]["id"]
         .as_str()
