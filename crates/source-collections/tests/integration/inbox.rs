@@ -512,3 +512,110 @@ async fn the_core_tables_are_handed_over() {
         .unwrap();
     assert_eq!(left, 0);
 }
+
+/// A pod layout titled `title` drawing a page with one screen per route.
+async fn page(pod: &Pod, title: &str, routes: &[&str]) -> String {
+    let screens: Vec<Value> = routes
+        .iter()
+        .enumerate()
+        .map(|(i, r)| {
+            json!({"id": format!("s{i}"), "route": r,
+                "root": {"type": "core://Text", "style": "Body", "value_expr": "$route.id"}})
+        })
+        .collect();
+    let made = tool(
+        pod,
+        "create_layout",
+        json!({"title": title, "layout": {"type": "core://Page", "id": "p", "title": title,
+            "root": {"type": "core://Text", "style": "Body", "value_expr": title},
+            "screens": screens}}),
+    )
+    .await;
+    made["id"].as_str().unwrap().to_owned()
+}
+
+fn aimed(key: &str, target: Option<&str>) -> NewNotification {
+    NewNotification {
+        target_uri: target.map(str::to_owned),
+        ..note(key, "likes", None)
+    }
+}
+
+/// Issue #337: a notification of a blueprint's channel opens the pod's own
+/// layout that routes its target (the blueprint's copy, or another layout),
+/// else the copy; rows stored without one get it when the pod opens.
+#[tokio::test]
+async fn notifications_open_the_pods_layout_that_routes_them() {
+    let pod = pod();
+    // A copy of the Bell blueprint (same title, no reference to it) and an
+    // unrelated layout that routes the tasks.
+    let copy = page(&pod, "Bell", &["bell://items/{id}"]).await;
+    let tasks = page(&pod, "Tasks", &["bell://tasks/{id}"]).await;
+    pod.notify(vec![
+        aimed("item", Some("bell://items/i1")),
+        aimed("task", Some("bell://tasks/t1")),
+        aimed("none", None),
+        aimed("nowhere", Some("bell://elsewhere/e1")),
+    ])
+    .await
+    .unwrap();
+    let all = rows(&pod, "notifications").await;
+    let layout_of = |t: &str| {
+        all.iter()
+            .find(|r| r["title"] == format!("Title {t}"))
+            .unwrap_or_else(|| panic!("{t} in {all:?}"))["layout"]
+            .clone()
+    };
+    assert_eq!(layout_of("item"), json!(copy), "the copy routes it");
+    assert_eq!(layout_of("task"), json!(tasks), "another layout routes it");
+    assert_eq!(layout_of("none"), json!(copy), "no target: the copy");
+    assert_eq!(layout_of("nowhere"), json!(copy), "no route: the copy");
+    let listed = ok(&pod, "GET", "/v1/notifications", None).await;
+    assert!(
+        listed["notifications"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|n| n["layout"] != json!("bell")),
+        "{listed}"
+    );
+
+    // A row stored before (no layout, or the blueprint's id) is filled in
+    // when the pod opens; one already naming a pod layout stays.
+    let id = |t: &str| {
+        all.iter()
+            .find(|r| r["title"] == format!("Title {t}"))
+            .unwrap()["id"]
+            .as_str()
+            .unwrap()
+            .to_owned()
+    };
+    for (t, layout) in [("task", Value::Null), ("item", json!("bell"))] {
+        ok(
+            &pod,
+            "POST",
+            "/v1/collections/notifications/update",
+            Some(json!({"id": id(t), "layout": layout})),
+        )
+        .await;
+    }
+    ok(
+        &pod,
+        "POST",
+        "/v1/collections/notifications/update",
+        Some(json!({"id": id("none"), "layout": tasks})),
+    )
+    .await;
+    assert_eq!(pod.fill_notification_layouts().unwrap(), 2);
+    let all = rows(&pod, "notifications").await;
+    let layout_of = |t: &str| {
+        all.iter()
+            .find(|r| r["title"] == format!("Title {t}"))
+            .unwrap()["layout"]
+            .clone()
+    };
+    assert_eq!(layout_of("task"), json!(tasks));
+    assert_eq!(layout_of("item"), json!(copy));
+    assert_eq!(layout_of("none"), json!(tasks), "a pod layout stays");
+    assert_eq!(pod.fill_notification_layouts().unwrap(), 0, "nothing left");
+}
