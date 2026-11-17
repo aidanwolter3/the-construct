@@ -65,7 +65,10 @@ collection side by side.
     dates, a schema.org enumeration URL as a choice); a time without an offset is placed in `zone`, and a UTC time
     (`Z`, as many sites' JSON gives it) is moved to `zone`'s clock (the same instant). A value that
     doesn't fit is skipped and counted.
-  - `upcoming` (a date or datetime field) leaves out items that have passed. `details` (`link`, `extract`, `map`,
+  - `upcoming` (a date or datetime field) leaves out items that have passed, and they don't count toward a fill's
+    200-item cap: a feed listing hundreds of past events before its upcoming ones still brings every upcoming one,
+    and an upcoming event doesn't drop out of one fill and come back as a new row (and a new alert) in the next
+    when the feed reorders. `details` (`link`, `extract`, `map`,
     `text`) reads each new row's own page, at most 10 a fill (the Watcher's event pages, for lineups).
 - **`agent`** (costs model calls): `prompt`, `fields`, `max_searches` (≤ 20), `max_fetches` (≤ 30),
   `fills_per_day`. One fill is a Messages API conversation with the server-side web search and fetch tools, ending

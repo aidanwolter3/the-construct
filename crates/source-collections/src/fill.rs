@@ -537,7 +537,7 @@ pub fn coerce_preview(
     max_chars: usize,
     zone: Option<&web_extract::when::Zone>,
 ) -> (Vec<Map<String, Value>>, usize) {
-    coerce_all(def, rows, usize::MAX, max_chars, zone)
+    coerce_all(def, rows, usize::MAX, max_chars, zone, None)
 }
 
 /// A key value as a match key.
@@ -548,6 +548,11 @@ fn key_text(v: &Value) -> Option<String> {
         other => other.to_string(),
     };
     (!t.is_empty()).then_some(t)
+}
+
+/// A filler's `upcoming` field and `now`, for [`coerce_all`].
+fn upcoming(filler: &Filler, now: i64) -> Option<(&str, i64)> {
+    filler.upcoming.as_deref().map(|u| (u, now))
 }
 
 /// Whether an item's `upcoming` value has passed at `now`.
@@ -1161,24 +1166,37 @@ fn hash_of(bytes: &[u8]) -> String {
 }
 
 /// Map extracted rows (keyed by field id) to stored values.
+/// Rows as values by field id, at most `max` of them. With `upcoming` (the
+/// filler's date field and now), past items don't count toward `max`: they
+/// pass through for [`store`] to leave out and count, so a feed whose first
+/// `max` items are mostly past still brings every upcoming one, and an
+/// upcoming item doesn't drop out of one fill and come back as a new row
+/// (with a new alert) in the next when the feed lists its items in another
+/// order.
 fn coerce_all(
     def: &Definition,
     rows: Vec<Map<String, Value>>,
     max: usize,
     max_chars: usize,
     zone: Option<&web_extract::when::Zone>,
+    upcoming: Option<(&str, i64)>,
 ) -> (Vec<Map<String, Value>>, usize) {
-    let mut skipped = 0;
-    let items = rows
-        .into_iter()
-        .take(max)
-        .map(|r| {
-            let (v, s) = to_values(def, r, max_chars, zone);
-            skipped += s;
-            v
-        })
-        .filter(|v| !v.is_empty())
-        .collect();
+    let (mut skipped, mut taken) = (0, 0);
+    let mut items = Vec::new();
+    for r in rows {
+        if taken >= max {
+            break;
+        }
+        let (v, s) = to_values(def, r, max_chars, zone);
+        skipped += s;
+        if v.is_empty() {
+            continue;
+        }
+        if !upcoming.is_some_and(|(u, now)| is_past(v.get(u), now)) {
+            taken += 1;
+        }
+        items.push(v);
+    }
     (items, skipped)
 }
 
@@ -1279,6 +1297,7 @@ async fn run_mcp(
         caps.fill_items,
         caps.text_chars,
         filler.zone().as_ref(),
+        upcoming(filler, now),
     );
     Fetch::Items {
         items,
@@ -1346,7 +1365,14 @@ fn run_range(
         return Fetch::Unchanged;
     }
     let caps = adapter.caps();
-    let (items, skipped) = coerce_all(def, rows, caps.fill_items, caps.text_chars, None);
+    let (items, skipped) = coerce_all(
+        def,
+        rows,
+        caps.fill_items,
+        caps.text_chars,
+        None,
+        upcoming(filler, now),
+    );
     Fetch::Items {
         items,
         skipped,
@@ -1503,8 +1529,14 @@ async fn run_fetch(
         let today = day.clone().unwrap_or_default();
         return match read(body, url.clone(), today).await {
             Ok(rows) => {
-                let (items, skipped) =
-                    coerce_all(def, rows, caps.fill_items, caps.text_chars, zone.as_ref());
+                let (items, skipped) = coerce_all(
+                    def,
+                    rows,
+                    caps.fill_items,
+                    caps.text_chars,
+                    zone.as_ref(),
+                    upcoming(filler, now),
+                );
                 Fetch::Items {
                     items,
                     skipped,
@@ -1754,7 +1786,7 @@ async fn run_fetch(
         };
         match found {
             Ok(found) => {
-                let (mut vals, s) = coerce_all(def, found, 1, caps.text_chars, zone.as_ref());
+                let (mut vals, s) = coerce_all(def, found, 1, caps.text_chars, zone.as_ref(), None);
                 skipped += s;
                 if let Some(v) = vals.pop() {
                     items += 1;
@@ -1885,6 +1917,7 @@ async fn run_agent(
         caps.fill_items,
         caps.text_chars,
         None,
+        upcoming(filler, now),
     );
     Ok((
         Fetch::Items {
@@ -2665,6 +2698,41 @@ mod tests {
         );
         assert_eq!(day_of(Some(&json!("2099-12-04"))), Some("2099-12-04"));
         assert_eq!(day_of(Some(&json!("Friday"))), None);
+    }
+
+    #[test]
+    fn past_items_dont_count_toward_the_fill_cap() {
+        let def: Definition = serde_json::from_value(json!({
+            "name": "events", "title": "Events", "next_field": 3,
+            "fields": [{"id": "f1", "name": "title", "type": "text", "optional": true},
+                       {"id": "f2", "name": "start", "type": "datetime", "optional": true}]
+        }))
+        .unwrap();
+        // A feed listing past events first, then two upcoming ones.
+        let now = 1_794_900_000; // 2026-11-17
+        let item =
+            |t: &str, start: &str| json!({"f1": t, "f2": start}).as_object().unwrap().clone();
+        let mut rows: Vec<_> = (1..=5)
+            .map(|d| item(&format!("past {d}"), &format!("2026-10-0{d}T19:00Z")))
+            .collect();
+        rows.push(item("Sundance", "2027-01-21T19:00Z"));
+        rows.push(item("Film festival", "2027-04-08T19:00Z"));
+        rows.push(item("Too many", "2027-05-01T19:00Z"));
+        let titles = |items: &[Map<String, Value>]| -> Vec<String> {
+            items
+                .iter()
+                .map(|i| i["f1"].as_str().unwrap().to_owned())
+                .collect()
+        };
+        let (items, _) = coerce_all(&def, rows.clone(), 2, 100, None, Some(("f2", now)));
+        assert_eq!(items.len(), 7, "past items pass through for store to count");
+        assert_eq!(
+            titles(&items[5..]),
+            ["Sundance", "Film festival"],
+            "the cap counts only upcoming items"
+        );
+        let (items, _) = coerce_all(&def, rows, 2, 100, None, None);
+        assert_eq!(titles(&items), ["past 1", "past 2"], "without upcoming");
     }
 
     #[test]
