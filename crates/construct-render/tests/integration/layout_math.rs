@@ -350,3 +350,37 @@ fn a_long_chip_in_a_container_leaves_room_for_the_button_beside_it() {
         }
     }
 }
+
+#[test]
+fn an_icon_only_badge_centres_its_icon_in_a_centred_box() {
+    // A tinted icon circle: a 34 dp box, its content centred, holding a
+    // badge with no text. Only the icon is drawn, at the box's centre
+    // (#325: a gap and an empty label used to push it 2 dp left).
+    let spec = json!({ "type": "core://Tappable", "tag": "circle",
+        "on_click": { "intent": "action.navigation.back" },
+        "content": { "type": "core://Box", "width_dp": 34, "height_dp": 34, "corner_dp": 17,
+            "align": "Center", "background": "#EEF0F4",
+            "content": { "type": "core://Badge", "text": "", "icon": "warning" } } });
+    let scene = SceneBuilder::build_from_spec(&spec, 200.0, 200.0, 1.0).unwrap();
+    let circle = scene.find_node("circle").unwrap().bounds;
+    let icons: Vec<[f32; 4]> = scene
+        .draws
+        .iter()
+        .filter_map(|d| match d {
+            Draw::Icon(i) => Some(i.rect),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(icons.len(), 1, "{icons:?}");
+    let icon = icons[0];
+    let centre = |r: [f32; 4]| (r[0] + r[2] / 2.0, r[1] + r[3] / 2.0);
+    let (ix, iy) = centre(icon);
+    // The tappable stretches across the screen; the 34 dp box starts at its left.
+    let (cx, cy) = (circle[0] + 17.0, circle[1] + 17.0);
+    assert!(
+        close(ix, cx) && close(iy, cy),
+        "icon {icon:?} in {circle:?}"
+    );
+    // Nothing but the icon: no empty text run beside it.
+    assert!(!scene.draws.iter().any(|d| matches!(d, Draw::Text(_))));
+}

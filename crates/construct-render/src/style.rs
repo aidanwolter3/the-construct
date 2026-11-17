@@ -121,6 +121,23 @@ impl Theme {
             }
         }
         let tok = |t: &str| Rgba::hex(&tokens[t]).unwrap_or(Rgba::TRANSPARENT);
+        // A built-in token the pod (or device) gave a colour of its own:
+        // `None` while it is the default for this mode. The controls'
+        // own colours follow a token only once it is set, so a pod
+        // without a theme draws as before (decision `controls-follow-the-theme`).
+        let set = |t: &str| {
+            let default = THEME_DEFAULTS
+                .iter()
+                .find(|d| d.0 == t)
+                .map(|d| if dark { d.2 } else { d.1 });
+            let v = tokens.get(t)?;
+            (default.map(|d| !d.eq_ignore_ascii_case(v)).unwrap_or(true))
+                .then(|| Rgba::hex(v))
+                .flatten()
+        };
+        // Optional, not built in: what goes on an accent fill (a button's
+        // label, a switch's thumb), for a pod whose accent is light.
+        let on_accent = tokens.get("on_accent").and_then(|v| Rgba::hex(v));
         Theme {
             dark,
             // Dark: the palette's page; light: Material's background, as
@@ -137,28 +154,30 @@ impl Theme {
             },
             muted_text: tok("muted_text"),
             surface: tok("card"),
+            // Light: the pod's accent once it sets one, else Material's
+            // primary, as the Compose app draws.
             primary: if dark {
                 tok("accent")
             } else {
-                Rgba::rgb(0x67, 0x50, 0xA4)
+                set("accent").unwrap_or(Rgba::rgb(0x67, 0x50, 0xA4))
             },
-            on_primary: if dark {
+            on_primary: on_accent.unwrap_or(if dark {
                 tok("accent_surface")
             } else {
                 Rgba::rgb(0xFF, 0xFF, 0xFF)
-            },
+            }),
             outline: tok("card_border"),
             surface_variant: tok("muted_surface"),
-            switch_track_off: if dark {
+            switch_track_off: set("muted_surface").unwrap_or(if dark {
                 Rgba::rgb(0x36, 0x34, 0x3B)
             } else {
                 Rgba::rgb(0xE6, 0xE0, 0xE9)
-            },
-            switch_outline: if dark {
+            }),
+            switch_outline: set("muted_text").unwrap_or(if dark {
                 Rgba::rgb(0x93, 0x8F, 0x99)
             } else {
                 Rgba::rgb(0x79, 0x74, 0x7E)
-            },
+            }),
             warning_surface: tok("highlight"),
             warning_text: if dark {
                 Rgba::rgb(0xFF, 0xD8, 0x80)
@@ -285,5 +304,52 @@ mod tests {
         // Dark roles come from the palette.
         assert_eq!(dark.background, Rgba::hex("#1A1A1C").unwrap());
         assert_eq!(dark.surface, Rgba::hex("#242428").unwrap());
+    }
+
+    #[test]
+    fn controls_follow_a_set_accent_and_keep_material_without_one() {
+        let purple = Rgba::rgb(0x67, 0x50, 0xA4);
+        // No theme, or one that only repeats the defaults: today's look.
+        let plain = Theme::new(false, &BTreeMap::new());
+        assert_eq!(plain.primary, purple);
+        assert_eq!(plain.on_primary, Rgba::rgb(0xFF, 0xFF, 0xFF));
+        assert_eq!(plain.switch_track_off, Rgba::rgb(0xE6, 0xE0, 0xE9));
+        assert_eq!(plain.switch_outline, Rgba::rgb(0x79, 0x74, 0x7E));
+        let mut defaults = EntityRecord::new();
+        for (t, light, dark) in THEME_DEFAULTS {
+            defaults.set(*t, light.to_lowercase());
+            defaults.set(format!("{t}_dark"), *dark);
+        }
+        let entities = BTreeMap::from([(THEME_ENTITY.to_owned(), defaults)]);
+        assert_eq!(Theme::new(false, &entities).primary, purple);
+        assert_eq!(
+            Theme::new(true, &entities).primary,
+            Rgba::hex("#D9C8FF").unwrap()
+        );
+
+        // A pod that sets its accent gets it on its controls in light mode.
+        let mut e = EntityRecord::new();
+        e.set("accent", "#2D5E4D");
+        e.set("muted_surface", "#E4ECE8");
+        e.set("muted_text", "#5E6B66");
+        let entities = BTreeMap::from([(THEME_ENTITY.to_owned(), e.clone())]);
+        let light = Theme::new(false, &entities);
+        assert_eq!(light.primary, Rgba::hex("#2D5E4D").unwrap());
+        assert_eq!(light.on_primary, Rgba::rgb(0xFF, 0xFF, 0xFF));
+        assert_eq!(light.switch_track_off, Rgba::hex("#E4ECE8").unwrap());
+        assert_eq!(light.switch_outline, Rgba::hex("#5E6B66").unwrap());
+
+        // `on_accent`, the pod's own token, is what goes on the fill.
+        e.set("on_accent", "#102018");
+        e.set("on_accent_dark", "#0A0A0A");
+        let entities = BTreeMap::from([(THEME_ENTITY.to_owned(), e)]);
+        assert_eq!(
+            Theme::new(false, &entities).on_primary,
+            Rgba::hex("#102018").unwrap()
+        );
+        assert_eq!(
+            Theme::new(true, &entities).on_primary,
+            Rgba::hex("#0A0A0A").unwrap()
+        );
     }
 }

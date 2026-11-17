@@ -1362,17 +1362,25 @@ impl<'i> Build<'_, 'i> {
                 let fg = b.color.unwrap_or(theme.muted_text);
                 let label = ctx.text(text);
                 let i = self.icon(icon, fg, 14.0);
-                let t = self.text_leaf(
-                    Style::default(),
-                    label.clone(),
-                    type_for(TextStyle::Secondary),
-                    fg,
-                    None,
-                );
-                let sem = self.sem(b, n, Some(label), None);
+                // An icon-only badge is just its icon: no gap and no empty
+                // text beside it, so it centres where it is put (#325).
+                let kids = if label.is_empty() {
+                    vec![i]
+                } else {
+                    let t = self.text_leaf(
+                        Style::default(),
+                        label.clone(),
+                        type_for(TextStyle::Secondary),
+                        fg,
+                        None,
+                    );
+                    vec![i, t]
+                };
+                // Decorative alone: screen readers skip a badge with no text.
+                let sem = self.sem(b, n, Some(label).filter(|l| !l.is_empty()), None);
                 self.push(
                     row(4, pad(0, 0), AlignItems::CENTER),
-                    vec![i, t],
+                    kids,
                     Paint::None,
                     Some(sem),
                     false,
