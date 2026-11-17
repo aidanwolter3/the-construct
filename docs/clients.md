@@ -91,7 +91,9 @@ code form, a wrong code, home drawn, the cookie, a reload, a phone-sized window 
   the rest of decision `screen-sizes` follow the browser window, and `local://device#platform` is `web`.
 - **Fonts and images** are fetched, not built in: the faces before the first frame, the symbol and emoji fallbacks
   after it (`/web/fonts/<file>`). Images of other sites go through the pod's proxy (`/web/image`).
-- **Input**: click or tap, the wheel and touch drags scroll, typing goes through a hidden input, Escape is Back.
+- **Input**: click or tap, the wheel and touch drags scroll; a touch scroll goes on after the finger lifts and slows
+  down as on Android, and a touch catches it (decision [`web-touch-fling`](decisions/web-touch-fling.md)); typing
+  goes through a hidden input, Escape is Back.
 - **On staging**: `https://the-construct-pod.fly.dev/web` takes an admin pod's code, or a temporary pod's
   (`POST /v1/pods/temporary`); the image builds the client into `/web` (`deploy/pod.Dockerfile`).
 - **Public links**: with `CONSTRUCT_PUBLIC_WEB=1` too (staging has it), `/s/<link>` draws a pod's public copy for anyone, read-only:

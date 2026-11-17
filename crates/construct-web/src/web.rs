@@ -18,6 +18,7 @@ use construct_render::device_data;
 use construct_render::gpu::{Gpu, Renderer};
 use construct_render::interact::{Changes, Done, Loaded, Loader, Session, Write, Written};
 use construct_render::layout::Viewport;
+use construct_render::scroll::{Fling, Flinging, VelocityTracker};
 use construct_render::time::{Duration, Instant};
 use construct_render::viewer::{Controller, EditKey, Event};
 use protocol::{DataBundle, UiNode};
@@ -629,6 +630,25 @@ struct App {
     /// Where the primary pointer went down, and when; a drag that moves
     /// scrolls, one that doesn't is a tap.
     down: Option<(f32, f32, f32, f32, Instant, bool)>,
+    /// The finger's positions down the screen while it drags, for its speed
+    /// when it lifts.
+    tracker: VelocityTracker,
+    /// A touch scroll still moving after the finger lifted (decision
+    /// `web-touch-fling`): the renderer's fling, as the Android app flings,
+    /// and where it started.
+    fling: Option<(Flinging, f32, f32)>,
+}
+
+/// When an event happened (seconds on the page's clock), not when it is
+/// handled: while a frame is drawing, touches wait, and their speed must
+/// come from when they were made.
+fn event_secs(e: &PointerEvent) -> f64 {
+    e.time_stamp() / 1000.0
+}
+
+/// Seconds on the page's clock.
+fn secs() -> f64 {
+    window().performance().map_or(0.0, |p| p.now() / 1000.0)
 }
 
 impl App {
@@ -695,7 +715,23 @@ impl App {
     }
 
     /// Draws a frame when something changed.
+    /// Moves a fling on by what this frame's share of it is.
+    fn step_fling(&mut self) {
+        let Some((f, x, y)) = self.fling.as_mut() else {
+            return;
+        };
+        let (dy, done) = f.step(secs());
+        let (x, y) = (*x, *y);
+        if dy != 0.0 {
+            self.controller.handle(Event::Scroll { x, y, dy });
+        }
+        if done {
+            self.fling = None;
+        }
+    }
+
     fn frame(&mut self) {
+        self.step_fling();
         let due = self
             .controller
             .session
@@ -703,8 +739,11 @@ impl App {
             .is_some_and(|t| t <= Instant::now());
         // A slide, a spinner or a settling card draws every frame until done.
         let animating = self.controller.session.animating();
-        let dirty =
-            DIRTY.swap(false, Ordering::Relaxed) || self.controller.dirty || due || animating;
+        let dirty = DIRTY.swap(false, Ordering::Relaxed)
+            || self.controller.dirty
+            || due
+            || animating
+            || self.fling.is_some();
         if !dirty {
             return;
         }
@@ -854,6 +893,8 @@ async fn mount(session: Session) -> Result<(), JsValue> {
         input: input.clone(),
         drawn: u64::MAX,
         down: None,
+        tracker: VelocityTracker::new(),
+        fling: None,
     }));
     app.borrow_mut().resize();
     let _ = doc.body().map(|b| b.class_list().add_1("ready"));
@@ -876,7 +917,15 @@ async fn mount(session: Session) -> Result<(), JsValue> {
                 return;
             }
             let (x, y) = (e.offset_x() as f32, e.offset_y() as f32);
-            app.borrow_mut().down = Some((x, y, x, y, Instant::now(), false));
+            let mut a = app.borrow_mut();
+            // A finger landing on a moving fling catches it: it stops, and
+            // the touch is no tap.
+            let caught = a.fling.take().is_some_and(|(f, _, _)| f.caught(secs()));
+            a.tracker.clear();
+            a.tracker.add(event_secs(&e), y);
+            a.down = Some((x, y, x, y, Instant::now(), caught));
+            // Moves outside the canvas still belong to this drag.
+            let _ = a.canvas.set_pointer_capture(e.pointer_id());
         }
     });
     listen(&canvas, "pointermove", {
@@ -888,6 +937,7 @@ async fn mount(session: Session) -> Result<(), JsValue> {
             };
             let (x, y) = (e.offset_x() as f32, e.offset_y() as f32);
             let moved = moved || (x - x0).hypot(y - y0) > TAP_SLOP;
+            a.tracker.add(event_secs(&e), y);
             if moved && e.pointer_type() != "mouse" {
                 // A finger drags the content: it moves with it.
                 a.event(Event::Scroll {
@@ -901,17 +951,33 @@ async fn mount(session: Session) -> Result<(), JsValue> {
     });
     listen(&canvas, "pointerup", {
         let app = app.clone();
-        move |_: PointerEvent| {
+        move |e: PointerEvent| {
             let mut a = app.borrow_mut();
-            if let Some((x, y, _, _, at, moved)) = a.down.take()
-                && !moved
-            {
+            let Some((x, y, _, _, at, moved)) = a.down.take() else {
+                return;
+            };
+            if !moved {
                 if at.elapsed() >= LONG_PRESS {
                     a.event(Event::LongPress { x, y });
                 } else {
                     a.event(Event::Tap { x, y });
                 }
+            } else if e.pointer_type() != "mouse" {
+                // The content goes on at the finger's speed and slows down
+                // (the finger moving up scrolls forward).
+                let v = -a.tracker.velocity(event_secs(&e));
+                if let Some(f) = Fling::new(v) {
+                    a.fling = Some((Flinging::new(f, secs()), x, y));
+                    wake();
+                }
             }
+        }
+    });
+    // The browser took the touch over (or it left): no tap, no fling.
+    listen(&canvas, "pointercancel", {
+        let app = app.clone();
+        move |_: PointerEvent| {
+            app.borrow_mut().down = None;
         }
     });
     listen(&canvas, "wheel", {
