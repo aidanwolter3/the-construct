@@ -206,6 +206,9 @@ pub struct App {
     a11y: Option<A11y>,
     /// Frame diagnostics: one log line per burst of frames.
     perf: crate::perf::Recorder,
+    /// Whether the status and navigation bars were last told they are
+    /// over a light colour ([`Platform::system_bars`]).
+    light_bars: Option<[bool; 2]>,
 }
 
 impl App {
@@ -222,6 +225,7 @@ impl App {
             stretch: None,
             epoch: Instant::now(),
             waker: None,
+            light_bars: None,
             mods: ModifiersState::empty(),
             inbox: Default::default(),
             #[cfg(not(target_os = "android"))]
@@ -641,6 +645,8 @@ impl App {
         self.surface = Some(s);
         self.update_insets();
         self.update_dark();
+        // A new window: its bars are told again.
+        self.light_bars = None;
         Ok(())
     }
 
@@ -696,9 +702,11 @@ impl App {
             .create_view(&wgpu::TextureViewDescriptor::default());
         let px = (s.config.width, s.config.height);
         let t = Instant::now();
+        let mut bars = None;
         match self.controller.session.scene_and_text() {
             Ok((scene, text)) => {
                 stats.scene = t.elapsed();
+                bars = Some(scene.bars);
                 let t = Instant::now();
                 if let Err(e) = s.renderer.render(&s.gpu, &view, px, scene, text) {
                     log(&format!("draw failed: {e}"));
@@ -712,6 +720,14 @@ impl App {
         stats.present = t.elapsed();
         if let Some(p) = &self.platform {
             p.frame_drawn(stats.work());
+            // The bars' icons follow what this frame drew under them.
+            let light = bars.map(|b| b.map(|c| crate::style::Rgba(c).is_light()));
+            if let Some([status, nav]) = light
+                && light != self.light_bars
+            {
+                self.light_bars = light;
+                p.system_bars(status, nav);
+            }
         }
         let wants_next = flinging || self.controller.session.animating();
         if wants_next {

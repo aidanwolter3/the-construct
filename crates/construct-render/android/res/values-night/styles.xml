@@ -1,10 +1,11 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Dark mode (the system's): dark system bars with light icons, over the engine's dark page (#141318). -->
+<!-- Dark mode (the system's): as values/, edge to edge under transparent bars, with light icons over the engine's
+     dark page until the first frame sets them for what it draws. -->
 <resources>
     <style name="Construct" parent="@android:style/Theme.Material.NoActionBar">
         <item name="android:windowBackground">@color/construct_page_dark</item>
-        <item name="android:statusBarColor">@color/construct_page_dark</item>
-        <item name="android:navigationBarColor">@color/construct_page_dark</item>
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
         <item name="android:windowLightStatusBar">false</item>
         <item name="android:windowLightNavigationBar">false</item>
     </style>

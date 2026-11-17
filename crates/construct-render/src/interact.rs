@@ -2638,6 +2638,17 @@ impl Session {
             ..Default::default()
         };
         let mut keep_from = 0;
+        let insets = self.insets;
+        // The navigation bar's edge (top, right, bottom, left): the
+        // widest of the others (on its side in landscape, with buttons).
+        let nav_edge = if insets[2] >= insets[1].max(insets[3]) {
+            2
+        } else if insets[1] >= insets[3] {
+            1
+        } else {
+            3
+        };
+        let mut bars = [theme.background; 2];
         for &i in &visible {
             let p = self.progress(i, now);
             let (frame, content, _) = self.frame_rects(i);
@@ -2683,6 +2694,28 @@ impl Session {
             };
             let frame_now = [frame[0] + fx, frame[1] + fy, frame[2], frame[3]];
             let (laid, _) = e.laid.as_ref().expect("laid out");
+            let shown = p >= 0.5;
+            if !e.in_frame && shown {
+                match e.frame {
+                    Frame::Full => {}
+                    Frame::Dialog => bars = bars.map(|c| c.dimmed(0.32 * p)),
+                    Frame::Edge(edge) => {
+                        bars = bars.map(|c| c.dimmed(0.32 * p * (1.0 - drag)));
+                        let side = match edge {
+                            protocol::Edge::Top => 0,
+                            protocol::Edge::End => 1,
+                            protocol::Edge::Bottom => 2,
+                            protocol::Edge::Start => 3,
+                        };
+                        if side == 0 {
+                            bars[0] = theme.surface;
+                        }
+                        if side == nav_edge {
+                            bars[1] = theme.surface;
+                        }
+                    }
+                }
+            }
             if e.in_frame {
                 // A screen inside its layout's box slides in from the side.
                 let dx = (1.0 - p) * frame[2];
@@ -2710,6 +2743,13 @@ impl Session {
                         );
                         q.clip = [0.0, 0.0, w, h];
                         scene.draws.push(Draw::Quad(q));
+                    }
+                    // The page's own colour under the system bars, as each
+                    // edge of it is drawn.
+                    let edges = laid.edge_colors();
+                    inset_bands(&mut scene, frame_now, insets, &edges);
+                    if shown {
+                        bars = [edges[0], edges[nav_edge]].map(|c| c.unwrap_or(theme.background));
                     }
                     laid.emit_into(
                         &mut scene,
@@ -2810,6 +2850,7 @@ impl Session {
                 }
             }
         }
+        scene.bars = bars.map(|c| c.0);
         // Only the top layout (or sheet, with its scrim) answers taps.
         if keep_from > 0 {
             scene.semantics.drain(..keep_from);
@@ -4592,6 +4633,31 @@ fn bind_form_text(
     }
     out.push_str(rest);
     Value::String(out)
+}
+
+/// Paints a full-screen layout's page colours (`Laid::edge_colors`: top,
+/// right, bottom, left) into the window's insets around its frame `at`,
+/// where the system bars are drawn over it: they then show the page, not
+/// the theme's default. An edge without one keeps what is under it.
+fn inset_bands(scene: &mut Scene, at: [f32; 4], insets: [f32; 4], edges: &[Option<Rgba>; 4]) {
+    let [x, y, w, h] = at;
+    let [it, ir, ib, il] = insets.map(|v| v.max(0.0));
+    let bands = [
+        [x, y, w, it],
+        [x + w - ir, y + it, ir, h - it - ib],
+        [x, y + h - ib, w, ib],
+        [x, y + it, il, h - it - ib],
+    ];
+    for (band, color) in bands.into_iter().zip(edges) {
+        if let Some(c) = color
+            && band[2] > 0.0
+            && band[3] > 0.0
+        {
+            scene
+                .draws
+                .push(Draw::Quad(QuadInstance::fill(band, *c, 0.0)));
+        }
+    }
 }
 
 #[cfg(test)]

@@ -64,6 +64,12 @@ pub trait Platform {
     fn dark(&self) -> Option<bool> {
         None
     }
+    /// The colours drawn under the status bar and the navigation bar
+    /// changed between light and dark ([`crate::scene::Scene::bars`]):
+    /// `true` for a light one, which takes dark icons. Android sets its
+    /// bars' icons to match (the app draws edge to edge, under transparent
+    /// bars); a desktop window has none.
+    fn system_bars(&self, _light_status: bool, _light_nav: bool) {}
     /// The keyboard's own editing (Android's input connection: suggestions,
     /// autocorrect, composing), given the focused field as the engine has it
     /// (`None`: none is focused). Returns what the keyboard did since last

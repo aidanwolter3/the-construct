@@ -3,7 +3,7 @@ package org.theconstruct.android;
 import android.app.NativeActivity;
 import android.content.ClipData;
 import android.content.Intent;
-import android.content.res.Configuration;
+import android.graphics.Color;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
@@ -23,16 +23,13 @@ public final class ConstructActivity extends NativeActivity {
 
     private static final int PICK_IMAGES = 1;
 
-    /** The engine's dark page (res/values: construct_page_dark). */
-    private static final int PAGE_DARK = 0xFF141318;
-
     /** What the keyboard connects to (read from Rust, src/ime.rs). */
     public volatile TextInputView textInput;
 
     @Override
     protected void onCreate(Bundle state) {
         super.onCreate(state);
-        applySystemBars(getResources().getConfiguration());
+        edgeToEdge();
         textInput = TextInputView.attach(this);
         link(getIntent());
     }
@@ -46,35 +43,48 @@ public final class ConstructActivity extends NativeActivity {
     }
 
     /**
-     * The activity takes uiMode changes itself (the manifest), so the theme's system bars are not re-applied when the
-     * system switches between light and dark: set them here, or the status bar keeps the launch mode's icon colour.
+     * The engine draws edge to edge: under transparent status and navigation bars, with no scrim, so whatever a
+     * layout paints there shows (it pads its content by the window insets itself, android.rs). The bars' icon colour
+     * follows what is drawn under them ({@link #setLightBars}, from Rust), not the night mode.
      */
-    @Override
-    public void onConfigurationChanged(Configuration config) {
-        super.onConfigurationChanged(config);
-        applySystemBars(config);
-    }
-
-    /** Light bars with dark icons, or dark bars with light icons, as the layouts draw (the theme does the same). */
-    private void applySystemBars(Configuration config) {
-        boolean dark = (config.uiMode & Configuration.UI_MODE_NIGHT_MASK) == Configuration.UI_MODE_NIGHT_YES;
+    private void edgeToEdge() {
         Window window = getWindow();
-        int color = dark ? PAGE_DARK : 0xFFFFFFFF;
-        window.setStatusBarColor(color);
-        window.setNavigationBarColor(color);
+        window.setStatusBarColor(Color.TRANSPARENT);
+        window.setNavigationBarColor(Color.TRANSPARENT);
+        if (Build.VERSION.SDK_INT >= 29) {
+            window.setStatusBarContrastEnforced(false);
+            window.setNavigationBarContrastEnforced(false);
+        }
         if (Build.VERSION.SDK_INT >= 30) {
-            WindowInsetsController bars = window.getInsetsController();
-            if (bars != null) {
-                int light = WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS
-                        | WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS;
-                bars.setSystemBarsAppearance(dark ? 0 : light, light);
-            }
+            window.setDecorFitsSystemWindows(false);
         } else {
             View decor = window.getDecorView();
-            int light = View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR | View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR;
-            int flags = decor.getSystemUiVisibility();
-            decor.setSystemUiVisibility(dark ? flags & ~light : flags | light);
+            decor.setSystemUiVisibility(decor.getSystemUiVisibility()
+                    | View.SYSTEM_UI_FLAG_LAYOUT_STABLE
+                    | View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
+                    | View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION);
         }
+    }
+
+    /** Dark icons on a bar over a light colour, light icons over a dark one (called from Rust). */
+    public void setLightBars(boolean lightStatus, boolean lightNav) {
+        runOnUiThread(() -> {
+            Window window = getWindow();
+            if (Build.VERSION.SDK_INT >= 30) {
+                WindowInsetsController bars = window.getInsetsController();
+                if (bars == null) return;
+                int status = WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS;
+                int nav = WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS;
+                bars.setSystemBarsAppearance((lightStatus ? status : 0) | (lightNav ? nav : 0), status | nav);
+            } else {
+                View decor = window.getDecorView();
+                int flags = decor.getSystemUiVisibility() & ~(View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR
+                        | View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR);
+                if (lightStatus) flags |= View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR;
+                if (lightNav) flags |= View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR;
+                decor.setSystemUiVisibility(flags);
+            }
+        });
     }
 
     private static void link(Intent intent) {

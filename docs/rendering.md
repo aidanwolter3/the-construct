@@ -39,7 +39,7 @@ PNG / WebP (encode.rs)                 HeadlessSurface (readback) or a window / 
 | `remote` | `PodClient`: a session fetched straight from the pod (`construct-sim`'s live mode), and the device data builders both use (feature `remote`) |
 | `pods` | A device's own pod: the pod it opened last, its engine, the pod's sign-in screen, leaving and reloading (features `remote` and `window`); shared by Android and the desktop viewer |
 | `signin` | `SignIn`: how a platform signs in to an upstream (its browser, and the redirect for a server: loopback on desktops, the App Link or `construct://oauth` on Android) (feature `remote`) |
-| `platform` | `Platform`: what the app needs from the system it runs on (keyboard, insets, browser, clipboard, photo picker, events, the pod's saved session), implemented per platform |
+| `platform` | `Platform`: what the app needs from the system it runs on (keyboard, insets, the system bars' icons, browser, clipboard, photo picker, events, the pod's saved session), implemented per platform |
 | `android` | `android_main` for the NativeActivity (Android builds with `window`) |
 | `bridge` | The Rust side of the Android bridge (`android/java`): links (the sign-in redirect), the photo picker's result, messages |
 | `push` | Push while the app is closed: Web Push keys and decryption, endpoints and notification taps (feature `remote`); on Android the UnifiedPush receiver's native methods, registration and notifications |
@@ -201,23 +201,38 @@ device-to-device transfers (`allowBackup="false"` and `android/res/xml/data_extr
 engine's cache and the push keys stay on the device.
 
 winit makes one event loop per process while Android keeps the process after the activity goes, so the process ends
-with its activity (when it is finishing or destroyed) and every launch starts afresh. The app targets SDK 34, so the
-system keeps its window below the status bar and camera cutout and resizes it for the keyboard; a tapped text field
-opens the keyboard, and Back pops the stack. The layout stays inside the window insets Android reports
-(`getRootWindowInsets`: system bars, camera cutout and keyboard), logged as they change. Its theme draws light system
-bars with dark icons; in dark mode (`values-night`), dark bars with light icons. The layouts follow the system's
-mode: `Configuration.uiMode` read through JNI after each batch of events. The activity handles `uiMode` changes
-itself (no restart), so it sets the system bars' colour and icons again in `onConfigurationChanged`, as the theme
-would. `local:servers` offers Staging, Local emulator (`10.0.2.2:8080`), Local USB (`127.0.0.1:8080`, with
-`adb reverse`) and the saved server when it is another; `set_server` switches as on the desktop.
+with its activity (when it is finishing or destroyed) and every launch starts afresh. A tapped text field opens the
+keyboard, and Back pops the stack.
+
+**Edge to edge.** The app draws under transparent status and navigation bars, with no scrim (the theme XML and
+`ConstructActivity.edgeToEdge`: `setDecorFitsSystemWindows(false)` on Android 11+, the `LAYOUT_STABLE`,
+`LAYOUT_FULLSCREEN` and `LAYOUT_HIDE_NAVIGATION` flags before; the contrast scrims off on 10+). A NativeActivity takes
+the whole window's surface, so the content doesn't move: the layout's root is padded by the window insets Android
+reports (`getRootWindowInsets`: system bars, camera cutout and keyboard, logged as they change), once. What shows
+under the bars is each screen's own page, not a fixed colour: for the top full-screen layout (the root or a pushed
+screen) the scene paints its page colour into the insets, edge by edge (`Laid::edge_colors`: the opaque, square box
+drawn last across that whole edge, outside any scrolling view: a `core://Box` with `fill` and a `background` such as
+`${local://theme#page}`, or a coloured header across the top), else the theme's background shows there. Sheets and
+panels draw as before (a bottom sheet's surface reaches the bottom edge). The scene's `bars` are the colours under the
+status bar and the navigation bar (dimmed by a dialog's or sheet's scrim, covered by a sheet); when either changes
+between light and dark (WCAG luminance), the window calls `Platform::system_bars` and Android sets the bars' icons
+(`ConstructActivity.setLightBars`: `APPEARANCE_LIGHT_STATUS_BARS` and `APPEARANCE_LIGHT_NAVIGATION_BARS`, the
+`SYSTEM_UI_FLAG_LIGHT_*` flags before Android 11). So a pod's theme or layout change shows under the bars with no app
+update; the desktop and the simulator have no bars and ignore the call. The theme XML's light or dark icons and window
+background (the engine's default page) are only the launch's, until the first frame.
+
+The layouts follow the system's mode: `Configuration.uiMode` read through JNI after each batch of events. The activity
+handles `uiMode` changes itself (no restart); the next frame's `bars` set the icons again. `local:servers` offers
+Staging, Local emulator (`10.0.2.2:8080`), Local USB (`127.0.0.1:8080`, with `adb reverse`) and the saved server when
+it is another; `set_server` switches as on the desktop.
 
 ### The Android bridge
 
 A NativeActivity gets none of the Android callbacks that arrive through Java: a link opening the app, an activity
 result, a broadcast while the app is closed. `android/java` holds a small bridge that passes them to Rust and holds no
-app logic: `ConstructActivity` (NativeActivity plus `onNewIntent` and `onActivityResult`, and `pickImages` and
-`askPermission` that Rust calls), `ConstructReceiver` (a message, also while the app is closed), `PushReceiver` and
-`NativePush` (push, below), `Native` (the
+app logic: `ConstructActivity` (NativeActivity plus `onNewIntent` and `onActivityResult`, and `pickImages`,
+`askPermission` and `setLightBars` that Rust calls), `ConstructReceiver` (a message, also while the app is closed),
+`PushReceiver` and `NativePush` (push, below), `Native` (the
 native methods, `Java_org_theconstruct_android_Native_*` in `src/bridge.rs`), and the keyboard's `TextInputView`,
 `TextInput` and `NativeText` (`src/ime.rs`, above). The script compiles them with `javac`
 and `d8` into the APK's `classes.dex`. Events queue in `bridge.rs`, wake the window and reach it through
