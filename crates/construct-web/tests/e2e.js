@@ -13,10 +13,13 @@ async function watchFiles(page) {
   const cdp = await page.context().newCDPSession(page);
   await cdp.send('Network.enable');
   const files = new Map();
-  cdp.on('Network.responseReceived', ({ response: r }) => {
+  const cached = new Set(); // requests the browser answered from its memory cache
+  cdp.on('Network.requestServedFromCache', ({ requestId }) => cached.add(requestId));
+  cdp.on('Network.responseReceived', ({ requestId, response: r }) => {
     const path = new URL(r.url).pathname;
     if (!/^\/web\/.+\.(js|wasm|css|ttf)$/.test(path)) return;
-    files.set(path, r.fromDiskCache || r.fromMemoryCache ? 'cache' : r.status === 304 ? '304' : 'network');
+    const fromCache = r.fromDiskCache || cached.has(requestId);
+    files.set(path, fromCache ? 'cache' : r.status === 304 ? '304' : 'network');
   });
   return files;
 }
