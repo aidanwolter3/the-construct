@@ -44,6 +44,10 @@ const PAGE_CSP: &str = "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'
     style-src 'self'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; \
     base-uri 'none'; form-action 'self'";
 
+/// A proxied image's policy: opened on its own (not drawn by the client), it
+/// loads and runs nothing.
+const IMAGE_CSP: &str = "default-src 'none'; sandbox";
+
 /// Largest image the proxy passes on.
 const MAX_IMAGE_BYTES: usize = 10 << 20;
 
@@ -441,7 +445,7 @@ async fn proxy_image(url: reqwest::Url) -> Response {
         .and_then(|v| v.to_str().ok())
         .unwrap_or("")
         .to_owned();
-    if !resp.status().is_success() || !kind.starts_with("image/") {
+    if !resp.status().is_success() || !is_raster_image(&kind) {
         return json_error(StatusCode::BAD_GATEWAY, json!({ "error": "not_an_image" }));
     }
     let mut bytes = Vec::new();
@@ -451,14 +455,67 @@ async fn proxy_image(url: reqwest::Url) -> Response {
         }
         bytes.extend_from_slice(&chunk);
     }
+    image_response(&kind, bytes)
+}
+
+/// An image type the proxy passes on: not SVG, a document that runs scripts
+/// when opened on this site (and the client's decoder can't draw it).
+fn is_raster_image(kind: &str) -> bool {
+    let kind = kind.trim().to_ascii_lowercase();
+    kind.starts_with("image/") && !kind.starts_with("image/svg")
+}
+
+/// Another site's image as this site serves it: never read as anything but
+/// its type, and opened on its own it runs nothing.
+fn image_response(kind: &str, bytes: Vec<u8>) -> Response {
     let mut r = Response::new(Body::from(bytes));
     let h = r.headers_mut();
-    if let Ok(v) = HeaderValue::from_str(&kind) {
+    if let Ok(v) = HeaderValue::from_str(kind) {
         h.insert(header::CONTENT_TYPE, v);
     }
     h.insert(
         header::CACHE_CONTROL,
         HeaderValue::from_static("private, max-age=3600"),
     );
+    h.insert(
+        header::X_CONTENT_TYPE_OPTIONS,
+        HeaderValue::from_static("nosniff"),
+    );
+    h.insert(
+        header::CONTENT_SECURITY_POLICY,
+        HeaderValue::from_static(IMAGE_CSP),
+    );
     r
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_proxy_passes_raster_images_only() {
+        for kind in ["image/png", "image/jpeg", "image/webp", "image/gif"] {
+            assert!(is_raster_image(kind), "{kind}");
+        }
+        for kind in [
+            "image/svg+xml",
+            "Image/SVG+XML; charset=utf-8",
+            " image/svg+xml",
+            "text/html",
+            "",
+        ] {
+            assert!(!is_raster_image(kind), "{kind}");
+        }
+    }
+
+    #[test]
+    fn a_proxied_image_runs_nothing_opened_on_its_own() {
+        let r = image_response("image/png", vec![1, 2, 3]);
+        let h = r.headers();
+        assert_eq!(h[header::CONTENT_TYPE], "image/png");
+        assert_eq!(h[header::X_CONTENT_TYPE_OPTIONS], "nosniff");
+        let csp = h[header::CONTENT_SECURITY_POLICY].to_str().unwrap();
+        assert!(csp.contains("default-src 'none'"), "{csp}");
+        assert!(csp.contains("sandbox"), "{csp}");
+    }
 }
