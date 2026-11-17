@@ -352,7 +352,8 @@ A collection can keep itself current from the web (decision
   daily cap per site, and a shared backoff after a site blocks the pod as an automated visitor). Model work runs
   through the agent module (`crates/agent`): the `model` jack, daily budgets per feature, retries.
 - **Modes:** `replace` (the filler's rows are its latest answer, kept stable by `key`, or without one by pairing
-  each item with the row it most resembles on the same `upcoming` day) or `upsert` by `key`.
+  each item with the row it most resembles on the same `upcoming` day) or `upsert` by `key`. A fill takes at most
+  200 items; with `upcoming`, past items don't count toward that, so they never crowd out upcoming ones.
 - **Locks:** a field a filler fills can't be set by hand on that filler's rows (409 `filled_by_filler`); on other
   fillers' rows and people's rows it stays editable, since the filler never writes them. A per-row filler
   (`url_field`, `query_field`) fills every row with a source, so its fields are locked on every row, creates
