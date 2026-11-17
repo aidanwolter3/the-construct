@@ -178,7 +178,12 @@ a component by reference to keep it current, or read it (get_layout, get_compone
 it. list_layouts lists layouts and blueprints, list_parts blueprints' parts, list_components components. Call \
 list_data_sources and describe_vocabulary first and sample_data to see real fields. Every write is validated \
 (errors give a JSON pointer and what is allowed) and appears live on the user's devices; each name keeps its \
-history, and restore_version moves a layout back to an earlier one. The vocabulary is plumbing (what the app \
+history, and restore_version moves a layout back to an earlier one. Before changing anything the user sees (\"my \
+notifications\", \"the shopping screen\"), find what is drawn there: start at home and follow its references \
+(embeds, components, links and gestures) to the element on that screen; list_layouts and get_layout give each \
+layout's path from home (reached) and flag a layout copied from a blueprint (copy_of). Change that element, not \
+the blueprint it may have started from: a copy doesn't follow its blueprint, and a blueprint changes only with the \
+server. Then look at it with render_layout_preview. The vocabulary is plumbing (what the app \
 draws) and porcelain: components, used with {\"type\": \"core://Use\", \"ref\": \"@core/<name>\" or \
 \"@me/<name>\", \"args\", \"children\"} and expanded by the app. Prefer a component over repeating nodes, and \
 define one (define_component, or copy_component to change a @core/ one) when a piece repeats across layouts. \
@@ -263,7 +268,7 @@ fn base_tools() -> Vec<Value> {
         ),
         tool(
             "list_layouts",
-            "The user's layouts (home first, with the feeds every layout may bind; each with its element and its history's newest version) and the blueprints layouts can use (@core/<id>, with their feeds).",
+            "The user's layouts (home first, with the feeds every layout may bind; each with its element, its history's newest version, reached: how the user gets to it from home (e.g. home → (on_swipe_down, Overlay from top) → c-...), or that home doesn't reach it, and copy_of: the blueprint it looks copied from, which it doesn't follow) and the blueprints layouts can use (@core/<id>, with their feeds, reached, used_by: the layouts that use them, and copies).",
             json!({}),
             &[],
         ),
@@ -281,7 +286,7 @@ fn base_tools() -> Vec<Value> {
         ),
         tool(
             "get_layout",
-            "A layout or blueprint (now, or one entry of its name's history), its element and needs, and its history. expanded: true adds what clients get (components expanded to plumbing).",
+            "A layout or blueprint (now, or one entry of its name's history), its element and needs, its history, reached (how the user gets to it from home, or that home doesn't reach it) and copy_of (the blueprint it looks copied from, which it doesn't follow). expanded: true adds what clients get (components expanded to plumbing).",
             json!({ "id": id, "version": { "type": "integer" }, "expanded": { "type": "boolean" } }),
             &["id"],
         ),

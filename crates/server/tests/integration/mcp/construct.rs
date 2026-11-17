@@ -515,3 +515,96 @@ async fn a_change_set_edits_and_checks_the_constructs_layouts() {
     let d = ok("describe_collection", json!({"collection": "books"})).await;
     assert_eq!(d["latest_version"], 2, "nothing applied: {d}");
 }
+
+/// Decision `trace-from-home`: list_layouts and get_layout say how the user
+/// reaches each layout from home, and flag a layout copied from a
+/// blueprint, which doesn't follow it (a home whose swipe down opens its
+/// own copy of the inbox never shows a change to `@core/inbox`).
+#[tokio::test]
+async fn layouts_say_how_home_reaches_them_and_which_are_copies() {
+    let env = env().await;
+    let pod_code = env.pod("mine").await;
+    let access = env.connect(&pod_code).await;
+    let (err, copy) = env
+        .tool(&access, "create_layout", json!({"title": "Notifications",
+            "layout": {"type": "core://Page", "title": "Notifications", "root": {"type": "core://Column",
+                "children": [{"type": "core://Text", "style": "Body", "value_expr": "My inbox"}]}}}))
+        .await;
+    assert!(!err, "{copy}");
+    let copy = copy["id"].as_str().unwrap().to_owned();
+    let (err, lone) = env
+        .tool(
+            &access,
+            "create_layout",
+            json!({"title": "Drafts",
+            "layout": {"type": "core://Page", "title": "Drafts", "root": {"type": "core://Text",
+                "style": "Body", "value_expr": "Nothing yet"}}}),
+        )
+        .await;
+    assert!(!err, "{lone}");
+    let lone = lone["id"].as_str().unwrap().to_owned();
+    let (err, h) = env
+        .tool(&access, "update_layout", json!({"id": "home", "layout": {"type": "core://Page",
+            "title": "Home", "root": {"type": "core://Gesture",
+                "on_swipe_down": {"intent": "action.navigation.open", "ref": copy,
+                    "presentation": "Overlay", "edge": "top"},
+                "content": {"type": "core://Column", "children": [
+                    {"type": "core://Tappable", "content_description": "Settings",
+                     "on_click": {"intent": "action.navigation.open", "ref": "@core/settings",
+                        "presentation": "Panel"},
+                     "content": {"type": "core://Text", "style": "Body", "value_expr": "Settings"}}]}}}}))
+        .await;
+    assert!(!err, "{h}");
+
+    let (err, all) = env.tool(&access, "list_layouts", json!({})).await;
+    assert!(!err, "{all}");
+    let row = |id: &str| {
+        all["layouts"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|l| l["id"] == id)
+            .unwrap()
+            .clone()
+    };
+    assert_eq!(row("home")["reached"], "home");
+    assert_eq!(
+        row(&copy)["reached"],
+        format!("home → (on_swipe_down, Overlay from top) → {copy}")
+    );
+    assert_eq!(row(&copy)["copy_of"], "@core/inbox");
+    assert!(
+        row(&lone)["reached"]
+            .as_str()
+            .unwrap()
+            .starts_with("not reached from home"),
+        "{}",
+        row(&lone)
+    );
+    assert!(row(&lone).get("copy_of").is_none());
+    let inbox = all["blueprints"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|b| b["id"] == "inbox")
+        .unwrap()
+        .clone();
+    assert_eq!(inbox["copies"], json!([copy]));
+    assert!(inbox.get("reached").is_none(), "{inbox}");
+    let settings = all["blueprints"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|b| b["id"] == "settings")
+        .unwrap()
+        .clone();
+    assert_eq!(
+        settings["reached"],
+        "home → (on_click, Panel, \"Settings\") → @core/settings"
+    );
+
+    let (err, one) = env.tool(&access, "get_layout", json!({"id": copy})).await;
+    assert!(!err, "{one}");
+    assert_eq!(one["copy_of"], "@core/inbox");
+    assert!(one["reached"].as_str().unwrap().contains("on_swipe_down"));
+}
