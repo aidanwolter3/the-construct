@@ -106,9 +106,7 @@ pub fn derive(
             }
         }
     }
-    let mut features: Vec<&str> = serde_json::from_value::<protocol::UiNode>(node)
-        .map(|n| protocol::required_features(&n))
-        .unwrap_or_default();
+    let mut features = drawn_features(&node);
     // Bindings between layouts are drawn by the engine, not the renderer: an
     // element that binds or reads them needs a client that fills them in.
     let binds = m
@@ -150,6 +148,89 @@ fn collect_paths(v: &Value, data: &mut BTreeSet<String>, endpoints: &mut BTreeSe
         }
         Value::Array(a) => a.iter().for_each(|c| collect_paths(c, data, endpoints)),
         _ => {}
+    }
+}
+
+/// The features a client needs to draw `node` (an element materialized).
+/// A component's own template still holds the nodes only expansion reads:
+/// they count as what they expand to, not as unknown node types (the
+/// removed `legacy_nodes`, which no client draws, so sealing passed over
+/// the element for an older entry of its name).
+fn drawn_features(node: &Value) -> Vec<&'static str> {
+    serde_json::from_value::<protocol::UiNode>(as_expanded(node))
+        .map(|n| protocol::required_features(&n))
+        .unwrap_or_default()
+}
+
+/// A migration step (scope `construct`): the features of the stored
+/// component elements that were recorded with `legacy_nodes` from their own
+/// `core://IfArg`, `core://Fragment` or `core://Children`, derived again
+/// with [`drawn_features`], so a client is served their name's current
+/// element rather than an older one.
+pub fn rederive_component_features(tx: &rusqlite::Transaction<'_>) -> rusqlite::Result<()> {
+    let ids: Vec<String> = {
+        let mut stmt = tx.prepare(
+            "SELECT hash FROM objects WHERE (',' || features || ',') LIKE '%,legacy_nodes,%'",
+        )?;
+        stmt.query_map([], |r| r.get(0))?
+            .collect::<rusqlite::Result<_>>()?
+    };
+    let objects = super::write::ConnObjects::new(tx);
+    let mut fixed = 0;
+    for id in ids {
+        let Some(el) = objects.object(&id) else {
+            continue;
+        };
+        if !matches!(
+            construct_elements::materialize::element_def(&el),
+            Ok(Some(_))
+        ) {
+            continue;
+        }
+        let Ok(m) = construct_elements::materialize(&objects, &id) else {
+            continue;
+        };
+        let features = drawn_features(&m.node).join(",");
+        fixed += tx.execute(
+            "UPDATE objects SET features = ?1 WHERE hash = ?2",
+            rusqlite::params![features, id],
+        )?;
+    }
+    if fixed > 0 {
+        tracing::info!(fixed, "component elements' features derived again");
+        cstore::bump_generation(tx)?;
+    }
+    Ok(())
+}
+
+/// `v` with a template's `core://IfArg` as both its branches,
+/// `core://Fragment` as its children and `core://Children` as none: what
+/// any expansion of it can draw, for its features.
+fn as_expanded(v: &Value) -> Value {
+    use construct_elements::def::{CHILDREN_TYPE, FRAGMENT_TYPE, IF_ARG_TYPE};
+    let column = |children: Vec<Value>| json!({ "type": "core://Column", "children": children });
+    match v {
+        Value::Object(o) => match o.get("type").and_then(Value::as_str) {
+            Some(IF_ARG_TYPE) => column(
+                ["then", "else"]
+                    .iter()
+                    .filter_map(|k| o.get(*k).filter(|b| !b.is_null()))
+                    .map(as_expanded)
+                    .collect(),
+            ),
+            Some(FRAGMENT_TYPE) => column(
+                o.get("children")
+                    .and_then(Value::as_array)
+                    .into_iter()
+                    .flatten()
+                    .map(as_expanded)
+                    .collect(),
+            ),
+            Some(CHILDREN_TYPE) => column(Vec::new()),
+            _ => Value::Object(o.iter().map(|(k, c)| (k.clone(), as_expanded(c))).collect()),
+        },
+        Value::Array(a) => Value::Array(a.iter().map(as_expanded).collect()),
+        other => other.clone(),
     }
 }
 
@@ -369,6 +450,11 @@ impl Builder<'_> {
             if let Some(t) = crate::validate::unknown_node_types(&node).first() {
                 return Err(fail(format!("expands to an unknown node type '{t}'")));
             }
+            // The limits a saved or served layout is held to (a corner of
+            // at most 512 dp, known icons): a component past them would
+            // break every layout that uses it.
+            crate::validate::check_node_values(&node)
+                .map_err(|e| fail(format!("expands to an invalid layout: {e}")))?;
             if let Some(f) = protocol::required_features(&node)
                 .into_iter()
                 .find(|f| protocol::is_retired(f))
@@ -913,4 +999,56 @@ pub fn plumbing(core: &Core, v: &Value) -> Result<Value, String> {
     construct_elements::materialize(&objects, &id)
         .map(|m| m.node)
         .map_err(|e| e.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::store::Store;
+
+    fn component() -> Value {
+        json!({"kind": "element", "doc": "A row.", "children": true, "examples": [],
+            "params": [{"name": "chevron", "type": "bool", "default": false, "doc": "A ›"}],
+            "node": {"type": "core://Row", "children": [
+                {"type": "core://Children"},
+                {"type": "core://IfArg", "arg": "chevron",
+                    "then": {"type": "core://Text", "style": "Title", "value_expr": "›"}}]}})
+    }
+
+    #[test]
+    fn a_templates_own_nodes_need_no_removed_vocabulary() {
+        let v = component();
+        let features = drawn_features(&v["node"]);
+        assert!(
+            !features.contains(&protocol::feature::LEGACY_NODES),
+            "{features:?}"
+        );
+        // A node no build knows still does.
+        let unknown = json!({"type": "core://Row", "children": [{"type": "core://Gone"}]});
+        assert!(drawn_features(&unknown).contains(&protocol::feature::LEGACY_NODES));
+    }
+
+    #[test]
+    fn components_recorded_with_removed_vocabulary_are_derived_again() {
+        let store = Store::open_in_memory().unwrap();
+        let comp = component();
+        let comp_id = object_id(&comp);
+        let other = json!({"kind": "element", "node": {"type": "core://Gone"}});
+        let other_id = object_id(&other);
+        store
+            .transaction(|tx| {
+                cstore::ensure_tables(tx)?;
+                cstore::put_object(tx, &comp_id, &comp, "legacy_nodes")?;
+                cstore::put_object(tx, &other_id, &other, "legacy_nodes")?;
+                rederive_component_features(tx)
+            })
+            .unwrap();
+        let features = |id: &str| store.with_conn(|c| cstore::object(c, id).unwrap().unwrap().1);
+        assert!(
+            !features(&comp_id).contains("legacy_nodes"),
+            "{}",
+            features(&comp_id)
+        );
+        assert_eq!(features(&other_id), "legacy_nodes", "not a component: left");
+    }
 }

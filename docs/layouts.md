@@ -225,7 +225,11 @@ A pod stores layouts and components as immutable elements behind names (decision
 Every piece of vocabulary above is a named feature, one file in `crates/protocol/features/`, and
 `protocol::required_features` maps a layout to the features it uses. Clients send the features they draw in
 `X-Construct-Features`, and the pod seals each client, for every name, the newest element it can fully draw (one
-that uses nothing newer, and nothing removed). See decision [`named-vocabulary`](decisions/named-vocabulary.md).
+that uses nothing newer, and nothing removed). A component's features are those of its template as any expansion
+draws it: `core://IfArg` counts as both its branches, `core://Fragment` as its children and `core://Children` as
+nothing (they once counted as the removed `legacy_nodes`, so a client was sealed an older element of a component
+that had one; the `construct` migration step `component_features` derives stored components' features again). See
+decision [`named-vocabulary`](decisions/named-vocabulary.md).
 
 - **Adding vocabulary** needs a client build: add the type or field to `protocol`, a feature file, an arm in
   `required_features`, drawing it in `crates/construct-render` (and `construct-sim` scripts if it adds
@@ -304,7 +308,9 @@ sees one and changing one needs no app build. Use one anywhere a node goes:
   `$arg.<name>` is an argument (a string that is only `"$arg.n"` keeps the argument's type; it may name a key too),
   `{"type": "core://Children"}` is where the caller's children go (`"at": i` for one), `{"type": "core://IfArg",
   "arg", "equals"?, "then", "else"?}` keeps a branch, and `{"type": "core://Fragment", "children"}` is several
-  siblings. Every example must expand to plumbing.
+  siblings. Every example must expand to plumbing a pod would save and serve: within the limits layouts are held
+  to (`corner_dp` at most 512, known icons, …). A server component that doesn't stops the server from starting
+  and names the file and example.
 - **Following and pinning.** Without `version` a use follows the component: the layout gets a new version when the
   component changes. With `version` it stays.
 - **Seeing the result.** MCP `expand` shows what a layout, a component use or any node becomes, and the features it

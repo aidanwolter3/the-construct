@@ -1,0 +1,63 @@
+{
+  "note": "A valid corner (512 dp, the most a layout may set; the renderer clamps it to half the box, so the circle stays round at any size), and examples with icons this build has: 999 dp and the icon 'home' failed validation",
+  "component": {
+    "doc": "An icon in a tinted circle (a list row's leading icon, a category): the circle in tint_bg, the icon in tint, centred. Until issue #325's renderer fix is in the app, an icon-only core://Badge draws 2 dp left of centre; this component leaves that to the renderer rather than padding around it.",
+    "params": [
+      {
+        "name": "icon",
+        "type": "text",
+        "doc": "An icon name or path:<svg path> (24x24, filled).",
+        "required": true
+      },
+      {
+        "name": "tint",
+        "type": "text",
+        "doc": "The icon's colour (#RRGGBB or a binding such as ${local://theme#accent}).",
+        "default": "${local://theme#accent}"
+      },
+      {
+        "name": "tint_bg",
+        "type": "text",
+        "doc": "The circle's colour (#RRGGBB or a binding such as ${local://theme#accent_surface}).",
+        "default": "${local://theme#accent_surface}"
+      },
+      {
+        "name": "size",
+        "type": "number",
+        "doc": "The circle's diameter in dp.",
+        "default": 34
+      }
+    ],
+    "template": {
+      "type": "core://Box",
+      "background": "$arg.tint_bg",
+      "content_color": "$arg.tint",
+      "corner_dp": 512,
+      "width_dp": "$arg.size",
+      "height_dp": "$arg.size",
+      "align": "Center",
+      "content": {
+        "type": "core://Badge",
+        "text": "",
+        "icon": "$arg.icon"
+      }
+    },
+    "examples": [
+      {
+        "args": {
+          "icon": "notifications"
+        },
+        "note": "a bell in the accent colours"
+      },
+      {
+        "args": {
+          "icon": "shopping_cart",
+          "tint": "${local://theme#error}",
+          "tint_bg": "${local://theme#error_surface}",
+          "size": 28
+        },
+        "note": "a smaller, warning-toned cart"
+      }
+    ]
+  }
+}
