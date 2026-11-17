@@ -45,6 +45,9 @@ scenario scroll-anchor home \
 construct crates/construct-sim/data/construct_anchor_above.json; wait 300; assert-text Item 30; shot rows-above"
 scenario tiles-home tiles_home \
   "shot top; scroll-to Photos; assert-text Read more; shot tiles"
+scenario screen-sizes screen_sizes \
+  "assert-text compact window; shot phone; screen tablet; assert-text medium window; shot tablet; \
+screen desktop; assert-text Shown only on a wide window; shot desktop"
 for page in home groceries log; do
   echo "== theme-$page"
   for mode in light dark; do

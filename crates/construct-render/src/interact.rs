@@ -164,6 +164,19 @@ pub struct Outcome {
     pub effects: Vec<Effect>,
 }
 
+/// The size class of a window this many points wide (feature
+/// `device_size`): `compact` under 600, `medium` under 840, else
+/// `expanded`, the common breakpoints of phone, tablet and desktop layouts.
+pub fn size_class(width: f32) -> &'static str {
+    if width < 600.0 {
+        "compact"
+    } else if width < 840.0 {
+        "medium"
+    } else {
+        "expanded"
+    }
+}
+
 /// Where an entry is drawn (decision `edge-overlays-and-gestures`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Frame {
@@ -2486,6 +2499,7 @@ impl Session {
         screen.set("loading", e.loading.is_some());
         screen.set("error", e.error.clone().unwrap_or_default());
         self.data.entities.insert("local://screen".into(), screen);
+        self.set_device_size();
         let vp = Viewport {
             width: size[0],
             height: size[1],
@@ -3065,6 +3079,21 @@ impl Session {
             self.insets = insets;
             self.invalidate();
         }
+    }
+
+    /// `local://device`'s `width_dp`, `height_dp` and `size_class`: the
+    /// window's size (feature `device_size`, decision `screen-sizes`), over
+    /// whatever device data the loader gave.
+    fn set_device_size(&mut self) {
+        let (w, h) = (self.viewport.width, self.viewport.height);
+        let device = self
+            .data
+            .entities
+            .entry("local://device".into())
+            .or_default();
+        device.set("width_dp", w.round() as i64);
+        device.set("height_dp", h.round() as i64);
+        device.set("size_class", size_class(w));
     }
 
     /// A new viewport (a window resize): the next frame lays out again.

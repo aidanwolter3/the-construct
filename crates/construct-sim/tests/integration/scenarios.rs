@@ -334,3 +334,28 @@ fn rows_added_above_the_scroll_position_dont_move_the_visible_row() {
     assert_ok(&runner.run(&step));
     assert!(near(y(&mut runner, &next), next_y));
 }
+
+/// Decision `screen-sizes`: one layout on three windows. The size is device
+/// data, the recipes fill as many columns as fit, and on a desktop the page
+/// stops at its `max_width_dp`, centred.
+#[test]
+fn one_layout_fits_a_phone_a_tablet_and_a_desktop() {
+    let (mut runner, results) = run(
+        "screen_sizes",
+        "assert-text compact window, 390 points wide; assert-no-text Shown only on a wide window; \
+         screen tablet; assert-text medium window, 820 points wide; \
+         screen desktop; assert-text expanded window, 1280 points wide; \
+         assert-text Shown only on a wide window",
+        &out_dir("screen-sizes"),
+    );
+    assert_ok(&results);
+    let scene = runner.session.scene().unwrap();
+    let card = |i: u32| scene.find_node(&format!("recipe:{i}")).unwrap().bounds;
+    // 1040 - 2 × 16 padding = 1008 for the cards: four of at least 240.
+    let (first, fourth, fifth) = (card(1), card(4), card(5));
+    assert!((first[1] - fourth[1]).abs() < 0.5, "{first:?} {fourth:?}");
+    assert!(fifth[1] > first[1], "the fifth starts a new row");
+    let (left, right) = (first[0], 1280.0 - (fourth[0] + fourth[2]));
+    assert!((left - right).abs() < 0.5, "centred: {left} {right}");
+    assert!((left - (120.0 + 16.0)).abs() < 0.5, "{left}");
+}

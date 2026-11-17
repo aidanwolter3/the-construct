@@ -1161,20 +1161,28 @@ impl<'i> Build<'_, 'i> {
                 padding_v_dp,
                 align,
                 justify,
+                max_width_dp,
             } => {
                 let kids = self.children(children, b, Axis::Column);
                 self.justify_children(&kids, *justify, Axis::Column);
-                self.push(
-                    column(
-                        *spacing_dp,
-                        pad(*padding_h_dp, *padding_v_dp),
-                        align_items(*align),
-                    ),
-                    kids,
-                    Paint::None,
-                    None,
-                    false,
-                )
+                let mut style = column(
+                    *spacing_dp,
+                    pad(*padding_h_dp, *padding_v_dp),
+                    align_items(*align),
+                );
+                if *max_width_dp > 0 {
+                    // At most this wide, centred: auto margins on both sides
+                    // take what it leaves (decision `screen-sizes`). Down a
+                    // column it is as wide as it may be (auto margins would
+                    // otherwise shrink it to its content).
+                    style.max_size.width = length(*max_width_dp as f32);
+                    if b.axis == Axis::Column {
+                        style.size.width = percent(1.0);
+                    }
+                    style.margin.left = auto();
+                    style.margin.right = auto();
+                }
+                self.push(style, kids, Paint::None, None, false)
             }
             UiNode::Row {
                 children,
@@ -1862,6 +1870,7 @@ impl<'i> Build<'_, 'i> {
                 focus,
                 indent,
                 stack,
+                min_column_dp,
             } => {
                 let Some(all) = ctx.query(query_key) else {
                     // Not loaded yet: nothing, as the app shows while loading.
@@ -1929,7 +1938,18 @@ impl<'i> Build<'_, 'i> {
                         ));
                     }
                 }
-                let cols = (*columns).max(1) as usize;
+                // Automatic columns (decision `screen-sizes`): a CSS grid of
+                // as many columns as fit, so cells go into it one by one.
+                let auto_cols = *min_column_dp > 0 && !*stack;
+                let mut spans = Vec::new();
+                if auto_cols {
+                    spans.extend(kids.iter().copied());
+                }
+                let cols = if auto_cols {
+                    1
+                } else {
+                    (*columns).max(1) as usize
+                };
                 let mut last_group: Option<String> = None;
                 let mut row_cells: Vec<usize> = Vec::new();
                 let flush = |this: &mut Self, cells: &mut Vec<usize>, kids: &mut Vec<usize>| {
@@ -1965,7 +1985,11 @@ impl<'i> Build<'_, 'i> {
                                 path: format!("{}/h{i}", b.path),
                                 ..ib.clone()
                             };
-                            kids.extend(self.node(&g.header, &hb));
+                            let header = self.node(&g.header, &hb);
+                            if auto_cols {
+                                spans.extend(header);
+                            }
+                            kids.extend(header);
                         }
                         if g.headers_only {
                             continue;
@@ -2034,7 +2058,25 @@ impl<'i> Build<'_, 'i> {
                     }
                 }
                 flush(self, &mut row_cells, &mut kids);
-                let style = column(*spacing_dp, pad(*padding_h_dp, 0), AlignItems::STRETCH);
+                let mut style = column(*spacing_dp, pad(*padding_h_dp, 0), AlignItems::STRETCH);
+                if auto_cols {
+                    style.display = Display::Grid;
+                    style.grid_template_columns = vec![repeat(
+                        RepetitionCount::AutoFill,
+                        vec![minmax(length(*min_column_dp as f32), fr(1.0))],
+                    )];
+                    style.gap.width = length(*spacing_dp as f32);
+                    // Group headers and the empty text span every column.
+                    for &k in &spans {
+                        let node = self.elems[k].node;
+                        let mut s = self.tree.style(node).cloned().unwrap_or_default();
+                        s.grid_column = Line {
+                            start: line(1),
+                            end: line(-1),
+                        };
+                        self.restyle(node, s);
+                    }
+                }
                 if *stack && let [top, behind] = kids[..] {
                     // Side by side in a row, the top card pulled back over
                     // the next (drawn first, so under it): the row is as

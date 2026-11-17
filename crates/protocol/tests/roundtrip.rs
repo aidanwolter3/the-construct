@@ -28,6 +28,7 @@ fn post_template(author_tag: Option<String>, items: ListBinding) -> UiNode {
         padding_v_dp: 0,
         align: Align::Start,
         justify: Justify::Start,
+        max_width_dp: 0,
         children: vec![
             UiNode::Row {
                 align: None,
@@ -179,6 +180,7 @@ fn full_workspace() -> UiNode {
                             padding_h_dp: 0,
                             focus: None,
                             stack: false,
+                            min_column_dp: 0,
                         },
                         UiNode::List {
                             query_key: "timeline:pinned".into(),
@@ -220,6 +222,7 @@ fn full_workspace() -> UiNode {
                             padding_h_dp: 12,
                             focus: None,
                             stack: false,
+                            min_column_dp: 0,
                         },
                     ],
                 },
