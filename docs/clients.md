@@ -65,7 +65,9 @@ server when it is another). The APK is built for arm64-v8a only.
 ## Web
 
 A prototype (decision [`web-client`](decisions/web-client.md)): `crates/construct-web` is the renderer compiled to
-WebAssembly and drawn into a `<canvas>` by its CPU rasterizer. The server serves it at `/web` only with
+WebAssembly and drawn into a `<canvas>` on the GPU: the renderer's wgpu pipeline over WebGL2 (decision
+[`web-gpu`](decisions/web-gpu.md)), or its CPU rasterizer where the browser has no WebGL2 (`?cpu` in the address
+forces it; `?webgpu` tries WebGPU). The server serves it at `/web` only with
 `CONSTRUCT_WEB=1`, from `CONSTRUCT_WEB_DIR` (default `target/web`):
 
 ```bash
@@ -98,8 +100,8 @@ code form, a wrong code, home drawn, the cookie, a reload, a phone-sized window 
 - **Not yet**: drags of cards, pagers and sheets; photo picking; upstream sign-ins (Pixelfed); notifications and an
   offline cache; screen readers (the canvas has no accessibility tree yet). It sends the features it can draw minus
   `media_picker`, `auth_login` and `device_notification_permission`, so the pod serves older versions without them.
-  The CPU rasterizer redraws the whole window on each frame, about 50 ms at 1280 × 800 and 90 ms at twice that
-  density, so scrolling a long page is not smooth; the renderer's GPU path is the way past that.
+  On the GPU a scroll redraws in a frame; on the CPU fallback a whole 1280 × 800 window takes about 50 ms (90 ms at
+  twice the density).
 
 ## Releases
 

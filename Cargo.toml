@@ -44,3 +44,11 @@ debug = "line-tables-only"
 
 [profile.dev.package."*"]
 debug = false
+
+# The web client's build (scripts/web_build.sh, decision `web-gpu`): optimized for size, since a browser
+# downloads it.
+[profile.web-release]
+inherits = "release"
+opt-level = "z"
+lto = true
+codegen-units = 1

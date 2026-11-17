@@ -7,7 +7,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 out=${1:-target/web}
-profile=release
+profile=web-release
 [ "${2:-}" = "--dev" ] && profile=dev
 want=$(grep -A1 '^name = "wasm-bindgen"$' Cargo.lock | grep version | cut -d'"' -f2)
 have=$(wasm-bindgen --version 2>/dev/null | cut -d' ' -f2 || true)
@@ -16,9 +16,9 @@ if [ "$want" != "$have" ]; then
   exit 1
 fi
 cargo build -q -p construct-web --target wasm32-unknown-unknown --profile "$profile"
-dir=$([ "$profile" = dev ] && echo debug || echo release)
+dir=$([ "$profile" = dev ] && echo debug || echo "$profile")
 mkdir -p "$out"
-wasm-bindgen --target web --no-typescript --out-dir "$out" "target/wasm32-unknown-unknown/$dir/construct_web.wasm"
+wasm-bindgen --target web --no-typescript --remove-name-section --remove-producers-section --out-dir "$out" "target/wasm32-unknown-unknown/$dir/construct_web.wasm"
 # The page, and the renderer's fonts, which the client fetches instead of carrying.
 cp crates/construct-web/static/* "$out/"
 mkdir -p "$out/fonts"

@@ -18,6 +18,10 @@ construct-render = { path = "../construct-render", default-features = false }
 serde_json.workspace = true
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
+# In a browser the renderer draws on the GPU (decision `web-gpu`): its wgpu
+# pipeline over WebGPU, else WebGL2 (wgpu's `webgl`).
+construct-render = { path = "../construct-render", default-features = false, features = ["gpu"] }
+wgpu = { version = "30", features = ["webgl"] }
 wasm-bindgen = "0.2"
 wasm-bindgen-futures = "0.4"
 js-sys = "0.3"
@@ -27,5 +31,5 @@ web-sys = { version = "0.3", features = [
     "CanvasRenderingContext2d", "ImageData", "CssStyleDeclaration", "DomTokenList", "Location",
     "Request", "RequestInit", "Response", "Headers", "ReadableStream", "ReadableStreamDefaultReader",
     "TextDecoder", "TextDecodeOptions", "EventTarget", "Event", "PointerEvent", "MouseEvent",
-    "WheelEvent", "KeyboardEvent",
+    "WheelEvent", "KeyboardEvent", "Node",
 ] }

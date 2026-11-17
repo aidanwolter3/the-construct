@@ -15,6 +15,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use construct_render::device_data;
+use construct_render::gpu::{Gpu, Renderer};
 use construct_render::interact::{Changes, Done, Loaded, Loader, Session, Write, Written};
 use construct_render::layout::Viewport;
 use construct_render::time::{Duration, Instant};
@@ -506,10 +507,123 @@ async fn load_fonts(files: &[&str]) {
 
 /// The app on a page: the canvas, a hidden text input for typing, and the
 /// session drawn into the canvas.
+/// What draws the frames: the GPU (WebGPU, else WebGL2) through the
+/// renderer's wgpu pipeline, or, where the browser has neither, the CPU
+/// rasterizer into a 2D canvas (decision `web-gpu`).
+enum Drawer {
+    Gpu(Box<GpuDrawer>),
+    Cpu(CanvasRenderingContext2d),
+}
+
+struct GpuDrawer {
+    gpu: Gpu,
+    surface: wgpu::Surface<'static>,
+    config: wgpu::SurfaceConfiguration,
+    renderer: Renderer,
+}
+
+impl GpuDrawer {
+    /// The GPU behind `canvas`: WebGL2, which every current browser has;
+    /// WebGPU with `?webgpu` in the address (not yet checked on real
+    /// hardware: headless Chromium's software WebGPU loses its device).
+    async fn new(
+        canvas: &HtmlCanvasElement,
+        images: &construct_render::images::ImageStore,
+    ) -> Result<GpuDrawer, String> {
+        let webgpu = window()
+            .location()
+            .search()
+            .unwrap_or_default()
+            .contains("webgpu");
+        let desc = wgpu::InstanceDescriptor {
+            backends: if webgpu {
+                wgpu::Backends::BROWSER_WEBGPU | wgpu::Backends::GL
+            } else {
+                wgpu::Backends::GL
+            },
+            ..wgpu::InstanceDescriptor::new_without_display_handle()
+        };
+        let instance = wgpu::util::new_instance_with_webgpu_detection(desc).await;
+        let surface = instance
+            .create_surface(wgpu::SurfaceTarget::Canvas(canvas.clone()))
+            .map_err(|e| e.to_string())?;
+        let gpu = Gpu::with_instance(instance, Some(&surface))
+            .await
+            .map_err(|e| e.to_string())?;
+        let caps = surface.get_capabilities(&gpu.adapter);
+        // A non-sRGB format blends as the CPU path does (as the desktop).
+        let format = caps
+            .formats
+            .iter()
+            .copied()
+            .find(|f| !f.is_srgb())
+            .or_else(|| caps.formats.first().copied())
+            .ok_or("the canvas supports no format")?;
+        let config = wgpu::SurfaceConfiguration {
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+            format,
+            width: canvas.width().max(1),
+            height: canvas.height().max(1),
+            present_mode: wgpu::PresentMode::AutoVsync,
+            alpha_mode: caps.alpha_modes[0],
+            view_formats: vec![],
+            desired_maximum_frame_latency: 2,
+            color_space: wgpu::SurfaceColorSpace::Auto,
+        };
+        surface.configure(&gpu.device, &config);
+        gpu.device
+            .on_uncaptured_error(std::sync::Arc::new(|e| log(&format!("GPU error: {e}"))));
+        let mut renderer = Renderer::new(&gpu, format);
+        renderer.images = Some(images.clone());
+        log(&format!("drawing on the GPU: {}", gpu.describe()));
+        Ok(GpuDrawer {
+            gpu,
+            surface,
+            config,
+            renderer,
+        })
+    }
+
+    fn resize(&mut self, w: u32, h: u32) {
+        self.config.width = w.max(1);
+        self.config.height = h.max(1);
+        self.surface.configure(&self.gpu.device, &self.config);
+    }
+
+    /// Draws the session's scene; false when there was no frame to draw on.
+    fn draw(&mut self, session: &mut Session) -> bool {
+        let frame = match self.surface.get_current_texture() {
+            wgpu::CurrentSurfaceTexture::Success(f) => f,
+            wgpu::CurrentSurfaceTexture::Suboptimal(_) | wgpu::CurrentSurfaceTexture::Outdated => {
+                self.surface.configure(&self.gpu.device, &self.config);
+                return false;
+            }
+            other => {
+                log(&format!("no frame: {other:?}"));
+                return false;
+            }
+        };
+        let view = frame
+            .texture
+            .create_view(&wgpu::TextureViewDescriptor::default());
+        let px = (self.config.width, self.config.height);
+        match session.scene_and_text() {
+            Ok((scene, text)) => {
+                if let Err(e) = self.renderer.render(&self.gpu, &view, px, scene, text) {
+                    log(&format!("drawing: {e}"));
+                }
+            }
+            Err(e) => log(&format!("drawing: {e}")),
+        }
+        self.gpu.queue.present(frame);
+        true
+    }
+}
+
 struct App {
     controller: Controller,
     canvas: HtmlCanvasElement,
-    ctx: CanvasRenderingContext2d,
+    drawer: Drawer,
     input: HtmlInputElement,
     drawn: u64,
     /// Where the primary pointer went down, and when; a drag that moves
@@ -545,6 +659,9 @@ impl App {
         let style = self.canvas.style();
         let _ = style.set_property("width", &format!("{}px", vp.width));
         let _ = style.set_property("height", &format!("{}px", vp.height));
+        if let Drawer::Gpu(g) = &mut self.drawer {
+            g.resize(self.canvas.width(), self.canvas.height());
+        }
         self.controller.handle(Event::Resized {
             width_px: (vp.width * vp.scale) as u32,
             height_px: (vp.height * vp.scale) as u32,
@@ -600,20 +717,31 @@ impl App {
         if session.scenes_built() == self.drawn {
             return;
         }
-        self.drawn = session.scenes_built();
-        match session.render_cpu() {
-            Ok(img) => {
-                let (w, h) = img.dimensions();
-                let data = web_sys::ImageData::new_with_u8_clamped_array_and_sh(
-                    wasm_bindgen::Clamped(img.as_raw()),
-                    w,
-                    h,
-                );
-                if let Ok(d) = data {
-                    let _ = self.ctx.put_image_data(&d, 0.0, 0.0);
+        match &mut self.drawer {
+            Drawer::Gpu(g) => {
+                if g.draw(session) {
+                    self.drawn = session.scenes_built();
+                } else {
+                    wake();
                 }
             }
-            Err(e) => log(&format!("drawing: {e}")),
+            Drawer::Cpu(ctx) => {
+                self.drawn = session.scenes_built();
+                match session.render_cpu() {
+                    Ok(img) => {
+                        let (w, h) = img.dimensions();
+                        let data = web_sys::ImageData::new_with_u8_clamped_array_and_sh(
+                            wasm_bindgen::Clamped(img.as_raw()),
+                            w,
+                            h,
+                        );
+                        if let Ok(d) = data {
+                            let _ = ctx.put_image_data(&d, 0.0, 0.0);
+                        }
+                    }
+                    Err(e) => log(&format!("drawing: {e}")),
+                }
+            }
         }
         if session.busy() {
             wake();
@@ -643,7 +771,7 @@ pub async fn start() -> Result<(), JsValue> {
     session.loader = Some(Box::new(loader.clone()));
     fetch_images(&session.images, "/web/image");
     loader.listen();
-    mount(session)
+    mount(session).await
 }
 
 /// A public link's page (decision `public-web-links`): its copy, drawn
@@ -662,21 +790,58 @@ pub async fn start_public(link: &str) -> Result<(), JsValue> {
         session.set_root(Default::default(), Some(item.to_owned()));
     }
     fetch_images(&session.images, &format!("{base}/image"));
-    mount(session)
+    mount(session).await
 }
 
 /// Puts a session on the page's canvas and runs it.
-fn mount(session: Session) -> Result<(), JsValue> {
+async fn mount(session: Session) -> Result<(), JsValue> {
+    // A panic says what it was in the console (else only "unreachable").
+    std::panic::set_hook(Box::new(|info| {
+        web_sys::console::error_1(&format!("construct-web: {info}").into())
+    }));
     session.images.set_waker(wake);
     let doc = window().document().ok_or("no document")?;
-    let canvas: HtmlCanvasElement = doc
+    let mut canvas: HtmlCanvasElement = doc
         .get_element_by_id("construct")
         .ok_or("no canvas")?
         .dyn_into()?;
-    let ctx: CanvasRenderingContext2d = canvas
-        .get_context("2d")?
-        .ok_or("no 2d context")?
-        .dyn_into()?;
+    // Sized before the GPU takes the canvas, so its first frame fits.
+    let ratio = window().device_pixel_ratio();
+    let inner = |v: Result<JsValue, JsValue>| v.ok().and_then(|v| v.as_f64()).unwrap_or(1.0);
+    canvas.set_width((inner(window().inner_width()) * ratio) as u32);
+    canvas.set_height((inner(window().inner_height()) * ratio) as u32);
+    // `?cpu` in the address draws on the CPU (to compare, or where a GPU
+    // misbehaves).
+    let want_gpu = !window()
+        .location()
+        .search()
+        .unwrap_or_default()
+        .contains("cpu");
+    let gpu = if want_gpu {
+        match GpuDrawer::new(&canvas, &session.images).await {
+            Ok(g) => Some(g),
+            Err(e) => {
+                log(&format!("no GPU, drawing on the CPU: {e}"));
+                // A canvas keeps the first kind of context it gave out: a
+                // fresh one for the 2D context.
+                let fresh: HtmlCanvasElement = canvas.clone_node()?.dyn_into()?;
+                canvas.replace_with_with_node_1(&fresh)?;
+                canvas = fresh;
+                None
+            }
+        }
+    } else {
+        None
+    };
+    let drawer = match gpu {
+        Some(g) => Drawer::Gpu(Box::new(g)),
+        None => Drawer::Cpu(
+            canvas
+                .get_context("2d")?
+                .ok_or("no 2d context")?
+                .dyn_into()?,
+        ),
+    };
     let input: HtmlInputElement = doc
         .get_element_by_id("construct-input")
         .ok_or("no input")?
@@ -685,7 +850,7 @@ fn mount(session: Session) -> Result<(), JsValue> {
     let app = Rc::new(RefCell::new(App {
         controller: Controller::new(session),
         canvas: canvas.clone(),
-        ctx,
+        drawer,
         input: input.clone(),
         drawn: u64::MAX,
         down: None,

@@ -48,8 +48,9 @@ PNG / WebP (encode.rs)                 HeadlessSurface (readback) or a window / 
 
 The pod builds the crate with `default-features = false`: no wgpu, CPU only.
 
-It also builds for the browser (`wasm32-unknown-unknown`, the web client, decision
-[`web-client`](decisions/web-client.md)). There the clock is the browser's (`crate::time`: std's `Instant` and
+It also builds for the browser (`wasm32-unknown-unknown`, the web client, decisions
+[`web-client`](decisions/web-client.md), [`web-gpu`](decisions/web-gpu.md)), with `gpu` (wgpu's WebGL2 backend;
+`Gpu::with_instance` asks a browser for WebGL2's limits). There the clock is the browser's (`crate::time`: std's `Instant` and
 `SystemTime` on native, `web_time`'s in a browser, where std's panic), dates use jiff's browser time zone and bundled
 database, images are cut on the caller's thread (no threads), and the fonts are not built in: the client fetches the
 files `text::FACE_FILES` names before its first frame and `text::FALLBACK_FILES` after, and hands them to
