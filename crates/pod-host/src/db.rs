@@ -118,6 +118,13 @@ const MIGRATIONS: &[Step] = &[
          PRIMARY KEY (link, hash)
      );",
     ),
+    // 5: who asked for a temporary pod (client address, the caller's own
+    // `X-Construct-Client` label, its User-Agent), so an operator can tell
+    // their own sessions and CI from someone else's.
+    Step::sql(
+        "pod_creators",
+        "ALTER TABLE pods ADD COLUMN created_by TEXT;",
+    ),
 ];
 
 /// What a credential is for (`credentials.kind`).
@@ -504,6 +511,26 @@ impl HostStore {
             params![token_hash, pod_id, now_secs()],
         )?;
         tx.commit()
+    }
+
+    /// Record who asked for a pod (temporary pods: see `pod_host::PodCreator`).
+    pub fn set_created_by(&self, pod_id: &str, created_by: &str) -> rusqlite::Result<()> {
+        self.conn().execute(
+            "UPDATE pods SET created_by = ?2 WHERE id = ?1",
+            params![pod_id, created_by],
+        )?;
+        Ok(())
+    }
+
+    /// Who asked for a pod, when that was recorded.
+    pub fn created_by(&self, pod_id: &str) -> rusqlite::Result<Option<String>> {
+        Ok(self
+            .conn()
+            .query_row("SELECT created_by FROM pods WHERE id = ?1", [pod_id], |r| {
+                r.get::<_, Option<String>>(0)
+            })
+            .optional()?
+            .flatten())
     }
 
     /// Stop a pod now: its tokens go, and the sweeper removes it.

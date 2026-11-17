@@ -87,11 +87,16 @@ variables `CONSTRUCT_*`; OAuth redirect `construct://oauth`.
 ## Staging
 
 Every push to `main` deploys the staging server, `https://the-construct-pod.fly.dev`, once the Rust job passes.
-To try it from a script, make a temporary pod (24 hours, deleted afterwards):
+To try it from a script, make a temporary pod (24 hours at most). Name yourself in `X-Construct-Client` (the server
+records it with your address, so its operator can tell their own callers from strangers'), and delete the pod when
+you are done so its slot is free for the next caller (staging holds 50):
 
 ```bash
-token=$(curl -fsS -X POST https://the-construct-pod.fly.dev/v1/pods/temporary | jq -r .session_token)
-curl -fsS -H "Authorization: Bearer $token" https://the-construct-pod.fly.dev/v1/construct | jq
+pod=https://the-construct-pod.fly.dev
+token=$(curl -fsS -X POST -H "X-Construct-Client: claude-session ${CLAUDE_CODE_SESSION_ID:-manual}" \
+  $pod/v1/pods/temporary | jq -r .session_token)
+curl -fsS -H "Authorization: Bearer $token" $pod/v1/construct | jq
+curl -fsS -X DELETE -H "Authorization: Bearer $token" $pod/v1/pods/temporary   # done with it
 ```
 
 Never put pod codes or tokens in git or files.

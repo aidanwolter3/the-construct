@@ -95,6 +95,7 @@ settings are logged at startup.
 | `CONSTRUCT_METRICS_ADDR` | unset | Serve Prometheus `GET /metrics` on this separate address. |
 | `CONSTRUCT_MONITOR_AUTH_FAILURES_PER_HOUR` | `20` | The monitoring source warns above this many wrong pod codes and unknown tokens an hour. |
 | `CONSTRUCT_MONITOR_LLM_TOKENS_PER_DAY` | `1000000` | It warns above this many model tokens a day. |
+| `CONSTRUCT_MONITOR_TEMP_PODS_PERCENT` | `80` | It warns once live temporary pods reach this share of `CONSTRUCT_TEMP_POD_MAX` (40 of 50), before new ones are refused. |
 | `CONSTRUCT_AGENTS_PRIVATE_HOSTS` | unset | `1`: the Agents source may sign in to a runner on any address over http (local development only); otherwise `https://` public hosts. |
 | `CONSTRUCT_SHOW_DEV_APPS` | unset | `1`: MCP also lists the dev blueprints and sources (`pixelfed_sample_no_login`; it works either way). |
 | `CONSTRUCT_TEST_HOOKS` | unset | `1` enables `POST /v1/test/fault` and local Web Push receivers. Tests only. |
@@ -128,7 +129,10 @@ server pods adopt <name> <path/to/server.db>   # turn a pre-pods single-user dat
 server pods remove-adopted [dir]               # delete the originals adopt left behind
 ```
 
-`list` shows, for each pod, whether it is on the content-addressed construct (`construct yes`). Every pod is on it
+`list` shows, for each pod, whether it is on the content-addressed construct (`construct yes`), and for a temporary
+pod who asked for it (`created by ip …, client "…", agent "…"`). A deleted pod stops at once (its tokens end and it no
+longer counts toward `CONSTRUCT_TEMP_POD_MAX`); `list` shows it as `deleted` until the sweeper removes its files and
+row, within 5 minutes. Every pod is on it
 (decision [`one-layout-system`](decisions/one-layout-system.md)): a pod still on the old layout system is converted
 when it next opens. The conversion draws each of its layouts both ways on empty data first and logs the result: one
 `info` line when every layout draws the same, a `warn` line per layout that differs (with its differences)
@@ -163,9 +167,18 @@ hour. They are how visitors and automated sessions try a deployed server:
 
 ```bash
 pod=https://the-construct-pod.fly.dev
-token=$(curl -fsS -X POST $pod/v1/pods/temporary | jq -r .session_token)
+token=$(curl -fsS -X POST -H "X-Construct-Client: my-script" $pod/v1/pods/temporary | jq -r .session_token)
 curl -fsS -H "Authorization: Bearer $token" $pod/v1/construct | jq      # {root, generation}
+curl -fsS -X DELETE -H "Authorization: Bearer $token" $pod/v1/pods/temporary   # done: free the slot now
 ```
+
+The server records who asked for each one: the client address (`Fly-Client-IP` behind Fly), the caller's own
+`X-Construct-Client` label and its `User-Agent`, in the host database and in the `temporary pod created` log line
+(refusals are logged the same way). `server pods list` shows it. The label is whatever the caller sends, so it is a
+hint next to the address, not proof: CI's smoke test sends `ci-smoke-test run <id>` and sessions `claude-session
+<id>`; a pod with no label, or a label from an address you don't know, is someone else's. The apps don't send a
+label yet. A temporary pod deletes itself with `DELETE /v1/pods/temporary` and its own token, as the deploy smoke test
+does when it finishes.
 
 ## Security defaults
 

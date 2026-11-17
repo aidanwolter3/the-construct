@@ -211,9 +211,10 @@ jobs:
           root=$(curl -fsS "$pod/v1/construct" | jq -er '.root')
           curl -fsS "$pod/v1/objects/$root" | jq -e '.kind == "element" and (tojson | contains("pod_token"))'
           # A temporary pod (deleted when it expires) serves its construct and its data. When staging already has
-          # its most temporary pods (CONSTRUCT_TEMP_POD_MAX; sessions and earlier smoke tests make them, and each
-          # lives 24 h), the server answers 503 temporary_pods_full: the deploy is fine, so warn and skip this part.
-          made=$(curl -sS -X POST "$pod/v1/pods/temporary" -w '\n%{http_code}')
+          # its most temporary pods (CONSTRUCT_TEMP_POD_MAX; sessions make them, and each lives 24 h unless deleted),
+          # the server answers 503 temporary_pods_full: the deploy is fine, so warn and skip this part.
+          made=$(curl -sS -X POST "$pod/v1/pods/temporary" -w '\n%{http_code}' \
+            -H "X-Construct-Client: ci-smoke-test run $GITHUB_RUN_ID")
           status=$(tail -n1 <<<"$made")
           if [ "$status" = 503 ] && head -n -1 <<<"$made" | jq -e '.error == "temporary_pods_full"' >/dev/null; then
             echo "::warning::Staging's temporary pods are full; the smoke test's temporary-pod checks were skipped."
@@ -221,6 +222,8 @@ jobs:
           fi
           [ "$status" = 200 ] || { echo "POST /v1/pods/temporary returned $status"; exit 1; }
           token=$(head -n -1 <<<"$made" | jq -er '.session_token')
+          # Give the slot back when done, pass or fail, instead of holding it for 24 h.
+          trap 'curl -sS -X DELETE -H "Authorization: Bearer $token" "$pod/v1/pods/temporary" || true' EXIT
           root=$(curl -fsS -H "Authorization: Bearer $token" "$pod/v1/construct" | jq -er '.root')
           curl -fsS -H "Authorization: Bearer $token" "$pod/v1/objects/$root" \
             | jq -e '.kind == "element" and .node.id == "home"'

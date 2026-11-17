@@ -113,8 +113,10 @@ Habits that avoid known traps:
   PR.
 
 **Staging** needs a pod token: make a temporary one with
-`curl -fsS -X POST https://the-construct-pod.fly.dev/v1/pods/temporary | jq -r .session_token` and send it as
-`Authorization: Bearer <token>`; in the simulator, click "Try a temporary pod". Never put pod codes in git or files.
+`curl -fsS -X POST -H "X-Construct-Client: claude-session $CLAUDE_CODE_SESSION_ID" https://the-construct-pod.fly.dev/v1/pods/temporary | jq -r .session_token`
+and send it as `Authorization: Bearer <token>`; in the simulator, click "Try a temporary pod". Staging holds 50
+temporary pods: when done, delete yours with `curl -fsS -X DELETE -H "Authorization: Bearer <token>"
+https://the-construct-pod.fly.dev/v1/pods/temporary`. Never put pod codes in git or files.
 Staging's image is Debian slim (it carries Chromium for rendered fillers), but manage pods with the
 `server pods …` subcommands ([docs/server.md](docs/server.md)).
 
