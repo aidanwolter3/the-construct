@@ -27,7 +27,9 @@ served to anyone with the link by the web client. Only where the host allows it 
   - **taken out**: controls whose intent writes, loads or goes elsewhere (a tappable keeps its content; a button
     goes), embeds of other layouts, screens. Kept intents: `action.navigation.back`, `action.local.set` and
     `action.link.open` (its URL is in the review);
-  - **Collections only**: a layout whose data is anything else (Pixelfed, Events) is refused; the theme
+  - **only data its source lets out**: each source says which of its data a public link may carry
+    (`Source::public_data`, URI and query prefixes; none by default, so the core names no source). Collections
+    lets its rows out; a layout that draws anything else (Pixelfed, Events) is refused. The theme
     (`core://theme`, colours) goes too;
   - **only what shows**: rows the copy's lists hold (or only `rows`, or the `item` drawn as `$item`), each with
     only the fields the layout reads (`$item.<f>`, `#<f>`, quoted names); a field the page doesn't show never
@@ -40,7 +42,7 @@ served to anyone with the link by the web client. Only where the host allows it 
   (`pub-` and 32 base32 characters). `GET /s/<link>` is the web client's page titled with the copy's title (for link
   previews; `noindex`), `/s/<link>/view` the copy, `/s/<link>/image` an image proxy for URLs the copy names only.
   A visitor never reaches a pod and gets no cookie.
-- **Refresh**: each pod watches its own Collections data events and, two seconds after they settle, copies its
+- **Refresh**: each pod watches the data events of the sources that let data out and, two seconds after they settle, copies its
   live links again. A copy that can't be made (the layout was deleted, now draws other data) keeps the last one.
   New rows the layout shows go out without a new review: the review says so.
 - **Revoke**: `unshare_publicly` takes the copy off the host at once (the row stays, marked revoked, for the

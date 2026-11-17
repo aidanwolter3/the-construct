@@ -22,6 +22,32 @@ use std::collections::BTreeSet;
 use crate::Pod;
 use crate::construct::share::Shelf;
 
+/// What data of a source a public link may carry ([`crate::Source::public_data`]).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct PublicData {
+    /// Entity URI prefixes.
+    pub uris: Vec<&'static str>,
+    /// Query key prefixes.
+    pub queries: Vec<&'static str>,
+}
+
+impl PublicData {
+    /// What every source of the pod lets out, and their names.
+    fn of(pod: &Pod) -> (PublicData, Vec<&'static str>) {
+        let mut all = PublicData::default();
+        let mut names = Vec::new();
+        for a in pod.catalog().adapters() {
+            let d = a.public_data();
+            if !d.uris.is_empty() || !d.queries.is_empty() {
+                names.push(a.name());
+            }
+            all.uris.extend(d.uris);
+            all.queries.extend(d.queries);
+        }
+        (all, names)
+    }
+}
+
 /// The largest copy (layout and data, as JSON).
 pub const MAX_COPY_BYTES: usize = 512 * 1024;
 /// Most public links a pod keeps live.
@@ -192,19 +218,20 @@ fn fields_read(node: &str) -> BTreeSet<String> {
 /// as the owner's does.
 const THEME: &str = "core://theme";
 
-/// Whether data is Collections' (the only data a public copy may carry).
-fn collections_only(data: &DataBundle) -> Result<(), Vec<String>> {
+/// Whether every piece of data is one its source lets out ([`PublicData`]);
+/// else the kinds that aren't.
+fn shareable(data: &DataBundle, allowed: &PublicData) -> Result<(), Vec<String>> {
     let mut other: BTreeSet<String> = BTreeSet::new();
     for uri in data.entities.keys() {
-        if !(uri.starts_with("collections://")
+        let ok = allowed.uris.iter().any(|p| uri.starts_with(p))
             || uri.starts_with("core://sources/")
-            || uri == THEME)
-        {
+            || uri == THEME;
+        if !ok {
             other.insert(uri.split("://").next().unwrap_or("").to_owned());
         }
     }
     for key in data.queries.keys() {
-        if !key.starts_with("collection:") {
+        if !allowed.queries.iter().any(|p| key.starts_with(p)) {
             other.insert(key.split(':').next().unwrap_or("").to_owned());
         }
     }
@@ -357,11 +384,13 @@ pub async fn make(
         entities: spec.entities,
         queries: spec.queries,
     };
-    if let Err(other) = collections_only(&data) {
+    let (allowed, names) = PublicData::of(pod);
+    if let Err(other) = shareable(&data, &allowed) {
         return Err(refuse(
-            "not_collections_data",
+            "data_not_shareable",
             format!(
-                "a public link carries Collections data only; this layout draws {}",
+                "a public link carries only data its source lets out ({}); this layout draws {}",
+                names.join(", "),
                 other.join(", ")
             ),
         ));
@@ -380,7 +409,7 @@ pub async fn make(
             return Err(refuse(
                 "unknown_row",
                 format!(
-                    "{r} is not a row this layout shows (rows are entity URIs such as collections://recipes/<id>)"
+                    "{r} is not a row this layout shows (rows are the entity URIs the layout's lists hold)"
                 ),
             ));
         }
@@ -435,10 +464,10 @@ fn answer(c: &PublicCopy, base: Option<&str>) -> Value {
 pub fn tool_specs() -> Vec<Value> {
     vec![
         json!({ "name": "share_publicly",
-            "description": "Make a page anyone can open in a browser, without a pod: a copy of one of the pod's layouts and the Collections rows it shows, read-only (decision public-web-links). Without confirm nothing is shared: the answer is a review of everything a visitor would read (every text and value, every URL) and what was taken out (buttons that write, links to other layouts, embeds, screens); show it to the user and ask before confirming. With confirm (the review_id) it goes out and answers the page's url. The copy is refreshed when the pod's Collections data changes, so new rows the layout shows appear too; say so. rows limits it to some rows (one recipe: its entity URI); item draws the layout with that row as $item. Sharing the same layout and rows again updates the same link.",
+            "description": "Make a page anyone can open in a browser, without a pod: a copy of one of the pod's layouts and the rows it shows, read-only (decision public-web-links). Without confirm nothing is shared: the answer is a review of everything a visitor would read (every text and value, every URL) and what was taken out (buttons that write, links to other layouts, embeds, screens); show it to the user and ask before confirming. With confirm (the review_id) it goes out and answers the page's url. The copy is refreshed when the data changes, so new rows the layout shows appear too; say so. rows limits it to some rows (one recipe: its entity URI); item draws the layout with that row as $item. Sharing the same layout and rows again updates the same link.",
             "inputSchema": { "type": "object", "properties": {
                 "layout": { "type": "string", "description": "A layout id: home or a c-... id from list_layouts" },
-                "rows": { "type": "array", "items": { "type": "string" }, "description": "Only these rows (entity URIs, e.g. collections://recipes/<id>)" },
+                "rows": { "type": "array", "items": { "type": "string" }, "description": "Only these rows (entity URIs the layout's lists hold)" },
                 "item": { "type": "string", "description": "A row (entity URI) the layout draws as $item" },
                 "confirm": { "type": "string", "description": "The review_id of the review the user approved" } },
                 "required": ["layout"] } }),
@@ -554,7 +583,7 @@ async fn share(
                 "embedded_layouts": made.removed.embeds,
                 "screens": made.removed.screens,
             },
-            "updates": "the copy is made again whenever the pod's Collections data changes: new rows this layout shows will appear on the page too",
+            "updates": "the copy is made again whenever the data changes: new rows this layout shows will appear on the page too",
         }));
     }
     let item_key = item.map(str::to_owned);
@@ -635,13 +664,18 @@ pub fn watch(pod: &Pod) {
     if !shelf.public_links_enabled() {
         return;
     }
+    // The sources whose data a copy may carry: their changes copy again.
+    let sources = PublicData::of(pod).1;
+    if sources.is_empty() {
+        return;
+    }
     let mut rx = pod.subscribe_data();
     // Weak: a pod the host closes is not kept open by this.
     let weak = std::sync::Arc::downgrade(pod);
     tokio::spawn(async move {
         loop {
             match rx.recv().await {
-                Ok(e) if e.source == "collections" => {}
+                Ok(e) if sources.contains(&e.source.as_str()) => {}
                 Ok(_) => continue,
                 Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {}
                 Err(_) => return,
@@ -714,41 +748,45 @@ mod tests {
     fn only_listed_rows_and_read_fields_go() {
         let data: DataBundle = serde_json::from_value(json!({
             "entities": {
-                "collections://recipes/1": { "id": "1", "title": "Lentil soup", "notes": "for Dana's birthday", "minutes": 40 },
-                "collections://recipes/2": { "id": "2", "title": "Shakshuka", "notes": "secret", "minutes": 30 },
-                "collections://diary/9": { "id": "9", "title": "Dear diary" } },
-            "queries": { "collection:recipes": ["collections://recipes/1", "collections://recipes/2"] } })).unwrap();
-        let node = json!({ "type": "core://List", "query_key": "collection:recipes",
+                "notes://recipes/1": { "id": "1", "title": "Lentil soup", "notes": "for Dana's birthday", "minutes": 40 },
+                "notes://recipes/2": { "id": "2", "title": "Shakshuka", "notes": "secret", "minutes": 30 },
+                "notes://diary/9": { "id": "9", "title": "Dear diary" } },
+            "queries": { "note:recipes": ["notes://recipes/1", "notes://recipes/2"] } })).unwrap();
+        let node = json!({ "type": "core://List", "query_key": "note:recipes",
             "item_template": { "type": "core://Text", "style": "Body", "value_expr": "$item.title · $item.minutes min" } });
         let all = rows_of(&minimize(&data, &node, &[]));
         assert_eq!(all.len(), 2, "the diary isn't listed: it doesn't go");
         assert_eq!(
-            all["collections://recipes/1"],
+            all["notes://recipes/1"],
             json!({ "id": "1", "title": "Lentil soup", "minutes": 40 })
         );
-        let one = minimize(&data, &node, &["collections://recipes/2".into()]);
+        let one = minimize(&data, &node, &["notes://recipes/2".into()]);
         assert_eq!(
-            one.queries["collection:recipes"],
-            vec!["collections://recipes/2".to_owned()]
+            one.queries["note:recipes"],
+            vec!["notes://recipes/2".to_owned()]
         );
         assert_eq!(rows_of(&one).len(), 1);
     }
 
     #[test]
-    fn only_collections_data_is_shared() {
+    fn only_data_a_source_lets_out_is_shared() {
         let ok: DataBundle = serde_json::from_value(
-            json!({ "entities": { "collections://a/1": {}, "core://theme": {} },
-            "queries": { "collection:a": [] } }),
+            json!({ "entities": { "notes://a/1": {}, "core://theme": {} },
+            "queries": { "note:a": [] } }),
         )
         .unwrap();
-        assert!(collections_only(&ok).is_ok());
+        let allowed = PublicData {
+            uris: vec!["notes://"],
+            queries: vec!["note:"],
+        };
+        assert!(shareable(&ok, &allowed).is_ok());
         let no: DataBundle =
-            serde_json::from_value(json!({ "entities": { "pixelfed://posts/1": {} },
+            serde_json::from_value(json!({ "entities": { "photos://posts/1": {} },
             "queries": { "timeline:home": [] } }))
             .unwrap();
         assert_eq!(
-            collections_only(&no),
-            Err(vec!["pixelfed".into(), "timeline".into()])
+            shareable(&no, &allowed),
+            Err(vec!["photos".into(), "timeline".into()])
         );
     }
 
@@ -756,7 +794,7 @@ mod tests {
     fn the_review_lists_what_a_visitor_reads() {
         let copy = json!({ "title": "Recipes", "node": { "type": "core://Text", "style": "Body",
             "value_expr": "Our family recipes · $item.minutes min", "url": "https://img.example/a.png" },
-            "data": { "entities": { "collections://r/1": { "id": "1", "title": "Lentil soup" } } } });
+            "data": { "entities": { "notes://r/1": { "id": "1", "title": "Lentil soup" } } } });
         let (texts, urls) = review_texts(&copy);
         assert!(
             texts.contains(&"Our family recipes ·  min".to_owned()),
