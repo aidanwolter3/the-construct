@@ -106,7 +106,9 @@ Drawn like the app: Page, Workspace (title and slots), Column, Row, Container, B
 IconButton (`active`), Chip, Badge, Spacer, Divider, Conditional, Container (children 8 points apart; horizontal
 ones wrap), Tappable (while a finger or the mouse button is down on it, a wash of the text colour at 10% darkens it on
 a light page and lightens it on a dark one, rounded as its one child is; it goes when the finger lifts or the touch
-becomes a scroll or swipe: `Session::press` / `release_press`), Gesture (tap), Scroll (clipped, offsets; with `follow_end`, a tap outside it, such as a
+becomes a scroll or swipe: `Session::press` / `release_press`; a mouse resting over it with no button down, on desktop
+and the web, washes it at 5% and the pointer becomes a hand: `Session::hover` / `hover_end`, never called on touch, so phones
+draw as before; decision `wide-screen-panels`), Gesture (tap), Scroll (clipped, offsets; with `follow_end`, a tap outside it, such as a
 footer's Send, makes it follow its content to the end once that has grown, while a tap inside it, a like, doesn't), Text
 `format` (bound `YYYY-MM-DD` values as "today", "in 3 days" or "Nov 5", or `past`, against the device's own day; a
 `SceneBuilder` can be given another with `today`), List (`where`, `filter`, `group_by`, `columns`, `focus`, `indent`, `empty_text`), ChoiceChips (a row as wide as its place; chips past its

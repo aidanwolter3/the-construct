@@ -37,6 +37,7 @@ pub fn build(
             item: None,
             insets: [0.0; 4],
             focused: None,
+            panels: &construct_render::NO_PANELS,
         })
         .unwrap()
 }

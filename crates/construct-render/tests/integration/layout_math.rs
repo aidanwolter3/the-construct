@@ -263,6 +263,7 @@ fn side_by_side_scrolling_columns_get_the_row_s_height() {
             item: None,
             insets: [0.0; 4],
             focused: None,
+            panels: &construct_render::NO_PANELS,
         })
         .unwrap();
     let scene = laid.emit(&BTreeMap::new());

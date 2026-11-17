@@ -89,6 +89,7 @@ word is the command and the rest of the entry, as written, its argument: `click 
 | `swipe-down <target>` / `swipe-up <target>` | A flick: closes a sheet from its handle (`tag:sheet-handle`), else runs the gesture's `on_swipe_down` / `on_swipe_up`. |
 | `drag-down <points> <target>` | Drags a sheet's handle down and lets go without a fling (it closes past a quarter of its height), else scrolls the view there up by that much. |
 | `scroll-to <target>` | Scrolls until the node is on screen. |
+| `hover <target>` | Rests the mouse over the node's centre (a `core://Tappable` there is drawn hovered, as on desktop and the web) until another `hover`. |
 | `back` | A system Back press. |
 | `wait <ms>` / `idle` | Keeps drawing for that long / waits until no load or write is out. |
 | `assert-text <text>` / `assert-no-text <text>` | Some node's text or content description contains (or doesn't contain) the text; retries 2 s. |
@@ -105,7 +106,7 @@ word is the command and the rest of the entry, as written, its argument: `click 
 | `open-inbox` | Presents the inbox layout as a sheet. |
 | `notify <layout> <channel> <title>` | Fixture mode: a notification arrives (the inbox and its count update; the fake pod serves it in `local:notifications` and as a row of `collection:notifications`). |
 | `toggle-channel <layout>.<channel>` | Flips a notification channel (`toggle_channel`; fixture mode). |
-| `construct <file>` | Fixture mode: the pod's construct moves to the one in the file (`{"layouts": {key: page}, "reach": {key: [keys]}, "data"?}`, decision `content-addressed-construct`): changed layouts are drawn again where they are open (after a focused field or a touch ends), and a stack entry the one below no longer reaches closes. Start with `--workspace home` (`construct_home_bundle.json`); `construct_v1.json` to `construct_v4.json` are an example; `construct_anchor_above.json` adds rows above a scrolled list (the `scroll-anchor` scenario). |
+| `construct <file>` | Fixture mode: the pod's construct moves to the one in the file (`{"layouts": {key: page}, "reach": {key: [keys]}, "data"?}`, decision `content-addressed-construct`): changed layouts are drawn again where they are open (after a focused field or a touch ends), and a stack entry the one below no longer reaches closes. Start with `--workspace home` (`construct_home_bundle.json`); `construct_v1.json` to `construct_v4.json` are an example; `construct_anchor_above.json` adds rows above a scrolled list (the `scroll-anchor` scenario); `construct_panels.json` is a home whose inline meals layout opens panels on a desktop window (the `panels` scenario, decision `wide-screen-panels`). |
 | `pick <path> [<path>…]` | Queues files (relative to the repository root) for the next media picker tap, at most its `max`; none queued is a cancelled pick. Fixture mode: the fake pod stages each file where it is (`sim-<n>` ids). |
 | `publish-version <note>` | Parsed, but fails: the engine always shows a layout's latest version. |
 
