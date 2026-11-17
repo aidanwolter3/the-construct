@@ -106,7 +106,7 @@ like any other.
 | `GET /web`, `GET /web/<file>`, `GET /web/fonts/<file>` *public* | The page, the built client and the renderer's fonts, from `CONSTRUCT_WEB_DIR` (plain file names only). The page's policy allows only its own scripts and WebAssembly. |
 | `POST /web/session {code}` *public* | With `x-construct-client: web` (else 403 `web_client_only`): a new session of the pod `code` opens, as the cookie `construct_web` (`HttpOnly; SameSite=Strict; Path=/`, `Secure` behind HTTPS, as long as `CONSTRUCT_SESSION_TTL_DAYS`) -> `{ok}`; 401 `pod_not_found`; rate-limited like `POST /v1/pods/open`. |
 | `POST /web/logout` | Deletes the cookie's session and clears the cookie. |
-| `GET /web/image?url=<url>` | With the cookie: an image of a public `http(s)` site, passed on (images only, at most 10 MiB); 400 for other URLs. |
+| `GET /web/image?url=<url>` | With the cookie: an image of a public `http(s)` site, passed on (raster images only, not SVG, at most 10 MiB, sent with `nosniff` and a sandboxing CSP so one opened on its own runs nothing); 400 for other URLs. |
 
 The cookie stands for its session on every other route, but only on requests with `x-construct-client: web` and,
 where the browser sends `Sec-Fetch-Site`, `same-origin`; a pod code put in the cookie is not taken, and `/v1/mcp`
