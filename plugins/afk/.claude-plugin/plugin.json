@@ -1,0 +1,6 @@
+{
+  "name": "afk",
+  "version": "0.1.0",
+  "description": "/afk: Claude makes as much progress as it can while you're away, then summarizes what it did and where things stand.",
+  "author": { "name": "aidanwolter3" }
+}
