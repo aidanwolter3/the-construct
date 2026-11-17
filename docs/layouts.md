@@ -329,6 +329,11 @@ The server components:
 | `core:chevron_card` | `background`, `color`, `border`; children | A rounded card that opens something: its children on one centred row and a › at the end; `color` and `border` are left out while empty. Wrap it in `core://Tappable`. |
 | `core:pill` | `text`, `background`, `color`, `style`, `corner` | A small tinted tag (a date, a status, a count); `corner` defaults to 8. |
 | `core:dot` | `color`, `size`, `corner` | A small coloured dot. |
+| `core:section_label` | `text` | A quiet section heading above a grouped card: Label text in `muted_text`, inset 4 dp. |
+| `core:grouped_card` | `corner`; children | Rows grouped in one rounded card (`card` colour, `card_border` edge, `corner` defaults to 18); the rows bring their own dividers. |
+| `core:tinted_icon` | `icon`, `tint`, `tint_bg`, `size` | An icon centred in a tinted circle (`accent` on `accent_surface`, 34 dp by default). Until the app has issue #325's renderer fix, an icon-only Badge, and so this icon, sits 2 dp left of centre. |
+| `core:date_block` | `weekday`, `day` | A compact date: the short weekday (Caption, muted) over the day of the month (Title), centred in 36 dp. |
+| `core:icon_row` | `icon`, `tint`, `tint_bg`, `title`, `meta`, `trailing`, `chevron` | A list row: `core:tinted_icon`, a bold title with a muted line under it while `meta` is set, optional quiet `trailing` text and a ›. |
 | `core:collapsible` | `key`, `title`, `show_label`, `hide_label`; children | A section that starts closed: a header (the title, Show or Hide) that opens and closes its children, kept open while the app runs (`local://collapsible/<key>`). |
 | `core:warning_chip` | `text` | A warning chip. |
 | `core:link_button` | `label`, `url` | A button opening a link, shown while the link is set. |

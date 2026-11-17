@@ -1,0 +1,61 @@
+{
+  "note": "First version: a short weekday over the day of the month",
+  "component": {
+    "doc": "A compact date: the short weekday (Caption, muted) over the day of the month (Title), centred in 36 dp (a row of what's coming up, a week plan).",
+    "params": [
+      {
+        "name": "weekday",
+        "type": "text",
+        "doc": "The short weekday, e.g. WED (bindings allowed).",
+        "required": true
+      },
+      {
+        "name": "day",
+        "type": "text",
+        "doc": "The day of the month, e.g. 18 (bindings allowed).",
+        "required": true
+      }
+    ],
+    "template": {
+      "type": "core://Box",
+      "width_dp": 36,
+      "align": "Center",
+      "content": {
+        "type": "core://Column",
+        "align": "Center",
+        "children": [
+          {
+            "type": "core://Box",
+            "content_color": "${local://theme#muted_text}",
+            "content": {
+              "type": "core://Text",
+              "value_expr": "$arg.weekday",
+              "style": "Caption"
+            }
+          },
+          {
+            "type": "core://Text",
+            "value_expr": "$arg.day",
+            "style": "Title"
+          }
+        ]
+      }
+    },
+    "examples": [
+      {
+        "args": {
+          "weekday": "WED",
+          "day": "18"
+        },
+        "note": "Wednesday the 18th"
+      },
+      {
+        "args": {
+          "weekday": "$item.weekday",
+          "day": "$item.day"
+        },
+        "note": "a date from the item"
+      }
+    ]
+  }
+}

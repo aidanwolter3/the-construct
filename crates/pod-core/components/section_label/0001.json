@@ -1,0 +1,38 @@
+{
+  "note": "First version: the quiet heading above a grouped card",
+  "component": {
+    "doc": "A quiet section heading above a grouped card (what's coming up, a month, a settings group): Label text in the muted colour, inset 4 dp to line up with the card's rounded edge.",
+    "params": [
+      {
+        "name": "text",
+        "type": "text",
+        "doc": "The heading (bindings allowed).",
+        "required": true
+      }
+    ],
+    "template": {
+      "type": "core://Box",
+      "content_color": "${local://theme#muted_text}",
+      "padding_h_dp": 4,
+      "content": {
+        "type": "core://Text",
+        "value_expr": "$arg.text",
+        "style": "Label"
+      }
+    },
+    "examples": [
+      {
+        "args": {
+          "text": "Coming up"
+        },
+        "note": "above a card of events"
+      },
+      {
+        "args": {
+          "text": "$item.month_name"
+        },
+        "note": "a month's heading from the item"
+      }
+    ]
+  }
+}
