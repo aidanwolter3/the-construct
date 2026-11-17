@@ -355,6 +355,23 @@ impl CpuRenderer {
                 glyphs.push((g.physical((ox, oy), 1.0), run.line_y.round() as i32));
             }
         }
+        if t.strike {
+            // A solid line in the text's colour through each line.
+            let a = color[3];
+            let src = [color[0] * a, color[1] * a, color[2] * a, a];
+            for [lx, ly, lw, lh] in crate::text::strike_lines(&buffer, ty, s) {
+                let (lx, ly) = (ox as i32 + lx, oy as i32 + ly);
+                for y in ly.max(0)..(ly + lh).min(h as i32) {
+                    for x in lx.max(0)..(lx + lw).min(w as i32) {
+                        let (fx, fy) = (x as f32 + 0.5, y as f32 + 0.5);
+                        if fx < cx || fy < cy || fx > cx + cw || fy > cy + ch {
+                            continue;
+                        }
+                        over(&mut px[y as usize * w + x as usize], src);
+                    }
+                }
+            }
+        }
         for (g, line_y) in glyphs {
             let Some(img) = self
                 .swash

@@ -1239,6 +1239,7 @@ impl<'i> Build<'_, 'i> {
                 weight,
                 caps,
                 max_lines,
+                strike,
             } => {
                 let mut text = match format {
                     Some(f) => self.dated(value_expr, f, &ctx),
@@ -1257,6 +1258,7 @@ impl<'i> Build<'_, 'i> {
                     ty.face = ty.face.with_weight(*w);
                 }
                 ty.max_lines = max_lines.unwrap_or(0).min(protocol::MAX_TEXT_LINES);
+                ty.strike = *strike;
                 let color = if *style == TextStyle::Secondary && b.color.is_none() {
                     theme.muted_text
                 } else {
@@ -3500,6 +3502,7 @@ impl Laid {
                     line_height: ty.line_height,
                     tracking: ty.tracking,
                     max_lines: ty.max_lines,
+                    strike: ty.strike,
                     color: *color,
                     rect: [px, py, pw, ph],
                     clip,

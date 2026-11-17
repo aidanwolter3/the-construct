@@ -3004,6 +3004,7 @@ impl Session {
                 line_height: label.line_height,
                 tracking: 0.0,
                 max_lines: 0,
+                strike: false,
                 color: theme.on_background,
                 rect: [ix + pad, y + (h - th) / 2.0, *tw, *th],
                 clip: all,
