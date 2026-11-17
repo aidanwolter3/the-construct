@@ -146,6 +146,16 @@ pub fn required_features(node: &UiNode) -> Vec<&'static str> {
         if json.contains("local://theme#") {
             out.insert(feature::THEME);
         }
+        if [
+            "local://device#width_dp",
+            "local://device#height_dp",
+            "local://device#size_class",
+        ]
+        .iter()
+        .any(|f| json.contains(f))
+        {
+            out.insert(feature::DEVICE_SIZE);
+        }
     }
     out.into_iter().collect()
 }
@@ -214,9 +224,13 @@ fn node_features(node: &UiNode, out: &mut BTreeSet<&'static str>) {
             padding_h_dp,
             focus,
             stack,
+            min_column_dp,
             ..
         } => {
             add(feature::LIST);
+            if *min_column_dp > 0 {
+                add(feature::LIST_AUTO_COLUMNS);
+            }
             if filter.is_some() {
                 add(feature::LIST_FILTER);
             }
@@ -264,8 +278,16 @@ fn node_features(node: &UiNode, out: &mut BTreeSet<&'static str>) {
                 add(feature::JUSTIFY);
             }
         }
-        UiNode::Column { align, justify, .. } => {
+        UiNode::Column {
+            align,
+            justify,
+            max_width_dp,
+            ..
+        } => {
             add(feature::COLUMN);
+            if *max_width_dp > 0 {
+                add(feature::MAX_WIDTH);
+            }
             if *align != Align::Start {
                 add(feature::ALIGN);
             }
@@ -1079,6 +1101,39 @@ mod tests {
         };
         assert_eq!(w.conditions().len(), 2);
         assert_eq!(w.conditions()[1].field, "category");
+    }
+
+    /// Decision `screen-sizes`: a column's `max_width_dp`, a list's
+    /// `min_column_dp` and the window's size in `local://device` are each a
+    /// feature, so clients without them get older versions.
+    #[test]
+    fn screen_size_vocabulary_needs_its_features() {
+        let col = node(json!({"type": "core://Column", "max_width_dp": 720, "children": []}));
+        assert_eq!(required_features(&col), ["column", "max_width"]);
+        let list = node(
+            json!({"type": "core://List", "query_key": "q", "min_column_dp": 280,
+            "item_template": {"type": "core://Divider"}}),
+        );
+        assert_eq!(
+            required_features(&list),
+            ["divider", "list", "list_auto_columns"]
+        );
+        let cond = node(json!({"type": "core://Conditional",
+            "value": "${local://device#size_class}", "equals": "expanded",
+            "content": {"type": "core://Divider"}}));
+        assert_eq!(
+            required_features(&cond),
+            [
+                "conditional",
+                "conditional_form",
+                "device_size",
+                "divider",
+                "local_data"
+            ]
+        );
+        let plain = node(json!({"type": "core://Text", "style": "Body",
+            "value_expr": "${local://device#platform}"}));
+        assert!(!required_features(&plain).contains(&"device_size"));
     }
 
     /// Decision `named-vocabulary`: `dismiss` is removed; only the layouts

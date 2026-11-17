@@ -252,6 +252,12 @@ pub enum UiNode {
         /// (`core://SwipeCard`) shows the next.
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         stack: bool,
+        /// Feature `list_auto_columns`: as many equal columns as fit at
+        /// least this wide (at least one), in place of `columns`; they
+        /// follow the width the list is given, so a phone shows one and a
+        /// wide window several.
+        #[serde(default, skip_serializing_if = "is_zero")]
+        min_column_dp: u16,
     },
     /// An image from a URL (a literal or a binding such as
     /// `"$item.avatar_url"`). `size_dp` makes it a square of that size;
@@ -318,9 +324,10 @@ pub enum UiNode {
         #[serde(default, skip_serializing_if = "Justify::is_start")]
         justify: Justify,
     },
-    /// Children stacked, full width. `align` (schema 6, D44) places children
-    /// narrower than the column (default `Start`); `justify` (feature
-    /// `justify`) places them down a column taller than they are.
+    /// Children stacked, full width (up to `max_width_dp`). `align` (schema
+    /// 6, D44) places children narrower than the column (default `Start`);
+    /// `justify` (feature `justify`) places them down a column taller than
+    /// they are.
     #[serde(rename = "core://Column")]
     Column {
         children: Vec<UiNode>,
@@ -334,6 +341,10 @@ pub enum UiNode {
         align: Align,
         #[serde(default, skip_serializing_if = "Justify::is_start")]
         justify: Justify,
+        /// Feature `max_width`: at most this wide, centred in the room it is
+        /// given (a readable column on a wide screen); 0 is no limit.
+        #[serde(default, skip_serializing_if = "is_zero")]
+        max_width_dp: u16,
     },
     /// Empty space: `size_dp` along the parent's axis, or (no size, in a
     /// `core://Row`) all the remaining width.
