@@ -495,10 +495,18 @@ async fn image_bytes(path: &str) -> Option<Vec<u8>> {
 }
 
 /// Fetches the fonts by name (`/web/fonts/<file>`): the faces before the
-/// first frame, the fallbacks after it (decision `web-client`).
+/// first frame, the fallbacks after it (decision `web-client`). With the
+/// build's hash of the fonts (`constructFontVersion`, set by the page's
+/// script) they are asked for as `?v=<hash>`, which the browser keeps until
+/// a deploy changes them (decision `web-client-cache`).
 async fn load_fonts(files: &[&str]) {
+    let version = js_sys::Reflect::get(&js_sys::global(), &"constructFontVersion".into())
+        .ok()
+        .and_then(|v| v.as_string())
+        .filter(|v| !v.is_empty() && v.bytes().all(|b| b.is_ascii_hexdigit()));
+    let query = version.map(|v| format!("?v={v}")).unwrap_or_default();
     for f in files {
-        if let Some(b) = image_bytes(&format!("/web/fonts/{f}")).await {
+        if let Some(b) = image_bytes(&format!("/web/fonts/{f}{query}")).await {
             construct_render::text::add_font(b);
         } else {
             log(&format!("couldn't load the font {f}"));

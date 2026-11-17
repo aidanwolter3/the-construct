@@ -192,7 +192,7 @@ jobs:
       - run: scripts/web_build.sh target/web
       - name: Size budget (gzipped WebAssembly at most 2.5 MiB)
         run: |
-          size=$(gzip -9 -c target/web/construct_web_bg.wasm | wc -c)
+          size=$(gzip -9 -c target/web/construct_web_bg.*.wasm | wc -c)
           echo "gzipped: $size bytes"
           [ "$size" -le 2621440 ]
 
