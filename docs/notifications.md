@@ -62,7 +62,12 @@ pod has:
 - **`notifications`**: one row per notification: `title`, `body`, `channel_layout`, `channel`, `channel_key`
   (`<layout>.<channel>`), `layout` (the layout it opens), `target_uri`, `image_url`, `group_key`, `subject`,
   `dedupe_key`, `at` (when it happened), `read`, `read_at` (set by the pod when `read` turns true), and two live
-  lookups into its channel's row, `channel_enabled` and `channel_title`. Ordered by `at`, newest first. Actions:
+  lookups into its channel's row, `channel_enabled` and `channel_title`, and `subject_alert_matched`: false once
+  the row it is about no longer matches an alert of its collection (a `subject` compute reading that row's
+  `alert_matched`, live: when the row or its collection's alerts change, and hourly; decision
+  [`notifications-follow-their-alerts`](decisions/notifications-follow-their-alerts.md)). The unread counts and
+  the old list leave out notifications whose `subject_alert_matched` is false. Ordered by `at`, newest
+  first. Actions:
   `mark_all_read` (an update action) and `clear_read` (a delete action). It keeps the newest 500 of the last 30
   days (`keep`).
 - **`notification_channels`**: one row per declared channel, kept current as sources declare them: `key`, `layout`,
@@ -100,8 +105,8 @@ in a row. Limits per pod: 20 devices, 60 deliveries a minute. The routes are in 
   caches the newest 200 notifications (for builds whose inbox reads `local:notifications`), the channels and the
   unread counts, so the badge works offline; marking read is optimistic and queued. A listener fires only for live
   arrivals, so one notification never alerts twice. Sign-out unregisters the device and clears the cache.
-- **Layouts:** the `inbox` blueprint (file 0005) binds `collection:notifications`: the notifications whose channel
-  is on, grouped by day, and below them, in a section that starts closed (`@core/collapsible`), those read more than
+- **Layouts:** the `inbox` blueprint (file 0006) binds `collection:notifications`: the notifications whose channel
+  is on and whose event still matches its alert, grouped by day, and below them, in a section that starts closed (`@core/collapsible`), those read more than
   a day ago (`where` `older_than`, feature `list_where_age`). Tapping one marks its row read and presents its layout
   and target (`open_notification` with the row's URI). Builds before `list_where_age` get file 0004 (device data).
   The `settings` blueprint lists the channels with switches (for the whole pod). Any layout can open them, bind the

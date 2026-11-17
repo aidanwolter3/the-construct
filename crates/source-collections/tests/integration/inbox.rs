@@ -619,3 +619,33 @@ async fn notifications_open_the_pods_layout_that_routes_them() {
     assert_eq!(layout_of("none"), json!(tasks), "a pod layout stays");
     assert_eq!(pod.fill_notification_layouts().unwrap(), 0, "nothing left");
 }
+
+/// A pod from before decision `notifications-follow-their-alerts`: its
+/// notifications gain `subject_alert_matched`, and those without a
+/// `subject` take their `target_uri` when it names a collection row.
+#[tokio::test]
+async fn older_notifications_gain_the_subject_field() {
+    let pod = pod();
+    let mut a = note("a", "likes", None);
+    a.target_uri = Some("collections://shows/r1".into());
+    pod.notify(vec![a, note("b", "likes", None)]).await.unwrap();
+    // Back to the definition before the field, and no subject.
+    pod.store()
+        .transaction(|tx| {
+            let (_, mut def) = source_collections::db::latest_def(tx, "notifications")?.unwrap();
+            def.fields.retain(|f| f.name != "subject_alert_matched");
+            source_collections::db::append_def(tx, &def, "old", "pod", 1)?;
+            Ok(())
+        })
+        .unwrap();
+    source_collections::inbox::prepare(pod.store()).unwrap();
+    let all = rows(&pod, "notifications").await;
+    let a = all.iter().find(|r| r["title"] == "Title a").unwrap();
+    assert_eq!(a["subject"], "collections://shows/r1", "{a}");
+    assert_eq!(
+        a["subject_alert_matched"], true,
+        "a row it can't read keeps the default"
+    );
+    let b = all.iter().find(|r| r["title"] == "Title b").unwrap();
+    assert!(b["subject"].is_null() || b["subject"] == "", "{b}");
+}

@@ -618,6 +618,14 @@ fn answer(
                     return Ok(Answer::Now(v));
                 }
             }
+            Compute::Subject { from, value } => {
+                let uri = value_of(def, from, &values);
+                if let Some(v) = subject_value(conn, uri.as_str().unwrap_or(""), value)?
+                    .and_then(|v| model::coerce(field, &v, max_chars).ok().flatten())
+                {
+                    return Ok(Answer::Now(v));
+                }
+            }
             Compute::Count { from, .. } => {
                 let n = match lookup::text_of(&value_of(def, from, &values)) {
                     Some(input) => lookups
@@ -668,6 +676,32 @@ fn answer(
         }
     }
     Ok(Answer::None)
+}
+
+/// What the live row entity URI `uri` names serves as `name` (as clients
+/// get it: its fields by name and the derived names, e.g. `alert_matched`);
+/// `None` when it names no live row of a collection, or the row serves no
+/// such value ([`Compute::Subject`]).
+pub(crate) fn subject_value(
+    conn: &Connection,
+    uri: &str,
+    name: &str,
+) -> rusqlite::Result<Option<Value>> {
+    let Some((collection, id)) = uri
+        .strip_prefix("collections://")
+        .and_then(|r| r.split_once('/'))
+        .filter(|(c, id)| !c.is_empty() && !id.is_empty() && !id.contains('/'))
+    else {
+        return Ok(None);
+    };
+    let Some((_, def)) = db::latest_def(conn, collection)? else {
+        return Ok(None);
+    };
+    let Some(row) = db::row(conn, collection, id)?.filter(|r| r.deleted_at.is_none()) else {
+        return Ok(None);
+    };
+    let rec = db::row_record(&def, &row, pod_core::util::now_secs());
+    Ok(rec.0.get(name).cloned().filter(|v| !v.is_null()))
 }
 
 /// Compute `field` of `row` now: the field is set to the answer, or left
