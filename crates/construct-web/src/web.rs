@@ -826,21 +826,17 @@ pub async fn start() -> Result<(), JsValue> {
     mount(session).await
 }
 
-/// A public link's page (decision `public-web-links`): its copy, drawn
-/// read-only with no pod behind it (nothing it draws can write).
-pub async fn start_public(link: &str) -> Result<(), JsValue> {
+/// A public link's page (decisions `public-web-links`,
+/// `public-links-share-the-closure`): its copy, drawn read-only with no pod
+/// behind it (nothing it draws can write); the layouts it opens come from
+/// the copy. `base` is the page's path: `/s/<link>` or `/@<handle>/<slug>`.
+pub async fn start_public(base: &str) -> Result<(), JsValue> {
     load_fonts(&construct_render::text::FACE_FILES).await;
-    let base = format!("/s/{}", crate::construct::encode(link));
     let copy = get_json(&format!("{base}/view"))
         .await
         .map_err(|_| JsValue::from_str("This page isn't shared any more."))?;
-    let root: UiNode = serde_json::from_value(copy["node"].clone())
-        .map_err(|e| JsValue::from_str(&e.to_string()))?;
-    let data: DataBundle = serde_json::from_value(copy["data"].clone()).unwrap_or_default();
-    let mut session = Session::new("public", root, data, Viewport::PHONE);
-    if let Some(item) = copy["item"].as_str() {
-        session.set_root(Default::default(), Some(item.to_owned()));
-    }
+    let session = construct_render::public::session(&copy, Viewport::PHONE)
+        .map_err(|e| JsValue::from_str(&e))?;
     fetch_images(&session.images, &format!("{base}/image"));
     mount(session).await
 }

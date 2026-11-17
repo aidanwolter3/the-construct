@@ -49,11 +49,12 @@ fn public_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<PublicCopy> {
         created_at: r.get(6)?,
         updated_at: r.get(7)?,
         revoked_at: r.get(8)?,
+        slug: r.get(9)?,
     })
 }
 
 const PUBLIC_COLUMNS: &str =
-    "link, owner_pod, layout, rows, title, copy, created_at, updated_at, revoked_at";
+    "link, owner_pod, layout, rows, title, copy, created_at, updated_at, revoked_at, slug";
 
 fn err(e: rusqlite::Error) -> ShelfError {
     ShelfError::Store(e.to_string())
@@ -150,9 +151,12 @@ impl Shelf for HostShelf {
             return Err(ShelfError::HandleTaken);
         }
         if current.is_some() {
+            // Publications and short paths (`/@<handle>/<slug>`) carry it.
             let live: bool = conn
                 .query_row(
-                    "SELECT EXISTS (SELECT 1 FROM publications WHERE owner_pod = ?1 AND revoked_at IS NULL)",
+                    "SELECT EXISTS (SELECT 1 FROM publications WHERE owner_pod = ?1 AND revoked_at IS NULL)
+                     OR EXISTS (SELECT 1 FROM public_copies
+                                WHERE owner_pod = ?1 AND slug IS NOT NULL AND revoked_at IS NULL)",
                     [pod],
                     |r| r.get(0),
                 )
@@ -358,12 +362,25 @@ impl Shelf for HostShelf {
         let now = now_secs();
         let rows = serde_json::to_string(&c.rows).unwrap_or_default();
         let copy = c.copy.to_string();
+        if let Some(slug) = &c.slug {
+            let taken: bool = conn
+                .query_row(
+                    "SELECT EXISTS (SELECT 1 FROM public_copies WHERE owner_pod = ?1 AND slug = ?2
+                         AND revoked_at IS NULL AND link != ?3)",
+                    params![c.owner_pod, slug, c.link],
+                    |r| r.get(0),
+                )
+                .map_err(err)?;
+            if taken {
+                return Err(ShelfError::SlugTaken);
+            }
+        }
         conn.execute(
-            "INSERT INTO public_copies (link, owner_pod, layout, rows, title, copy, created_at, updated_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?7)
-             ON CONFLICT(link) DO UPDATE SET title = ?5, copy = ?6, updated_at = ?7
+            "INSERT INTO public_copies (link, owner_pod, layout, rows, title, copy, created_at, updated_at, slug)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?7, ?8)
+             ON CONFLICT(link) DO UPDATE SET title = ?5, copy = ?6, updated_at = ?7, rows = ?4, slug = ?8
              WHERE owner_pod = ?2 AND revoked_at IS NULL",
-            params![c.link, c.owner_pod, c.layout, rows, c.title, copy, now],
+            params![c.link, c.owner_pod, c.layout, rows, c.title, copy, now, c.slug],
         )
         .map_err(err)?;
         conn.query_row(
@@ -397,6 +414,22 @@ impl Shelf for HostShelf {
                     "SELECT {PUBLIC_COLUMNS} FROM public_copies WHERE link = ?1 AND revoked_at IS NULL"
                 ),
                 [link],
+                public_row,
+            )
+            .optional()
+            .map_err(err)
+    }
+
+    fn public_by_slug(&self, handle: &str, slug: &str) -> Result<Option<PublicCopy>, ShelfError> {
+        self.store
+            .conn()
+            .query_row(
+                &format!(
+                    "SELECT {PUBLIC_COLUMNS} FROM public_copies
+                     WHERE owner_pod = (SELECT pod_id FROM handles WHERE handle = ?1)
+                       AND slug = ?2 AND revoked_at IS NULL"
+                ),
+                [handle, slug],
                 public_row,
             )
             .optional()
@@ -518,6 +551,7 @@ mod tests {
             rows: vec![],
             title: "Recipes".into(),
             copy: json!({ "title": "Recipes", "node": { "type": "core://Text", "value_expr": text } }),
+            slug: None,
             created_at: 0,
             updated_at: 0,
             revoked_at: None,
@@ -550,5 +584,43 @@ mod tests {
             .unwrap();
         forget_pod(&store.conn(), "a").unwrap();
         assert!(shelf.public_of_pod("a").unwrap().is_empty());
+    }
+
+    /// Decision `public-links-share-the-closure`: a chosen short path
+    /// answers the same copy by the owner's handle, one live per pod and
+    /// slug, and holds the handle while it lives.
+    #[test]
+    fn short_paths_answer_by_handle_and_hold_it() {
+        let (shelf, _store) = shelf();
+        let shelf = shelf.with_public_links(true);
+        shelf.set_handle("a", "ann").unwrap();
+        let copy = |link: &str, slug: &str| PublicCopy {
+            link: link.into(),
+            owner_pod: "a".into(),
+            layout: "c-meals".into(),
+            rows: vec![],
+            title: "Meals".into(),
+            copy: json!({ "title": "Meals" }),
+            slug: Some(slug.into()),
+            created_at: 0,
+            updated_at: 0,
+            revoked_at: None,
+        };
+        let first = shelf
+            .put_public(copy("pub-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "meals"))
+            .unwrap();
+        assert_eq!(
+            shelf.public_by_slug("ann", "meals").unwrap().unwrap().link,
+            first.link
+        );
+        assert!(shelf.public_by_slug("bob", "meals").unwrap().is_none());
+        assert_eq!(
+            shelf.put_public(copy("pub-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "meals")),
+            Err(ShelfError::SlugTaken)
+        );
+        assert_eq!(shelf.set_handle("a", "anna"), Err(ShelfError::HandleInUse));
+        assert!(shelf.revoke_public("a", &first.link).unwrap());
+        assert!(shelf.public_by_slug("ann", "meals").unwrap().is_none());
+        shelf.set_handle("a", "anna").unwrap();
     }
 }

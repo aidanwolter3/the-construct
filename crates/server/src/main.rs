@@ -125,6 +125,13 @@ fn main() -> std::process::ExitCode {
                 std::process::ExitCode::FAILURE
             }
         },
+        ["backup", dest] => match backup(dest) {
+            Ok(()) => std::process::ExitCode::SUCCESS,
+            Err(e) => {
+                eprintln!("error: {e}");
+                std::process::ExitCode::FAILURE
+            }
+        },
         ["pods", rest @ ..] => match pods(rest) {
             Ok(()) => std::process::ExitCode::SUCCESS,
             Err(e) => {
@@ -141,7 +148,8 @@ fn main() -> std::process::ExitCode {
                  server pods rotate <name>\n       \
                  server pods delete <name>\n       server pods notify-test <name>\n       \
                  server pods mcp <name> [label]\n       server pods revoke-mcp <name>\n       \
-                 server pods monitoring <name> on|off\n       server pods list"
+                 server pods monitoring <name> on|off\n       server pods list\n       \
+                 server backup <dir>   (a consistent copy of the data; docs/server.md)"
             );
             std::process::ExitCode::from(2)
         }
@@ -177,6 +185,18 @@ fn print_token(what: &str, name: &str, token: &str) {
     println!(
         "Enter it in the app's \"Open your pod\" screen, or send it as `Authorization: Bearer`."
     );
+}
+
+/// `server backup <dir>`: a consistent copy of the host's data (host.db and
+/// every pod's database), safe while the server runs. To restore it, put
+/// the folder at `<data dir>/restore` and restart (docs/server.md).
+fn backup(dest: &str) -> Result<(), String> {
+    let written = server::host::backup::backup(&data_dir(), std::path::Path::new(dest))?;
+    for f in &written {
+        println!("{}", f.display());
+    }
+    println!("{} databases copied", written.len());
+    Ok(())
 }
 
 /// The admin commands. They write `host.db` and the pod files directly; a
@@ -348,6 +368,11 @@ const LOCAL_POD: &str = "local";
 #[tokio::main]
 async fn serve(local: LocalPod) -> Result<(), String> {
     let dir = data_dir();
+    // A backup waiting in <data dir>/restore goes in place before anything
+    // opens a database (docs/server.md "Backups and restore").
+    if let Some(aside) = server::host::backup::restore_pending(&dir)? {
+        tracing::warn!(replaced = %aside.display(), "restored the data from a backup");
+    }
     let pixelfed = server::PixelfedConfig::from_env();
     tracing::info!(
         instance = %pixelfed.instance_url,

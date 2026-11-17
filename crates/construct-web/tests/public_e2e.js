@@ -1,10 +1,29 @@
 // A public link in Chromium (decision `public-web-links`) against a running server with CONSTRUCT_PUBLIC_WEB=1
 // (scripts/web_e2e.sh starts one): an agent makes a made-up recipes collection and layout over MCP, reviews and
 // shares it; a visitor with no pod opens the page; a new row reaches it; a field the page doesn't show never does;
-// unsharing stops it. Screenshots go to the directory given.
+// unsharing stops it. Then (decision `public-links-share-the-closure`) a list whose rows push their recipe is shared
+// with a short path: a visitor taps a row, the recipe shows, and Back returns. Screenshots go to the directory given.
 //   node crates/construct-web/tests/public_e2e.js <base url> <mcp key> <out dir>
 const { chromium } = require('playwright');
 const [base, key, out] = process.argv.slice(2);
+
+// The colour of the page at (x, y), from a screenshot decoded in the page (a GPU canvas can't be read back).
+async function pixel(page, x, y) {
+  const png = (await page.screenshot()).toString('base64');
+  return page.evaluate(async ([b64, x, y]) => {
+    const img = new Image();
+    img.src = 'data:image/png;base64,' + b64;
+    await img.decode();
+    const c = document.createElement('canvas');
+    c.width = img.width;
+    c.height = img.height;
+    const g = c.getContext('2d');
+    g.drawImage(img, 0, 0);
+    const d = g.getImageData(Math.round(x * img.width / innerWidth), Math.round(y * img.height / innerHeight), 1, 1).data;
+    return [d[0], d[1], d[2]];
+  }, [png, x, y]);
+}
+const green = ([r, g, b]) => r < 60 && g > 70 && g < 120 && b < 60;
 
 function check(ok, what) {
   if (!ok) throw new Error(what);
@@ -72,6 +91,48 @@ async function tool(name, args) {
 
   await tool('unshare_publicly', { link: shared.link });
   check((await page.request.get(base + '/s/' + shared.link)).status() === 404, 'unsharing stops the page at once');
+
+  // A list whose rows push their recipe, shared whole at a short path.
+  await tool('define_collection', { name: 'meals', fields: [{ name: 'name', type: 'text' }] });
+  await tool('define_collection', { name: 'lines', fields: [{ name: 'meal_id', type: 'text' }, { name: 'thing', type: 'text' }] });
+  for (const [meal, things] of [['Lentil soup', ['Red lentils', 'Cumin']], ['Shakshuka', ['Eggs', 'Tomatoes']]]) {
+    const row = await tool('add_row', { collection: 'meals', values: { name: meal } });
+    for (const thing of things) await tool('add_row', { collection: 'lines', values: { meal_id: row.id, thing } });
+  }
+  const feeds = [['collections', 'meals'], ['collections', 'lines']];
+  // The recipe fills the screen with a green the test can see.
+  const recipe = await tool('create_layout', { title: 'Recipe', feeds, layout: { type: 'core://Page', id: 'recipe',
+    title: 'Recipe', root: { type: 'core://Box', fill: true, background: '#1b5e20', content: { type: 'core://Column',
+      padding_h_dp: 16, padding_v_dp: 16, spacing_dp: 8, children: [
+        { type: 'core://Text', style: 'Headline', value_expr: '${collections://meals/$route.id#name}' },
+        { type: 'core://List', query_key: 'collection:lines', where: [{ field: 'meal_id', equals: '$route.id' }],
+          item_template: { type: 'core://Text', style: 'Body', value_expr: '$item.thing' } }] } } } });
+  check(recipe.id, 'an agent made a recipe screen that reads $route.id');
+  const meals = await tool('create_layout', { title: 'Meals', feeds, layout: { type: 'core://Page', id: 'meals',
+    title: 'Meals', root: { type: 'core://Column', children: [
+      { type: 'core://Box', height_dp: 64, padding_h_dp: 16, content: { type: 'core://Text', style: 'Headline', value_expr: 'Meals' } },
+      { type: 'core://List', query_key: 'collection:meals', item_template: { type: 'core://Tappable',
+        on_click: { intent: 'action.navigation.open', ref: recipe.id, params: { id: '$item.id' }, presentation: 'Push' },
+        content: { type: 'core://Box', height_dp: 64, padding_h_dp: 16,
+          content: { type: 'core://Text', style: 'Title', value_expr: '$item.name' } } } }] } } });
+  await tool('set_handle', { handle: 'webcook' });
+  const mealsReview = await tool('share_publicly', { layout: meals.id, slug: 'meals' });
+  check(mealsReview.anyone_with_the_link_reads.layouts.length === 2, 'the review lists the list and the recipe it opens');
+  const mealsLink = await tool('share_publicly', { layout: meals.id, slug: 'meals', confirm: mealsReview.review_id });
+  check(mealsLink.short_url && mealsLink.short_url.endsWith('/@webcook/meals'), 'shared at ' + mealsLink.short_url);
+
+  await page.goto(base + '/@webcook/meals');
+  await page.waitForSelector('body.ready', { timeout: 60000 });
+  await page.waitForTimeout(800);
+  check(!green(await pixel(page, 195, 600)), 'the short path opens the list');
+  await page.mouse.click(195, 96);
+  await page.waitForTimeout(1200);
+  await page.screenshot({ path: out + '/public-pushed.png' });
+  check(green(await pixel(page, 195, 600)), 'tapping a meal pushes its recipe from the copy');
+  await page.keyboard.press('Escape');
+  await page.waitForTimeout(1200);
+  check(!green(await pixel(page, 195, 600)), 'Back returns to the list');
+
   check(errors.length === 0, 'no page errors' + (errors.length ? ': ' + errors.join('; ') : ''));
   await browser.close();
 })().catch((e) => {

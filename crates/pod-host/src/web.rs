@@ -82,29 +82,81 @@ pub(crate) fn routes() -> Router<Arc<Host>> {
 }
 
 /// Public links (decision `public-web-links`, `CONSTRUCT_PUBLIC_WEB=1`):
-/// anyone with a link reads its copy, never the pod.
+/// anyone with a link reads its copy, never the pod. A chosen short path,
+/// `/@<handle>/<slug>`, answers the same copy (decision
+/// `public-links-share-the-closure`).
 pub(crate) fn public_routes() -> Router<Arc<Host>> {
     Router::new()
         .route("/s/{link}", get(public_page))
         .route("/s/{link}/view", get(public_view))
         .route("/s/{link}/image", get(public_image))
+        .route("/@{handle}/{slug}", get(short_page))
+        .route("/@{handle}/{slug}/view", get(short_view))
+        .route("/@{handle}/{slug}/image", get(short_image))
 }
 
-/// A live public copy by its link.
+/// Where the host doesn't serve public links (`CONSTRUCT_PUBLIC_WEB`
+/// unset): their addresses answer that sharing is paused, and the copies
+/// stay stored for when it is back.
+pub(crate) fn paused_routes() -> Router<Arc<Host>> {
+    Router::new()
+        .route("/s/{link}", get(paused))
+        .route("/s/{link}/{*rest}", get(paused))
+        .route("/@{handle}/{slug}", get(paused))
+        .route("/@{handle}/{slug}/{*rest}", get(paused))
+}
+
+/// The page a public link answers while sharing is paused.
+async fn paused() -> Response {
+    let page = "<!doctype html>\n<html lang=\"en\"><head><meta charset=\"utf-8\">\
+        <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\
+        <meta name=\"robots\" content=\"noindex\"><title>Sharing is paused</title>\
+        <style>body{font:16px/1.5 system-ui,sans-serif;max-width:32rem;margin:15vh auto;padding:0 16px;\
+        color:#222;background:#fafafa}@media(prefers-color-scheme:dark){body{color:#eee;background:#161616}}</style>\
+        </head><body><h1>Sharing is paused on this server</h1>\
+        <p>This page was shared from The Construct. Its owner's server isn't showing shared pages right now; \
+        the link will work again when it does.</p></body></html>";
+    let mut r = (StatusCode::SERVICE_UNAVAILABLE, page).into_response();
+    let h = r.headers_mut();
+    h.insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_static("text/html; charset=utf-8"),
+    );
+    h.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-cache"));
+    h.insert(header::RETRY_AFTER, HeaderValue::from_static("3600"));
+    r
+}
+
+/// How a visitor names a copy: its link, or a short path.
+enum Named {
+    Link(String),
+    Short(String, String),
+}
+
+/// A live public copy by its link or short path.
 async fn public_copy(
     host: &Arc<Host>,
-    link: &str,
+    named: Named,
 ) -> Option<pod_core::construct::share::PublicCopy> {
     use pod_core::construct::share::Shelf;
-    if !pod_core::public_copy::is_link(link) {
-        return None;
+    match &named {
+        Named::Link(l) if !pod_core::public_copy::is_link(l) => return None,
+        Named::Short(h, s)
+            if !pod_core::construct::share::valid_handle(h)
+                || !pod_core::public_copy::is_slug(s) =>
+        {
+            return None;
+        }
+        _ => {}
     }
     let shelf = crate::shelf::HostShelf::new(host.store.clone()).with_public_links(true);
-    let link = link.to_owned();
-    host.blocking(move |_| shelf.public_by_link(&link))
-        .await
-        .ok()?
-        .ok()?
+    host.blocking(move |_| match named {
+        Named::Link(l) => shelf.public_by_link(&l),
+        Named::Short(h, s) => shelf.public_by_slug(&h, &s),
+    })
+    .await
+    .ok()?
+    .ok()?
 }
 
 /// Text for HTML.
@@ -119,7 +171,19 @@ fn escape_html(s: &str) -> String {
 /// `GET /s/<link>`: the web client's page for a visitor, titled with the
 /// copy's title (a chat app's link preview shows it).
 async fn public_page(State(host): State<Arc<Host>>, Path(link): Path<String>) -> Response {
-    let (Some(d), Some(c)) = (dir(&host), public_copy(&host, &link).await) else {
+    page_of(host, Named::Link(link)).await
+}
+
+/// `GET /@<handle>/<slug>`: the same page by a short path.
+async fn short_page(
+    State(host): State<Arc<Host>>,
+    Path((handle, slug)): Path<(String, String)>,
+) -> Response {
+    page_of(host, Named::Short(handle, slug)).await
+}
+
+async fn page_of(host: Arc<Host>, named: Named) -> Response {
+    let (Some(d), Some(c)) = (dir(&host), public_copy(&host, named).await) else {
         return not_found();
     };
     let Some((page, kind)) = file(d, "index.html").await else {
@@ -137,10 +201,21 @@ async fn public_page(State(host): State<Arc<Host>>, Path(link): Path<String>) ->
     served(page.into_bytes(), kind, "no-cache")
 }
 
-/// `GET /s/<link>/view`: the copy a visitor's page draws
-/// (`{title, node, data, item?}`).
+/// `GET /s/<link>/view`: the copy a visitor's page draws, unchanged
+/// (`{format, layout, title, node, data, item?, params?, layouts?}`).
 async fn public_view(State(host): State<Arc<Host>>, Path(link): Path<String>) -> Response {
-    match public_copy(&host, &link).await {
+    view_of(host, Named::Link(link)).await
+}
+
+async fn short_view(
+    State(host): State<Arc<Host>>,
+    Path((handle, slug)): Path<(String, String)>,
+) -> Response {
+    view_of(host, Named::Short(handle, slug)).await
+}
+
+async fn view_of(host: Arc<Host>, named: Named) -> Response {
+    match public_copy(&host, named).await {
         Some(c) => {
             let mut r = axum::Json(c.copy).into_response();
             r.headers_mut()
@@ -158,7 +233,19 @@ async fn public_image(
     Path(link): Path<String>,
     RawQuery(q): RawQuery,
 ) -> Response {
-    let Some(c) = public_copy(&host, &link).await else {
+    image_of(host, Named::Link(link), q).await
+}
+
+async fn short_image(
+    State(host): State<Arc<Host>>,
+    Path((handle, slug)): Path<(String, String)>,
+    RawQuery(q): RawQuery,
+) -> Response {
+    image_of(host, Named::Short(handle, slug), q).await
+}
+
+async fn image_of(host: Arc<Host>, named: Named, q: Option<String>) -> Response {
+    let Some(c) = public_copy(&host, named).await else {
         return not_found();
     };
     let Some(url) = url_param(q) else {
