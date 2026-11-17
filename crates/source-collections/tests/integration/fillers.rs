@@ -108,6 +108,22 @@ END:VCALENDAR\r\n"
         .into_response()
 }
 
+/// A long calendar: 300 past events listed before an upcoming one.
+async fn long_ics() -> Response {
+    let mut feed = String::from("BEGIN:VCALENDAR\r\n");
+    for i in 0..300 {
+        feed.push_str(&format!(
+            "BEGIN:VEVENT\r\nUID:past{i}\r\nSUMMARY:Old market {i}\r\nDTSTART:2020{:02}{:02}T100000\r\nEND:VEVENT\r\n",
+            i % 12 + 1,
+            i % 28 + 1
+        ));
+    }
+    feed.push_str(
+        "BEGIN:VEVENT\r\nUID:fest\r\nSUMMARY:Valley Film Festival\r\nDTSTART:20990121\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n",
+    );
+    feed.into_response()
+}
+
 /// A show's own page with the full lineup.
 async fn show_page() -> Response {
     r#"<script type="application/ld+json">{"@type":"Event","name":"Friday Improv","startDate":"2099-11-06T19:30:00-07:00",
@@ -127,6 +143,7 @@ async fn serve(site: Arc<Site>) -> String {
         .route("/p/{id}", get(product))
         .route("/private.json", get(private_feed))
         .route("/club.ics", get(club_ics))
+        .route("/long.ics", get(long_ics))
         .route("/shows/{id}", get(show_page))
         .route("/plain", get(plain_page))
         .route("/echo", get(echo))
@@ -909,6 +926,53 @@ async fn a_reworded_refill_keeps_its_rows_and_doesnt_notify_again() {
     );
     source_collections::alerts::run(&pod, None).await;
     assert_eq!(notified(&pod), 2, "only the new show notifies");
+}
+
+#[tokio::test]
+async fn a_long_feeds_upcoming_event_keeps_its_row_and_alerts_once() {
+    // More past events than a fill keeps, listed before the upcoming one: it
+    // is still filled, and a refill keeps its row, so its alert notifies once.
+    let base = serve(Arc::new(Site::default())).await;
+    let pod = pod_with(None);
+    ok(
+        &pod,
+        "define_collection",
+        json!({"name": "events", "fields": [
+            {"name": "source_id", "type": "text", "optional": true},
+            {"name": "title", "type": "text", "optional": true},
+            {"name": "start", "type": "datetime", "optional": true}],
+        "fillers": [{"kind": "fetch", "title": "Valley calendar", "url": format!("{base}/long.ics"),
+            "extract": "events", "key": "source_id", "upcoming": "start", "zone": "America/Denver",
+            "map": {"source_id": "id", "title": "title", "start": "start"}}],
+        "alerts": [{"name": "Festivals", "any": ["festival"]}]}),
+    )
+    .await;
+    settle(&pod, "events").await;
+    let first = rows(&pod, "events").await;
+    assert_eq!(first.len(), 1, "{first:?}");
+    assert_eq!(first[0]["title"], "Valley Film Festival");
+    let id = filler_ids(&pod, "events").await.remove(0);
+    fill::fill(&pod, "events", &id, true).await;
+    let again = rows(&pod, "events").await;
+    assert_eq!(again.len(), 1);
+    assert_eq!(again[0]["id"], first[0]["id"], "the row stays");
+    let st = ok(&pod, "collections_status", json!({"collection": "events"})).await;
+    let detail = st["fillers"][0]["detail"].as_str().unwrap();
+    assert!(
+        detail.starts_with("1 items · 300 past ones left out"),
+        "{detail}"
+    );
+    let sent: i64 = pod
+        .store()
+        .with_conn(|c| {
+            c.query_row(
+                "SELECT COUNT(*) FROM notifications WHERE dedupe_key LIKE 'alert:events:%'",
+                [],
+                |r| r.get(0),
+            )
+        })
+        .unwrap();
+    assert_eq!(sent, 1, "notified once");
 }
 
 #[tokio::test]
