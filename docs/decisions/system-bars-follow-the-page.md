@@ -22,3 +22,7 @@ Consequences: any colour a pod's layout or theme paints at the screen's edges sh
 Boxes inside a scrolling view don't count (a bar's colour doesn't flicker as rows pass the edge), and a side panel
 leaves the status bar the colour of the dimmed page under it. Desktop and the simulator have no bars and ignore the
 call.
+
+Later the same day: sheets, shades (an overlay from the top) and panels kept the theme's surface, so a layout on the
+page colour showed surface-coloured bands at its handle strip and under the bars. They are now drawn on their own
+layout's page colour (where it meets the handle strip, or the top for a panel), and the handle is a tint of it.

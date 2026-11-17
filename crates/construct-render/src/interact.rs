@@ -2651,7 +2651,7 @@ impl Session {
         let mut bars = [theme.background; 2];
         for &i in &visible {
             let p = self.progress(i, now);
-            let (frame, content, _) = self.frame_rects(i);
+            let (frame, content, entry_insets) = self.frame_rects(i);
             let e = &self.stack[i];
             // Only the top layout's nodes can be pressed, as tapped.
             let pressed = self.pressed.as_ref().filter(|_| i >= top_group);
@@ -2694,6 +2694,16 @@ impl Session {
             };
             let frame_now = [frame[0] + fx, frame[1] + fy, frame[2], frame[3]];
             let (laid, _) = e.laid.as_ref().expect("laid out");
+            // The layout's page colour at each edge, and what a sheet or
+            // panel is drawn on: its page where it meets the handle strip
+            // (or the top, for a panel), else the theme's surface.
+            let edges = laid.edge_colors();
+            let sheet_fill = match e.frame {
+                Frame::Edge(protocol::Edge::Top) => edges[2],
+                _ => edges[0],
+            }
+            .or_else(|| edges.iter().flatten().next().copied())
+            .unwrap_or(theme.surface);
             let shown = p >= 0.5;
             if !e.in_frame && shown {
                 match e.frame {
@@ -2708,10 +2718,10 @@ impl Session {
                             protocol::Edge::Start => 3,
                         };
                         if side == 0 {
-                            bars[0] = theme.surface;
+                            bars[0] = edges[0].unwrap_or(sheet_fill);
                         }
                         if side == nav_edge {
-                            bars[1] = theme.surface;
+                            bars[1] = edges[nav_edge].unwrap_or(sheet_fill);
                         }
                     }
                 }
@@ -2746,7 +2756,6 @@ impl Session {
                     }
                     // The page's own colour under the system bars, as each
                     // edge of it is drawn.
-                    let edges = laid.edge_colors();
                     inset_bands(&mut scene, frame_now, insets, &edges);
                     if shown {
                         bars = [edges[0], edges[nav_edge]].map(|c| c.unwrap_or(theme.background));
@@ -2819,7 +2828,7 @@ impl Session {
                         protocol::Edge::Start => [0.0, 16.0, 16.0, 0.0],
                         protocol::Edge::End => [16.0, 0.0, 0.0, 16.0],
                     };
-                    let mut surface = QuadInstance::fill(frame_now, theme.surface, 0.0).shadow(
+                    let mut surface = QuadInstance::fill(frame_now, sheet_fill, 0.0).shadow(
                         Rgba([0.0, 0.0, 0.0, 0.25]),
                         [0.0, 2.0],
                         8.0,
@@ -2834,14 +2843,29 @@ impl Session {
                         } else {
                             frame_now[1] + frame_now[3] - 12.0
                         };
+                        // A tint of the sheet's own colour, so it reads on any page.
+                        let grip = if sheet_fill.is_light() {
+                            Rgba([0.0, 0.0, 0.0, 0.22])
+                        } else {
+                            Rgba([1.0, 1.0, 1.0, 0.28])
+                        };
                         let handle = QuadInstance::fill(
                             [frame_now[0] + frame_now[2] / 2.0 - 16.0, hy, 32.0, 4.0],
-                            theme.muted_text.with_alpha(0.4),
+                            grip,
                             2.0,
                         );
                         scene.draws.push(Draw::Quad(handle));
                     }
                     let origin = (content[0] + fx, content[1] + fy);
+                    // Its page under the system bars too, where it differs
+                    // from what the sheet is drawn on.
+                    let differing = edges.map(|c| c.filter(|c| *c != sheet_fill));
+                    inset_bands(
+                        &mut scene,
+                        [origin.0, origin.1, content[2], content[3]],
+                        entry_insets,
+                        &differing,
+                    );
                     let mut clip = frame_now;
                     if matches!(edge, protocol::Edge::Bottom | protocol::Edge::Top) {
                         clip = [origin.0, origin.1, content[2], content[3]];
