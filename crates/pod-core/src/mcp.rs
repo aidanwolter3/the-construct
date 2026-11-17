@@ -394,8 +394,8 @@ fn base_tools() -> Vec<Value> {
         ),
         tool(
             "set_theme",
-            "The pod's theme colours, each with a light and a dark value; layouts bind them as ${local://theme#<token>} and the app picks the value for the device's mode. Without theme: answers the current theme and its tokens.",
-            json!({ "theme": { "type": "object", "description": "{token: {light?: #RRGGBB, dark?: #RRGGBB}}, or flat: {token: #RRGGBB (light), token_dark: #RRGGBB}. A token left unset follows the default for each mode." } }),
+            "The pod's theme colours, each with a light and a dark value; layouts bind them as ${local://theme#<token>} and the app picks the value for the device's mode. Besides the built-in tokens, a pod may name up to 40 of its own (e.g. a colour per category, a toolbar's fill): any new name [a-z][a-z0-9_]{0,31}, not ending in _dark; give it a light and a dark value (one alone is used for both). Without theme: answers the current theme and its tokens.",
+            json!({ "theme": { "type": "object", "description": "{token: {light?: #RRGGBB, dark?: #RRGGBB}}, or flat: {token: #RRGGBB (light), token_dark: #RRGGBB}. A built-in token left unset follows its default for each mode; {token: null} puts a built-in back to its defaults or removes a token of the pod's own." } }),
             &[],
         ),
     ]
@@ -507,10 +507,18 @@ async fn set_theme(pod: &Pod, args: &Value) -> Result<Value, Value> {
     .map_err(store_err)?;
     match r {
         Ok(t) => {
-            let tokens: serde_json::Map<String, Value> = crate::porcelain::THEME_TOKENS
+            let mut tokens: serde_json::Map<String, Value> = crate::porcelain::THEME_TOKENS
                 .iter()
                 .map(|(t, _, _, what)| ((*t).to_owned(), json!(what)))
                 .collect();
+            for own in t
+                .keys()
+                .filter(|k| !tokens.contains_key(*k))
+                .cloned()
+                .collect::<Vec<_>>()
+            {
+                tokens.insert(own, json!("the pod's own token"));
+            }
             Ok(json!({ "ok": true, "theme": t, "tokens": tokens,
             "use": "bind ${local://theme#<token>} where a colour goes (core://Box background, border_color, content_color; core://IconButton active_tint; core://List focus colours) instead of a fixed #RRGGBB, so the layout follows the device's light or dark mode: page for a page's background, card for cards and rows on it, card_border for their borders, muted_text for secondary text. Devices pick a change up the next time they load the layout." }))
         }
