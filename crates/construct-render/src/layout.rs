@@ -3186,6 +3186,33 @@ const PRESSED_ALPHA: f32 = 0.10;
 /// How much a hovered row is washed with: half a press.
 const HOVER_ALPHA: f32 = 0.05;
 
+/// The corner radii (top left, top right, bottom right, bottom left) of a
+/// box inside a rounded box `outer` (radius `r`): each of its corners
+/// within `r` of a corner of `outer` is rounded to follow it (concentric:
+/// `r` less how far in it is), at least `own`.
+fn shared_corners(rect: [f32; 4], outer: [f32; 4], r: f32, own: [f32; 4]) -> [f32; 4] {
+    let left = rect[0] - outer[0];
+    let right = outer[0] + outer[2] - (rect[0] + rect[2]);
+    let top = rect[1] - outer[1];
+    let bottom = outer[1] + outer[3] - (rect[1] + rect[3]);
+    let max = rect[2].min(rect[3]) / 2.0;
+    let corner = |dx: f32, dy: f32| {
+        let inset = dx.max(dy);
+        if dx < -0.5 || dy < -0.5 || inset >= r {
+            0.0
+        } else {
+            (r - inset.max(0.0)).min(max)
+        }
+    };
+    let follow = [
+        corner(left, top),
+        corner(right, top),
+        corner(right, bottom),
+        corner(left, bottom),
+    ];
+    std::array::from_fn(|k| own[k].max(follow[k]))
+}
+
 /// A dashed border's dashes and gaps (points), before they are stretched
 /// to fit the box (`core://Box` `border_style: Dashed`).
 const BORDER_DASH: f32 = 4.0;
@@ -3233,6 +3260,9 @@ struct At {
     /// The nearest opaque background around it (a page's `core://Box`
     /// `background`, or the theme's): what shows behind it.
     backdrop: Rgba,
+    /// The nearest rounded box around it and its corner radius (a card
+    /// grouping rows): a pressed row in its corner is rounded as it is.
+    rounded: Option<([f32; 4], f32)>,
 }
 
 /// A laid-out frame: the taffy tree and what each node paints. Scrolling
@@ -3355,6 +3385,7 @@ impl Laid {
             scrolled: 0.0,
             parent: [offset.0, offset.1, vp.width, vp.height],
             backdrop: self.theme.background,
+            rounded: None,
         };
         let mut pinned = Vec::new();
         self.emit_at(
@@ -3564,6 +3595,12 @@ impl Laid {
                 Paint::Quad { bg, .. } if bg.0[3] >= 0.999 => *bg,
                 _ => at.backdrop,
             },
+            rounded: match &e.paint {
+                Paint::Quad { radius, .. } | Paint::Image { radius, .. } if *radius > 0.0 => {
+                    Some((rect, radius.min(w.min(h) / 2.0)))
+                }
+                _ => at.rounded,
+            },
         };
         let mut own_pins = Vec::new();
         let scrolls = e.scrolls && e.sem.is_some();
@@ -3630,6 +3667,7 @@ impl Laid {
                 scrolled: 0.0,
                 parent: rect,
                 backdrop: p.backdrop,
+                rounded: None,
             };
             let mut none = Vec::new();
             self.emit_at(
@@ -3648,7 +3686,7 @@ impl Laid {
             self.paint_card_tint(e, rect, clip, card_dx, *threshold, scene);
         }
         if visible && let Some(p) = pressed {
-            self.paint_pressed(e, rect, clip, p, scene);
+            self.paint_pressed(e, rect, clip, at.rounded, p, scene);
         }
     }
 
@@ -3694,12 +3732,15 @@ impl Laid {
     }
 
     /// A pressed `core://Tappable`: a wash over what it drew, in its box
-    /// (rounded as its one child is: a card's corners), inside its clip.
+    /// (rounded as its one child is: a card's corners; and, where a corner
+    /// of it is a corner of the rounded box around it, as that box is: the
+    /// first and last rows of a card of rows), inside its clip.
     fn paint_pressed(
         &self,
         e: &Elem,
         rect: [f32; 4],
         clip: [f32; 4],
+        around: Option<([f32; 4], f32)>,
         p: &Pressed,
         scene: &mut Scene,
     ) {
@@ -3716,6 +3757,9 @@ impl Laid {
                 .with_alpha(if p.hover { HOVER_ALPHA } else { PRESSED_ALPHA }),
             self.one_child_radius(e),
         );
+        if let Some((b, r)) = around {
+            q.radii = shared_corners(rect, b, r, q.radii);
+        }
         q.clip = clip;
         scene.draws.push(Draw::Quad(q));
     }

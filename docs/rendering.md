@@ -105,7 +105,7 @@ and a GameActivity, and the app is a NativeActivity with no Java (issue #172).
 Drawn like the app: Page, Workspace (title and slots), Column, Row, Container, Box, Text (styles, `count`), Button,
 IconButton (`active`), Chip, Badge, Spacer, Divider, Conditional, Container (children 8 points apart; horizontal
 ones wrap), Tappable (while a finger or the mouse button is down on it, a wash of the text colour at 10% darkens it on
-a light page and lightens it on a dark one, rounded as its one child is; it goes when the finger lifts or the touch
+a light page and lightens it on a dark one, rounded as its one child is and, at a corner of the rounded box around it (the first or last row of a card of rows), as that box is, concentric with it; it goes when the finger lifts or the touch
 becomes a scroll or swipe: `Session::press` / `release_press`; a mouse resting over it with no button down, on desktop
 and the web, washes it at 5% and the pointer becomes a hand: `Session::hover` / `hover_end`, never called on touch, so phones
 draw as before; decision `wide-screen-panels`), Gesture (tap), Scroll (clipped, offsets; with `follow_end`, a tap outside it, such as a
