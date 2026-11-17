@@ -57,23 +57,30 @@
         },
         "children": [
           {
-            "type": "core://List",
-            "data": "collections://notes",
-            "item": {
-              "type": "core://Column",
-              "padding_h_dp": 16,
-              "padding_v_dp": 12,
-              "children": [
-                {
-                  "type": "core://Text",
-                  "value_expr": "$item.title",
-                  "style": "Body"
-                }
-              ]
+            "type": "core://Use",
+            "component": "core:icon_row",
+            "args": {
+              "icon": "home",
+              "title": "Garden shed",
+              "meta": "Painted in May",
+              "chevron": true
+            }
+          },
+          {
+            "type": "core://Divider"
+          },
+          {
+            "type": "core://Use",
+            "component": "core:icon_row",
+            "args": {
+              "icon": "flight",
+              "title": "Weekend in Porto",
+              "meta": "Mar 3–5",
+              "chevron": true
             }
           }
         ],
-        "note": "a list of notes, tighter corners"
+        "note": "two icon rows that open something, tighter corners"
       }
     ]
   }
