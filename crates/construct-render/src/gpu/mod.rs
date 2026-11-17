@@ -192,11 +192,24 @@ type Layers = (
     Vec<Vec<GlyphRun>>,
 );
 
-/// An image (cut to the request's size) or an icon's mask, for the atlas.
+/// The custom glyph a `core://Text` `strike` line is drawn as: past the
+/// last image id ([`crate::images::FIRST_GLYPH_ID`] onwards stops short of
+/// it).
+const STRIKE_GLYPH_ID: u16 = u16::MAX;
+
+/// An image (cut to the request's size), an icon's mask or a strike line's
+/// solid one, for the atlas.
 fn rasterize(
     images: Option<&crate::images::ImageStore>,
     req: glyphon::RasterizeCustomGlyphRequest,
 ) -> Option<RasterizedCustomGlyph> {
+    if req.id == STRIKE_GLYPH_ID {
+        // A solid mask: tinted with its text's colour.
+        return Some(RasterizedCustomGlyph {
+            data: vec![255; req.width as usize * req.height as usize],
+            content_type: ContentType::Mask,
+        });
+    }
     if req.id >= crate::images::FIRST_GLYPH_ID {
         let store = images?;
         let (url, radius) = store.glyph(req.id)?;
@@ -530,25 +543,53 @@ impl Renderer {
         for (li, runs) in text_layers.iter().enumerate() {
             let buffers: Vec<&glyphon::Buffer> =
                 runs.iter().map(|t| &self.shaped[&key(t)].0).collect();
-            let areas = runs.iter().zip(buffers).map(|(t, b)| {
-                let [cx, cy, cw, ch] = t.clip.map(|v| v * s);
-                let bounds = TextBounds {
-                    left: cx.max(-1.0e6) as i32,
-                    top: cy.max(-1.0e6) as i32,
-                    right: (cx + cw).min(1.0e6) as i32,
-                    bottom: (cy + ch).min(1.0e6) as i32,
-                };
-                let c = t.color.to_u8();
-                TextArea {
-                    buffer: b,
-                    left: (t.rect[0] * s).round(),
-                    top: (t.rect[1] * s).round(),
-                    scale: 1.0,
-                    bounds,
-                    default_color: glyphon::Color::rgba(c[0], c[1], c[2], c[3]),
-                    custom_glyphs: &[],
-                }
-            });
+            // A text's strike lines are custom glyphs of its own area, so
+            // they take its colour and clip (the same pixels as the CPU's).
+            let strikes: Vec<Vec<CustomGlyph>> = runs
+                .iter()
+                .zip(&buffers)
+                .map(|(t, b)| {
+                    if !t.strike {
+                        return Vec::new();
+                    }
+                    crate::text::strike_lines(b, t.ty(), s)
+                        .into_iter()
+                        .map(|[x, y, w, h]| CustomGlyph {
+                            id: STRIKE_GLYPH_ID,
+                            left: x as f32,
+                            top: y as f32,
+                            width: w as f32,
+                            height: h as f32,
+                            color: None,
+                            snap_to_physical_pixel: true,
+                            metadata: 0,
+                        })
+                        .collect()
+                })
+                .collect();
+            let areas = runs
+                .iter()
+                .zip(buffers)
+                .zip(&strikes)
+                .map(|((t, b), strike)| {
+                    let [cx, cy, cw, ch] = t.clip.map(|v| v * s);
+                    let bounds = TextBounds {
+                        left: cx.max(-1.0e6) as i32,
+                        top: cy.max(-1.0e6) as i32,
+                        right: (cx + cw).min(1.0e6) as i32,
+                        bottom: (cy + ch).min(1.0e6) as i32,
+                    };
+                    let c = t.color.to_u8();
+                    TextArea {
+                        buffer: b,
+                        left: (t.rect[0] * s).round(),
+                        top: (t.rect[1] * s).round(),
+                        scale: 1.0,
+                        bounds,
+                        default_color: glyphon::Color::rgba(c[0], c[1], c[2], c[3]),
+                        custom_glyphs: strike,
+                    }
+                });
             // Icons are custom glyphs: one area each (each has its own clip),
             // over an empty buffer, rasterized from their paths on demand.
             let glyphs: Vec<[CustomGlyph; 1]> = icon_layers[li]

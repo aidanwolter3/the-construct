@@ -1239,6 +1239,7 @@ impl<'i> Build<'_, 'i> {
                 weight,
                 caps,
                 max_lines,
+                strike,
             } => {
                 let mut text = match format {
                     Some(f) => self.dated(value_expr, f, &ctx),
@@ -1257,6 +1258,7 @@ impl<'i> Build<'_, 'i> {
                     ty.face = ty.face.with_weight(*w);
                 }
                 ty.max_lines = max_lines.unwrap_or(0).min(protocol::MAX_TEXT_LINES);
+                ty.strike = *strike;
                 let color = if *style == TextStyle::Secondary && b.color.is_none() {
                     theme.muted_text
                 } else {
@@ -3186,6 +3188,72 @@ impl Laid {
         &self.theme
     }
 
+    /// The page colour at each edge of the content (top, right, bottom,
+    /// left), for the window's insets around it (the system bars): the
+    /// opaque, square box drawn last (on top) that spans that whole edge,
+    /// such as a page's `core://Box` with `fill` and `background`, or a
+    /// coloured header across the top of it. Nothing inside a
+    /// scrolling view, carousel, sideways row or swipe card counts (it
+    /// moves). `None` where no box spans the edge: the theme's page shows.
+    pub fn edge_colors(&self) -> [Option<Rgba>; 4] {
+        let Ok(root) = self.tree.layout(self.elems[self.root].node) else {
+            return [None; 4];
+        };
+        let p = root.padding;
+        let content = [
+            p.left,
+            p.top,
+            root.size.width - p.left - p.right,
+            root.size.height - p.top - p.bottom,
+        ];
+        let mut out = [None; 4];
+        let mut stack: Vec<(usize, (f32, f32))> = self.elems[self.root]
+            .kids
+            .iter()
+            .rev()
+            .map(|&k| (k, (0.0, 0.0)))
+            .collect();
+        // In drawing order (depth first, parents before children): a later
+        // box is drawn over an earlier one.
+        while let Some((i, origin)) = stack.pop() {
+            let e = &self.elems[i];
+            let Ok(l) = self.tree.layout(e.node) else {
+                continue;
+            };
+            let r = [
+                origin.0 + l.location.x,
+                origin.1 + l.location.y,
+                l.size.width,
+                l.size.height,
+            ];
+            if let Paint::Quad { bg, radius, .. } = &e.paint
+                && bg.0[3] >= 0.999
+                && *radius < 0.5
+            {
+                const E: f32 = 0.5;
+                let spans_w = r[0] <= content[0] + E && r[0] + r[2] >= content[0] + content[2] - E;
+                let spans_h = r[1] <= content[1] + E && r[1] + r[3] >= content[1] + content[3] - E;
+                let at_top = spans_w && r[1] <= content[1] + E;
+                let at_bottom = spans_w && r[1] + r[3] >= content[1] + content[3] - E;
+                let at_left = spans_h && r[0] <= content[0] + E;
+                let at_right = spans_h && r[0] + r[2] >= content[0] + content[2] - E;
+                for (k, at) in [at_top, at_right, at_bottom, at_left]
+                    .into_iter()
+                    .enumerate()
+                {
+                    if at {
+                        out[k] = Some(*bg);
+                    }
+                }
+            }
+            let moves = e.scrolls || e.pager.is_some() || e.slides.is_some() || e.card.is_some();
+            if !moves {
+                stack.extend(e.kids.iter().rev().map(|&k| (k, (r[0], r[1]))));
+            }
+        }
+        out
+    }
+
     /// How tall the root's content is (a bar laid out on its own).
     pub fn used_height(&self) -> f32 {
         self.content_height(&self.elems[self.root])
@@ -3500,6 +3568,7 @@ impl Laid {
                     line_height: ty.line_height,
                     tracking: ty.tracking,
                     max_lines: ty.max_lines,
+                    strike: ty.strike,
                     color: *color,
                     rect: [px, py, pw, ph],
                     clip,

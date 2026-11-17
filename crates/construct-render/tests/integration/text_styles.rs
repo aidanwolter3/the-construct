@@ -1,10 +1,12 @@
-//! `core://Text` `weight`, `caps` and `max_lines`, and `core://Conditional`
-//! `not` and `count` (decision `text-weight-caps-lines`).
+//! `core://Text` `weight`, `caps`, `max_lines` and `strike`, and
+//! `core://Conditional` `not` and `count` (decision
+//! `text-weight-caps-lines`).
 
 use std::collections::BTreeMap;
 
 use construct_render::Viewport;
-use construct_render::scene::TextRun;
+use construct_render::cpu::CpuRenderer;
+use construct_render::scene::{Scene, TextRun};
 use construct_render::style::Face;
 use construct_render::text::TextEngine;
 use protocol::{DataBundle, UiNode};
@@ -183,6 +185,87 @@ fn max_lines_ends_a_longer_text_in_an_ellipsis() {
     assert_eq!(shaped(&runs[3]), ["Short"]);
     // Screen readers read it whole.
     assert!(read_out(&root, &data).iter().filter(|t| *t == long).count() == 3);
+}
+
+/// The longest stretch of dark pixels along any one row of `run`'s box in
+/// `frame`, and that row (device pixels).
+pub fn longest_dark_row(frame: &image::RgbaImage, run: &TextRun, scale: f32) -> (u32, u32) {
+    let [x, y, w, h] = run.rect.map(|v| (v * scale).round() as u32);
+    let mut best = (0, 0);
+    for row in y..(y + h).min(frame.height()) {
+        let mut stretch = 0;
+        for col in x..(x + w).min(frame.width()) {
+            if frame.get_pixel(col, row).0[0] < 128 {
+                stretch += 1;
+                if stretch > best.0 {
+                    best = (stretch, row);
+                }
+            } else {
+                stretch = 0;
+            }
+        }
+    }
+    best
+}
+
+/// A plain and a struck-through "Milk and eggs", built and drawn by the CPU.
+pub fn struck_scene() -> (Scene, TextEngine) {
+    let root = column(json!([
+        {"type": "core://Text", "style": "Body", "value_expr": "Milk and eggs"},
+        {"type": "core://Text", "style": "Body", "value_expr": "Milk and eggs", "strike": true},
+        {"type": "core://Text", "style": "Body", "value_expr": "Milk and eggs", "strike": true,
+         "max_lines": 1, "weight": "Bold"}
+    ]));
+    let scene = build(
+        &root,
+        &DataBundle::default(),
+        &BTreeMap::new(),
+        Viewport::PHONE,
+    );
+    (scene, TextEngine::new())
+}
+
+#[test]
+fn strike_draws_a_line_through_the_middle_of_the_text() {
+    let (scene, mut engine) = struck_scene();
+    let runs: Vec<TextRun> = scene.texts().cloned().collect();
+    assert_eq!(
+        runs.iter().map(|r| r.strike).collect::<Vec<_>>(),
+        [false, true, true]
+    );
+    let s = scene.scale;
+    let frame = CpuRenderer::new().render(&scene, &mut engine);
+    let wide = |run: &TextRun, engine: &mut TextEngine| {
+        let buffer = engine.buffer(&run.text, run.ty(), Some(run.rect[2] + 0.5), s);
+        construct_render::text::strike_lines(&buffer, run.ty(), s)
+    };
+    // Plain text has gaps along every row (between letters and words).
+    let lines = wide(&runs[1], &mut engine);
+    assert_eq!(lines.len(), 1, "{lines:?}");
+    let [_, _, line_w, line_h] = lines[0];
+    assert_eq!(line_h, s.round() as i32);
+    let (plain, _) = longest_dark_row(&frame, &runs[0], s);
+    assert!((plain as i32) < line_w / 3, "{plain} of {line_w}");
+    for run in &runs[1..] {
+        // Struck through: one row is dark across the whole text...
+        let (dark, row) = longest_dark_row(&frame, run, s);
+        let width = wide(run, &mut engine)[0][2];
+        assert!(dark as i32 >= width - 2, "{dark} of {width}");
+        // ...through its middle: between the baseline and the top of its
+        // capitals, not at the top or bottom of the line.
+        let top = run.rect[1] * s;
+        let mid = (row as f32 - top) / (run.line_height * s);
+        assert!((0.35..0.75).contains(&mid), "{mid}");
+    }
+    // The text reads as written.
+    assert!(
+        scene
+            .semantics
+            .iter()
+            .filter(|n| n.text_content.as_deref() == Some("Milk and eggs"))
+            .count()
+            == 3
+    );
 }
 
 fn inbox(unread: &str) -> DataBundle {
