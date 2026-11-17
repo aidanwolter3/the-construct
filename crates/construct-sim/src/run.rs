@@ -332,6 +332,10 @@ impl Runner {
                 self.session.set_dark(*dark);
                 done("")
             }
+            Step::Insets(insets) => {
+                self.session.set_insets(*insets);
+                done("")
+            }
             Step::Clock(at) => {
                 self.opts.now = Some(*at);
                 self.session.set_clock(clock(&self.opts));
