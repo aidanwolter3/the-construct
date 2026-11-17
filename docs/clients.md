@@ -91,6 +91,15 @@ the next reload picks up, a phone-sized window and logging out.
   browser; their data comes in the background (`/v1/construct/data/…`) and the events stream keeps them current (an
   agent's edit or a new row appears without a reload). It draws the window's size: `local://device#size_class` and
   the rest of decision `screen-sizes` follow the browser window, and `local://device#platform` is `web`.
+- **Upstream sign-ins** (Settings' **Sign in to Pixelfed**, a layout's `action.auth.login`; decision
+  [`web-upstream-sign-in`](decisions/web-upstream-sign-in.md)): the page itself is the redirect. The client registers
+  `<origin>/web` with the pod (`POST /v1/auth/pixelfed/app`), keeps the PKCE verifier and `state` in the tab's
+  `sessionStorage` and goes to the instance's authorize page; the instance sends the tab back to
+  `/web?code=…&state=…`, and the client, before it draws, trades the code at the pod (`POST /v1/auth/pixelfed/token`),
+  which adds the sign-in to the browser's session. Progress and errors show in Settings under Sign-ins. The pod accepts
+  the redirect only as a `PIXELFED_EXTRA_REDIRECTS` entry (staging lists `https://the-construct-pod.fly.dev/web`; a
+  local server needs `PIXELFED_EXTRA_REDIRECTS=http://127.0.0.1:8080/web`). **Sign out** ends the browser's session,
+  as on a native client's session that isn't a pod code's.
 - **Fonts and images** are fetched, not built in: the faces before the first frame, the symbol and emoji fallbacks
   after it (`/web/fonts/<file>`). Images of other sites go through the pod's proxy (`/web/image`).
 - **Caching**: `scripts/web_build.sh` names the script, WebAssembly and style by a hash of their content
@@ -110,9 +119,9 @@ the next reload picks up, a phone-sized window and logging out.
   copy carries pushes it from the copy, with the row's params, and Back (Escape) returns; a link a layout opens
   (`action.link.open`) opens in a new tab. `construct_render::public::session` builds the page's session and reads
   every copy format a server has served.
-- **Not yet**: drags of cards, pagers and sheets; photo picking; upstream sign-ins (Pixelfed); notifications and an
-  offline cache; screen readers (the canvas has no accessibility tree yet). It sends the features it can draw minus
-  `media_picker`, `auth_login` and `device_notification_permission`, so the pod serves older versions without them.
+- **Not yet**: drags of cards, pagers and sheets; photo picking; notifications and an offline cache; screen readers
+  (the canvas has no accessibility tree yet). It sends the features it can draw minus `media_picker` and
+  `device_notification_permission`, so the pod serves older versions without them.
   On the GPU a scroll redraws in a frame; on the CPU fallback a whole 1280 × 800 window takes about 50 ms (90 ms at
   twice the density).
 

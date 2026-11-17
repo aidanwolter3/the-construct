@@ -13,13 +13,11 @@ use std::sync::Arc;
 pub const HOME: &str = "home";
 
 /// Features this client can't draw (decision `web-client`): no photo
-/// picker, no upstream sign-in redirect and no notification permission in a
-/// browser yet, so the pod serves the newest versions without them.
-pub const NOT_ON_THE_WEB: [&str; 3] = [
-    "media_picker",
-    "auth_login",
-    "device_notification_permission",
-];
+/// picker and no notification permission in a browser yet, so the pod
+/// serves the newest versions without them. Upstream sign-ins
+/// (`auth_login`) go through the page itself (decision
+/// `web-upstream-sign-in`).
+pub const NOT_ON_THE_WEB: [&str; 2] = ["media_picker", "device_notification_permission"];
 
 /// The features this client sends in `x-construct-features`: every one the
 /// renderer draws but [`NOT_ON_THE_WEB`].

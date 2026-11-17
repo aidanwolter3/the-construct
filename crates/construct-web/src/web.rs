@@ -32,6 +32,7 @@ use web_sys::{
 };
 
 use crate::construct::{Construct, HOME, features_header, take_events};
+use crate::signin;
 
 /// The frame must be drawn again (something arrived).
 static DIRTY: AtomicBool = AtomicBool::new(true);
@@ -112,6 +113,9 @@ struct State {
     /// Device data paths' last answers (notifications, channels, sign-ins).
     device: HashMap<String, Value>,
     changes: Option<Changes>,
+    /// An upstream sign-in's progress or why it failed, shown as
+    /// `local://session#status` (Settings' line under Sign-ins).
+    sign_in_status: Option<String>,
 }
 
 impl State {
@@ -130,12 +134,19 @@ impl State {
     fn device(&self, needs: &str) -> DataBundle {
         let base = window().location().origin().unwrap_or_default();
         let titles = self.construct.titles();
-        device_data::device(&base, needs, &titles, |p| {
+        let mut out = device_data::device(&base, needs, &titles, |p| {
             self.device
                 .get(p)
                 .cloned()
                 .ok_or_else(|| "not loaded".to_owned())
-        })
+        });
+        if let (Some(s), Some(e)) = (
+            &self.sign_in_status,
+            out.entities.get_mut("local://session"),
+        ) {
+            e.set("status", s.clone());
+        }
+        out
     }
 }
 
@@ -204,6 +215,119 @@ impl WebLoader {
                 self.lock().device.insert(p.to_owned(), v);
             }
         }
+    }
+
+    /// Shows a sign-in's progress (`None`: nothing) where Settings reads it,
+    /// with the sign-ins as they are now.
+    fn sign_in_status(&self, status: Option<&str>) {
+        let mut st = self.lock();
+        st.sign_in_status = status.map(str::to_owned);
+        let data = st.device("local://session local:sign_ins");
+        st.push(Changes {
+            data,
+            layouts: Vec::new(),
+        });
+    }
+
+    /// Starts an upstream sign-in (decision `web-upstream-sign-in`):
+    /// registers this page as the redirect with the pod, keeps the PKCE
+    /// verifier and `state` in the tab, and goes to the authorize page.
+    async fn begin_sign_in(&self, login: Value) {
+        self.sign_in_status(Some(signin::STARTING));
+        let fail = |status: Option<u16>, v: &Value| {
+            log(&format!("sign-in: {status:?} {v}"));
+            self.sign_in_status(Some(signin::error_message(status, v["error"].as_str())));
+        };
+        let (Some(instance), Some(app_path), Some(token_path)) = (
+            login["instance_url"].as_str(),
+            login["app_path"].as_str(),
+            login["token_path"].as_str(),
+        ) else {
+            return fail(Some(400), &login);
+        };
+        let origin = window().location().origin().unwrap_or_default();
+        let redirect = signin::redirect_uri(&origin);
+        let body = json!({ "instance_url": instance, "redirect_uri": redirect });
+        let app = match request("POST", app_path, Some(&body)).await {
+            Ok((s, v)) if (200..300).contains(&s) => v,
+            Ok((s, v)) => return fail(Some(s), &v),
+            Err(_) => return fail(None, &Value::Null),
+        };
+        let (Some(endpoint), Some(client_id)) = (
+            app["authorize_endpoint"].as_str(),
+            app["client_id"].as_str(),
+        ) else {
+            return fail(Some(500), &app);
+        };
+        let (Some(verifier), Some(state)) = (random(32), random(24)) else {
+            return fail(Some(500), &json!({ "error": "no random numbers" }));
+        };
+        let pending = signin::Pending {
+            state,
+            verifier,
+            instance_url: instance.to_owned(),
+            token_path: token_path.to_owned(),
+            redirect_uri: redirect,
+            started_ms: js_sys::Date::now(),
+        };
+        let kept = window()
+            .session_storage()
+            .ok()
+            .flatten()
+            .is_some_and(|s| s.set_item(signin::PENDING_KEY, &pending.to_json()).is_ok());
+        if !kept {
+            return fail(Some(500), &json!({ "error": "no session storage" }));
+        }
+        let url = signin::authorize_url(
+            endpoint,
+            client_id,
+            &pending.redirect_uri,
+            app["scopes"].as_str().unwrap_or(""),
+            &pending.state,
+            &signin::challenge(&pending.verifier),
+        );
+        if window().location().assign(&url).is_err() {
+            fail(
+                Some(500),
+                &json!({ "error": "can't open the sign-in page" }),
+            );
+        }
+    }
+
+    /// The page came back from an authorize page (`/web?code=…&state=…`):
+    /// takes the address back to `/web` and hands the code to the pod, which
+    /// adds the sign-in to this browser's session.
+    async fn finish_sign_in(&self) {
+        let location = window().location();
+        let Some(ret) = signin::parse_return(&location.search().unwrap_or_default()) else {
+            return;
+        };
+        if let Ok(h) = window().history() {
+            let _ = h.replace_state_with_url(&JsValue::NULL, "", Some(signin::PAGE_PATH));
+        }
+        let storage = window().session_storage().ok().flatten();
+        let pending = storage
+            .as_ref()
+            .and_then(|s| s.get_item(signin::PENDING_KEY).ok().flatten())
+            .and_then(|raw| signin::Pending::parse(&raw));
+        if let Some(s) = &storage {
+            let _ = s.remove_item(signin::PENDING_KEY);
+        }
+        let code = match signin::check_return(&ret, pending.as_ref(), js_sys::Date::now()) {
+            Ok(code) => code,
+            Err(message) => return self.sign_in_status(Some(message)),
+        };
+        let Some(p) = pending else { return };
+        self.sign_in_status(Some(signin::FINISHING));
+        let status = match request("POST", &p.token_path, Some(&p.exchange(&code))).await {
+            Ok((s, _)) if (200..300).contains(&s) => None,
+            Ok((s, v)) => {
+                log(&format!("sign-in: HTTP {s} {v}"));
+                Some(signin::error_message(Some(s), v["error"].as_str()))
+            }
+            Err(_) => Some(signin::POD_UNREACHABLE),
+        };
+        self.sign_in_status(status);
     }
 
     /// The data path of layout `key`, if it is known.
@@ -447,6 +571,40 @@ impl Loader for WebLoader {
     fn changes(&self) -> Option<Changes> {
         self.lock().changes.take()
     }
+
+    /// Settings' Sign in (and a layout's `action.auth.login`) goes to the
+    /// upstream's authorize page and comes back to this page; Sign out ends
+    /// this browser's session as it does a native client's unpinned one.
+    fn auth(&self, intent: &Value) -> bool {
+        if intent["command"] == "sign_out" {
+            spawn_local(async {
+                let _ = request("POST", "/web/logout", None).await;
+                let _ = window().location().reload();
+            });
+            return true;
+        }
+        let login = {
+            let st = self.lock();
+            signin::login_intent(intent, st.device.get(device_data::SIGN_INS_PATH))
+        };
+        let Some(login) = login else {
+            return false;
+        };
+        let me = self.clone();
+        spawn_local(async move { me.begin_sign_in(login).await });
+        true
+    }
+}
+
+/// `bytes` random bytes from the browser's CSPRNG, base64url.
+fn random(bytes: usize) -> Option<String> {
+    let mut buf = vec![0u8; bytes];
+    window()
+        .crypto()
+        .ok()?
+        .get_random_values_with_u8_array(&mut buf)
+        .ok()?;
+    Some(signin::random_string(&buf))
 }
 
 /// Downloads images for the session: the pod's own through `fetch`, others
@@ -842,6 +1000,8 @@ const LONG_PRESS: Duration = Duration::from_millis(500);
 pub async fn start() -> Result<(), JsValue> {
     load_fonts(&construct_render::text::FACE_FILES).await;
     let loader = WebLoader::default();
+    // Back from an upstream's sign-in page: before the sign-ins are read.
+    loader.finish_sign_in().await;
     loader.load_device().await;
     loader
         .load_root()

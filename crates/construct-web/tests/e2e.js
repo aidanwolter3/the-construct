@@ -116,6 +116,27 @@ function check(ok, what) {
       `after a rebuild the page loads the new client (${before} -> ${after})`);
   }
 
+  // Signing in to the fake Pixelfed (decision `web-upstream-sign-in`): Settings' "Sign in to Pixelfed" goes to its
+  // authorize page and Authorize comes back to /web, signed in. Where the blank home (1280 x 800) draws Settings'
+  // gear and the panel its button.
+  await page.mouse.click(91, 431);
+  await page.waitForTimeout(3000);
+  await page.mouse.click(100, 157);
+  await page.waitForURL((u) => u.pathname === '/oauth/authorize', { timeout: 15000 });
+  const asked = new URL(page.url());
+  check(asked.searchParams.get('redirect_uri') === base + '/web' && asked.searchParams.get('code_challenge_method') === 'S256',
+    "Settings' Sign in opens the instance's authorize page, back to /web with PKCE");
+  await page.click('button[value=approve]');
+  await page.waitForURL((u) => u.pathname === '/web' && u.search === '', { timeout: 15000 });
+  await page.waitForSelector('body.ready', { timeout: 60000 });
+  const signIns = await page.evaluate(async () =>
+    (await fetch('/v1/auth/sign-ins', { headers: { 'x-construct-client': 'web' } })).json());
+  check((signIns.sign_ins || []).some((s) => s.id === 'pixelfed'),
+    'back on /web (the code taken off the address), the session is signed in to Pixelfed');
+  await page.mouse.click(91, 431);
+  await page.waitForTimeout(3000);
+  await page.screenshot({ path: out + '/web-signed-in.png' });
+
   await page.setViewportSize({ width: 390, height: 844 });
   await page.waitForTimeout(1000);
   const litPhone = await drawn(page);

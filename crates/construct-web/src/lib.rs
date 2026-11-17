@@ -1,10 +1,11 @@
 //! The web client (decision `web-client`): the one renderer
 //! (`construct-render`) compiled to WebAssembly and drawn into a canvas by
 //! its CPU rasterizer, over the pod's HTTP API on the page's own origin.
-//! [`construct`] is the part with no I/O (tested natively); `web` is the
-//! browser half, built only for `wasm32`.
+//! [`construct`] and [`signin`] are the parts with no I/O (tested
+//! natively); `web` is the browser half, built only for `wasm32`.
 
 pub mod construct;
+pub mod signin;
 #[cfg(target_arch = "wasm32")]
 mod web;
 

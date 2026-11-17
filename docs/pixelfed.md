@@ -22,7 +22,8 @@ the code to the pod, which exchanges it and keeps the tokens (sealed with `CONST
   change that.
 - **Redirects:** `http://127.0.0.1:<port>/callback` and `http://localhost:<port>/callback` (desktop),
   `construct://oauth` (Android), and any `PIXELFED_EXTRA_REDIRECTS` entry such as the Android App Link
-  `https://<host>/oauth/android`.
+  `https://<host>/oauth/android` or the web client's page `https://<host>/web` (decision `web-upstream-sign-in`; a
+  server that serves `/web` lists it to let browsers sign in, as staging does).
 
 ### On staging
 
