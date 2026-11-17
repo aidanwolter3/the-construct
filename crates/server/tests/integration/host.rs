@@ -1066,6 +1066,8 @@ mod web {
         .unwrap();
         std::fs::create_dir(files.path().join("fonts")).unwrap();
         std::fs::write(files.path().join("fonts/Face.ttf"), b"font").unwrap();
+        std::fs::write(files.path().join("app.0123456789abcdef.js"), b"app").unwrap();
+        std::fs::write(files.path().join("app.js"), b"app").unwrap();
         std::fs::write(files.path().join("secret.txt"), b"no").unwrap();
         let env = env_with(HostConfig {
             web: Some(WebConfig {
@@ -1161,6 +1163,51 @@ mod web {
             StatusCode::NOT_FOUND
         );
         assert_eq!(status("/web/.hidden.js").await, StatusCode::NOT_FOUND);
+    }
+
+    /// Decision `web-client-cache`: a hashed name (or a font with the build's
+    /// `?v=`) is kept for good, everything else is revalidated with its ETag.
+    #[tokio::test]
+    async fn hashed_files_are_kept_and_the_page_is_revalidated() {
+        let (env, _files) = web_env().await;
+        let get = |p: &'static str, tag: Option<String>| {
+            let mut req = client().get(env.url(p));
+            if let Some(t) = tag {
+                req = req.header("if-none-match", t);
+            }
+            async move { req.send().await.unwrap() }
+        };
+        let header = |r: &reqwest::Response, h: &str| {
+            r.headers()
+                .get(h)
+                .map(|v| v.to_str().unwrap().to_owned())
+                .unwrap_or_default()
+        };
+        for p in [
+            "/web/app.0123456789abcdef.js",
+            "/web/fonts/Face.ttf?v=0123abcd",
+        ] {
+            let r = get(p, None).await;
+            assert_eq!(r.status(), StatusCode::OK, "{p}");
+            assert_eq!(
+                header(&r, "cache-control"),
+                "public, max-age=31536000, immutable",
+                "{p}"
+            );
+        }
+        for p in ["/web", "/web/app.js", "/web/fonts/Face.ttf"] {
+            let r = get(p, None).await;
+            assert_eq!(r.status(), StatusCode::OK, "{p}");
+            assert_eq!(header(&r, "cache-control"), "no-cache", "{p}");
+            let tag = header(&r, "etag");
+            assert!(tag.starts_with('"') && tag.len() > 2, "{p}: {tag}");
+            let again = get(p, Some(tag.clone())).await;
+            assert_eq!(again.status(), StatusCode::NOT_MODIFIED, "{p}");
+            assert_eq!(header(&again, "etag"), tag, "{p}");
+            assert!(again.bytes().await.unwrap().is_empty(), "{p}");
+            let other = get(p, Some("\"stale\"".into())).await;
+            assert_eq!(other.status(), StatusCode::OK, "{p}");
+        }
     }
 
     #[tokio::test]

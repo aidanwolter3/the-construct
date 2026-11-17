@@ -2,6 +2,10 @@
 // asks for the pod code, which the server turns into a session cookie (the code is not kept here).
 import init, { start, start_public } from "/web/construct_web.js";
 
+// scripts/web_build.sh names the client's files by a hash of their content, rewrites the names above and in the
+// page, and puts the fonts' hash here: the client asks for them with it (decision `web-client-cache`).
+globalThis.constructFontVersion = "FONT_VERSION";
+
 const $ = (id) => document.getElementById(id);
 const web = { "x-construct-client": "web" };
 

@@ -1548,11 +1548,7 @@ mod tests {
             rows["notes://ingredients/i0"],
             json!({ "id": "i0", "staple": true })
         );
-        assert!(
-            rows["notes://recipe_lines/m1-l0"]
-                .get("cost")
-                .is_none()
-        );
+        assert!(rows["notes://recipe_lines/m1-l0"].get("cost").is_none());
     }
 
     /// A list with `where` carries only matching rows; a condition that
@@ -1582,8 +1578,7 @@ mod tests {
             "where": [{ "field": "meal_id", "equals": "$form.meal" }],
             "item_template": { "type": "core::Text", "value_expr": "$item.text" } });
         assert_eq!(
-            minimize(&kitchen(), &form, &[], Use::default()).queries["note:recipe_steps"]
-                .len(),
+            minimize(&kitchen(), &form, &[], Use::default()).queries["note:recipe_steps"].len(),
             6
         );
     }
@@ -1617,10 +1612,7 @@ mod tests {
         let mut shows = Shows::new(&pool, &nodes, "c-meals", &only);
         assert!(shows.run(Use::default()));
         let rows = rows_of(&shows.data());
-        assert!(
-            rows.contains_key("notes://recipe_steps/m2-s1"),
-            "{rows:?}"
-        );
+        assert!(rows.contains_key("notes://recipe_steps/m2-s1"), "{rows:?}");
         assert!(
             !rows.keys().any(|u| u.contains("m1")),
             "the meal the list hides, and its recipe, stay home: {rows:?}"
@@ -1640,10 +1632,7 @@ mod tests {
         };
         assert_eq!(Ask::from_key("c-recipe", &ask.key()), ask);
         // A key stored before params (rows and item only) reads as it did.
-        let old = Ask::from_key(
-            "c-x",
-            &["notes://a/1".into(), "item:notes://a/2".into()],
-        );
+        let old = Ask::from_key("c-x", &["notes://a/1".into(), "item:notes://a/2".into()]);
         assert_eq!(old.rows, vec!["notes://a/1".to_owned()]);
         assert_eq!(old.item.as_deref(), Some("notes://a/2"));
         assert!(is_slug("lentil-soup") && !is_slug("-x") && !is_slug("A") && !is_slug(""));

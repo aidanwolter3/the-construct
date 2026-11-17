@@ -79,7 +79,8 @@ CONSTRUCT_WEB=1 CONSTRUCT_OPEN_POD=off cargo run -p server -- serve --pod-code c
 ```
 
 `scripts/web_e2e.sh` does this on a spare port with a throwaway pod and drives the page in Chromium (Playwright): the
-code form, a wrong code, home drawn, the cookie, a reload, a phone-sized window and logging out.
+code form, a wrong code, home drawn, the cookie, a reload (which takes the client from the browser's cache), a rebuild
+the next reload picks up, a phone-sized window and logging out.
 
 - **Signing in**: the page asks for the pod code and posts it to `POST /web/session`, which answers a session cookie
   (`HttpOnly`, `SameSite=Strict`): an ordinary session of the pod, which expires and which Settings' **Leave pod on
@@ -92,6 +93,11 @@ code form, a wrong code, home drawn, the cookie, a reload, a phone-sized window 
   the rest of decision `screen-sizes` follow the browser window, and `local://device#platform` is `web`.
 - **Fonts and images** are fetched, not built in: the faces before the first frame, the symbol and emoji fallbacks
   after it (`/web/fonts/<file>`). Images of other sites go through the pod's proxy (`/web/image`).
+- **Caching**: `scripts/web_build.sh` names the script, WebAssembly and style by a hash of their content
+  (`app.<hash>.js`, `construct_web_bg.<hash>.wasm`, …) and the fonts by a `?v=<hash>`; those are cached for good
+  (`immutable`), so a reload downloads nothing but the page, which is revalidated (`no-cache` with an `ETag`, `304`
+  when unchanged). A deploy changes the names, so the next load takes the new client (decision
+  [`web-client-cache`](decisions/web-client-cache.md)).
 - **Input**: click or tap, the wheel and touch drags scroll; a touch scroll goes on after the finger lifts and slows
   down as on Android, and a touch catches it (decision [`web-touch-fling`](decisions/web-touch-fling.md)); typing
   goes through a hidden input, Escape is Back.

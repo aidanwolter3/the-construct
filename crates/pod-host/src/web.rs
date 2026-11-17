@@ -11,6 +11,13 @@
 //! only on requests that also carry `x-construct-client: web` (a page of
 //! another site can't send it without a preflight, which nothing answers)
 //! and, where the browser says, from the same site, and never for `/v1/mcp`.
+//!
+//! Caching (decision `web-client-cache`): the build names each script,
+//! WebAssembly and style by a hash of its content (`app.<hash>.js`), so a
+//! hashed name is served `immutable` and a deploy changes the names the page
+//! asks for; fonts are `immutable` when asked for with the build's `?v=`.
+//! Everything else (the pages) is `no-cache` with an `ETag`, answered `304`
+//! when it hasn't changed.
 
 use std::path::{Path as FsPath, PathBuf};
 use std::sync::Arc;
@@ -27,6 +34,7 @@ use axum::{
 use pod_core::session::{new_session_token, session_hash, session_ttl_from_env};
 use pod_core::{json_error, metrics, parse_json_body};
 use serde_json::{Value, json};
+use sha2::{Digest, Sha256};
 
 use crate::db::CredentialKind;
 use crate::{Host, TOKEN_PREFIX, client_keys, peer, rate_limited};
@@ -170,19 +178,24 @@ fn escape_html(s: &str) -> String {
 
 /// `GET /s/<link>`: the web client's page for a visitor, titled with the
 /// copy's title (a chat app's link preview shows it).
-async fn public_page(State(host): State<Arc<Host>>, Path(link): Path<String>) -> Response {
-    page_of(host, Named::Link(link)).await
+async fn public_page(
+    State(host): State<Arc<Host>>,
+    Path(link): Path<String>,
+    headers: HeaderMap,
+) -> Response {
+    page_of(host, Named::Link(link), headers).await
 }
 
 /// `GET /@<handle>/<slug>`: the same page by a short path.
 async fn short_page(
     State(host): State<Arc<Host>>,
     Path((handle, slug)): Path<(String, String)>,
+    headers: HeaderMap,
 ) -> Response {
-    page_of(host, Named::Short(handle, slug)).await
+    page_of(host, Named::Short(handle, slug), headers).await
 }
 
-async fn page_of(host: Arc<Host>, named: Named) -> Response {
+async fn page_of(host: Arc<Host>, named: Named, headers: HeaderMap) -> Response {
     let (Some(d), Some(c)) = (dir(&host), public_copy(&host, named).await) else {
         return not_found();
     };
@@ -198,7 +211,7 @@ async fn page_of(host: Arc<Host>, named: Named) -> Response {
              <meta name=\"robots\" content=\"noindex\">"
         ),
     );
-    served(page.into_bytes(), kind, "no-cache")
+    served(page.into_bytes(), kind, Cache::Revalidate, &headers)
 }
 
 /// `GET /s/<link>/view`: the copy a visitor's page draws, unchanged
@@ -337,11 +350,73 @@ async fn file(base: &FsPath, name: &str) -> Option<(Vec<u8>, &'static str)> {
     Some((bytes, kind))
 }
 
-fn served(bytes: Vec<u8>, kind: &'static str, cache: &'static str) -> Response {
-    let mut r = Response::new(Body::from(bytes));
+/// How a file of the client may be cached.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Cache {
+    /// Its name or `?v=` changes with its content: kept until it expires.
+    Immutable,
+    /// Asked again on every load, answered `304` while it hasn't changed.
+    Revalidate,
+}
+
+impl Cache {
+    fn header(self) -> &'static str {
+        match self {
+            Cache::Immutable => "public, max-age=31536000, immutable",
+            Cache::Revalidate => "no-cache",
+        }
+    }
+}
+
+/// A name the build gave a hash of its content (`app.<16 hex>.js`).
+fn is_hashed(name: &str) -> bool {
+    let mut parts = name.rsplit('.');
+    let (Some(_ext), Some(hash), Some(stem)) = (parts.next(), parts.next(), parts.next()) else {
+        return false;
+    };
+    !stem.is_empty()
+        && hash.len() == 16
+        && hash
+            .bytes()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+}
+
+/// The content's validator: a quoted hash of it.
+fn etag(bytes: &[u8]) -> String {
+    let d = Sha256::digest(bytes);
+    let hex: String = d[..8].iter().map(|b| format!("{b:02x}")).collect();
+    format!("\"{hex}\"")
+}
+
+/// Whether the request's `If-None-Match` names `tag` (or `*`).
+fn not_modified(headers: &HeaderMap, tag: &str) -> bool {
+    headers
+        .get_all(header::IF_NONE_MATCH)
+        .iter()
+        .filter_map(|v| v.to_str().ok())
+        .flat_map(|v| v.split(','))
+        .map(|t| t.trim().trim_start_matches("W/"))
+        .any(|t| t == tag || t == "*")
+}
+
+fn served(bytes: Vec<u8>, kind: &'static str, cache: Cache, req: &HeaderMap) -> Response {
+    let tag = etag(&bytes);
+    let mut r = if not_modified(req, &tag) {
+        let mut r = Response::new(Body::empty());
+        *r.status_mut() = StatusCode::NOT_MODIFIED;
+        r
+    } else {
+        let mut r = Response::new(Body::from(bytes));
+        r.headers_mut()
+            .insert(header::CONTENT_TYPE, HeaderValue::from_static(kind));
+        r
+    };
     let h = r.headers_mut();
-    h.insert(header::CONTENT_TYPE, HeaderValue::from_static(kind));
-    h.insert(header::CACHE_CONTROL, HeaderValue::from_static(cache));
+    h.insert(header::ETAG, HeaderValue::from_str(&tag).expect("hex"));
+    h.insert(
+        header::CACHE_CONTROL,
+        HeaderValue::from_static(cache.header()),
+    );
     h.insert(
         header::CONTENT_SECURITY_POLICY,
         HeaderValue::from_static(PAGE_CSP),
@@ -354,33 +429,58 @@ fn not_found() -> Response {
 }
 
 /// `GET /web`: the page (it asks for the pod code when there is no session).
-async fn page(State(host): State<Arc<Host>>) -> Response {
+async fn page(State(host): State<Arc<Host>>, headers: HeaderMap) -> Response {
     match dir(&host) {
         Some(d) => match file(d, "index.html").await {
-            Some((b, k)) => served(b, k, "no-cache"),
+            Some((b, k)) => served(b, k, Cache::Revalidate, &headers),
             None => not_found(),
         },
         None => not_found(),
     }
 }
 
-/// `GET /web/<file>`: the client's script, WebAssembly and style.
-async fn asset(State(host): State<Arc<Host>>, Path(name): Path<String>) -> Response {
+/// `GET /web/<file>`: the client's script, WebAssembly and style; a hashed
+/// name is kept for good.
+async fn asset(
+    State(host): State<Arc<Host>>,
+    Path(name): Path<String>,
+    headers: HeaderMap,
+) -> Response {
+    let cache = if is_hashed(&name) {
+        Cache::Immutable
+    } else {
+        Cache::Revalidate
+    };
     match dir(&host) {
         Some(d) => match file(d, &name).await {
-            Some((b, k)) => served(b, k, "no-cache"),
+            Some((b, k)) => served(b, k, cache, &headers),
             None => not_found(),
         },
         None => not_found(),
     }
 }
 
-/// `GET /web/fonts/<file>`: the renderer's fonts, fetched by the client
-/// instead of built into it.
-async fn font(State(host): State<Arc<Host>>, Path(name): Path<String>) -> Response {
+/// `GET /web/fonts/<file>[?v=<hash>]`: the renderer's fonts, fetched by the
+/// client instead of built into it, with the build's hash of the fonts (kept
+/// for good) or without (revalidated).
+async fn font(
+    State(host): State<Arc<Host>>,
+    Path(name): Path<String>,
+    RawQuery(q): RawQuery,
+    headers: HeaderMap,
+) -> Response {
+    let versioned = q
+        .unwrap_or_default()
+        .split('&')
+        .any(|kv| kv.strip_prefix("v=").is_some_and(|v| !v.is_empty()));
+    let cache = if versioned {
+        Cache::Immutable
+    } else {
+        Cache::Revalidate
+    };
     match dir(&host) {
         Some(d) => match file(&d.join("fonts"), &name).await {
-            Some((b, k)) => served(b, k, "public, max-age=86400"),
+            Some((b, k)) => served(b, k, cache, &headers),
             None => not_found(),
         },
         None => not_found(),
@@ -593,6 +693,41 @@ mod tests {
         ] {
             assert!(!is_raster_image(kind), "{kind}");
         }
+    }
+
+    #[test]
+    fn hashed_names_are_the_builds() {
+        for name in [
+            "app.0123456789abcdef.js",
+            "construct_web_bg.0123456789abcdef.wasm",
+        ] {
+            assert!(is_hashed(name), "{name}");
+        }
+        for name in [
+            "app.js",
+            "index.html",
+            ".0123456789abcdef.js",
+            "app.0123456789ABCDEF.js",
+            "app.0123456789abcde.js",
+            "app.0123456789abcdeg.js",
+        ] {
+            assert!(!is_hashed(name), "{name}");
+        }
+    }
+
+    #[test]
+    fn if_none_match_names_the_etag() {
+        let tag = etag(b"page");
+        let mut h = HeaderMap::new();
+        assert!(!not_modified(&h, &tag));
+        h.insert(
+            header::IF_NONE_MATCH,
+            HeaderValue::from_str(&format!("\"other\", W/{tag}")).unwrap(),
+        );
+        assert!(not_modified(&h, &tag));
+        let r = served(b"page".to_vec(), "text/html", Cache::Revalidate, &h);
+        assert_eq!(r.status(), StatusCode::NOT_MODIFIED);
+        assert_eq!(r.headers()[header::ETAG], tag.as_str());
     }
 
     #[test]
