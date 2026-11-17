@@ -18,6 +18,7 @@ use construct_render::device_data;
 use construct_render::gpu::{Gpu, Renderer};
 use construct_render::interact::{Changes, Done, Loaded, Loader, Session, Write, Written};
 use construct_render::layout::Viewport;
+use construct_render::scroll::{Fling, Flinging, VelocityTracker};
 use construct_render::time::{Duration, Instant};
 use construct_render::viewer::{Controller, EditKey, Event};
 use protocol::{DataBundle, UiNode};
@@ -31,6 +32,7 @@ use web_sys::{
 };
 
 use crate::construct::{Construct, HOME, features_header, take_events};
+use crate::signin;
 
 /// The frame must be drawn again (something arrived).
 static DIRTY: AtomicBool = AtomicBool::new(true);
@@ -111,6 +113,9 @@ struct State {
     /// Device data paths' last answers (notifications, channels, sign-ins).
     device: HashMap<String, Value>,
     changes: Option<Changes>,
+    /// An upstream sign-in's progress or why it failed, shown as
+    /// `local://session#status` (Settings' line under Sign-ins).
+    sign_in_status: Option<String>,
 }
 
 impl State {
@@ -129,12 +134,19 @@ impl State {
     fn device(&self, needs: &str) -> DataBundle {
         let base = window().location().origin().unwrap_or_default();
         let titles = self.construct.titles();
-        device_data::device(&base, needs, &titles, |p| {
+        let mut out = device_data::device(&base, needs, &titles, |p| {
             self.device
                 .get(p)
                 .cloned()
                 .ok_or_else(|| "not loaded".to_owned())
-        })
+        });
+        if let (Some(s), Some(e)) = (
+            &self.sign_in_status,
+            out.entities.get_mut("local://session"),
+        ) {
+            e.set("status", s.clone());
+        }
+        out
     }
 }
 
@@ -203,6 +215,119 @@ impl WebLoader {
                 self.lock().device.insert(p.to_owned(), v);
             }
         }
+    }
+
+    /// Shows a sign-in's progress (`None`: nothing) where Settings reads it,
+    /// with the sign-ins as they are now.
+    fn sign_in_status(&self, status: Option<&str>) {
+        let mut st = self.lock();
+        st.sign_in_status = status.map(str::to_owned);
+        let data = st.device("local://session local:sign_ins");
+        st.push(Changes {
+            data,
+            layouts: Vec::new(),
+        });
+    }
+
+    /// Starts an upstream sign-in (decision `web-upstream-sign-in`):
+    /// registers this page as the redirect with the pod, keeps the PKCE
+    /// verifier and `state` in the tab, and goes to the authorize page.
+    async fn begin_sign_in(&self, login: Value) {
+        self.sign_in_status(Some(signin::STARTING));
+        let fail = |status: Option<u16>, v: &Value| {
+            log(&format!("sign-in: {status:?} {v}"));
+            self.sign_in_status(Some(signin::error_message(status, v["error"].as_str())));
+        };
+        let (Some(instance), Some(app_path), Some(token_path)) = (
+            login["instance_url"].as_str(),
+            login["app_path"].as_str(),
+            login["token_path"].as_str(),
+        ) else {
+            return fail(Some(400), &login);
+        };
+        let origin = window().location().origin().unwrap_or_default();
+        let redirect = signin::redirect_uri(&origin);
+        let body = json!({ "instance_url": instance, "redirect_uri": redirect });
+        let app = match request("POST", app_path, Some(&body)).await {
+            Ok((s, v)) if (200..300).contains(&s) => v,
+            Ok((s, v)) => return fail(Some(s), &v),
+            Err(_) => return fail(None, &Value::Null),
+        };
+        let (Some(endpoint), Some(client_id)) = (
+            app["authorize_endpoint"].as_str(),
+            app["client_id"].as_str(),
+        ) else {
+            return fail(Some(500), &app);
+        };
+        let (Some(verifier), Some(state)) = (random(32), random(24)) else {
+            return fail(Some(500), &json!({ "error": "no random numbers" }));
+        };
+        let pending = signin::Pending {
+            state,
+            verifier,
+            instance_url: instance.to_owned(),
+            token_path: token_path.to_owned(),
+            redirect_uri: redirect,
+            started_ms: js_sys::Date::now(),
+        };
+        let kept = window()
+            .session_storage()
+            .ok()
+            .flatten()
+            .is_some_and(|s| s.set_item(signin::PENDING_KEY, &pending.to_json()).is_ok());
+        if !kept {
+            return fail(Some(500), &json!({ "error": "no session storage" }));
+        }
+        let url = signin::authorize_url(
+            endpoint,
+            client_id,
+            &pending.redirect_uri,
+            app["scopes"].as_str().unwrap_or(""),
+            &pending.state,
+            &signin::challenge(&pending.verifier),
+        );
+        if window().location().assign(&url).is_err() {
+            fail(
+                Some(500),
+                &json!({ "error": "can't open the sign-in page" }),
+            );
+        }
+    }
+
+    /// The page came back from an authorize page (`/web?code=…&state=…`):
+    /// takes the address back to `/web` and hands the code to the pod, which
+    /// adds the sign-in to this browser's session.
+    async fn finish_sign_in(&self) {
+        let location = window().location();
+        let Some(ret) = signin::parse_return(&location.search().unwrap_or_default()) else {
+            return;
+        };
+        if let Ok(h) = window().history() {
+            let _ = h.replace_state_with_url(&JsValue::NULL, "", Some(signin::PAGE_PATH));
+        }
+        let storage = window().session_storage().ok().flatten();
+        let pending = storage
+            .as_ref()
+            .and_then(|s| s.get_item(signin::PENDING_KEY).ok().flatten())
+            .and_then(|raw| signin::Pending::parse(&raw));
+        if let Some(s) = &storage {
+            let _ = s.remove_item(signin::PENDING_KEY);
+        }
+        let code = match signin::check_return(&ret, pending.as_ref(), js_sys::Date::now()) {
+            Ok(code) => code,
+            Err(message) => return self.sign_in_status(Some(message)),
+        };
+        let Some(p) = pending else { return };
+        self.sign_in_status(Some(signin::FINISHING));
+        let status = match request("POST", &p.token_path, Some(&p.exchange(&code))).await {
+            Ok((s, _)) if (200..300).contains(&s) => None,
+            Ok((s, v)) => {
+                log(&format!("sign-in: HTTP {s} {v}"));
+                Some(signin::error_message(Some(s), v["error"].as_str()))
+            }
+            Err(_) => Some(signin::POD_UNREACHABLE),
+        };
+        self.sign_in_status(status);
     }
 
     /// The data path of layout `key`, if it is known.
@@ -446,6 +571,40 @@ impl Loader for WebLoader {
     fn changes(&self) -> Option<Changes> {
         self.lock().changes.take()
     }
+
+    /// Settings' Sign in (and a layout's `action.auth.login`) goes to the
+    /// upstream's authorize page and comes back to this page; Sign out ends
+    /// this browser's session as it does a native client's unpinned one.
+    fn auth(&self, intent: &Value) -> bool {
+        if intent["command"] == "sign_out" {
+            spawn_local(async {
+                let _ = request("POST", "/web/logout", None).await;
+                let _ = window().location().reload();
+            });
+            return true;
+        }
+        let login = {
+            let st = self.lock();
+            signin::login_intent(intent, st.device.get(device_data::SIGN_INS_PATH))
+        };
+        let Some(login) = login else {
+            return false;
+        };
+        let me = self.clone();
+        spawn_local(async move { me.begin_sign_in(login).await });
+        true
+    }
+}
+
+/// `bytes` random bytes from the browser's CSPRNG, base64url.
+fn random(bytes: usize) -> Option<String> {
+    let mut buf = vec![0u8; bytes];
+    window()
+        .crypto()
+        .ok()?
+        .get_random_values_with_u8_array(&mut buf)
+        .ok()?;
+    Some(signin::random_string(&buf))
 }
 
 /// Downloads images for the session: the pod's own through `fetch`, others
@@ -480,13 +639,19 @@ fn fetch_images(store: &construct_render::images::ImageStore, proxy: &str) {
     });
 }
 
+/// A GET of the pod's bytes (an image through the proxy, a font): with
+/// `x-construct-client: web`, without which the pod doesn't read the session
+/// cookie and answers 401 (decision `web-client`).
 async fn image_bytes(path: &str) -> Option<Vec<u8>> {
-    let resp: Response = JsFuture::from(window().fetch_with_str(path))
+    let req = Request::new_with_str(path).ok()?;
+    let _ = req.headers().set("x-construct-client", "web");
+    let resp: Response = JsFuture::from(window().fetch_with_request(&req))
         .await
         .ok()?
         .dyn_into()
         .ok()?;
     if !resp.ok() {
+        log(&format!("{path}: {}", resp.status()));
         return None;
     }
     let buf = JsFuture::from(resp.array_buffer().ok()?).await.ok()?;
@@ -494,10 +659,18 @@ async fn image_bytes(path: &str) -> Option<Vec<u8>> {
 }
 
 /// Fetches the fonts by name (`/web/fonts/<file>`): the faces before the
-/// first frame, the fallbacks after it (decision `web-client`).
+/// first frame, the fallbacks after it (decision `web-client`). With the
+/// build's hash of the fonts (`constructFontVersion`, set by the page's
+/// script) they are asked for as `?v=<hash>`, which the browser keeps until
+/// a deploy changes them (decision `web-client-cache`).
 async fn load_fonts(files: &[&str]) {
+    let version = js_sys::Reflect::get(&js_sys::global(), &"constructFontVersion".into())
+        .ok()
+        .and_then(|v| v.as_string())
+        .filter(|v| !v.is_empty() && v.bytes().all(|b| b.is_ascii_hexdigit()));
+    let query = version.map(|v| format!("?v={v}")).unwrap_or_default();
     for f in files {
-        if let Some(b) = image_bytes(&format!("/web/fonts/{f}")).await {
+        if let Some(b) = image_bytes(&format!("/web/fonts/{f}{query}")).await {
             construct_render::text::add_font(b);
         } else {
             log(&format!("couldn't load the font {f}"));
@@ -629,6 +802,25 @@ struct App {
     /// Where the primary pointer went down, and when; a drag that moves
     /// scrolls, one that doesn't is a tap.
     down: Option<(f32, f32, f32, f32, Instant, bool)>,
+    /// The finger's positions down the screen while it drags, for its speed
+    /// when it lifts.
+    tracker: VelocityTracker,
+    /// A touch scroll still moving after the finger lifted (decision
+    /// `web-touch-fling`): the renderer's fling, as the Android app flings,
+    /// and where it started.
+    fling: Option<(Flinging, f32, f32)>,
+}
+
+/// When an event happened (seconds on the page's clock), not when it is
+/// handled: while a frame is drawing, touches wait, and their speed must
+/// come from when they were made.
+fn event_secs(e: &PointerEvent) -> f64 {
+    e.time_stamp() / 1000.0
+}
+
+/// Seconds on the page's clock.
+fn secs() -> f64 {
+    window().performance().map_or(0.0, |p| p.now() / 1000.0)
 }
 
 impl App {
@@ -670,14 +862,42 @@ impl App {
         self.drawn = u64::MAX;
     }
 
+    /// The mouse moved to a point, or left the canvas (`None`): the
+    /// tappable under it is drawn hovered and the pointer is a hand.
+    fn hover(&mut self, at: Option<(f32, f32)>) {
+        let session = &mut self.controller.session;
+        let changed = match at {
+            Some((x, y)) => session.hover(x, y),
+            None => session.hover_end(),
+        };
+        if changed {
+            let cursor = if session.hovering() { "pointer" } else { "" };
+            let _ = self.canvas.style().set_property("cursor", cursor);
+            wake();
+        }
+    }
+
     fn event(&mut self, e: Event) {
         let out = self.controller.handle(e);
         // A link opens in a new tab, not over the pod.
         for effect in out.iter().flat_map(|o| &o.effects) {
-            if let construct_render::interact::Effect::OpenLink { url } = effect
-                && (url.starts_with("https://") || url.starts_with("http://"))
-            {
-                let _ = window().open_with_url_and_target_and_features(url, "_blank", "noopener");
+            match effect {
+                construct_render::interact::Effect::OpenLink { url }
+                    if url.starts_with("https://") || url.starts_with("http://") =>
+                {
+                    let _ =
+                        window().open_with_url_and_target_and_features(url, "_blank", "noopener");
+                }
+                // Settings' "Leave pod on this device": this browser logs
+                // out (its session ends; the pod code still works) and asks
+                // for a code again.
+                construct_render::interact::Effect::LeftPod => {
+                    spawn_local(async {
+                        let _ = request("POST", "/web/logout", None).await;
+                        let _ = window().location().reload();
+                    });
+                }
+                _ => {}
             }
         }
         self.sync_input();
@@ -695,7 +915,23 @@ impl App {
     }
 
     /// Draws a frame when something changed.
+    /// Moves a fling on by what this frame's share of it is.
+    fn step_fling(&mut self) {
+        let Some((f, x, y)) = self.fling.as_mut() else {
+            return;
+        };
+        let (dy, done) = f.step(secs());
+        let (x, y) = (*x, *y);
+        if dy != 0.0 {
+            self.controller.handle(Event::Scroll { x, y, dy });
+        }
+        if done {
+            self.fling = None;
+        }
+    }
+
     fn frame(&mut self) {
+        self.step_fling();
         let due = self
             .controller
             .session
@@ -703,8 +939,11 @@ impl App {
             .is_some_and(|t| t <= Instant::now());
         // A slide, a spinner or a settling card draws every frame until done.
         let animating = self.controller.session.animating();
-        let dirty =
-            DIRTY.swap(false, Ordering::Relaxed) || self.controller.dirty || due || animating;
+        let dirty = DIRTY.swap(false, Ordering::Relaxed)
+            || self.controller.dirty
+            || due
+            || animating
+            || self.fling.is_some();
         if !dirty {
             return;
         }
@@ -761,6 +1000,8 @@ const LONG_PRESS: Duration = Duration::from_millis(500);
 pub async fn start() -> Result<(), JsValue> {
     load_fonts(&construct_render::text::FACE_FILES).await;
     let loader = WebLoader::default();
+    // Back from an upstream's sign-in page: before the sign-ins are read.
+    loader.finish_sign_in().await;
     loader.load_device().await;
     loader
         .load_root()
@@ -774,21 +1015,17 @@ pub async fn start() -> Result<(), JsValue> {
     mount(session).await
 }
 
-/// A public link's page (decision `public-web-links`): its copy, drawn
-/// read-only with no pod behind it (nothing it draws can write).
-pub async fn start_public(link: &str) -> Result<(), JsValue> {
+/// A public link's page (decisions `public-web-links`,
+/// `public-links-share-the-closure`): its copy, drawn read-only with no pod
+/// behind it (nothing it draws can write); the layouts it opens come from
+/// the copy. `base` is the page's path: `/s/<link>` or `/@<handle>/<slug>`.
+pub async fn start_public(base: &str) -> Result<(), JsValue> {
     load_fonts(&construct_render::text::FACE_FILES).await;
-    let base = format!("/s/{}", crate::construct::encode(link));
     let copy = get_json(&format!("{base}/view"))
         .await
         .map_err(|_| JsValue::from_str("This page isn't shared any more."))?;
-    let root: UiNode = serde_json::from_value(copy["node"].clone())
-        .map_err(|e| JsValue::from_str(&e.to_string()))?;
-    let data: DataBundle = serde_json::from_value(copy["data"].clone()).unwrap_or_default();
-    let mut session = Session::new("public", root, data, Viewport::PHONE);
-    if let Some(item) = copy["item"].as_str() {
-        session.set_root(Default::default(), Some(item.to_owned()));
-    }
+    let session = construct_render::public::session(&copy, Viewport::PHONE)
+        .map_err(|e| JsValue::from_str(&e))?;
     fetch_images(&session.images, &format!("{base}/image"));
     mount(session).await
 }
@@ -854,6 +1091,8 @@ async fn mount(session: Session) -> Result<(), JsValue> {
         input: input.clone(),
         drawn: u64::MAX,
         down: None,
+        tracker: VelocityTracker::new(),
+        fling: None,
     }));
     app.borrow_mut().resize();
     let _ = doc.body().map(|b| b.class_list().add_1("ready"));
@@ -876,7 +1115,15 @@ async fn mount(session: Session) -> Result<(), JsValue> {
                 return;
             }
             let (x, y) = (e.offset_x() as f32, e.offset_y() as f32);
-            app.borrow_mut().down = Some((x, y, x, y, Instant::now(), false));
+            let mut a = app.borrow_mut();
+            // A finger landing on a moving fling catches it: it stops, and
+            // the touch is no tap.
+            let caught = a.fling.take().is_some_and(|(f, _, _)| f.caught(secs()));
+            a.tracker.clear();
+            a.tracker.add(event_secs(&e), y);
+            a.down = Some((x, y, x, y, Instant::now(), caught));
+            // Moves outside the canvas still belong to this drag.
+            let _ = a.canvas.set_pointer_capture(e.pointer_id());
         }
     });
     listen(&canvas, "pointermove", {
@@ -884,10 +1131,16 @@ async fn mount(session: Session) -> Result<(), JsValue> {
         move |e: PointerEvent| {
             let mut a = app.borrow_mut();
             let Some((x0, y0, _, ly, at, moved)) = a.down else {
+                // A mouse with no button down: what it rests over is drawn
+                // hovered (a finger never hovers).
+                if e.pointer_type() == "mouse" {
+                    a.hover(Some((e.offset_x() as f32, e.offset_y() as f32)));
+                }
                 return;
             };
             let (x, y) = (e.offset_x() as f32, e.offset_y() as f32);
             let moved = moved || (x - x0).hypot(y - y0) > TAP_SLOP;
+            a.tracker.add(event_secs(&e), y);
             if moved && e.pointer_type() != "mouse" {
                 // A finger drags the content: it moves with it.
                 a.event(Event::Scroll {
@@ -901,17 +1154,37 @@ async fn mount(session: Session) -> Result<(), JsValue> {
     });
     listen(&canvas, "pointerup", {
         let app = app.clone();
-        move |_: PointerEvent| {
+        move |e: PointerEvent| {
             let mut a = app.borrow_mut();
-            if let Some((x, y, _, _, at, moved)) = a.down.take()
-                && !moved
-            {
+            let Some((x, y, _, _, at, moved)) = a.down.take() else {
+                return;
+            };
+            if !moved {
                 if at.elapsed() >= LONG_PRESS {
                     a.event(Event::LongPress { x, y });
                 } else {
                     a.event(Event::Tap { x, y });
                 }
+            } else if e.pointer_type() != "mouse" {
+                // The content goes on at the finger's speed and slows down
+                // (the finger moving up scrolls forward).
+                let v = -a.tracker.velocity(event_secs(&e));
+                if let Some(f) = Fling::new(v) {
+                    a.fling = Some((Flinging::new(f, secs()), x, y));
+                    wake();
+                }
             }
+        }
+    });
+    listen(&canvas, "pointerleave", {
+        let app = app.clone();
+        move |_: PointerEvent| app.borrow_mut().hover(None)
+    });
+    // The browser took the touch over (or it left): no tap, no fling.
+    listen(&canvas, "pointercancel", {
+        let app = app.clone();
+        move |_: PointerEvent| {
+            app.borrow_mut().down = None;
         }
     });
     listen(&canvas, "wheel", {

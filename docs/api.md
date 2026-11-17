@@ -106,19 +106,22 @@ like any other.
 | `GET /web`, `GET /web/<file>`, `GET /web/fonts/<file>` *public* | The page, the built client and the renderer's fonts, from `CONSTRUCT_WEB_DIR` (plain file names only). The page's policy allows only its own scripts and WebAssembly. |
 | `POST /web/session {code}` *public* | With `x-construct-client: web` (else 403 `web_client_only`): a new session of the pod `code` opens, as the cookie `construct_web` (`HttpOnly; SameSite=Strict; Path=/`, `Secure` behind HTTPS, as long as `CONSTRUCT_SESSION_TTL_DAYS`) -> `{ok}`; 401 `pod_not_found`; rate-limited like `POST /v1/pods/open`. |
 | `POST /web/logout` | Deletes the cookie's session and clears the cookie. |
-| `GET /web/image?url=<url>` | With the cookie: an image of a public `http(s)` site, passed on (images only, at most 10 MiB); 400 for other URLs. |
+| `GET /web/image?url=<url>` | With the cookie: an image of a public `http(s)` site, passed on (raster images only, not SVG, at most 10 MiB, sent with `nosniff` and a sandboxing CSP so one opened on its own runs nothing); 400 for other URLs. |
 
 The cookie stands for its session on every other route, but only on requests with `x-construct-client: web` and,
 where the browser sends `Sec-Fetch-Site`, `same-origin`; a pod code put in the cookie is not taken, and `/v1/mcp`
 answers it 403 `web_credential_scope`. Rotating the pod code ends every browser's session.
 
-**Public links** (decision [`public-web-links`](decisions/public-web-links.md)), only with `CONSTRUCT_WEB=1` and
-`CONSTRUCT_PUBLIC_WEB=1`; anyone with the link reads them, and they never reach the pod:
+**Public links** (decisions [`public-web-links`](decisions/public-web-links.md),
+[`public-links-share-the-closure`](decisions/public-links-share-the-closure.md)), only with `CONSTRUCT_WEB=1` and
+`CONSTRUCT_PUBLIC_WEB=1`; anyone with the link reads them, and they never reach the pod. Each route also answers at a
+chosen short path, `/@<handle>/<slug>` (and `…/view`, `…/image`). With `CONSTRUCT_PUBLIC_WEB` unset they answer 503,
+a page saying sharing is paused, and the copies stay stored. A page address with a trailing slash, `%40` for `@`, capitals or a `/web` prefix redirects (308) to its own address:
 
 | Route | |
 |---|---|
 | `GET /s/<link>` *public* | The web client's page for the copy, titled with its title (`og:title`, `noindex`). |
-| `GET /s/<link>/view` *public* | The copy: `{title, node, data, item?}`, the plumbing a visitor's page draws and the rows it shows. 404 once revoked. |
+| `GET /s/<link>/view` *public* | The copy, as stored: `{format: 2, layout, title, node, data, item?, params?, layouts?}`, the plumbing a visitor's page draws (the root and, by id, the layouts it opens and embeds) and the rows they show. A copy without `format` is format 1 (`{title, node, data, item?}`). 404 once revoked. |
 | `GET /s/<link>/image?url=<url>` *public* | An image the copy names, passed on as `/web/image` does; a URL the copy doesn't name is 404. |
 
 Pods make and revoke them with the MCP tools `share_publicly`, `list_public_links` and `unshare_publicly`

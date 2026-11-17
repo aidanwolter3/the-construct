@@ -2,6 +2,10 @@
 // asks for the pod code, which the server turns into a session cookie (the code is not kept here).
 import init, { start, start_public } from "/web/construct_web.js";
 
+// scripts/web_build.sh names the client's files by a hash of their content, rewrites the names above and in the
+// page, and puts the fonts' hash here: the client asks for them with it (decision `web-client-cache`).
+globalThis.constructFontVersion = "FONT_VERSION";
+
 const $ = (id) => document.getElementById(id);
 const web = { "x-construct-client": "web" };
 
@@ -11,8 +15,9 @@ async function hasSession() {
   return r.ok;
 }
 
-// A public link (/s/<link>, decision `public-web-links`): its copy, read-only, for anyone; no pod, no sign-in.
-const shared = location.pathname.match(/^\/s\/(pub-[a-z0-9]+)\/?$/);
+// A public link (/s/<link>, or a chosen /@<handle>/<slug>; decisions `public-web-links`,
+// `public-links-share-the-closure`): its copy, read-only, for anyone; no pod, no sign-in.
+const shared = location.pathname.match(/^(\/s\/pub-[a-z0-9]+|\/@[a-z0-9_-]+\/[a-z0-9-]+)\/?$/);
 
 async function run() {
   if (shared) {
@@ -30,7 +35,6 @@ async function run() {
   await init();
   await start();
   $("loading").hidden = true;
-  $("log-out").hidden = false;
 }
 
 $("code-form").addEventListener("submit", async (e) => {
@@ -48,11 +52,6 @@ $("code-form").addEventListener("submit", async (e) => {
   } else {
     $("code-error").textContent = "That code didn't open a pod.";
   }
-});
-
-$("log-out").addEventListener("click", async () => {
-  await fetch("/web/logout", { method: "POST", headers: web });
-  location.reload();
 });
 
 run().catch((e) => {

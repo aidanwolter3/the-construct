@@ -521,6 +521,76 @@ fn a_pressed_tappable_is_drawn_pressed_until_let_go() {
     assert!(s.pressed().is_none());
 }
 
+/// Rows grouped in a rounded card: a pressed first or last row is rounded
+/// where it meets the card's corners, and square where it meets a row.
+#[test]
+fn a_pressed_row_in_a_rounded_card_is_rounded_at_the_cards_corners() {
+    let row = |tag: &str, text: &str| {
+        json!({ "type": "core://Tappable", "tag": tag,
+            "on_click": { "intent": "action.navigation.back" },
+            "content": { "type": "core://Row", "padding_h_dp": 16, "padding_v_dp": 12, "children": [
+                { "type": "core://Text", "value_expr": text, "style": "Body" },
+                { "type": "core://Spacer" } ] } })
+    };
+    let root: protocol::UiNode = serde_json::from_value(json!({
+        "type": "core://Column", "padding_h_dp": 20, "children": [{
+            "type": "core://Box", "corner_dp": 16, "background": "#ffffff",
+            "content": { "type": "core://Column", "children": [
+                row("first", "Eat well"), row("middle", "Sleep"), row("last", "Walk") ] } }] }))
+    .unwrap();
+    let mut s = Session::new("home", root, Default::default(), Viewport::PHONE);
+    let mut wash = |text: &str| {
+        let t = s.scene().unwrap().find_text(text).unwrap().bounds;
+        assert!(s.press(t[0] + 1.0, t[1] + 1.0));
+        let scene = s.scene().unwrap();
+        let q = scene
+            .quads()
+            .find(|q| q.bg_color[3] > 0.0 && q.bg_color[3] < 0.2)
+            .expect("a wash")
+            .radii;
+        s.release_press();
+        q
+    };
+    assert_eq!(wash("Eat well"), [16.0, 16.0, 0.0, 0.0]);
+    assert_eq!(wash("Sleep"), [0.0; 4]);
+    assert_eq!(wash("Walk"), [0.0, 0.0, 16.0, 16.0]);
+}
+
+/// A selected row drawn with its own background (a list-detail home's
+/// open row) in a rounded card: the fill is rounded at the card's corners
+/// it meets, so it doesn't poke out past them.
+#[test]
+fn a_filled_row_in_a_rounded_card_is_rounded_at_the_cards_corners() {
+    let row = |text: &str, bg: Option<&str>| {
+        let mut b = json!({ "type": "core://Box", "content": {
+            "type": "core://Row", "padding_h_dp": 16, "padding_v_dp": 12, "children": [
+                { "type": "core://Text", "value_expr": text, "style": "Body" },
+                { "type": "core://Spacer" } ] } });
+        if let Some(bg) = bg {
+            b["background"] = json!(bg);
+        }
+        b
+    };
+    let root: protocol::UiNode = serde_json::from_value(json!({
+        "type": "core://Column", "padding_h_dp": 20, "children": [{
+            "type": "core://Box", "corner_dp": 16, "background": "#ffffff",
+            "content": { "type": "core://Column", "children": [
+                row("Eat well", Some("#e0e8ff")), row("Sleep", Some("#e0e8ff")),
+                row("Walk", Some("#e0e8ff")) ] } }] }))
+    .unwrap();
+    let mut s = Session::new("home", root, Default::default(), Viewport::PHONE);
+    let scene = s.scene().unwrap();
+    let fills: Vec<[f32; 4]> = scene
+        .quads()
+        .filter(|q| q.bg_color[2] > 0.99 && q.bg_color[0] < 0.9)
+        .map(|q| q.radii)
+        .collect();
+    assert_eq!(
+        fills,
+        vec![[16.0, 16.0, 0.0, 0.0], [0.0; 4], [0.0, 0.0, 16.0, 16.0]]
+    );
+}
+
 #[test]
 fn a_spinner_turns_while_the_session_animates() {
     let root: protocol::UiNode = serde_json::from_value(json!({
@@ -785,4 +855,42 @@ fn going_back_leaves_what_is_under_it_laid_out() {
         .unwrap();
     s.scene().unwrap();
     assert!(s.take_work().laid_out > 0);
+}
+
+/// The band above a pinned node, where it rests below the top of its view
+/// (a column's padding), shows the page's own background, not the theme's,
+/// while a white card scrolls under it.
+#[test]
+fn band_above_a_pinned_node_is_the_page_background() {
+    let rows: Vec<_> = (0..40)
+        .map(
+            |i| json!({ "type": "core://Text", "value_expr": format!("Row {i}"), "style": "Body" }),
+        )
+        .collect();
+    let page: protocol::UiNode = serde_json::from_value(json!({
+        "type": "core://Page", "id": "p", "root": {
+            "type": "core://Box", "fill": true, "background": "#00FF00",
+            "content": { "type": "core://Scroll", "content": {
+                "type": "core://Column", "padding_v_dp": 8, "children": [
+                    { "type": "core://Spacer", "size_dp": 10 },
+                    { "type": "core://Sticky", "content": { "type": "core://Box",
+                        "background": "#00FF00",
+                        "content": { "type": "core://Text", "value_expr": "Filters", "style": "Body" } } },
+                    { "type": "core://Box", "background": "#FFFFFF",
+                        "content": { "type": "core://Column", "children": rows } } ] } } } }))
+    .unwrap();
+    let mut s = Session::new(
+        "p",
+        page,
+        Default::default(),
+        Viewport {
+            width: 300.0,
+            height: 400.0,
+            scale: 1.0,
+        },
+    );
+    s.scroll_by(None, 200.0).unwrap();
+    let img = s.render_cpu().unwrap();
+    // Between the view's top and the pinned filters (resting at 18 points).
+    assert_eq!(img.get_pixel(20, 10).0, [0, 255, 0, 255]);
 }

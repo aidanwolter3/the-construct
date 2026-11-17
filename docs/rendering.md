@@ -102,11 +102,13 @@ and a GameActivity, and the app is a NativeActivity with no Java (issue #172).
 
 ## Coverage
 
-Drawn like the app: Page, Workspace (title and slots), Column, Row, Container, Box, Text (styles, `count`), Button,
+Drawn like the app: Page, Workspace (title and slots), Column, Row, Container, Box (a filled box at a corner of the rounded box around it, such as a selected row's background in a card of rows, is rounded there as that box is, concentric with it, so it stays inside the corner), Text (styles, `count`), Button,
 IconButton (`active`), Chip, Badge, Spacer, Divider, Conditional, Container (children 8 points apart; horizontal
 ones wrap), Tappable (while a finger or the mouse button is down on it, a wash of the text colour at 10% darkens it on
-a light page and lightens it on a dark one, rounded as its one child is; it goes when the finger lifts or the touch
-becomes a scroll or swipe: `Session::press` / `release_press`), Gesture (tap), Scroll (clipped, offsets; with `follow_end`, a tap outside it, such as a
+a light page and lightens it on a dark one, rounded as its one child is and, at a corner of the rounded box around it (the first or last row of a card of rows), as that box is, concentric with it; it goes when the finger lifts or the touch
+becomes a scroll or swipe: `Session::press` / `release_press`; a mouse resting over it with no button down, on desktop
+and the web, washes it at 5% and the pointer becomes a hand: `Session::hover` / `hover_end`, never called on touch, so phones
+draw as before; decision `wide-screen-panels`), Gesture (tap), Scroll (clipped, offsets; with `follow_end`, a tap outside it, such as a
 footer's Send, makes it follow its content to the end once that has grown, while a tap inside it, a like, doesn't), Text
 `format` (bound `YYYY-MM-DD` values as "today", "in 3 days" or "Nov 5", or `past`, against the device's own day; a
 `SceneBuilder` can be given another with `today`), List (`where`, `filter`, `group_by`, `columns`, `focus`, `indent`, `empty_text`), ChoiceChips (a row as wide as its place; chips past its
@@ -152,7 +154,9 @@ images move but keep their size, since each size is cut anew). A mouse wheel not
 `card`, and each mode takes only its own token values from `core://theme` (`<token>`, `<token>_dark`), any token
 the pod sends included. The renderer's own controls (a switch, `core://Button`) draw `accent` in light mode once the pod sets it, else Material's purple; an off switch follows `muted_surface` and `muted_text` once set, and an optional token of the pod's own, `on_accent`, is what goes on the accent fill (decision `controls-follow-the-theme`). `core://Sticky` pins at the top of its scrolling view, over the page
 background, until its parent scrolls away; one that rests within 24 points of the view's top (a column's padding)
-pins where it rests, so it never moves (the Compose UI moved it up to the top first).
+pins where it rests, so it never moves (the Compose UI moved it up to the top first); the band between the view's
+top and where it rests is filled with the nearest opaque background around it (a page `core://Box`'s `background`,
+else the theme's), so the content scrolling under it doesn't show there.
 
 ## The desktop viewer
 

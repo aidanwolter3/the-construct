@@ -41,8 +41,9 @@ its CPU rasterizer into a `<canvas>`, over the pod's HTTP API on the page's own 
   `Sec-Fetch-Site`, `same-origin`; only as a `web` credential (a pod code in the cookie is not taken); never for
   `/v1/mcp`. The page allows only its own scripts and WebAssembly (no inline script).
 - **Images of other sites** go through `GET /web/image` (a canvas can't read pixels without CORS): with the cookie,
-  public `http(s)` hosts only (names that resolve to private addresses are refused when connecting), images only, at
-  most 10 MiB.
+  public `http(s)` hosts only (names that resolve to private addresses are refused when connecting), raster images
+  only (not SVG: opened on its own on this site it would run scripts, and the decoder can't draw it anyway), at most
+  10 MiB, sent with `nosniff` and `default-src 'none'; sandbox` so one opened on its own runs nothing.
 - **Features**: the client sends the renderer's features minus what a browser can't do yet (`media_picker`,
   `auth_login`, `device_notification_permission`), so the pod serves older versions without them.
 - **Off by default**: `/web`, the cookie and the proxy exist only with `CONSTRUCT_WEB=1` (unset on staging), from

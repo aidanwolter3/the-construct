@@ -1,23 +1,26 @@
-//! Public links (decision `public-web-links`): a layout and the rows it
-//! shows, copied to the host for anyone with the link to look at in a
-//! browser, read-only, without a pod. Only when the host allows it
-//! (`CONSTRUCT_PUBLIC_WEB=1`).
+//! Public links (decisions `public-web-links`,
+//! `public-links-share-the-closure`): a layout, the layouts it opens and
+//! embeds, and the rows they show, copied to the host for anyone with the
+//! link to look at in a browser, read-only, without a pod. Only when the
+//! host allows it (`CONSTRUCT_PUBLIC_WEB=1`).
 //!
 //! Privacy is storage (decision `sharing`): a visitor never reaches the pod.
 //! Sharing copies the layout as the owner's device draws it (its plumbing,
-//! components expanded) with its data, then takes out everything that could
-//! reach further: what writes, what loads more, links to other layouts and
-//! embeds of them, screens. Only Collections data goes, and of it only the
-//! rows the copy lists and the fields it reads. The owner reviews the copy
-//! (every text and value a visitor would read) before it goes out, and the
-//! pod copies it again when its Collections data changes, so the page stays
-//! current. Revoking takes the copy off the host.
+//! components expanded) with its data, and so each layout it opens or
+//! embeds whose data may go out, then takes out everything that could reach
+//! further: what writes, what loads more, links to layouts it doesn't
+//! carry, screens. Only Collections data goes, and of it only the rows the
+//! copy's layouts show (each list's `where` applied, with the `$route` and
+//! `$item` of each place it is drawn) and the fields they read. The owner
+//! reviews the copy (every text and value a visitor would read) before it
+//! goes out, and the pod copies it again when its Collections data changes,
+//! so the page stays current. Revoking takes the copy off the host.
 
 use axum::http::HeaderMap;
 use protocol::{DataBundle, EntityRecord};
 use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use crate::Pod;
 use crate::construct::share::Shelf;
@@ -48,8 +51,9 @@ impl PublicData {
     }
 }
 
-/// The largest copy (layout and data, as JSON).
-pub const MAX_COPY_BYTES: usize = 512 * 1024;
+/// The largest copy (its layouts and data, as JSON): a whole recipe book,
+/// every recipe with its lines and steps (decision `public-link-size`).
+pub const MAX_COPY_BYTES: usize = 2 * 1024 * 1024;
 /// Most public links a pod keeps live.
 pub const MAX_LIVE: usize = 20;
 /// Wait this long after a data change before copying again, so a burst of
@@ -64,11 +68,17 @@ pub struct PublicCopy {
     pub owner_pod: String,
     /// The layout it copies (`home`, `c-…`).
     pub layout: String,
-    /// The rows it shows (entity URIs); empty: every row the layout shows.
+    /// What it was asked for ([`Ask::key`]): the rows it shows (entity
+    /// URIs; none: every row the layout shows), `item:<uri>`,
+    /// `param:<name>=<value>` and `leave_out:<layout>`.
     pub rows: Vec<String>,
     pub title: String,
-    /// `{title, node, data, item?}`: what a visitor's page draws.
+    /// `{format, layout, title, node, data, item?, params?, layouts?}`:
+    /// what a visitor's page draws (format 1 had only `title`, `node`,
+    /// `data` and `item`).
     pub copy: Value,
+    /// A chosen short path, `/@<owner's handle>/<slug>`.
+    pub slug: Option<String>,
     pub created_at: i64,
     pub updated_at: i64,
     pub revoked_at: Option<i64>,
@@ -90,13 +100,14 @@ pub fn is_link(s: &str) -> bool {
     })
 }
 
-/// The intents a public page keeps: nothing that writes, loads, signs in or
-/// opens another layout.
+/// The intents a public page keeps: nothing that writes, loads or signs
+/// in; an open only of a layout the copy carries.
 const KEPT_INTENTS: [&str; 3] = [
     "action.navigation.back",
     "action.local.set",
     "action.link.open",
 ];
+const OPEN: &str = "action.navigation.open";
 
 /// Nodes whose job is an intent: without it they go (a button that would
 /// write), or their content stays (a tappable card).
@@ -109,23 +120,42 @@ const CONTROLS: [&str; 5] = [
 ];
 const WRAPPERS: [&str; 3] = ["core://Tappable", "core://Gesture", "core://SwipeCard"];
 
-/// Whether an intent (a node's `on_click`, …) may stay.
-fn kept(intent: &Value) -> bool {
+/// The layout an open (`action.navigation.open`) or embed names, when it
+/// names one plainly (no `$`, no screen of it).
+fn target(o: &Map<String, Value>) -> Option<&str> {
+    let layout = o.get("layout")?.as_str()?;
+    let plain = !layout.is_empty() && !layout.contains('$');
+    let screen = o
+        .get("target_uri")
+        .and_then(Value::as_str)
+        .is_some_and(|t| !t.is_empty());
+    (plain && !screen).then_some(layout)
+}
+
+/// Whether an intent (a node's `on_click`, …) may stay: it writes nothing
+/// and goes nowhere outside the copy (`carried`: the layouts in it).
+fn kept(intent: &Value, carried: &BTreeSet<String>) -> bool {
     match intent["intent"].as_str() {
         Some(i) if KEPT_INTENTS.contains(&i) => true,
+        Some(OPEN) => intent
+            .as_object()
+            .and_then(target)
+            .is_some_and(|t| carried.contains(t)),
         Some("action.sequence") => intent["steps"]
             .as_array()
-            .is_some_and(|s| s.iter().all(kept)),
+            .is_some_and(|s| s.iter().all(|x| kept(x, carried))),
         _ => false,
     }
 }
 
 /// Whether a node carries an intent that may not stay.
-fn has_dropped_intent(o: &Map<String, Value>) -> bool {
+fn has_dropped_intent(o: &Map<String, Value>, carried: &BTreeSet<String>) -> bool {
     o.iter().any(|(k, v)| {
-        k != "item_template" && v.get("intent").is_some_and(|_| !kept(v))
-            || v.as_array()
-                .is_some_and(|a| a.iter().any(|x| x.get("intent").is_some_and(|_| !kept(x))))
+        k != "item_template" && v.get("intent").is_some_and(|_| !kept(v, carried))
+            || v.as_array().is_some_and(|a| {
+                a.iter()
+                    .any(|x| x.get("intent").is_some_and(|_| !kept(x, carried)))
+            })
     })
 }
 
@@ -138,23 +168,26 @@ pub struct Removed {
 }
 
 /// The copy of a plumbing node a visitor gets: controls that would write or
-/// go elsewhere taken out (a tappable keeps its content), embeds of other
-/// layouts and screens dropped. `None`: the node goes.
-pub fn strip(v: &Value, removed: &mut Removed) -> Option<Value> {
+/// go outside the copy taken out (a tappable keeps its content), embeds of
+/// layouts it doesn't carry and screens dropped. `carried`: the layouts the
+/// copy carries, whose opens and embeds stay. `None`: the node goes.
+pub fn strip(v: &Value, carried: &BTreeSet<String>, removed: &mut Removed) -> Option<Value> {
     match v {
         Value::Array(a) => Some(Value::Array(
-            a.iter().filter_map(|x| strip(x, removed)).collect(),
+            a.iter()
+                .filter_map(|x| strip(x, carried, removed))
+                .collect(),
         )),
         Value::Object(o) => {
             let ty = o.get("type").and_then(Value::as_str).unwrap_or("");
-            if ty == "core://Layout" {
+            if ty == "core://Layout" && !target(o).is_some_and(|t| carried.contains(t)) {
                 removed.embeds += 1;
                 return None;
             }
-            if has_dropped_intent(o) {
+            if has_dropped_intent(o, carried) {
                 if WRAPPERS.contains(&ty) {
                     removed.controls += 1;
-                    return o.get("content").and_then(|c| strip(c, removed));
+                    return o.get("content").and_then(|c| strip(c, carried, removed));
                 }
                 if CONTROLS.contains(&ty) || o.contains_key("on_click") {
                     removed.controls += 1;
@@ -169,11 +202,11 @@ pub fn strip(v: &Value, removed: &mut Removed) -> Option<Value> {
                 }
                 // Intents left in other places (a field's on_submit, a
                 // chip's) go; kept ones stay.
-                if x.get("intent").is_some() && !kept(x) {
+                if x.get("intent").is_some() && !kept(x, carried) {
                     removed.controls += 1;
                     continue;
                 }
-                match strip(x, removed) {
+                match strip(x, carried, removed) {
                     Some(y) => {
                         out.insert(k.clone(), y);
                     }
@@ -193,25 +226,28 @@ pub fn strip(v: &Value, removed: &mut Removed) -> Option<Value> {
 /// (a list's `where`, `group_by`, `filter`).
 fn fields_read(node: &str) -> BTreeSet<String> {
     let mut out = BTreeSet::new();
-    let word = |s: &str| -> String {
-        s.chars()
-            .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
-            .collect()
-    };
     for (i, _) in node.match_indices("$item.") {
-        out.insert(word(&node[i + 6..]));
+        out.insert(word(&node[i + 6..]).to_owned());
     }
     for (i, _) in node.match_indices('#') {
-        out.insert(word(&node[i + 1..]));
+        out.insert(word(&node[i + 1..]).to_owned());
     }
     for (i, _) in node.match_indices('"') {
         let w = word(&node[i + 1..]);
         if node[i + 1 + w.len()..].starts_with('"') {
-            out.insert(w);
+            out.insert(w.to_owned());
         }
     }
     out.remove("");
     out
+}
+
+/// The name at the start of `s` (letters, digits, `_`).
+fn word(s: &str) -> &str {
+    let end = s
+        .find(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
+        .unwrap_or(s.len());
+    &s[..end]
 }
 
 /// The pod's theme (its colours): a copy carries it whole, so the page looks
@@ -242,42 +278,333 @@ fn shareable(data: &DataBundle, allowed: &PublicData) -> Result<(), Vec<String>>
     }
 }
 
-/// The data a visitor gets: the rows the copy's lists show (only `rows`
-/// when given), each with only the fields the node reads.
-pub fn minimize(data: &DataBundle, node: &Value, rows: &[String]) -> DataBundle {
-    let text = node.to_string();
-    let read = fields_read(&text);
-    let mut out = DataBundle::default();
-    for (key, uris) in &data.queries {
-        let kept: Vec<String> = uris
-            .iter()
-            .filter(|u| rows.is_empty() || rows.contains(u))
-            .cloned()
-            .collect();
-        out.queries.insert(key.clone(), kept);
-    }
-    let listed: BTreeSet<&String> = out.queries.values().flatten().collect();
-    if let Some(t) = data.entities.get(THEME) {
-        out.entities.insert(THEME.to_owned(), t.clone());
-    }
-    for (uri, e) in &data.entities {
-        let named = text.contains(uri.as_str()) || rows.contains(uri);
-        if !(listed.contains(uri) || named) || uri.starts_with("core://") {
-            continue;
+/// One use of a layout in a copy: its `$route` and `$item` there.
+#[derive(Debug, Clone, Default, PartialEq, Eq, PartialOrd, Ord)]
+pub struct Use {
+    pub route: BTreeMap<String, String>,
+    pub item: Option<String>,
+}
+
+/// Most uses of layouts one copy walks (a list of 300 meals each pushing
+/// its recipe is 301).
+const MAX_USES: usize = 2000;
+
+/// What a copy's layouts show, found by drawing them in the head: for each
+/// use of each layout (the root with its `params` and `item`, a layout
+/// pushed from a row with that row's params), the rows each list keeps
+/// after its `where`, the rows a `${<uri>#<f>}` names, and the fields read
+/// of each.
+struct Shows<'a> {
+    pool: &'a DataBundle,
+    /// The layouts the copy carries (their stripped nodes).
+    nodes: &'a BTreeMap<String, Value>,
+    root: &'a str,
+    /// The root's lists hold only these rows (`rows`), when given.
+    only: &'a BTreeSet<String>,
+    /// Shown rows and the fields read of each.
+    rows: BTreeMap<String, BTreeSet<String>>,
+    /// Shown rows by query key (every key a list reads, even when empty).
+    queries: BTreeMap<String, BTreeSet<String>>,
+    /// Shown rows by layout (for the review and the size).
+    by_layout: BTreeMap<String, BTreeSet<String>>,
+    seen: BTreeSet<(String, Use)>,
+    todo: Vec<(String, Use)>,
+}
+
+impl<'a> Shows<'a> {
+    fn new(
+        pool: &'a DataBundle,
+        nodes: &'a BTreeMap<String, Value>,
+        root: &'a str,
+        only: &'a BTreeSet<String>,
+    ) -> Self {
+        Shows {
+            pool,
+            nodes,
+            root,
+            only,
+            rows: BTreeMap::new(),
+            queries: BTreeMap::new(),
+            by_layout: BTreeMap::new(),
+            seen: BTreeSet::new(),
+            todo: Vec::new(),
         }
-        let mut m = Map::new();
-        if let Ok(Value::Object(all)) = serde_json::to_value(e) {
-            for (f, v) in all {
-                if f == "id" || read.contains(&f) {
-                    m.insert(f, v);
+    }
+
+    /// Walks every use reached from the root's; false past [`MAX_USES`].
+    fn run(&mut self, first: Use) -> bool {
+        self.todo.push((self.root.to_owned(), first));
+        while let Some((id, u)) = self.todo.pop() {
+            if !self.seen.insert((id.clone(), u.clone())) {
+                continue;
+            }
+            if self.seen.len() > MAX_USES {
+                return false;
+            }
+            let Some(node) = self.nodes.get(&id) else {
+                continue;
+            };
+            if let Some(i) = &u.item {
+                let read = fields_read(&node.to_string());
+                self.show(&id, i, read);
+            }
+            let item = u.item.clone();
+            self.walk(&id, node, &u, item.as_deref());
+        }
+        true
+    }
+
+    fn show(&mut self, layout: &str, uri: &str, fields: BTreeSet<String>) {
+        if !self.pool.entities.contains_key(uri) {
+            return;
+        }
+        self.rows.entry(uri.to_owned()).or_default().extend(fields);
+        self.by_layout
+            .entry(layout.to_owned())
+            .or_default()
+            .insert(uri.to_owned());
+    }
+
+    /// `s` with `$route.<name>` and `$item.<field>` filled in (others left).
+    fn bind(&self, s: &str, u: &Use, item: Option<&str>) -> String {
+        let entity = item.and_then(|i| self.pool.entities.get(i));
+        let mut out = String::new();
+        let mut rest = s;
+        while let Some(i) = rest.find('$') {
+            out.push_str(&rest[..i]);
+            let after = &rest[i..];
+            if let Some(r) = after.strip_prefix("$route.") {
+                let name = word(r);
+                match u.route.get(name) {
+                    Some(v) if !name.is_empty() => {
+                        out.push_str(v);
+                        rest = &r[name.len()..];
+                        continue;
+                    }
+                    _ => {}
+                }
+            } else if let Some(r) = after.strip_prefix("$item.")
+                && let Some(e) = entity
+            {
+                let name = word(r);
+                if !name.is_empty() {
+                    out.push_str(&e.get(name).map(render).unwrap_or_default());
+                    rest = &r[name.len()..];
+                    continue;
                 }
             }
+            out.push('$');
+            rest = &after[1..];
         }
-        if let Ok(rec) = serde_json::from_value::<EntityRecord>(Value::Object(m)) {
-            out.entities.insert(uri.clone(), rec);
+        out.push_str(rest);
+        out
+    }
+
+    /// The rows `${<uri>#<field>}` in `s` names.
+    fn lookups(&mut self, layout: &str, s: &str, u: &Use, item: Option<&str>) {
+        let mut rest = s;
+        while let Some(i) = rest.find("${") {
+            let after = &rest[i + 2..];
+            let Some(end) = after.find('}') else { break };
+            let inner = self.bind(&after[..end], u, item);
+            rest = &after[end + 1..];
+            let (uri, field) = match inner.split_once('#') {
+                Some((u, f)) => (u, Some(f)),
+                None => (inner.as_str(), None),
+            };
+            if uri.contains('$')
+                || !uri.contains("://")
+                || uri.starts_with("local://")
+                || uri.starts_with("core://")
+            {
+                continue;
+            }
+            let fields = field.map(|f| word(f).to_owned()).into_iter().collect();
+            self.show(layout, uri, fields);
         }
     }
-    out
+
+    /// The rows of `key` (bound) a list keeps: its `where` holds, and, in
+    /// the root, only `rows` when given.
+    fn kept_rows(
+        &self,
+        layout: &str,
+        o: &Map<String, Value>,
+        u: &Use,
+        item: Option<&str>,
+    ) -> (String, Vec<String>) {
+        let key = self.bind(o["query_key"].as_str().unwrap_or(""), u, item);
+        let conds: Vec<&Value> = match o.get("where") {
+            Some(Value::Array(a)) => a.iter().collect(),
+            Some(w @ Value::Object(_)) => vec![w],
+            _ => Vec::new(),
+        };
+        let rows = self
+            .pool
+            .queries
+            .get(&key)
+            .into_iter()
+            .flatten()
+            .filter(|r| layout != self.root || self.only.is_empty() || self.only.contains(*r))
+            .filter(|r| {
+                let e = self.pool.entities.get(*r);
+                conds.iter().all(|c| self.holds(c, e, u, item))
+            })
+            .cloned()
+            .collect();
+        (key, rows)
+    }
+
+    /// Whether a `where` condition holds for a row, as the renderer tests
+    /// it (`layout.rs` `Where`); a condition that can't be decided here (an
+    /// age, a form value) holds, so its rows go.
+    fn holds(&self, c: &Value, e: Option<&EntityRecord>, u: &Use, item: Option<&str>) -> bool {
+        if c.get("older_than").is_some_and(|v| !v.is_null()) {
+            return true;
+        }
+        let want = self.bind(c["equals"].as_str().unwrap_or(""), u, item);
+        if want.trim().is_empty() || want.contains('$') {
+            return true;
+        }
+        let field = c["field"].as_str().unwrap_or("");
+        let hit = e.and_then(|e| e.get(field)).is_some_and(|v| match v {
+            Value::String(s) => *s == want,
+            Value::Bool(b) => want == if *b { "true" } else { "false" },
+            other => render(other) == want,
+        });
+        hit != (c["not"] == true)
+    }
+
+    fn walk(&mut self, layout: &str, v: &Value, u: &Use, item: Option<&str>) {
+        match v {
+            Value::String(s) => self.lookups(layout, s, u, item),
+            Value::Array(a) => a.iter().for_each(|x| self.walk(layout, x, u, item)),
+            Value::Object(o) => {
+                let mut templates: &[&str] = &[];
+                if o.get("query_key").is_some_and(Value::is_string) {
+                    // A list (or a dock, chips): the rows it keeps, each
+                    // with what its template reads, and its template per row.
+                    let (key, rows) = self.kept_rows(layout, o, u, item);
+                    let read = fields_read(&v.to_string());
+                    self.queries.entry(key).or_default().extend(rows.clone());
+                    templates = &["item_template", "item"];
+                    for r in &rows {
+                        self.show(layout, r, read.clone());
+                        for t in templates {
+                            if let Some(t) = o.get(*t).filter(|t| t.is_object()) {
+                                self.walk(layout, t, u, Some(r));
+                            }
+                        }
+                    }
+                }
+                if let Some(c) = o.get("count").and_then(Value::as_object)
+                    && c.get("query_key").is_some_and(Value::is_string)
+                {
+                    // A count: its rows, with only the fields its `where` reads.
+                    let (key, rows) = self.kept_rows(layout, c, u, item);
+                    let read = fields_read(&Value::Object(c.clone()).to_string());
+                    self.queries.entry(key).or_default().extend(rows.clone());
+                    for r in &rows {
+                        self.show(layout, r, read.clone());
+                    }
+                }
+                let is_open = o.get("intent").and_then(Value::as_str) == Some(OPEN);
+                let is_embed = o.get("type").and_then(Value::as_str) == Some("core://Layout");
+                if (is_open || is_embed)
+                    && let Some(t) = target(o)
+                    && self.nodes.contains_key(t)
+                {
+                    let params: BTreeMap<String, String> = o
+                        .get("params")
+                        .and_then(Value::as_object)
+                        .into_iter()
+                        .flatten()
+                        .map(|(k, x)| (k.clone(), self.bind(&render(x), u, item)))
+                        .collect();
+                    // An embed draws in its host: its route unless it sets one.
+                    let next = if is_embed {
+                        Use {
+                            route: if params.is_empty() {
+                                u.route.clone()
+                            } else {
+                                params
+                            },
+                            item: item.map(str::to_owned),
+                        }
+                    } else {
+                        Use {
+                            route: params,
+                            item: None,
+                        }
+                    };
+                    self.todo.push((t.to_owned(), next));
+                }
+                for (k, x) in o {
+                    if !templates.contains(&k.as_str()) {
+                        self.walk(layout, x, u, item);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// The data a visitor gets: the shown rows, each with only the fields
+    /// read of it, the lists holding only them, and the theme.
+    fn data(&self) -> DataBundle {
+        let mut out = DataBundle::default();
+        for (key, shown) in &self.queries {
+            let kept = self
+                .pool
+                .queries
+                .get(key)
+                .into_iter()
+                .flatten()
+                .filter(|u| shown.contains(*u))
+                .cloned()
+                .collect();
+            out.queries.insert(key.clone(), kept);
+        }
+        if let Some(t) = self.pool.entities.get(THEME) {
+            out.entities.insert(THEME.to_owned(), t.clone());
+        }
+        for (uri, fields) in &self.rows {
+            let Some(e) = self.pool.entities.get(uri) else {
+                continue;
+            };
+            let mut m = Map::new();
+            if let Ok(Value::Object(all)) = serde_json::to_value(e) {
+                for (f, v) in all {
+                    if f == "id" || fields.contains(&f) {
+                        m.insert(f, v);
+                    }
+                }
+            }
+            if let Ok(rec) = serde_json::from_value::<EntityRecord>(Value::Object(m)) {
+                out.entities.insert(uri.clone(), rec);
+            }
+        }
+        out
+    }
+}
+
+/// A value as the renderer writes it.
+fn render(v: &Value) -> String {
+    match v {
+        Value::String(s) => s.clone(),
+        Value::Null => String::new(),
+        other => other.to_string(),
+    }
+}
+
+/// The data a visitor gets of one layout drawn with `u` (only `rows` in
+/// its lists when given): see [`Shows`].
+pub fn minimize(data: &DataBundle, node: &Value, rows: &[String], u: Use) -> DataBundle {
+    let nodes = BTreeMap::from([("root".to_owned(), node.clone())]);
+    let only = rows.iter().cloned().collect();
+    let mut s = Shows::new(data, &nodes, "root", &only);
+    s.run(u);
+    s.data()
 }
 
 /// Keys of a node whose strings a person reads.
@@ -362,30 +689,94 @@ fn review_id(copy: &Value) -> String {
     format!("review-{}", crate::util::hex(&h[..8]))
 }
 
+/// The copy's format (`format` in it; a copy without one is format 1, a
+/// single layout). Clients draw every format they have served
+/// (`construct_render::public`); a change to it is a new number.
+pub const FORMAT: u64 = 2;
+
+/// Most layouts one copy carries (the root and what it reaches).
+pub const MAX_LAYOUTS: usize = 16;
+
+/// What to copy: a layout and how it is drawn.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Ask {
+    pub layout: String,
+    /// Only these rows in the root's lists (empty: every row they show).
+    pub rows: Vec<String>,
+    /// The row the root draws as `$item`.
+    pub item: Option<String>,
+    /// The root's `$route.<name>`.
+    pub params: BTreeMap<String, String>,
+    /// Layouts not to carry: their opens and embeds go.
+    pub leave_out: BTreeSet<String>,
+}
+
+impl Ask {
+    /// What a stored copy's key (`PublicCopy::rows`) asked for: rows, and
+    /// `item:<uri>`, `param:<name>=<value>` and `leave_out:<layout>`.
+    pub fn from_key(layout: &str, key: &[String]) -> Ask {
+        let mut a = Ask {
+            layout: layout.to_owned(),
+            ..Ask::default()
+        };
+        for r in key {
+            if let Some(i) = r.strip_prefix("item:") {
+                a.item = Some(i.to_owned());
+            } else if let Some(p) = r.strip_prefix("param:") {
+                let (k, v) = p.split_once('=').unwrap_or((p, ""));
+                a.params.insert(k.to_owned(), v.to_owned());
+            } else if let Some(l) = r.strip_prefix("leave_out:") {
+                a.leave_out.insert(l.to_owned());
+            } else {
+                a.rows.push(r.clone());
+            }
+        }
+        a
+    }
+
+    /// The stored key: what makes the link (rows, item, params), then what
+    /// it leaves out.
+    pub fn key(&self) -> Vec<String> {
+        let mut k = self.identity();
+        k.extend(self.leave_out.iter().map(|l| format!("leave_out:{l}")));
+        k
+    }
+
+    /// What makes a link: the same layout with other rows, item or params
+    /// is another link.
+    fn identity(&self) -> Vec<String> {
+        let mut k = self.rows.clone();
+        k.extend(self.item.iter().map(|i| format!("item:{i}")));
+        k.extend(self.params.iter().map(|(n, v)| format!("param:{n}={v}")));
+        k
+    }
+}
+
 /// A layout copied for the public, with what was taken out.
 pub struct Made {
     pub copy: Value,
     pub removed: Removed,
+    /// The layouts it carries: id, title, the rows shown there.
+    pub layouts: Vec<(String, String, BTreeSet<String>)>,
+    /// Layouts it reaches but doesn't carry, and why.
+    pub left_out: Vec<(String, String)>,
 }
 
 fn refuse(error: &str, detail: impl Into<String>) -> Value {
     json!({ "error": error, "detail": detail.into() })
 }
 
-/// Copies `layout` (as the owner's device draws it) for the public.
-pub async fn make(
-    pod: &Pod,
-    layout: &str,
-    rows: &[String],
-    item: Option<&str>,
-) -> Result<Made, Value> {
-    let spec = crate::preview::fetch(pod, &HeaderMap::new(), layout).await?;
-    let data = DataBundle {
+/// Copies `ask.layout` (as the owner's device draws it) for the public,
+/// with the layouts it opens and embeds (decision
+/// `public-links-share-the-closure`).
+pub async fn make(pod: &Pod, ask: &Ask) -> Result<Made, Value> {
+    let (allowed, names) = PublicData::of(pod);
+    let spec = crate::preview::fetch(pod, &HeaderMap::new(), &ask.layout).await?;
+    let mut pool = DataBundle {
         entities: spec.entities,
         queries: spec.queries,
     };
-    let (allowed, names) = PublicData::of(pod);
-    if let Err(other) = shareable(&data, &allowed) {
+    if let Err(other) = shareable(&pool, &allowed) {
         return Err(refuse(
             "data_not_shareable",
             format!(
@@ -395,17 +786,74 @@ pub async fn make(
             ),
         ));
     }
-    let node =
+    let root =
         serde_json::to_value(&spec.workspace).map_err(|e| refuse("copy_failed", e.to_string()))?;
-    let title = node["title"].as_str().unwrap_or(layout).to_owned();
-    let mut removed = Removed::default();
-    let node = strip(&node, &mut removed).unwrap_or(Value::Null);
-    let mut rows: Vec<String> = rows.to_vec();
-    if let Some(i) = item {
-        rows.push(i.to_owned());
+    let title = root["title"].as_str().unwrap_or(&ask.layout).to_owned();
+
+    // The closure: what the root opens and embeds, and what those do, each
+    // layout once, as long as its data may go out.
+    let mut full: BTreeMap<String, Value> = BTreeMap::from([(ask.layout.clone(), root)]);
+    let mut left_out: Vec<(String, String)> = Vec::new();
+    let mut todo = vec![ask.layout.clone()];
+    while let Some(id) = todo.pop() {
+        let mut found = BTreeSet::new();
+        targets(&full[&id], &mut found);
+        for t in found {
+            if full.contains_key(&t) || left_out.iter().any(|(l, _)| *l == t) {
+                continue;
+            }
+            let why = if ask.leave_out.contains(&t) {
+                Some("left out (leave_out)".to_owned())
+            } else if pod.catalog().blueprint(&t).is_some() {
+                Some("a built-in layout (Settings, the inbox, …)".to_owned())
+            } else if full.len() >= MAX_LAYOUTS {
+                Some(format!("a copy carries at most {MAX_LAYOUTS} layouts"))
+            } else {
+                match crate::preview::fetch(pod, &HeaderMap::new(), &t).await {
+                    Err(e) => Some(format!("not loaded: {}", e["detail"])),
+                    Ok(s) => {
+                        let data = DataBundle {
+                            entities: s.entities,
+                            queries: s.queries,
+                        };
+                        match (
+                            shareable(&data, &allowed),
+                            serde_json::to_value(&s.workspace),
+                        ) {
+                            (Err(other), _) => Some(format!("it draws {}", other.join(", "))),
+                            (_, Err(e)) => Some(e.to_string()),
+                            (Ok(()), Ok(node)) => {
+                                pool.entities.extend(data.entities);
+                                for (k, v) in data.queries {
+                                    pool.queries.entry(k).or_insert(v);
+                                }
+                                full.insert(t.clone(), node);
+                                todo.push(t.clone());
+                                None
+                            }
+                        }
+                    }
+                }
+            };
+            if let Some(w) = why {
+                left_out.push((t, w));
+            }
+        }
     }
-    for r in &rows {
-        if !data.entities.contains_key(r) {
+    let carried: BTreeSet<String> = full.keys().cloned().collect();
+    let mut removed = Removed::default();
+    let nodes: BTreeMap<String, Value> = full
+        .iter()
+        .map(|(id, n)| {
+            (
+                id.clone(),
+                strip(n, &carried, &mut removed).unwrap_or(Value::Null),
+            )
+        })
+        .collect();
+
+    for r in ask.rows.iter().chain(&ask.item) {
+        if !pool.entities.contains_key(r) {
             return Err(refuse(
                 "unknown_row",
                 format!(
@@ -414,21 +862,106 @@ pub async fn make(
             ));
         }
     }
-    let data = minimize(&data, &node, &rows);
-    let mut copy = json!({ "title": title, "node": node, "data": data });
-    if let Some(i) = item {
-        copy["item"] = json!(i);
-    }
-    if copy.to_string().len() > MAX_COPY_BYTES {
+    let only: BTreeSet<String> = ask.rows.iter().cloned().collect();
+    let mut shows = Shows::new(&pool, &nodes, &ask.layout, &only);
+    let first = Use {
+        route: ask.params.clone(),
+        item: ask.item.clone(),
+    };
+    if !shows.run(first) {
         return Err(refuse(
             "too_large",
             format!(
-                "the copy is over {} KiB: share fewer rows",
-                MAX_COPY_BYTES / 1024
+                "the copy draws its layouts more than {MAX_USES} times (one per row that opens one): share fewer rows or leave_out a layout"
             ),
         ));
     }
-    Ok(Made { copy, removed })
+    let data = shows.data();
+    // Opens and embeds of a layout carried: the root too, when something
+    // goes back to it.
+    let mut reached = BTreeSet::new();
+    for n in nodes.values() {
+        targets(n, &mut reached);
+    }
+    let layouts: Map<String, Value> = nodes
+        .iter()
+        .filter(|(id, _)| **id != ask.layout || reached.contains(*id))
+        .map(|(id, n)| (id.clone(), n.clone()))
+        .collect();
+    let mut copy = json!({ "format": FORMAT, "layout": ask.layout, "title": title,
+        "node": nodes[&ask.layout], "data": data });
+    if let Some(i) = &ask.item {
+        copy["item"] = json!(i);
+    }
+    if !ask.params.is_empty() {
+        copy["params"] = json!(ask.params);
+    }
+    if !layouts.is_empty() {
+        copy["layouts"] = Value::Object(layouts);
+    }
+    let made_layouts: Vec<(String, String, BTreeSet<String>)> = nodes
+        .iter()
+        .map(|(id, n)| {
+            (
+                id.clone(),
+                n["title"].as_str().unwrap_or(id).to_owned(),
+                shows.by_layout.get(id).cloned().unwrap_or_default(),
+            )
+        })
+        .collect();
+    if copy.to_string().len() > MAX_COPY_BYTES {
+        let entity_size = |u: &String| {
+            data.entities
+                .get(u)
+                .and_then(|e| serde_json::to_string(e).ok())
+                .map_or(0, |s| s.len())
+        };
+        let mut sizes: Vec<(usize, &String)> = made_layouts
+            .iter()
+            .map(|(id, _, rows)| {
+                (
+                    nodes[id].to_string().len() + rows.iter().map(entity_size).sum::<usize>(),
+                    id,
+                )
+            })
+            .collect();
+        sizes.sort_by(|a, b| b.cmp(a));
+        let largest: Vec<String> = sizes
+            .iter()
+            .take(3)
+            .map(|(n, id)| format!("{id} ({} KiB)", n.div_ceil(1024)))
+            .collect();
+        return Err(refuse(
+            "too_large",
+            format!(
+                "the copy is over {} KiB; the largest layouts in it: {}. Share fewer rows or leave_out a layout",
+                MAX_COPY_BYTES / 1024,
+                largest.join(", ")
+            ),
+        ));
+    }
+    Ok(Made {
+        copy,
+        removed,
+        layouts: made_layouts,
+        left_out,
+    })
+}
+
+/// The layouts a node opens or embeds plainly.
+fn targets(v: &Value, out: &mut BTreeSet<String>) {
+    match v {
+        Value::Array(a) => a.iter().for_each(|x| targets(x, out)),
+        Value::Object(o) => {
+            let opens = o.get("intent").and_then(Value::as_str) == Some(OPEN)
+                || o.get("type").and_then(Value::as_str) == Some("core://Layout");
+            if opens && let Some(t) = target(o) {
+                out.insert(t.to_owned());
+            }
+            o.values().for_each(|x| targets(x, out));
+        }
+        _ => {}
+    }
 }
 
 fn shelf(pod: &Pod) -> Result<(String, std::sync::Arc<dyn Shelf>), Value> {
@@ -447,32 +980,64 @@ fn shelf(pod: &Pod) -> Result<(String, std::sync::Arc<dyn Shelf>), Value> {
     Ok((id.to_owned(), shelf.clone()))
 }
 
-fn answer(c: &PublicCopy, base: Option<&str>) -> Value {
-    let path = format!("/s/{}", c.link);
-    json!({
+fn answer(c: &PublicCopy, base: Option<&str>, handle: Option<&str>) -> Value {
+    let url = |path: String| {
+        base.map_or(path.clone(), |b| {
+            format!("{}{path}", b.trim_end_matches('/'))
+        })
+    };
+    let ask = Ask::from_key(&c.layout, &c.rows);
+    let mut out = json!({
         "link": c.link,
-        "url": base.map_or(path.clone(), |b| format!("{}{path}", b.trim_end_matches('/'))),
+        "url": url(format!("/s/{}", c.link)),
         "layout": c.layout,
-        "rows": c.rows,
+        "rows": ask.rows,
         "title": c.title,
         "updated_at": c.updated_at,
         "revoked": c.revoked_at.is_some(),
-    })
+    });
+    if let Some(i) = ask.item {
+        out["item"] = json!(i);
+    }
+    if !ask.params.is_empty() {
+        out["params"] = json!(ask.params);
+    }
+    if !ask.leave_out.is_empty() {
+        out["leave_out"] = json!(ask.leave_out);
+    }
+    if let (Some(s), Some(h)) = (&c.slug, handle) {
+        out["slug"] = json!(s);
+        out["short_url"] = json!(url(format!("/@{h}/{s}")));
+    }
+    out
+}
+
+/// Whether `s` may be a chosen short path (`/@<handle>/<slug>`): 1 to 48
+/// lowercase letters, digits and `-`, not starting or ending with `-`.
+pub fn is_slug(s: &str) -> bool {
+    (1..=48).contains(&s.len())
+        && !s.starts_with('-')
+        && !s.ends_with('-')
+        && s.bytes()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
 }
 
 /// The MCP tools (only listed while the host serves public links).
 pub fn tool_specs() -> Vec<Value> {
     vec![
         json!({ "name": "share_publicly",
-            "description": "Make a page anyone can open in a browser, without a pod: a copy of one of the pod's layouts and the rows it shows, read-only (decision public-web-links). Without confirm nothing is shared: the answer is a review of everything a visitor would read (every text and value, every URL) and what was taken out (buttons that write, links to other layouts, embeds, screens); show it to the user and ask before confirming. With confirm (the review_id) it goes out and answers the page's url. The copy is refreshed when the data changes, so new rows the layout shows appear too; say so. rows limits it to some rows (one recipe: its entity URI); item draws the layout with that row as $item. Sharing the same layout and rows again updates the same link.",
+            "description": "Make a page anyone can open in a browser, without a pod: a copy of one of the pod's layouts, the layouts it opens and embeds (a list's rows push their screen: those come too, each with the rows it shows for each row), and only the rows they show, read-only (decisions public-web-links, public-links-share-the-closure). Without confirm nothing is shared: the answer is a review of everything a visitor would read (every text and value, every URL, per layout) and what was taken out (buttons that write, links to layouts not carried, screens); show it to the user and ask before confirming. With confirm (the review_id) it goes out and answers the page's url. The copy is refreshed when the data changes, so new rows the layouts show appear too; say so. params draws a screen that reads $route.<name> (a recipe screen: {\"id\": \"<meal id>\"}); item draws the layout with that row as $item; rows limits the root's lists to some rows; leave_out keeps layouts out (their links go). slug also answers it at /@<handle>/<slug> (the pod needs a handle: set_handle). Sharing the same layout, rows, item and params again updates the same link.",
             "inputSchema": { "type": "object", "properties": {
                 "layout": { "type": "string", "description": "A layout id: home or a c-... id from list_layouts" },
-                "rows": { "type": "array", "items": { "type": "string" }, "description": "Only these rows (entity URIs the layout's lists hold)" },
+                "params": { "type": "object", "description": "{name: value} for $route.<name> of the layout (as render_layout_preview)" },
+                "rows": { "type": "array", "items": { "type": "string" }, "description": "Only these rows in the layout's lists (entity URIs they hold)" },
                 "item": { "type": "string", "description": "A row (entity URI) the layout draws as $item" },
+                "leave_out": { "type": "array", "items": { "type": "string" }, "description": "Layout ids the copy doesn't carry (the review lists the ones it does)" },
+                "slug": { "type": "string", "description": "A short path: /@<handle>/<slug> (lowercase letters, digits, -)" },
                 "confirm": { "type": "string", "description": "The review_id of the review the user approved" } },
                 "required": ["layout"] } }),
         json!({ "name": "list_public_links",
-            "description": "The pod's public links (share_publicly): each link's url, layout, rows and when it was last copied; revoked ones too.",
+            "description": "The pod's public links (share_publicly): each link's url (and short_url), layout, params, rows and when it was last copied; revoked ones too.",
             "inputSchema": { "type": "object", "properties": {} } }),
         json!({ "name": "unshare_publicly",
             "description": "Revoke a public link: the page stops working at once and its copy leaves the server.",
@@ -482,7 +1047,8 @@ pub fn tool_specs() -> Vec<Value> {
     ]
 }
 
-/// The base URL visitors use, from the MCP request (or none).
+/// The base URL visitors use: the host's chosen one (`CONSTRUCT_PUBLIC_URL`),
+/// else the MCP request's.
 fn base_url(headers: &HeaderMap) -> Option<String> {
     if let Ok(u) = std::env::var("CONSTRUCT_PUBLIC_URL")
         && !u.trim().is_empty()
@@ -513,11 +1079,22 @@ pub async fn tool(
         Err(e) => return Some(Err(e)),
     };
     let base = base_url(headers);
+    let handle = shelf.handle(&pod_id).ok().flatten();
     Some(match name {
-        "share_publicly" => share(pod, &pod_id, shelf.as_ref(), args, base.as_deref()).await,
+        "share_publicly" => {
+            share(
+                pod,
+                &pod_id,
+                shelf.as_ref(),
+                args,
+                base.as_deref(),
+                handle.as_deref(),
+            )
+            .await
+        }
         "list_public_links" => shelf
             .public_of_pod(&pod_id)
-            .map(|v| json!({ "links": v.iter().map(|c| answer(c, base.as_deref())).collect::<Vec<_>>() }))
+            .map(|v| json!({ "links": v.iter().map(|c| answer(c, base.as_deref(), handle.as_deref())).collect::<Vec<_>>() }))
             .map_err(|e| refuse("shelf_error", format!("{e:?}"))),
         "unshare_publicly" => {
             let link = args["link"].as_str().unwrap_or("");
@@ -532,93 +1109,161 @@ pub async fn tool(
     })
 }
 
+/// The `share_publicly` arguments.
+fn ask_of(args: &Value) -> Result<Ask, Value> {
+    let strings = |k: &str| -> Vec<String> {
+        args[k]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|r| r.as_str().map(str::to_owned))
+            .collect()
+    };
+    let mut rows = strings("rows");
+    rows.sort();
+    rows.dedup();
+    let params = match &args["params"] {
+        Value::Null => BTreeMap::new(),
+        Value::Object(m) => m.iter().map(|(k, v)| (k.clone(), render(v))).collect(),
+        _ => return Err(refuse("invalid_arguments", "params: {name: value}")),
+    };
+    Ok(Ask {
+        layout: args["layout"].as_str().unwrap_or("").to_owned(),
+        rows,
+        item: args["item"].as_str().map(str::to_owned),
+        params,
+        leave_out: strings("leave_out").into_iter().collect(),
+    })
+}
+
 async fn share(
     pod: &Pod,
     pod_id: &str,
     shelf: &dyn Shelf,
     args: &Value,
     base: Option<&str>,
+    handle: Option<&str>,
 ) -> Result<Value, Value> {
-    let layout = args["layout"].as_str().unwrap_or("").to_owned();
-    let mut rows: Vec<String> = args["rows"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .filter_map(|r| r.as_str().map(str::to_owned))
-        .collect();
-    rows.sort();
-    rows.dedup();
-    let item = args["item"].as_str();
-    let made = make(pod, &layout, &rows, item).await?;
+    let ask = ask_of(args)?;
+    let slug = args["slug"].as_str().filter(|s| !s.is_empty());
+    if let Some(s) = slug {
+        if !is_slug(s) {
+            return Err(refuse(
+                "invalid_slug",
+                "a slug is 1 to 48 lowercase letters, digits and -",
+            ));
+        }
+        if handle.is_none() {
+            return Err(refuse(
+                "no_handle",
+                "a short path is /@<handle>/<slug>: give the pod a handle first (set_handle)",
+            ));
+        }
+    }
+    let made = make(pod, &ask).await?;
     let id = review_id(&made.copy);
     if args["confirm"].as_str() != Some(id.as_str()) {
+        let entities = made.copy["data"]["entities"].as_object();
+        let real = |u: &&String| !u.starts_with("core://");
+        let fields_of = |rows: &mut dyn Iterator<Item = &String>| -> BTreeSet<String> {
+            rows.filter_map(|u| entities.and_then(|e| e.get(u)))
+                .flat_map(|e| e.as_object().into_iter().flatten().map(|(k, _)| k.clone()))
+                .collect()
+        };
         let (texts, urls) = review_texts(&made.copy);
-        let data = &made.copy["data"];
-        let rows: Vec<&String> = data["entities"]
-            .as_object()
+        let all: Vec<&String> = entities
             .into_iter()
             .flatten()
-            .filter(|(u, _)| !u.starts_with("core://"))
             .map(|(u, _)| u)
+            .filter(real)
             .collect();
-        let fields: BTreeSet<String> = data["entities"]
-            .as_object()
-            .into_iter()
-            .flatten()
-            .filter(|(u, _)| !u.starts_with("core://"))
-            .flat_map(|(_, e)| e.as_object().into_iter().flatten().map(|(k, _)| k.clone()))
+        let fields = fields_of(&mut all.iter().copied());
+        let layouts: Vec<Value> = made
+            .layouts
+            .iter()
+            .map(|(lid, title, rows)| {
+                let node = if *lid == ask.layout {
+                    &made.copy["node"]
+                } else {
+                    &made.copy["layouts"][lid]
+                };
+                let data: Map<String, Value> = rows
+                    .iter()
+                    .filter_map(|u| {
+                        entities
+                            .and_then(|e| e.get(u))
+                            .map(|e| (u.clone(), e.clone()))
+                    })
+                    .collect();
+                let (texts, urls) =
+                    review_texts(&json!({ "node": node, "data": { "entities": data } }));
+                json!({ "layout": lid, "title": title, "rows": rows.len(),
+                    "fields": fields_of(&mut rows.iter()), "texts": texts, "urls": urls })
+            })
             .collect();
         return Ok(json!({
             "review_id": id,
             "title": made.copy["title"],
             "shared": "nothing yet: confirm with this review_id once the user approves",
             "anyone_with_the_link_reads": {
-                "rows": rows.len(),
+                "rows": all.len(),
                 "fields": fields,
                 "texts": texts,
                 "urls": urls,
+                "layouts": layouts,
             },
             "taken_out": {
                 "controls_that_write_or_go_elsewhere": made.removed.controls,
                 "embedded_layouts": made.removed.embeds,
                 "screens": made.removed.screens,
+                "layouts_not_carried": made.left_out.iter()
+                    .map(|(l, why)| json!({ "layout": l, "why": why })).collect::<Vec<_>>(),
             },
-            "updates": "the copy is made again whenever the data changes: new rows this layout shows will appear on the page too",
+            "updates": "the copy is made again whenever the data changes: new rows these layouts show will appear on the page too",
         }));
-    }
-    let item_key = item.map(str::to_owned);
-    let mut key_rows = rows.clone();
-    if let Some(i) = &item_key {
-        key_rows.push(format!("item:{i}"));
     }
     let live = shelf
         .public_of_pod(pod_id)
         .map_err(|e| refuse("shelf_error", format!("{e:?}")))?;
-    let existing = live
-        .iter()
-        .find(|c| c.revoked_at.is_none() && c.layout == layout && c.rows == key_rows);
+    let existing = live.iter().find(|c| {
+        c.revoked_at.is_none()
+            && c.layout == ask.layout
+            && Ask::from_key(&c.layout, &c.rows).identity() == ask.identity()
+    });
     if existing.is_none() && live.iter().filter(|c| c.revoked_at.is_none()).count() >= MAX_LIVE {
         return Err(refuse(
             "too_many_links",
             format!("a pod keeps at most {MAX_LIVE} public links: unshare one first"),
         ));
     }
-    let title = made.copy["title"].as_str().unwrap_or(&layout).to_owned();
+    let title = made.copy["title"]
+        .as_str()
+        .unwrap_or(&ask.layout)
+        .to_owned();
     let c = shelf
         .put_public(PublicCopy {
             link: existing.map_or_else(new_link, |c| c.link.clone()),
             owner_pod: pod_id.to_owned(),
-            layout,
-            rows: key_rows,
+            layout: ask.layout.clone(),
+            rows: ask.key(),
             title,
             copy: made.copy,
+            slug: slug
+                .map(str::to_owned)
+                .or_else(|| existing.and_then(|c| c.slug.clone())),
             created_at: 0,
             updated_at: 0,
             revoked_at: None,
         })
-        .map_err(|e| refuse("shelf_error", format!("{e:?}")))?;
+        .map_err(|e| match e {
+            crate::construct::share::ShelfError::SlugTaken => refuse(
+                "slug_taken",
+                "another live public link of this pod has that slug: pick another",
+            ),
+            e => refuse("shelf_error", format!("{e:?}")),
+        })?;
     tracing::info!("a public link was shared");
-    let mut out = answer(&c, base);
+    let mut out = answer(&c, base, handle);
     out["detail"] =
         json!("anyone with this url can read the page, without a pod; unshare_publicly stops it");
     Ok(out)
@@ -633,15 +1278,7 @@ pub async fn refresh(pod: &Pod) {
         return;
     };
     for c in live.into_iter().filter(|c| c.revoked_at.is_none()) {
-        let mut rows = Vec::new();
-        let mut item = None;
-        for r in &c.rows {
-            match r.strip_prefix("item:") {
-                Some(i) => item = Some(i.to_owned()),
-                None => rows.push(r.clone()),
-            }
-        }
-        match make(pod, &c.layout, &rows, item.as_deref()).await {
+        match make(pod, &Ask::from_key(&c.layout, &c.rows)).await {
             Ok(made) if made.copy != c.copy => {
                 let _ = shelf.put_public(PublicCopy {
                     copy: made.copy,
@@ -723,7 +1360,7 @@ mod tests {
                   "content": { "type": "core://Text", "style": "Body", "value_expr": "Buy" } },
                 { "type": "core://Layout", "layout": "c-private" } ] } });
         let mut removed = Removed::default();
-        let out = strip(&node, &mut removed).unwrap();
+        let out = strip(&node, &BTreeSet::new(), &mut removed).unwrap();
         let s = out.to_string();
         assert!(
             !s.contains("Delete all") && !s.contains("c-secret") && !s.contains("c-private"),
@@ -754,13 +1391,13 @@ mod tests {
             "queries": { "note:recipes": ["notes://recipes/1", "notes://recipes/2"] } })).unwrap();
         let node = json!({ "type": "core://List", "query_key": "note:recipes",
             "item_template": { "type": "core://Text", "style": "Body", "value_expr": "$item.title · $item.minutes min" } });
-        let all = rows_of(&minimize(&data, &node, &[]));
+        let all = rows_of(&minimize(&data, &node, &[], Use::default()));
         assert_eq!(all.len(), 2, "the diary isn't listed: it doesn't go");
         assert_eq!(
             all["notes://recipes/1"],
             json!({ "id": "1", "title": "Lentil soup", "minutes": 40 })
         );
-        let one = minimize(&data, &node, &["notes://recipes/2".into()]);
+        let one = minimize(&data, &node, &["notes://recipes/2".into()], Use::default());
         assert_eq!(
             one.queries["note:recipes"],
             vec!["notes://recipes/2".to_owned()]
@@ -803,5 +1440,202 @@ mod tests {
         assert!(texts.contains(&"Lentil soup".to_owned()) && !texts.contains(&"Body".to_owned()));
         assert_eq!(urls, vec!["https://img.example/a.png".to_owned()]);
         assert_eq!(review_id(&copy), review_id(&copy.clone()));
+    }
+
+    /// The made-up recipe screen of the issue: it reads `$route.id`, its
+    /// lists keep one meal's lines and steps with `where`, and a lookup
+    /// names each line's ingredient.
+    fn recipe_screen() -> Value {
+        json!({ "type": "core://Page", "id": "c-recipe", "title": "Recipe", "root": { "type": "core://Column", "children": [
+            { "type": "core://Text", "style": "Title", "value_expr": "${notes://meals/$route.id#name}" },
+            { "type": "core://IconButton", "icon": "favorite", "content_description": "Favorite",
+              "active": "${notes://meals/$route.id#favorite}",
+              "on_click": { "intent": "action.mutation.optimistic", "endpoint": "/v1/notes/meals/update",
+                "entity_uri": "notes://meals/$route.id", "field": "favorite", "payload": {} } },
+            { "type": "core://Text", "style": "Title", "value_expr": "$count",
+              "count": { "query_key": "note:recipe_lines",
+                "where": [{ "field": "deleted", "equals": "false" }, { "field": "meal_id", "equals": "$route.id" }] } },
+            { "type": "core://List", "query_key": "note:recipe_lines",
+              "where": [{ "field": "deleted", "equals": "false" }, { "field": "meal_id", "equals": "$route.id" }],
+              "item_template": { "type": "core://Row", "children": [
+                { "type": "core://Text", "style": "Body", "value_expr": "$item.thing" },
+                { "type": "core://Conditional", "value": "${notes://ingredients/$item.ingredient#staple}", "equals": "true",
+                  "content": { "type": "core://Text", "style": "Caption", "value_expr": "Staple" } } ] } },
+            { "type": "core://List", "query_key": "note:recipe_steps",
+              "where": [{ "field": "meal_id", "equals": "$route.id" }],
+              "item_template": { "type": "core://Text", "style": "Body", "value_expr": "$item.text" } } ] } })
+    }
+
+    /// Two meals, each with lines and steps, ingredients, and a Pixelfed
+    /// post: made up.
+    fn kitchen() -> DataBundle {
+        let mut entities = Map::new();
+        let mut lines = Vec::new();
+        let mut steps = Vec::new();
+        for (m, name) in [("m1", "Lentil soup"), ("m2", "Shakshuka")] {
+            entities.insert(
+                format!("notes://meals/{m}"),
+                json!({ "id": m, "name": name, "favorite": true, "notes": "only for me" }),
+            );
+            for i in 0..3 {
+                let id = format!("{m}-l{i}");
+                entities.insert(format!("notes://recipe_lines/{id}"), json!({ "id": id, "meal_id": m,
+                    "deleted": false, "thing": format!("{name} thing {i}"), "ingredient": format!("i{i}"), "cost": 3 }));
+                lines.push(format!("notes://recipe_lines/{id}"));
+                let sid = format!("{m}-s{i}");
+                entities.insert(
+                    format!("notes://recipe_steps/{sid}"),
+                    json!({ "id": sid, "meal_id": m, "text": format!("{name} step {i}") }),
+                );
+                steps.push(format!("notes://recipe_steps/{sid}"));
+            }
+        }
+        // A deleted line of m1: its list hides it.
+        entities.insert(
+            "notes://recipe_lines/m1-gone".into(),
+            json!({ "id": "m1-gone",
+            "meal_id": "m1", "deleted": true, "thing": "Old thing" }),
+        );
+        lines.push("notes://recipe_lines/m1-gone".into());
+        for i in 0..3 {
+            entities.insert(
+                format!("notes://ingredients/i{i}"),
+                json!({ "id": format!("i{i}"), "staple": i == 0, "price": 9 }),
+            );
+        }
+        serde_json::from_value(json!({ "entities": entities, "queries": {
+            "note:meals": ["notes://meals/m1", "notes://meals/m2"],
+            "note:recipe_lines": lines, "note:recipe_steps": steps } }))
+        .unwrap()
+    }
+
+    fn route(id: &str) -> Use {
+        Use {
+            route: BTreeMap::from([("id".to_owned(), id.to_owned())]),
+            item: None,
+        }
+    }
+
+    /// Issue #363: a `$route.id` screen shared with params carries its
+    /// meal, that meal's lines and steps (its lists' `where` applied), and
+    /// the ingredients its lines look up, each with only the fields read.
+    #[test]
+    fn a_route_screen_carries_only_its_rows() {
+        let mut removed = Removed::default();
+        let node = strip(&recipe_screen(), &BTreeSet::new(), &mut removed).unwrap();
+        let rows = rows_of(&minimize(&kitchen(), &node, &[], route("m1")));
+        let keys: Vec<&str> = rows.keys().map(String::as_str).collect();
+        assert_eq!(
+            keys,
+            [
+                "notes://ingredients/i0",
+                "notes://ingredients/i1",
+                "notes://ingredients/i2",
+                "notes://meals/m1",
+                "notes://recipe_lines/m1-l0",
+                "notes://recipe_lines/m1-l1",
+                "notes://recipe_lines/m1-l2",
+                "notes://recipe_steps/m1-s0",
+                "notes://recipe_steps/m1-s1",
+                "notes://recipe_steps/m1-s2",
+            ]
+        );
+        assert_eq!(
+            rows["notes://meals/m1"],
+            json!({ "id": "m1", "name": "Lentil soup" }),
+            "the favorite button went, and notes aren't shown"
+        );
+        assert_eq!(
+            rows["notes://ingredients/i0"],
+            json!({ "id": "i0", "staple": true })
+        );
+        assert!(rows["notes://recipe_lines/m1-l0"].get("cost").is_none());
+    }
+
+    /// A list with `where` carries only matching rows; a condition that
+    /// can't be decided (a form value) keeps them.
+    #[test]
+    fn a_list_where_keeps_only_matching_rows() {
+        let node = json!({ "type": "core://List", "query_key": "note:recipe_steps",
+            "where": { "field": "meal_id", "equals": "m2" },
+            "item_template": { "type": "core::Text", "value_expr": "$item.text" } });
+        let d = minimize(&kitchen(), &node, &[], Use::default());
+        assert_eq!(d.queries["note:recipe_steps"].len(), 3);
+        assert!(
+            d.queries["note:recipe_steps"]
+                .iter()
+                .all(|u| u.contains("/m2-"))
+        );
+        let not = json!({ "type": "core://List", "query_key": "note:recipe_steps",
+            "where": [{ "field": "meal_id", "equals": "m2", "not": true }],
+            "item_template": { "type": "core::Text", "value_expr": "$item.text" } });
+        let d = minimize(&kitchen(), &not, &[], Use::default());
+        assert!(
+            d.queries["note:recipe_steps"]
+                .iter()
+                .all(|u| u.contains("/m1-"))
+        );
+        let form = json!({ "type": "core://List", "query_key": "note:recipe_steps",
+            "where": [{ "field": "meal_id", "equals": "$form.meal" }],
+            "item_template": { "type": "core::Text", "value_expr": "$item.text" } });
+        assert_eq!(
+            minimize(&kitchen(), &form, &[], Use::default()).queries["note:recipe_steps"].len(),
+            6
+        );
+    }
+
+    /// A list whose rows push an item screen: the copy keeps the push to a
+    /// layout it carries, the item screen's rows for each listed row, and
+    /// strips a push to a layout it doesn't (a Pixelfed one).
+    #[test]
+    fn a_list_carries_the_screens_its_rows_push() {
+        let meals = json!({ "type": "core://Page", "id": "c-meals", "title": "Meals", "root": { "type": "core://Column", "children": [
+            { "type": "core://List", "query_key": "note:meals",
+              "where": [{ "field": "name", "equals": "Shakshuka" }],
+              "item_template": { "type": "core://Tappable",
+                "on_click": { "intent": "action.navigation.open", "layout": "c-recipe", "params": { "id": "$item.id" }, "presentation": "Push" },
+                "content": { "type": "core://Text", "style": "Body", "value_expr": "$item.name" } } },
+            { "type": "core://Tappable", "on_click": { "intent": "action.navigation.open", "layout": "c-photos", "presentation": "Push" },
+              "content": { "type": "core://Text", "style": "Body", "value_expr": "Photos" } } ] } });
+        let carried = BTreeSet::from(["c-meals".to_owned(), "c-recipe".to_owned()]);
+        let mut removed = Removed::default();
+        let nodes: BTreeMap<String, Value> = [("c-meals", meals), ("c-recipe", recipe_screen())]
+            .into_iter()
+            .map(|(id, n)| (id.to_owned(), strip(&n, &carried, &mut removed).unwrap()))
+            .collect();
+        let s = nodes["c-meals"].to_string();
+        assert!(
+            s.contains("c-recipe") && !s.contains("c-photos") && s.contains("Photos"),
+            "{s}"
+        );
+        let pool = kitchen();
+        let only = BTreeSet::new();
+        let mut shows = Shows::new(&pool, &nodes, "c-meals", &only);
+        assert!(shows.run(Use::default()));
+        let rows = rows_of(&shows.data());
+        assert!(rows.contains_key("notes://recipe_steps/m2-s1"), "{rows:?}");
+        assert!(
+            !rows.keys().any(|u| u.contains("m1")),
+            "the meal the list hides, and its recipe, stay home: {rows:?}"
+        );
+        assert_eq!(shows.by_layout["c-recipe"].len(), 1 + 3 + 3 + 3);
+    }
+
+    /// What a stored link asked for reads back from its key.
+    #[test]
+    fn a_link_key_keeps_what_it_asked_for() {
+        let ask = Ask {
+            layout: "c-recipe".into(),
+            rows: vec!["notes://meals/m1".into()],
+            item: Some("notes://meals/m1".into()),
+            params: BTreeMap::from([("id".to_owned(), "m1".to_owned())]),
+            leave_out: BTreeSet::from(["c-photos".to_owned()]),
+        };
+        assert_eq!(Ask::from_key("c-recipe", &ask.key()), ask);
+        // A key stored before params (rows and item only) reads as it did.
+        let old = Ask::from_key("c-x", &["notes://a/1".into(), "item:notes://a/2".into()]);
+        assert_eq!(old.rows, vec!["notes://a/1".to_owned()]);
+        assert_eq!(old.item.as_deref(), Some("notes://a/2"));
+        assert!(is_slug("lentil-soup") && !is_slug("-x") && !is_slug("A") && !is_slug(""));
     }
 }

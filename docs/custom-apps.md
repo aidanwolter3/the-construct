@@ -121,7 +121,9 @@ share screen.
   each literal text or URL that would go out. A reference to one row is refused. `publish {name, confirm:
   <review_id>}` shares exactly what was reviewed and answers the share link (`share-…`); `leave_out` leaves
   elements out, `keep_shared: true` sends later versions without asking while they bring no new text or URLs.
-  Only `visibility: link` (unlisted) for now.
+  Only `visibility: link` (unlisted) for now. The shelf is the server's, outside the pod's storage quota, so a pod
+  keeps at most 20 live publications (`too_many_publications`: revoke one first), each of at most 1 MiB of
+  elements (`too_large`).
 - `describe_publication {link}` shows what a link holds; `adopt {link, bindings}` copies it into the pod bound to
   the user's own collections (`{"chores": {"collection": "tasks", "fields": {"title": "name"}}}`, or `{"new":
   "chores"}` for an empty one from the suggested schema) and answers the reference to put in home. Without
@@ -131,18 +133,25 @@ share screen.
 
 ### Public links for people without a pod
 
-Where the server serves them (`CONSTRUCT_PUBLIC_WEB=1`, as staging does; decision
-[`public-web-links`](decisions/public-web-links.md)), Claude can make a page anyone can open in a browser: a copy of
-a layout and the Collections rows it shows, read-only. The tools are listed only on such a server, and only for an
+Where the server serves them (`CONSTRUCT_PUBLIC_WEB=1`, as staging does; decisions
+[`public-web-links`](decisions/public-web-links.md),
+[`public-links-share-the-closure`](decisions/public-links-share-the-closure.md)), Claude can make a page anyone can
+open in a browser: a copy of a layout, the layouts it opens and embeds, and the Collections rows they show,
+read-only. The tools are listed only on such a server, and only for an
 admin pod: a temporary pod can't share a public page (decision [`web-on-staging`](decisions/web-on-staging.md)).
 
 - `share_publicly {layout}` answers a review and shares nothing: every text and value a visitor would read, every
-  URL, the rows and fields that go (only the fields the layout reads), and what was taken out (controls that write
-  or open other layouts, embedded layouts, screens). `rows: [<entity URI>]` shares only some rows (one recipe);
-  `item` draws the layout with one row as `$item`. `share_publicly {layout, confirm: <review_id>}` shares it and
-  answers its `url` (`/s/pub-…`). Sharing the same layout and rows again updates the same link.
-- The copy is made again when the pod's Collections data changes, so new rows the layout shows appear on the
-  page. A layout that draws anything but Collections data (Pixelfed, Events) is refused.
+  URL, the rows and fields that go (only the rows each list's `where` shows, with only the fields read), per
+  layout, and what was taken out (controls that write, opens and embeds of layouts it doesn't carry, screens, and
+  the layouts left out with why). A list whose rows push a screen carries that screen once, with the rows it shows
+  for each listed row; `leave_out: [<layout>]` keeps one out (its openers go). `params: {id: <meal id>}` draws a
+  screen that reads `$route.id`; `item` draws the layout with one row as `$item`; `rows: [<entity URI>]` limits
+  the root's lists. `share_publicly {layout, confirm: <review_id>}` shares it and answers its `url` (`/s/pub-…`);
+  with `slug` (and the pod's handle, `set_handle`) also a `short_url`, `/@<handle>/<slug>`. Sharing the same layout,
+  rows, item and params again updates the same link; other params are another link.
+- The copy is made again when the pod's Collections data changes, so new rows the layouts show appear on the
+  page. A root that draws anything but Collections data (Pixelfed, Events) is refused; a layout it reaches that
+  does is left out, and so are built-in layouts (Settings, the inbox). A copy holds at most 16 layouts and 2 MiB.
 - `list_public_links` lists them; `unshare_publicly {link}` stops one at once and its copy leaves the server.
 
 ## Collections

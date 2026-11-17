@@ -11,6 +11,13 @@
 //! only on requests that also carry `x-construct-client: web` (a page of
 //! another site can't send it without a preflight, which nothing answers)
 //! and, where the browser says, from the same site, and never for `/v1/mcp`.
+//!
+//! Caching (decision `web-client-cache`): the build names each script,
+//! WebAssembly and style by a hash of its content (`app.<hash>.js`), so a
+//! hashed name is served `immutable` and a deploy changes the names the page
+//! asks for; fonts are `immutable` when asked for with the build's `?v=`.
+//! Everything else (the pages) is `no-cache` with an `ETag`, answered `304`
+//! when it hasn't changed.
 
 use std::path::{Path as FsPath, PathBuf};
 use std::sync::Arc;
@@ -27,6 +34,7 @@ use axum::{
 use pod_core::session::{new_session_token, session_hash, session_ttl_from_env};
 use pod_core::{json_error, metrics, parse_json_body};
 use serde_json::{Value, json};
+use sha2::{Digest, Sha256};
 
 use crate::db::CredentialKind;
 use crate::{Host, TOKEN_PREFIX, client_keys, peer, rate_limited};
@@ -43,6 +51,10 @@ pub const CLIENT_WEB: &str = "web";
 const PAGE_CSP: &str = "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; \
     style-src 'self'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; \
     base-uri 'none'; form-action 'self'";
+
+/// A proxied image's policy: opened on its own (not drawn by the client), it
+/// loads and runs nothing.
+const IMAGE_CSP: &str = "default-src 'none'; sandbox";
 
 /// Largest image the proxy passes on.
 const MAX_IMAGE_BYTES: usize = 10 << 20;
@@ -78,29 +90,123 @@ pub(crate) fn routes() -> Router<Arc<Host>> {
 }
 
 /// Public links (decision `public-web-links`, `CONSTRUCT_PUBLIC_WEB=1`):
-/// anyone with a link reads its copy, never the pod.
+/// anyone with a link reads its copy, never the pod. A chosen short path,
+/// `/@<handle>/<slug>`, answers the same copy (decision
+/// `public-links-share-the-closure`).
 pub(crate) fn public_routes() -> Router<Arc<Host>> {
     Router::new()
         .route("/s/{link}", get(public_page))
         .route("/s/{link}/view", get(public_view))
         .route("/s/{link}/image", get(public_image))
+        .route("/@{handle}/{slug}", get(short_page))
+        .route("/@{handle}/{slug}/view", get(short_view))
+        .route("/@{handle}/{slug}/image", get(short_image))
+        // The same pages as people's apps write them: a trailing slash, and
+        // `@` sent as `%40`. Each redirects to the address above, so the
+        // page reads its own path.
+        .route("/s/{link}/", get(link_slash))
+        .route("/@{handle}/{slug}/", get(short_variant))
+        .route("/%40{handle}/{slug}", get(short_variant))
+        .route("/%40{handle}/{slug}/", get(short_variant))
+        // Under /web, where the owner's own app lives.
+        .route("/web/s/{link}", get(link_slash))
+        .route("/web/@{handle}/{slug}", get(short_variant))
+        .route("/web/%40{handle}/{slug}", get(short_variant))
 }
 
-/// A live public copy by its link.
+/// A permanent redirect to `path` (the page's own address).
+fn moved(path: String) -> Response {
+    match HeaderValue::from_str(&path) {
+        Ok(v) => {
+            let mut r = StatusCode::PERMANENT_REDIRECT.into_response();
+            r.headers_mut().insert(header::LOCATION, v);
+            r
+        }
+        Err(_) => not_found(),
+    }
+}
+
+/// `/s/<link>/` (or under `/web`): the link at its own address.
+async fn link_slash(Path(link): Path<String>) -> Response {
+    if !pod_core::public_copy::is_link(&link) {
+        return not_found();
+    }
+    moved(format!("/s/{link}"))
+}
+
+/// `/@<handle>/<slug>/`, `/%40<handle>/<slug>`, under `/web`, in any case:
+/// the short path as `/@<handle>/<slug>`.
+async fn short_variant(Path((handle, slug)): Path<(String, String)>) -> Response {
+    let (handle, slug) = (handle.to_ascii_lowercase(), slug.to_ascii_lowercase());
+    if !pod_core::construct::share::valid_handle(&handle) || !pod_core::public_copy::is_slug(&slug)
+    {
+        return not_found();
+    }
+    moved(format!("/@{handle}/{slug}"))
+}
+
+/// Where the host doesn't serve public links (`CONSTRUCT_PUBLIC_WEB`
+/// unset): their addresses answer that sharing is paused, and the copies
+/// stay stored for when it is back.
+pub(crate) fn paused_routes() -> Router<Arc<Host>> {
+    Router::new()
+        .route("/s/{link}", get(paused))
+        .route("/s/{link}/{*rest}", get(paused))
+        .route("/@{handle}/{slug}", get(paused))
+        .route("/@{handle}/{slug}/{*rest}", get(paused))
+}
+
+/// The page a public link answers while sharing is paused.
+async fn paused() -> Response {
+    let page = "<!doctype html>\n<html lang=\"en\"><head><meta charset=\"utf-8\">\
+        <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\
+        <meta name=\"robots\" content=\"noindex\"><title>Sharing is paused</title>\
+        <style>body{font:16px/1.5 system-ui,sans-serif;max-width:32rem;margin:15vh auto;padding:0 16px;\
+        color:#222;background:#fafafa}@media(prefers-color-scheme:dark){body{color:#eee;background:#161616}}</style>\
+        </head><body><h1>Sharing is paused on this server</h1>\
+        <p>This page was shared from The Construct. Its owner's server isn't showing shared pages right now; \
+        the link will work again when it does.</p></body></html>";
+    let mut r = (StatusCode::SERVICE_UNAVAILABLE, page).into_response();
+    let h = r.headers_mut();
+    h.insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_static("text/html; charset=utf-8"),
+    );
+    h.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-cache"));
+    h.insert(header::RETRY_AFTER, HeaderValue::from_static("3600"));
+    r
+}
+
+/// How a visitor names a copy: its link, or a short path.
+enum Named {
+    Link(String),
+    Short(String, String),
+}
+
+/// A live public copy by its link or short path.
 async fn public_copy(
     host: &Arc<Host>,
-    link: &str,
+    named: Named,
 ) -> Option<pod_core::construct::share::PublicCopy> {
     use pod_core::construct::share::Shelf;
-    if !pod_core::public_copy::is_link(link) {
-        return None;
+    match &named {
+        Named::Link(l) if !pod_core::public_copy::is_link(l) => return None,
+        Named::Short(h, s)
+            if !pod_core::construct::share::valid_handle(h)
+                || !pod_core::public_copy::is_slug(s) =>
+        {
+            return None;
+        }
+        _ => {}
     }
     let shelf = crate::shelf::HostShelf::new(host.store.clone()).with_public_links(true);
-    let link = link.to_owned();
-    host.blocking(move |_| shelf.public_by_link(&link))
-        .await
-        .ok()?
-        .ok()?
+    host.blocking(move |_| match named {
+        Named::Link(l) => shelf.public_by_link(&l),
+        Named::Short(h, s) => shelf.public_by_slug(&h, &s),
+    })
+    .await
+    .ok()?
+    .ok()?
 }
 
 /// Text for HTML.
@@ -114,8 +220,30 @@ fn escape_html(s: &str) -> String {
 
 /// `GET /s/<link>`: the web client's page for a visitor, titled with the
 /// copy's title (a chat app's link preview shows it).
-async fn public_page(State(host): State<Arc<Host>>, Path(link): Path<String>) -> Response {
-    let (Some(d), Some(c)) = (dir(&host), public_copy(&host, &link).await) else {
+async fn public_page(
+    State(host): State<Arc<Host>>,
+    Path(link): Path<String>,
+    headers: HeaderMap,
+) -> Response {
+    page_of(host, Named::Link(link), headers).await
+}
+
+/// `GET /@<handle>/<slug>`: the same page by a short path.
+async fn short_page(
+    State(host): State<Arc<Host>>,
+    Path((handle, slug)): Path<(String, String)>,
+    headers: HeaderMap,
+) -> Response {
+    if handle.bytes().any(|b| b.is_ascii_uppercase())
+        || slug.bytes().any(|b| b.is_ascii_uppercase())
+    {
+        return short_variant(Path((handle, slug))).await;
+    }
+    page_of(host, Named::Short(handle, slug), headers).await
+}
+
+async fn page_of(host: Arc<Host>, named: Named, headers: HeaderMap) -> Response {
+    let (Some(d), Some(c)) = (dir(&host), public_copy(&host, named).await) else {
         return not_found();
     };
     let Some((page, kind)) = file(d, "index.html").await else {
@@ -130,13 +258,24 @@ async fn public_page(State(host): State<Arc<Host>>, Path(link): Path<String>) ->
              <meta name=\"robots\" content=\"noindex\">"
         ),
     );
-    served(page.into_bytes(), kind, "no-cache")
+    served(page.into_bytes(), kind, Cache::Revalidate, &headers)
 }
 
-/// `GET /s/<link>/view`: the copy a visitor's page draws
-/// (`{title, node, data, item?}`).
+/// `GET /s/<link>/view`: the copy a visitor's page draws, unchanged
+/// (`{format, layout, title, node, data, item?, params?, layouts?}`).
 async fn public_view(State(host): State<Arc<Host>>, Path(link): Path<String>) -> Response {
-    match public_copy(&host, &link).await {
+    view_of(host, Named::Link(link)).await
+}
+
+async fn short_view(
+    State(host): State<Arc<Host>>,
+    Path((handle, slug)): Path<(String, String)>,
+) -> Response {
+    view_of(host, Named::Short(handle, slug)).await
+}
+
+async fn view_of(host: Arc<Host>, named: Named) -> Response {
+    match public_copy(&host, named).await {
         Some(c) => {
             let mut r = axum::Json(c.copy).into_response();
             r.headers_mut()
@@ -154,7 +293,19 @@ async fn public_image(
     Path(link): Path<String>,
     RawQuery(q): RawQuery,
 ) -> Response {
-    let Some(c) = public_copy(&host, &link).await else {
+    image_of(host, Named::Link(link), q).await
+}
+
+async fn short_image(
+    State(host): State<Arc<Host>>,
+    Path((handle, slug)): Path<(String, String)>,
+    RawQuery(q): RawQuery,
+) -> Response {
+    image_of(host, Named::Short(handle, slug), q).await
+}
+
+async fn image_of(host: Arc<Host>, named: Named, q: Option<String>) -> Response {
+    let Some(c) = public_copy(&host, named).await else {
         return not_found();
     };
     let Some(url) = url_param(q) else {
@@ -246,11 +397,73 @@ async fn file(base: &FsPath, name: &str) -> Option<(Vec<u8>, &'static str)> {
     Some((bytes, kind))
 }
 
-fn served(bytes: Vec<u8>, kind: &'static str, cache: &'static str) -> Response {
-    let mut r = Response::new(Body::from(bytes));
+/// How a file of the client may be cached.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Cache {
+    /// Its name or `?v=` changes with its content: kept until it expires.
+    Immutable,
+    /// Asked again on every load, answered `304` while it hasn't changed.
+    Revalidate,
+}
+
+impl Cache {
+    fn header(self) -> &'static str {
+        match self {
+            Cache::Immutable => "public, max-age=31536000, immutable",
+            Cache::Revalidate => "no-cache",
+        }
+    }
+}
+
+/// A name the build gave a hash of its content (`app.<16 hex>.js`).
+fn is_hashed(name: &str) -> bool {
+    let mut parts = name.rsplit('.');
+    let (Some(_ext), Some(hash), Some(stem)) = (parts.next(), parts.next(), parts.next()) else {
+        return false;
+    };
+    !stem.is_empty()
+        && hash.len() == 16
+        && hash
+            .bytes()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+}
+
+/// The content's validator: a quoted hash of it.
+fn etag(bytes: &[u8]) -> String {
+    let d = Sha256::digest(bytes);
+    let hex: String = d[..8].iter().map(|b| format!("{b:02x}")).collect();
+    format!("\"{hex}\"")
+}
+
+/// Whether the request's `If-None-Match` names `tag` (or `*`).
+fn not_modified(headers: &HeaderMap, tag: &str) -> bool {
+    headers
+        .get_all(header::IF_NONE_MATCH)
+        .iter()
+        .filter_map(|v| v.to_str().ok())
+        .flat_map(|v| v.split(','))
+        .map(|t| t.trim().trim_start_matches("W/"))
+        .any(|t| t == tag || t == "*")
+}
+
+fn served(bytes: Vec<u8>, kind: &'static str, cache: Cache, req: &HeaderMap) -> Response {
+    let tag = etag(&bytes);
+    let mut r = if not_modified(req, &tag) {
+        let mut r = Response::new(Body::empty());
+        *r.status_mut() = StatusCode::NOT_MODIFIED;
+        r
+    } else {
+        let mut r = Response::new(Body::from(bytes));
+        r.headers_mut()
+            .insert(header::CONTENT_TYPE, HeaderValue::from_static(kind));
+        r
+    };
     let h = r.headers_mut();
-    h.insert(header::CONTENT_TYPE, HeaderValue::from_static(kind));
-    h.insert(header::CACHE_CONTROL, HeaderValue::from_static(cache));
+    h.insert(header::ETAG, HeaderValue::from_str(&tag).expect("hex"));
+    h.insert(
+        header::CACHE_CONTROL,
+        HeaderValue::from_static(cache.header()),
+    );
     h.insert(
         header::CONTENT_SECURITY_POLICY,
         HeaderValue::from_static(PAGE_CSP),
@@ -263,33 +476,58 @@ fn not_found() -> Response {
 }
 
 /// `GET /web`: the page (it asks for the pod code when there is no session).
-async fn page(State(host): State<Arc<Host>>) -> Response {
+async fn page(State(host): State<Arc<Host>>, headers: HeaderMap) -> Response {
     match dir(&host) {
         Some(d) => match file(d, "index.html").await {
-            Some((b, k)) => served(b, k, "no-cache"),
+            Some((b, k)) => served(b, k, Cache::Revalidate, &headers),
             None => not_found(),
         },
         None => not_found(),
     }
 }
 
-/// `GET /web/<file>`: the client's script, WebAssembly and style.
-async fn asset(State(host): State<Arc<Host>>, Path(name): Path<String>) -> Response {
+/// `GET /web/<file>`: the client's script, WebAssembly and style; a hashed
+/// name is kept for good.
+async fn asset(
+    State(host): State<Arc<Host>>,
+    Path(name): Path<String>,
+    headers: HeaderMap,
+) -> Response {
+    let cache = if is_hashed(&name) {
+        Cache::Immutable
+    } else {
+        Cache::Revalidate
+    };
     match dir(&host) {
         Some(d) => match file(d, &name).await {
-            Some((b, k)) => served(b, k, "no-cache"),
+            Some((b, k)) => served(b, k, cache, &headers),
             None => not_found(),
         },
         None => not_found(),
     }
 }
 
-/// `GET /web/fonts/<file>`: the renderer's fonts, fetched by the client
-/// instead of built into it.
-async fn font(State(host): State<Arc<Host>>, Path(name): Path<String>) -> Response {
+/// `GET /web/fonts/<file>[?v=<hash>]`: the renderer's fonts, fetched by the
+/// client instead of built into it, with the build's hash of the fonts (kept
+/// for good) or without (revalidated).
+async fn font(
+    State(host): State<Arc<Host>>,
+    Path(name): Path<String>,
+    RawQuery(q): RawQuery,
+    headers: HeaderMap,
+) -> Response {
+    let versioned = q
+        .unwrap_or_default()
+        .split('&')
+        .any(|kv| kv.strip_prefix("v=").is_some_and(|v| !v.is_empty()));
+    let cache = if versioned {
+        Cache::Immutable
+    } else {
+        Cache::Revalidate
+    };
     match dir(&host) {
         Some(d) => match file(&d.join("fonts"), &name).await {
-            Some((b, k)) => served(b, k, "public, max-age=86400"),
+            Some((b, k)) => served(b, k, cache, &headers),
             None => not_found(),
         },
         None => not_found(),
@@ -441,7 +679,7 @@ async fn proxy_image(url: reqwest::Url) -> Response {
         .and_then(|v| v.to_str().ok())
         .unwrap_or("")
         .to_owned();
-    if !resp.status().is_success() || !kind.starts_with("image/") {
+    if !resp.status().is_success() || !is_raster_image(&kind) {
         return json_error(StatusCode::BAD_GATEWAY, json!({ "error": "not_an_image" }));
     }
     let mut bytes = Vec::new();
@@ -451,14 +689,102 @@ async fn proxy_image(url: reqwest::Url) -> Response {
         }
         bytes.extend_from_slice(&chunk);
     }
+    image_response(&kind, bytes)
+}
+
+/// An image type the proxy passes on: not SVG, a document that runs scripts
+/// when opened on this site (and the client's decoder can't draw it).
+fn is_raster_image(kind: &str) -> bool {
+    let kind = kind.trim().to_ascii_lowercase();
+    kind.starts_with("image/") && !kind.starts_with("image/svg")
+}
+
+/// Another site's image as this site serves it: never read as anything but
+/// its type, and opened on its own it runs nothing.
+fn image_response(kind: &str, bytes: Vec<u8>) -> Response {
     let mut r = Response::new(Body::from(bytes));
     let h = r.headers_mut();
-    if let Ok(v) = HeaderValue::from_str(&kind) {
+    if let Ok(v) = HeaderValue::from_str(kind) {
         h.insert(header::CONTENT_TYPE, v);
     }
     h.insert(
         header::CACHE_CONTROL,
         HeaderValue::from_static("private, max-age=3600"),
     );
+    h.insert(
+        header::X_CONTENT_TYPE_OPTIONS,
+        HeaderValue::from_static("nosniff"),
+    );
+    h.insert(
+        header::CONTENT_SECURITY_POLICY,
+        HeaderValue::from_static(IMAGE_CSP),
+    );
     r
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_proxy_passes_raster_images_only() {
+        for kind in ["image/png", "image/jpeg", "image/webp", "image/gif"] {
+            assert!(is_raster_image(kind), "{kind}");
+        }
+        for kind in [
+            "image/svg+xml",
+            "Image/SVG+XML; charset=utf-8",
+            " image/svg+xml",
+            "text/html",
+            "",
+        ] {
+            assert!(!is_raster_image(kind), "{kind}");
+        }
+    }
+
+    #[test]
+    fn hashed_names_are_the_builds() {
+        for name in [
+            "app.0123456789abcdef.js",
+            "construct_web_bg.0123456789abcdef.wasm",
+        ] {
+            assert!(is_hashed(name), "{name}");
+        }
+        for name in [
+            "app.js",
+            "index.html",
+            ".0123456789abcdef.js",
+            "app.0123456789ABCDEF.js",
+            "app.0123456789abcde.js",
+            "app.0123456789abcdeg.js",
+        ] {
+            assert!(!is_hashed(name), "{name}");
+        }
+    }
+
+    #[test]
+    fn if_none_match_names_the_etag() {
+        let tag = etag(b"page");
+        let mut h = HeaderMap::new();
+        assert!(!not_modified(&h, &tag));
+        h.insert(
+            header::IF_NONE_MATCH,
+            HeaderValue::from_str(&format!("\"other\", W/{tag}")).unwrap(),
+        );
+        assert!(not_modified(&h, &tag));
+        let r = served(b"page".to_vec(), "text/html", Cache::Revalidate, &h);
+        assert_eq!(r.status(), StatusCode::NOT_MODIFIED);
+        assert_eq!(r.headers()[header::ETAG], tag.as_str());
+    }
+
+    #[test]
+    fn a_proxied_image_runs_nothing_opened_on_its_own() {
+        let r = image_response("image/png", vec![1, 2, 3]);
+        let h = r.headers();
+        assert_eq!(h[header::CONTENT_TYPE], "image/png");
+        assert_eq!(h[header::X_CONTENT_TYPE_OPTIONS], "nosniff");
+        let csp = h[header::CONTENT_SECURITY_POLICY].to_str().unwrap();
+        assert!(csp.contains("default-src 'none'"), "{csp}");
+        assert!(csp.contains("sandbox"), "{csp}");
+    }
 }

@@ -22,8 +22,9 @@ use crate::fetch::absolute;
 use crate::html;
 use crate::path::{self, Path};
 
-/// Most items read from one body.
-pub const MAX_ITEMS: usize = 500;
+/// Most items read from one body: a bound for memory, well above what a fill
+/// keeps (past items, which only the caller can tell, don't count there).
+pub const MAX_ITEMS: usize = 5_000;
 /// Longest value kept (characters).
 pub const MAX_VALUE_CHARS: usize = 4_000;
 /// The script `embedded-json` reads without `script`.

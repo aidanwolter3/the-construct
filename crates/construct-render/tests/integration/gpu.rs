@@ -49,6 +49,7 @@ fn gpu_frame(name: &str, form: &BTreeMap<String, String>, dark: bool) -> Option<
             item: None,
             insets: [0.0; 4],
             focused: None,
+            panels: &construct_render::NO_PANELS,
         })
         .unwrap();
     Some(surface.render(&scene, &mut builder.text).unwrap())
@@ -155,6 +156,7 @@ fn gpu_snapshot_latency() {
         item: None,
         insets: [0.0; 4],
         focused: None,
+        panels: &construct_render::NO_PANELS,
     };
     let scene = builder.build(&input).unwrap();
     surface.render(&scene, &mut builder.text).unwrap();

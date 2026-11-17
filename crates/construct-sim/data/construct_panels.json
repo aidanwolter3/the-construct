@@ -1,0 +1,565 @@
+{
+ "layouts": {
+  "home": {
+   "type": "core://Page",
+   "id": "home",
+   "title": "Home",
+   "root": {
+    "type": "core://Box",
+    "fill": true,
+    "background": "${local://theme#page}",
+    "content": {
+     "type": "core://Row",
+     "children": [
+      {
+       "type": "core://Box",
+       "width_dp": 320,
+       "content": {
+        "type": "core://Scroll",
+        "content": {
+         "type": "core://Column",
+         "padding_h_dp": 16,
+         "padding_v_dp": 8,
+         "spacing_dp": 12,
+         "children": [
+          {
+           "type": "core://Text",
+           "style": "Headline",
+           "value_expr": "Today"
+          },
+          {
+           "type": "core://Box",
+           "background": "${local://theme#card}",
+           "border_color": "${local://theme#card_border}",
+           "corner_dp": 14,
+           "content": {
+            "type": "core://Column",
+            "children": [
+             {
+              "type": "core://Tappable",
+              "content_description": "Eat well",
+              "on_click": {
+               "intent": "action.local.set",
+               "entity_uri": "local://home_pane",
+               "field": "selected",
+               "value_expr": "\"eat\""
+              },
+              "content": {
+               "type": "core://Column",
+               "padding_h_dp": 16,
+               "padding_v_dp": 12,
+               "spacing_dp": 2,
+               "children": [
+                {
+                 "type": "core://Text",
+                 "style": "Label",
+                 "value_expr": "Eat well"
+                },
+                {
+                 "type": "core://Text",
+                 "style": "Secondary",
+                 "value_expr": "3 of this week's picks saved"
+                }
+               ]
+              }
+             },
+             {
+              "type": "core://Divider"
+             },
+             {
+              "type": "core://Tappable",
+              "content_description": "Move often",
+              "on_click": {
+               "intent": "action.local.set",
+               "entity_uri": "local://home_pane",
+               "field": "selected",
+               "value_expr": "\"move\""
+              },
+              "content": {
+               "type": "core://Column",
+               "padding_h_dp": 16,
+               "padding_v_dp": 12,
+               "spacing_dp": 2,
+               "children": [
+                {
+                 "type": "core://Text",
+                 "style": "Label",
+                 "value_expr": "Move often"
+                },
+                {
+                 "type": "core://Text",
+                 "style": "Secondary",
+                 "value_expr": "1 of 5"
+                }
+               ]
+              }
+             }
+            ]
+           }
+          }
+         ]
+        }
+       }
+      },
+      {
+       "type": "core://Box",
+       "width_dp": 1,
+       "background": "${local://theme#card_border}",
+       "content": {
+        "type": "core://Scroll",
+        "content": {
+         "type": "core://Spacer",
+         "size_dp": 0
+        }
+       }
+      },
+      {
+       "type": "core://Box",
+       "fill": true,
+       "content": {
+        "type": "core://Layout",
+        "layout": "c-meals",
+        "panels": true
+       }
+      }
+     ]
+    }
+   }
+  },
+  "c-meals": {
+   "type": "core://Page",
+   "id": "c-meals",
+   "title": "This week's meals",
+   "root": {
+    "type": "core://Box",
+    "fill": true,
+    "background": "${local://theme#page}",
+    "content": {
+     "type": "core://Column",
+     "children": [
+      {
+       "type": "core://Row",
+       "align": "Center",
+       "padding_h_dp": 16,
+       "padding_v_dp": 8,
+       "spacing_dp": 4,
+       "children": [
+        {
+         "type": "core://Text",
+         "style": "Headline",
+         "value_expr": "This week's meals"
+        },
+        {
+         "type": "core://Spacer"
+        },
+        {
+         "type": "core://Tappable",
+         "tag": "all-meals",
+         "content_description": "All meals",
+         "on_click": {
+          "intent": "action.navigation.open",
+          "layout": "c-all",
+          "presentation": "Push"
+         },
+         "content": {
+          "type": "core://Box",
+          "padding_h_dp": 8,
+          "padding_v_dp": 6,
+          "content_color": "${local://theme#accent}",
+          "content": {
+           "type": "core://Text",
+           "style": "Label",
+           "value_expr": "All meals"
+          }
+         }
+        }
+       ]
+      },
+      {
+       "type": "core://Scroll",
+       "content": {
+        "type": "core://Column",
+        "padding_h_dp": 16,
+        "padding_v_dp": 8,
+        "spacing_dp": 12,
+        "children": [
+         {
+          "type": "core://Box",
+          "background": "${local://theme#card}",
+          "border_color": "${local://theme#card_border}",
+          "corner_dp": 14,
+          "content": {
+           "type": "core://Column",
+           "children": [
+            {
+             "type": "core://Tappable",
+             "content_description": "Salmon",
+             "on_click": {
+              "intent": "action.navigation.open",
+              "layout": "c-recipe",
+              "presentation": "Push",
+              "params": {
+               "name": "Salmon"
+              }
+             },
+             "content": {
+              "type": "core://Column",
+              "padding_h_dp": 16,
+              "padding_v_dp": 12,
+              "spacing_dp": 2,
+              "children": [
+               {
+                "type": "core://Text",
+                "style": "Label",
+                "value_expr": "Salmon"
+               },
+               {
+                "type": "core://Text",
+                "style": "Secondary",
+                "value_expr": "Weeknight · 25 min"
+               }
+              ]
+             }
+            },
+            {
+             "type": "core://Divider"
+            },
+            {
+             "type": "core://Tappable",
+             "content_description": "Red lentil dal",
+             "on_click": {
+              "intent": "action.navigation.open",
+              "layout": "c-recipe",
+              "presentation": "Push",
+              "params": {
+               "name": "Red lentil dal"
+              }
+             },
+             "content": {
+              "type": "core://Column",
+              "padding_h_dp": 16,
+              "padding_v_dp": 12,
+              "spacing_dp": 2,
+              "children": [
+               {
+                "type": "core://Text",
+                "style": "Label",
+                "value_expr": "Red lentil dal"
+               },
+               {
+                "type": "core://Text",
+                "style": "Secondary",
+                "value_expr": "Batch & freeze · 30 min"
+               }
+              ]
+             }
+            },
+            {
+             "type": "core://Divider"
+            },
+            {
+             "type": "core://Tappable",
+             "content_description": "Sheet-pan chicken",
+             "on_click": {
+              "intent": "action.navigation.open",
+              "layout": "c-recipe",
+              "presentation": "Push",
+              "params": {
+               "name": "Sheet-pan chicken"
+              }
+             },
+             "content": {
+              "type": "core://Column",
+              "padding_h_dp": 16,
+              "padding_v_dp": 12,
+              "spacing_dp": 2,
+              "children": [
+               {
+                "type": "core://Text",
+                "style": "Label",
+                "value_expr": "Sheet-pan chicken"
+               },
+               {
+                "type": "core://Text",
+                "style": "Secondary",
+                "value_expr": "Sheet pan · 45 min"
+               }
+              ]
+             }
+            }
+           ]
+          }
+         }
+        ]
+       }
+      }
+     ]
+    }
+   }
+  },
+  "c-all": {
+   "type": "core://Page",
+   "id": "c-all",
+   "title": "All meals",
+   "root": {
+    "type": "core://Box",
+    "fill": true,
+    "background": "${local://theme#page}",
+    "content": {
+     "type": "core://Column",
+     "children": [
+      {
+       "type": "core://Row",
+       "align": "Center",
+       "padding_h_dp": 16,
+       "padding_v_dp": 8,
+       "spacing_dp": 4,
+       "children": [
+        {
+         "type": "core://IconButton",
+         "icon": "arrow_back",
+         "content_description": "Back",
+         "on_click": {
+          "intent": "action.navigation.back"
+         }
+        },
+        {
+         "type": "core://Text",
+         "style": "Headline",
+         "value_expr": "All meals"
+        }
+       ]
+      },
+      {
+       "type": "core://Scroll",
+       "content": {
+        "type": "core://Column",
+        "padding_h_dp": 16,
+        "padding_v_dp": 8,
+        "spacing_dp": 12,
+        "children": [
+         {
+          "type": "core://Text",
+          "style": "Secondary",
+          "value_expr": "Every recipe, with what goes in it"
+         },
+         {
+          "type": "core://Box",
+          "background": "${local://theme#card}",
+          "border_color": "${local://theme#card_border}",
+          "corner_dp": 14,
+          "content": {
+           "type": "core://Column",
+           "children": [
+            {
+             "type": "core://Tappable",
+             "content_description": "Lentil soup",
+             "on_click": {
+              "intent": "action.navigation.open",
+              "layout": "c-recipe",
+              "presentation": "Push",
+              "params": {
+               "name": "Lentil soup"
+              }
+             },
+             "content": {
+              "type": "core://Column",
+              "padding_h_dp": 16,
+              "padding_v_dp": 12,
+              "spacing_dp": 2,
+              "children": [
+               {
+                "type": "core://Text",
+                "style": "Label",
+                "value_expr": "Lentil soup"
+               },
+               {
+                "type": "core://Text",
+                "style": "Secondary",
+                "value_expr": "Turkish · 35 min"
+               }
+              ]
+             }
+            },
+            {
+             "type": "core://Divider"
+            },
+            {
+             "type": "core://Tappable",
+             "content_description": "Salmon",
+             "on_click": {
+              "intent": "action.navigation.open",
+              "layout": "c-recipe",
+              "presentation": "Push",
+              "params": {
+               "name": "Salmon"
+              }
+             },
+             "content": {
+              "type": "core://Column",
+              "padding_h_dp": 16,
+              "padding_v_dp": 12,
+              "spacing_dp": 2,
+              "children": [
+               {
+                "type": "core://Text",
+                "style": "Label",
+                "value_expr": "Salmon"
+               },
+               {
+                "type": "core://Text",
+                "style": "Secondary",
+                "value_expr": "Weeknight · 25 min"
+               }
+              ]
+             }
+            },
+            {
+             "type": "core://Divider"
+            },
+            {
+             "type": "core://Tappable",
+             "content_description": "Red lentil dal",
+             "on_click": {
+              "intent": "action.navigation.open",
+              "layout": "c-recipe",
+              "presentation": "Push",
+              "params": {
+               "name": "Red lentil dal"
+              }
+             },
+             "content": {
+              "type": "core://Column",
+              "padding_h_dp": 16,
+              "padding_v_dp": 12,
+              "spacing_dp": 2,
+              "children": [
+               {
+                "type": "core://Text",
+                "style": "Label",
+                "value_expr": "Red lentil dal"
+               },
+               {
+                "type": "core://Text",
+                "style": "Secondary",
+                "value_expr": "Batch & freeze · 30 min"
+               }
+              ]
+             }
+            },
+            {
+             "type": "core://Divider"
+            },
+            {
+             "type": "core://Tappable",
+             "content_description": "Sheet-pan chicken",
+             "on_click": {
+              "intent": "action.navigation.open",
+              "layout": "c-recipe",
+              "presentation": "Push",
+              "params": {
+               "name": "Sheet-pan chicken"
+              }
+             },
+             "content": {
+              "type": "core://Column",
+              "padding_h_dp": 16,
+              "padding_v_dp": 12,
+              "spacing_dp": 2,
+              "children": [
+               {
+                "type": "core://Text",
+                "style": "Label",
+                "value_expr": "Sheet-pan chicken"
+               },
+               {
+                "type": "core://Text",
+                "style": "Secondary",
+                "value_expr": "Sheet pan · 45 min"
+               }
+              ]
+             }
+            }
+           ]
+          }
+         }
+        ]
+       }
+      }
+     ]
+    }
+   }
+  },
+  "c-recipe": {
+   "type": "core://Page",
+   "id": "c-recipe",
+   "title": "Recipe",
+   "root": {
+    "type": "core://Box",
+    "fill": true,
+    "background": "${local://theme#page}",
+    "content": {
+     "type": "core://Column",
+     "children": [
+      {
+       "type": "core://Row",
+       "align": "Center",
+       "padding_h_dp": 16,
+       "padding_v_dp": 8,
+       "spacing_dp": 4,
+       "children": [
+        {
+         "type": "core://IconButton",
+         "icon": "arrow_back",
+         "content_description": "Back",
+         "on_click": {
+          "intent": "action.navigation.back"
+         }
+        },
+        {
+         "type": "core://Text",
+         "style": "Headline",
+         "value_expr": "$route.name"
+        }
+       ]
+      },
+      {
+       "type": "core://Scroll",
+       "content": {
+        "type": "core://Column",
+        "padding_h_dp": 16,
+        "padding_v_dp": 8,
+        "spacing_dp": 12,
+        "children": [
+         {
+          "type": "core://Text",
+          "style": "Title",
+          "value_expr": "Recipe: $route.name"
+         },
+         {
+          "type": "core://Text",
+          "style": "Body",
+          "value_expr": "Serves 4. What goes in it, and the steps, would be here."
+         }
+        ]
+       }
+      }
+     ]
+    }
+   }
+  }
+ },
+ "reach": {
+  "home": [
+   "c-meals"
+  ],
+  "c-meals": [
+   "c-all",
+   "c-recipe"
+  ],
+  "c-all": [
+   "c-recipe"
+  ],
+  "c-recipe": []
+ }
+}

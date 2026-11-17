@@ -29,8 +29,12 @@ pub struct RawEvent {
     pub url: String,
 }
 
-/// Most events kept from one page.
-pub const MAX_EVENTS: usize = 200;
+/// Most events kept from one page: a bound for memory, well above what a
+/// fill keeps. Feeds often list years of past events before (or among) the
+/// upcoming ones, and only the caller knows which have passed (a filler's
+/// `upcoming`, whose cap counts only upcoming items), so a low bound here
+/// would cut upcoming events from a long feed.
+pub const MAX_EVENTS: usize = 5_000;
 /// Longest description kept.
 pub const MAX_DESCRIPTION: usize = 4_000;
 

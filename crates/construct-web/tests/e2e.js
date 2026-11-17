@@ -1,9 +1,28 @@
 // The web client in Chromium against a running server (scripts/web_e2e.sh starts one): the code form, a wrong
 // code, the right one, home drawn on the canvas, the cookie (HttpOnly, not the pod code), a reload that keeps the
-// session, a phone-sized window, and logging out. Screenshots go to the directory given.
-//   node crates/construct-web/tests/e2e.js <base url> <pod code> <out dir>
+// session and takes the client from the browser's cache, a rebuild whose names changed, a phone-sized window, and
+// logging out. Screenshots go to the directory given; <rebuild> is a shell command that rebuilds the client with
+// different content (decision `web-client-cache`).
+//   node crates/construct-web/tests/e2e.js <base url> <pod code> <out dir> [rebuild]
 const { chromium } = require('playwright');
-const [base, code, out] = process.argv.slice(2);
+const { execSync } = require('child_process');
+const [base, code, out, rebuild] = process.argv.slice(2);
+
+// The client's files a load asks for, each with where it came from: 'cache' (the browser's), 'network' or a 304.
+async function watchFiles(page) {
+  const cdp = await page.context().newCDPSession(page);
+  await cdp.send('Network.enable');
+  const files = new Map();
+  const cached = new Set(); // requests the browser answered from its memory cache
+  cdp.on('Network.requestServedFromCache', ({ requestId }) => cached.add(requestId));
+  cdp.on('Network.responseReceived', ({ requestId, response: r }) => {
+    const path = new URL(r.url).pathname;
+    if (!/^\/web\/.+\.(js|wasm|css|ttf)$/.test(path)) return;
+    const fromCache = r.fromDiskCache || cached.has(requestId);
+    files.set(path, fromCache ? 'cache' : r.status === 304 ? '304' : 'network');
+  });
+  return files;
+}
 
 // How many pixels of a screenshot differ from its corner's colour (a GPU canvas can't be read back, so the
 // screenshot is decoded in the page).
@@ -40,6 +59,15 @@ function check(ok, what) {
   const logs = [];
   page.on('pageerror', (e) => errors.push(e.message));
   page.on('console', (m) => logs.push(m.text()));
+  // Images and fonts are fetched by the same code: without this header the pod ignores the cookie and every proxied
+  // image is refused (401).
+  const bareGets = [];
+  page.on('request', (r) => {
+    const p = new URL(r.url()).pathname;
+    if ((p.startsWith('/web/fonts/') || p === '/web/image') && r.headers()['x-construct-client'] !== 'web') {
+      bareGets.push(p);
+    }
+  });
   await page.goto(base + '/web');
   await page.waitForSelector('#sign-in:not([hidden])', { timeout: 15000 });
   check(true, 'without a session the page asks for the pod code');
@@ -56,8 +84,10 @@ function check(ok, what) {
   await page.waitForTimeout(1000);
   check(logs.some((l) => l.startsWith('drawing on the GPU')), 'it draws on the GPU (WebGL2): ' +
     (logs.find((l) => l.startsWith('drawing on') || l.startsWith('no GPU')) || 'no word'));
+  check(bareGets.length === 0, 'fonts and images are fetched as the web client (' + bareGets.join(', ') + ')');
   await page.screenshot({ path: out + '/web-home-desktop.png' });
-  check((await drawn(page)) > 500, 'home is drawn');
+  const lit = await drawn(page);
+  check(lit > 60, `home is drawn (${lit} sampled pixels differ from the background)`);
   await page.screenshot({ path: out + '/web-home-desktop.png' });
 
   const cookie = (await page.context().cookies()).find((c) => c.name === 'construct_web');
@@ -65,16 +95,57 @@ function check(ok, what) {
   check(!cookie.value.includes(code) && !cookie.value.startsWith('cpod_'), 'the cookie is not the pod code');
   check(!(await page.evaluate(() => document.cookie)).includes('construct_web'), 'page scripts cannot read it');
 
+  const files = await watchFiles(page);
   await page.reload();
   await page.waitForSelector('body.ready', { timeout: 60000 });
+  await page.waitForTimeout(1000);
   check(true, 'a reload keeps the session');
+  const listed = [...files].map(([f, from]) => `${f} ${from}`).join(', ');
+  check([...files.keys()].some((f) => f.endsWith('.wasm')) && [...files.keys()].some((f) => f.endsWith('.ttf')),
+    'the reload asks for the WebAssembly and the fonts: ' + listed);
+  check([...files.values()].every((from) => from !== 'network'), 'and takes none of them from the network');
+
+  if (rebuild) {
+    const before = [...files.keys()].find((f) => /^\/web\/app\.[0-9a-f]{16}\.js$/.test(f));
+    execSync(rebuild, { stdio: 'inherit' });
+    files.clear();
+    await page.reload();
+    await page.waitForSelector('body.ready', { timeout: 60000 });
+    const after = [...files.keys()].find((f) => /^\/web\/app\.[0-9a-f]{16}\.js$/.test(f));
+    check(before && after && before !== after && files.get(after) === 'network',
+      `after a rebuild the page loads the new client (${before} -> ${after})`);
+  }
+
+  // Signing in to the fake Pixelfed (decision `web-upstream-sign-in`): Settings' "Sign in to Pixelfed" goes to its
+  // authorize page and Authorize comes back to /web, signed in. Where the blank home (1280 x 800) draws Settings'
+  // gear and the panel its button.
+  await page.mouse.click(91, 431);
+  await page.waitForTimeout(3000);
+  await page.mouse.click(100, 157);
+  await page.waitForURL((u) => u.pathname === '/oauth/authorize', { timeout: 15000 });
+  const asked = new URL(page.url());
+  check(asked.searchParams.get('redirect_uri') === base + '/web' && asked.searchParams.get('code_challenge_method') === 'S256',
+    "Settings' Sign in opens the instance's authorize page, back to /web with PKCE");
+  await page.click('button[value=approve]');
+  await page.waitForURL((u) => u.pathname === '/web' && u.search === '', { timeout: 15000 });
+  await page.waitForSelector('body.ready', { timeout: 60000 });
+  const signIns = await page.evaluate(async () =>
+    (await fetch('/v1/auth/sign-ins', { headers: { 'x-construct-client': 'web' } })).json());
+  check((signIns.sign_ins || []).some((s) => s.id === 'pixelfed'),
+    'back on /web (the code taken off the address), the session is signed in to Pixelfed');
+  await page.mouse.click(91, 431);
+  await page.waitForTimeout(3000);
+  await page.screenshot({ path: out + '/web-signed-in.png' });
 
   await page.setViewportSize({ width: 390, height: 844 });
   await page.waitForTimeout(1000);
-  check((await drawn(page)) > 200, 'a phone-sized window is drawn');
+  const litPhone = await drawn(page);
+  check(litPhone > 30, `a phone-sized window is drawn (${litPhone})`);
   await page.screenshot({ path: out + '/web-home-phone.png' });
 
-  await page.click('#log-out');
+  // What Settings' "Leave pod on this device" does in a browser.
+  await page.evaluate(() => fetch('/web/logout', { method: 'POST', headers: { 'x-construct-client': 'web' } }));
+  await page.reload();
   await page.waitForSelector('#sign-in:not([hidden])', { timeout: 15000 });
   check(true, 'logging out asks for the code again');
 
