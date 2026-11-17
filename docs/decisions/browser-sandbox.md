@@ -30,6 +30,8 @@ Consequences: no layout vocabulary and no client build. The fallback never retri
 deploy restarts). The probe costs one call timeout (15 s) on the first render if renderers hang under the sandbox.
 A manual `flyctl deploy` without the build arg reuses whatever layer the builder cached for `unset`.
 
-Not yet: checking on a Fly machine which mode staging runs in (its log says); running the browser in its own Fly
-machine without the private network; base-image digest updates for `deploy/pod.Dockerfile` (the weekly rebuild
-takes Debian's updates without them).
+Checked on staging (2026-11-17): its log reads `browser sandbox: on (Chromium's sandbox and site isolation)`, so
+Fly's kernel allows the sandbox and staging doesn't fall back.
+
+Not yet: running the browser in its own Fly machine without the private network (issue #318); base-image digest
+updates for `deploy/pod.Dockerfile` (the weekly rebuild takes Debian's updates without them).
