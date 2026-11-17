@@ -1439,13 +1439,17 @@ pub fn run(
             let mut p = r.clone();
             let src = (&source, r);
             let mut write = Map::new();
+            let mut copied = BTreeMap::new();
             for a in &action.update {
                 write.insert(
                     def.name_of(&a.field),
                     run.eval(&a.value, &params, src, None)?,
                 );
+                if let Some(w) = run.writer_of(&a.value, src, None)? {
+                    copied.insert(a.field.clone(), w);
+                }
             }
-            match run.update(&def, &mut p, &write)? {
+            match run.update(&def, &mut p, &write, &copied)? {
                 Ok(true) => report.updated += 1,
                 Ok(false) => {}
                 Err(e) => return refuse(422, "invalid_value", e),
