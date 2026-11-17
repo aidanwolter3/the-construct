@@ -284,6 +284,28 @@ fn a_construct_edit_keeps_the_stack_and_a_removed_link_pops_back() {
     );
 }
 
+/// Panels (decision `wide-screen-panels`): on a desktop window a push from
+/// the inline meals layout opens beside it, deeper pushes the oldest column
+/// out of sight and Back brings it back; on a phone the same tap pushes.
+#[test]
+fn a_push_from_a_panel_host_opens_beside_it_on_a_desktop_only() {
+    let d = "crates/construct-sim/data";
+    let (_, results) = run(
+        "home",
+        &format!(
+            "screen desktop; construct {d}/construct_panels.json; wait 300; \
+             hover All meals; click All meals; assert-text Every recipe, with what goes in it; \
+             assert-text This week's meals; assert-text Today; click Lentil soup; \
+             assert-text Recipe: Lentil soup; assert-no-text This week's meals; back; \
+             assert-text This week's meals; assert-no-text Recipe: Lentil soup; \
+             screen phone; click All meals; assert-text Every recipe, with what goes in it; \
+             assert-no-text This week's meals"
+        ),
+        &out_dir("panels"),
+    );
+    assert_ok(&results);
+}
+
 /// Scroll anchors on a switched pod (decision `content-addressed-construct`):
 /// rows added above the scroll position don't move the rows on screen, and
 /// when the first row showing goes, the next one stays where it was.

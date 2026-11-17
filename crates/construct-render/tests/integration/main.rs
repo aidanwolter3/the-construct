@@ -16,6 +16,7 @@ mod interaction;
 mod layout_math;
 mod main_axis;
 mod media;
+mod panels;
 mod reuse;
 mod screen_sizes;
 mod swipe_cards;

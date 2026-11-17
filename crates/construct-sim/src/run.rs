@@ -237,6 +237,16 @@ impl Runner {
                     Err(format!("no core://Tappable at '{target}'"))
                 }
             }
+            Step::Hover(target) => {
+                let node = self.reveal(target)?;
+                let (x, y) = center(&node);
+                self.session.hover(x, y);
+                if self.session.hovering() {
+                    done("hovered")
+                } else {
+                    Err(format!("no core://Tappable at '{target}'"))
+                }
+            }
             Step::Release => {
                 self.session.release_press();
                 match self.held_card.take() {

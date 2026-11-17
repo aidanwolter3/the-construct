@@ -115,6 +115,7 @@ fn a_frame_is_stale_from_the_minute_an_answer_changes() {
             item: None,
             insets: [0.0; 4],
             focused: None,
+            panels: &construct_render::NO_PANELS,
         };
         b.relayout(&input, prev).unwrap()
     };

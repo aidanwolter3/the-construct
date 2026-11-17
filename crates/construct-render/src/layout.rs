@@ -49,6 +49,31 @@ impl Viewport {
     }
 }
 
+/// A layout opened beside the inline `core://Layout` it was opened from
+/// (`panels: true` on an expanded screen; decision `wide-screen-panels`):
+/// its id and its `$route`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Panel {
+    pub layout: String,
+    pub route: BTreeMap<String, String>,
+}
+
+/// The panels open beside each panel host (by the semantic id of its
+/// inline `core://Layout`'s content), leftmost first.
+pub type Panels = BTreeMap<String, Vec<Panel>>;
+
+/// No panels open (an [`Input`] that draws none).
+pub static NO_PANELS: Panels = BTreeMap::new();
+
+/// At most this many columns show for a panel host: the embed and its
+/// panels, the oldest moving out of sight first.
+const PANEL_COLUMNS: usize = 2;
+
+/// The semantic id of panel `k` of the host at `host`.
+pub fn panel_id(host: &str, k: usize) -> String {
+    format!("{host}~{k}")
+}
+
 /// Everything a frame is drawn from.
 pub struct Input<'a> {
     pub root: &'a UiNode,
@@ -68,6 +93,8 @@ pub struct Input<'a> {
     pub insets: [f32; 4],
     /// The text field being typed into (its `field`): drawn with a caret.
     pub focused: Option<&'a str>,
+    /// The panels open beside inline layouts with `panels: true`.
+    pub panels: &'a Panels,
 }
 
 /// Why a frame couldn't be built.
@@ -271,6 +298,9 @@ struct Build<'t, 'i> {
     changes_at: Option<i64>,
     /// The scrolling views with `follow_end`, by semantic id.
     follow_end: Vec<String>,
+    /// The inline layouts that open panels beside them, by the semantic id
+    /// of their content.
+    panel_hosts: Vec<String>,
     tree: TaffyTree<Leaf>,
     elems: Vec<Elem>,
     text: &'t mut TextEngine,
@@ -304,6 +334,7 @@ struct Env {
     item: Option<String>,
     insets: [f32; 4],
     focused: Option<String>,
+    panels: Panels,
     today: i64,
     /// The theme's entity (`local://theme`): every colour follows it.
     theme: Option<EntityRecord>,
@@ -324,6 +355,7 @@ impl Env {
             item: input.item.map(str::to_owned),
             insets: input.insets,
             focused: input.focused.map(str::to_owned),
+            panels: input.panels.clone(),
             today,
             theme: input.data.entities.get("local://theme").cloned(),
             pages: input
@@ -422,6 +454,7 @@ impl SceneBuilder {
             item: None,
             insets: [0.0; 4],
             focused: None,
+            panels: &NO_PANELS,
         })
     }
 
@@ -458,6 +491,7 @@ impl SceneBuilder {
             zone: self.clock.zone.clone(),
             changes_at: None,
             follow_end: Vec::new(),
+            panel_hosts: Vec::new(),
             tree,
             elems: Vec::new(),
             text: &mut self.text,
@@ -533,6 +567,7 @@ impl SceneBuilder {
             slides: BTreeMap::new(),
             cards: BTreeMap::new(),
             follow_end: b.follow_end,
+            panel_hosts: b.panel_hosts,
             changes_at: b.changes_at,
             env,
             parts: b.parts,
@@ -1020,6 +1055,118 @@ impl<'i> Build<'_, 'i> {
         if self.tree.style(node).ok() != Some(&style) {
             let _ = self.tree.set_style(node, style);
         }
+    }
+
+    /// An inline layout's content (`host`) with the panels open beside it
+    /// ([`Panels`]): a row of the last [`PANEL_COLUMNS`] columns, a
+    /// hairline between each two, each column as wide as the others.
+    fn with_panels(
+        &mut self,
+        host: &str,
+        content: Option<usize>,
+        b: &B,
+        ctx: Ctx,
+    ) -> Option<usize> {
+        let input = self.input;
+        let open = input.panels.get(host).map_or(&[][..], Vec::as_slice);
+        // Each column is a node with its semantic id, so a tap inside
+        // (on a tagged row too) finds the column it came from.
+        let column_sem = |id: String| Sem {
+            id,
+            node_type: "panel".into(),
+            text: None,
+            tap: None,
+            selected: false,
+            gestures: BTreeMap::new(),
+            hint: None,
+        };
+        let content = content.map(|c| {
+            let node = self.elems[c].node;
+            let mut cs = self.tree.style(node).cloned().unwrap_or_default();
+            cs.flex_grow = 1.0;
+            let _ = self.tree.set_style(node, cs);
+            let mut style = column(0, pad(0, 0), AlignItems::STRETCH);
+            style.flex_grow = 1.0;
+            self.push(
+                style,
+                vec![c],
+                Paint::None,
+                Some(column_sem(host.to_owned())),
+                false,
+            )
+        });
+        if open.is_empty() {
+            return content;
+        }
+        // Column 0 is the embed's own content, column k + 1 panel k.
+        let first = (open.len() + 1).saturating_sub(PANEL_COLUMNS);
+        let mut cols = Vec::new();
+        if first == 0 {
+            cols.extend(content);
+        }
+        for (k, p) in open.iter().enumerate().skip(first.saturating_sub(1)) {
+            let pb = B {
+                ctx: Ctx {
+                    route: &p.route,
+                    ..ctx
+                },
+                axis: Axis::Column,
+                color: b.color,
+                path: panel_id(host, k),
+                depth: b.depth + 1,
+                in_scroll: false,
+            };
+            let col = match input.layouts.get(&p.layout) {
+                Some(l) => self.node(l, &pb),
+                None => Some(self.placeholder(&format!("Layout {}", p.layout))),
+            };
+            if let Some(c) = col {
+                let node = self.elems[c].node;
+                let mut cs = self.tree.style(node).cloned().unwrap_or_default();
+                cs.flex_grow = 1.0;
+                let _ = self.tree.set_style(node, cs);
+                let style = column(0, pad(0, 0), AlignItems::STRETCH);
+                let sem = column_sem(panel_id(host, k));
+                cols.push(self.push(style, vec![c], Paint::None, Some(sem), false));
+            }
+        }
+        let mut kids = Vec::new();
+        for (i, c) in cols.into_iter().enumerate() {
+            if i > 0 {
+                let line = Style {
+                    size: Size {
+                        width: length(1.0),
+                        height: auto(),
+                    },
+                    flex_shrink: 0.0,
+                    ..Default::default()
+                };
+                kids.push(self.push(
+                    line,
+                    Vec::new(),
+                    Paint::Quad {
+                        bg: self.theme.outline,
+                        border: None,
+                        dashed: false,
+                        radius: 0.0,
+                    },
+                    None,
+                    false,
+                ));
+            }
+            // Each column takes an equal share of the width and the
+            // whole height.
+            let node = self.elems[c].node;
+            let mut cs = self.tree.style(node).cloned().unwrap_or_default();
+            cs.flex_grow = 1.0;
+            cs.flex_basis = length(0.0);
+            cs.min_size.width = length(0.0);
+            let _ = self.tree.set_style(node, cs);
+            kids.push(c);
+        }
+        let mut style = row(0, pad(0, 0), AlignItems::STRETCH);
+        style.flex_grow = 1.0;
+        Some(self.push(style, kids, Paint::None, None, false))
     }
 
     fn sem(&self, b: &B, n: &UiNode, text: Option<String>, tap: Option<Tap>) -> Sem {
@@ -2505,6 +2652,8 @@ impl<'i> Build<'_, 'i> {
                 equals,
                 presentation,
                 height_dp,
+                params,
+                panels,
                 ..
             } => {
                 if show_when
@@ -2526,9 +2675,26 @@ impl<'i> Build<'_, 'i> {
                     .layouts
                     .get(&id)
                     .filter(|_| b.depth < MAX_EMBED_DEPTH);
+                // `params` bind as `$route.<name>` in it, as when it is
+                // opened (bound here, against the embedding layout).
+                let route: BTreeMap<String, String>;
+                let lctx = if params.is_empty() {
+                    ctx
+                } else {
+                    route = params
+                        .iter()
+                        .map(|(k, v)| (k.clone(), ctx.text(v)))
+                        .collect();
+                    Ctx {
+                        route: &route,
+                        ..ctx
+                    }
+                };
+                let host = format!("{}/layout:{id}", b.path);
                 let kid = match inner {
                     Some(l) => {
                         let lb = B {
+                            ctx: lctx,
                             depth: b.depth + 1,
                             in_scroll: b.in_scroll && height_dp.is_none(),
                             ..b.child(format!("layout:{id}"), Axis::Column)
@@ -2536,6 +2702,13 @@ impl<'i> Build<'_, 'i> {
                         self.node(l, &lb)
                     }
                     None => Some(self.placeholder(&format!("Layout {id}"))),
+                };
+                let wide = crate::interact::size_class(self.input.viewport.width) == "expanded";
+                let kid = if *panels && wide && b.depth < MAX_EMBED_DEPTH {
+                    self.panel_hosts.push(host.clone());
+                    self.with_panels(&host, kid, b, ctx)
+                } else {
+                    kid
                 };
                 let mut sem = self.sem(b, n, None, None);
                 sem.id = format!("layout:{id}");
@@ -2996,18 +3169,22 @@ fn intersects(a: [f32; 4], b: [f32; 4]) -> bool {
     r[2] > 0.0 && r[3] > 0.0 || (a[2] == 0.0 || a[3] == 0.0)
 }
 
-/// The `core://Tappable` a finger (or the mouse button) is down on: its
-/// semantic id and the point pressed, so a node elsewhere with the same id
-/// (a repeated tag) is not drawn pressed.
+/// The `core://Tappable` a finger (or the mouse button) is down on, or the
+/// mouse rests over (`hover`): its semantic id and the point, so a node
+/// elsewhere with the same id (a repeated tag) is not drawn pressed.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Pressed {
     pub id: String,
     pub at: (f32, f32),
+    /// Only hovered (a mouse over it, no button down): a lighter wash.
+    pub hover: bool,
 }
 
 /// How much of the text colour a pressed row is washed with: it darkens a
 /// light page and lightens a dark one, as Android's ripple does.
 const PRESSED_ALPHA: f32 = 0.10;
+/// How much a hovered row is washed with: half a press.
+const HOVER_ALPHA: f32 = 0.05;
 
 /// A dashed border's dashes and gaps (points), before they are stretched
 /// to fit the box (`core://Box` `border_style: Dashed`).
@@ -3078,6 +3255,10 @@ pub struct Laid {
     /// The scrolling views that follow their content to the end after an
     /// action from outside them (`core://Scroll` `follow_end`).
     pub follow_end: Vec<String>,
+    /// The inline layouts drawn with panels beside them (`panels: true`, on
+    /// an expanded screen), by the semantic id of their content: a layout
+    /// opened from inside one opens as a panel ([`Panels`]).
+    pub panel_hosts: Vec<String>,
     /// The next minute (local, since the epoch) at which a `date`
     /// conditional of this frame changes its answer: the frame is stale
     /// from then on.
@@ -3530,7 +3711,9 @@ impl Laid {
         }
         let mut q = QuadInstance::fill(
             rect,
-            self.theme.on_background.with_alpha(PRESSED_ALPHA),
+            self.theme
+                .on_background
+                .with_alpha(if p.hover { HOVER_ALPHA } else { PRESSED_ALPHA }),
             self.one_child_radius(e),
         );
         q.clip = clip;

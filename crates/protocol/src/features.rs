@@ -356,6 +356,8 @@ fn node_features(node: &UiNode, out: &mut BTreeSet<&'static str>) {
             if *presentation == crate::EmbedPresentation::Overlay {
                 add(feature::OVERLAY_EDGE);
             }
+            // `panels` (feature::LAYOUT_PANELS) needs nothing: a client
+            // without it pushes as before.
         }
         UiNode::Gesture { .. } => add(feature::GESTURE),
         UiNode::SwipeCard { .. } => add(feature::SWIPE_CARD),
@@ -918,6 +920,12 @@ mod tests {
             assert!(f.contains(&want), "{want}: {f:?}");
         }
         assert_eq!(ws.walk().len(), 4, "a gesture's content is its child");
+        // Panels gate nothing: an older client pushes instead.
+        let n: UiNode = serde_json::from_value(
+            json!({"type": "core://Layout", "layout": "c-abc", "panels": true}),
+        )
+        .unwrap();
+        assert!(!required_features(&n).contains(&feature::LAYOUT_PANELS));
         // A sheet or a panel needs neither: older clients still draw them.
         for p in ["Sheet", "Panel"] {
             let n: UiNode = serde_json::from_value(json!({"type": "core://Button", "label": "x",

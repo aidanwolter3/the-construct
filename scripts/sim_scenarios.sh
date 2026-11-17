@@ -43,6 +43,10 @@ construct crates/construct-sim/data/construct_v3.json; wait 600; assert-text Not
 scenario scroll-anchor home \
   "construct crates/construct-sim/data/construct_v1.json; click Recipes; scroll-to Item 30; shot before; \
 construct crates/construct-sim/data/construct_anchor_above.json; wait 300; assert-text Item 30; shot rows-above"
+scenario panels home \
+  "screen desktop; construct crates/construct-sim/data/construct_panels.json; wait 300; hover All meals; shot hover; \
+click All meals; assert-text Every recipe, with what goes in it; shot panel; click Lentil soup; \
+assert-text Recipe: Lentil soup; shot deeper; back; shot back; screen phone; click All meals; shot phone-pushes"
 scenario text-styles text_styles \
   "assert-text Move often · this week; assert-text Still to do; assert-no-text All done for the week; \
 assert-text Nothing archived yet; assert-no-text Inbox clear; shot light; mode dark; shot dark"

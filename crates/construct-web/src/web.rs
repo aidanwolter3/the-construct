@@ -704,6 +704,21 @@ impl App {
         self.drawn = u64::MAX;
     }
 
+    /// The mouse moved to a point, or left the canvas (`None`): the
+    /// tappable under it is drawn hovered and the pointer is a hand.
+    fn hover(&mut self, at: Option<(f32, f32)>) {
+        let session = &mut self.controller.session;
+        let changed = match at {
+            Some((x, y)) => session.hover(x, y),
+            None => session.hover_end(),
+        };
+        if changed {
+            let cursor = if session.hovering() { "pointer" } else { "" };
+            let _ = self.canvas.style().set_property("cursor", cursor);
+            wake();
+        }
+    }
+
     fn event(&mut self, e: Event) {
         let out = self.controller.handle(e);
         // A link opens in a new tab, not over the pod.
@@ -960,6 +975,11 @@ async fn mount(session: Session) -> Result<(), JsValue> {
         move |e: PointerEvent| {
             let mut a = app.borrow_mut();
             let Some((x0, y0, _, ly, at, moved)) = a.down else {
+                // A mouse with no button down: what it rests over is drawn
+                // hovered (a finger never hovers).
+                if e.pointer_type() == "mouse" {
+                    a.hover(Some((e.offset_x() as f32, e.offset_y() as f32)));
+                }
                 return;
             };
             let (x, y) = (e.offset_x() as f32, e.offset_y() as f32);
@@ -999,6 +1019,10 @@ async fn mount(session: Session) -> Result<(), JsValue> {
                 }
             }
         }
+    });
+    listen(&canvas, "pointerleave", {
+        let app = app.clone();
+        move |_: PointerEvent| app.borrow_mut().hover(None)
     });
     // The browser took the touch over (or it left): no tap, no fling.
     listen(&canvas, "pointercancel", {
