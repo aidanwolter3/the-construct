@@ -481,13 +481,19 @@ fn fetch_images(store: &construct_render::images::ImageStore, proxy: &str) {
     });
 }
 
+/// A GET of the pod's bytes (an image through the proxy, a font): with
+/// `x-construct-client: web`, without which the pod doesn't read the session
+/// cookie and answers 401 (decision `web-client`).
 async fn image_bytes(path: &str) -> Option<Vec<u8>> {
-    let resp: Response = JsFuture::from(window().fetch_with_str(path))
+    let req = Request::new_with_str(path).ok()?;
+    let _ = req.headers().set("x-construct-client", "web");
+    let resp: Response = JsFuture::from(window().fetch_with_request(&req))
         .await
         .ok()?
         .dyn_into()
         .ok()?;
     if !resp.ok() {
+        log(&format!("{path}: {}", resp.status()));
         return None;
     }
     let buf = JsFuture::from(resp.array_buffer().ok()?).await.ok()?;
