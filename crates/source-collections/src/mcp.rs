@@ -25,7 +25,13 @@ edit_rows changes rows directly (imports, backfills; all of them in one call, fr
 by url): it first answers a preview, which you must show the user (the count and the sample) before \
 calling again with just its confirm token; every edit \
 can be undone with undo_edit. delete_collection deletes a collection the user no longer wants once no layout \
-shows it (restore_collection brings it back for 30 days). Any field may be computed from the row's other fields \
+shows it (restore_collection brings it back for 30 days). The pod's notifications are the system \
+collection notifications (one row per notification: title, body, channel_layout, channel, layout, target_uri, \
+subject, at, read, read_at, and channel_enabled and channel_title from its channel; the newest 500 of 30 days; \
+actions mark_all_read and clear_read) and its channels notification_channels (key \"<layout>.<channel>\", title, \
+enabled: the pod-wide switch, remove_with_subject: whether a notification goes when the row it is about is \
+deleted): bind, filter, edit or delete them like any collection (the inbox blueprint shows notifications \
+whose channel_enabled is true, read ones older than a day in a closed section). Any field may be computed from the row's other fields \
 whenever they change: compute: {kind: \"expr\", expr} evaluates a small expression at once (entity.<field>, \
 entity.id (the row's id), literals, + joins text or adds numbers, -, !, c ? a : b, parentheses); compute: {kind: \"lookup\", from, \
 collection, key, value, match: exact|contains|regex, learn?} takes the value of the best matching row of \

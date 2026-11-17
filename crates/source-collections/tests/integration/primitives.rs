@@ -1136,13 +1136,18 @@ async fn a_delete_action_clears_the_matching_rows_in_one_undoable_edit() {
     )
     .await;
     let set = |a: Value| json!({"collection": "groceries", "changes": [{"op": "set_action", "action": a}]});
-    // Refusals: its own collection only with delete, delete only of its own,
-    // and nothing to upsert.
+    // Refusals: its own collection only to delete or update (decision
+    // `notifications-in-a-collection`), delete only of its own, and nothing
+    // to upsert.
     for (bad, why) in [
         (
             json!({"name": "a", "source": {"collection": "groceries"},
                    "match": {"name": "$row.name"}}),
-            "only a delete action",
+            "deletes them (delete: true) or updates them",
+        ),
+        (
+            json!({"name": "a", "source": {"collection": "groceries"}}),
+            "or updates them (update:",
         ),
         (
             json!({"name": "a", "source": {"collection": "aisles"}, "delete": true}),
