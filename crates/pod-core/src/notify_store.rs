@@ -95,6 +95,20 @@ pub trait NotificationStore: Send + Sync {
     /// Remove the notifications about `subjects` (entity URIs that are
     /// gone); answers how many went.
     fn remove_about(&self, pod: &Pod, subjects: &[String]) -> rusqlite::Result<usize>;
+
+    /// Give each stored notification whose `layout` is empty, or names no
+    /// layout of the pod (a blueprint, a layout since deleted), the layout
+    /// `opens` finds for it, where that differs (issue #337: rows stored
+    /// before the pod resolved them). Answers how many changed. A store
+    /// that resolves when it lists (the core's) needs nothing here.
+    fn fill_layouts(
+        &self,
+        pod: &Pod,
+        opens: &crate::layouts::NotificationOpens,
+    ) -> rusqlite::Result<usize> {
+        let _ = (pod, opens);
+        Ok(0)
+    }
 }
 
 /// The core's own tables (`notifications`, `notification_switches`).

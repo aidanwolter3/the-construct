@@ -498,7 +498,9 @@ impl Source for CollectionsAdapter {
                 .blocking(move |s| {
                     inbox::prepare(s)?;
                     // The channels' rows carry what sources declare now.
-                    p.channel_states().map(|_| ())
+                    p.channel_states()?;
+                    // Rows stored before the pod knew where they open.
+                    p.fill_notification_layouts().map(|_| ())
                 })
                 .await
                 .inspect_err(|e| {
