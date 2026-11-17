@@ -151,7 +151,7 @@ admin pod: a temporary pod can't share a public page (decision [`web-on-staging`
   rows, item and params again updates the same link; other params are another link.
 - The copy is made again when the pod's Collections data changes, so new rows the layouts show appear on the
   page. A root that draws anything but Collections data (Pixelfed, Events) is refused; a layout it reaches that
-  does is left out, and so are built-in layouts (Settings, the inbox). A copy holds at most 16 layouts and 512 KiB.
+  does is left out, and so are built-in layouts (Settings, the inbox). A copy holds at most 16 layouts and 2 MiB.
 - `list_public_links` lists them; `unshare_publicly {link}` stops one at once and its copy leaves the server.
 
 ## Collections
