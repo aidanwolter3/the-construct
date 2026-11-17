@@ -32,6 +32,14 @@ for: one layout is a `core://Layout` as home's one slot; with more, home lists t
 a card-sized region, or show it as a sheet or side panel while a condition holds. `@core/settings` and `@core/inbox`
 are Settings and the inbox. Snippets for each are in `describe_vocabulary`. Home can't be deleted.
 
+**What the user sees is what home reaches** (decision [`trace-from-home`](decisions/trace-from-home.md)).
+`list_layouts` and `get_layout` give each layout `reached`: the shortest path from home, each step with the field
+that takes it, its presentation and its label (`home → (on_swipe_down, Overlay from top) → c-…`), or "not reached
+from home". A pod layout titled like a blueprint it doesn't reference gets `copy_of: "@core/<blueprint>"`: it is
+the blueprint as it was when copied, and doesn't follow it; a blueprint row lists its `copies`, the layouts that
+`use` it (`used_by`) and its own `reached`. The pod's MCP instructions tell agents to change the element home
+actually reaches, not the blueprint it may have started from.
+
 ## The pod's layouts
 
 A layout of the pod is a name (`c-` and 10 characters, except `home`) pointing to an element with a title, an icon

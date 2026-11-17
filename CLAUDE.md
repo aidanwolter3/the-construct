@@ -153,6 +153,13 @@ connector); a new session started after that sees the new tools.
 
 ## House rules
 
+- **Change what the user actually sees.** A request about "my notifications" or "the shopping screen" is about
+  the element their pod's home reaches there, which may be the user's own copy of a blueprint (copies don't
+  follow blueprints). Before changing a blueprint, look at what real pods draw (on staging, MCP `list_layouts`:
+  `reached` and `copy_of`, decision `trace-from-home`), and say which pods' copies the change won't reach; a fix
+  for one user's screen may be an edit of their copy instead (or as well). Agents without the repo get the same
+  rule from the pod's MCP instructions.
+
 - No model names in commit messages or docs prose.
 - Keep docs current: a change to behaviour, configuration or vocabulary updates the guide in `docs/` that covers
   it, in the same PR.

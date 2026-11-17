@@ -28,6 +28,8 @@ pub mod seal;
 pub mod share;
 #[path = "construct_store.rs"]
 pub mod store;
+#[path = "construct_trace.rs"]
+pub mod trace;
 #[path = "construct_write.rs"]
 pub mod write;
 
