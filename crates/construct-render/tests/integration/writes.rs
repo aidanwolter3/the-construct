@@ -216,6 +216,51 @@ fn opening_a_notification_marks_it_read_and_opens_its_layout() {
     assert_eq!(writes.lock().unwrap()[1].body, json!({ "all": true }));
 }
 
+/// A row of the pod's `notifications` collection (decision
+/// `notifications-in-a-collection`) opens the `layout` the pod filled in
+/// (issue #337), not its channel's blueprint, and that layout's screen.
+#[test]
+fn a_notification_row_opens_the_layout_the_pod_filled_in() {
+    let inbox = json!({ "type": "core://List", "query_key": "collection:notifications", "item_template": {
+        "type": "core://Tappable", "tag": "n_$item.id",
+        "content": { "type": "core://Text", "style": "Body", "value_expr": "$item.title" },
+        "on_click": { "intent": "action.device", "command": "open_notification", "id": "$item.uri" } } });
+    let page = json!({ "type": "core://Page", "id": "c-tasks00001", "title": "Tasks", "root": { "type": "core://Text", "style": "Body", "value_expr": "All tasks" },
+        "screens": [{ "id": "task", "route": "x://tasks/{id}", "root": { "type": "core://Text", "style": "Body", "value_expr": "Task $route.id" } }] });
+    let writes = Arc::new(Mutex::new(Vec::new()));
+    let mut s = Session::new(
+        "home",
+        node(json!({ "type": "core://Text", "style": "Body", "value_expr": "Home" })),
+        data(json!({ "entities": {
+            "collections://notifications/r1": { "id": "r1", "uri": "collections://notifications/r1",
+                "title": "A run needs you", "read": false, "channel_layout": "tasksbp",
+                "layout": "c-tasks00001", "target_uri": "x://tasks/t7" } },
+            "queries": { "collection:notifications": ["collections://notifications/r1"] } })),
+        Viewport::PHONE,
+    );
+    s.layouts.insert("inbox".into(), node(inbox));
+    s.loader = Some(Box::new(Pod {
+        writes: writes.clone(),
+        refuse: false,
+        layouts: vec![("c-tasks00001".into(), node(page))],
+    }));
+    s.dispatch(
+        &json!({ "intent": "action.navigation.open", "layout": "inbox", "presentation": "Sheet" }),
+    )
+    .unwrap();
+    s.tap(&Target::Id("n_r1".into())).unwrap();
+    assert_eq!(
+        writes.lock().unwrap()[0].body,
+        json!({ "ids": ["r1"] }),
+        "marked read by its id"
+    );
+    assert_eq!(
+        s.state()["stack"],
+        json!(["home", "c-tasks00001", "c-tasks00001"])
+    );
+    assert!(s.scene().unwrap().find_text("Task t7").is_some());
+}
+
 #[test]
 fn a_link_is_opened_by_the_platform() {
     let (mut s, _) = session(

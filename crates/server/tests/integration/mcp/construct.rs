@@ -608,3 +608,119 @@ async fn layouts_say_how_home_reaches_them_and_which_are_copies() {
     assert_eq!(one["copy_of"], "@core/inbox");
     assert!(one["reached"].as_str().unwrap().contains("on_swipe_down"));
 }
+
+/// A client is served a component's current element, as `expand` shows
+/// it: `@me/icon_row`, first a wrapper over `@core/icon_row` and then the
+/// pod's own template with a `core://IfArg`, draws the pod's template. The
+/// `core://IfArg` once read as a removed node type in the element's
+/// recorded features, so sealing for a client passed over it for the
+/// wrapper, and the client drew `@core/icon_row`.
+#[tokio::test]
+async fn a_pods_own_component_is_served_as_its_own() {
+    let env = env().await;
+    let pod_code = env.pod("mine").await;
+    let access = env.connect(&pod_code).await;
+    let ok = |name: &'static str, args: Value| {
+        let (env, access) = (&env, &access);
+        async move {
+            let (err, v) = env.tool(access, name, args).await;
+            assert!(!err, "{name}: {v}");
+            v
+        }
+    };
+    ok(
+        "define_component",
+        json!({"name": "icon_row", "component": {
+        "doc": "The server's row, for now.",
+        "params": [{"name": "title", "type": "text", "required": true, "doc": "The title"}],
+        "template": {"type": "core://Use", "ref": "@core/icon_row",
+            "args": {"icon": "bookmark", "title": "$arg.title"}},
+        "examples": [{"args": {"title": "Porto"}, "note": "a row"}]}}),
+    )
+    .await;
+    ok(
+        "update_component",
+        json!({"name": "icon_row", "component": {
+        "doc": "The pod's own row.",
+        "params": [{"name": "title", "type": "text", "required": true, "doc": "The title"},
+            {"name": "chevron", "type": "bool", "default": false, "doc": "A ›"}],
+        "template": {"type": "core://Row", "spacing_dp": 8, "children": [
+            {"type": "core://Text", "style": "Label", "value_expr": "Mine: $arg.title"},
+            {"type": "core://IfArg", "arg": "chevron",
+                "then": {"type": "core://Text", "style": "Title", "value_expr": "›"}}]},
+        "examples": [{"args": {"title": "Porto"}, "note": "a row"}]}}),
+    )
+    .await;
+    let use_it = json!({"type": "core://Use", "ref": "@me/icon_row", "args": {"title": "Porto"}});
+    let c = ok(
+        "create_layout",
+        json!({"title": "Trips", "layout": {"type": "core://Page",
+        "title": "Trips", "root": {"type": "core://Column", "children": [use_it.clone()]}}}),
+    )
+    .await;
+    let c = c["id"].as_str().unwrap().to_owned();
+
+    let expanded = ok("expand", json!({"node": use_it})).await.to_string();
+    assert!(expanded.contains("Mine: Porto"), "{expanded}");
+    let drawn = env.drawn(&c, &pod_code).await["workspace"].to_string();
+    assert!(drawn.contains("Mine: Porto"), "{drawn}");
+    assert!(
+        !drawn.contains("corner_dp"),
+        "the @core/ row's circle: {drawn}"
+    );
+}
+
+/// Every component this build ships expands, at each of its examples, to a
+/// layout a pod saves and serves: within the limits `check_node_values`
+/// holds layouts to (`@core/tinted_icon`'s 999 dp corner once broke every
+/// layout using it or `@core/icon_row`). And none is recorded as needing
+/// removed vocabulary, which would have a client served an older element.
+#[test]
+fn every_shipped_components_examples_expand_to_valid_layouts() {
+    let catalog = server::catalog();
+    let core = pod_core::construct::core::load(&catalog).unwrap();
+    let components: Vec<(&String, &String)> = core
+        .names
+        .iter()
+        .filter_map(|(name, els)| Some((name, &els.last()?.0)))
+        .filter(|(_, el)| core.objects[*el].get("params").is_some())
+        .collect();
+    assert!(
+        components.iter().any(|(n, _)| *n == "@core/tinted_icon")
+            && components.iter().any(|(n, _)| *n == "@core/icon_row"),
+        "{components:?}"
+    );
+    let mut checked = 0;
+    for (name, el) in components {
+        let features = &core.features[el];
+        assert!(
+            !features.split(',').any(protocol::is_retired),
+            "{name}: {features}"
+        );
+        for (i, ex) in core.objects[el]["examples"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .enumerate()
+        {
+            let at = format!("{name} examples/{i}");
+            let use_ = json!({"kind": "element", "node": {"type": "core://Use",
+                "ref": {"name": name, "el": el, "pin": true},
+                "args": ex.get("args").cloned().unwrap_or(json!({})),
+                "children": ex.get("children").cloned().unwrap_or(json!([]))}});
+            let mut objects = core.objects.clone();
+            let id = construct_elements::object_id(&use_);
+            objects.insert(id.clone(), std::sync::Arc::new(use_));
+            let m = construct_elements::materialize(&objects, &id)
+                .unwrap_or_else(|e| panic!("{at}: {e}"));
+            assert!(m.missing.is_empty(), "{at}: {:?}", m.missing);
+            let node: protocol::UiNode =
+                serde_json::from_value(m.node).unwrap_or_else(|e| panic!("{at}: {e}"));
+            if let Err(e) = pod_core::validate::check_node_values(&node) {
+                panic!("{at}: {e}");
+            }
+            checked += 1;
+        }
+    }
+    assert!(checked > 20, "{checked} examples");
+}

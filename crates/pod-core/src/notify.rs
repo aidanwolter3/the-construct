@@ -383,6 +383,15 @@ impl AppState {
             .unwrap_or_else(|| Arc::new(CoreStore))
     }
 
+    /// [`NotificationStore::fill_layouts`] with the pod's layouts as they
+    /// are now (when the pod opens). Blocking.
+    pub fn fill_notification_layouts(self: &Pod) -> rusqlite::Result<usize> {
+        let opens = self
+            .store()
+            .with_conn(|c| crate::layouts::NotificationOpens::read(self.catalog(), c))?;
+        self.notification_store().fill_layouts(self, &opens)
+    }
+
     /// Every declared channel, and those switched off pod-wide (by the
     /// user, or by default). Tells the store which channels there are.
     /// Blocking.
@@ -567,14 +576,11 @@ impl AppState {
         items.sort_by_key(|n| n.created_at);
         let p = self.clone();
         let (inserted, hidden, unread_total) = blocking(self, move |s| {
-            let open = s.with_conn(|c| crate::layouts::layouts_for_blueprints(p.catalog(), c))?;
+            let opens = s.with_conn(|c| crate::layouts::NotificationOpens::read(p.catalog(), c))?;
             let items: Vec<ToStore> = items
                 .into_iter()
                 .map(|item| ToStore {
-                    open: open
-                        .get(&item.layout)
-                        .cloned()
-                        .unwrap_or_else(|| item.layout.clone()),
+                    open: opens.open(&item.layout, item.target_uri.as_deref()),
                     item,
                 })
                 .collect();
@@ -943,15 +949,11 @@ async fn list(
         };
         // The layout each opens, where the store doesn't say.
         if rows.iter().any(|n| n.layout.is_none()) {
-            let open = p
+            let opens = p
                 .store()
-                .with_conn(|c| crate::layouts::layouts_for_blueprints(p.catalog(), c))?;
+                .with_conn(|c| crate::layouts::NotificationOpens::read(p.catalog(), c))?;
             for n in rows.iter_mut().filter(|n| n.layout.is_none()) {
-                n.layout = Some(
-                    open.get(&n.channel_layout)
-                        .cloned()
-                        .unwrap_or_else(|| n.channel_layout.clone()),
-                );
+                n.layout = Some(opens.open(&n.channel_layout, n.target_uri.as_deref()));
             }
         }
         Ok((rows, total, by))

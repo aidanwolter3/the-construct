@@ -764,6 +764,115 @@ pub fn layouts_for_blueprints(
     Ok(out)
 }
 
+/// Where the pod's notifications open (issue #337): read once from the
+/// pod's layouts, then asked per notification ([`Self::open`]).
+#[derive(Debug, Default, Clone)]
+pub struct NotificationOpens {
+    /// The pod's layouts (home last), each with its screens' routes.
+    layouts: Vec<(String, Vec<String>)>,
+    /// Blueprint id -> the pod's layout built on it: the first that uses
+    /// it whole, else the first copy of it (`copy_of`).
+    built_on: HashMap<String, String>,
+}
+
+impl NotificationOpens {
+    /// Read from the pod's layouts. Blocking.
+    pub fn read(catalog: &Catalog, conn: &Connection) -> rusqlite::Result<Self> {
+        let mut built_on = layouts_for_blueprints(catalog, conn)?;
+        let mut all = pod_layouts(conn)?;
+        let home_first = all.first().is_some_and(|a| a.id == crate::HOME_APP);
+        all.rotate_left(usize::from(home_first));
+        let mut layouts = Vec::new();
+        for l in all {
+            let el = cstore::object(conn, &l.element)?.map(|(v, _)| v);
+            if let Some(el) = &el {
+                let uses = crate::construct::trace::names_used(el);
+                let copy = crate::construct::trace::copy_of(
+                    &l.title,
+                    &uses,
+                    catalog.blueprints().map(|a| (a.id, a.title)),
+                );
+                if let Some(bp) = copy
+                    .as_deref()
+                    .and_then(|n| n.strip_prefix(crate::construct::CORE_PREFIX))
+                {
+                    built_on
+                        .entry(bp.to_owned())
+                        .or_insert_with(|| l.id.clone());
+                }
+            }
+            let routes = materialized(conn, &l.element)
+                .map(|node| {
+                    node["screens"]
+                        .as_array()
+                        .into_iter()
+                        .flatten()
+                        .filter_map(|s| s["route"].as_str().map(str::to_owned))
+                        .collect()
+                })
+                .unwrap_or_default();
+            layouts.push((l.id, routes));
+        }
+        Ok(Self { layouts, built_on })
+    }
+
+    /// The layout a notification of channel layout `channel_layout` (a pod
+    /// layout or a blueprint id) with `target_uri` opens: the first that
+    /// has a screen routing `target_uri`, looking at the channel's own
+    /// layout, then the pod's layout built on that blueprint, then every
+    /// other layout (home last); without one, the channel's layout, else
+    /// the one built on its blueprint, else `channel_layout` itself.
+    pub fn open(&self, channel_layout: &str, target_uri: Option<&str>) -> String {
+        let own = self
+            .layouts
+            .iter()
+            .any(|(id, _)| id == channel_layout)
+            .then_some(channel_layout);
+        let built = self.built_on.get(channel_layout).map(String::as_str);
+        if let Some(uri) = target_uri.filter(|u| !u.trim().is_empty()) {
+            let routes = |id: &str| {
+                self.layouts
+                    .iter()
+                    .find(|(l, _)| l == id)
+                    .is_some_and(|(_, r)| r.iter().any(|r| route_matches(r, uri)))
+            };
+            let first = own
+                .into_iter()
+                .chain(built)
+                .chain(self.layouts.iter().map(|(id, _)| id.as_str()))
+                .find(|id| routes(id));
+            if let Some(id) = first {
+                return id.to_owned();
+            }
+        }
+        own.or(built).unwrap_or(channel_layout).to_owned()
+    }
+
+    /// Whether `id` is one of the pod's layouts (not a blueprint).
+    pub fn is_layout(&self, id: &str) -> bool {
+        self.layouts.iter().any(|(l, _)| l == id)
+    }
+}
+
+/// Whether screen route `pattern` (`scheme://a/{param}/b`) matches `uri`,
+/// as clients match them: segment by segment, a `{param}` taking one
+/// segment of letters, digits, `_` and `-` (at most 64).
+pub fn route_matches(pattern: &str, uri: &str) -> bool {
+    let p: Vec<&str> = pattern.split('/').collect();
+    let u: Vec<&str> = uri.split('/').collect();
+    p.len() == u.len()
+        && p.iter().zip(&u).all(|(a, b)| {
+            if a.starts_with('{') && a.ends_with('}') {
+                !b.is_empty()
+                    && b.len() <= 64
+                    && b.chars()
+                        .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+            } else {
+                a == b
+            }
+        })
+}
+
 /// One of the pod's layouts as a source's checks see it.
 #[derive(Debug, Clone)]
 pub struct SourceUse {
@@ -810,4 +919,44 @@ pub fn layouts_with_source(store: &Store, source: &str) -> rusqlite::Result<Vec<
         }
         Ok(out)
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn routes_match_as_clients_match_them() {
+        assert!(route_matches(
+            "x://posts/{id}/comments",
+            "x://posts/p-1/comments"
+        ));
+        assert!(!route_matches("x://posts/{id}", "x://posts/p-1/comments"));
+        assert!(!route_matches("x://posts/{id}", "x://posts/"));
+        assert!(!route_matches("x://posts/{id}", "x://posts/a.b"));
+        assert!(!route_matches("x://posts/{id}", "y://posts/a"));
+    }
+
+    #[test]
+    fn a_notification_opens_the_layout_routing_it_else_its_channels() {
+        let opens = NotificationOpens {
+            layouts: vec![
+                ("c-copy".into(), vec!["x://items/{id}".into()]),
+                ("c-tasks".into(), vec!["x://tasks/{id}".into()]),
+                ("home".into(), vec!["x://items/{id}".into()]),
+            ],
+            built_on: HashMap::from([("bp".to_owned(), "c-copy".to_owned())]),
+        };
+        assert_eq!(opens.open("bp", Some("x://items/1")), "c-copy");
+        assert_eq!(opens.open("bp", Some("x://tasks/1")), "c-tasks");
+        assert_eq!(opens.open("bp", None), "c-copy");
+        assert_eq!(opens.open("home", Some("x://tasks/1")), "c-tasks");
+        assert_eq!(
+            opens.open("home", Some("x://items/1")),
+            "home",
+            "its own first"
+        );
+        assert_eq!(opens.open("c-tasks", None), "c-tasks");
+        assert_eq!(opens.open("other", Some("x://none/1")), "other");
+    }
 }

@@ -77,6 +77,25 @@ fn a_notification_arrives_and_opens_its_thread() {
     assert_ok(&results);
 }
 
+/// `@core/collapsible` (the inbox's older notifications) opens and closes
+/// again: Hide sets `open` to "false", which shows the closed header (#336).
+#[test]
+fn the_inbox_older_section_opens_and_closes() {
+    let (runner, results) = run(
+        "pixelfed",
+        "open-inbox; assert-text Show; assert-no-text Hide; click Show; assert-text Hide; \
+         click Hide; assert-text Show; assert-no-text Hide; click Show; assert-text Hide",
+        &out_dir("collapsible"),
+    );
+    assert_ok(&results);
+    let section = &runner.session.data.entities["local://collapsible/inbox_older"];
+    assert_eq!(
+        section.get("open").and_then(|v| v.as_bool()),
+        Some(true),
+        "{section:?}"
+    );
+}
+
 #[test]
 fn a_failing_step_stops_the_run_and_saves_the_screen() {
     let out = out_dir("fail");

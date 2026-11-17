@@ -1,0 +1,166 @@
+{
+  "note": "Hide sets open to \"false\" (an empty value_expr was a no-op, so the section never closed); the closed header shows while open is \"\" or \"false\"",
+  "component": {
+    "doc": "A section that starts closed: a header (its title and Show or Hide) that opens and closes its children (open is \"true\" while open, \"false\" once closed). It stays open while the app runs (the device's own local://collapsible/<key>); give each section its own key. The inbox's \"Older\" section.",
+    "params": [
+      {
+        "name": "key",
+        "type": "text",
+        "doc": "Names the section's open state ([a-z0-9_]); two sections with one key open together.",
+        "required": true
+      },
+      {
+        "name": "title",
+        "type": "text",
+        "doc": "The header's text (bindings allowed).",
+        "required": true
+      },
+      {
+        "name": "show_label",
+        "type": "text",
+        "doc": "What the closed header offers.",
+        "default": "Show"
+      },
+      {
+        "name": "hide_label",
+        "type": "text",
+        "doc": "What the open header offers.",
+        "default": "Hide"
+      }
+    ],
+    "children": true,
+    "template": {
+      "type": "core://Column",
+      "children": [
+        {
+          "type": "core://Conditional",
+          "value": "${local://collapsible/$arg.key#open}",
+          "equals": "",
+          "content": {
+            "type": "core://Tappable",
+            "content_description": "$arg.title",
+            "on_click": {
+              "intent": "action.local.set",
+              "entity_uri": "local://collapsible/$arg.key",
+              "field": "open",
+              "value_expr": "true"
+            },
+            "content": {
+              "type": "core://Row",
+              "padding_h_dp": 16,
+              "padding_v_dp": 8,
+              "children": [
+                {
+                  "type": "core://Text",
+                  "style": "Label",
+                  "value_expr": "$arg.title"
+                },
+                {
+                  "type": "core://Spacer"
+                },
+                {
+                  "type": "core://Text",
+                  "style": "Secondary",
+                  "value_expr": "$arg.show_label"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "type": "core://Conditional",
+          "value": "${local://collapsible/$arg.key#open}",
+          "equals": "false",
+          "content": {
+            "type": "core://Tappable",
+            "content_description": "$arg.title",
+            "on_click": {
+              "intent": "action.local.set",
+              "entity_uri": "local://collapsible/$arg.key",
+              "field": "open",
+              "value_expr": "true"
+            },
+            "content": {
+              "type": "core://Row",
+              "padding_h_dp": 16,
+              "padding_v_dp": 8,
+              "children": [
+                {
+                  "type": "core://Text",
+                  "style": "Label",
+                  "value_expr": "$arg.title"
+                },
+                {
+                  "type": "core://Spacer"
+                },
+                {
+                  "type": "core://Text",
+                  "style": "Secondary",
+                  "value_expr": "$arg.show_label"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "type": "core://Conditional",
+          "value": "${local://collapsible/$arg.key#open}",
+          "equals": "true",
+          "content": {
+            "type": "core://Column",
+            "children": [
+              {
+                "type": "core://Tappable",
+                "content_description": "$arg.title",
+                "on_click": {
+                  "intent": "action.local.set",
+                  "entity_uri": "local://collapsible/$arg.key",
+                  "field": "open",
+                  "value_expr": "false"
+                },
+                "content": {
+                  "type": "core://Row",
+                  "padding_h_dp": 16,
+                  "padding_v_dp": 8,
+                  "children": [
+                    {
+                      "type": "core://Text",
+                      "style": "Label",
+                      "value_expr": "$arg.title"
+                    },
+                    {
+                      "type": "core://Spacer"
+                    },
+                    {
+                      "type": "core://Text",
+                      "style": "Secondary",
+                      "value_expr": "$arg.hide_label"
+                    }
+                  ]
+                }
+              },
+              {
+                "type": "core://Children"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    "examples": [
+      {
+        "args": {
+          "key": "older",
+          "title": "Older"
+        },
+        "children": [
+          {
+            "type": "core://Text",
+            "style": "Body",
+            "value_expr": "Something read a while ago"
+          }
+        ]
+      }
+    ]
+  }
+}
