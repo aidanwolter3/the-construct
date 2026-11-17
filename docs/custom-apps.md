@@ -121,7 +121,9 @@ share screen.
   each literal text or URL that would go out. A reference to one row is refused. `publish {name, confirm:
   <review_id>}` shares exactly what was reviewed and answers the share link (`share-…`); `leave_out` leaves
   elements out, `keep_shared: true` sends later versions without asking while they bring no new text or URLs.
-  Only `visibility: link` (unlisted) for now.
+  Only `visibility: link` (unlisted) for now. The shelf is the server's, outside the pod's storage quota, so a pod
+  keeps at most 20 live publications (`too_many_publications`: revoke one first), each of at most 1 MiB of
+  elements (`too_large`).
 - `describe_publication {link}` shows what a link holds; `adopt {link, bindings}` copies it into the pod bound to
   the user's own collections (`{"chores": {"collection": "tasks", "fields": {"title": "name"}}}`, or `{"new":
   "chores"}` for an empty one from the suggested schema) and answers the reference to put in home. Without
