@@ -1,7 +1,7 @@
 {
   "note": "First version (decision screen-sizes): a list beside its detail on a wide window",
   "component": {
-    "doc": "Two panes for a wide window: its first child (a list) at list_width on the left and its second (the detail) filling the rest; on a narrower window (size_class compact or medium) the first child alone. Each pane brings its own core://Scroll. Rows usually pick what the detail shows on a wide window (action.local.set on local://<key>#selected, the detail showing the matching core://Layout with show_when and equals) and push it on a narrow one (each row's two intents in core://Conditional on ${local://device#size_class}).",
+    "doc": "Two panes for a wide window: its first child (a list) at list_width on the left and its second (the detail) filling the rest; on a narrower window (size_class compact or medium) the first child alone. Each pane brings its own core://Scroll. Rows usually pick what the detail shows on a wide window (action.local.set on local://<key>#selected, the detail showing the matching core://Layout with show_when and equals) and push it on a narrow one (each row's two intents in a core://Conditional on ${local://device#size_class} equals expanded, and one with not: true).",
     "params": [
       {
         "name": "list_width",
@@ -25,12 +25,18 @@
               {
                 "type": "core://Box",
                 "width_dp": "$arg.list_width",
-                "content": { "type": "core://Children", "at": 0 }
+                "content": {
+                  "type": "core://Children",
+                  "at": 0
+                }
               },
               {
                 "type": "core://Box",
                 "fill": true,
-                "content": { "type": "core://Children", "at": 1 }
+                "content": {
+                  "type": "core://Children",
+                  "at": 1
+                }
               }
             ]
           }
@@ -38,23 +44,31 @@
         {
           "type": "core://Conditional",
           "value": "${local://device#size_class}",
-          "equals": "compact",
-          "content": { "type": "core://Children", "at": 0 }
-        },
-        {
-          "type": "core://Conditional",
-          "value": "${local://device#size_class}",
-          "equals": "medium",
-          "content": { "type": "core://Children", "at": 0 }
+          "equals": "expanded",
+          "not": true,
+          "content": {
+            "type": "core://Children",
+            "at": 0
+          }
         }
       ]
     },
     "examples": [
       {
-        "args": { "list_width": 320 },
+        "args": {
+          "list_width": 320
+        },
         "children": [
-          { "type": "core://Text", "style": "Body", "value_expr": "The list" },
-          { "type": "core://Text", "style": "Body", "value_expr": "The detail" }
+          {
+            "type": "core://Text",
+            "style": "Body",
+            "value_expr": "The list"
+          },
+          {
+            "type": "core://Text",
+            "style": "Body",
+            "value_expr": "The detail"
+          }
         ],
         "note": "a list and its detail"
       }

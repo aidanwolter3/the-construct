@@ -50,6 +50,9 @@ fn post_template(author_tag: Option<String>, items: ListBinding) -> UiNode {
                         style: TextStyle::Label,
                         format: None,
                         count: None,
+                        weight: None,
+                        caps: false,
+                        max_lines: None,
                     },
                 ],
             },
@@ -114,6 +117,8 @@ fn post_template(author_tag: Option<String>, items: ListBinding) -> UiNode {
                     icon: Some("warning".into()),
                     tone: Tone::Warning,
                 }),
+                not: false,
+                count: None,
             },
             UiNode::Conditional {
                 equals: None,
@@ -124,6 +129,8 @@ fn post_template(author_tag: Option<String>, items: ListBinding) -> UiNode {
                     text: "$item.reblogged_by_name boosted".into(),
                     icon: "repeat".into(),
                 }),
+                not: false,
+                count: None,
             },
             UiNode::Divider {},
         ],
@@ -149,6 +156,9 @@ fn full_workspace() -> UiNode {
                             style: TextStyle::Headline,
                             format: None,
                             count: None,
+                            weight: None,
+                            caps: false,
+                            max_lines: None,
                         },
                         UiNode::Button {
                             label: "Back".into(),
@@ -206,6 +216,9 @@ fn full_workspace() -> UiNode {
                                     style: TextStyle::Title,
                                     format: None,
                                     count: None,
+                                    weight: None,
+                                    caps: false,
+                                    max_lines: None,
                                 }),
                             }),
                             where_: Some(
@@ -828,6 +841,9 @@ fn text_format_and_count_round_trip_and_need_their_features() {
                 past: Some("Overdue".into()),
             }),
             count: None,
+            weight: None,
+            caps: false,
+            max_lines: None,
         }
     );
     assert_eq!(serde_json::to_string(&parsed).unwrap(), wire);
@@ -851,6 +867,124 @@ fn text_format_and_count_round_trip_and_need_their_features() {
         serde_json::from_str(r#"{"type":"core://Text","value_expr":"Hi","style":"Body"}"#).unwrap();
     assert!(additive_features(&plain).is_empty());
     assert!(protocol::FEATURES.contains(&"date_format") && protocol::FEATURES.contains(&"count"));
+}
+
+#[test]
+fn text_weight_caps_and_lines_round_trip_and_still_draw_without_their_features() {
+    let wire = r#"{"type":"core://Text","value_expr":"Move often · this week","style":"Caption","weight":"SemiBold","caps":true,"max_lines":2}"#;
+    let parsed: UiNode = serde_json::from_str(wire).unwrap();
+    assert_eq!(
+        parsed,
+        UiNode::Text {
+            value_expr: "Move often · this week".into(),
+            style: TextStyle::Caption,
+            format: None,
+            count: None,
+            weight: Some(protocol::TextWeight::SemiBold),
+            caps: true,
+            max_lines: Some(2),
+        }
+    );
+    assert_eq!(serde_json::to_string(&parsed).unwrap(), wire);
+    for (name, value) in [
+        ("Regular", 400),
+        ("Medium", 500),
+        ("SemiBold", 600),
+        ("Bold", 700),
+    ] {
+        let w: protocol::TextWeight = serde_json::from_value(json!(name)).unwrap();
+        assert_eq!(w.value(), value);
+    }
+    // Unset, none is written: an older text is unchanged.
+    let plain: UiNode =
+        serde_json::from_str(r#"{"type":"core://Text","value_expr":"Hi","style":"Body"}"#).unwrap();
+    assert_eq!(
+        serde_json::to_string(&plain).unwrap(),
+        r#"{"type":"core://Text","value_expr":"Hi","style":"Body"}"#
+    );
+    // They don't gate the layout: a client without them is served it and,
+    // not knowing the fields, draws the text in its style.
+    for f in ["text_weight", "text_caps", "text_max_lines"] {
+        assert!(protocol::FEATURES.contains(&f), "{f}");
+    }
+    assert!(additive_features(&parsed).is_empty());
+    let mut old = protocol::ClientCaps::this_build();
+    for f in ["text_weight", "text_caps", "text_max_lines"] {
+        old.features.remove(f);
+    }
+    assert_eq!(
+        old.can_draw(&protocol::required_features(&parsed)),
+        protocol::Compatibility::Compatible
+    );
+    let unknown: UiNode = serde_json::from_str(
+        &wire
+            .replace("\"weight\"", "\"heft\"")
+            .replace("\"caps\"", "\"upper\"")
+            .replace("\"max_lines\"", "\"rows\""),
+    )
+    .unwrap();
+    assert!(matches!(
+        unknown,
+        UiNode::Text {
+            weight: None,
+            caps: false,
+            max_lines: None,
+            ..
+        }
+    ));
+}
+
+#[test]
+fn conditional_not_and_count_round_trip_and_need_their_features() {
+    let wire = r#"{"type":"core://Conditional","value":"${local://inbox#unread}","content":{"type":"core://Divider"},"equals":"0","not":true}"#;
+    let parsed: UiNode = serde_json::from_str(wire).unwrap();
+    assert!(matches!(parsed, UiNode::Conditional { not: true, .. }));
+    assert_eq!(serde_json::to_string(&parsed).unwrap(), wire);
+    assert_eq!(
+        additive_features(&parsed),
+        ["conditional_not", "local_data"]
+    );
+
+    // With count, value may be left out; it is written as "" for older
+    // clients, which require it.
+    let parsed: UiNode = serde_json::from_value(json!({"type": "core://Conditional",
+        "count": {"query_key": "collection:todos", "where": [{"field": "done", "equals": "false"}]},
+        "content": {"type": "core://Divider"}}))
+    .unwrap();
+    let UiNode::Conditional {
+        value, count, not, ..
+    } = &parsed
+    else {
+        panic!("{parsed:?}");
+    };
+    assert_eq!((value.as_str(), *not), ("", false));
+    assert_eq!(
+        count,
+        &Some(protocol::QueryCount {
+            query_key: "collection:todos".into(),
+            where_: vec![protocol::ListWhere {
+                field: "done".into(),
+                equals: "false".into(),
+                older_than: None,
+                not: false,
+            }],
+        })
+    );
+    let wire = serde_json::to_string(&parsed).unwrap();
+    assert_eq!(
+        wire,
+        r#"{"type":"core://Conditional","value":"","content":{"type":"core://Divider"},"count":{"query_key":"collection:todos","where":[{"field":"done","equals":"false"}]}}"#
+    );
+    assert_eq!(serde_json::from_str::<UiNode>(&wire).unwrap(), parsed);
+    assert_eq!(additive_features(&parsed), ["conditional_count"]);
+    // Both gate the layout: a client without them would show the content
+    // when it shouldn't.
+    let mut old = protocol::ClientCaps::this_build();
+    old.features.remove("conditional_count");
+    assert_eq!(
+        old.can_draw(&protocol::required_features(&parsed)),
+        protocol::Compatibility::UpdateRequired
+    );
 }
 
 #[test]

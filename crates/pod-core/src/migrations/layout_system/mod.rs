@@ -33,10 +33,13 @@ use crate::store::Store;
 pub const SCOPE: &str = "construct";
 
 /// Run after a pod is on the construct ([`open`] has converted it, or it
-/// was switched before): the old layout system's tables and settings go.
-pub const STEPS: &[Step] = &[Step::sql(
-    "drop_old_layout_system",
-    "DROP TABLE IF EXISTS custom_apps;
+/// was switched before): the old layout system's tables and settings go;
+/// then component elements recorded as needing removed vocabulary are
+/// derived again (`crate::construct::core::rederive_component_features`).
+pub const STEPS: &[Step] = &[
+    Step::sql(
+        "drop_old_layout_system",
+        "DROP TABLE IF EXISTS custom_apps;
      DROP TABLE IF EXISTS app_versions;
      DROP TABLE IF EXISTS layout_blobs;
      DROP TABLE IF EXISTS components;
@@ -45,7 +48,12 @@ pub const STEPS: &[Step] = &[Step::sql(
      DROP TABLE IF EXISTS workspace_revisions;
      DELETE FROM pod_settings
        WHERE key IN ('apps.hidden', 'updates.dismissed', 'blueprints.convert', 'layouts.convert');",
-)];
+    ),
+    Step::rust(
+        "component_features",
+        crate::construct::core::rederive_component_features,
+    ),
+];
 
 /// One layout of the dry run, compared.
 #[derive(Debug, Clone, PartialEq)]

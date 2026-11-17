@@ -1,0 +1,346 @@
+{
+  "version": "1.0.0",
+  "workspace": {
+    "type": "core://Page",
+    "id": "text_styles",
+    "title": "Weekly plan",
+    "root": {
+      "type": "core://Box",
+      "fill": true,
+      "background": "${local://theme#page}",
+      "content": {
+        "type": "core://Scroll",
+        "content": {
+          "type": "core://Column",
+          "spacing_dp": 12,
+          "padding_h_dp": 16,
+          "padding_v_dp": 16,
+          "children": [
+            {
+              "type": "core://Column",
+              "spacing_dp": 2,
+              "children": [
+                {
+                  "type": "core://Box",
+                  "content_color": "${local://theme#muted_text}",
+                  "content": {
+                    "type": "core://Text",
+                    "style": "Caption",
+                    "value_expr": "Move often · this week",
+                    "caps": true,
+                    "weight": "SemiBold"
+                  }
+                },
+                {
+                  "type": "core://Text",
+                  "style": "Display",
+                  "value_expr": "Weekly plan",
+                  "weight": "SemiBold"
+                }
+              ]
+            },
+            {
+              "type": "core://Box",
+              "background": "${local://theme#card}",
+              "border_color": "${local://theme#card_border}",
+              "corner_dp": 14,
+              "padding_h_dp": 16,
+              "padding_v_dp": 14,
+              "content": {
+                "type": "core://Column",
+                "spacing_dp": 6,
+                "children": [
+                  {
+                    "type": "core://Box",
+                    "content_color": "${local://theme#muted_text}",
+                    "content": {
+                      "type": "core://Text",
+                      "style": "Caption",
+                      "value_expr": "Weights",
+                      "caps": true,
+                      "weight": "Medium"
+                    }
+                  },
+                  {
+                    "type": "core://Text",
+                    "style": "Body",
+                    "value_expr": "Regular 400"
+                  },
+                  {
+                    "type": "core://Text",
+                    "style": "Body",
+                    "value_expr": "Medium 500",
+                    "weight": "Medium"
+                  },
+                  {
+                    "type": "core://Text",
+                    "style": "Body",
+                    "value_expr": "SemiBold 600",
+                    "weight": "SemiBold"
+                  },
+                  {
+                    "type": "core://Text",
+                    "style": "Body",
+                    "value_expr": "Bold 700",
+                    "weight": "Bold"
+                  },
+                  {
+                    "type": "core://Text",
+                    "style": "Display",
+                    "value_expr": "Lora Bold",
+                    "weight": "Bold"
+                  }
+                ]
+              }
+            },
+            {
+              "type": "core://Box",
+              "background": "${local://theme#card}",
+              "border_color": "${local://theme#card_border}",
+              "corner_dp": 14,
+              "padding_h_dp": 16,
+              "padding_v_dp": 14,
+              "content": {
+                "type": "core://Column",
+                "spacing_dp": 6,
+                "children": [
+                  {
+                    "type": "core://Box",
+                    "content_color": "${local://theme#muted_text}",
+                    "content": {
+                      "type": "core://Text",
+                      "style": "Caption",
+                      "value_expr": "Notes · two lines",
+                      "caps": true,
+                      "weight": "Medium"
+                    }
+                  },
+                  {
+                    "type": "core://Text",
+                    "style": "Body",
+                    "value_expr": "${plan://notes/n#text}",
+                    "max_lines": 2
+                  }
+                ]
+              }
+            },
+            {
+              "type": "core://Conditional",
+              "value": "${plan://inbox/me#unread}",
+              "equals": "0",
+              "not": true,
+              "content": {
+                "type": "core://Box",
+                "background": "${local://theme#accent_surface}",
+                "border_color": "${local://theme#card_border}",
+                "corner_dp": 14,
+                "padding_h_dp": 16,
+                "padding_v_dp": 14,
+                "content": {
+                  "type": "core://Column",
+                  "spacing_dp": 6,
+                  "children": [
+                    {
+                      "type": "core://Text",
+                      "style": "Body",
+                      "value_expr": "${plan://inbox/me#unread} unread messages",
+                      "weight": "SemiBold"
+                    }
+                  ]
+                }
+              }
+            },
+            {
+              "type": "core://Conditional",
+              "value": "${plan://inbox/me#unread}",
+              "equals": "0",
+              "content": {
+                "type": "core://Text",
+                "style": "Secondary",
+                "value_expr": "Inbox clear"
+              }
+            },
+            {
+              "type": "core://Conditional",
+              "count": {
+                "query_key": "collection:tasks",
+                "where": [
+                  {
+                    "field": "done",
+                    "equals": "false"
+                  }
+                ]
+              },
+              "content": {
+                "type": "core://Box",
+                "background": "${local://theme#card}",
+                "border_color": "${local://theme#card_border}",
+                "corner_dp": 14,
+                "padding_h_dp": 16,
+                "padding_v_dp": 14,
+                "content": {
+                  "type": "core://Column",
+                  "spacing_dp": 6,
+                  "children": [
+                    {
+                      "type": "core://Box",
+                      "content_color": "${local://theme#muted_text}",
+                      "content": {
+                        "type": "core://Text",
+                        "style": "Caption",
+                        "value_expr": "Still to do",
+                        "caps": true,
+                        "weight": "SemiBold"
+                      }
+                    },
+                    {
+                      "type": "core://List",
+                      "query_key": "collection:tasks",
+                      "where": [
+                        {
+                          "field": "done",
+                          "equals": "false"
+                        }
+                      ],
+                      "spacing_dp": 6,
+                      "item_template": {
+                        "type": "core://Row",
+                        "spacing_dp": 8,
+                        "children": [
+                          {
+                            "type": "core://Text",
+                            "style": "Body",
+                            "value_expr": "$item.title",
+                            "weight": "Medium"
+                          },
+                          {
+                            "type": "core://Spacer"
+                          },
+                          {
+                            "type": "core://Text",
+                            "style": "Secondary",
+                            "value_expr": "$item.when"
+                          }
+                        ]
+                      }
+                    }
+                  ]
+                }
+              }
+            },
+            {
+              "type": "core://Conditional",
+              "count": {
+                "query_key": "collection:tasks",
+                "where": [
+                  {
+                    "field": "done",
+                    "equals": "false"
+                  }
+                ]
+              },
+              "not": true,
+              "content": {
+                "type": "core://Text",
+                "style": "Secondary",
+                "value_expr": "All done for the week"
+              }
+            },
+            {
+              "type": "core://Conditional",
+              "count": {
+                "query_key": "collection:archived"
+              },
+              "content": {
+                "type": "core://Box",
+                "background": "${local://theme#card}",
+                "border_color": "${local://theme#card_border}",
+                "corner_dp": 14,
+                "padding_h_dp": 16,
+                "padding_v_dp": 14,
+                "content": {
+                  "type": "core://Column",
+                  "spacing_dp": 6,
+                  "children": [
+                    {
+                      "type": "core://Text",
+                      "style": "Label",
+                      "value_expr": "Archived"
+                    },
+                    {
+                      "type": "core://List",
+                      "query_key": "collection:archived",
+                      "item_template": {
+                        "type": "core://Row",
+                        "spacing_dp": 8,
+                        "children": [
+                          {
+                            "type": "core://Text",
+                            "style": "Body",
+                            "value_expr": "$item.title",
+                            "weight": "Medium"
+                          },
+                          {
+                            "type": "core://Spacer"
+                          },
+                          {
+                            "type": "core://Text",
+                            "style": "Secondary",
+                            "value_expr": "$item.when"
+                          }
+                        ]
+                      }
+                    }
+                  ]
+                }
+              }
+            },
+            {
+              "type": "core://Conditional",
+              "count": {
+                "query_key": "collection:archived"
+              },
+              "not": true,
+              "content": {
+                "type": "core://Text",
+                "style": "Secondary",
+                "value_expr": "Nothing archived yet"
+              }
+            }
+          ]
+        }
+      }
+    }
+  },
+  "entities": {
+    "plan://notes/n": {
+      "text": "Walk along the river before work on Mondays and Wednesdays, swim at the lido on Thursdays, stretch on Sundays, and take a rest day whenever it rains hard."
+    },
+    "plan://inbox/me": {
+      "unread": "2"
+    },
+    "collections://tasks/t1": {
+      "title": "Morning walk",
+      "when": "Mon",
+      "done": "false"
+    },
+    "collections://tasks/t2": {
+      "title": "Swim",
+      "when": "Thu",
+      "done": "false"
+    },
+    "collections://tasks/t3": {
+      "title": "Stretch",
+      "when": "Sun",
+      "done": "true"
+    }
+  },
+  "queries": {
+    "collection:tasks": [
+      "collections://tasks/t1",
+      "collections://tasks/t2",
+      "collections://tasks/t3"
+    ],
+    "collection:archived": []
+  }
+}

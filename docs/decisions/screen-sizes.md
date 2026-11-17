@@ -30,11 +30,13 @@ Decision: **one layout serves every window and adapts when drawn, only as it ask
     It replaces `columns` where set; a deck can't have it.
 - **Porcelain**: `@core/two_pane` puts its first child (a list) beside its second (the detail) on an `expanded`
   window and shows the list alone otherwise, from `core://Box` `width_dp`, a filling box and `core://Conditional`:
-  no new node. The rows' own intents choose between selecting (wide) and pushing (narrow), because a link inside a
+  no new node (its narrow branch uses `not`). The rows' own intents choose between selecting (wide) and pushing (narrow), because a link inside a
   component template isn't an edge of the construct (links are made references when a layout is written, before
   devices expand components).
 - No blueprint uses the new vocabulary yet; blueprints adopt it in new layout versions when we choose. Until
   then nothing an existing pod draws changes, on any client.
 
-Not yet: a condition that isn't `equals` (`not` or `in`), which would spare a row's separate `compact` and
-`medium` branches; `two_pane` highlighting the selected row; docked side panels.
+A row's narrow branch is a `core://Conditional` with `not: true` (feature `conditional_not`), so it needs no
+separate `compact` and `medium` branches.
+
+Not yet: `two_pane` highlighting the selected row; docked side panels.

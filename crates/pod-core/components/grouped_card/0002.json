@@ -1,0 +1,87 @@
+{
+  "note": "Examples with icons this build has ('home' and 'flight' failed validation)",
+  "component": {
+    "doc": "Rows grouped in one rounded card on the page (a list, a settings group): the card colour with a card_border edge, its children in a column. Rows bring their own core://Divider between them; a core://List inside works too.",
+    "params": [
+      {
+        "name": "corner",
+        "type": "number",
+        "doc": "Corner radius in dp.",
+        "default": 18
+      }
+    ],
+    "children": true,
+    "template": {
+      "type": "core://Box",
+      "background": "${local://theme#card}",
+      "border_color": "${local://theme#card_border}",
+      "corner_dp": "$arg.corner",
+      "content": {
+        "type": "core://Column",
+        "children": [
+          {
+            "type": "core://Children"
+          }
+        ]
+      }
+    },
+    "examples": [
+      {
+        "args": {},
+        "children": [
+          {
+            "type": "core://Use",
+            "component": "core:list_row",
+            "args": {
+              "title": "Notifications",
+              "trailing": "On"
+            }
+          },
+          {
+            "type": "core://Divider"
+          },
+          {
+            "type": "core://Use",
+            "component": "core:list_row",
+            "args": {
+              "title": "Time zone",
+              "trailing": "Lisbon"
+            }
+          }
+        ],
+        "note": "a settings group of two rows"
+      },
+      {
+        "args": {
+          "corner": 12
+        },
+        "children": [
+          {
+            "type": "core://Use",
+            "component": "core:icon_row",
+            "args": {
+              "icon": "settings",
+              "title": "Garden shed",
+              "meta": "Painted in May",
+              "chevron": true
+            }
+          },
+          {
+            "type": "core://Divider"
+          },
+          {
+            "type": "core://Use",
+            "component": "core:icon_row",
+            "args": {
+              "icon": "bookmark",
+              "title": "Weekend in Porto",
+              "meta": "Mar 3–5",
+              "chevron": true
+            }
+          }
+        ],
+        "note": "two icon rows that open something, tighter corners"
+      }
+    ]
+  }
+}

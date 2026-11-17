@@ -48,13 +48,19 @@ PNG / WebP (encode.rs)                 HeadlessSurface (readback) or a window / 
 
 The pod builds the crate with `default-features = false`: no wgpu, CPU only.
 
-Fonts are bundled in `fonts/` and nothing else is loaded: Instrument Sans (regular, bold), Lora (the Display
-style), and three fallbacks: `DejaVuSans-Symbols.ttf`, DejaVu Sans cut to punctuation, arrows, shapes, symbols,
+Fonts are bundled in `fonts/` and nothing else is loaded: Instrument Sans and Lora (the Display style), each at
+regular, medium, semibold and bold (400 to 700, for `core://Text` `weight`; each a static cut of the family's
+variable font, made with fontTools' `varLib.instancer`, so no weight is synthesised), and three fallbacks: `DejaVuSans-Symbols.ttf`, DejaVu Sans cut to punctuation, arrows, shapes, symbols,
 dingbats and number forms (fractions such as ⅓ and ⅝, which Instrument Sans lacks); `DejaVuSans-Bold-Fractions.ttf`,
 the bold cut of just the fractions, superscripts and subscripts, so bold text keeps bold fractions; and
 `NotoEmoji-Regular.ttf`, monochrome Noto Emoji cut to what DejaVu lacks (⏰, 📅). cosmic-text falls back to a loaded
 font with the glyph, DejaVu Sans of the matching weight first, so ♥, ✓, ★ and ⅓ come from DejaVu. To change a cut,
 subset the font with fontTools' `pyftsubset` and keep its license next to it.
+
+A `core://Text` with `caps` is drawn upper-cased with 0.07 em letter spacing (cosmic-text's `letter_spacing`); its
+semantic text stays as written. `max_lines` is applied where text is shaped (`TextEngine::buffer`), so measuring
+and both renderers agree: a text that takes more lines is cut to the longest start that, followed by "…", still
+fits that many (found by bisection); screen readers get the whole text.
 
 ## Semantic ids
 

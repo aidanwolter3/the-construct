@@ -1236,6 +1236,9 @@ impl<'i> Build<'_, 'i> {
                 style,
                 count,
                 format,
+                weight,
+                caps,
+                max_lines,
             } => {
                 let mut text = match format {
                     Some(f) => self.dated(value_expr, f, &ctx),
@@ -1249,13 +1252,22 @@ impl<'i> Build<'_, 'i> {
                         (None, _) => String::new(),
                     };
                 }
-                let ty = type_for(*style);
+                let mut ty = type_for(*style);
+                if let Some(w) = weight {
+                    ty.face = ty.face.with_weight(*w);
+                }
+                ty.max_lines = max_lines.unwrap_or(0).min(protocol::MAX_TEXT_LINES);
                 let color = if *style == TextStyle::Secondary && b.color.is_none() {
                     theme.muted_text
                 } else {
                     self.fg(b)
                 };
+                // Screen readers get the text as written, and whole.
                 let sem = self.sem(b, n, Some(text.clone()), None);
+                if *caps {
+                    ty.tracking = protocol::CAPS_TRACKING;
+                    text = text.to_uppercase();
+                }
                 self.text_leaf(Style::default(), text, ty, color, Some(sem))
             }
             UiNode::Button { label, on_click } => {
@@ -1426,21 +1438,14 @@ impl<'i> Build<'_, 'i> {
                 )
             }
             UiNode::Conditional {
-                value,
                 content,
-                equals,
-                date: Some(test),
-                time,
+                not,
+                count: Some(c),
+                ..
             } => {
-                let time = time.as_deref().map(|t| ctx.text(t)).unwrap_or_default();
-                let at = crate::dates::moment(&ctx.text(value), &time, self.zone.as_ref())?;
-                let (shows, next) = crate::dates::passes(*test, at, self.now);
-                self.changes_at = earliest(self.changes_at, next);
-                if !shows
-                    || equals
-                        .as_deref()
-                        .is_some_and(|e| !ctx.shows(value, Some(e)))
-                {
+                // Not loaded yet: nothing, either way.
+                let n = self.count_matching(&c.query_key, &c.where_, &ctx)?;
+                if (n > 0) == *not {
                     return None;
                 }
                 return self.node(content, b);
@@ -1449,9 +1454,35 @@ impl<'i> Build<'_, 'i> {
                 value,
                 content,
                 equals,
+                date: Some(test),
+                time,
+                not,
                 ..
             } => {
-                if !ctx.shows(value, equals.as_deref()) {
+                let time = time.as_deref().map(|t| ctx.text(t)).unwrap_or_default();
+                // A value that isn't a date fails the test.
+                let shows = match crate::dates::moment(&ctx.text(value), &time, self.zone.as_ref())
+                {
+                    Some(at) => {
+                        let (shows, next) = crate::dates::passes(*test, at, self.now);
+                        self.changes_at = earliest(self.changes_at, next);
+                        shows && equals.as_deref().is_none_or(|e| ctx.shows(value, Some(e)))
+                    }
+                    None => false,
+                };
+                if shows == *not {
+                    return None;
+                }
+                return self.node(content, b);
+            }
+            UiNode::Conditional {
+                value,
+                content,
+                equals,
+                not,
+                ..
+            } => {
+                if ctx.shows(value, equals.as_deref()) == *not {
                     return None;
                 }
                 return self.node(content, b);
@@ -2787,8 +2818,19 @@ impl<'i> Build<'_, 'i> {
     }
 
     fn count(&mut self, c: &protocol::TextCount, ctx: &Ctx) -> Option<usize> {
-        let list = ctx.query(&c.query_key)?;
-        let wants = Where::of(&c.where_, ctx);
+        self.count_matching(&c.query_key, &c.where_, ctx)
+    }
+
+    /// How many entities of `queries[query_key]` match every condition
+    /// (`None` while the query is not loaded).
+    fn count_matching(
+        &mut self,
+        query_key: &str,
+        conds: &[protocol::ListWhere],
+        ctx: &Ctx,
+    ) -> Option<usize> {
+        let list = ctx.query(query_key)?;
+        let wants = Where::of(conds, ctx);
         let (now, zone) = (self.now, self.zone.clone());
         let mut next = None;
         let n = list
@@ -3456,6 +3498,8 @@ impl Laid {
                     face: ty.face,
                     size: ty.size,
                     line_height: ty.line_height,
+                    tracking: ty.tracking,
+                    max_lines: ty.max_lines,
                     color: *color,
                     rect: [px, py, pw, ph],
                     clip,

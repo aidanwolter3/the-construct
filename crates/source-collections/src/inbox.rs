@@ -602,6 +602,49 @@ impl InboxStore {
 }
 
 impl NotificationStore for InboxStore {
+    fn fill_layouts(
+        &self,
+        pod: &Pod,
+        opens: &pod_core::layouts::NotificationOpens,
+    ) -> rusqlite::Result<usize> {
+        // (row id, the layout it should open), for the rows that change.
+        let want = |n: &Names<'_>, r: &Row| -> Option<String> {
+            let now = n.text(r, "layout");
+            if now.as_deref().is_some_and(|l| opens.is_layout(l)) {
+                return None;
+            }
+            let open = opens.open(
+                &n.text(r, "channel_layout")?,
+                n.text(r, "target_uri").as_deref(),
+            );
+            (now.as_deref() != Some(open.as_str())).then_some(open)
+        };
+        let pending = self.read(pod, |conn, defn, _| {
+            let n = Names(defn);
+            Ok(db::all_rows(conn, NOTIFICATIONS, false)?
+                .iter()
+                .filter(|r| want(&n, r).is_some())
+                .count())
+        })?;
+        if pending == 0 {
+            return Ok(0);
+        }
+        self.write(pod, |tx, defn, _, now, caps| {
+            let n = Names(defn);
+            let mut changed = 0;
+            for mut r in db::all_rows(tx, NOTIFICATIONS, false)? {
+                let Some(open) = want(&n, &r) else {
+                    continue;
+                };
+                let write = json_map(json!({ "layout": open }));
+                if update(tx, defn, &mut r, &write, now, caps)? {
+                    changed += 1;
+                }
+            }
+            Ok(changed)
+        })
+    }
+
     fn channels_declared(
         &self,
         pod: &Pod,

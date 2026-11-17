@@ -22,10 +22,20 @@ kept as rows of the pod's `notifications` collection, which any layout can bind 
 
 Only a source knows where its notifications come from. The pod, the engine and the clients see a layout, a
 **channel** the source declares ("Likes"), ready-made title and body text, an optional image, a `target_uri`, and
-the `layout` to present it in: the pod's own layout built on that blueprint (a whole reference to it, or copied from
-it), else the blueprint's id (decision `layouts-not-apps`). The client presents that layout and opens the screen of it
-whose route matches `target_uri`, like any navigation. Adding notifications to a new
-source needs source code only.
+the `layout` to present it in, which the pod fills in (decision `layouts-not-apps`, issue #337):
+
+1. with a `target_uri`, the first of the pod's layouts with a screen whose `route` matches it: the channel's own
+   layout (`channel_layout`, when it is a pod layout), then the pod's layout built on that blueprint, then every
+   other layout, home last (so an Agents run opens in whichever layout routes `agents://sessions/{id}`);
+2. otherwise the channel's own layout, else the pod's layout built on its blueprint: the first that uses it whole
+   (`core://Use` of `@core/<blueprint>`), else the first copy of it (`copy_of`, as `list_layouts` says);
+3. else the blueprint's id.
+
+The pod resolves it when it stores a notification, when `GET /v1/notifications` lists one without it, and each time
+the pod opens for rows whose `layout` is empty or names no layout of the pod (a blueprint, or a layout since deleted);
+a row already naming a pod layout keeps it. The client presents that layout and opens the screen of it whose route
+matches `target_uri`, like any navigation, so it needs nothing of channels. Adding notifications to a new source
+needs source code only.
 
 ## Sources
 
