@@ -44,7 +44,7 @@ Decision:
   root's lists.
 - **Review**: per carried layout, its title, texts, URLs, rows and fields, and the layouts not carried with why. The
   review id covers the whole copy.
-- **Size**: 512 KiB for the whole copy; over it, the refusal names the three largest layouts (their plumbing and
+- **Size**: 512 KiB for the whole copy (2 MiB since decision [public-link-size](public-link-size.md)); over it, the refusal names the three largest layouts (their plumbing and
   rows).
 - **The copy's format** is versioned: `format: 2` is `{format, layout, title, node, data, item?, params?, layouts?}`;
   a copy without `format` is format 1 (`{title, node, data, item?}`). `construct_render::public::session` draws

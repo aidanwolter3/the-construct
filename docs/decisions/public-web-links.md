@@ -37,7 +37,7 @@ served to anyone with the link by the web client. Only where the host allows it 
   - **only what shows**: rows the copy's lists hold (or only `rows`, or the `item` drawn as `$item`), each with
     only the fields the layout reads (`$item.<f>`, `#<f>`, quoted names); a field the page doesn't show never
     leaves the pod;
-  - at most 512 KiB; at most 20 live links per pod.
+  - at most 512 KiB (2 MiB since decision [public-link-size](public-link-size.md)); at most 20 live links per pod.
 - **Review**: `share_publicly` without `confirm` answers every text and value a visitor would read, every URL, the
   rows and fields, and what was taken out, and says the copy follows new data. `confirm` must repeat the review's id
   (a hash of the copy): anything that changed asks again.

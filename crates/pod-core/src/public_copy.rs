@@ -51,8 +51,9 @@ impl PublicData {
     }
 }
 
-/// The largest copy (layout and data, as JSON).
-pub const MAX_COPY_BYTES: usize = 512 * 1024;
+/// The largest copy (its layouts and data, as JSON): a whole recipe book,
+/// every recipe with its lines and steps (decision `public-link-size`).
+pub const MAX_COPY_BYTES: usize = 2 * 1024 * 1024;
 /// Most public links a pod keeps live.
 pub const MAX_LIVE: usize = 20;
 /// Wait this long after a data change before copying again, so a burst of
