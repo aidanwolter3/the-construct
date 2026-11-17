@@ -1,13 +1,17 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Light system bars with dark icons, over the layouts' light page (the status bar's text was white on white). -->
+<!-- Edge to edge: transparent system bars, so each screen's own page shows under them (the engine pads its content
+     by the window insets; ConstructActivity turns the bars' scrims off). The bars' icons follow what is drawn under
+     them (ConstructActivity.setLightBars, from Rust); these are only the launch's, over the window background. -->
 <resources>
     <style name="Construct" parent="@android:style/Theme.Material.Light.NoActionBar">
-        <item name="android:windowBackground">@android:color/white</item>
-        <item name="android:statusBarColor">@android:color/white</item>
-        <item name="android:navigationBarColor">@android:color/white</item>
+        <item name="android:windowBackground">@color/construct_page</item>
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
         <item name="android:windowLightStatusBar">true</item>
         <item name="android:windowLightNavigationBar">true</item>
     </style>
-    <!-- The engine's dark page, for values-night (defined here too, as every resource needs a default). -->
-    <color name="construct_page_dark">#141318</color>
+    <!-- The engine's default pages (style.rs `Theme::background`), until the first frame; values-night has the dark
+         one (defined here too, as every resource needs a default). -->
+    <color name="construct_page">#FEFBFF</color>
+    <color name="construct_page_dark">#1A1A1C</color>
 </resources>

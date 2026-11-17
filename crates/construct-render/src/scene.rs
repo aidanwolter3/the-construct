@@ -200,6 +200,11 @@ pub struct Scene {
     /// Device pixels per logical point.
     pub scale: f32,
     pub background: [f32; 4],
+    /// What is drawn under the status bar and under the navigation bar
+    /// (the window's insets): the top screen's page colour at those
+    /// edges, dimmed by a scrim or covered by a sheet. Android picks the
+    /// bars' icon colour from it (`Platform::system_bars`).
+    pub bars: [[f32; 4]; 2],
     pub draws: Vec<Draw>,
     pub semantics: Vec<SemanticNode>,
     /// Where each visible text field's text is drawn, for editing it.

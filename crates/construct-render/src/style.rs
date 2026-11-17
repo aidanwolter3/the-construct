@@ -41,6 +41,35 @@ impl Rgba {
     pub fn to_u8(self) -> [u8; 4] {
         self.0.map(|c| (c.clamp(0.0, 1.0) * 255.0).round() as u8)
     }
+
+    /// Relative luminance (WCAG: linear light, 0 black to 1 white), alpha
+    /// ignored.
+    pub fn luminance(self) -> f32 {
+        let lin = |c: f32| {
+            let c = c.clamp(0.0, 1.0);
+            if c <= 0.04045 {
+                c / 12.92
+            } else {
+                ((c + 0.055) / 1.055).powf(2.4)
+            }
+        };
+        let [r, g, b, _] = self.0;
+        0.2126 * lin(r) + 0.7152 * lin(g) + 0.0722 * lin(b)
+    }
+
+    /// Light enough for dark icons over it (Android's "light" system bars):
+    /// dark text reads better on it than white does (WCAG contrast).
+    pub fn is_light(self) -> bool {
+        // Equal contrast with black and white at L = 0.179.
+        self.luminance() > 0.179
+    }
+
+    /// Black at `a` over this colour (a scrim).
+    pub fn dimmed(self, a: f32) -> Rgba {
+        let [r, g, b, al] = self.0;
+        let k = 1.0 - a.clamp(0.0, 1.0);
+        Rgba([r * k, g * k, b * k, al])
+    }
 }
 
 /// The theme tokens with their light and dark defaults: the same table as

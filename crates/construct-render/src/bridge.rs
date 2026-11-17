@@ -243,6 +243,23 @@ pub fn pick_images(env: &mut jni::Env, activity: &JObject, max: u32) -> jni::err
     Ok(())
 }
 
+/// Sets the system bars' icons for what is drawn under them
+/// (`ConstructActivity.setLightBars`): dark icons over a light colour.
+pub fn system_bars(
+    env: &mut jni::Env,
+    activity: &JObject,
+    light_status: bool,
+    light_nav: bool,
+) -> jni::errors::Result<()> {
+    env.call_method(
+        activity,
+        jni_str!("setLightBars"),
+        jni_sig!("(ZZ)V"),
+        &[JValue::Bool(light_status), JValue::Bool(light_nav)],
+    )?;
+    Ok(())
+}
+
 /// Asks for the notification permission (Android 13+), once.
 pub fn ask_notifications(env: &mut jni::Env, activity: &JObject) -> jni::errors::Result<()> {
     let sdk = env
