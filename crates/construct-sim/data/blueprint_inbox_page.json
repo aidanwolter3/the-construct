@@ -65,15 +65,15 @@
               "type": "core://Row"
             },
             {
-              "empty_text": "No notifications yet.",
+              "empty_text": "You're all caught up.",
               "group_by": {
-                "field": "day",
+                "field": "at_date",
                 "header": {
                   "children": [
                     {
                       "style": "Label",
                       "type": "core://Text",
-                      "value_expr": "$item.day"
+                      "value_expr": "$item.at_day"
                     }
                   ],
                   "padding_h_dp": 16,
@@ -89,7 +89,7 @@
                         {
                           "style": "Secondary",
                           "type": "core://Text",
-                          "value_expr": "$item.app_title · $item.when"
+                          "value_expr": "$item.channel_title · $item.at_time"
                         },
                         {
                           "style": "Body",
@@ -124,8 +124,9 @@
                         "type": "core://Box",
                         "width_dp": 8
                       },
+                      "equals": "false",
                       "type": "core://Conditional",
-                      "value": "$item.unread"
+                      "value": "$item.read"
                     }
                   ],
                   "padding_h_dp": 16,
@@ -135,33 +136,232 @@
                 },
                 "content_description": "$item.title",
                 "on_click": {
-                  "command": "open_notification",
-                  "id": "$item.id",
-                  "intent": "action.device"
+                  "intent": "action.sequence",
+                  "steps": [
+                    {
+                      "endpoint": "/v1/collections/notifications/update",
+                      "entity_uri": "$item.uri",
+                      "field": "read",
+                      "intent": "action.mutation.optimistic",
+                      "payload": {
+                        "id": "$item.id",
+                        "read": "$value"
+                      },
+                      "rollback_value": false,
+                      "value_expr": "true"
+                    },
+                    {
+                      "command": "open_notification",
+                      "id": "$item.uri",
+                      "intent": "action.device"
+                    }
+                  ]
                 },
                 "type": "core://Tappable"
               },
-              "query_key": "local:notifications",
-              "type": "core://List"
+              "query_key": "collection:notifications",
+              "type": "core://List",
+              "where": [
+                {
+                  "equals": "true",
+                  "field": "channel_enabled"
+                },
+                {
+                  "equals": "",
+                  "field": "read_at",
+                  "not": true,
+                  "older_than": "1d"
+                }
+              ]
             },
             {
-              "content": {
-                "children": [
-                  {
-                    "label": "Load older",
-                    "on_click": {
-                      "command": "load_older_notifications",
-                      "intent": "action.device"
+              "children": [
+                {
+                  "content": {
+                    "content": {
+                      "children": [
+                        {
+                          "style": "Label",
+                          "type": "core://Text",
+                          "value_expr": "Read more than a day ago"
+                        },
+                        {
+                          "type": "core://Spacer"
+                        },
+                        {
+                          "style": "Secondary",
+                          "type": "core://Text",
+                          "value_expr": "Show"
+                        }
+                      ],
+                      "padding_h_dp": 16,
+                      "padding_v_dp": 8,
+                      "type": "core://Row"
                     },
-                    "type": "core://Button"
-                  }
-                ],
-                "padding_h_dp": 16,
-                "padding_v_dp": 8,
-                "type": "core://Column"
-              },
-              "type": "core://Conditional",
-              "value": "${local://inbox#has_older}"
+                    "content_description": "Read more than a day ago",
+                    "on_click": {
+                      "entity_uri": "local://collapsible/inbox_older",
+                      "field": "open",
+                      "intent": "action.local.set",
+                      "value_expr": "true"
+                    },
+                    "type": "core://Tappable"
+                  },
+                  "equals": "",
+                  "type": "core://Conditional",
+                  "value": "${local://collapsible/inbox_older#open}"
+                },
+                {
+                  "content": {
+                    "children": [
+                      {
+                        "content": {
+                          "children": [
+                            {
+                              "style": "Label",
+                              "type": "core://Text",
+                              "value_expr": "Read more than a day ago"
+                            },
+                            {
+                              "type": "core://Spacer"
+                            },
+                            {
+                              "style": "Secondary",
+                              "type": "core://Text",
+                              "value_expr": "Hide"
+                            }
+                          ],
+                          "padding_h_dp": 16,
+                          "padding_v_dp": 8,
+                          "type": "core://Row"
+                        },
+                        "content_description": "Read more than a day ago",
+                        "on_click": {
+                          "entity_uri": "local://collapsible/inbox_older",
+                          "field": "open",
+                          "intent": "action.local.set",
+                          "value_expr": ""
+                        },
+                        "type": "core://Tappable"
+                      },
+                      {
+                        "empty_text": "Nothing older.",
+                        "group_by": {
+                          "field": "at_date",
+                          "header": {
+                            "children": [
+                              {
+                                "style": "Label",
+                                "type": "core://Text",
+                                "value_expr": "$item.at_day"
+                              }
+                            ],
+                            "padding_h_dp": 16,
+                            "padding_v_dp": 8,
+                            "type": "core://Column"
+                          }
+                        },
+                        "item_template": {
+                          "content": {
+                            "children": [
+                              {
+                                "children": [
+                                  {
+                                    "style": "Secondary",
+                                    "type": "core://Text",
+                                    "value_expr": "$item.channel_title · $item.at_time"
+                                  },
+                                  {
+                                    "style": "Body",
+                                    "type": "core://Text",
+                                    "value_expr": "$item.title"
+                                  },
+                                  {
+                                    "content": {
+                                      "style": "Secondary",
+                                      "type": "core://Text",
+                                      "value_expr": "$item.body"
+                                    },
+                                    "type": "core://Conditional",
+                                    "value": "$item.body"
+                                  }
+                                ],
+                                "orientation": "Vertical",
+                                "padding_dp": 0,
+                                "type": "core://Container"
+                              },
+                              {
+                                "type": "core://Spacer"
+                              },
+                              {
+                                "content": {
+                                  "background": "${local://theme#unread}",
+                                  "content": {
+                                    "type": "core://Spacer"
+                                  },
+                                  "corner_dp": 4,
+                                  "height_dp": 8,
+                                  "type": "core://Box",
+                                  "width_dp": 8
+                                },
+                                "equals": "false",
+                                "type": "core://Conditional",
+                                "value": "$item.read"
+                              }
+                            ],
+                            "padding_h_dp": 16,
+                            "padding_v_dp": 8,
+                            "spacing_dp": 12,
+                            "type": "core://Row"
+                          },
+                          "content_description": "$item.title",
+                          "on_click": {
+                            "intent": "action.sequence",
+                            "steps": [
+                              {
+                                "endpoint": "/v1/collections/notifications/update",
+                                "entity_uri": "$item.uri",
+                                "field": "read",
+                                "intent": "action.mutation.optimistic",
+                                "payload": {
+                                  "id": "$item.id",
+                                  "read": "$value"
+                                },
+                                "rollback_value": false,
+                                "value_expr": "true"
+                              },
+                              {
+                                "command": "open_notification",
+                                "id": "$item.uri",
+                                "intent": "action.device"
+                              }
+                            ]
+                          },
+                          "type": "core://Tappable"
+                        },
+                        "query_key": "collection:notifications",
+                        "type": "core://List",
+                        "where": [
+                          {
+                            "equals": "true",
+                            "field": "channel_enabled"
+                          },
+                          {
+                            "equals": "",
+                            "field": "read_at",
+                            "older_than": "1d"
+                          }
+                        ]
+                      }
+                    ],
+                    "type": "core://Column"
+                  },
+                  "equals": "true",
+                  "type": "core://Conditional",
+                  "value": "${local://collapsible/inbox_older#open}"
+                }
+              ],
+              "type": "core://Column"
             },
             {
               "content": {

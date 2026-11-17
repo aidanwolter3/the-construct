@@ -109,6 +109,7 @@ pub fn notifications(
         target_uri: target,
         group_key: Some("agents".into()),
         created_at: now,
+        subject: None,
         quiet,
     };
     let target = |id: &str| Some(format!("agents://sessions/{id}"));

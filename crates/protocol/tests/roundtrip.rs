@@ -210,6 +210,8 @@ fn full_workspace() -> UiNode {
                                 ListWhere {
                                     field: "kind".into(),
                                     equals: "$form.kind".into(),
+                                    older_than: None,
+                                    not: false,
                                 }
                                 .into(),
                             ),

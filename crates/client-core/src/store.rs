@@ -1863,6 +1863,7 @@ mod tests {
             group_key: None,
             created_at: 1,
             read: false,
+            subject: None,
         }
     }
 

@@ -717,6 +717,7 @@ version = "0.1.0"
 dependencies = [
  "construct-render",
  "image",
+ "jiff",
  "protocol",
  "serde",
  "serde_json",
@@ -4364,6 +4365,7 @@ dependencies = [
  "serde_json",
  "sha2 0.10.9",
  "source-shell",
+ "tempfile",
  "tokio",
  "tower",
  "tracing",

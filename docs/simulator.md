@@ -99,7 +99,7 @@ word is the command and the rest of the entry, as written, its argument: `click 
 | `open-layout <id> [push\|sheet\|panel]` | Presents a layout (`action.navigation.open {layout}`) and waits for its data. |
 | `open-settings` | Presents the Settings layout as a side panel. |
 | `open-inbox` | Presents the inbox layout as a sheet. |
-| `notify <layout> <channel> <title>` | Fixture mode: a notification arrives (the inbox and its count update). |
+| `notify <layout> <channel> <title>` | Fixture mode: a notification arrives (the inbox and its count update; the fake pod serves it in `local:notifications` and as a row of `collection:notifications`). |
 | `toggle-channel <layout>.<channel>` | Flips a notification channel (`toggle_channel`; fixture mode). |
 | `construct <file>` | Fixture mode: the pod's construct moves to the one in the file (`{"layouts": {key: page}, "reach": {key: [keys]}, "data"?}`, decision `content-addressed-construct`): changed layouts are drawn again where they are open (after a focused field or a touch ends), and a stack entry the one below no longer reaches closes. Start with `--workspace home` (`construct_home_bundle.json`); `construct_v1.json` to `construct_v4.json` are an example; `construct_anchor_above.json` adds rows above a scrolled list (the `scroll-anchor` scenario). |
 | `pick <path> [<path>…]` | Queues files (relative to the repository root) for the next media picker tap, at most its `max`; none queued is a cancelled pick. Fixture mode: the fake pod stages each file where it is (`sim-<n>` ids). |

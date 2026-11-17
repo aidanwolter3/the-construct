@@ -108,6 +108,7 @@ fn note(key: &str) -> NewNotification {
         target_uri: None,
         group_key: None,
         created_at: 1_700_000_000,
+        subject: None,
         quiet: false,
     }
 }

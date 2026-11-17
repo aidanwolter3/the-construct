@@ -60,14 +60,16 @@ pub const SETTINGS_APP: BlueprintInfo = BlueprintInfo {
     feeds: &[],
 };
 
-/// The notification inbox as a layout (device data only).
+/// The notification inbox as a layout: the pod's `notifications`
+/// collection (decision `notifications-in-a-collection`), and the device's
+/// own notification data for builds before it.
 pub const INBOX_APP: BlueprintInfo = BlueprintInfo {
     id: INBOX,
     title: "Notifications",
     icon: "dashboard",
     dev: false,
     auth: AuthPolicy::Public,
-    feeds: &[],
+    feeds: &[("collections", "notifications")],
 };
 
 fn empty() -> WorkspaceSpec {

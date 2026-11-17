@@ -3,14 +3,18 @@
 Sources send notifications through their pod: likes and comments from Pixelfed, matches from the Events app, reminders
 from a collection. They reach every device of the pod: an in-app inbox, OS notifications while an app runs, and Web
 Push when the Android app is closed. Decision D52 in [DECISIONS.md](DECISIONS.md) records the design and what was
-weighed; the original build plan is in [history/notifications-plan.md](history/notifications-plan.md).
+weighed; the original build plan is in [history/notifications-plan.md](history/notifications-plan.md). They are
+kept as rows of the pod's `notifications` collection, which any layout can bind and Claude can edit (decision
+[`notifications-in-a-collection`](decisions/notifications-in-a-collection.md)).
 
 ```
  upstream ─poll─▶ source (its upstream) ──── NewNotification{channel, title, body, target_uri, dedupe_key}
                                                     │
- host scheduler ─wakes due pods─▶ pod-core: store once ─┬─▶ `notification` event on open event streams
-                                                        └─▶ Web Push to registered devices (per-device channels)
- engine: cache, unread counts, live-arrival callback ─▶ inbox, badge, OS notifications
+ host scheduler ─wakes due pods─▶ pod-core: store once (NotificationStore: the `notifications` collection)
+                                    │ channel switched on? ┬─▶ `notification` event on open event streams
+                                    │                      └─▶ Web Push to registered devices
+                                    └─▶ rows reach layouts as `event: data` (the inbox binds the collection)
+ engine: unread counts, live-arrival callback ─▶ badge, OS notifications
  tap ─▶ open its layout, then action.navigation.open {target_uri} against that layout's own routes
 ```
 
@@ -39,15 +43,42 @@ source needs source code only.
   signed in to an agent runner) is always due, so it is opened when the server starts. Failed polls back off from 1 minute to 1 hour; a revoked
   sign-in stops polls until someone signs in again.
 
+## Storage
+
+`pod-core` stores through a `NotificationStore` (`notify_store.rs`); Collections provides it
+(`source_collections::inbox`), and without Collections the core's own tables serve. Two system collections every
+pod has:
+
+- **`notifications`**: one row per notification: `title`, `body`, `channel_layout`, `channel`, `channel_key`
+  (`<layout>.<channel>`), `layout` (the layout it opens), `target_uri`, `image_url`, `group_key`, `subject`,
+  `dedupe_key`, `at` (when it happened), `read`, `read_at` (set by the pod when `read` turns true), and two live
+  lookups into its channel's row, `channel_enabled` and `channel_title`. Ordered by `at`, newest first. Actions:
+  `mark_all_read` (an update action) and `clear_read` (a delete action). It keeps the newest 500 of the last 30
+  days (`keep`).
+- **`notification_channels`**: one row per declared channel, kept current as sources declare them: `key`, `layout`,
+  `channel`, `title`, `description`, `importance`, `enabled` (the pod-wide switch), `default_enabled`,
+  `remove_with_subject`.
+
+Both are bound, filtered and edited like any collection (marking read is setting `read`, removing is deleting a
+row); any write to them announces the unread counts again. They don't count against the pod's collection or row
+caps and can't be deleted. A pod's first open with them moves the core table's notifications and switches in.
+
 ## Delivery
 
-1. Each notification is stored once per pod, keyed by `(layout, dedupe_key)`, so repeated polls are harmless. The
-   newest 500 are kept for 30 days. `layout` is the layout (or blueprint) whose channel it is: on the wire a
-   channel's `layout` and a notification's `channel_layout` (`app_id` before decision
+1. Each notification is stored once per pod, keyed by `(layout, dedupe_key)`, so repeated polls are harmless (a
+   row the user deleted isn't stored again). `layout` is the layout (or blueprint) whose channel it is: on the wire
+   a channel's `layout` and a notification's `channel_layout` (`app_id` before decision
    [`one-layout-system`](decisions/one-layout-system.md)); a notification's `layout` is the layout it opens.
-2. It goes out as a `notification` event on every open events stream that has a session.
-3. It is sent by Web Push (RFC 8291 encryption, VAPID) to every registered device that wants its channel and has no
-   stream open. Payloads are end-to-end encrypted, so push services see no text.
+2. **Channel switches are the pod's**, one per channel for every device. A switched-off channel's notifications
+   are stored but alert no one: no stream event, no push, and `GET /v1/notifications` and the unread counts leave
+   them out. Layouts decide whether to show them (`channel_enabled`).
+3. It goes out as a `notification` event on every open events stream that has a session.
+4. It is sent by Web Push (RFC 8291 encryption, VAPID) to every registered device that has no stream open.
+   Payloads are end-to-end encrypted, so push services see no text.
+5. **It goes with its subject.** A notification may name the entity it is about (`subject`; Collections' alerts and
+   reminders name their row). When that row is deleted (by a person, an action, or a filler that no longer lists
+   it, e.g. an event that is gone), its notifications are deleted in the same write, unless the channel's
+   `remove_with_subject` is off. Other sources call `Pod::notifications_gone(uris)`.
 
 Push endpoints are supplied by devices, so the pod only sends to `https://` URLs on the default port of a public
 host, resolving public addresses only. A 404 or 410 from the push service drops the subscription, as do 5 failures
@@ -56,12 +87,15 @@ in a row. Limits per pod: 20 devices, 60 deliveries a minute. The routes are in 
 ## Clients
 
 - **Engine:** sends a stable device id (`X-Construct-Device`) and registers the device when its stream connects. It
-  caches the newest 200 notifications, the channels and the unread counts, so the inbox and badge work offline;
-  marking read is optimistic and queued. A listener fires only for live arrivals, so one notification never alerts
-  twice. Sign-out unregisters the device and clears the cache.
-- **Layouts:** the `inbox` blueprint lists every notification (`local:notifications`), grouped by day; tapping one
-  presents its layout and target and marks it read. The `settings` blueprint lists the channels with switches (stored
-  per device on the pod). Any layout can open them, or bind `${local://inbox#unread}` for a badge.
+  caches the newest 200 notifications (for builds whose inbox reads `local:notifications`), the channels and the
+  unread counts, so the badge works offline; marking read is optimistic and queued. A listener fires only for live
+  arrivals, so one notification never alerts twice. Sign-out unregisters the device and clears the cache.
+- **Layouts:** the `inbox` blueprint (file 0005) binds `collection:notifications`: the notifications whose channel
+  is on, grouped by day, and below them, in a section that starts closed (`@core/collapsible`), those read more than
+  a day ago (`where` `older_than`, feature `list_where_age`). Tapping one marks its row read and presents its layout
+  and target (`open_notification` with the row's URI). Builds before `list_where_age` get file 0004 (device data).
+  The `settings` blueprint lists the channels with switches (for the whole pod). Any layout can open them, bind the
+  collections for its own view of notifications, or bind `${local://inbox#unread}` for a badge.
 - **Android:** asks for `POST_NOTIFICATIONS` once; layouts can ask again with the
   `action.device` command `request_notification_permission`, which shows the system prompt, or the app's notification
   settings once Android won't show the prompt again ([layouts.md](layouts.md)) (`local://device#notification_permission`
@@ -84,7 +118,8 @@ in a row. Limits per pod: 20 devices, 60 deliveries a minute. The routes are in 
 
 ## Not done yet
 
-Desktop notifications; Android channels created from the pod's channel list (titles, importance, groups) rather
+Per-device channel switches (one switch per pod since decision `notifications-in-a-collection`); subjects from
+Pixelfed, Agents and Monitor; desktop notifications; Android channels created from the pod's channel list (titles, importance, groups) rather
 than on arrival; removing an Android notification when it is read on another device; per-app notification screens
 inside layouts; upstream push instead of polling where an upstream offers it. The Android app decrypts push with its
 own keys (decisions [`android-native-push-unifiedpush`](decisions/android-native-push-unifiedpush.md),

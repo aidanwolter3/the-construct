@@ -109,6 +109,11 @@ pub struct Notification {
     pub created_at: i64,
     #[serde(default)]
     pub read: bool,
+    /// The entity it is about (a row's `collections://…` URI, say), when
+    /// its source names one: it goes when that does (decision
+    /// `notifications-in-a-collection`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub subject: Option<String>,
 }
 
 /// `GET /v1/notifications`.
@@ -170,6 +175,7 @@ mod tests {
                     group_key: None,
                     created_at: 5,
                     read: false,
+                    subject: None,
                 },
                 unread_total: 2,
             },

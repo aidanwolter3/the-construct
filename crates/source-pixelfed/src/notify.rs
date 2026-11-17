@@ -362,6 +362,7 @@ pub fn to_new(
             }),
         group_key: post_id.map(|id| format!("{id}:{channel}")),
         created_at,
+        subject: None,
         quiet,
     }
 }

@@ -500,6 +500,21 @@ pub struct Definition {
     /// [`crate::actions`]).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub actions: Vec<crate::actions::Action>,
+    /// How many rows the collection keeps (decision
+    /// `notifications-in-a-collection`): the oldest beyond it go for good
+    /// when a write settles ([`crate::follow::settle`]).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub keep: Option<Keep>,
+}
+
+/// A collection's retention: at most `rows` live rows (0: no limit), none
+/// created more than `days` days ago (0: no limit).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Keep {
+    #[serde(default)]
+    pub rows: u32,
+    #[serde(default)]
+    pub days: u32,
 }
 
 /// The built-in app a system collection belongs to.
@@ -967,6 +982,7 @@ pub fn rules_to_create(
             actions: Vec::new(),
             order_by: Vec::new(),
             descending: false,
+            keep: None,
         });
     }
     Ok(out)
@@ -2313,6 +2329,7 @@ mod tests {
             alerts: Vec::new(),
             system: None,
             actions: Vec::new(),
+            keep: None,
         }
     }
 

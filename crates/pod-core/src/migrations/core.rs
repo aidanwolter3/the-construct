@@ -360,6 +360,24 @@ pub const STEPS: &[Step] = &[
          );
          CREATE INDEX IF NOT EXISTS follows_by_follower ON follows (follower);",
     ),
+    // Decision `notifications-in-a-collection`: channel switches are the
+    // pod's, not each device's (a channel any device turned off stays off),
+    // and a notification may name what it is about (`subject`), so it can
+    // go when that does. Where a source stores the pod's notifications
+    // (Collections), these tables only hand over what they held.
+    Step::sql(
+        "pod_channel_switches",
+        "CREATE TABLE notification_switches (
+             layout  TEXT NOT NULL,
+             channel TEXT NOT NULL,
+             enabled INTEGER NOT NULL,
+             PRIMARY KEY (layout, channel)
+         ) WITHOUT ROWID;
+         INSERT INTO notification_switches (layout, channel, enabled)
+             SELECT layout, channel, MIN(enabled) FROM device_channel_prefs GROUP BY layout, channel;
+         ALTER TABLE notifications ADD COLUMN subject TEXT;
+         CREATE INDEX notifications_subject ON notifications (subject);",
+    ),
 ];
 
 /// Whether the old layout system's tables are still there (dropped by

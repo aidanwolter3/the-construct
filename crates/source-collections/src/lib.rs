@@ -59,6 +59,7 @@ pub mod filler;
 pub mod follow;
 pub mod images;
 pub mod import;
+pub mod inbox;
 pub mod lookup;
 mod mcp;
 pub mod model;
@@ -437,6 +438,7 @@ impl Source for CollectionsAdapter {
             let now = pod_core::util::now_secs();
             let found = pod
                 .blocking(move |s| {
+                    inbox::prepare_for(s, &name)?;
                     s.with_conn(|c| match db::latest_def(c, &name)? {
                         Some((_, def)) => {
                             // Opening an app fills a stale collection.
@@ -484,11 +486,30 @@ impl Source for CollectionsAdapter {
                 tokio::time::sleep(std::time::Duration::from_secs(3600)).await;
             }
         });
-        Box::pin(async {})
+        // Every pod has its notification collections (decision
+        // `notifications-in-a-collection`), so layouts can bind them.
+        let pod = Arc::clone(pod);
+        Box::pin(async move {
+            let p = pod.clone();
+            let _ = pod
+                .blocking(move |s| {
+                    inbox::prepare(s)?;
+                    // The channels' rows carry what sources declare now.
+                    p.channel_states().map(|_| ())
+                })
+                .await
+                .inspect_err(|e| {
+                    tracing::error!(status = ?e.0, "the notification collections could not be prepared");
+                });
+        })
     }
 
     fn notifies_layouts(&self) -> bool {
         true
+    }
+
+    fn notification_store(&self) -> Option<Arc<dyn pod_core::NotificationStore>> {
+        Some(Arc::new(inbox::InboxStore))
     }
 
     fn layout_notification_channels(
@@ -1209,6 +1230,7 @@ async fn rows_route(State(pod): State<Pod>, Path(collection): Path<String>) -> R
     let name = collection.clone();
     let found = pod
         .blocking(move |s| {
+            inbox::prepare_for(s, &name)?;
             s.with_conn(|c| match db::latest_def(c, &name)? {
                 Some((_, def)) => db::bundle(c, &def).map(Some),
                 None => Ok(None),
