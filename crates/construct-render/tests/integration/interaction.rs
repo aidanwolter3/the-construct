@@ -556,6 +556,41 @@ fn a_pressed_row_in_a_rounded_card_is_rounded_at_the_cards_corners() {
     assert_eq!(wash("Walk"), [0.0, 0.0, 16.0, 16.0]);
 }
 
+/// A selected row drawn with its own background (a list-detail home's
+/// open row) in a rounded card: the fill is rounded at the card's corners
+/// it meets, so it doesn't poke out past them.
+#[test]
+fn a_filled_row_in_a_rounded_card_is_rounded_at_the_cards_corners() {
+    let row = |text: &str, bg: Option<&str>| {
+        let mut b = json!({ "type": "core://Box", "content": {
+            "type": "core://Row", "padding_h_dp": 16, "padding_v_dp": 12, "children": [
+                { "type": "core://Text", "value_expr": text, "style": "Body" },
+                { "type": "core://Spacer" } ] } });
+        if let Some(bg) = bg {
+            b["background"] = json!(bg);
+        }
+        b
+    };
+    let root: protocol::UiNode = serde_json::from_value(json!({
+        "type": "core://Column", "padding_h_dp": 20, "children": [{
+            "type": "core://Box", "corner_dp": 16, "background": "#ffffff",
+            "content": { "type": "core://Column", "children": [
+                row("Eat well", Some("#e0e8ff")), row("Sleep", Some("#e0e8ff")),
+                row("Walk", Some("#e0e8ff")) ] } }] }))
+    .unwrap();
+    let mut s = Session::new("home", root, Default::default(), Viewport::PHONE);
+    let scene = s.scene().unwrap();
+    let fills: Vec<[f32; 4]> = scene
+        .quads()
+        .filter(|q| q.bg_color[2] > 0.99 && q.bg_color[0] < 0.9)
+        .map(|q| q.radii)
+        .collect();
+    assert_eq!(
+        fills,
+        vec![[16.0, 16.0, 0.0, 0.0], [0.0; 4], [0.0, 0.0, 16.0, 16.0]]
+    );
+}
+
 #[test]
 fn a_spinner_turns_while_the_session_animates() {
     let root: protocol::UiNode = serde_json::from_value(json!({

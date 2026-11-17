@@ -102,7 +102,7 @@ and a GameActivity, and the app is a NativeActivity with no Java (issue #172).
 
 ## Coverage
 
-Drawn like the app: Page, Workspace (title and slots), Column, Row, Container, Box, Text (styles, `count`), Button,
+Drawn like the app: Page, Workspace (title and slots), Column, Row, Container, Box (a filled box at a corner of the rounded box around it, such as a selected row's background in a card of rows, is rounded there as that box is, concentric with it, so it stays inside the corner), Text (styles, `count`), Button,
 IconButton (`active`), Chip, Badge, Spacer, Divider, Conditional, Container (children 8 points apart; horizontal
 ones wrap), Tappable (while a finger or the mouse button is down on it, a wash of the text colour at 10% darkens it on
 a light page and lightens it on a dark one, rounded as its one child is and, at a corner of the rounded box around it (the first or last row of a card of rows), as that box is, concentric with it; it goes when the finger lifts or the touch
