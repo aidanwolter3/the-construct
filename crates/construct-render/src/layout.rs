@@ -3552,7 +3552,7 @@ impl Laid {
         let rect = [x, y, w, h];
         let visible = intersects(rect, clip);
         if visible {
-            self.paint(e, rect, l, clip, scene);
+            self.paint(e, rect, l, clip, at.rounded, scene);
             if let (Some(f), Paint::Text { ty, .. }) = (&e.field, &e.paint) {
                 scene.fields.push(crate::scene::FieldBox {
                     field: f.field.clone(),
@@ -3764,12 +3764,18 @@ impl Laid {
         scene.draws.push(Draw::Quad(q));
     }
 
+    /// Draws what one element paints. `around` is the nearest rounded box
+    /// around it: a filled box in one of its corners (a selected row's
+    /// background in a card of rows) is rounded as that box is, so it
+    /// doesn't poke out past the card's corners.
+    #[allow(clippy::too_many_arguments)]
     fn paint(
         &self,
         e: &Elem,
         rect: [f32; 4],
         l: &taffy::Layout,
         clip: [f32; 4],
+        around: Option<([f32; 4], f32)>,
         scene: &mut Scene,
     ) {
         let [x, y, w, h] = rect;
@@ -3783,6 +3789,9 @@ impl Laid {
             } => {
                 let r = radius.min(w.min(h) / 2.0);
                 let mut q = QuadInstance::fill(rect, *bg, r);
+                if let Some((b, br)) = around {
+                    q.radii = shared_corners(rect, b, br, q.radii);
+                }
                 if let Some(b) = border {
                     q = q.border(*b, 1.0);
                     if *dashed {
