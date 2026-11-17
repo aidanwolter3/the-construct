@@ -716,7 +716,7 @@ pub fn rows(conn: &Connection, def: &Definition) -> rusqlite::Result<Vec<Row>> {
     Ok(rows)
 }
 
-fn compare_rows(field: &Field, a: &Row, b: &Row, descending: bool) -> Ordering {
+pub(crate) fn compare_rows(field: &Field, a: &Row, b: &Row, descending: bool) -> Ordering {
     let x = a
         .values
         .get(&field.id)
@@ -896,15 +896,17 @@ fn fills_off(conn: &Connection) -> rusqlite::Result<crate::fill::Off> {
 /// A collection's list as a `DataBundle`: each live row at
 /// `collections://<name>/<id>`, in order under `collection:<name>`; with
 /// fillers also `collection:<name>:fillers`, with alerts
-/// `collection:<name>:alerted` (the rows an alert matches).
+/// `collection:<name>:alerted` (the rows an alert matches), and each view
+/// as `collection:<name>:view:<view>` (decision `collection-views`).
 pub fn bundle(conn: &Connection, def: &Definition) -> rusqlite::Result<DataBundle> {
     let now = pod_core::util::now_secs();
     let mut data = DataBundle::default();
     let mut list = Vec::new();
     let mut alerted = Vec::new();
-    for r in rows(conn, def)? {
+    let all = rows(conn, def)?;
+    for r in &all {
         let uri = row_uri(&def.name, &r.id);
-        let rec = row_record(def, &r, now);
+        let rec = row_record(def, r, now);
         if rec.0.get("alert_matched") == Some(&json!(true)) {
             alerted.push(uri.clone());
         }
@@ -912,6 +914,18 @@ pub fn bundle(conn: &Connection, def: &Definition) -> rusqlite::Result<DataBundl
         list.push(uri);
     }
     data.queries.insert(query_key(&def.name), list);
+    if !def.views.is_empty() {
+        let zone = crate::views::zone_on(conn)?;
+        for v in &def.views {
+            let uris = v
+                .select(def, &all, &zone, now)
+                .into_iter()
+                .map(|r| row_uri(&def.name, &r.id))
+                .collect();
+            data.queries
+                .insert(crate::views::key(&def.name, &v.name), uris);
+        }
+    }
     if !def.alerts.is_empty() {
         data.queries.insert(alerted_key(&def.name), alerted);
     }

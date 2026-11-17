@@ -7,7 +7,8 @@
 //!
 //! What counts as a binding to a row of collection `c`:
 //! - `$item.<f>` inside a `core://List` whose `query_key` is
-//!   `collection:<c>`, and its `filter.fields`, `group_by.field`,
+//!   `collection:<c>` or one of its views, `collection:<c>:view:<v>` (the
+//!   view must exist), and its `filter.fields`, `group_by.field`,
 //!   `where.field` (or each `where[].field`);
 //! - a `core://Text` `count`'s `where[].field` when its `query_key` is
 //!   `collection:<c>`;
@@ -32,6 +33,16 @@ use crate::model::{Definition, SYSTEM_FIELDS};
 pub fn collection_of_key(key: &str) -> Option<&str> {
     let c = key.strip_prefix("collection:")?;
     (!c.is_empty() && !c.contains(':')).then_some(c)
+}
+
+/// The collection a row list's query key lists, and the view when it is
+/// one (`collection:<c>` or `collection:<c>:view:<v>`).
+pub fn list_of_key(key: &str) -> Option<(&str, Option<&str>)> {
+    if let Some(c) = collection_of_key(key) {
+        return Some((c, None));
+    }
+    let (c, v) = key.strip_prefix("collection:")?.split_once(":view:")?;
+    (!c.is_empty() && !c.contains(':') && !v.is_empty() && !v.contains(':')).then_some((c, Some(v)))
 }
 
 /// The collection of a `collections://<c>/...` URI.
@@ -170,9 +181,23 @@ impl<'a> Checker<'a> {
         }
         let mut inner = item;
         if let Some(q) = map.get("query_key").and_then(Value::as_str)
-            && let Some(c) = collection_of_key(q)
+            && let Some((c, view)) = list_of_key(q)
         {
             let def = self.def(&format!("{at}/query_key"), c)?;
+            if let Some(v) = view
+                && crate::views::find(def, v).is_none()
+            {
+                return Err(err(
+                    &format!("{at}/query_key"),
+                    format!(
+                        "collection '{c}' has no view '{v}' (add it with apply_change set_view)"
+                    ),
+                    crate::views::names(def)
+                        .iter()
+                        .map(|n| crate::views::key(c, n))
+                        .collect(),
+                ));
+            }
             if map.contains_key("item_template") {
                 inner = Some(def);
                 self.list_fields(map, at, def)?;
@@ -438,6 +463,7 @@ mod tests {
             alerts: Vec::new(),
             system: None,
             actions: Vec::new(),
+            views: Vec::new(),
             keep: None,
         };
         def.fields[0].aliases.push("name".into());
@@ -568,5 +594,43 @@ mod tests {
         let bad = list(json!({"type": "core://Text", "value_expr": "$item.done"}));
         let e = check(&bad, &[], &d).unwrap_err();
         assert!(e.message.contains("was removed"), "{}", e.message);
+    }
+
+    #[test]
+    fn a_view_lists_rows_of_its_collection() {
+        let mut d = defs();
+        let todos = d.get_mut("todos").unwrap();
+        let v = crate::views::parse(todos, &json!({"name": "open", "limit": 3})).unwrap();
+        todos.views.push(v);
+        let list = |key: &str, template: Value| json!({"type": "core://List", "query_key": key, "item_template": template});
+        let ok = list(
+            "collection:todos:view:open",
+            json!({"type": "core://Text", "value_expr": "$item.title"}),
+        );
+        assert_eq!(check(&ok, &[], &d), Ok(()));
+        let bad = list(
+            "collection:todos:view:open",
+            json!({"type": "core://Text", "value_expr": "$item.colour"}),
+        );
+        let e = check(&bad, &[], &d).unwrap_err();
+        assert!(e.message.contains("'$item.colour'"), "{}", e.message);
+        let missing = list(
+            "collection:todos:view:later",
+            json!({"type": "core://Divider"}),
+        );
+        let e = check(&missing, &[], &d).unwrap_err();
+        assert_eq!(e.pointer, "/query_key");
+        assert!(e.message.contains("no view 'later'"), "{}", e.message);
+        assert_eq!(e.allowed, ["collection:todos:view:open"]);
+        // Removing the view breaks the layout the same way.
+        d.get_mut("todos").unwrap().views.clear();
+        assert!(check(&ok, &[], &d).is_err());
+        assert_eq!(list_of_key("collection:todos"), Some(("todos", None)));
+        assert_eq!(
+            list_of_key("collection:todos:view:open"),
+            Some(("todos", Some("open")))
+        );
+        assert_eq!(list_of_key("collection:todos:fillers"), None);
+        assert_eq!(list_of_key("collection:todos:view:"), None);
     }
 }

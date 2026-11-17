@@ -85,6 +85,7 @@ pub fn channels_definition() -> Definition {
         alerts: Vec::new(),
         system: system(),
         actions: Vec::new(),
+        views: Vec::new(),
         keep: None,
     }
 }
@@ -138,6 +139,7 @@ pub fn notifications_definition(channels: &Definition) -> Definition {
         alerts: Vec::new(),
         system: system(),
         actions: Vec::new(),
+        views: Vec::new(),
         keep: Some(Keep {
             rows: pod_core::notify::KEEP_COUNT as u32,
             days: (pod_core::notify::KEEP_SECS / 86_400) as u32,
