@@ -1,9 +1,28 @@
 // The web client in Chromium against a running server (scripts/web_e2e.sh starts one): the code form, a wrong
 // code, the right one, home drawn on the canvas, the cookie (HttpOnly, not the pod code), a reload that keeps the
-// session, a phone-sized window, and logging out. Screenshots go to the directory given.
-//   node crates/construct-web/tests/e2e.js <base url> <pod code> <out dir>
+// session and takes the client from the browser's cache, a rebuild whose names changed, a phone-sized window, and
+// logging out. Screenshots go to the directory given; <rebuild> is a shell command that rebuilds the client with
+// different content (decision `web-client-cache`).
+//   node crates/construct-web/tests/e2e.js <base url> <pod code> <out dir> [rebuild]
 const { chromium } = require('playwright');
-const [base, code, out] = process.argv.slice(2);
+const { execSync } = require('child_process');
+const [base, code, out, rebuild] = process.argv.slice(2);
+
+// The client's files a load asks for, each with where it came from: 'cache' (the browser's), 'network' or a 304.
+async function watchFiles(page) {
+  const cdp = await page.context().newCDPSession(page);
+  await cdp.send('Network.enable');
+  const files = new Map();
+  const cached = new Set(); // requests the browser answered from its memory cache
+  cdp.on('Network.requestServedFromCache', ({ requestId }) => cached.add(requestId));
+  cdp.on('Network.responseReceived', ({ requestId, response: r }) => {
+    const path = new URL(r.url).pathname;
+    if (!/^\/web\/.+\.(js|wasm|css|ttf)$/.test(path)) return;
+    const fromCache = r.fromDiskCache || cached.has(requestId);
+    files.set(path, fromCache ? 'cache' : r.status === 304 ? '304' : 'network');
+  });
+  return files;
+}
 
 // How many pixels of a screenshot differ from its corner's colour (a GPU canvas can't be read back, so the
 // screenshot is decoded in the page).
@@ -76,9 +95,26 @@ function check(ok, what) {
   check(!cookie.value.includes(code) && !cookie.value.startsWith('cpod_'), 'the cookie is not the pod code');
   check(!(await page.evaluate(() => document.cookie)).includes('construct_web'), 'page scripts cannot read it');
 
+  const files = await watchFiles(page);
   await page.reload();
   await page.waitForSelector('body.ready', { timeout: 60000 });
+  await page.waitForTimeout(1000);
   check(true, 'a reload keeps the session');
+  const listed = [...files].map(([f, from]) => `${f} ${from}`).join(', ');
+  check([...files.keys()].some((f) => f.endsWith('.wasm')) && [...files.keys()].some((f) => f.endsWith('.ttf')),
+    'the reload asks for the WebAssembly and the fonts: ' + listed);
+  check([...files.values()].every((from) => from !== 'network'), 'and takes none of them from the network');
+
+  if (rebuild) {
+    const before = [...files.keys()].find((f) => /^\/web\/app\.[0-9a-f]{16}\.js$/.test(f));
+    execSync(rebuild, { stdio: 'inherit' });
+    files.clear();
+    await page.reload();
+    await page.waitForSelector('body.ready', { timeout: 60000 });
+    const after = [...files.keys()].find((f) => /^\/web\/app\.[0-9a-f]{16}\.js$/.test(f));
+    check(before && after && before !== after && files.get(after) === 'network',
+      `after a rebuild the page loads the new client (${before} -> ${after})`);
+  }
 
   await page.setViewportSize({ width: 390, height: 844 });
   await page.waitForTimeout(1000);
