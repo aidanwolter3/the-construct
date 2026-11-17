@@ -282,6 +282,11 @@ fn wave_step(
             else {
                 continue;
             };
+            // A count by a datetime field matches by the day it falls on.
+            let count_kind = match c {
+                Compute::Count { key, .. } => tdef.by_id(key).map(|f| f.kind),
+                _ => None,
+            };
             let (key, relevant) = match c {
                 Compute::Lookup { key, value, .. } => {
                     (key, live_changed || differs(key) || differs(value))
@@ -316,6 +321,8 @@ fn wave_step(
                 // A lookup through a ref matches the read row's own id.
                 let k = if key == model::ROW_ID {
                     Some(ch.id.clone())
+                } else if let Some(kind) = count_kind {
+                    lookup::count_key(kind, &value_of(tdef, key, side))
                 } else {
                     lookup::text_of(&value_of(tdef, key, side))
                 };
@@ -379,9 +386,13 @@ fn wave_step(
             if fields.is_empty() {
                 continue;
             }
+            let before = row.values.clone();
             if recompute_row(tx, def, &mut row, &fields, &mut lookups, caps, out)? {
                 row.updated_at = now;
                 db::save_row(tx, name, &row)?;
+                // Values from other rows, which a filler may have written
+                // (issue #289).
+                db::note_writes(tx, name, Some(&before), &row, Some(db::WRITER_DERIVED), now)?;
                 out.changed += 1;
             }
         }

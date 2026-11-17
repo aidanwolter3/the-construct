@@ -22,6 +22,7 @@ pub mod db;
 pub mod limits;
 pub mod oauth;
 pub mod screen;
+pub mod shelf;
 
 use std::collections::HashMap;
 use std::net::SocketAddr;
@@ -284,7 +285,7 @@ struct OpenPod {
 /// The pods of this server.
 pub struct Host {
     dir: PathBuf,
-    store: HostStore,
+    store: Arc<HostStore>,
     factory: PodFactory,
     config: HostConfig,
     open: Mutex<HashMap<String, Arc<OpenPod>>>,
@@ -314,7 +315,7 @@ impl Host {
             .map_err(|e| format!("opening {}: {e}", dir.join("host.db").display()))?;
         let host = Self {
             dir: dir.to_owned(),
-            store,
+            store: Arc::new(store),
             factory,
             config,
             open: Mutex::new(HashMap::new()),
@@ -1003,6 +1004,7 @@ impl Host {
             state.set_public_base(base);
         }
         state.set_hosted();
+        state.set_shelf(id, Arc::new(shelf::HostShelf::new(self.store.clone())));
         let pod: Pod = Arc::new(state);
         let open = Arc::new(OpenPod {
             router: pod_core::app(pod.clone()),

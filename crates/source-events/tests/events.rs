@@ -525,3 +525,23 @@ async fn simulator_fixture() {
         .unwrap();
     }
 }
+
+/// The events collection exists as soon as the pod is made, before any
+/// background work (`resume`) runs, even with Events listed before
+/// Collections: a layout binding `collections/events` can be written at once.
+#[test]
+fn the_events_collection_exists_when_the_pod_opens() {
+    let dir = tempfile::tempdir().unwrap();
+    let pod = AppState::new(
+        pod_core::store::Store::open(&dir.path().join("server.db")).unwrap(),
+        vec![
+            Arc::new(EventsAdapter::new()),
+            Arc::new(CollectionsAdapter::new()),
+        ],
+    );
+    let def = pod
+        .store()
+        .with_conn(|c| source_collections::db::latest_def(c, COLLECTION))
+        .unwrap();
+    assert!(def.is_some(), "no events collection after the pod opened");
+}

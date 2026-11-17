@@ -184,7 +184,10 @@ and optional text fields `run_id`, `session_id`, `workspace`, `stage` and `diagn
   (`collections_field_writers`: a filler or a model; a person's or Claude's write clears it). A queued row a filler
   made, or whose `status`, `title`, `notes`, `description`, `details`, `workspace`, `model` or `max_runtime_min` a
   filler or a model wrote last, isn't sent: it goes to `failed` with "Not started: the filler … wrote … last; set it
-  yourself to start it". Setting those fields yourself (or through Claude) makes it startable.
+  yourself to start it". Setting those fields yourself (or through Claude) makes it startable. A field is found by
+  the name a run reads (an old name of a renamed field counts), and text from other rows is theirs (issue #289): a
+  lookup, count or rollup ("a value from other rows"), an expression over such a field, and an action's copy of a
+  row a filler or a model wrote.
 - a row that becomes `queued` sends `start_run` once: `work_item_id` the row's id, `origin: task`, its title, its
   title and notes as the prompt (the runner adds its own preamble), its `workspace` (else the linked default), its
   `model` and `max_runtime_min` fields when it has them (else the link's), and a `request_id` stored before sending

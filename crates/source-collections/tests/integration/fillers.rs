@@ -9,8 +9,9 @@
 //! page, an llm site read by a fake model) and alerts notify once per match,
 //! a page listing only past events reads as nothing upcoming, not as a
 //! broken recipe,
-//! an agent filler (a fake model) upserts rows within its daily budget, and
-//! temporary pods can't fill.
+//! an agent filler (a fake model) upserts rows within its daily budget,
+//! temporary pods can't fill, and a range filler makes a row per day with no
+//! web jack (a count field tallying another collection's rows on each).
 
 use std::sync::{Arc, Mutex};
 
@@ -1137,4 +1138,142 @@ async fn details_llm_reads_each_new_rows_page_once() {
     ok(&pod, "collections_refresh", json!({"collection": "shows"})).await;
     settle(&pod, "shows").await;
     assert_eq!(agent.pages.lock().unwrap().len(), 1, "read once per row");
+}
+
+#[tokio::test]
+async fn a_range_fills_a_row_per_day_without_the_web() {
+    // No web jack, no model: a range makes its rows from the date alone.
+    let pod = pod_with(None);
+    pod.store()
+        .set_pod_setting("jack.web", pod_core::jacks::LOCKED)
+        .unwrap();
+    ok(
+        &pod,
+        "define_collection",
+        json!({"name": "plans", "fields": [
+        {"name": "title", "type": "text"}, {"name": "date", "type": "date"}]}),
+    )
+    .await;
+    ok(
+        &pod,
+        "define_collection",
+        json!({"name": "meetups", "fields": [
+        {"name": "title", "type": "text"}, {"name": "start", "type": "datetime"}]}),
+    )
+    .await;
+    ok(
+        &pod,
+        "define_collection",
+        json!({"name": "days", "order_by": "date", "fields": [
+        {"name": "date", "type": "date", "optional": true},
+        {"name": "weekday", "type": "text", "optional": true},
+        {"name": "plans", "type": "number", "default": 0,
+         "compute": {"kind": "count", "from": "date", "collection": "plans", "key": "date"}},
+        {"name": "meetups", "type": "number", "default": 0,
+         "compute": {"kind": "count", "from": "date", "collection": "meetups", "key": "start"}}],
+        "fillers": [{"kind": "range", "from": "{today-1}", "to": "{today+6}",
+            "map": {"date": "date", "weekday": "weekday"}, "key": "date"}]}),
+    )
+    .await;
+    settle(&pod, "days").await;
+    let now = pod_core::util::now_secs();
+    let today = fill::today(pod.store(), now);
+    let days = rows(&pod, "days").await;
+    assert_eq!(days.len(), 8, "{days:?}");
+    assert_eq!(days[1]["date"], today.as_str());
+    assert!(days[0]["date"].as_str() < Some(today.as_str()));
+    assert!(
+        days.iter()
+            .all(|d| d["weekday"].as_str().is_some_and(|w| w.len() == 3))
+    );
+    let st = ok(&pod, "collections_status", json!({"collection": "days"})).await;
+    assert_eq!(st["fillers"][0]["state"], "ok", "{st}");
+    assert_eq!(st["fillers"][0]["kind"], "range", "{st}");
+    // A day counts the rows that fall on it, live.
+    ok(
+        &pod,
+        "add_row",
+        json!({"collection": "plans", "values": {"title": "Swim", "date": today}}),
+    )
+    .await;
+    ok(
+        &pod,
+        "add_row",
+        json!({"collection": "plans", "values": {"title": "Dinner", "date": today}}),
+    )
+    .await;
+    let days = rows(&pod, "days").await;
+    assert_eq!(days[1]["plans"], json!(2), "{days:?}");
+    assert_eq!(days[2]["plans"], json!(0), "{days:?}");
+    // A datetime key counts on the day it falls on (its own wall clock).
+    let tomorrow = days[2]["date"].as_str().unwrap().to_owned();
+    let added = ok(
+        &pod,
+        "add_row",
+        json!({"collection": "meetups",
+        "values": {"title": "Board games", "start": format!("{tomorrow}T19:30-07:00")}}),
+    )
+    .await;
+    ok(
+        &pod,
+        "add_row",
+        json!({"collection": "meetups",
+        "values": {"title": "Late show", "start": format!("{tomorrow}T23:30-07:00")}}),
+    )
+    .await;
+    let days = rows(&pod, "days").await;
+    assert_eq!(
+        (&days[1]["meetups"], &days[2]["meetups"]),
+        (&json!(0), &json!(2)),
+        "{days:?}"
+    );
+    // Moving one to today moves its count, live.
+    let id = added["id"].as_str().unwrap();
+    let pv = ok(
+        &pod,
+        "edit_rows",
+        json!({"collection": "meetups", "edits": [
+        {"op": "update", "id": id, "values": {"start": format!("{today}T08:00-07:00")}}]}),
+    )
+    .await;
+    ok(
+        &pod,
+        "edit_rows",
+        json!({"collection": "meetups", "confirm": pv["confirm"]}),
+    )
+    .await;
+    let days = rows(&pod, "days").await;
+    assert_eq!(
+        (&days[1]["meetups"], &days[2]["meetups"]),
+        (&json!(1), &json!(1)),
+        "{days:?}"
+    );
+    // The same day again writes nothing; the rows keep their ids.
+    let ids: Vec<_> = days.iter().map(|d| d["id"].clone()).collect();
+    let fid = filler_ids(&pod, "days").await.remove(0);
+    assert_eq!(
+        fill::fill(&pod, "days", &fid, false).await,
+        Outcome::Unchanged
+    );
+    let again: Vec<_> = rows(&pod, "days")
+        .await
+        .iter()
+        .map(|d| d["id"].clone())
+        .collect();
+    assert_eq!(ids, again);
+    // A preview shows today's rows; the rows are the filler's alone.
+    let p = ok(&pod, "collections_preview", json!({"collection": "days"})).await;
+    assert_eq!(
+        (p["kind"].as_str(), p["items"].as_u64()),
+        (Some("range"), Some(8)),
+        "{p}"
+    );
+    assert_eq!(p["rows"][1]["date"], today.as_str(), "{p}");
+    let (err, e) = tool(
+        &pod,
+        "add_row",
+        json!({"collection": "days", "values": {"date": today}}),
+    )
+    .await;
+    assert!(err, "{e}");
 }

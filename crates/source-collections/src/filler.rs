@@ -11,6 +11,10 @@
 //!   `render` loads the page (and the details pages) in the server's
 //!   headless browser first ([`web_extract::render`]), for pages built by
 //!   JavaScript or behind a bot check.
+//! - `mcp`: a tool of an MCP server the pod is connected to, its answer read
+//!   like a JSON page.
+//! - `range`: one row per day, week or month of a window that moves with
+//!   today (decision `range-filler`), made from the date alone.
 //! - `agent`: a model with web search and fetch, a prompt and a budget,
 //!   answering rows that fit the collection's fields.
 //!
@@ -252,6 +256,18 @@ pub enum Source {
         /// Field id -> path in each item.
         map: BTreeMap<String, String>,
     },
+    /// One row per step of a window of dates counted from today in the
+    /// pod's zone (decision `range-filler`): no network and no model. Its
+    /// items are generated ([`range_items`]) and read like a JSON page
+    /// (`map`: field -> one of [`RANGE_PARTS`]).
+    Range {
+        /// The window's first and last day, in days from today.
+        from: i64,
+        to: i64,
+        step: Step,
+        /// Field id -> a part of each step ([`RANGE_PARTS`]).
+        map: BTreeMap<String, String>,
+    },
     /// A model with web tools answers the rows.
     Agent {
         prompt: String,
@@ -261,6 +277,144 @@ pub enum Source {
         max_fetches: u32,
         fills_per_day: u32,
     },
+}
+
+/// What one row of a `range` filler covers.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Step {
+    /// A day.
+    Day,
+    /// A week, Monday to Sunday (the window's first week is the one its
+    /// first day falls in).
+    Week,
+    /// A calendar month (likewise).
+    Month,
+}
+
+impl Step {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Step::Day => "day",
+            Step::Week => "week",
+            Step::Month => "month",
+        }
+    }
+
+    fn parse(s: &str) -> Option<Step> {
+        match s {
+            "" | "day" => Some(Step::Day),
+            "week" => Some(Step::Week),
+            "month" => Some(Step::Month),
+            _ => None,
+        }
+    }
+
+    /// The most steps a window of `days` days (last minus first) can hold.
+    fn most(self, days: i64) -> i64 {
+        match self {
+            Step::Day => days + 1,
+            Step::Week => days / 7 + 2,
+            Step::Month => days / 28 + 2,
+        }
+    }
+}
+
+/// The parts of a `range` filler's item a field may take: `date` (the
+/// step's first day, `YYYY-MM-DD`), `end` (its last day), `weekday`
+/// (`Mon`), `weekday_long` (`Monday`), `day` (`16`), `month` (`Nov`),
+/// `month_long` (`November`), `year` (`2026`), `week` (the ISO week number)
+/// and `index` (0 for the window's first step).
+pub const RANGE_PARTS: [&str; 10] = [
+    "date",
+    "end",
+    "weekday",
+    "weekday_long",
+    "day",
+    "month",
+    "month_long",
+    "year",
+    "week",
+    "index",
+];
+
+/// A `range` filler's interval when it names none, minutes.
+pub const RANGE_EVERY: u32 = 60;
+
+/// Most items a `range` filler makes (a fill writes at most this many rows
+/// anyway: [`crate::Caps::fill_items`]).
+pub const MAX_RANGE_ITEMS: i64 = 200;
+
+/// The items of a `range` filler for `today` (`YYYY-MM-DD`): one per step
+/// whose first day is in `today+from ..= today+to` (a week or month step
+/// starts on the Monday or the first of the month on or before the window's
+/// first day), each with every part of [`RANGE_PARTS`].
+pub fn range_items(from: i64, to: i64, step: Step, today: &str) -> Result<Vec<Value>, String> {
+    use pod_core::tz::jiff::{Span, civil::Date};
+    let today: Date = today
+        .parse()
+        .map_err(|e| format!("today '{today}' is not a date: {e}"))?;
+    let shift = |d: Date, days: i64| {
+        d.checked_add(Span::new().days(days))
+            .map_err(|e| format!("a date out of range: {e}"))
+    };
+    let (first, last) = (shift(today, from)?, shift(today, to)?);
+    let mut at = match step {
+        Step::Day => first,
+        Step::Week => shift(first, -i64::from(first.weekday().to_monday_zero_offset()))?,
+        Step::Month => first.first_of_month(),
+    };
+    let mut out = Vec::new();
+    while at <= last && (out.len() as i64) < MAX_RANGE_ITEMS {
+        let (end, next) = match step {
+            Step::Day => (at, shift(at, 1)?),
+            Step::Week => (shift(at, 6)?, shift(at, 7)?),
+            Step::Month => (
+                at.last_of_month(),
+                at.checked_add(Span::new().months(1))
+                    .map_err(|e| format!("a date out of range: {e}"))?,
+            ),
+        };
+        out.push(json!({
+            "date": at.to_string(),
+            "end": end.to_string(),
+            "weekday": at.strftime("%a").to_string(),
+            "weekday_long": at.strftime("%A").to_string(),
+            "day": at.day(),
+            "month": at.strftime("%b").to_string(),
+            "month_long": at.strftime("%B").to_string(),
+            "year": at.year(),
+            "week": at.iso_week_date().week(),
+            "index": out.len(),
+        }));
+        at = next;
+    }
+    Ok(out)
+}
+
+/// A `{today}` / `{today±N}` bound of a `range` filler: its offset in days.
+fn range_bound(o: &Map<String, Value>, k: &str) -> Result<i64, String> {
+    let s = text(o, k);
+    let inner = s
+        .strip_prefix('{')
+        .and_then(|r| r.strip_suffix('}'))
+        .filter(|t| t.starts_with("today"));
+    match inner.and_then(day_token) {
+        Some(Ok((DayToken::Date, n))) => Ok(n),
+        Some(Err(e)) => Err(format!("filler.{k}: {e}")),
+        _ => Err(format!(
+            "filler.{k} is {{today}}, {{today+N}} or {{today-N}} (days from today in the pod's zone)"
+        )),
+    }
+}
+
+/// A `range` bound as written: `{today}`, `{today+N}`, `{today-N}`.
+fn range_token(n: i64) -> String {
+    match n {
+        0 => "{today}".to_owned(),
+        n if n > 0 => format!("{{today+{n}}}"),
+        n => format!("{{today{n}}}"),
+    }
 }
 
 /// How a fill writes rows.
@@ -365,7 +519,14 @@ impl Filler {
             Source::Fetch { .. } => "fetch",
             Source::Agent { .. } => "agent",
             Source::Mcp { .. } => "mcp",
+            Source::Range { .. } => "range",
         }
+    }
+
+    /// Whether it makes its rows from dates (`range`): no jack, network or
+    /// model.
+    pub fn is_range(&self) -> bool {
+        matches!(self.source, Source::Range { .. })
     }
 
     /// Whether it calls an MCP server's tool.
@@ -395,7 +556,9 @@ impl Filler {
     /// The field ids each item writes.
     pub fn mapped(&self) -> Vec<String> {
         match &self.source {
-            Source::Fetch { map, .. } | Source::Mcp { map, .. } => map.keys().cloned().collect(),
+            Source::Fetch { map, .. } | Source::Mcp { map, .. } | Source::Range { map, .. } => {
+                map.keys().cloned().collect()
+            }
             Source::Agent { fields, .. } => fields.clone(),
         }
     }
@@ -420,7 +583,7 @@ impl Filler {
     pub fn url_field(&self) -> Option<&str> {
         match &self.source {
             Source::Fetch { url_field, .. } => url_field.as_deref(),
-            Source::Agent { .. } | Source::Mcp { .. } => None,
+            Source::Agent { .. } | Source::Mcp { .. } | Source::Range { .. } => None,
         }
     }
 
@@ -428,7 +591,7 @@ impl Filler {
     pub fn query_field(&self) -> Option<&str> {
         match &self.source {
             Source::Fetch { query_field, .. } => query_field.as_deref(),
-            Source::Agent { .. } | Source::Mcp { .. } => None,
+            Source::Agent { .. } | Source::Mcp { .. } | Source::Range { .. } => None,
         }
     }
 
@@ -451,7 +614,7 @@ impl Filler {
     pub fn render(&self) -> Option<&Render> {
         match &self.source {
             Source::Fetch { render, .. } => render.as_ref(),
-            Source::Agent { .. } | Source::Mcp { .. } => None,
+            Source::Agent { .. } | Source::Mcp { .. } | Source::Range { .. } => None,
         }
     }
 
@@ -459,7 +622,7 @@ impl Filler {
     pub fn url(&self) -> Option<&str> {
         match &self.source {
             Source::Fetch { url, .. } => url.as_deref(),
-            Source::Agent { .. } | Source::Mcp { .. } => None,
+            Source::Agent { .. } | Source::Mcp { .. } | Source::Range { .. } => None,
         }
     }
 
@@ -491,7 +654,7 @@ impl Filler {
                 }
                 out
             }
-            Source::Agent { .. } | Source::Mcp { .. } => Vec::new(),
+            Source::Agent { .. } | Source::Mcp { .. } | Source::Range { .. } => Vec::new(),
         }
     }
 
@@ -519,6 +682,14 @@ impl Filler {
                 types: Vec::new(),
                 script: String::new(),
                 zone: zone.clone(),
+            }),
+            // Its generated items are a JSON list of plain dates.
+            Source::Range { .. } => Some(web_extract::items::Spec {
+                kind: web_extract::items::Kind::Json,
+                items: String::new(),
+                types: Vec::new(),
+                script: String::new(),
+                zone: String::new(),
             }),
             Source::Agent { .. } => None,
         }
@@ -645,6 +816,15 @@ impl Filler {
                 }
                 v
             }
+            Source::Range {
+                from,
+                to,
+                step,
+                map,
+            } => json!({
+                "kind": "range", "from": range_token(*from), "to": range_token(*to),
+                "step": step.as_str(), "map": names(map),
+            }),
             Source::Agent {
                 prompt,
                 fields,
@@ -1123,6 +1303,47 @@ pub fn parse(
                 map,
             }
         }
+        "range" => {
+            let (from, to) = (range_bound(o, "from")?, range_bound(o, "to")?);
+            if to < from {
+                return Err("filler.to is on or after filler.from".into());
+            }
+            let step = Step::parse(text(o, "step"))
+                .ok_or_else(|| "filler.step is day, week or month".to_owned())?;
+            if step.most(to - from) > MAX_RANGE_ITEMS {
+                return Err(format!(
+                    "a range filler makes at most {MAX_RANGE_ITEMS} rows: shorten from..to or take a longer step"
+                ));
+            }
+            let (map, _) = parse_map(def, o.get("map"), "filler")?;
+            if let Some((id, p)) = map.iter().find(|(_, p)| !RANGE_PARTS.contains(&p.as_str())) {
+                return Err(format!(
+                    "filler.map.{}: '{p}' is not a part of a range step ({})",
+                    def.name_of(id),
+                    RANGE_PARTS.join(", ")
+                ));
+            }
+            for k in [
+                "url",
+                "url_field",
+                "query_field",
+                "extract",
+                "items",
+                "arguments",
+            ] {
+                if o.get(k).is_some_and(|v| !v.is_null()) {
+                    return Err(format!(
+                        "a range filler makes its rows from dates: it takes from, to, step and map, not {k}"
+                    ));
+                }
+            }
+            Source::Range {
+                from,
+                to,
+                step,
+                map,
+            }
+        }
         "agent" => {
             let prompt = text(o, "prompt");
             if prompt.is_empty() || prompt.chars().count() > MAX_PROMPT_CHARS {
@@ -1172,7 +1393,7 @@ pub fn parse(
         }
         other => {
             return Err(format!(
-                "filler.kind '{other}' is \"fetch\" (a recipe), \"mcp\" (an MCP server's tool) or \"agent\" (a model with web search)"
+                "filler.kind '{other}' is \"fetch\" (a recipe), \"mcp\" (an MCP server's tool), \"range\" (a row per day, week or month from today) or \"agent\" (a model with web search)"
             ));
         }
     };
@@ -1192,6 +1413,7 @@ pub fn parse(
     let kind = match source {
         Source::Agent { .. } => "agent",
         Source::Mcp { .. } => "mcp",
+        Source::Range { .. } => "range",
         Source::Fetch {
             query_field: Some(_),
             ..
@@ -1204,6 +1426,11 @@ pub fn parse(
     };
     let title = match (text(o, "title"), &source) {
         ("", Source::Mcp { server, tool, .. }) => format!("{server} · {tool}"),
+        ("", Source::Range { step, .. }) => match step {
+            Step::Day => "Days".to_owned(),
+            Step::Week => "Weeks".to_owned(),
+            Step::Month => "Months".to_owned(),
+        },
         ("", _) => default_title(url.as_deref(), kind),
         (t, _) if t.chars().count() > MAX_TITLE_CHARS => {
             return Err(format!(
@@ -1239,13 +1466,19 @@ pub fn parse(
         }
         other => return Err(format!("filler.on_empty '{other}' is keep or clear")),
     };
+    // A range moves with the date: by default it checks hourly (an answer
+    // like the last one writes nothing).
+    let every_minutes = match uint(o, "every_minutes")? {
+        None if matches!(source, Source::Range { .. }) => Some(RANGE_EVERY),
+        m => m,
+    };
     Ok(Filler {
         id,
         title,
         source,
         mode,
         key,
-        every_minutes: uint(o, "every_minutes")?,
+        every_minutes,
         on_open_minutes: uint(o, "on_open_minutes")?,
         upcoming,
         refresh,
@@ -1863,6 +2096,111 @@ mod tests {
             json!({"from": "2026-11-14T00:00:00-07:00", "to": "2026-11-29T00:00:00-07:00",
                 "later": "2027-03-15T00:00:00-06:00"})
         );
+    }
+
+    #[test]
+    fn range_items_cover_days_weeks_and_months() {
+        // Monday 16 November 2026.
+        let days = range_items(-1, 2, Step::Day, "2026-11-16").unwrap();
+        let dates: Vec<_> = days.iter().map(|d| d["date"].clone()).collect();
+        assert_eq!(
+            dates,
+            [
+                json!("2026-11-15"),
+                json!("2026-11-16"),
+                json!("2026-11-17"),
+                json!("2026-11-18")
+            ]
+        );
+        assert_eq!(
+            days[1],
+            json!({"date": "2026-11-16", "end": "2026-11-16", "weekday": "Mon",
+                "weekday_long": "Monday", "day": 16, "month": "Nov", "month_long": "November",
+                "year": 2026, "week": 47, "index": 1})
+        );
+        // A week starts on the Monday on or before the window's first day.
+        let weeks = range_items(2, 9, Step::Week, "2026-11-16").unwrap();
+        assert_eq!(weeks.len(), 2, "{weeks:?}");
+        assert_eq!(weeks[0]["date"], "2026-11-16");
+        assert_eq!(weeks[0]["end"], "2026-11-22");
+        assert_eq!(weeks[1]["date"], "2026-11-23");
+        // Months start on the first and end on their last day, across years
+        // and a leap February.
+        let months = range_items(0, 100, Step::Month, "2027-12-31").unwrap();
+        let spans: Vec<_> = months
+            .iter()
+            .map(|m| {
+                format!(
+                    "{}..{}",
+                    m["date"].as_str().unwrap(),
+                    m["end"].as_str().unwrap()
+                )
+            })
+            .collect();
+        assert_eq!(
+            spans,
+            [
+                "2027-12-01..2027-12-31",
+                "2028-01-01..2028-01-31",
+                "2028-02-01..2028-02-29",
+                "2028-03-01..2028-03-31",
+                "2028-04-01..2028-04-30"
+            ]
+        );
+        assert!(range_items(0, 1, Step::Day, "not a date").is_err());
+    }
+
+    #[test]
+    fn range_fillers_parse() {
+        let def = products();
+        let f = parse(
+            &def,
+            &json!({"kind": "range", "from": "{today-1}", "to": "{today+13}",
+                "map": {"name": "weekday", "about": "date"}, "key": "about"}),
+            "s1".into(),
+            false,
+        )
+        .unwrap();
+        assert!(f.is_range() && !f.uses_model() && !f.is_mcp());
+        assert_eq!(f.kind(), "range");
+        assert_eq!(f.title, "Days");
+        assert_eq!(f.every_minutes, Some(RANGE_EVERY));
+        assert!(f.owns_rows());
+        let d = f.describe(&def);
+        assert_eq!(
+            (&d["from"], &d["to"], &d["step"], &d["map"]["name"]),
+            (
+                &json!("{today-1}"),
+                &json!("{today+13}"),
+                &json!("day"),
+                &json!("weekday")
+            )
+        );
+        let weekly = parse(
+            &def,
+            &json!({"kind": "range", "from": "{today}", "to": "{today+364}", "step": "week",
+                "every_minutes": 1440, "map": {"name": "date"}}),
+            "s2".into(),
+            false,
+        )
+        .unwrap();
+        assert_eq!(weekly.every_minutes, Some(1440));
+        assert_eq!(weekly.title, "Weeks");
+        for bad in [
+            // Bounds are {today±N}.
+            json!({"kind": "range", "from": "2026-11-16", "to": "{today+3}", "map": {"name": "date"}}),
+            json!({"kind": "range", "from": "{midnight}", "to": "{today+3}", "map": {"name": "date"}}),
+            json!({"kind": "range", "to": "{today+3}", "map": {"name": "date"}}),
+            json!({"kind": "range", "from": "{today+3}", "to": "{today}", "map": {"name": "date"}}),
+            // Too many rows, an unknown step or part, a recipe's options.
+            json!({"kind": "range", "from": "{today}", "to": "{today+400}", "map": {"name": "date"}}),
+            json!({"kind": "range", "from": "{today}", "to": "{today+3}", "step": "hour", "map": {"name": "date"}}),
+            json!({"kind": "range", "from": "{today}", "to": "{today+3}", "map": {"name": "dayname"}}),
+            json!({"kind": "range", "from": "{today}", "to": "{today+3}", "url": "https://x.example", "map": {"name": "date"}}),
+            json!({"kind": "range", "from": "{today}", "to": "{today+3}"}),
+        ] {
+            assert!(parse(&def, &bad, "s1".into(), false).is_err(), "{bad}");
+        }
     }
 
     #[test]

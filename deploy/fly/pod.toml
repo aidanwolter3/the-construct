@@ -1,5 +1,7 @@
-# Staging pod on Fly.io. Deployed by .github/workflows/ci.yml on push to main; by hand, from the repo root:
-#   flyctl deploy . --config deploy/fly/pod.toml --dockerfile deploy/pod.Dockerfile --remote-only
+# Staging pod on Fly.io. Deployed by .github/workflows/ci.yml on push to main and weekly; by hand, from the repo
+# root (the build arg keeps Chromium current: decision `browser-sandbox`):
+#   flyctl deploy . --config deploy/fly/pod.toml --dockerfile deploy/pod.Dockerfile --remote-only \
+#     --build-arg CHROMIUM_REFRESH="$(date -u +%G-W%V)"
 # Secrets (never in this file): `flyctl secrets set -a the-construct-pod CONSTRUCT_INFER_API_KEY=...` (Collections
 # `model` fields and the `llm` extractor of fetch fillers).
 # CONSTRUCT_SECRETS_KEY seals the upstream Pixelfed tokens in the pod databases (docs/server.md

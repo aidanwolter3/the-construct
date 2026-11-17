@@ -100,6 +100,26 @@ and `entities` try a row with made-up data, `full_height` draws a long screen wh
 The server's MCP instructions tell Claude how to use them. After a change to the tools, the Claude connector needs
 "Refresh tools list" in its settings.
 
+### Sharing with other users on the server
+
+Claude can share a layout, a component or the whole construct (`home`) with other users of the same server, and adopt what
+they share (decision [`sharing`](decisions/sharing.md)). Share links work through Claude only: the apps have no
+share screen.
+
+- `set_handle` chooses the pod's handle (`@ann`, unique on the server); publications are named `@<handle>/<slug>`.
+- `publish {name}` answers a review and shares nothing: every element of the closure, the interface (each
+  collection the layout uses becomes an input, with the fields it reads and writes and a suggested schema) and
+  each literal text or URL that would go out. A reference to one row is refused. `publish {name, confirm:
+  <review_id>}` shares exactly what was reviewed and answers the share link (`share-…`); `leave_out` leaves
+  elements out, `keep_shared: true` sends later versions without asking while they bring no new text or URLs.
+  Only `visibility: link` (unlisted) for now.
+- `describe_publication {link}` shows what a link holds; `adopt {link, bindings}` copies it into the pod bound to
+  the user's own collections (`{"chores": {"collection": "tasks", "fields": {"title": "name"}}}`, or `{"new":
+  "chores"}` for an empty one from the suggested schema) and answers the reference to put in home. Without
+  bindings it proposes them.
+- `list_adoptions` and `update_adoption` follow new versions while they fit the bindings; `list_publications` and
+  `revoke_publication` manage the pod's own. A revoked publication keeps drawing where it was adopted.
+
 ## Collections
 
 Collections is a built-in data source (`crates/source-collections`) that stores any collection Claude declares. Claude
@@ -136,7 +156,8 @@ never writes code: it declares typed fields (`text`, `number`, `bool`, `date`, `
   only when no rule matches, and its answers and hand edits become rules; a learning lookup naming a collection that
   doesn't exist makes it (its `key` text, its `value` of the field's type). `{kind: "count", from, collection, key,
   where?: [{field, equals}]}` (a number field's only kind) is the number of live rows of `collection` whose `key`
-  equals this row's `from` (ignoring case and spacing) and that match every condition (the field's value as text,
+  equals this row's `from` (ignoring case and spacing; a `datetime` key by the day it falls on, its stored wall
+  clock, so a date counts the events that start on it) and that match every condition (the field's value as text,
   as a layout `where` compares: `"true"`, `"false"`, a number or text). Lookups and counts are **live**: when rows
   of the collection they read are created, changed, deleted or restored, the rows whose answer could change are
   computed again in the same write and reach devices through the normal change feed, cascading (a count's `where`
@@ -267,6 +288,19 @@ A collection can keep itself current from the web (decision
   and the next 14 days, whole days. The default title is `<server> · <tool>`.
   An answer like the last one writes nothing. `collections_preview {collection, filler}` calls the tool and shows
   the rows; `mcp_call_tool` shows a tool's raw answer to write `items` and `map` from.
+- **`range`** (no web, no model): one row per step of a window of dates that moves with today in the pod's zone
+  (decision [`range-filler`](decisions/range-filler.md)): `{kind: "range", from, to, step, map, key}`. `from` and
+  `to` are `{today}`, `{today+N}` or `{today-N}`; `step` is `day` (the default), `week` (Monday to Sunday, from the
+  week `from` falls in) or `month` (likewise). `map` gives each field a part of the step: `date` (its first day,
+  `YYYY-MM-DD`), `end` (its last day), `weekday` (`Mon`), `weekday_long` (`Monday`), `day` (`16`), `month` (`Nov`),
+  `month_long` (`November`), `year`, `week` (the ISO week number) or `index` (0 for the window's first step). At
+  most 200 rows. Give `key` the date field so a day keeps its row (and its hand-set unfilled fields) as the window
+  moves; a day that leaves the window is deleted. It fills hourly unless `every_minutes` says otherwise, and a fill
+  on the same day writes nothing. Its use is as a spine: `count` or `lookup` fields over other collections keyed by
+  the date (`{kind: "count", from: "date", collection: "workouts", key: "date"}`) make a calendar's days, a habit
+  tracker's rows or a monthly budget's months, and a layout lists each day with the other collections' rows on it
+  (a `core://List` inside the day's template, `where` its date). Fields it doesn't fill (a day's note, a tick) are
+  people's to edit.
 - **`agent`** (costs model calls): a prompt; a model with web search answers rows that fit the fields, within a
   daily budget. With the `web_search` jack plugged it searches and reads pages with the pod's own tools; it reads
   only pages it has seen (a URL in the prompt or the rows, a search result, or a link on a page it read), so a page
@@ -279,8 +313,11 @@ A collection can keep itself current from the web (decision
   edited by hand.
 - **Who wrote a field:** a row a filler made carries its id (`collections_rows.filler`), and every field a filler
   or a model's computed answer wrote last is recorded in `collections_field_writers` (`filler:<id>` or `model`); a
-  person's (or Claude's) write of the field clears it. The Agents source starts runs only from rows a person wrote
-  (decision [`agents-cap-v3`](decisions/agents-cap-v3.md), issue #243).
+  person's (or Claude's) write of the field clears it. A value from other rows carries their writer too: a live
+  lookup, count or rollup's recompute records `derived`, an action's `$row.…` / `$parent.…` copy records the writer
+  of the field (or ref) it read, and a guard reading a field counts a lookup, count or rollup as `derived` and an
+  expression as the first untrusted writer of the fields it reads (issue #289). The Agents source starts runs only
+  from rows a person wrote (decision [`agents-cap-v3`](decisions/agents-cap-v3.md), issue #243).
 - **Alerts** notify once when a row matches: `any` / `all` / `none` phrases, a filler, days of the week, a window on a
   date field. Rows are served with `alert_matched` and `alert_names`.
 
@@ -311,7 +348,7 @@ never shown back. The host can lock a jack off for a pod (`jack.<id> = locked` i
 
 The pod can call the tools of remote MCP servers (decision [`mcp-jack`](decisions/mcp-jack.md), `pod_core::mcp_servers`),
 for `mcp` fillers. Claude connects one with `mcp_connect {name, url}` (an `https://` endpoint on a public host
-name): a server that needs nothing connects at once, one that takes an API key with `token` (sealed, never shown
+name, default port): a server that needs nothing connects at once, one that takes an API key with `token` (sealed, never shown
 back), and one that uses OAuth answers a `sign_in_url` for the user to open in a browser. The pod finds the
 server's authorization server (protected resource metadata, then OAuth metadata), registers itself as a public
 client and signs in with PKCE; the browser comes back to the pod's public callback
@@ -320,7 +357,9 @@ their own; when a refresh is refused the server reads `needs_sign_in` and `mcp_c
 The server must accept the pod's redirect URI (proton-mcp: add the pod's host to `ALLOWED_REDIRECT_HOSTS`).
 `mcp_servers` lists the servers with their state and tools (with `name`: each tool's input schema),
 `mcp_call_tool` calls one now, `mcp_disconnect` forgets one. At most 20 servers a pod; each call opens its own
-session over Streamable HTTP, with no redirects, a minute per request and 8 MB per answer.
+session over Streamable HTTP, with no redirects, a minute per request and 8 MB per answer. What a server lists is kept
+capped: tool names of at most 128 characters (longer ones are skipped), descriptions of 600, an input schema of
+16 KB (a larger one reads as a bare object schema), 200 tools and 1 MB in all.
 
 ## The Events app
 

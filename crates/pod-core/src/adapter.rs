@@ -305,6 +305,31 @@ pub trait Source: Any + Send + Sync {
         Ok(())
     }
 
+    /// Publishing an element (decision `sharing`): rewrite each literal
+    /// reference in `node` (one element's tree, its inputs bound) to a data
+    /// set of this source as an input, `$in.<name>`, and each field of it the
+    /// tree reads or writes as a field input, `$in.<name>__<field>`
+    /// ([`crate::construct::share::field_input`]), so the copy reads only
+    /// what its adopter binds. Answers one input per data set; an error
+    /// names a reference that can't become an input (one row's URI).
+    /// Default: the tree names none of this source's data.
+    /// `conn` is the pod's store connection, held by the caller.
+    fn share_inputs(
+        &self,
+        conn: &rusqlite::Connection,
+        node: &mut serde_json::Value,
+    ) -> Result<Vec<crate::construct::share::DataInput>, crate::validate::LayoutError> {
+        let _ = (conn, node);
+        Ok(Vec::new())
+    }
+
+    /// The data sets of this source an adopter could bind a shared input to
+    /// (decision `sharing`), read on `conn`. Default: none.
+    fn data_sets(&self, conn: &rusqlite::Connection) -> Vec<crate::construct::share::DataSet> {
+        let _ = conn;
+        Vec::new()
+    }
+
     /// The jacks this adapter declares (decision `jacks`): the abilities it
     /// lets a pod plug in, such as an account it connects. Ids are unique
     /// across the core and every adapter (checked at startup) and stored,

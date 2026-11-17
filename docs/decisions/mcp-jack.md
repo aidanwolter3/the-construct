@@ -17,7 +17,7 @@ Decision: the pod is an MCP **client** (`pod_core::mcp_servers`):
 
 - **Jack:** `mcp`, a core switch, on by default and locked on temporary pods. Unplugged, no server is called
   and `mcp` fillers read `off`. `list_jacks` shows the connected servers under it.
-- **Servers** are named entries (`mcp_servers` table, at most 20 a pod): an `https://` URL on a public host name
+- **Servers** are named entries (`mcp_servers` table, at most 20 a pod): an `https://` URL on a public host name and the default port
   (private hosts only with `CONSTRUCT_FILL_PRIVATE_HOSTS=1`) and its auth: `none`, `token` (a bearer the user
   gives once) or `oauth`. Secrets (token, access and refresh tokens, a client secret, the PKCE verifier) are
   sealed per server and field (`mcp_servers:<name>:<field>`) and never shown back.
@@ -33,7 +33,10 @@ Decision: the pod is an MCP **client** (`pod_core::mcp_servers`):
 - **Calls** use Streamable HTTP: each call opens its own session (`initialize`, `notifications/initialized`,
   the request, with `Mcp-Session-Id` and `MCP-Protocol-Version` once known), and reads the answer as JSON or as
   an event stream. No redirects are followed (a POST would turn into a GET; a token must not follow one off its
-  host), a request has a minute, an answer at most 8 MB. A tool's value is its `structuredContent`, else its
+  host), a request has a minute, an answer at most 8 MB. The listed tools are stored capped (names of 128
+  characters, longer ones skipped; descriptions of 600; a schema of 16 KB, else a bare object schema; 200 tools,
+  1 MB in all), and a server's error text is cut to 300 characters. The public callback looks up the one server
+  whose pending state matches, in SQL. A tool's value is its `structuredContent`, else its
   text parsed as JSON; `isError` is a failure with its text.
 - **Claude's tools:** `mcp_connect`, `mcp_servers`, `mcp_call_tool` (runs a tool now, answer shortened) and
   `mcp_disconnect`.

@@ -9,8 +9,6 @@
 
 pub mod events;
 
-use std::sync::Arc;
-
 use pod_core::layouts::LayoutSource;
 use pod_core::store::Step;
 use pod_core::{
@@ -127,17 +125,11 @@ impl Source for EventsAdapter {
         Box::pin(async move { pod_core::unknown_feed(NAME, feed) })
     }
 
-    fn resume<'a>(&'a self, pod: &'a Pod) -> BoxFuture<'a, ()> {
-        let pod = Arc::clone(pod);
-        Box::pin(async move {
-            let _ = pod
-                .blocking(|s| {
-                    events::prepare(s).inspect_err(|e| {
-                        tracing::error!(error = %e, "the events collection could not be prepared");
-                    })
-                })
-                .await;
-        })
+    /// The events collection exists before the pod serves its first request,
+    /// so a layout binding `collections/events` can be written at once (it
+    /// was made in `resume`, in the background, and an early write raced it).
+    fn on_open(&self, store: &pod_core::store::Store) -> Result<(), String> {
+        events::prepare(store).map_err(|e| format!("preparing the events collection: {e}"))
     }
 
     fn notification_channels(&self) -> Vec<NotificationChannel> {
