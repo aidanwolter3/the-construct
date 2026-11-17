@@ -112,6 +112,11 @@ Habits that avoid known traps:
 - Rust is pinned in `rust-toolchain.toml` (CI uses the same file), so local clippy matches CI. Bump it in its own
   PR.
 
+**Plugins**: the repo is also a Claude Code plugin marketplace (`.claude-plugin/marketplace.json`, plugins in
+`plugins/`). `.claude/settings.json` enables them for sessions in this repo, cloud ones included; `afk` gives
+`/afk` (keep working without the developer, then summarize). On a Mac, install once for every project with
+`/plugin marketplace add aidanwolter3/the-construct` and `/plugin install afk@the-construct`.
+
 **Staging** needs a pod token: make a temporary one with
 `curl -fsS -X POST -H "X-Construct-Client: claude-session $CLAUDE_CODE_SESSION_ID" https://the-construct-pod.fly.dev/v1/pods/temporary | jq -r .session_token`
 and send it as `Authorization: Bearer <token>`; in the simulator, click "Try a temporary pod". Staging holds 50
