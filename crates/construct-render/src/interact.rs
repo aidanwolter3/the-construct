@@ -3837,12 +3837,27 @@ impl Session {
     /// `open_notification`: marks it read, closes the inbox (the sheet or
     /// panel on top) and opens the notification's layout and screen, as the
     /// shared UI does.
+    ///
+    /// `id` is a notification's id (`local:notifications`), or the URI of
+    /// any entity shaped like one (a row of the pod's `notifications`
+    /// collection, decision `notifications-in-a-collection`), whose `id`
+    /// is the one marked read.
     fn open_notification(&mut self, id: &str, out: &mut Vec<Effect>) {
-        let uri = format!("local://notifications/{id}");
+        let uri = if id.contains("://") {
+            id.to_owned()
+        } else {
+            format!("local://notifications/{id}")
+        };
         let Some(n) = self.data.entities.get(&uri).cloned() else {
             out.push(Effect::Nothing);
             return;
         };
+        let id = n
+            .get("id")
+            .and_then(Value::as_str)
+            .filter(|_| id.contains("://"))
+            .map_or_else(|| id.to_owned(), str::to_owned);
+        let id = id.as_str();
         let text = |f: &str| {
             n.get(f)
                 .and_then(Value::as_str)

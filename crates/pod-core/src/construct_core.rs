@@ -654,9 +654,28 @@ impl Builder<'_> {
             recorded.clone()
         };
         let node = self.uses(&node).map_err(fail)?;
-        let id = self.finish(json!({
+        // A blueprint reads its own feeds wherever it is drawn (the inbox
+        // reads the notifications; decision `notifications-in-a-collection`).
+        let feeds: Vec<(String, String)> = info
+            .feeds
+            .iter()
+            .map(|(s, f)| ((*s).to_owned(), (*f).to_owned()))
+            .collect();
+        let el = json!({
             "kind": "element", "title": info.title, "icon": info.icon, "node": node,
-        }));
+        });
+        let id = if feeds.is_empty() {
+            self.finish(el)
+        } else {
+            finish(
+                self.catalog,
+                &mut self.core.objects,
+                &mut self.core.features,
+                &feeds,
+                el,
+                true,
+            )
+        };
         let name = blueprint_name(info.id);
         self.core.names.entry(name).or_default().push((
             id,

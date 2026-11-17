@@ -546,6 +546,7 @@ pub fn plan(
                         target_uri: Some(db::row_uri(&def.name, &key[2])),
                         group_key: Some(r.id.clone()),
                         created_at: d.at,
+                        subject: Some(db::row_uri(&def.name, &key[2])),
                         quiet: false,
                     },
                     key,
@@ -636,6 +637,7 @@ mod tests {
             alerts: Vec::new(),
             system: None,
             actions: Vec::new(),
+            keep: None,
         }
     }
 

@@ -65,11 +65,11 @@ layouts, 256 KiB per layout.
 
 | Call | Answer |
 |---|---|
-| `GET /v1/notifications?limit=0..100&before=<id>&layout=<id>` | `{notifications, unread_total, unread_by_layout, next_before?}`, newest first. |
+| `GET /v1/notifications?limit=0..100&before=<id>&layout=<id>` | `{notifications, unread_total, unread_by_layout, next_before?}`, newest first; switched-off channels are left out of both. Each notification may carry `subject`, the entity it is about. The same notifications are the rows of the `notifications` collection (`/v1/collections/notifications/rows`). |
 | `POST /v1/notifications/read {"ids": [...]}` or `{"all": true, "layout"?: id}` | `{unread_total, unread_by_layout}`. |
-| `GET /v1/notifications/channels` | `{channels: [{layout, id, title, description, default_enabled, importance, enabled}]}`; `layout` is the layout (or blueprint) the channel belongs to; `enabled` is the calling device's choice. |
+| `GET /v1/notifications/channels` | `{channels: [{layout, id, title, description, default_enabled, importance, enabled}]}`; `layout` is the layout (or blueprint) the channel belongs to; `enabled` is the channel's switch, for the whole pod (a row of the `notification_channels` collection). |
 | `PUT /v1/devices/{id} {platform, name?, push?: {endpoint, p256dh, auth} \| null}` | Registers the device under the session; `push` sets or removes its Web Push subscription. |
-| `PUT /v1/devices/{id}/channels {"<layout>.<channel>": bool}` | The device's channel choices. |
+| `PUT /v1/devices/{id}/channels {"<layout>.<channel>": bool}` | Turns channels on or off for the whole pod (`{id}` must be a registered device). |
 | `DELETE /v1/devices/{id}` | Forgets the device. |
 | `GET /v1/push/key` | `{vapid_public_key}`; 404 `push_unavailable` with `CONSTRUCT_PUSH=off`. |
 

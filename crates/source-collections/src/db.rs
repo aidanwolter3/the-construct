@@ -994,7 +994,10 @@ pub fn usage(conn: &Connection) -> rusqlite::Result<(i64, i64)> {
     conn.query_row(
         &format!(
             "SELECT COUNT(*), COALESCE(SUM(LENGTH(values_json)), 0) FROM collections_rows
-             WHERE deleted_at IS NULL AND collection {LIVE}"
+             WHERE deleted_at IS NULL AND collection {LIVE}
+               AND collection NOT IN ('{}', '{}')",
+            crate::inbox::NOTIFICATIONS,
+            crate::inbox::CHANNELS
         ),
         [],
         |r| Ok((r.get(0)?, r.get(1)?)),

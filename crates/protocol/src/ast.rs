@@ -934,10 +934,46 @@ pub struct GroupBy {
 /// literal text) is non-blank, only items whose `field` equals it exactly are
 /// drawn. Applied before the list's [`ListFilter`]; both can be set (a
 /// category picker and a search box over one list).
+///
+/// Feature `list_where_age` (decision `notifications-in-a-collection`):
+/// `older_than` (`30m`, `12h`, `1d`, `2w`) instead matches items whose
+/// `field` is a date or time more than that long ago on the device's
+/// clock (an empty or unreadable value never does), and `not` inverts a
+/// condition (a blank `equals` still matches everything).
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct ListWhere {
     pub field: String,
+    #[serde(default)]
     pub equals: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub older_than: Option<String>,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub not: bool,
+}
+
+impl ListWhere {
+    /// Whether this condition reads the clock or is inverted (feature
+    /// `list_where_age`).
+    pub fn uses_age(&self) -> bool {
+        self.older_than.is_some() || self.not
+    }
+}
+
+/// A duration as `older_than` writes it (`45s`, `30m`, `12h`, `1d`,
+/// `2w`), in seconds; `None` when it doesn't read as one.
+pub fn duration_secs(text: &str) -> Option<i64> {
+    let t = text.trim();
+    let unit = t.chars().last()?;
+    let n: i64 = t[..t.len() - unit.len_utf8()].trim().parse().ok()?;
+    let per = match unit {
+        's' => 1,
+        'm' => 60,
+        'h' => 3_600,
+        'd' => 86_400,
+        'w' => 7 * 86_400,
+        _ => return None,
+    };
+    (n >= 0).then(|| n.saturating_mul(per))
 }
 
 /// A `core://List` `where`: one [`ListWhere`] (`{field, equals}`), or
