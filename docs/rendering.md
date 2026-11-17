@@ -131,7 +131,7 @@ images move but keep their size, since each size is cut anew). A mouse wheel not
 120 ms; trackpad deltas apply as they come (macOS adds its own momentum). A drag's scrolling is applied once per frame, and the GPU renderer keeps shaped text between frames. The session follows the platform's light or dark mode (`Session::set_dark`). Dark mode draws the theme's dark palette
 (decision `dark-palette`): the background is the `page` token, dialogs, sheets, panels and the edit bar draw on
 `card`, and each mode takes only its own token values from `core://theme` (`<token>`, `<token>_dark`), any token
-the pod sends included. `core://Sticky` pins at the top of its scrolling view, over the page
+the pod sends included. The renderer's own controls (a switch, `core://Button`) draw `accent` in light mode once the pod sets it, else Material's purple; an off switch follows `muted_surface` and `muted_text` once set, and an optional token of the pod's own, `on_accent`, is what goes on the accent fill (decision `controls-follow-the-theme`). `core://Sticky` pins at the top of its scrolling view, over the page
 background, until its parent scrolls away; one that rests within 24 points of the view's top (a column's padding)
 pins where it rests, so it never moves (the Compose UI moved it up to the top first).
 
