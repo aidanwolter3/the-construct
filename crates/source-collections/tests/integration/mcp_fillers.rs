@@ -5,7 +5,8 @@
 //! event-stream answer); an `mcp` filler fills a collection with dated
 //! arguments; an expired access token refreshes (rotating the refresh
 //! token); a refused refresh asks for a new sign-in; a token server
-//! connects with its token; and the `mcp` jack switches it all off.
+//! connects with its token; the `mcp` jack switches it all off; and a
+//! server's oversized tool list is stored capped.
 
 use std::sync::{Arc, Mutex};
 
@@ -42,6 +43,24 @@ struct Fake {
     refreshes: Mutex<usize>,
     /// Each tools/call's arguments.
     calls: Mutex<Vec<Value>>,
+    /// tools/list answers oversized tools.
+    huge: Mutex<bool>,
+}
+
+/// An oversized tools/list: a name too long to keep, a huge schema, and many
+/// tools with long descriptions.
+fn huge_tools() -> Value {
+    let big = "x".repeat(20 * 1024);
+    let mut tools = vec![
+        json!({ "name": "n".repeat(5000), "description": "too long a name", "inputSchema": {} }),
+        json!({ "name": "big_schema", "description": "d", "inputSchema": {
+            "type": "object", "properties": { "a": { "type": "string", "description": big } } } }),
+    ];
+    for i in 0..150 {
+        tools.push(json!({ "name": format!("t{i}"), "description": big, "inputSchema": {
+            "type": "object", "properties": { "a": { "type": "string", "description": "y".repeat(15_000) } } } }));
+    }
+    json!({ "tools": tools })
 }
 
 fn form(body: &Bytes) -> Map<String, Value> {
@@ -92,6 +111,7 @@ async fn mcp(State(f): State<Arc<Fake>>, headers: HeaderMap, body: Bytes) -> Res
         )
             .into_response(),
         "notifications/initialized" => StatusCode::ACCEPTED.into_response(),
+        "tools/list" if *f.huge.lock().unwrap() => axum::Json(answer(huge_tools())).into_response(),
         "tools/list" => axum::Json(answer(json!({ "tools": [{
             "name": "calendar_list_events",
             "description": "Events between two dates",
@@ -486,7 +506,67 @@ async fn a_token_server_connects_with_its_token() {
     )
     .await;
     assert!(err && e["error"] == "invalid_url", "{e}");
+    // So is a port other than https's own.
+    let (err, e) = tool(
+        &strict,
+        "mcp_connect",
+        json!({"name": "x", "url": "https://calendar.example:6379/mcp"}),
+    )
+    .await;
+    assert!(err && e["error"] == "invalid_url", "{e}");
     ok(&pod, "mcp_disconnect", json!({"name": "keyed"})).await;
     let st = ok(&pod, "mcp_servers", json!({})).await;
     assert_eq!(st["servers"], json!([]));
+}
+
+#[tokio::test]
+async fn an_oversized_tool_list_is_stored_capped() {
+    let fake = Arc::new(Fake::default());
+    *fake.access.lock().unwrap() = "api-key-1".into();
+    *fake.huge.lock().unwrap() = true;
+    let base = serve(fake.clone()).await;
+    let pod = pod();
+    let c = ok(
+        &pod,
+        "mcp_connect",
+        json!({"name": "huge", "url": format!("{base}/mcp"), "token": "api-key-1"}),
+    )
+    .await;
+    assert_eq!(c["server"]["state"], "connected", "{c}");
+    let st = ok(&pod, "mcp_servers", json!({"name": "huge"})).await;
+    let tools = st["server"]["tools"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default();
+    assert!(!tools.is_empty(), "{st}");
+    // The name too long to call is skipped; the huge schema is a bare one.
+    assert!(
+        tools
+            .iter()
+            .all(|t| t["name"].as_str().unwrap().len() <= 128)
+    );
+    assert_eq!(tools[0]["name"], "big_schema");
+    assert_eq!(tools[0]["input_schema"], json!({ "type": "object" }));
+    // Descriptions are cut, and the whole list stays near a megabyte.
+    assert!(
+        tools
+            .iter()
+            .all(|t| t["description"].as_str().unwrap().chars().count() <= 601)
+    );
+    let stored: String = pod
+        .store()
+        .with_conn(|c| {
+            c.query_row(
+                "SELECT tools FROM mcp_servers WHERE name = 'huge'",
+                [],
+                |r| r.get(0),
+            )
+        })
+        .unwrap();
+    assert!(stored.len() <= 1024 * 1024, "{} bytes stored", stored.len());
+    assert!(
+        tools.len() < 152,
+        "the cap drops tools past it: {}",
+        tools.len()
+    );
 }

@@ -57,6 +57,16 @@ pub const PENDING_TTL_SECS: i64 = 30 * 60;
 const MAX_TOOLS: usize = 200;
 /// A tool description's length in listings.
 const MAX_DESCRIPTION: usize = 600;
+/// The longest tool name kept (a longer one is skipped: a cut name can't be
+/// called).
+const MAX_TOOL_NAME: usize = 128;
+/// A tool's input schema, serialized, at most; a larger one is stored as a
+/// bare object schema.
+const MAX_SCHEMA: usize = 16 * 1024;
+/// All of a server's tools, serialized, at most; tools past it are dropped.
+const MAX_TOOLS_JSON: usize = 1024 * 1024;
+/// A server's error text kept in `last_error`.
+const MAX_ERROR: usize = 300;
 
 /// The state of a server.
 pub const CONNECTED: &str = "connected";
@@ -169,6 +179,22 @@ fn all_on(c: &Connection) -> rusqlite::Result<Vec<Server>> {
     let mut st = c.prepare(&format!("SELECT {COLUMNS} FROM mcp_servers ORDER BY name"))?;
     let rows = st.query_map([], row_to_server)?;
     rows.collect()
+}
+
+/// The server whose sign-in `state` hashes to `hash`, still good at `now`:
+/// looked up in SQL, so the public callback reads one row whatever it is sent.
+fn pending_on(c: &Connection, hash: &str, now: i64) -> rusqlite::Result<Option<Server>> {
+    c.query_row(
+        &format!(
+            "SELECT {COLUMNS} FROM mcp_servers
+             WHERE json_extract(config, '$.pending_state') = ?1
+               AND json_extract(config, '$.pending_until') >= ?2
+             LIMIT 1"
+        ),
+        params![hash, now],
+        row_to_server,
+    )
+    .optional()
 }
 
 fn save_on(c: &Connection, s: &Server) -> rusqlite::Result<()> {
@@ -298,11 +324,11 @@ fn check_url(pod: &Pod, s: &str) -> Result<reqwest::Url, String> {
     if pod.mcp_private_hosts() && matches!(u.scheme(), "http" | "https") {
         return Ok(u);
     }
-    if u.scheme() == "https" && u.host_str().is_some_and(crate::net::is_public_host) {
+    if crate::net::is_public_https(&u) {
         return Ok(u);
     }
     Err(format!(
-        "'{s}' is not an https:// address on a public host name"
+        "'{s}' is not an https:// address on a public host name (default port)"
     ))
 }
 
@@ -519,6 +545,7 @@ impl Conn {
     /// Every tool (`tools/list`, following cursors).
     async fn tools(&mut self) -> Result<Vec<Value>, RpcError> {
         let mut out = Vec::new();
+        let mut size = 0;
         let mut cursor: Option<String> = None;
         for _ in 0..10 {
             let params = match &cursor {
@@ -527,22 +554,44 @@ impl Conn {
             };
             let r = self.request("tools/list", params).await?;
             for t in r["tools"].as_array().into_iter().flatten() {
-                if out.len() >= MAX_TOOLS {
+                if out.len() >= MAX_TOOLS || size >= MAX_TOOLS_JSON {
                     break;
                 }
-                out.push(json!({
-                    "name": t["name"],
-                    "description": short(t["description"].as_str().unwrap_or(""), MAX_DESCRIPTION),
-                    "inputSchema": t["inputSchema"],
-                }));
+                let Some(tool) = kept_tool(t) else { continue };
+                size += tool.to_string().len();
+                if size > MAX_TOOLS_JSON {
+                    break;
+                }
+                out.push(tool);
             }
             cursor = r["nextCursor"].as_str().map(str::to_owned);
-            if cursor.is_none() || out.len() >= MAX_TOOLS {
+            if cursor.is_none() || out.len() >= MAX_TOOLS || size >= MAX_TOOLS_JSON {
                 break;
             }
         }
         Ok(out)
     }
+}
+
+/// A listed tool as the pod stores it, capped: `None` for one without a
+/// usable name; a description cut to [`MAX_DESCRIPTION`]; a schema over
+/// [`MAX_SCHEMA`] replaced by a bare object schema.
+fn kept_tool(t: &Value) -> Option<Value> {
+    let name = t["name"].as_str().map(str::trim)?;
+    if name.is_empty() || name.chars().count() > MAX_TOOL_NAME {
+        return None;
+    }
+    let schema = &t["inputSchema"];
+    let schema = if schema.to_string().len() > MAX_SCHEMA {
+        json!({ "type": "object" })
+    } else {
+        schema.clone()
+    };
+    Some(json!({
+        "name": name,
+        "description": short(t["description"].as_str().unwrap_or(""), MAX_DESCRIPTION),
+        "inputSchema": schema,
+    }))
 }
 
 /// A `tools/call` result as a value: its structured content, else its text
@@ -748,7 +797,7 @@ async fn register(
         let why = v["error_description"]
             .as_str()
             .or(v["error"].as_str())
-            .map(str::to_owned)
+            .map(|e| short(e, MAX_ERROR))
             .unwrap_or_else(|| short(&String::from_utf8_lossy(&body), 200));
         return Err(format!(
             "the authorization server refused to register the pod ({}): {why}",
@@ -822,7 +871,7 @@ async fn token_request(
             message: format!(
                 "the authorization server answered {}: {}",
                 status.as_u16(),
-                v["error_description"].as_str().unwrap_or(err)
+                short(v["error_description"].as_str().unwrap_or(err), MAX_ERROR)
             ),
             refused: status.is_client_error(),
         });
@@ -1221,17 +1270,7 @@ pub async fn callback(State(pod): State<Pod>, Query(q): Query<Map<String, Value>
     let hash = sha256_hex(&state);
     let now = now_secs();
     let found = pod
-        .blocking(move |st| {
-            st.with_conn(|c| {
-                Ok(all_on(c)?.into_iter().find(|s| {
-                    s.text("pending_state") == Some(hash.as_str())
-                        && s.config
-                            .get("pending_until")
-                            .and_then(Value::as_i64)
-                            .is_some_and(|u| u >= now)
-                }))
-            })
-        })
+        .blocking(move |st| st.with_conn(|c| pending_on(c, &hash, now)))
         .await
         .ok()
         .flatten();
@@ -1248,7 +1287,11 @@ pub async fn callback(State(pod): State<Pod>, Query(q): Query<Map<String, Value>
     if !error.is_empty() || code.is_empty() || verifier.is_none() {
         s.last_error = Some(format!(
             "sign-in didn't finish: {}",
-            if error.is_empty() { "no code" } else { &error }
+            if error.is_empty() {
+                "no code".to_owned()
+            } else {
+                short(&error, MAX_ERROR)
+            }
         ));
         let _ = save(&pod, &s).await;
         return page(
