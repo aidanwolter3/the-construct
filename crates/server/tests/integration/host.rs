@@ -1774,6 +1774,32 @@ mod web {
                 .status(),
             StatusCode::NOT_FOUND
         );
+        // The link as apps write it (a trailing slash, `@` as `%40`, other
+        // case) redirects to the page's own address.
+        let no_redirects = reqwest::Client::builder()
+            .redirect(reqwest::redirect::Policy::none())
+            .build()
+            .unwrap();
+        for (from, to) in [
+            (
+                "/@cook/our-meals/".to_owned(),
+                "/@cook/our-meals".to_owned(),
+            ),
+            (
+                "/%40cook/our-meals".to_owned(),
+                "/@cook/our-meals".to_owned(),
+            ),
+            (
+                "/%40Cook/Our-Meals/".to_owned(),
+                "/@cook/our-meals".to_owned(),
+            ),
+            ("/@Cook/our-meals".to_owned(), "/@cook/our-meals".to_owned()),
+            (format!("/s/{link}/"), format!("/s/{link}")),
+        ] {
+            let r = no_redirects.get(env.url(&from)).send().await.unwrap();
+            assert_eq!(r.status(), StatusCode::PERMANENT_REDIRECT, "{from}");
+            assert_eq!(r.headers()["location"], to.as_str(), "{from}");
+        }
         // The short path holds the handle.
         let renamed = tool(&env, &key, "set_handle", json!({ "handle": "chef" })).await;
         assert_eq!(renamed["error"], "handle_in_use", "{renamed}");

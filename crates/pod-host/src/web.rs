@@ -101,6 +101,44 @@ pub(crate) fn public_routes() -> Router<Arc<Host>> {
         .route("/@{handle}/{slug}", get(short_page))
         .route("/@{handle}/{slug}/view", get(short_view))
         .route("/@{handle}/{slug}/image", get(short_image))
+        // The same pages as people's apps write them: a trailing slash, and
+        // `@` sent as `%40`. Each redirects to the address above, so the
+        // page reads its own path.
+        .route("/s/{link}/", get(link_slash))
+        .route("/@{handle}/{slug}/", get(short_variant))
+        .route("/%40{handle}/{slug}", get(short_variant))
+        .route("/%40{handle}/{slug}/", get(short_variant))
+}
+
+/// A permanent redirect to `path` (the page's own address).
+fn moved(path: String) -> Response {
+    match HeaderValue::from_str(&path) {
+        Ok(v) => {
+            let mut r = StatusCode::PERMANENT_REDIRECT.into_response();
+            r.headers_mut().insert(header::LOCATION, v);
+            r
+        }
+        Err(_) => not_found(),
+    }
+}
+
+/// `/s/<link>/`: the link without its trailing slash.
+async fn link_slash(Path(link): Path<String>) -> Response {
+    if !pod_core::public_copy::is_link(&link) {
+        return not_found();
+    }
+    moved(format!("/s/{link}"))
+}
+
+/// `/@<handle>/<slug>/`, `/%40<handle>/<slug>` (and any case): the short
+/// path as `/@<handle>/<slug>`.
+async fn short_variant(Path((handle, slug)): Path<(String, String)>) -> Response {
+    let (handle, slug) = (handle.to_ascii_lowercase(), slug.to_ascii_lowercase());
+    if !pod_core::construct::share::valid_handle(&handle) || !pod_core::public_copy::is_slug(&slug)
+    {
+        return not_found();
+    }
+    moved(format!("/@{handle}/{slug}"))
 }
 
 /// Where the host doesn't serve public links (`CONSTRUCT_PUBLIC_WEB`
@@ -192,6 +230,11 @@ async fn short_page(
     Path((handle, slug)): Path<(String, String)>,
     headers: HeaderMap,
 ) -> Response {
+    if handle.bytes().any(|b| b.is_ascii_uppercase())
+        || slug.bytes().any(|b| b.is_ascii_uppercase())
+    {
+        return short_variant(Path((handle, slug))).await;
+    }
     page_of(host, Named::Short(handle, slug), headers).await
 }
 
