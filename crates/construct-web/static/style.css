@@ -14,4 +14,3 @@ input#code { font: inherit; padding: 12px; border: 1px solid #c9c5d0; border-rad
 button { font: inherit; padding: 12px; border: 0; border-radius: 10px; background: #6750a4; color: #fff;
   cursor: pointer; }
 #code-error { color: #b3261e; min-height: 1.4em; margin: 0; }
-#log-out { position: fixed; right: 12px; bottom: 12px; padding: 6px 12px; font-size: 13px; opacity: 0.7; }

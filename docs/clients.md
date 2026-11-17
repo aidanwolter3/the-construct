@@ -82,7 +82,8 @@ CONSTRUCT_WEB=1 CONSTRUCT_OPEN_POD=off cargo run -p server -- serve --pod-code c
 code form, a wrong code, home drawn, the cookie, a reload, a phone-sized window and logging out.
 
 - **Signing in**: the page asks for the pod code and posts it to `POST /web/session`, which answers a session cookie
-  (`HttpOnly`, `SameSite=Strict`): an ordinary session of the pod, which expires and which **Log out** ends. The code
+  (`HttpOnly`, `SameSite=Strict`): an ordinary session of the pod, which expires and which Settings' **Leave pod on
+  this device** ends (in a browser it logs out: `POST /web/logout`, then the code form). The code
   is not kept in the browser. The cookie works only on requests that carry `x-construct-client: web` and never for
   `/v1/mcp` ([api.md](api.md#web-client)).
 - **What it draws**: the layouts home reaches, fetched with home's root (`POST /v1/objects`) and materialized in the

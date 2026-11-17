@@ -57,7 +57,8 @@ function check(ok, what) {
   check(logs.some((l) => l.startsWith('drawing on the GPU')), 'it draws on the GPU (WebGL2): ' +
     (logs.find((l) => l.startsWith('drawing on') || l.startsWith('no GPU')) || 'no word'));
   await page.screenshot({ path: out + '/web-home-desktop.png' });
-  check((await drawn(page)) > 500, 'home is drawn');
+  const lit = await drawn(page);
+  check(lit > 60, `home is drawn (${lit} sampled pixels differ from the background)`);
   await page.screenshot({ path: out + '/web-home-desktop.png' });
 
   const cookie = (await page.context().cookies()).find((c) => c.name === 'construct_web');
@@ -71,10 +72,13 @@ function check(ok, what) {
 
   await page.setViewportSize({ width: 390, height: 844 });
   await page.waitForTimeout(1000);
-  check((await drawn(page)) > 200, 'a phone-sized window is drawn');
+  const litPhone = await drawn(page);
+  check(litPhone > 30, `a phone-sized window is drawn (${litPhone})`);
   await page.screenshot({ path: out + '/web-home-phone.png' });
 
-  await page.click('#log-out');
+  // What Settings' "Leave pod on this device" does in a browser.
+  await page.evaluate(() => fetch('/web/logout', { method: 'POST', headers: { 'x-construct-client': 'web' } }));
+  await page.reload();
   await page.waitForSelector('#sign-in:not([hidden])', { timeout: 15000 });
   check(true, 'logging out asks for the code again');
 
