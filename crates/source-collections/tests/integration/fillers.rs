@@ -951,8 +951,23 @@ async fn a_long_feeds_upcoming_event_keeps_its_row_and_alerts_once() {
     let first = rows(&pod, "events").await;
     assert_eq!(first.len(), 1, "{first:?}");
     assert_eq!(first[0]["title"], "Valley Film Festival");
+    // Notifications need an app showing the collection.
+    ok(
+        &pod,
+        "create_layout",
+        json!({"title": "Events", "feeds": [["collections", "events"]],
+            "layout": {"type": "core://Workspace", "id": "x", "title": "Events", "slots": [
+                {"slot_id": "list", "provider_uri": "core://custom", "content": {
+                    "type": "core://List", "query_key": "collection:events",
+                    "item_template": {"type": "core://Text", "style": "Body",
+                        "value_expr": "$item.title"}}}]}}),
+    )
+    .await;
+    source_collections::alerts::run(&pod, None).await;
+    assert_eq!(pod.stored_notifications().unwrap().len(), 1);
     let id = filler_ids(&pod, "events").await.remove(0);
     fill::fill(&pod, "events", &id, true).await;
+    source_collections::alerts::run(&pod, None).await;
     let again = rows(&pod, "events").await;
     assert_eq!(again.len(), 1);
     assert_eq!(again[0]["id"], first[0]["id"], "the row stays");
@@ -962,17 +977,11 @@ async fn a_long_feeds_upcoming_event_keeps_its_row_and_alerts_once() {
         detail.starts_with("1 items · 300 past ones left out"),
         "{detail}"
     );
-    let sent: i64 = pod
-        .store()
-        .with_conn(|c| {
-            c.query_row(
-                "SELECT COUNT(*) FROM notifications WHERE dedupe_key LIKE 'alert:events:%'",
-                [],
-                |r| r.get(0),
-            )
-        })
-        .unwrap();
-    assert_eq!(sent, 1, "notified once");
+    assert_eq!(
+        pod.stored_notifications().unwrap().len(),
+        1,
+        "notified once"
+    );
 }
 
 #[tokio::test]
