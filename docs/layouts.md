@@ -340,7 +340,7 @@ The server components:
 | `core:tinted_icon` | `icon`, `tint`, `tint_bg`, `size` | An icon centred in a tinted circle (`accent` on `accent_surface`, 34 dp by default). Until the app has issue #325's renderer fix, an icon-only Badge, and so this icon, sits 2 dp left of centre. |
 | `core:date_block` | `weekday`, `day` | A compact date: the short weekday (Caption, muted) over the day of the month (Title), centred in 36 dp. |
 | `core:icon_row` | `icon`, `tint`, `tint_bg`, `title`, `meta`, `trailing`, `chevron` | A list row: `core:tinted_icon`, a bold title with a muted line under it while `meta` is set, optional quiet `trailing` text and a ›. |
-| `core:collapsible` | `key`, `title`, `show_label`, `hide_label`; children | A section that starts closed: a header (the title, Show or Hide) that opens and closes its children, kept open while the app runs (`local://collapsible/<key>`). |
+| `core:collapsible` | `key`, `title`, `show_label`, `hide_label`; children | A section that starts closed: a header (the title, Show or Hide) that opens and closes its children, kept open while the app runs (`local://collapsible/<key>#open`: `"true"` open, `""` or `"false"` closed). |
 | `core:warning_chip` | `text` | A warning chip. |
 | `core:link_button` | `label`, `url` | A button opening a link, shown while the link is set. |
 | `core:labeled_text` | `label`, `text`, `padding_h` | A small label above a text (an item's About or Description on its screen), shown while the text is set. |

@@ -213,6 +213,41 @@
                 },
                 {
                   "content": {
+                    "content": {
+                      "children": [
+                        {
+                          "style": "Label",
+                          "type": "core://Text",
+                          "value_expr": "Read more than a day ago"
+                        },
+                        {
+                          "type": "core://Spacer"
+                        },
+                        {
+                          "style": "Secondary",
+                          "type": "core://Text",
+                          "value_expr": "Show"
+                        }
+                      ],
+                      "padding_h_dp": 16,
+                      "padding_v_dp": 8,
+                      "type": "core://Row"
+                    },
+                    "content_description": "Read more than a day ago",
+                    "on_click": {
+                      "entity_uri": "local://collapsible/inbox_older",
+                      "field": "open",
+                      "intent": "action.local.set",
+                      "value_expr": "true"
+                    },
+                    "type": "core://Tappable"
+                  },
+                  "equals": "false",
+                  "type": "core://Conditional",
+                  "value": "${local://collapsible/inbox_older#open}"
+                },
+                {
+                  "content": {
                     "children": [
                       {
                         "content": {
@@ -240,7 +275,7 @@
                           "entity_uri": "local://collapsible/inbox_older",
                           "field": "open",
                           "intent": "action.local.set",
-                          "value_expr": ""
+                          "value_expr": "false"
                         },
                         "type": "core://Tappable"
                       },
