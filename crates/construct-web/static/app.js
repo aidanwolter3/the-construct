@@ -1,6 +1,6 @@
 // The web client's page (decision `web-client`): starts the WebAssembly client, and when there is no session
 // asks for the pod code, which the server turns into a session cookie (the code is not kept here).
-import init, { start } from "/web/construct_web.js";
+import init, { start, start_public } from "/web/construct_web.js";
 
 const $ = (id) => document.getElementById(id);
 const web = { "x-construct-client": "web" };
@@ -11,7 +11,16 @@ async function hasSession() {
   return r.ok;
 }
 
+// A public link (/s/<link>, decision `public-web-links`): its copy, read-only, for anyone; no pod, no sign-in.
+const shared = location.pathname.match(/^\/s\/(pub-[a-z0-9]+)\/?$/);
+
 async function run() {
+  if (shared) {
+    await init();
+    await start_public(shared[1]);
+    $("loading").hidden = true;
+    return;
+  }
   if (!(await hasSession())) {
     $("loading").hidden = true;
     $("sign-in").hidden = false;

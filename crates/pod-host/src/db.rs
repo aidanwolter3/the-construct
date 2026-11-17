@@ -144,6 +144,25 @@ const MIGRATIONS: &[Step] = &[
      ALTER TABLE credentials_v6 RENAME TO credentials;
      CREATE INDEX credentials_pod ON credentials(pod_id);",
     ),
+    // 7 (decision `public-web-links`): public copies, a layout and the
+    // Collections rows it shows, for anyone with the link (`/s/<link>`).
+    // A revoked copy keeps its row (the owner's list says so) without its
+    // copy.
+    Step::sql(
+        "public_copies",
+        "CREATE TABLE public_copies (
+         link       TEXT PRIMARY KEY NOT NULL,
+         owner_pod  TEXT NOT NULL REFERENCES pods(id),
+         layout     TEXT NOT NULL,
+         rows       TEXT NOT NULL,
+         title      TEXT NOT NULL,
+         copy       TEXT NOT NULL,
+         created_at INTEGER NOT NULL,
+         updated_at INTEGER NOT NULL,
+         revoked_at INTEGER
+     );
+     CREATE INDEX public_copies_owner ON public_copies(owner_pod);",
+    ),
 ];
 
 /// What a credential is for (`credentials.kind`).

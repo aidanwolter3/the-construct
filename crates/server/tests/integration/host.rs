@@ -1278,4 +1278,210 @@ mod web {
             StatusCode::BAD_REQUEST
         );
     }
+
+    /// Calls a pod MCP tool with an MCP credential: its JSON answer.
+    async fn tool(env: &Env, key: &str, name: &str, args: Value) -> Value {
+        let resp: Value = client()
+            .post(env.url("/v1/mcp"))
+            .bearer_auth(key)
+            .header("accept", "application/json, text/event-stream")
+            .json(&json!({ "jsonrpc": "2.0", "id": 1, "method": "tools/call",
+                "params": { "name": name, "arguments": args } }))
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        let text = resp["result"]["content"][0]["text"]
+            .as_str()
+            .unwrap_or("null");
+        serde_json::from_str(text).unwrap_or(resp)
+    }
+
+    async fn mcp_key(env: &Env, pod: &str) -> String {
+        let (host, pod) = (env.host.clone(), pod.to_owned());
+        tokio::task::spawn_blocking(move || host.issue_mcp(&pod, "test").unwrap())
+            .await
+            .unwrap()
+    }
+
+    /// Decision `public-web-links`: a reviewed copy of a layout and the
+    /// Collections rows it shows, read at `/s/<link>` by anyone, without the
+    /// fields it doesn't show or the controls that write; revoked at once.
+    #[tokio::test]
+    async fn a_public_link_shows_a_reviewed_copy_until_it_is_revoked() {
+        // Off: no tool, no page.
+        let (env, _files) = web_env().await;
+        env.create("off").await;
+        let key = mcp_key(&env, "off").await;
+        let off = tool(&env, &key, "share_publicly", json!({ "layout": "home" })).await;
+        assert_eq!(off["error"], "public_links_off", "{off}");
+
+        let files = tempfile::tempdir().unwrap();
+        std::fs::write(
+            files.path().join("index.html"),
+            "<title>The Construct</title>",
+        )
+        .unwrap();
+        let env = env_with(HostConfig {
+            web: Some(WebConfig {
+                dir: files.path().to_owned(),
+            }),
+            public_web: true,
+            ..HostConfig::default()
+        })
+        .await;
+        env.create("cook").await;
+        let key = mcp_key(&env, "cook").await;
+        let def = tool(&env, &key, "define_collection", json!({ "name": "recipes", "fields": [
+            { "name": "title", "type": "text" }, { "name": "notes", "type": "text", "optional": true },
+            { "name": "photo", "type": "text", "optional": true } ] })).await;
+        assert!(def.get("error").is_none(), "{def}");
+        for (t, n) in [
+            ("Lentil soup", "for Dana's birthday"),
+            ("Shakshuka", "too spicy"),
+        ] {
+            tool(
+                &env,
+                &key,
+                "add_row",
+                json!({ "collection": "recipes",
+                "values": { "title": t, "notes": n, "photo": "https://img.example/soup.png" } }),
+            )
+            .await;
+        }
+        let made = tool(&env, &key, "create_layout", json!({ "title": "Recipes",
+            "feeds": [["collections", "recipes"]],
+            "layout": { "type": "core://Page", "id": "recipes", "title": "Recipes <b>", "root":
+              { "type": "core://Column", "children": [
+                { "type": "core://Text", "style": "Title", "value_expr": "Our recipes" },
+                { "type": "core://Button", "label": "Add one", "on_click": { "intent": "action.mutation.create",
+                  "query_key": "collection:recipes", "entity_uri": "collections://recipes/$nonce", "entity": {},
+                  "endpoint": "/v1/collections/recipes/create", "payload": {} } },
+                { "type": "core://List", "query_key": "collection:recipes", "item_template":
+                  { "type": "core://Column", "children": [
+                    { "type": "core://Text", "style": "Body", "value_expr": "$item.title" },
+                    { "type": "core://Image", "url": "$item.photo" } ] } } ] } } })).await;
+        let layout = made["id"]
+            .as_str()
+            .unwrap_or_else(|| panic!("{made}"))
+            .to_owned();
+        tool(
+            &env,
+            &key,
+            "update_layout",
+            json!({ "id": "home", "layout": { "type": "core://Page", "id": "home",
+            "title": "Home", "root": { "type": "core://Layout", "ref": layout } } }),
+        )
+        .await;
+
+        // The review says what goes, and nothing is shared yet.
+        let review = tool(&env, &key, "share_publicly", json!({ "layout": layout })).await;
+        let reads = &review["anyone_with_the_link_reads"];
+        assert_eq!(reads["rows"], 2, "{review}");
+        assert!(
+            !reads["fields"]
+                .as_array()
+                .unwrap()
+                .contains(&json!("notes")),
+            "{review}"
+        );
+        assert!(
+            reads["texts"]
+                .as_array()
+                .unwrap()
+                .contains(&json!("Our recipes")),
+            "{review}"
+        );
+        assert_eq!(
+            review["taken_out"]["controls_that_write_or_go_elsewhere"],
+            1
+        );
+        assert_eq!(
+            tool(&env, &key, "list_public_links", json!({})).await["links"],
+            json!([])
+        );
+        // A wrong review id shares nothing.
+        let again = tool(
+            &env,
+            &key,
+            "share_publicly",
+            json!({ "layout": layout, "confirm": "review-nope" }),
+        )
+        .await;
+        assert!(again["review_id"].is_string());
+        let shared = tool(
+            &env,
+            &key,
+            "share_publicly",
+            json!({ "layout": layout, "confirm": review["review_id"] }),
+        )
+        .await;
+        let link = shared["link"]
+            .as_str()
+            .unwrap_or_else(|| panic!("{shared}"))
+            .to_owned();
+
+        // Anyone reads it: no cookie, no header.
+        let view: Value = client()
+            .get(env.url(&format!("/s/{link}/view")))
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        let text = view.to_string();
+        assert!(
+            text.contains("Lentil soup") && text.contains("Our recipes"),
+            "{text}"
+        );
+        assert!(
+            !text.contains("birthday") && !text.contains("Add one"),
+            "{text}"
+        );
+        let page = client()
+            .get(env.url(&format!("/s/{link}")))
+            .send()
+            .await
+            .unwrap()
+            .text()
+            .await
+            .unwrap();
+        assert!(
+            page.contains("<title>Recipes &lt;b&gt;</title>"),
+            "the title is escaped: {page}"
+        );
+        // Its image proxy passes only what the copy names.
+        let img = |u: &str| {
+            client()
+                .get(env.url(&format!("/s/{link}/image?url={u}")))
+                .send()
+        };
+        assert_eq!(
+            img("https%3A%2F%2Fother.example%2Fx.png")
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::NOT_FOUND
+        );
+        // An unknown or malformed link is nothing.
+        let unknown = client()
+            .get(env.url("/s/pub-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/view"))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(unknown.status(), StatusCode::NOT_FOUND);
+
+        // Revoked: gone at once.
+        let gone = tool(&env, &key, "unshare_publicly", json!({ "link": link })).await;
+        assert_eq!(gone["ok"], true, "{gone}");
+        let after = client()
+            .get(env.url(&format!("/s/{link}/view")))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(after.status(), StatusCode::NOT_FOUND);
+    }
 }

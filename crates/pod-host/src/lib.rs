@@ -192,6 +192,17 @@ pub struct HostConfig {
     /// The web client (`CONSTRUCT_WEB=1`, decision `web-client`): its page,
     /// its session cookie and its image proxy. Off: none of them exist.
     pub web: Option<web::WebConfig>,
+    /// Public links (`CONSTRUCT_PUBLIC_WEB=1`, decision `public-web-links`):
+    /// pods may share a layout's copy at `/s/<link>`. Only with the web
+    /// client on, which draws them.
+    pub public_web: bool,
+}
+
+impl HostConfig {
+    /// Whether public links are served (they need the web client).
+    pub fn public_links(&self) -> bool {
+        self.public_web && self.web.is_some()
+    }
 }
 
 impl HostConfig {
@@ -228,6 +239,7 @@ impl HostConfig {
             android: app_links::AndroidAppLinks::from_env(),
             oauth_client: oauth::StaticClient::from_env(),
             web: web::WebConfig::from_env(),
+            public_web: var("CONSTRUCT_PUBLIC_WEB").as_deref() == Some("1"),
         }
     }
 }
@@ -1009,7 +1021,13 @@ impl Host {
             state.set_public_base(base);
         }
         state.set_hosted();
-        state.set_shelf(id, Arc::new(shelf::HostShelf::new(self.store.clone())));
+        state.set_shelf(
+            id,
+            Arc::new(
+                shelf::HostShelf::new(self.store.clone())
+                    .with_public_links(self.config.public_links()),
+            ),
+        );
         let pod: Pod = Arc::new(state);
         let open = Arc::new(OpenPod {
             router: pod_core::app(pod.clone()),
@@ -1072,11 +1090,14 @@ impl Host {
 /// The host's router: its own routes, then every other request forwarded to
 /// the caller's pod.
 pub fn app(host: Arc<Host>) -> Router {
-    let web = if host.config.web.is_some() {
+    let mut web = if host.config.web.is_some() {
         web::routes()
     } else {
         Router::new()
     };
+    if host.config.public_links() {
+        web = web.merge(web::public_routes());
+    }
     Router::new()
         .route("/healthz", get(|| async { "ok" }))
         .route(screen::OPEN_PATH, post(open_with_token))

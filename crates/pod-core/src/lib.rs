@@ -26,6 +26,7 @@ pub mod notify;
 pub mod notify_store;
 pub mod porcelain;
 pub mod preview;
+pub mod public_copy;
 pub mod push;
 pub mod secrets;
 pub mod session;
@@ -441,6 +442,8 @@ impl AppState {
             let (a, pod) = (Arc::clone(a), Arc::clone(self));
             rt.spawn(async move { a.resume(&pod).await });
         }
+        // Public links follow the data they copy (decision `public-web-links`).
+        public_copy::watch(self);
         let weak = Arc::downgrade(self);
         rt.spawn(async move {
             loop {

@@ -129,6 +129,21 @@ share screen.
 - `list_adoptions` and `update_adoption` follow new versions while they fit the bindings; `list_publications` and
   `revoke_publication` manage the pod's own. A revoked publication keeps drawing where it was adopted.
 
+### Public links for people without a pod
+
+Where the server serves them (`CONSTRUCT_PUBLIC_WEB=1`, decision [`public-web-links`](decisions/public-web-links.md)),
+Claude can make a page anyone can open in a browser: a copy of a layout and the Collections rows it shows,
+read-only. The tools are listed only on such a server.
+
+- `share_publicly {layout}` answers a review and shares nothing: every text and value a visitor would read, every
+  URL, the rows and fields that go (only the fields the layout reads), and what was taken out (controls that write
+  or open other layouts, embedded layouts, screens). `rows: [<entity URI>]` shares only some rows (one recipe);
+  `item` draws the layout with one row as `$item`. `share_publicly {layout, confirm: <review_id>}` shares it and
+  answers its `url` (`/s/pub-…`). Sharing the same layout and rows again updates the same link.
+- The copy is made again when the pod's Collections data changes, so new rows the layout shows appear on the
+  page. A layout that draws anything but Collections data (Pixelfed, Events) is refused.
+- `list_public_links` lists them; `unshare_publicly {link}` stops one at once and its copy leaves the server.
+
 ## Collections
 
 Collections is a built-in data source (`crates/source-collections`) that stores any collection Claude declares. Claude

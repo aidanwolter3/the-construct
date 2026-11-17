@@ -26,7 +26,7 @@ use axum::{
 };
 use pod_core::session::{new_session_token, session_hash, session_ttl_from_env};
 use pod_core::{json_error, metrics, parse_json_body};
-use serde_json::json;
+use serde_json::{Value, json};
 
 use crate::db::CredentialKind;
 use crate::{Host, TOKEN_PREFIX, client_keys, peer, rate_limited};
@@ -75,6 +75,111 @@ pub(crate) fn routes() -> Router<Arc<Host>> {
         .route("/web/image", get(image))
         .route("/web/fonts/{file}", get(font))
         .route("/web/{file}", get(asset))
+}
+
+/// Public links (decision `public-web-links`, `CONSTRUCT_PUBLIC_WEB=1`):
+/// anyone with a link reads its copy, never the pod.
+pub(crate) fn public_routes() -> Router<Arc<Host>> {
+    Router::new()
+        .route("/s/{link}", get(public_page))
+        .route("/s/{link}/view", get(public_view))
+        .route("/s/{link}/image", get(public_image))
+}
+
+/// A live public copy by its link.
+async fn public_copy(
+    host: &Arc<Host>,
+    link: &str,
+) -> Option<pod_core::construct::share::PublicCopy> {
+    use pod_core::construct::share::Shelf;
+    if !pod_core::public_copy::is_link(link) {
+        return None;
+    }
+    let shelf = crate::shelf::HostShelf::new(host.store.clone()).with_public_links(true);
+    let link = link.to_owned();
+    host.blocking(move |_| shelf.public_by_link(&link))
+        .await
+        .ok()?
+        .ok()?
+}
+
+/// Text for HTML.
+fn escape_html(s: &str) -> String {
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+        .replace('\'', "&#39;")
+}
+
+/// `GET /s/<link>`: the web client's page for a visitor, titled with the
+/// copy's title (a chat app's link preview shows it).
+async fn public_page(State(host): State<Arc<Host>>, Path(link): Path<String>) -> Response {
+    let (Some(d), Some(c)) = (dir(&host), public_copy(&host, &link).await) else {
+        return not_found();
+    };
+    let Some((page, kind)) = file(d, "index.html").await else {
+        return not_found();
+    };
+    let title = escape_html(&c.title);
+    let page = String::from_utf8_lossy(&page).replace(
+        "<title>The Construct</title>",
+        &format!(
+            "<title>{title}</title>\n  <meta property=\"og:title\" content=\"{title}\">\n  \
+             <meta property=\"og:site_name\" content=\"The Construct\">\n  \
+             <meta name=\"robots\" content=\"noindex\">"
+        ),
+    );
+    served(page.into_bytes(), kind, "no-cache")
+}
+
+/// `GET /s/<link>/view`: the copy a visitor's page draws
+/// (`{title, node, data, item?}`).
+async fn public_view(State(host): State<Arc<Host>>, Path(link): Path<String>) -> Response {
+    match public_copy(&host, &link).await {
+        Some(c) => {
+            let mut r = axum::Json(c.copy).into_response();
+            r.headers_mut()
+                .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-cache"));
+            r
+        }
+        None => not_found(),
+    }
+}
+
+/// `GET /s/<link>/image?url=<url>`: an image the copy names, passed on
+/// (only URLs that appear in the copy, so it is no open proxy).
+async fn public_image(
+    State(host): State<Arc<Host>>,
+    Path(link): Path<String>,
+    RawQuery(q): RawQuery,
+) -> Response {
+    let Some(c) = public_copy(&host, &link).await else {
+        return not_found();
+    };
+    let Some(url) = url_param(q) else {
+        return json_error(StatusCode::BAD_REQUEST, json!({ "error": "invalid_url" }));
+    };
+    let quoted = Value::String(url.to_string()).to_string();
+    if !c.copy.to_string().contains(&quoted) {
+        return json_error(
+            StatusCode::NOT_FOUND,
+            json!({ "error": "not_in_this_page" }),
+        );
+    }
+    proxy_image(url).await
+}
+
+/// The `url` parameter of a query, parsed.
+fn url_param(q: Option<String>) -> Option<reqwest::Url> {
+    reqwest::Url::parse(&format!("http://q/?{}", q.unwrap_or_default()))
+        .ok()
+        .and_then(|u| {
+            u.query_pairs()
+                .find(|(k, _)| k == "url")
+                .map(|(_, v)| v.into_owned())
+        })
+        .and_then(|u| reqwest::Url::parse(&u).ok())
 }
 
 /// The cookie's token on a request the host may take it on: the web client
@@ -305,16 +410,16 @@ async fn image(State(host): State<Arc<Host>>, RawQuery(q): RawQuery, req: Reques
     ) {
         return json_error(StatusCode::UNAUTHORIZED, json!({ "error": "unauthorized" }));
     }
-    let url = reqwest::Url::parse(&format!("http://q/?{}", q.unwrap_or_default()))
-        .ok()
-        .and_then(|u| {
-            u.query_pairs()
-                .find(|(k, _)| k == "url")
-                .map(|(_, v)| v.into_owned())
-        });
-    let Some(url) = url.and_then(|u| reqwest::Url::parse(&u).ok()) else {
+    let Some(url) = url_param(q) else {
         return json_error(StatusCode::BAD_REQUEST, json!({ "error": "invalid_url" }));
     };
+    proxy_image(url).await
+}
+
+/// A public `http(s)` image, passed on: public hosts only (names that
+/// resolve to private addresses are refused at connect time), images only,
+/// at most 10 MiB.
+async fn proxy_image(url: reqwest::Url) -> Response {
     if !matches!(url.scheme(), "http" | "https")
         || !pod_core::net::is_public_host(url.host_str().unwrap_or(""))
     {
