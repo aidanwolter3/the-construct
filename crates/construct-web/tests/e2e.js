@@ -5,26 +5,41 @@
 const { chromium } = require('playwright');
 const [base, code, out] = process.argv.slice(2);
 
+// How many pixels of a screenshot differ from its corner's colour (a GPU canvas can't be read back, so the
+// screenshot is decoded in the page).
+async function drawn(page) {
+  const png = (await page.screenshot()).toString('base64');
+  return page.evaluate(async (b64) => {
+    const img = new Image();
+    img.src = 'data:image/png;base64,' + b64;
+    await img.decode();
+    const c = document.createElement('canvas');
+    c.width = img.width;
+    c.height = img.height;
+    const g = c.getContext('2d');
+    g.drawImage(img, 0, 0);
+    const d = g.getImageData(0, 0, c.width, c.height).data;
+    let n = 0;
+    for (let i = 0; i < d.length; i += 4 * 7) {
+      if (Math.abs(d[i] - d[0]) + Math.abs(d[i + 1] - d[1]) + Math.abs(d[i + 2] - d[2]) > 30) n++;
+    }
+    return n;
+  }, png);
+}
+
 function check(ok, what) {
   if (!ok) throw new Error(what);
   console.log('ok   ' + what);
 }
 
-// Whether the canvas drew anything (a pixel that isn't the first one's colour).
-const drawn = (page) => page.evaluate(() => {
-  const c = document.getElementById('construct');
-  const d = c.getContext('2d').getImageData(0, 0, c.width, c.height).data;
-  for (let i = 4; i < d.length; i += 4 * 97) {
-    if (d[i] !== d[0] || d[i + 1] !== d[1] || d[i + 2] !== d[2]) return true;
-  }
-  return false;
-});
 
 (async () => {
   const browser = await chromium.launch();
   const page = await browser.newPage({ viewport: { width: 1280, height: 800 } });
   const errors = [];
+  const logs = [];
   page.on('pageerror', (e) => errors.push(e.message));
+  page.on('console', (m) => logs.push(m.text()));
   await page.goto(base + '/web');
   await page.waitForSelector('#sign-in:not([hidden])', { timeout: 15000 });
   check(true, 'without a session the page asks for the pod code');
@@ -39,7 +54,10 @@ const drawn = (page) => page.evaluate(() => {
   await page.click('button[type=submit]');
   await page.waitForSelector('body.ready', { timeout: 60000 });
   await page.waitForTimeout(1000);
-  check(await drawn(page), 'home is drawn on the canvas');
+  check(logs.some((l) => l.startsWith('drawing on the GPU')), 'it draws on the GPU (WebGL2): ' +
+    (logs.find((l) => l.startsWith('drawing on') || l.startsWith('no GPU')) || 'no word'));
+  await page.screenshot({ path: out + '/web-home-desktop.png' });
+  check((await drawn(page)) > 500, 'home is drawn');
   await page.screenshot({ path: out + '/web-home-desktop.png' });
 
   const cookie = (await page.context().cookies()).find((c) => c.name === 'construct_web');
@@ -53,7 +71,7 @@ const drawn = (page) => page.evaluate(() => {
 
   await page.setViewportSize({ width: 390, height: 844 });
   await page.waitForTimeout(1000);
-  check(await drawn(page), 'a phone-sized window is drawn');
+  check((await drawn(page)) > 200, 'a phone-sized window is drawn');
   await page.screenshot({ path: out + '/web-home-phone.png' });
 
   await page.click('#log-out');

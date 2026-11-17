@@ -72,8 +72,14 @@ impl Gpu {
         let (device, queue) = adapter
             .request_device(&wgpu::DeviceDescriptor {
                 label: Some("construct-render"),
-                required_limits: wgpu::Limits::downlevel_defaults()
-                    .using_resolution(adapter.limits()),
+                // A browser may give only WebGL2 (decision `web-gpu`),
+                // whose limits are lower.
+                required_limits: if cfg!(target_arch = "wasm32") {
+                    wgpu::Limits::downlevel_webgl2_defaults()
+                } else {
+                    wgpu::Limits::downlevel_defaults()
+                }
+                .using_resolution(adapter.limits()),
                 ..Default::default()
             })
             .await
@@ -525,7 +531,7 @@ impl Renderer {
                 match self.shaped.get_mut(&k) {
                     Some(e) => e.1 = frame_no,
                     None => {
-                        let started = std::time::Instant::now();
+                        let started = crate::time::Instant::now();
                         let ty = t.ty();
                         let b = text.buffer(&t.text, ty, Some(t.rect[2] + 0.5), s);
                         self.shaped.insert(k, (b, frame_no));
@@ -539,7 +545,7 @@ impl Renderer {
             self.shaped
                 .retain(|_, (_, f)| frame_no - *f < SHAPED_IDLE_FRAMES);
         }
-        let prepare_started = std::time::Instant::now();
+        let prepare_started = crate::time::Instant::now();
         for (li, runs) in text_layers.iter().enumerate() {
             let buffers: Vec<&glyphon::Buffer> =
                 runs.iter().map(|t| &self.shaped[&key(t)].0).collect();
@@ -639,7 +645,7 @@ impl Renderer {
                     areas.chain(icon_areas),
                     &mut self.swash,
                     |req| {
-                        let started = std::time::Instant::now();
+                        let started = crate::time::Instant::now();
                         let out = rasterize(images.as_ref(), req);
                         stats.rasterized = stats.rasterized.saturating_add(1);
                         stats.raster_bytes = stats
@@ -653,7 +659,7 @@ impl Renderer {
         }
         stats.prepare = prepare_started.elapsed();
         stats.layers = plan.len() as u16;
-        let submit_started = std::time::Instant::now();
+        let submit_started = crate::time::Instant::now();
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("frame"),
         });
