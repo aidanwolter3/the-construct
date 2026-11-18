@@ -267,7 +267,7 @@ adb shell am broadcast -n org.theconstruct.android/.ConstructReceiver --es messa
 The pod's Web Push reaches the app while it is closed through a UnifiedPush distributor: an app such as ntfy if one
 is installed, else the embedded FCM distributor (Play services, with the pod's VAPID key; no Firebase project).
 `PushReceiver` extends the UnifiedPush connector's receiver (3.3.5; the script adds its classes, the embedded FCM
-distributor's and the Kotlin libraries' to the APK, downloaded once from Maven Central and checked by hash) and
+distributor's and the Kotlin libraries' to the APK, downloaded once from Maven Central and checked by hash; CI caches them, since Maven Central refuses runners that ask too often) and
 forwards each callback to `NativePush` (`src/push.rs`); `PushKeys` is the connector's key store, forwarding to Rust
 too. Rust keeps a key pair per server (`push.json`), sends the endpoint to the pod, decrypts messages,
 posts them (channel `<layout>.<channel>`) and opens a tapped one's layout and screen; a tap link only opens a
