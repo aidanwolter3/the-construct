@@ -114,7 +114,11 @@ the next reload picks up, a phone-sized window and logging out.
 - **Input**: click or tap, the wheel and touch drags scroll; a touch scroll goes on after the finger lifts and slows
   down as on Android, and a touch catches it (decision [`web-touch-fling`](decisions/web-touch-fling.md)); typing
   goes through a hidden input, which the app focuses while a field is (the canvas cancels its `mousedown`, which a
-  phone sends after a tap and would otherwise blur the input and close the keyboard as it opens), Escape is Back. A link (`action.link.open`) opens in a new tab once the handler that
+  phone sends after a tap and would otherwise blur the input and close the keyboard as it opens), Escape is Back.
+  The browser's Back (a phone's back gesture too) is Back as well: the page keeps one history entry for each step of
+  the back stack (`Session::back_steps`: each screen over home and each panel open beside one), pushed as the tap
+  opens it, so Back closes the top one and leaves the page only once nothing is open; one closed in the app (its Back
+  arrow, Escape) goes back over its entry. A link (`action.link.open`) opens in a new tab once the handler that
   tapped it has let the app go: desktop Chrome runs the page's frame inside `window.open`, so the client opens links
   last, and a handler or frame that finds the app held by another skips rather than panics (a panic in the frame
   loop would stop it and freeze the page).
@@ -124,7 +128,7 @@ the next reload picks up, a phone-sized window and logging out.
   draws a pod's public copy for anyone, read-only: no code, no cookie, nothing that writes (decisions
   [`public-web-links`](decisions/public-web-links.md),
   [`public-links-share-the-closure`](decisions/public-links-share-the-closure.md)). A row that opens a layout the
-  copy carries pushes it from the copy, with the row's params, and Back (Escape) returns; a link a layout opens
+  copy carries pushes it from the copy, with the row's params, and Back (Escape, or the browser's) returns; a link a layout opens
   (`action.link.open`) opens in a new tab. `construct_render::public::session` builds the page's session and reads
   every copy format a server has served.
 - **Not yet**: drags of cards, pagers and sheets; photo picking; notifications and an offline cache; screen readers

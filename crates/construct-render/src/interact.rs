@@ -2412,6 +2412,26 @@ impl Session {
             .unwrap_or(0)
     }
 
+    /// How many times system Back would close something before it reaches
+    /// home: the entries over it and the panels open beside them. The web
+    /// client keeps one browser history entry for each, so the browser's
+    /// Back steps through them before it leaves the page.
+    pub fn back_steps(&self) -> usize {
+        let top = self.top_index();
+        let panels: usize = self.stack[..=top]
+            .iter()
+            .filter(|e| e.closing.is_none())
+            .map(|e| {
+                e.panel_hosts
+                    .iter()
+                    .filter_map(|h| e.panels.get(h))
+                    .map(Vec::len)
+                    .sum::<usize>()
+            })
+            .sum();
+        top + panels
+    }
+
     /// The first entry of the sheet or panel `i` is drawn in (`i` itself
     /// unless it is a screen opened inside one).
     fn group_start(&self, mut i: usize) -> usize {
@@ -2462,7 +2482,9 @@ impl Session {
                 .stack
                 .iter()
                 .skip(1)
-                .any(|e| now.duration_since(e.closing.unwrap_or(e.opened)) < SLIDE)
+                // A closing entry until a frame has taken it off: else the
+                // frame drawn just before its slide ended stays on screen.
+                .any(|e| e.closing.is_some() || now.duration_since(e.opened) < SLIDE)
     }
 
     /// Whether a slide is still moving, or changes held during one wait
