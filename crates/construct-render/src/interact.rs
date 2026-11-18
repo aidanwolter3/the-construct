@@ -2482,7 +2482,9 @@ impl Session {
                 .stack
                 .iter()
                 .skip(1)
-                .any(|e| now.duration_since(e.closing.unwrap_or(e.opened)) < SLIDE)
+                // A closing entry until a frame has taken it off: else the
+                // frame drawn just before its slide ended stays on screen.
+                .any(|e| e.closing.is_some() || now.duration_since(e.opened) < SLIDE)
     }
 
     /// Whether a slide is still moving, or changes held during one wait

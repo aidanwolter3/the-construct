@@ -141,10 +141,13 @@ function check(ok, what) {
   // The browser's Back closes what is open (one history entry for each step of the back stack), not the page.
   check((await page.evaluate(() => history.state)) === 1, 'Settings open is one browser history entry');
   await page.goBack();
-  await page.waitForTimeout(1500);
+  // Long enough for Settings to finish sliding away.
+  await page.waitForTimeout(3000);
   check(new URL(page.url()).pathname === '/web' && (await page.evaluate(() => history.state)) === null,
     "the browser's Back stays on /web");
-  check(Buffer.compare(home, await page.screenshot()) === 0, "and it closed Settings, home as before");
+  const closed = await page.screenshot({ path: out + '/web-back-closed.png' });
+  require('fs').writeFileSync(out + '/web-back-before.png', home);
+  check(Buffer.compare(home, closed) === 0, "and it closed Settings, home as before");
   await page.mouse.click(91, 431);
   await page.waitForTimeout(1500);
   await page.keyboard.press('Escape');
