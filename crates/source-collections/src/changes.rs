@@ -311,11 +311,18 @@ fn apply_op(
                                 .join(", ")
                         ));
                     };
-                    let f = crate::filler::parse(def, spec, id.to_owned(), allow_private)?;
+                    let f =
+                        crate::filler::parse_in(def, others, spec, id.to_owned(), allow_private)?;
                     def.fillers[i] = f;
                 }
                 _ => {
-                    let f = crate::filler::parse(def, spec, crate::db::new_id("s"), allow_private)?;
+                    let f = crate::filler::parse_in(
+                        def,
+                        others,
+                        spec,
+                        crate::db::new_id("s"),
+                        allow_private,
+                    )?;
                     def.fillers.push(f);
                 }
             }

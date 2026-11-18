@@ -8,7 +8,10 @@
 //!
 //! A matching row notifies once per alert (`collections_alerts_sent`),
 //! after a fill and on the adapter's poll (so a row that comes into an
-//! alert's window later notifies then). Rows are served with
+//! alert's window later notifies then). With `repeat`, a row that stops
+//! matching is forgotten, so it notifies again the next time it matches
+//! (a price that drops, recovers and drops again: decision
+//! `research-per-row`). Rows are served with
 //! `alert_matched` and `alert_names` ("Brass Lanterns"), worked out when
 //! served. A row whose date has passed (more than six hours ago) no longer
 //! matches.
@@ -82,6 +85,10 @@ pub struct Alert {
     pub label: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub app: Option<String>,
+    /// Notify again each time a row comes back into a match (not once per
+    /// row ever).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub repeat: bool,
     pub created_at: i64,
 }
 
@@ -173,6 +180,9 @@ impl Alert {
         }
         if let Some(n) = self.within_days {
             v["within_days"] = json!(n);
+        }
+        if self.repeat {
+            v["repeat"] = json!(true);
         }
         for (k, t) in [("title", &self.title), ("body", &self.body)] {
             if !t.is_empty() {
@@ -424,6 +434,11 @@ pub fn apply_spec(def: &Definition, a: &mut Alert, op: &Value) -> Result<(), Str
             a.app = Some(id.to_owned());
         }
     }
+    match op.get("repeat") {
+        None | Some(Value::Null) => {}
+        Some(Value::Bool(b)) => a.repeat = *b,
+        Some(_) => return Err("\"repeat\" is true or false".into()),
+    }
     if (!a.days.is_empty() || a.within_days.is_some()) && a.date_field.is_none() {
         a.date_field = def
             .live_fields()
@@ -437,7 +452,7 @@ pub fn apply_spec(def: &Definition, a: &mut Alert, op: &Value) -> Result<(), Str
 }
 
 /// `{op: add_alert, name?, any?, all?, none?, fields?, filler?, days?,
-/// date_field?, within_days?, title?, body?, label?, app?}`.
+/// date_field?, within_days?, title?, body?, label?, app?, repeat?}`.
 pub fn add(def: &mut Definition, op: &Value, now: i64) -> Result<String, String> {
     if def.alerts.len() >= MAX_ALERTS {
         return Err(format!("a collection has at most {MAX_ALERTS} alerts"));
@@ -457,6 +472,7 @@ pub fn add(def: &mut Definition, op: &Value, now: i64) -> Result<String, String>
         body: String::new(),
         label: String::new(),
         app: None,
+        repeat: false,
         created_at: now,
     };
     apply_spec(def, &mut a, op)?;
@@ -733,6 +749,38 @@ pub fn mark_sent(
 /// One notification an alert owes: `(collection, alert, row)`.
 type Owed = (NewNotification, [String; 3]);
 
+/// The sent marks of `repeat` alerts whose rows no longer match, as
+/// `(collection, alert, row)`: forgetting them re-arms the alert.
+pub fn rearm(
+    conn: &Connection,
+    only: Option<&str>,
+    now: i64,
+) -> rusqlite::Result<Vec<[String; 3]>> {
+    let mut out = Vec::new();
+    for (_, def) in db::all_defs(conn)? {
+        if !def.alerts.iter().any(|a| a.repeat) || only.is_some_and(|o| o != def.name) {
+            continue;
+        }
+        let rows = db::all_rows(conn, &def.name, false)?;
+        for a in def.alerts.iter().filter(|a| a.repeat) {
+            for row in &rows {
+                if !a.matches(&def, row, now) && sent(conn, &def.name, &a.id, &row.id)? {
+                    out.push([def.name.clone(), a.id.clone(), row.id.clone()]);
+                }
+            }
+        }
+    }
+    Ok(out)
+}
+
+fn forget(conn: &Connection, k: &[String; 3]) -> rusqlite::Result<()> {
+    conn.execute(
+        "DELETE FROM collections_alerts_sent WHERE collection = ?1 AND alert = ?2 AND row_id = ?3",
+        params![k[0], k[1], k[2]],
+    )?;
+    Ok(())
+}
+
 /// What `def`'s alerts owe at `now` (`only`: one collection; `owners`:
 /// [`pod_core::layouts::feed_owners`] of Collections).
 pub fn plan(
@@ -779,7 +827,13 @@ pub fn plan(
                     NewNotification {
                         layout: app,
                         channel,
-                        dedupe_key: format!("alert:{}:{}:{}", def.name, a.id, row.id),
+                        // A repeating alert's later matches are new
+                        // notifications.
+                        dedupe_key: if a.repeat {
+                            format!("alert:{}:{}:{}:{now}", def.name, a.id, row.id)
+                        } else {
+                            format!("alert:{}:{}:{}", def.name, a.id, row.id)
+                        },
                         title: render(title, &entity, &a.name, filler),
                         body: render(body, &entity, &a.name, filler),
                         image_url: None,
@@ -806,6 +860,14 @@ pub async fn run(pod: &Pod, only: Option<String>) {
     let Ok(owed) = pod
         .blocking(move |s| {
             let owners = pod_core::layouts::feed_owners(s, p.catalog(), NAME)?;
+            // Rows of `repeat` alerts that stopped matching notify again
+            // next time.
+            s.transaction(|tx| {
+                for k in rearm(tx, o.as_deref(), now)? {
+                    forget(tx, &k)?;
+                }
+                Ok(())
+            })?;
             s.with_conn(|c| plan(c, &owners, o.as_deref(), now))
         })
         .await

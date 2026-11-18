@@ -8,6 +8,12 @@
 //! `web-fetch-provenance`): a URL in the request, a search result, or a
 //! link or URL on a page it read. A page can't have the model carry the
 //! task's data (a collection's rows) out in a URL it writes itself.
+//!
+//! What the tools read is kept with the URLs, so an answer's citations can be
+//! checked against it ([`Seen::check_rows`], decision `research-per-row`): a
+//! link must be one the task saw, and a quote must be on a page it read.
+//! `web_fetch` also lists a page's main pictures (its preview image and its
+//! JSON-LD product images), so a product's photo is the store's own.
 
 use std::collections::HashSet;
 use std::sync::atomic::{AtomicU32, Ordering};
@@ -15,13 +21,19 @@ use std::sync::{Arc, Mutex};
 
 use construct_agent::Tool;
 use pod_core::BoxFuture;
-use serde_json::{Value, json};
+use serde_json::{Map, Value, json};
 
 use crate::hosts::Hosts;
 use crate::search::{Provider, SearchCache};
 
 /// Most page text a fetch hands the model.
 pub const MAX_FETCH_CHARS: usize = 30_000;
+/// Most text one task keeps of what it read, for checking quotes.
+pub const MAX_READ_CHARS: usize = 2_000_000;
+/// Most pictures a fetch lists.
+pub const MAX_FETCH_IMAGES: usize = 4;
+/// A quote this many words long or longer must be on a page the task read.
+pub const MIN_QUOTE_WORDS: usize = 3;
 
 /// Most links a fetch lists after the page's text.
 pub const MAX_FETCH_LINKS: usize = 150;
@@ -41,16 +53,101 @@ pub struct Web {
 }
 
 /// The URLs one research task has seen (link provenance): only these can
-/// be fetched. Shared by the task's tools.
+/// be fetched. Shared by the task's tools, with the text they read.
 #[derive(Clone, Default, Debug)]
-pub struct Seen(Arc<Mutex<HashSet<String>>>);
+pub struct Seen {
+    urls: Arc<Mutex<HashSet<String>>>,
+    /// What the task read (search results and pages), normalized
+    /// ([`quote_text`]), at most [`MAX_READ_CHARS`].
+    read: Arc<Mutex<String>>,
+}
+
+/// What [`Seen::check_rows`] took out of an answer.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Cited {
+    /// Links the task never saw (a whole value, or a line of one).
+    pub urls_dropped: usize,
+    /// Lines quoting text that isn't on any page the task read.
+    pub quotes_dropped: usize,
+}
 
 impl Seen {
     /// Add one URL.
     pub fn add(&self, url: &str) {
         if let Some(k) = seen_key(url) {
-            self.0.lock().unwrap_or_else(|e| e.into_inner()).insert(k);
+            self.urls
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .insert(k);
         }
+    }
+
+    /// Keep `text` as read: its quotes count as found.
+    pub fn add_read(&self, text: &str) {
+        let mut r = self.read.lock().unwrap_or_else(|e| e.into_inner());
+        if r.len() >= MAX_READ_CHARS {
+            return;
+        }
+        r.push('\n');
+        r.push_str(&quote_text(text));
+    }
+
+    /// Whether `quote` is on a page (or in a search result) the task read,
+    /// spacing, case and punctuation aside.
+    pub fn read_has(&self, quote: &str) -> bool {
+        let q = quote_text(quote);
+        !q.is_empty()
+            && self
+                .read
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .contains(&q)
+    }
+
+    /// Check an answer's citations in place: a value that is a link the task
+    /// never saw becomes null; in other text, a line holding such a link, or
+    /// quoting [`MIN_QUOTE_WORDS`] or more words that are on no page it read,
+    /// is left out (the value becomes null when no line is left).
+    pub fn check_rows(&self, rows: &mut [Map<String, Value>]) -> Cited {
+        let mut out = Cited::default();
+        for row in rows.iter_mut() {
+            for v in row.values_mut() {
+                let Some(s) = v.as_str().map(str::trim).map(str::to_owned) else {
+                    continue;
+                };
+                if !s.contains(char::is_whitespace)
+                    && (s.starts_with("http://") || s.starts_with("https://"))
+                {
+                    if !self.contains(&s) {
+                        *v = Value::Null;
+                        out.urls_dropped += 1;
+                    }
+                    continue;
+                }
+                let mut kept = Vec::new();
+                let mut changed = false;
+                for line in s.lines() {
+                    if urls_in(line).iter().any(|u| !self.contains(u)) {
+                        out.urls_dropped += 1;
+                        changed = true;
+                        continue;
+                    }
+                    if quotes_in(line).iter().any(|q| {
+                        q.split_whitespace().count() >= MIN_QUOTE_WORDS && !self.read_has(q)
+                    }) {
+                        out.quotes_dropped += 1;
+                        changed = true;
+                        continue;
+                    }
+                    kept.push(line);
+                }
+                if changed {
+                    let t = kept.join("\n").trim().to_owned();
+                    *v = if t.is_empty() { Value::Null } else { json!(t) };
+                }
+            }
+        }
+        out
     }
 
     /// Add every `http(s)` URL written in `text`.
@@ -63,7 +160,7 @@ impl Seen {
     /// Whether `url` was seen (fragments and a trailing slash aside).
     pub fn contains(&self, url: &str) -> bool {
         seen_key(url).is_some_and(|k| {
-            self.0
+            self.urls
                 .lock()
                 .unwrap_or_else(|e| e.into_inner())
                 .contains(&k)
@@ -99,6 +196,119 @@ fn urls_in(text: &str) -> Vec<&str> {
         let u = word[at..].trim_end_matches(['.', ',', ';', ':', '!', '?']);
         if !u.is_empty() {
             out.push(u);
+        }
+    }
+    out
+}
+
+/// Text as quotes are compared: lowercase letters and digits, every other
+/// run as one space (curly quotes, dashes and spacing don't matter).
+pub fn quote_text(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut space = true;
+    for c in s.chars() {
+        if c.is_alphanumeric() {
+            out.extend(c.to_lowercase());
+            space = false;
+        } else if !space {
+            out.push(' ');
+            space = true;
+        }
+    }
+    out.trim_end().to_owned()
+}
+
+/// The quoted passages of `line`: between straight or curly double quotes.
+fn quotes_in(line: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut cur: Option<String> = None;
+    for c in line.chars() {
+        let open = matches!(c, '"' | '“');
+        let close = matches!(c, '"' | '”');
+        match &mut cur {
+            Some(q) if close => {
+                out.push(std::mem::take(q));
+                cur = None;
+            }
+            Some(q) => q.push(c),
+            None if open => cur = Some(String::new()),
+            None => {}
+        }
+    }
+    out
+}
+
+/// A page's main pictures, absolute against `base`: its preview image
+/// (`og:image`, `twitter:image`, `image_src`) and the `image` of its JSON-LD
+/// objects, each once, at most `max`.
+pub fn page_images(html: &str, base: &str, max: usize) -> Vec<String> {
+    let doc = scraper::Html::parse_document(html);
+    let mut out: Vec<String> = Vec::new();
+    let push = |u: &str, out: &mut Vec<String>| {
+        let u = crate::fetch::absolute(base, u.trim());
+        if (u.starts_with("https://") || u.starts_with("http://"))
+            && !out.contains(&u)
+            && out.len() < max
+        {
+            out.push(u);
+        }
+    };
+    for sel in [
+        r#"meta[property="og:image"]"#,
+        r#"meta[property="og:image:secure_url"]"#,
+        r#"meta[name="twitter:image"]"#,
+    ] {
+        if let Ok(s) = scraper::Selector::parse(sel) {
+            for m in doc.select(&s) {
+                if let Some(c) = m.value().attr("content") {
+                    push(c, &mut out);
+                }
+            }
+        }
+    }
+    if let Ok(s) = scraper::Selector::parse(r#"link[rel="image_src"]"#) {
+        for m in doc.select(&s) {
+            if let Some(h) = m.value().attr("href") {
+                push(h, &mut out);
+            }
+        }
+    }
+    fn images(v: &Value, out: &mut Vec<String>) {
+        match v {
+            Value::String(s) => out.push(s.clone()),
+            Value::Array(a) => a.iter().for_each(|x| images(x, out)),
+            Value::Object(o) => {
+                if let Some(u) = o.get("url").or(o.get("contentUrl")) {
+                    images(u, out);
+                }
+            }
+            _ => {}
+        }
+    }
+    fn walk(v: &Value, out: &mut Vec<String>) {
+        match v {
+            Value::Array(a) => a.iter().for_each(|x| walk(x, out)),
+            Value::Object(o) => {
+                if let Some(i) = o.get("image") {
+                    images(i, out);
+                }
+                if let Some(g) = o.get("@graph") {
+                    walk(g, out);
+                }
+            }
+            _ => {}
+        }
+    }
+    if let Ok(s) = scraper::Selector::parse(r#"script[type="application/ld+json"]"#) {
+        for m in doc.select(&s) {
+            let text: String = m.text().collect();
+            if let Ok(v) = serde_json::from_str::<Value>(text.trim()) {
+                let mut found = Vec::new();
+                walk(&v, &mut found);
+                for u in found {
+                    push(&u, &mut out);
+                }
+            }
         }
     }
     out
@@ -187,6 +397,7 @@ impl Tool for SearchTool {
             }
             let text = crate::search::results_text(&results);
             w.seen.add_text(&text);
+            w.seen.add_read(&text);
             Ok(text)
         })
     }
@@ -245,7 +456,19 @@ impl Tool for FetchTool {
                 return Err("the page answered nothing".into());
             };
             let html = String::from_utf8_lossy(&bytes);
-            let mut out = crate::html::truncate(&crate::html::to_text(&html), MAX_FETCH_CHARS);
+            let text = crate::html::to_text(&html);
+            // Quotes may come from anywhere on the page, not only the part
+            // the model was shown.
+            self.web.seen.add_read(&text);
+            let mut out = crate::html::truncate(&text, MAX_FETCH_CHARS);
+            let images = page_images(&html, &url, MAX_FETCH_IMAGES);
+            if !images.is_empty() {
+                out.push_str("\n\nImages:");
+                for i in &images {
+                    out.push_str(&format!("\n- {i}"));
+                    self.web.seen.add(i);
+                }
+            }
             let links = page_links(&html, &url, MAX_FETCH_LINKS);
             if !links.is_empty() {
                 out.push_str("\n\nLinks:");
@@ -284,6 +507,60 @@ mod tests {
         assert!(!seen.contains("https://attacker.example/?d=Gig"));
         assert!(!seen.contains("https://venue.example/Gig"));
         assert!(!seen.contains("not a url"));
+    }
+
+    #[test]
+    fn citations_are_checked_against_what_was_read() {
+        let seen = Seen::default();
+        seen.add("https://shop.example/tee");
+        seen.add_read(
+            "Reviews: “Soft, thick and it didn't shrink at all.” — Pat. Fits true to size.",
+        );
+        let mut rows = vec![
+            json!({
+                "url": "https://shop.example/tee",
+                "image": "https://cdn.example/made-up.jpg",
+                "reviews": "\"soft, thick and it didn't shrink at all\" (shop.example)\n\"Best tee I have ever owned\" (shop.example)\n\"Fits\" (shop.example)",
+                "sources": "Shop page: https://shop.example/tee\nA blog: https://blog.example/never-read",
+                "why": "A heavy cotton tee.",
+            })
+            .as_object()
+            .unwrap()
+            .clone(),
+        ];
+        let c = seen.check_rows(&mut rows);
+        assert_eq!(
+            c,
+            Cited {
+                urls_dropped: 2,
+                quotes_dropped: 1
+            }
+        );
+        let r = &rows[0];
+        assert_eq!(r["url"], "https://shop.example/tee");
+        assert_eq!(r["image"], Value::Null);
+        assert_eq!(
+            r["reviews"],
+            "\"soft, thick and it didn't shrink at all\" (shop.example)\n\"Fits\" (shop.example)"
+        );
+        assert_eq!(r["sources"], "Shop page: https://shop.example/tee");
+        assert_eq!(r["why"], "A heavy cotton tee.");
+    }
+
+    #[test]
+    fn a_page_lists_its_pictures() {
+        let html = r#"<head><meta property="og:image" content="/img/tee.jpg">
+            <meta name="twitter:image" content="https://cdn.example/tee.jpg">
+            <script type="application/ld+json">{"@graph":[{"@type":"Product","image":["https://cdn.example/tee.jpg",{"url":"https://cdn.example/back.jpg"}]}]}</script></head>"#;
+        assert_eq!(
+            page_images(html, "https://shop.example/p/1", 10),
+            vec![
+                "https://shop.example/img/tee.jpg".to_owned(),
+                "https://cdn.example/tee.jpg".to_owned(),
+                "https://cdn.example/back.jpg".to_owned()
+            ]
+        );
+        assert_eq!(page_images(html, "https://shop.example/p/1", 1).len(), 1);
     }
 
     #[test]

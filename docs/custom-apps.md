@@ -183,7 +183,9 @@ never writes code: it declares typed fields (`text`, `number`, `bool`, `date`, `
   field and keeps its data 30 days (`restore_field`); a type change converts row by row and keeps what doesn't
   convert aside. A write made under an older definition (an offline device) still lands.
 - **Computed fields.** A field's `compute` is one kind or a list tried in order: `expr` (a small expression over
-  the row; `entity.id` reads the row's own id), `lookup` (the value of the best-matching row of another
+  the row: `+`, `-`, `*`, `!`, `<` `<=` `>` `>=` (numbers, or texts in order, so dates compare), `c ? a : b`;
+  `entity.id` reads the row's own id, and an expression may read its own field's last value, for a running lowest
+  price; decision [`research-per-row`](decisions/research-per-row.md)), `lookup` (the value of the best-matching row of another
   collection, kept as editable rules: the longest key wins, then the oldest row; deleted rows never match), `count`
   `subject` (`{kind: "subject", from, value}`: what the row an entity URI in text field `from` names serves as
   `value`, a field or a derived name such as `alert_matched`, whatever its collection; live like a lookup, and when
@@ -357,6 +359,19 @@ A collection can keep itself current from the web (decision
   daily budget. With the `web_search` jack plugged it searches and reads pages with the pod's own tools; it reads
   only pages it has seen (a URL in the prompt or the rows, a search result, or a link on a page it read), so a page
   can't have it send the rows elsewhere in a URL (decision [`web-fetch-provenance`](decisions/web-fetch-provenance.md)).
+  Its answer is checked against what it read: a link it never saw is dropped, and so is a line quoting three or more
+  words that are on no page it read; `web_fetch` lists each page's main pictures (`og:image`, JSON-LD `image`), so
+  an image field gets the store's own photo.
+- **Research per row** (decision [`research-per-row`](decisions/research-per-row.md)): an `agent` with `for_each:
+  {collection, link, where?, from?, context?}` researches each row of another collection on its own (a shopping
+  list's items), one model call each, counted toward `fills_per_day` and the pod's limit, at most 10 a fill. The
+  request is the prompt, the row's fields (`from`, default every field but true/false ones and refs) and the
+  `context` rows (`[{collection, where?, fields?, limit?}]`: the owner's preferences); its rows here are that
+  row's answer (`replace` among them only, by `key`), linked back through `link`, a ref field the pod sets. A row
+  is researched again when its text or the context changes (`refresh: once`, the default) or on every fill
+  (`every`, with `every_minutes` for a weekly re-check); a write to the other collection starts a fill 20 s later.
+  A row that is deleted takes its answers with it. `keep: [{field, equals}]` (any filler that adds and removes
+  rows) keeps rows someone marked, an option put in the bag, when a refill leaves them out.
 - **The web module:** every request goes through the pod's host policy (`web-extract`'s `hosts`: 1 s spacing, a
   daily cap per site, and a shared backoff after a site blocks the pod as an automated visitor). Model work runs
   through the agent module (`crates/agent`): the `model` jack, daily budgets per feature, retries.
@@ -376,7 +391,8 @@ A collection can keep itself current from the web (decision
   expression as the first untrusted writer of the fields it reads (issue #289). The Agents source starts runs only
   from rows a person wrote (decision [`agents-cap-v3`](decisions/agents-cap-v3.md), issue #243).
 - **Alerts** notify once when a row matches: `any` / `all` / `none` phrases, a filler, days of the week, a window on a
-  date field. Rows are served with `alert_matched` and `alert_names`.
+  date field. Rows are served with `alert_matched` and `alert_names`. With `repeat: true` a row that stops matching
+  is forgotten, so it notifies again the next time it matches (a deal field an `expr` fills from today's price).
 
 | A layout uses | |
 |---|---|

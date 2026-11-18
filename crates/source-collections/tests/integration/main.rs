@@ -13,6 +13,7 @@ mod mcp_fillers;
 mod primitives;
 mod reminders;
 mod render;
+mod research;
 mod row_id;
 mod views;
 mod web;
