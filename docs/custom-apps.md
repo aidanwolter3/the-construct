@@ -150,7 +150,8 @@ admin pod: a temporary pod can't share a public page (decision [`web-on-staging`
   with `slug` (and the pod's handle, `set_handle`) also a `short_url`, `/@<handle>/<slug>`. Sharing the same layout,
   rows, item and params again updates the same link; other params are another link.
 - The copy is made again when the pod's Collections data changes, so new rows the layouts show appear on the
-  page. A root that draws anything but Collections data (Pixelfed, Events) is refused; a layout it reaches that
+  page. Only rows go out without a review: once a carried layout is edited (a field it now shows, a screen it now
+  opens), the page keeps its last copy until the layout is shared again with a new review. A root that draws anything but Collections data (Pixelfed, Events) is refused; a layout it reaches that
   does is left out, and so are built-in layouts (Settings, the inbox). A copy holds at most 16 layouts and 2 MiB.
 - `list_public_links` lists them; `unshare_publicly {link}` stops one at once and its copy leaves the server.
 
