@@ -812,6 +812,11 @@ struct App {
     /// Links to open in new tabs when the handler that tapped them lets the
     /// app go.
     links: Vec<String>,
+    /// Which of the page's history entries is current: 0 the page itself,
+    /// `k` the `k`th this app pushed, one for each step of the back stack
+    /// ([`Session::back_steps`]), so the browser's Back closes the top one
+    /// instead of leaving the page.
+    history_at: usize,
 }
 
 /// The app, held by one event handler at a time. The browser can run the
@@ -944,7 +949,42 @@ impl App {
             }
         }
         self.sync_input();
+        self.sync_history();
         wake();
+    }
+
+    /// One history entry for each step of the back stack: a screen opened
+    /// pushes one (inside the tap, so the browser keeps it), and one closed
+    /// in the app (its Back arrow, Escape) goes back over its entry.
+    fn sync_history(&mut self) {
+        let Ok(history) = window().history() else {
+            return;
+        };
+        let want = self.controller.session.back_steps();
+        while self.history_at < want {
+            self.history_at += 1;
+            let at = JsValue::from_f64(self.history_at as f64);
+            let _ = history.push_state(&at, "");
+        }
+        if want < self.history_at {
+            let _ = history.go_with_delta(want as i32 - self.history_at as i32);
+            self.history_at = want;
+        }
+    }
+
+    /// The browser went back (or forward) to the history entry `at`: Back
+    /// closes the back stack's top steps until as many are left.
+    fn went_to(&mut self, at: usize) {
+        self.history_at = at;
+        while self.controller.session.back_steps() > at {
+            let before = self.controller.session.back_steps();
+            self.controller.unfocus();
+            self.event(Event::Back);
+            if self.controller.session.back_steps() >= before {
+                break;
+            }
+        }
+        self.sync_history();
     }
 
     /// Keeps the hidden input focused while a field is, so the keyboard (and
@@ -1137,8 +1177,11 @@ async fn mount(session: Session) -> Result<(), JsValue> {
         tracker: VelocityTracker::new(),
         fling: None,
         links: Vec::new(),
+        history_at: history_at(),
     }));
     app.borrow_mut().resize();
+    // A reload on one of this app's entries goes back to the page's own.
+    app.borrow_mut().sync_history();
     let _ = doc.body().map(|b| b.class_list().add_1("ready"));
 
     // The fallbacks after the first frame: emoji and symbols appear when
@@ -1285,6 +1328,16 @@ async fn mount(session: Session) -> Result<(), JsValue> {
             }
         }
     });
+    // The browser's Back (a phone's back gesture too) closes what is open
+    // instead of leaving the page; with nothing open it leaves.
+    listen(&window(), "popstate", {
+        let app = app.clone();
+        move |_: web_sys::Event| {
+            if let Some(mut a) = lease(&app) {
+                a.went_to(history_at());
+            }
+        }
+    });
     listen(&window(), "keydown", {
         let app = app.clone();
         move |e: KeyboardEvent| {
@@ -1338,6 +1391,17 @@ async fn mount(session: Session) -> Result<(), JsValue> {
         window().request_animation_frame(cb.as_ref().unchecked_ref())?;
     }
     Ok(())
+}
+
+/// The current history entry's place: what this app pushed it with, 0 for
+/// the page's own.
+fn history_at() -> usize {
+    window()
+        .history()
+        .ok()
+        .and_then(|h| h.state().ok())
+        .and_then(|v| v.as_f64())
+        .map_or(0, |k| k.max(0.0) as usize)
 }
 
 /// Adds an event listener that lives as long as the page.

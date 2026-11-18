@@ -106,6 +106,8 @@ fn a_push_from_a_panel_host_opens_beside_it_and_back_closes_it() {
     assert!(shows(&mut s, "Detail Salmon").is_some());
     assert!(shows(&mut s, "List").is_none());
 
+    assert_eq!(s.back_steps(), 2, "a Back for each panel");
+
     // System Back closes the rightmost panel.
     let out = s
         .dispatch(&json!({ "intent": "action.navigation.back" }))
@@ -118,6 +120,7 @@ fn a_push_from_a_panel_host_opens_beside_it_and_back_closes_it() {
     s.tap(&Target::Id("close".into())).unwrap();
     assert!(shows(&mut s, "Detail Salmon").is_none());
     assert_eq!(s.current(), "home");
+    assert_eq!(s.back_steps(), 0);
     // With none open, Back is as before (nothing under home).
     let out = s
         .dispatch(&json!({ "intent": "action.navigation.back" }))
@@ -221,4 +224,18 @@ fn the_mouse_hovers_a_tappable_lighter_than_a_press() {
     assert!(s.hover(x, y));
     assert!(s.hover_end());
     assert_eq!(s.scene().unwrap().quads().count(), before);
+}
+
+#[test]
+fn each_pushed_screen_is_one_back_step() {
+    // On a phone the rows push over the whole screen instead.
+    let mut s = session(Viewport::PHONE);
+    assert_eq!(s.back_steps(), 0);
+    s.tap(&Target::Id("salmon".into())).unwrap();
+    assert_eq!(s.back_steps(), 1);
+    s.tap(&Target::Id("deeper".into())).unwrap();
+    assert_eq!(s.back_steps(), 2);
+    s.dispatch(&json!({ "intent": "action.navigation.back" }))
+        .unwrap();
+    assert_eq!(s.back_steps(), 1);
 }
