@@ -46,7 +46,7 @@ A layout of the pod is a name (`c-` and 10 characters, except `home`) pointing t
 and a node; the name keeps its history, and `restore_version` moves it back. Devices show a layout's `title` and
 `icon` from its element.
 
-**Home owns the feeds** (`["pixelfed", "home"]`, `["collections", "todos"]`, `["collections", "recipes"]`, at most 32): every
+**Home owns the feeds** (`["pixelfed", "home"]`, `["collections", "todos"]`, `["collections", "recipes"]`, at most 100): every
 layout may bind any of them, and a layout's request loads only the feeds whose query keys it binds. Feeds named when
 creating a layout (or renaming one) are added to home's. Changing home's own feed list is refused (`feed_in_use`,
 naming the layout) while another layout still binds a feed it would drop. Home's event stream carries every change of
@@ -360,7 +360,8 @@ A collection can keep itself current from the web (decision
   only pages it has seen (a URL in the prompt or the rows, a search result, or a link on a page it read), so a page
   can't have it send the rows elsewhere in a URL (decision [`web-fetch-provenance`](decisions/web-fetch-provenance.md)).
   Its answer is checked against what it read: a link it never saw is dropped, and so is a line quoting three or more
-  words that are on no page it read; `web_fetch` lists each page's main pictures (`og:image`, JSON-LD `image`), so
+  words that are on no page it read (and a value the model ran on into the next fields, `..." ,"details":"...`,
+  is split back into them); `web_fetch` lists each page's main pictures (`og:image`, JSON-LD `image`), so
   an image field gets the store's own photo.
 - **Research per row** (decision [`research-per-row`](decisions/research-per-row.md)): an `agent` with `for_each:
   {collection, link, where?, from?, context?}` researches each row of another collection on its own (a shopping
@@ -393,7 +394,7 @@ A collection can keep itself current from the web (decision
   from rows a person wrote (decision [`agents-cap-v3`](decisions/agents-cap-v3.md), issue #243).
 - **Alerts** notify once when a row matches: `any` / `all` / `none` phrases, a filler, days of the week, a window on a
   date field. Rows are served with `alert_matched` and `alert_names`. With `repeat: true` a row that stops matching
-  is forgotten, so it notifies again the next time it matches (a deal field an `expr` fills from today's price).
+  is forgotten (its notification removed), so it notifies again the next time it matches (a deal field an `expr` fills from today's price).
 
 | A layout uses | |
 |---|---|

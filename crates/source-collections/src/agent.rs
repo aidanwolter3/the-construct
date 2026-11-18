@@ -274,6 +274,10 @@ impl FillAgent for PodAgent {
                 return Err("the model answered without saving rows".into());
             };
             let mut rows = tasks::rows_in(input);
+            // A value the model ran on into the next fields goes back to
+            // them.
+            let names: Vec<String> = fields.iter().map(|f| f.name.clone()).collect();
+            tasks::split_run_on_fields(&mut rows, &names);
             // With the pod's own tools, every link in the answer must be one
             // the task saw and every quote on a page it read (decision
             // `research-per-row`).

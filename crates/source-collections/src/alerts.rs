@@ -9,7 +9,8 @@
 //! A matching row notifies once per alert (`collections_alerts_sent`),
 //! after a fill and on the adapter's poll (so a row that comes into an
 //! alert's window later notifies then). With `repeat`, a row that stops
-//! matching is forgotten, so it notifies again the next time it matches
+//! matching is forgotten (its notification removed), so it notifies again
+//! the next time it matches
 //! (a price that drops, recovers and drops again: decision
 //! `research-per-row`). Rows are served with
 //! `alert_matched` and `alert_names` ("Brass Lanterns"), worked out when
@@ -830,7 +831,7 @@ pub fn plan(
                         // A repeating alert's later matches are new
                         // notifications.
                         dedupe_key: if a.repeat {
-                            format!("alert:{}:{}:{}:{now}", def.name, a.id, row.id)
+                            format!("alert:{}:{}:{}:{}", def.name, a.id, row.id, db::new_id("n"))
                         } else {
                             format!("alert:{}:{}:{}", def.name, a.id, row.id)
                         },
@@ -862,12 +863,23 @@ pub async fn run(pod: &Pod, only: Option<String>) {
             let owners = pod_core::layouts::feed_owners(s, p.catalog(), NAME)?;
             // Rows of `repeat` alerts that stopped matching notify again
             // next time.
-            s.transaction(|tx| {
+            // Its earlier notification goes too: a stale deal would come
+            // back beside the new one when the row matches again.
+            let removed = s.transaction(|tx| {
+                let mut removed = 0;
                 for k in rearm(tx, o.as_deref(), now)? {
                     forget(tx, &k)?;
+                    removed += crate::inbox::remove_deduped_on(
+                        tx,
+                        &format!("alert:{}:{}:{}", k[0], k[1], k[2]),
+                        now,
+                    )?;
                 }
-                Ok(())
+                Ok(removed)
             })?;
+            if removed > 0 {
+                p.publish_data_all(NAME);
+            }
             s.with_conn(|c| plan(c, &owners, o.as_deref(), now))
         })
         .await

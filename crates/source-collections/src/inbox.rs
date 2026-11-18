@@ -589,6 +589,29 @@ pub fn remove_about_on(
     Ok(gone)
 }
 
+/// Remove the live notifications whose dedupe key is `key` or starts with
+/// `key:` (a repeating alert's earlier notifications about one row,
+/// decision `research-per-row`); answers how many.
+pub fn remove_deduped_on(tx: &Connection, key: &str, now: i64) -> rusqlite::Result<usize> {
+    let Some((_, defn)) = db::latest_def(tx, NOTIFICATIONS)? else {
+        return Ok(0);
+    };
+    let n = Names(&defn);
+    let prefix = format!("{key}:");
+    let mut gone = 0;
+    for mut row in db::all_rows(tx, NOTIFICATIONS, false)? {
+        if n.text(&row, "dedupe_key")
+            .is_some_and(|d| d == key || d.starts_with(&prefix))
+        {
+            row.deleted_at = Some(now);
+            row.updated_at = now;
+            db::save_row(tx, NOTIFICATIONS, &row)?;
+            gone += 1;
+        }
+    }
+    Ok(gone)
+}
+
 /// What [`follow::settle`] does for these collections each wave, with the
 /// rows the wave changed: a row of another collection that went takes its
 /// notifications with it, and `read_at` follows `read`.

@@ -366,7 +366,7 @@ pub const AUTHOR_CLAUDE: &str = "claude";
 /// What the pod itself writes (a conversion, a deploy's `@core/` names).
 pub const AUTHOR_POD: &str = "pod";
 /// Most feeds home binds.
-pub const MAX_HOME_FEEDS: usize = 32;
+pub const MAX_HOME_FEEDS: usize = 100;
 /// Most feeds one write may name.
 pub const MAX_FEEDS: usize = 8;
 /// Longest layout title.
