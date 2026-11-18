@@ -34,6 +34,7 @@
 //! most a day, at least `Retry-After`).
 
 use std::collections::{HashMap, HashSet};
+use std::sync::atomic::{AtomicI64, Ordering};
 use std::time::Duration;
 
 use pod_core::Pod;
@@ -1910,6 +1911,7 @@ fn save_marks(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn run_agent(
     pod: &Pod,
     adapter: &CollectionsAdapter,
@@ -1918,6 +1920,7 @@ async fn run_agent(
     state: &State,
     force: bool,
     now: i64,
+    spent: &AtomicI64,
 ) -> Result<(Fetch, String), String> {
     let Source::Agent {
         prompt,
@@ -1933,9 +1936,10 @@ async fn run_agent(
         return Err(NO_AGENT.into());
     };
     if filler.for_each().is_some() {
-        return run_each(pod, adapter, def, filler, state, force, now).await;
+        return run_each(pod, adapter, def, filler, state, force, now, spent).await;
     }
     let day = take_model_budget(pod, adapter, filler, state, now).await?;
+    spent.store(1, Ordering::SeqCst);
     let agent_fields = agent_fields(def, fields);
     let name = def.name.clone();
     let current_rows = pod
@@ -2044,7 +2048,9 @@ fn resolved(def: &Definition, c: &[model::Condition]) -> Option<Vec<model::Condi
 /// changed since its last research (`refresh: once`), or also once
 /// `every_minutes` have passed since it (`every`), up to [`crate::filler::MAX_EACH_PER_FILL`] and the budgets
 /// left today: rows never researched first, then the longest ago. Answers
-/// `(fill, the day the budget was counted on, calls)`.
+/// `(fill, the day the budget was counted on, calls)`. Each call is also
+/// counted in `spent` as it is made, so a fill that times out still counts.
+#[allow(clippy::too_many_arguments)]
 async fn run_each(
     pod: &Pod,
     adapter: &CollectionsAdapter,
@@ -2053,6 +2059,7 @@ async fn run_each(
     state: &State,
     force: bool,
     now: i64,
+    spent: &AtomicI64,
 ) -> Result<(Fetch, String), String> {
     let Source::Agent {
         prompt,
@@ -2255,6 +2262,7 @@ async fn run_each(
             parent.title
         );
         calls += 1;
+        spent.fetch_add(1, Ordering::SeqCst);
         let answer = agent
             .fill(AgentRequest {
                 pod,
@@ -2527,9 +2535,12 @@ pub async fn fill(pod: &Pod, collection: &str, filler_id: &str, force: bool) -> 
         } else {
             AGENT_FILL_TIMEOUT
         };
+        // The model calls made, counted as they go: a fill that times out
+        // spent them too.
+        let spent = AtomicI64::new(0);
         match tokio::time::timeout(
             limit,
-            run_agent(pod, adapter, &def, &filler, &st, force, now),
+            run_agent(pod, adapter, &def, &filler, &st, force, now, &spent),
         )
         .await
         {
@@ -2548,7 +2559,14 @@ pub async fn fill(pod: &Pod, collection: &str, filler_id: &str, force: bool) -> 
                 f
             }
             Ok(Err(e)) => Fetch::Failed(e, None),
-            Err(_) => Fetch::Failed("the agent took too long".into(), None),
+            Err(_) => {
+                let n = spent.load(Ordering::SeqCst);
+                if n > 0 {
+                    day = Some(today(pod.store(), now));
+                    extra_calls = n - 1;
+                }
+                Fetch::Failed("the agent took too long".into(), None)
+            }
         }
     } else {
         let limit = if filler.is_llm() {
