@@ -398,3 +398,54 @@ async fn a_repeating_alert_notifies_each_time_a_row_comes_back_into_a_match() {
     let d = ok(&pod, "describe_collection", json!({"collection": "watch"})).await;
     assert_eq!(d["definition"]["alerts"][0]["repeat"], true);
 }
+
+#[tokio::test]
+async fn with_refresh_every_a_row_is_researched_again_only_when_its_interval_has_passed() {
+    let agent = Arc::new(Researcher::default());
+    let pod = pod(agent.clone());
+    let filler = define(&pod, 10).await;
+    let v = ok(
+        &pod,
+        "describe_collection",
+        json!({"collection": "options"}),
+    )
+    .await;
+    let mut spec = v["definition"]["fillers"][0].clone();
+    spec["refresh"] = json!("every");
+    spec["every_minutes"] = json!(10080);
+    ok(
+        &pod,
+        "apply_change",
+        json!({"collection": "options", "changes": [{"op": "set_filler", "filler": spec}]}),
+    )
+    .await;
+    // The fill set_filler starts has nothing to research; wait it out.
+    while matches!(
+        fill::fill(&pod, "options", &filler, false).await,
+        Outcome::Busy
+    ) {
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    let lamp = create(&pod, "items", json!({"name": "Lamp"})).await;
+    *agent.answers.lock().unwrap() = vec![
+        ("Lamp".into(), vec![option("lamps", 40)]),
+        ("Rug".into(), vec![option("rugs", 90)]),
+    ];
+    fill::fill(&pod, "options", &filler, false).await;
+    assert_eq!(agent.asked.lock().unwrap().len(), 1);
+    // A new row is researched; the lamp, researched just now, isn't.
+    create(&pod, "items", json!({"name": "Rug"})).await;
+    fill::fill(&pod, "options", &filler, false).await;
+    {
+        let asked = agent.asked.lock().unwrap();
+        assert_eq!(asked.len(), 2, "{asked:?}");
+        assert!(asked[1].0.contains("Rug"));
+    }
+    // A changed row is researched at once.
+    update(&pod, "items", json!({"id": lamp, "notes": "Brass"})).await;
+    fill::fill(&pod, "options", &filler, false).await;
+    assert_eq!(agent.asked.lock().unwrap().len(), 3);
+    // A refresh asks for every row again.
+    fill::fill(&pod, "options", &filler, true).await;
+    assert_eq!(agent.asked.lock().unwrap().len(), 5);
+}

@@ -2038,8 +2038,8 @@ fn resolved(def: &Definition, c: &[model::Condition]) -> Option<Vec<model::Condi
 
 /// A `for_each` agent's fill (decision `research-per-row`): each live row of
 /// the other collection that matches, whose text (or the context) is new or
-/// changed since its last research (`refresh: once`) or every time
-/// (`every`), up to [`crate::filler::MAX_EACH_PER_FILL`] and the budgets
+/// changed since its last research (`refresh: once`), or also once
+/// `every_minutes` have passed since it (`every`), up to [`crate::filler::MAX_EACH_PER_FILL`] and the budgets
 /// left today: rows never researched first, then the longest ago. Answers
 /// `(fill, the day the budget was counted on, calls)`.
 async fn run_each(
@@ -2168,7 +2168,16 @@ async fn run_each(
             Some((r, text, key, filled))
         })
         .filter(|(_, _, _, filled)| {
-            force_all || refresh == crate::filler::Refresh::Every || filled.is_none()
+            // `every`: a row is due again once `every_minutes` have passed
+            // since its research (each fill without them), so a write to
+            // one row doesn't research the others again.
+            let again = refresh == crate::filler::Refresh::Every
+                && filled.is_none_or(|at| {
+                    filler
+                        .every_minutes
+                        .is_none_or(|m| now - at >= i64::from(m) * 60)
+                });
+            force_all || again || filled.is_none()
         })
         .collect();
     let day = today(pod.store(), now);

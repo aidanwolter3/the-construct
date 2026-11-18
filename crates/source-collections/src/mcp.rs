@@ -70,7 +70,7 @@ agent with for_each: {collection: <the list>, link: <a ref field here to it>, wh
 a collection of options: it answers each item on its own (one model call each, budgeted by fills_per_day), \
 with the item's fields and context rows (the owner's preferences, a style deck's likes) in the request, and \
 its rows here point back at the item; an item is researched again when its text or the context changes \
-(refresh once) or on every fill (refresh every, with every_minutes for a weekly re-check), soon after a \
+(refresh once), or also once every_minutes have passed since its research (refresh every, every_minutes 10080: weekly), soon after a \
 row is written. keep: [{field, equals}] keeps rows someone marked (in_bag) when a refill leaves them out. \
 With the web_search jack, links in its answer must be pages it saw and quotes must be on pages it read \
 (others are left out), and web_fetch lists each page's main pictures, so an image field gets the store's \
