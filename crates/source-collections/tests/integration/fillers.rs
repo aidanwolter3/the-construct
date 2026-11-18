@@ -833,6 +833,31 @@ async fn event_sites_fill_one_collection_and_alerts_notify_once() {
         .collect::<Vec<_>>(),
         "the same entities as each site's screen"
     );
+    // Each filter on its own, for a page that lays them out.
+    let filters = |a: &Value| {
+        [
+            "any",
+            "all",
+            "none",
+            "fields",
+            "days",
+            "within_days",
+            "date_field",
+        ]
+        .map(|k| a[k].clone())
+    };
+    assert_eq!(
+        filters(&alerts[0]),
+        [
+            json!("Brass Lanterns"),
+            json!(""),
+            json!("class"),
+            json!(""),
+            json!(""),
+            Value::Null,
+            json!("")
+        ]
+    );
     let keys = |e: &Value| {
         let mut k: Vec<String> = e.as_object().unwrap().keys().cloned().collect();
         k.sort();

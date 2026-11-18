@@ -2030,14 +2030,17 @@ mod web {
             )
         };
         let added = change(json!([{ "op": "add_alert", "name": "Budget cuts",
-            "any": ["budget cuts"], "none": ["class", "workshop"] }]))
+            "any": ["budget cuts"], "none": ["class", "workshop"], "fields": ["title"] }]))
         .await;
         assert!(added.get("error").is_none(), "{added}");
         let made = tool(&env, &key, "create_layout", json!({ "title": "Rules",
             "feeds": [["collections", "shows"]],
             "layout": { "type": "core://Page", "id": "rules", "title": "Rules", "root":
               { "type": "core://List", "query_key": "collection:shows:alerts", "item_template":
-                { "type": "core://Text", "style": "Body", "value_expr": "$item.name: $item.summary" } } } }))
+                { "type": "core://Column", "children": [
+                  { "type": "core://Text", "style": "Body", "value_expr": "$item.name: $item.summary" },
+                  { "type": "core://Text", "style": "Body",
+                    "value_expr": "Any of $item.any; none of $item.none; in $item.fields" } ] } } } }))
         .await;
         let layout = made["id"]
             .as_str()
@@ -2083,6 +2086,14 @@ mod web {
         assert_eq!(
             summaries(&view().await),
             ["\"budget cuts\" · not \"class\" or \"workshop\""]
+        );
+        // Its filters go too, each on its own.
+        let first = view().await.to_string();
+        assert!(
+            first.contains("\"any\":\"budget cuts\"")
+                && first.contains("\"none\":\"class, workshop\"")
+                && first.contains("\"fields\":\"title\""),
+            "{first}"
         );
         // Each change reaches the page after the refresh settles.
         let until = |want: Vec<&'static str>| {

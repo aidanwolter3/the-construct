@@ -885,7 +885,20 @@ pub const FILLER_FIELDS: [&str; 12] = [
 ];
 
 /// The fields of an alert's entity ([`alert_record`]).
-pub const ALERT_FIELDS: [&str; 5] = ["id", "uri", "name", "summary", "filler_id"];
+pub const ALERT_FIELDS: [&str; 12] = [
+    "id",
+    "uri",
+    "name",
+    "summary",
+    "filler_id",
+    "any",
+    "all",
+    "none",
+    "fields",
+    "days",
+    "within_days",
+    "date_field",
+];
 
 /// What a filler's entity needs besides its definition and state.
 #[derive(Debug, Clone, Copy)]
@@ -943,7 +956,11 @@ pub fn filler_record(
 }
 
 /// An alert as an entity: its name, its rule in one line (`summary`, as
-/// the site screen shows it) and its filler (`filler_id`, the one site it
+/// the site screen shows it), each of its filters for people (`any`,
+/// `all`, `none`: its phrases, `"budget cuts, layoffs"`; `fields`: the
+/// fields searched, empty for every text field; `days`: `"Fri, Sat"`;
+/// `within_days`: a number, or null; `date_field`: the field those read)
+/// and its filler (`filler_id`, the one site it
 /// watches; empty: every row of the collection). An alert has at most one
 /// filler, so a layout lists one site's with `where: {field: filler_id,
 /// equals: $route.id}`.
@@ -955,6 +972,30 @@ pub fn alert_record(def: &Definition, a: &crate::alerts::Alert) -> EntityRecord 
         ("name", json!(a.name)),
         ("summary", json!(a.summary())),
         ("filler_id", json!(a.filler.clone().unwrap_or_default())),
+        ("any", json!(a.any.join(", "))),
+        ("all", json!(a.all.join(", "))),
+        ("none", json!(a.none.join(", "))),
+        (
+            "fields",
+            json!(
+                a.fields
+                    .iter()
+                    .map(|f| def.name_of(f))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
+        ),
+        ("days", json!(a.days_text())),
+        ("within_days", json!(a.within_days)),
+        (
+            "date_field",
+            json!(
+                a.date_field
+                    .as_deref()
+                    .map(|f| def.name_of(f))
+                    .unwrap_or_default()
+            ),
+        ),
     ] {
         e.insert(k.to_owned(), v);
     }

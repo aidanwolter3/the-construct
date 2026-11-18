@@ -128,17 +128,7 @@ impl Alert {
             parts.push(format!("not {}", q(&self.none, " or ")));
         }
         if !self.days.is_empty() {
-            let days: Vec<String> = self
-                .days
-                .iter()
-                .map(|d| {
-                    let mut c = d.chars();
-                    c.next()
-                        .map(|f| f.to_uppercase().chain(c).collect())
-                        .unwrap_or_default()
-                })
-                .collect();
-            parts.push(days.join(", "));
+            parts.push(self.days_text());
         }
         if let Some(n) = self.within_days {
             parts.push(format!("within {n} days"));
@@ -148,6 +138,20 @@ impl Alert {
         } else {
             parts.join(" · ")
         }
+    }
+
+    /// Its days for people: `Fri, Sat` (empty: any day).
+    pub fn days_text(&self) -> String {
+        self.days
+            .iter()
+            .map(|d| {
+                let mut c = d.chars();
+                c.next()
+                    .map(|f| f.to_uppercase().chain(c).collect())
+                    .unwrap_or_default()
+            })
+            .collect::<Vec<String>>()
+            .join(", ")
     }
 
     /// As a spec with field names, for Claude.
