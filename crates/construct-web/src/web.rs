@@ -1230,6 +1230,13 @@ async fn mount(session: Session) -> Result<(), JsValue> {
             }
         }
     });
+    // A phone follows a tap with mouse events, and a mousedown on the canvas
+    // (which takes no focus) moves focus to the page: the hidden input the
+    // tap just focused blurs and the keyboard closes as it opens. The app
+    // says where focus goes (`sync_input`), so the mousedown moves none.
+    listen(&canvas, "mousedown", |e: web_sys::Event| {
+        e.prevent_default()
+    });
     listen(&canvas, "pointerleave", {
         let app = app.clone();
         move |_: PointerEvent| {
