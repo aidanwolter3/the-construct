@@ -1026,7 +1026,7 @@ pub fn is_slug(s: &str) -> bool {
 pub fn tool_specs() -> Vec<Value> {
     vec![
         json!({ "name": "share_publicly",
-            "description": "Make a page anyone can open in a browser, without a pod: a copy of one of the pod's layouts, the layouts it opens and embeds (a list's rows push their screen: those come too, each with the rows it shows for each row), and only the rows they show, read-only (decisions public-web-links, public-links-share-the-closure). Without confirm nothing is shared: the answer is a review of everything a visitor would read (every text and value, every URL, per layout) and what was taken out (buttons that write, links to layouts not carried, screens); show it to the user and ask before confirming. With confirm (the review_id) it goes out and answers the page's url. The copy is refreshed when the data changes, so new rows the layouts show appear too; say so. params draws a screen that reads $route.<name> (a recipe screen: {\"id\": \"<meal id>\"}); item draws the layout with that row as $item; rows limits the root's lists to some rows; leave_out keeps layouts out (their links go). slug also answers it at /@<handle>/<slug> (the pod needs a handle: set_handle). Sharing the same layout, rows, item and params again updates the same link.",
+            "description": "Make a page anyone can open in a browser, without a pod: a copy of one of the pod's layouts, the layouts it opens and embeds (a list's rows push their screen: those come too, each with the rows it shows for each row), and only the rows they show, read-only (decisions public-web-links, public-links-share-the-closure). Without confirm nothing is shared: the answer is a review of everything a visitor would read (every text and value, every URL, per layout) and what was taken out (buttons that write, links to layouts not carried, screens); show it to the user and ask before confirming. With confirm (the review_id) it goes out and answers the page's url. The copy is refreshed when the data changes, so new rows the layouts show appear too; say so. An edit to its layouts holds the page at its last copy until it is shared again (a new review). params draws a screen that reads $route.<name> (a recipe screen: {\"id\": \"<meal id>\"}); item draws the layout with that row as $item; rows limits the root's lists to some rows; leave_out keeps layouts out (their links go). slug also answers it at /@<handle>/<slug> (the pod needs a handle: set_handle). Sharing the same layout, rows, item and params again updates the same link.",
             "inputSchema": { "type": "object", "properties": {
                 "layout": { "type": "string", "description": "A layout id: home or a c-... id from list_layouts" },
                 "params": { "type": "object", "description": "{name: value} for $route.<name> of the layout (as render_layout_preview)" },
@@ -1219,7 +1219,7 @@ async fn share(
                 "layouts_not_carried": made.left_out.iter()
                     .map(|(l, why)| json!({ "layout": l, "why": why })).collect::<Vec<_>>(),
             },
-            "updates": "the copy is made again whenever the data changes: new rows these layouts show will appear on the page too",
+            "updates": "the copy is made again whenever the data changes: new rows these layouts show will appear on the page too; after an edit to these layouts the page keeps its last copy until it is shared again",
         }));
     }
     let live = shelf
@@ -1269,6 +1269,23 @@ async fn share(
     Ok(out)
 }
 
+fn same_format(a: &Value, b: &Value) -> bool {
+    a["format"] == b["format"]
+}
+
+/// Whether two copies draw the same layouts (everything but their rows),
+/// so they read the same fields and carry the same screens.
+fn same_shape(a: &Value, b: &Value) -> bool {
+    let shape = |c: &Value| {
+        let mut c = c.clone();
+        if let Some(o) = c.as_object_mut() {
+            o.remove("data");
+        }
+        c
+    };
+    shape(a) == shape(b)
+}
+
 /// Copies every live public link of the pod again (its data changed).
 pub async fn refresh(pod: &Pod) {
     let Ok((pod_id, shelf)) = shelf(pod) else {
@@ -1279,13 +1296,22 @@ pub async fn refresh(pod: &Pod) {
     };
     for c in live.into_iter().filter(|c| c.revoked_at.is_none()) {
         match make(pod, &Ask::from_key(&c.layout, &c.rows)).await {
-            Ok(made) if made.copy != c.copy => {
+            Ok(made) if made.copy == c.copy => {}
+            // Only rows go out without a review: a layout edited since (a new
+            // field, a screen it now opens) holds the page at its last copy
+            // until the owner shares it again. A copy of an older format is
+            // rewritten (decision `public-links-share-the-closure`).
+            Ok(made) if same_format(&made.copy, &c.copy) && !same_shape(&made.copy, &c.copy) => {
+                tracing::warn!(
+                    "a public link's layouts changed since its review: it keeps its last copy"
+                );
+            }
+            Ok(made) => {
                 let _ = shelf.put_public(PublicCopy {
                     copy: made.copy,
                     ..c
                 });
             }
-            Ok(_) => {}
             // The layout went or changed shape: the page keeps its last copy.
             Err(e) => tracing::warn!(error = %e["error"], "a public link couldn't be copied again"),
         }
