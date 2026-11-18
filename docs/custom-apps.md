@@ -369,7 +369,8 @@ A collection can keep itself current from the web (decision
   `context` rows (`[{collection, where?, fields?, limit?}]`: the owner's preferences); its rows here are that
   row's answer (`replace` among them only, by `key`), linked back through `link`, a ref field the pod sets. A row
   is researched again when its text or the context changes (`refresh: once`, the default) or on every fill
-  (`every`, with `every_minutes` for a weekly re-check); a write to the other collection starts a fill 20 s later.
+  (`every`: also once `every_minutes` have passed since its research, e.g. 10080 for a weekly re-check, so a write
+  to one row doesn't research the others again); a write to the other collection starts a fill 20 s later.
   A row that is deleted takes its answers with it. `keep: [{field, equals}]` (any filler that adds and removes
   rows) keeps rows someone marked, an option put in the bag, when a refill leaves them out.
 - **The web module:** every request goes through the pod's host policy (`web-extract`'s `hosts`: 1 s spacing, a
