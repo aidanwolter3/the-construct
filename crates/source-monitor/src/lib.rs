@@ -486,10 +486,23 @@ pub fn checks(series: &[Series], gauges: &[Gauge], cfg: &MonitorConfig) -> Vec<C
         value: h5 as f64,
     });
 
-    let (_, tokens) = sum(series, LLM_TOKENS, "feature", &[]);
+    // Cache reads cost a twentieth of other tokens, so they are left out
+    // of the warning (and the split) and only mentioned.
+    let cached = |s: &Series| s.label("direction") == Some("cache_read");
+    let (tokens, cache_reads) =
+        series
+            .iter()
+            .filter(|s| s.name == LLM_TOKENS)
+            .fold((0, 0), |(t, c), s| {
+                if cached(s) {
+                    (t, c + s.last_day)
+                } else {
+                    (t + s.last_day, c)
+                }
+            });
     let by_feature: std::collections::BTreeMap<&str, u64> = series
         .iter()
-        .filter(|s| s.name == LLM_TOKENS && s.last_day > 0)
+        .filter(|s| s.name == LLM_TOKENS && s.last_day > 0 && !cached(s))
         .fold(Default::default(), |mut m, s| {
             *m.entry(s.label("feature").unwrap_or("?")).or_default() += s.last_day;
             m
@@ -502,8 +515,13 @@ pub fn checks(series: &[Series], gauges: &[Gauge], cfg: &MonitorConfig) -> Vec<C
         title: "Model use",
         warn: tokens > cfg.llm_tokens_per_day,
         detail: format!(
-            "{} over {}{} in the last day{}",
+            "{}{} over {}{} in the last day{}",
             plural(tokens, "token", "tokens"),
+            if cache_reads > 0 {
+                format!(" (and {cache_reads} read from the cache)")
+            } else {
+                String::new()
+            },
             plural(calls, "call", "calls"),
             if web > 0 {
                 format!(
@@ -868,6 +886,38 @@ mod tests {
         let summary = &b.entities["monitor://summary/server"];
         assert_eq!(summary.get_str("headline"), Some("9 checks need a look"));
         assert_eq!(summary.get_str("window_note"), Some(""));
+    }
+
+    #[test]
+    fn cache_reads_do_not_count_toward_the_token_warning() {
+        let tok = |direction: &str, day: u64| Series {
+            name: LLM_TOKENS,
+            labels: vec![
+                ("direction".to_owned(), direction.to_owned()),
+                ("feature".to_owned(), "fill_agent".to_owned()),
+            ],
+            total: day,
+            last_hour: 0,
+            last_day: day,
+        };
+        let series = vec![
+            tok("input", 300_000),
+            tok("cache_write", 100_000),
+            tok("cache_read", 5_000_000),
+            tok("output", 20_000),
+        ];
+        assert!(warned(&series, &quiet_gauges()).is_empty());
+        let c = checks(&series, &quiet_gauges(), &MonitorConfig::default());
+        let model = c.iter().find(|c| c.id == "model_use").unwrap();
+        assert_eq!(
+            model.detail,
+            "420000 tokens (and 5000000 read from the cache) over 0 calls in the last day \
+             (fill_agent 420000)"
+        );
+        // Uncached tokens over the limit still warn.
+        let mut heavy = series.clone();
+        heavy.push(tok("input", 700_000));
+        assert_eq!(warned(&heavy, &quiet_gauges()), ["model_use"]);
     }
 
     #[test]

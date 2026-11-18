@@ -362,7 +362,9 @@ A collection can keep itself current from the web (decision
   Its answer is checked against what it read: a link it never saw is dropped, and so is a line quoting three or more
   words that are on no page it read (and a value the model ran on into the next fields, `..." ,"details":"...`,
   is split back into them); `web_fetch` lists each page's main pictures (`og:image`, JSON-LD `image`), so
-  an image field gets the store's own photo.
+  an image field gets the store's own photo. `web_fetch` shows the model a page's first 12,000 characters and 40 links (quotes are
+  checked against the whole page). The loop's requests use the prompt cache (each turn only appends, so it reads
+  the turns before it back), and the second-to-last request tells the model to save the rows it has.
 - **Research per row** (decision [`research-per-row`](decisions/research-per-row.md)): an `agent` with `for_each:
   {collection, link, where?, from?, context?}` researches each row of another collection on its own (a shopping
   list's items), one model call each, counted toward `fills_per_day` and the pod's limit, at most 10 a fill. The
