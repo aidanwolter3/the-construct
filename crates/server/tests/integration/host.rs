@@ -243,6 +243,24 @@ async fn sign_in(env: &Env, token: &str) {
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{app}");
+    let (code, verifier) = authorize(&app).await;
+    let (status, body) = post(
+        &env.url("/v1/auth/pixelfed/token"),
+        Some(token),
+        json!({ "instance_url": env.fake.url, "code": code, "code_verifier": verifier,
+                "redirect_uri": REDIRECT }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(
+        body["session_token"], token,
+        "the pod token stays the session"
+    );
+}
+
+/// The fake Pixelfed's authorize page for `app` (an answer of
+/// `/v1/auth/pixelfed/app`) -> the code it redirects with and its verifier.
+async fn authorize(app: &Value) -> (String, String) {
     let mut bytes = [0u8; 48];
     getrandom::fill(&mut bytes).unwrap();
     let verifier = URL_SAFE_NO_PAD.encode(bytes);
@@ -268,18 +286,7 @@ async fn sign_in(env: &Env, token: &str) {
         .unwrap()
         .1
         .into_owned();
-    let (status, body) = post(
-        &env.url("/v1/auth/pixelfed/token"),
-        Some(token),
-        json!({ "instance_url": env.fake.url, "code": code, "code_verifier": verifier,
-                "redirect_uri": REDIRECT }),
-    )
-    .await;
-    assert_eq!(status, StatusCode::OK, "{body}");
-    assert_eq!(
-        body["session_token"], token,
-        "the pod token stays the session"
-    );
+    (code, verifier)
 }
 
 #[tokio::test]
@@ -1311,6 +1318,62 @@ mod web {
             get(&env.url("/v1/auth/sign-ins"), Some(&code)).await.0,
             StatusCode::OK
         );
+    }
+
+    /// The cookie is `HttpOnly`: a Pixelfed sign-in made through it answers
+    /// the page without the session's token, and still signs the browser in.
+    #[tokio::test]
+    async fn a_sign_in_through_the_cookie_answers_no_session_token() {
+        let (env, _files) = web_env().await;
+        let code = env.create("cookie").await;
+        let set = open(&env, &code, true).await.1.expect("a cookie");
+        let cookie = set.split(';').next().unwrap().to_owned();
+        let token = cookie.strip_prefix("construct_web=").unwrap().to_owned();
+        let web_post = |path: &str, body: Value| {
+            client()
+                .post(env.url(path))
+                .header("cookie", &cookie)
+                .header("x-construct-client", "web")
+                .json(&body)
+                .send()
+        };
+        let app: Value = web_post(
+            "/v1/auth/pixelfed/app",
+            json!({ "instance_url": env.fake.url, "redirect_uri": REDIRECT }),
+        )
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+        let (upstream, verifier) = authorize(&app).await;
+        let resp = web_post(
+            "/v1/auth/pixelfed/token",
+            json!({ "instance_url": env.fake.url, "code": upstream, "code_verifier": verifier,
+                    "redirect_uri": REDIRECT }),
+        )
+        .await
+        .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let text = resp.text().await.unwrap();
+        assert!(
+            !text.contains(&token),
+            "the cookie's value reached the page: {text}"
+        );
+        let body: Value = serde_json::from_str(&text).unwrap();
+        assert!(body.get("session_token").is_none(), "{body}");
+        assert!(body["account"]["id"].is_string(), "{body}");
+        let sign_ins: Value = client()
+            .get(env.url("/v1/auth/sign-ins"))
+            .header("cookie", &cookie)
+            .header("x-construct-client", "web")
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        assert!(sign_ins.to_string().contains("pixelfed"), "{sign_ins}");
     }
 
     /// Decision `web-sessions-share-sign-ins`: typing the pod code in a

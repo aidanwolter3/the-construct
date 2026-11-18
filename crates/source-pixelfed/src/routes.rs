@@ -608,7 +608,7 @@ async fn exchange_token(State(state): State<Pod>, headers: HeaderMap, body: Byte
         return e.into_response();
     }
     tracing::info!(instance = %inst.url, "Pixelfed sign-in: session signed in");
-    Json(json!({
+    let mut answer = json!({
         "session_token": session,
         "instance_url": inst.url,
         "account": {
@@ -617,8 +617,12 @@ async fn exchange_token(State(state): State<Pod>, headers: HeaderMap, body: Byte
             "display_name": user.get("display_name"),
             "avatar_url": user.get("avatar_url"),
         },
-    }))
-    .into_response()
+    });
+    // A browser's session is its `HttpOnly` cookie: not for the page's script.
+    if state.host_credential(&headers).as_deref() == Some(pod_core::CREDENTIAL_WEB) {
+        answer.as_object_mut().map(|o| o.remove("session_token"));
+    }
+    Json(answer).into_response()
 }
 
 // ---------- home feed ----------
