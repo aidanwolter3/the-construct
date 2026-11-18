@@ -140,6 +140,51 @@ fn a_push_from_a_panel_column_replaces_the_panels_past_it() {
 }
 
 #[test]
+fn a_screen_tapped_in_a_panel_opens_from_the_panels_layout() {
+    // A feed in a panel whose rows and button open its own screens by
+    // address (a post, a New post): home has no such screens.
+    let mut s = session(WIDE);
+    s.layouts.insert(
+        "detail".into(),
+        node(json!({ "type": "core://Page", "id": "detail", "title": "Feed",
+            "root": { "type": "core://Column", "children": [
+                { "type": "core://Text", "style": "Body", "value_expr": "Feed" },
+                { "type": "core://Tappable", "tag": "post",
+                  "on_click": { "intent": "action.navigation.open", "presentation": "Push",
+                                "target_uri": "feed://posts/7" },
+                  "content": { "type": "core://Text", "style": "Body", "value_expr": "A post" } },
+                { "type": "core://Tappable", "tag": "compose",
+                  "on_click": { "intent": "action.navigation.open", "presentation": "Modal",
+                                "target_uri": "feed://compose" },
+                  "content": { "type": "core://Text", "style": "Body", "value_expr": "New post" } } ] },
+            "screens": [
+                { "id": "post", "route": "feed://posts/{id}", "title": "Post",
+                  "root": { "type": "core://Text", "style": "Body", "value_expr": "Post $route.id" } },
+                { "id": "compose", "route": "feed://compose", "title": "New post",
+                  "root": { "type": "core://Text", "style": "Body", "value_expr": "Write a caption" } } ] })),
+    );
+    s.tap(&Target::Id("salmon".into())).unwrap();
+    assert!(shows(&mut s, "A post").is_some(), "the feed is a panel");
+
+    let out = s.tap(&Target::Id("post".into())).unwrap();
+    assert_eq!(
+        out.effects,
+        vec![Effect::OpenedScreen {
+            screen: "post".into()
+        }]
+    );
+    assert!(shows(&mut s, "Post 7").is_some());
+    // Back returns to home with the feed still beside the list.
+    s.dispatch(&json!({ "intent": "action.navigation.back" }))
+        .unwrap();
+    assert!(shows(&mut s, "Post 7").is_none());
+    assert!(shows(&mut s, "A post").is_some());
+
+    s.tap(&Target::Id("compose".into())).unwrap();
+    assert!(shows(&mut s, "Write a caption").is_some());
+}
+
+#[test]
 fn on_a_phone_a_panel_host_pushes_as_before() {
     for width in [390.0, 700.0] {
         let mut s = session(Viewport {

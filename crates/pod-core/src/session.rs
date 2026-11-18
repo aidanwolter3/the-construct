@@ -60,6 +60,38 @@ pub fn session_hash(token: &str) -> String {
     crate::util::hex(&Sha256::digest(token.as_bytes()))
 }
 
+/// Gives session `to` every sign-in session `from` has, with each source's
+/// own per-session state ([`crate::Source::share_sign_in`]), in one
+/// transaction: a browser opened with the pod code starts signed in where
+/// the pod code is (decision `web-sessions-share-sign-ins`). Later sign-ins
+/// and sign-outs on either session stay its own.
+pub async fn share_sign_ins(pod: &Pod, from: &str, to: &str) -> Result<usize, ApiError> {
+    let p = pod.clone();
+    let (from, to) = (from.to_owned(), to.to_owned());
+    blocking(pod, move |store| {
+        store.transaction(|tx| {
+            let ids: Vec<String> = {
+                let mut stmt = tx.prepare(
+                    "SELECT provider FROM session_sign_ins WHERE token_hash = ?1 ORDER BY provider",
+                )?;
+                stmt.query_map([&from], |r| r.get(0))?
+                    .collect::<rusqlite::Result<_>>()?
+            };
+            let mut n = 0;
+            for id in ids {
+                let Some(adapter) = p.catalog().sign_in_adapter(&id) else {
+                    continue;
+                };
+                crate::store::attach_sign_in_on(tx, &to, &id)?;
+                adapter.share_sign_in(tx, &id, &from, &to)?;
+                n += 1;
+            }
+            Ok(n)
+        })
+    })
+    .await
+}
+
 /// A new random session token (256 bits, URL-safe base64).
 pub fn new_session_token() -> String {
     let mut buf = [0u8; 32];

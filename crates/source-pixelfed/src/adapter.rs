@@ -355,6 +355,17 @@ impl Source for PixelfedAdapter {
         })
     }
 
+    /// The server the session signed in to goes with it.
+    fn share_sign_in(
+        &self,
+        conn: &rusqlite::Connection,
+        _sign_in: &str,
+        from: &str,
+        to: &str,
+    ) -> rusqlite::Result<()> {
+        crate::db::share_session_instance(conn, from, to)
+    }
+
     fn resume<'a>(&'a self, pod: &'a Pod) -> BoxFuture<'a, ()> {
         Box::pin(crate::posting::resume(pod))
     }
