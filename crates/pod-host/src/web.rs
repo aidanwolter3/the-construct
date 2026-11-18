@@ -91,22 +91,25 @@ pub(crate) fn routes() -> Router<Arc<Host>> {
 
 /// Public links (decision `public-web-links`, `CONSTRUCT_PUBLIC_WEB=1`):
 /// anyone with a link reads its copy, never the pod. A chosen short path,
-/// `/@<handle>/<slug>`, answers the same copy (decision
-/// `public-links-share-the-closure`).
+/// `/<handle>/<slug>`, answers the same copy (decision
+/// `public-links-share-the-closure`); it has no route here (see
+/// [`short_path`]). The first form, `/@<handle>/<slug>`, redirects to it.
 pub(crate) fn public_routes() -> Router<Arc<Host>> {
     Router::new()
         .route("/s/{link}", get(public_page))
         .route("/s/{link}/view", get(public_view))
         .route("/s/{link}/image", get(public_image))
-        .route("/@{handle}/{slug}", get(short_page))
+        // Links sent before the short path lost its `@`: the page moves to
+        // the new address; a page already open still reads its copy.
+        .route("/@{handle}/{slug}", get(short_variant))
         .route("/@{handle}/{slug}/view", get(short_view))
         // Calendar feeds (decision `ical-feeds`): a subscriber's app reads
         // the text the pod last rendered, never the pod.
         .route("/ical/{file}", get(calendar_feed))
         .route("/@{handle}/{slug}/image", get(short_image))
         // The same pages as people's apps write them: a trailing slash, and
-        // `@` sent as `%40`. Each redirects to the address above, so the
-        // page reads its own path.
+        // `@` sent as `%40`. Each redirects to the page's own address, so
+        // the page reads its own path.
         .route("/s/{link}/", get(link_slash))
         .route("/@{handle}/{slug}/", get(short_variant))
         .route("/%40{handle}/{slug}", get(short_variant))
@@ -115,6 +118,51 @@ pub(crate) fn public_routes() -> Router<Arc<Host>> {
         .route("/web/s/{link}", get(link_slash))
         .route("/web/@{handle}/{slug}", get(short_variant))
         .route("/web/%40{handle}/{slug}", get(short_variant))
+}
+
+/// What a short path, `/<handle>/<slug>` (and `…/view`, `…/image`, `…/`),
+/// answers, or `None` for any other request. The host's fallback asks this
+/// before it forwards a request to a pod: a route for `/{handle}/{slug}`
+/// would also take the pods' own two-segment paths (`/v1/<x>`) and their
+/// other methods. A handle can't be a first segment the host or a pod
+/// routes (`v1`, `web`, `oauth`, …: `RESERVED_HANDLES`), so the two never
+/// meet.
+pub(crate) async fn short_path(
+    host: &Arc<Host>,
+    method: &axum::http::Method,
+    uri: &axum::http::Uri,
+    headers: &HeaderMap,
+) -> Option<Response> {
+    if !matches!(*method, axum::http::Method::GET | axum::http::Method::HEAD) {
+        return None;
+    }
+    let path = uri.path().strip_prefix('/')?;
+    let mut parts = path.split('/');
+    let (handle, slug) = (parts.next()?, parts.next()?);
+    let rest = parts.next();
+    if parts.next().is_some() {
+        return None;
+    }
+    let (lower_h, lower_s) = (handle.to_ascii_lowercase(), slug.to_ascii_lowercase());
+    if !pod_core::construct::share::valid_handle(&lower_h)
+        || !pod_core::public_copy::is_slug(&lower_s)
+    {
+        return None;
+    }
+    if !host.config.public_links() {
+        return Some(paused().await);
+    }
+    let lower = lower_h == handle && lower_s == slug;
+    let named = Named::Short(lower_h.clone(), lower_s.clone());
+    Some(match rest {
+        None if lower => page_of(host.clone(), named, headers.clone()).await,
+        None | Some("") => moved(format!("/{lower_h}/{lower_s}")),
+        Some("view") if lower => view_of(host.clone(), named).await,
+        Some("image") if lower => {
+            image_of(host.clone(), named, uri.query().map(str::to_owned)).await
+        }
+        Some(_) => return None,
+    })
 }
 
 /// A permanent redirect to `path` (the page's own address).
@@ -137,15 +185,16 @@ async fn link_slash(Path(link): Path<String>) -> Response {
     moved(format!("/s/{link}"))
 }
 
-/// `/@<handle>/<slug>/`, `/%40<handle>/<slug>`, under `/web`, in any case:
-/// the short path as `/@<handle>/<slug>`.
+/// `/@<handle>/<slug>` (the first form), `/@<handle>/<slug>/`,
+/// `/%40<handle>/<slug>`, under `/web`, in any case: the short path as
+/// `/<handle>/<slug>`.
 async fn short_variant(Path((handle, slug)): Path<(String, String)>) -> Response {
     let (handle, slug) = (handle.to_ascii_lowercase(), slug.to_ascii_lowercase());
     if !pod_core::construct::share::valid_handle(&handle) || !pod_core::public_copy::is_slug(&slug)
     {
         return not_found();
     }
-    moved(format!("/@{handle}/{slug}"))
+    moved(format!("/{handle}/{slug}"))
 }
 
 /// Where the host doesn't serve public links (`CONSTRUCT_PUBLIC_WEB`
@@ -265,20 +314,6 @@ async fn public_page(
     headers: HeaderMap,
 ) -> Response {
     page_of(host, Named::Link(link), headers).await
-}
-
-/// `GET /@<handle>/<slug>`: the same page by a short path.
-async fn short_page(
-    State(host): State<Arc<Host>>,
-    Path((handle, slug)): Path<(String, String)>,
-    headers: HeaderMap,
-) -> Response {
-    if handle.bytes().any(|b| b.is_ascii_uppercase())
-        || slug.bytes().any(|b| b.is_ascii_uppercase())
-    {
-        return short_variant(Path((handle, slug))).await;
-    }
-    page_of(host, Named::Short(handle, slug), headers).await
 }
 
 async fn page_of(host: Arc<Host>, named: Named, headers: HeaderMap) -> Response {

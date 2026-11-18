@@ -77,7 +77,7 @@ pub struct PublicCopy {
     /// what a visitor's page draws (format 1 had only `title`, `node`,
     /// `data` and `item`).
     pub copy: Value,
-    /// A chosen short path, `/@<owner's handle>/<slug>`.
+    /// A chosen short path, `/<owner's handle>/<slug>`.
     pub slug: Option<String>,
     pub created_at: i64,
     pub updated_at: i64,
@@ -1007,12 +1007,12 @@ fn answer(c: &PublicCopy, base: Option<&str>, handle: Option<&str>) -> Value {
     }
     if let (Some(s), Some(h)) = (&c.slug, handle) {
         out["slug"] = json!(s);
-        out["short_url"] = json!(url(format!("/@{h}/{s}")));
+        out["short_url"] = json!(url(format!("/{h}/{s}")));
     }
     out
 }
 
-/// Whether `s` may be a chosen short path (`/@<handle>/<slug>`): 1 to 48
+/// Whether `s` may be a chosen short path (`/<handle>/<slug>`): 1 to 48
 /// lowercase letters, digits and `-`, not starting or ending with `-`.
 pub fn is_slug(s: &str) -> bool {
     (1..=48).contains(&s.len())
@@ -1026,14 +1026,14 @@ pub fn is_slug(s: &str) -> bool {
 pub fn tool_specs() -> Vec<Value> {
     vec![
         json!({ "name": "share_publicly",
-            "description": "Make a page anyone can open in a browser, without a pod: a copy of one of the pod's layouts, the layouts it opens and embeds (a list's rows push their screen: those come too, each with the rows it shows for each row), and only the rows they show, read-only (decisions public-web-links, public-links-share-the-closure). Without confirm nothing is shared: the answer is a review of everything a visitor would read (every text and value, every URL, per layout) and what was taken out (buttons that write, links to layouts not carried, screens); show it to the user and ask before confirming. With confirm (the review_id) it goes out and answers the page's url. The copy is refreshed when the data changes, so new rows the layouts show appear too; say so. An edit to its layouts holds the page at its last copy until it is shared again (a new review). params draws a screen that reads $route.<name> (a recipe screen: {\"id\": \"<meal id>\"}); item draws the layout with that row as $item; rows limits the root's lists to some rows; leave_out keeps layouts out (their links go). slug also answers it at /@<handle>/<slug> (the pod needs a handle: set_handle). Sharing the same layout, rows, item and params again updates the same link.",
+            "description": "Make a page anyone can open in a browser, without a pod: a copy of one of the pod's layouts, the layouts it opens and embeds (a list's rows push their screen: those come too, each with the rows it shows for each row), and only the rows they show, read-only (decisions public-web-links, public-links-share-the-closure). Without confirm nothing is shared: the answer is a review of everything a visitor would read (every text and value, every URL, per layout) and what was taken out (buttons that write, links to layouts not carried, screens); show it to the user and ask before confirming. With confirm (the review_id) it goes out and answers the page's url. The copy is refreshed when the data changes, so new rows the layouts show appear too; say so. An edit to its layouts holds the page at its last copy until it is shared again (a new review). params draws a screen that reads $route.<name> (a recipe screen: {\"id\": \"<meal id>\"}); item draws the layout with that row as $item; rows limits the root's lists to some rows; leave_out keeps layouts out (their links go). slug also answers it at /<handle>/<slug> (the pod needs a handle: set_handle). Sharing the same layout, rows, item and params again updates the same link.",
             "inputSchema": { "type": "object", "properties": {
                 "layout": { "type": "string", "description": "A layout id: home or a c-... id from list_layouts" },
                 "params": { "type": "object", "description": "{name: value} for $route.<name> of the layout (as render_layout_preview)" },
                 "rows": { "type": "array", "items": { "type": "string" }, "description": "Only these rows in the layout's lists (entity URIs they hold)" },
                 "item": { "type": "string", "description": "A row (entity URI) the layout draws as $item" },
                 "leave_out": { "type": "array", "items": { "type": "string" }, "description": "Layout ids the copy doesn't carry (the review lists the ones it does)" },
-                "slug": { "type": "string", "description": "A short path: /@<handle>/<slug> (lowercase letters, digits, -)" },
+                "slug": { "type": "string", "description": "A short path: /<handle>/<slug> (lowercase letters, digits, -)" },
                 "confirm": { "type": "string", "description": "The review_id of the review the user approved" } },
                 "required": ["layout"] } }),
         json!({ "name": "list_public_links",
@@ -1156,7 +1156,7 @@ async fn share(
         if handle.is_none() {
             return Err(refuse(
                 "no_handle",
-                "a short path is /@<handle>/<slug>: give the pod a handle first (set_handle)",
+                "a short path is /<handle>/<slug>: give the pod a handle first (set_handle)",
             ));
         }
     }

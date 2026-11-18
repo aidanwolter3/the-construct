@@ -26,7 +26,7 @@ pub async fn start() -> Result<(), wasm_bindgen::JsValue> {
 
 /// A public link's page (decisions `public-web-links`,
 /// `public-links-share-the-closure`) calls this with its path:
-/// `/s/<link>` or `/@<handle>/<slug>`.
+/// `/s/<link>` or `/<handle>/<slug>`.
 #[cfg(target_arch = "wasm32")]
 #[wasm_bindgen::prelude::wasm_bindgen]
 pub async fn start_public(base: String) -> Result<(), wasm_bindgen::JsValue> {

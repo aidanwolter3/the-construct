@@ -1908,7 +1908,7 @@ mod web {
         assert!(
             shared["short_url"]
                 .as_str()
-                .is_some_and(|u| u.ends_with("/@cook/our-meals")),
+                .is_some_and(|u| u.ends_with("/cook/our-meals")),
             "{shared}"
         );
         let link = shared["link"].as_str().unwrap().to_owned();
@@ -1932,7 +1932,7 @@ mod web {
             "{text}"
         );
         let short: Value = client()
-            .get(env.url("/@cook/our-meals/view"))
+            .get(env.url("/cook/our-meals/view"))
             .send()
             .await
             .unwrap()
@@ -1940,15 +1940,25 @@ mod web {
             .await
             .unwrap();
         assert_eq!(short, view);
+        // A page already open at the first form (`/@…`) still reads its copy.
+        let first: Value = client()
+            .get(env.url("/@cook/our-meals/view"))
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        assert_eq!(first, view);
         let page = client()
-            .get(env.url("/@cook/our-meals"))
+            .get(env.url("/cook/our-meals"))
             .send()
             .await
             .unwrap();
         assert_eq!(page.status(), StatusCode::OK);
         assert_eq!(
             client()
-                .get(env.url("/@cook/nope/view"))
+                .get(env.url("/cook/nope/view"))
                 .send()
                 .await
                 .unwrap()
@@ -1962,22 +1972,23 @@ mod web {
             .build()
             .unwrap();
         for (from, to) in [
-            (
-                "/@cook/our-meals/".to_owned(),
-                "/@cook/our-meals".to_owned(),
-            ),
+            // The first form, with `@`, as sent before.
+            ("/@cook/our-meals".to_owned(), "/cook/our-meals".to_owned()),
+            ("/@cook/our-meals/".to_owned(), "/cook/our-meals".to_owned()),
             (
                 "/%40cook/our-meals".to_owned(),
-                "/@cook/our-meals".to_owned(),
+                "/cook/our-meals".to_owned(),
             ),
             (
                 "/%40Cook/Our-Meals/".to_owned(),
-                "/@cook/our-meals".to_owned(),
+                "/cook/our-meals".to_owned(),
             ),
-            ("/@Cook/our-meals".to_owned(), "/@cook/our-meals".to_owned()),
+            ("/@Cook/our-meals".to_owned(), "/cook/our-meals".to_owned()),
+            ("/cook/our-meals/".to_owned(), "/cook/our-meals".to_owned()),
+            ("/Cook/Our-Meals".to_owned(), "/cook/our-meals".to_owned()),
             (
                 "/web/@cook/our-meals".to_owned(),
-                "/@cook/our-meals".to_owned(),
+                "/cook/our-meals".to_owned(),
             ),
             (format!("/web/s/{link}"), format!("/s/{link}")),
             (format!("/s/{link}/"), format!("/s/{link}")),
@@ -1986,6 +1997,17 @@ mod web {
             assert_eq!(r.status(), StatusCode::PERMANENT_REDIRECT, "{from}");
             assert_eq!(r.headers()["location"], to.as_str(), "{from}");
         }
+        // The pod's own paths with two segments still reach it: a handle
+        // can't be one of their first segments.
+        let pod = client()
+            .get(env.url("/v1/construct"))
+            .bearer_auth(&key)
+            .send()
+            .await
+            .unwrap();
+        // (The test's key only reaches /v1/mcp: the host's own answer for
+        // a pod path, not a short path's 404.)
+        assert_eq!(pod.status(), StatusCode::FORBIDDEN, "/v1/construct");
         // The short path holds the handle.
         let renamed = tool(&env, &key, "set_handle", json!({ "handle": "chef" })).await;
         assert_eq!(renamed["error"], "handle_in_use", "{renamed}");

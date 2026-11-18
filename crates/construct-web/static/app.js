@@ -15,9 +15,9 @@ async function hasSession() {
   return r.ok;
 }
 
-// A public link (/s/<link>, or a chosen /@<handle>/<slug>; decisions `public-web-links`,
+// A public link (/s/<link>, or a chosen /<handle>/<slug>; decisions `public-web-links`,
 // `public-links-share-the-closure`): its copy, read-only, for anyone; no pod, no sign-in.
-const shared = location.pathname.match(/^(\/s\/pub-[a-z0-9]+|\/@[a-z0-9_-]+\/[a-z0-9-]+)\/?$/);
+const shared = location.pathname.match(/^(\/s\/pub-[a-z0-9]+|\/@?[a-z][a-z0-9-]+\/[a-z0-9-]+)\/?$/);
 
 async function run() {
   if (shared) {

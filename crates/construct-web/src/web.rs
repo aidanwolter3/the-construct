@@ -1101,7 +1101,7 @@ pub async fn start() -> Result<(), JsValue> {
 /// A public link's page (decisions `public-web-links`,
 /// `public-links-share-the-closure`): its copy, drawn read-only with no pod
 /// behind it (nothing it draws can write); the layouts it opens come from
-/// the copy. `base` is the page's path: `/s/<link>` or `/@<handle>/<slug>`.
+/// the copy. `base` is the page's path: `/s/<link>` or `/<handle>/<slug>`.
 pub async fn start_public(base: &str) -> Result<(), JsValue> {
     load_fonts(&construct_render::text::FACE_FILES).await;
     let copy = get_json(&format!("{base}/view"))
