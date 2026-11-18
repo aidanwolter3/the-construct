@@ -180,6 +180,27 @@ async function tool(name, args) {
   await shop.waitForTimeout(1200);
   check(green(await pixel(shop, 195, 600)), 'the page still answers taps after the link opened');
 
+  // A tap on a field on a phone keeps the hidden input focused, so the keyboard stays open: the tap's mousedown
+  // used to blur it as soon as the tap focused it.
+  const search = await tool('create_layout', { title: 'Search', feeds, layout: { type: 'core://Page', id: 'search',
+    title: 'Search', root: { type: 'core://Column', padding_h_dp: 16, padding_v_dp: 16, children: [
+      { type: 'core://TextField', field: 'q', placeholder: 'Search' }] } } });
+  const searchReview = await tool('share_publicly', { layout: search.id, slug: 'search' });
+  await tool('share_publicly', { layout: search.id, slug: 'search', confirm: searchReview.review_id });
+  const phone = await browser.newContext({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true });
+  const tapper = await phone.newPage();
+  tapper.on('pageerror', (e) => errors.push(e.message));
+  await tapper.goto(base + '/@webcook/search');
+  await tapper.waitForSelector('body.ready', { timeout: 60000 });
+  await tapper.waitForTimeout(800);
+  await tapper.touchscreen.tap(195, 40);
+  await tapper.waitForTimeout(300);
+  check(await tapper.evaluate(() => document.activeElement && document.activeElement.id === 'construct-input'),
+    'a tap on a field keeps the keyboard\'s input focused');
+  await tapper.keyboard.type('soup');
+  await tapper.waitForTimeout(300);
+  await tapper.screenshot({ path: out + '/public-typed.png' });
+
   check(errors.length === 0, 'no page errors' + (errors.length ? ': ' + errors.join('; ') : ''));
   await browser.close();
 })().catch((e) => {

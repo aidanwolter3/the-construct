@@ -29,6 +29,8 @@ struct Site {
     /// `ok`, `blocked` or `empty`.
     page: Mutex<String>,
     searches: Mutex<Vec<String>>,
+    /// The first web result's snippet (default `350 count, official store`).
+    snippet: Mutex<String>,
 }
 
 async fn page(State(site): State<Arc<Site>>) -> Response {
@@ -65,8 +67,12 @@ async fn searx(
         .to_string()
         .into_response();
     }
+    let snippet = match site.snippet.lock().unwrap().as_str() {
+        "" => "350 count, official store".to_owned(),
+        s => s.to_owned(),
+    };
     json!({"results": [
-        {"title": "Paper Micro-Filters", "url": "https://shop.example/filters", "content": "350 count, official store"},
+        {"title": "Paper Micro-Filters", "url": "https://shop.example/filters", "content": snippet},
         {"title": "Filters at Target", "url": "https://target.example/p/filters", "content": "same day pickup"},
     ]})
     .to_string()
@@ -355,6 +361,52 @@ async fn query_rows_are_filled_once_from_the_pods_own_search() {
     fill::fill(&pod, "shopping", &f, false).await;
     assert_eq!(site.searches.lock().unwrap().len(), 2);
     assert_eq!(rows(&pod, "shopping").await.len(), 2);
+}
+
+#[tokio::test]
+async fn every_query_rows_ask_again_only_when_the_results_change() {
+    let site = Arc::new(Site::default());
+    let base = serve(site.clone()).await;
+    let fake = Arc::new(Fake::default());
+    let pod = pod_with(fake.clone());
+    ok(
+        &pod,
+        "define_collection",
+        json!({"name": "shopping", "fields": [
+        {"name": "name", "type": "text"},
+        {"name": "store", "type": "text", "optional": true},
+        {"name": "link", "type": "text", "optional": true},
+        {"name": "why", "type": "text", "optional": true}],
+        "fillers": [{"kind": "fetch", "query_field": "name", "extract": "llm",
+                     "fields": ["store", "link", "why"], "refresh": "every"}]}),
+    )
+    .await;
+    settle(&pod, "shopping").await;
+    pod.store()
+        .with_conn(|c| {
+            c.execute(
+                "INSERT INTO jacks (id, plugged, config, secrets, updated_at) VALUES ('web_search', 1, ?1, '{}', 0)",
+                [json!({"provider": "searxng", "base_url": base}).to_string()],
+            )
+        })
+        .unwrap();
+    create(&pod, "shopping", json!({"name": "AeroPress paper filters"})).await;
+    let f = filler_of(&pod, "shopping").await;
+
+    fill::fill(&pod, "shopping", &f, false).await;
+    assert_eq!(fake.picks.lock().unwrap().len(), 1);
+    // Same results: searched again (not from the cache), no model call.
+    fill::fill(&pod, "shopping", &f, false).await;
+    assert_eq!(site.searches.lock().unwrap().len(), 2);
+    assert_eq!(fake.picks.lock().unwrap().len(), 1);
+    // Same links, a new price in a snippet: the model reads it.
+    *site.snippet.lock().unwrap() = "350 count, now $4.95".into();
+    fill::fill(&pod, "shopping", &f, false).await;
+    assert_eq!(fake.picks.lock().unwrap().len(), 2);
+    assert_eq!(
+        rows(&pod, "shopping").await[0]["why"],
+        "350 count, now $4.95"
+    );
 }
 
 #[tokio::test]
