@@ -2,7 +2,7 @@
 # Builds the web client (decision `web-client`, docs/clients.md#web) into <out> (default target/web), which the server
 # serves at /web with CONSTRUCT_WEB=1 (CONSTRUCT_WEB_DIR=<out>): index.html, and the script, WebAssembly and style
 # named by a hash of their content (app.<hash>.js, construct_web.<hash>.js, construct_web_bg.<hash>.wasm,
-# style.<hash>.css), which the server lets browsers keep for good (decision `web-client-cache`); fonts/ and their hash
+# style.<hash>.css, and the icon: favicon.<hash>.ico, icon.<hash>.png), which the server lets browsers keep for good (decision `web-client-cache`); fonts/ and their hash
 # in app.js. Needs the wasm32-unknown-unknown target and the wasm-bindgen CLI at the version
 # in Cargo.lock: rustup target add wasm32-unknown-unknown; cargo install wasm-bindgen-cli --version <it> --locked
 #   scripts/web_build.sh [out] [--dev]
@@ -21,10 +21,13 @@ cargo build -q -p construct-web --target wasm32-unknown-unknown --profile "$prof
 dir=$([ "$profile" = dev ] && echo debug || echo "$profile")
 mkdir -p "$out"
 # A previous build's files: their names change with their content.
-rm -f "$out"/*.js "$out"/*.wasm "$out"/*.css "$out"/*.html
+rm -f "$out"/*.js "$out"/*.wasm "$out"/*.css "$out"/*.html "$out"/*.ico "$out"/*.png
 wasm-bindgen --target web --no-typescript --remove-name-section --remove-producers-section --out-dir "$out" "target/wasm32-unknown-unknown/$dir/construct_web.wasm"
 # The page, and the renderer's fonts, which the client fetches instead of carrying.
 cp crates/construct-web/static/* "$out/"
+# The app icon (scripts/gen_icons.sh): the tab's, and the one a phone's home screen takes.
+cp assets/icon/construct.ico "$out/favicon.ico"
+cp assets/icon/png/construct-512.png "$out/icon.png"
 # A build that differs from the last without a change to the code (scripts/web_e2e.sh's reload after a rebuild).
 [ -n "${CONSTRUCT_WEB_STAMP:-}" ] && echo "// build $CONSTRUCT_WEB_STAMP" >> "$out/app.js"
 mkdir -p "$out/fonts"
@@ -47,6 +50,11 @@ sed -i -e "s|\"/web/construct_web.js\"|\"/web/$glue\"|" -e "s|\"FONT_VERSION\"|\
 grep -q "/web/$glue" "$out/app.js" && grep -q "\"$fonts\"" "$out/app.js" || { echo "app.js wasn't rewritten" >&2; exit 1; }
 app=$(hashed app.js app js)
 style=$(hashed style.css style css)
-sed -i -e "s|\"/web/app.js\"|\"/web/$app\"|" -e "s|\"/web/style.css\"|\"/web/$style\"|" "$out/index.html"
-grep -q "/web/$app" "$out/index.html" && grep -q "/web/$style" "$out/index.html" || { echo "index.html wasn't rewritten" >&2; exit 1; }
+favicon=$(hashed favicon.ico favicon ico)
+icon=$(hashed icon.png icon png)
+sed -i -e "s|\"/web/app.js\"|\"/web/$app\"|" -e "s|\"/web/style.css\"|\"/web/$style\"|" \
+  -e "s|\"/web/favicon.ico\"|\"/web/$favicon\"|" -e "s|\"/web/icon.png\"|\"/web/$icon\"|" "$out/index.html"
+for n in "$app" "$style" "$favicon" "$icon"; do
+  grep -q "/web/$n" "$out/index.html" || { echo "index.html wasn't rewritten ($n)" >&2; exit 1; }
+done
 ls -l "$out"

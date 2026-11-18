@@ -84,7 +84,9 @@ the next reload picks up, a phone-sized window and logging out.
 
 - **Signing in**: the page asks for the pod code and posts it to `POST /web/session`, which answers a session cookie
   (`HttpOnly`, `SameSite=Strict`): an ordinary session of the pod, which expires and which Settings' **Leave pod on
-  this device** ends (in a browser it logs out: `POST /web/logout`, then the code form). The code
+  this device** ends (in a browser it logs out: `POST /web/logout`, then the code form). The new session starts with
+  the sign-ins the pod code's session has (Pixelfed, on its server), so a browser is signed in where your phone is
+  (decision [`web-sessions-share-sign-ins`](decisions/web-sessions-share-sign-ins.md)). The code
   is not kept in the browser. The cookie works only on requests that carry `x-construct-client: web` and never for
   `/v1/mcp` ([api.md](api.md#web-client)).
 - **What it draws**: the layouts home reaches, fetched with home's root (`POST /v1/objects`) and materialized in the
@@ -99,11 +101,13 @@ the next reload picks up, a phone-sized window and logging out.
   which adds the sign-in to the browser's session. Progress and errors show in Settings under Sign-ins. The pod accepts
   the redirect only as a `PIXELFED_EXTRA_REDIRECTS` entry (staging lists `https://the-construct-pod.fly.dev/web`; a
   local server needs `PIXELFED_EXTRA_REDIRECTS=http://127.0.0.1:8080/web`). **Sign out** ends the browser's session,
-  as on a native client's session that isn't a pod code's.
+  as on a native client's session that isn't a pod code's. Settings' jack pill ("Plugged in · @you") is the pod's
+  account; the browser's own sign-in is the list under it.
 - **Fonts and images** are fetched, not built in: the faces before the first frame, the symbol and emoji fallbacks
   after it (`/web/fonts/<file>`). Images of other sites go through the pod's proxy (`/web/image`).
 - **Caching**: `scripts/web_build.sh` names the script, WebAssembly and style by a hash of their content
-  (`app.<hash>.js`, `construct_web_bg.<hash>.wasm`, …) and the fonts by a `?v=<hash>`; those are cached for good
+  (`app.<hash>.js`, `construct_web_bg.<hash>.wasm`, the app icon's `favicon.<hash>.ico` and `icon.<hash>.png`, …)
+  and the fonts by a `?v=<hash>`; those are cached for good
   (`immutable`), so a reload downloads nothing but the page, which is revalidated (`no-cache` with an `ETag`, `304`
   when unchanged). A deploy changes the names, so the next load takes the new client (decision
   [`web-client-cache`](decisions/web-client-cache.md)).

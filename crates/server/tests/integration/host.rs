@@ -1068,6 +1068,8 @@ mod web {
         std::fs::write(files.path().join("fonts/Face.ttf"), b"font").unwrap();
         std::fs::write(files.path().join("app.0123456789abcdef.js"), b"app").unwrap();
         std::fs::write(files.path().join("app.js"), b"app").unwrap();
+        std::fs::write(files.path().join("favicon.0123456789abcdef.ico"), b"ico").unwrap();
+        std::fs::write(files.path().join("icon.0123456789abcdef.png"), b"png").unwrap();
         std::fs::write(files.path().join("secret.txt"), b"no").unwrap();
         let env = env_with(HostConfig {
             web: Some(WebConfig {
@@ -1186,6 +1188,8 @@ mod web {
         for p in [
             "/web/app.0123456789abcdef.js",
             "/web/fonts/Face.ttf?v=0123abcd",
+            "/web/favicon.0123456789abcdef.ico",
+            "/web/icon.0123456789abcdef.png",
         ] {
             let r = get(p, None).await;
             assert_eq!(r.status(), StatusCode::OK, "{p}");
@@ -1207,6 +1211,19 @@ mod web {
             assert!(again.bytes().await.unwrap().is_empty(), "{p}");
             let other = get(p, Some("\"stale\"".into())).await;
             assert_eq!(other.status(), StatusCode::OK, "{p}");
+        }
+    }
+
+    #[tokio::test]
+    async fn the_icon_is_served_as_an_image() {
+        let (env, _files) = web_env().await;
+        for (p, kind) in [
+            ("/web/favicon.0123456789abcdef.ico", "image/x-icon"),
+            ("/web/icon.0123456789abcdef.png", "image/png"),
+        ] {
+            let r = client().get(env.url(p)).send().await.unwrap();
+            assert_eq!(r.status(), StatusCode::OK, "{p}");
+            assert_eq!(r.headers()["content-type"], kind, "{p}");
         }
     }
 
@@ -1294,6 +1311,45 @@ mod web {
             get(&env.url("/v1/auth/sign-ins"), Some(&code)).await.0,
             StatusCode::OK
         );
+    }
+
+    /// Decision `web-sessions-share-sign-ins`: typing the pod code in a
+    /// browser starts it signed in where the code is, on the same server;
+    /// logging the browser out leaves the code's sign-in alone.
+    #[tokio::test]
+    async fn a_browser_starts_with_the_pod_codes_sign_ins() {
+        let (env, _files) = web_env().await;
+        let code = env.create("shared").await;
+        sign_in(&env, &code).await;
+        let cookie = open(&env, &code, true).await.1.expect("a cookie");
+        let cookie = cookie.split(';').next().unwrap().to_owned();
+        let sign_ins = client()
+            .get(env.url("/v1/auth/sign-ins"))
+            .header("cookie", &cookie)
+            .header("x-construct-client", "web")
+            .send()
+            .await
+            .unwrap()
+            .json::<Value>()
+            .await
+            .unwrap();
+        let pixelfed = &sign_ins["sign_ins"][0];
+        assert_eq!(pixelfed["id"], "pixelfed", "{sign_ins}");
+        assert_eq!(
+            pixelfed["server"].as_str().map(|s| s.trim_end_matches('/')),
+            Some(env.fake.url.trim_end_matches('/')),
+            "the server the code signed in to: {sign_ins}"
+        );
+
+        client()
+            .post(env.url("/web/logout"))
+            .header("cookie", &cookie)
+            .header("x-construct-client", "web")
+            .send()
+            .await
+            .unwrap();
+        let (_, _, own) = get(&env.url("/v1/auth/sign-ins"), Some(&code)).await;
+        assert_eq!(own["sign_ins"][0]["id"], "pixelfed", "{own}");
     }
 
     #[tokio::test]

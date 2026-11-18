@@ -288,6 +288,23 @@ pub trait Source: Any + Send + Sync {
         Box::pin(async { None })
     }
 
+    /// Session `to` was given sign-in `sign_in` (one of [`Self::sign_ins`])
+    /// of session `from` ([`crate::session::share_sign_ins`]: a browser
+    /// opened with the pod code gets the pod code's sign-ins, decision
+    /// `web-sessions-share-sign-ins`): copy whatever the source keeps per
+    /// session (e.g. which server it signed in to), in the core's
+    /// transaction `conn`. Default: nothing kept per session.
+    fn share_sign_in(
+        &self,
+        conn: &rusqlite::Connection,
+        sign_in: &str,
+        from: &str,
+        to: &str,
+    ) -> rusqlite::Result<()> {
+        let _ = (conn, sign_in, from, to);
+        Ok(())
+    }
+
     /// Checks of a layout against this source's own data, run on every
     /// layout write that binds this source's feeds, after the core's checks
     /// pass (decision `collections`): e.g. that the bindings name fields its

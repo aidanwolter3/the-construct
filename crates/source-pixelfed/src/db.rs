@@ -277,6 +277,21 @@ fn open_account(
     })
 }
 
+/// Session `to` uses the server session `from` signed in to (a browser
+/// given the pod code's sign-in, decision `web-sessions-share-sign-ins`).
+pub(crate) fn share_session_instance(
+    conn: &Connection,
+    from: &str,
+    to: &str,
+) -> rusqlite::Result<()> {
+    conn.execute(
+        "INSERT OR REPLACE INTO pixelfed_session_instance (token_hash, instance)
+         SELECT ?2, instance FROM pixelfed_session_instance WHERE token_hash = ?1",
+        params![from, to],
+    )?;
+    Ok(())
+}
+
 /// Seal (again) every stored credential that is plaintext or sealed with an
 /// older key, under the store's current key: rows from before sealing, or
 /// written while no key was set. Runs when a pod opens; values that don't
@@ -637,6 +652,31 @@ mod tests {
         }
         let s = Store::open(&path).unwrap();
         assert_eq!(s.pixelfed_owner("i").unwrap().as_deref(), Some("7"));
+    }
+
+    #[test]
+    fn a_shared_sign_in_takes_its_server_along() {
+        let s = store();
+        s.sign_in_pixelfed(
+            "https://pf.example",
+            &account("1", "a"),
+            "code",
+            false,
+            86_400,
+        )
+        .unwrap();
+        s.create_session("browser").unwrap();
+        s.with_conn(|c| share_session_instance(c, "code", "browser"))
+            .unwrap();
+        assert_eq!(
+            s.session_instance("browser").unwrap().as_deref(),
+            Some("https://pf.example")
+        );
+        // A session without one gives nothing.
+        s.create_session("other").unwrap();
+        s.with_conn(|c| share_session_instance(c, "none", "other"))
+            .unwrap();
+        assert_eq!(s.session_instance("other").unwrap(), None);
     }
 
     #[test]

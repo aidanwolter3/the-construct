@@ -391,6 +391,8 @@ async fn file(base: &FsPath, name: &str) -> Option<(Vec<u8>, &'static str)> {
         "wasm" => "application/wasm",
         "css" => "text/css; charset=utf-8",
         "ttf" => "font/ttf",
+        "ico" => "image/x-icon",
+        "png" => "image/png",
         _ => return None,
     };
     let bytes = tokio::fs::read(base.join(name)).await.ok()?;
@@ -486,7 +488,7 @@ async fn page(State(host): State<Arc<Host>>, headers: HeaderMap) -> Response {
     }
 }
 
-/// `GET /web/<file>`: the client's script, WebAssembly and style; a hashed
+/// `GET /web/<file>`: the client's script, WebAssembly, style and icon; a hashed
 /// name is kept for good.
 async fn asset(
     State(host): State<Arc<Host>>,
@@ -535,7 +537,8 @@ async fn font(
 }
 
 /// `POST /web/session {code}` (with `x-construct-client: web`): a session
-/// of the pod the code opens, as a cookie -> `{ok}`; 401 `pod_not_found`,
+/// of the pod the code opens, with the sign-ins the code's session has
+/// (decision `web-sessions-share-sign-ins`), as a cookie -> `{ok}`; 401 `pod_not_found`,
 /// rate-limited like `POST /v1/pods/open`.
 async fn open_session(State(host): State<Arc<Host>>, req: Request) -> Response {
     if req
@@ -588,6 +591,13 @@ async fn open_session(State(host): State<Arc<Host>>, req: Request) -> Response {
     let h = hash.clone();
     if let Err(e) = open.pod.blocking(move |s| s.create_session(&h)).await {
         return e.into_response();
+    }
+    // The browser starts signed in where the pod code is (decision
+    // `web-sessions-share-sign-ins`): typing the code proved it's the owner.
+    match pod_core::session::share_sign_ins(&open.pod, &session_hash(&code), &hash).await {
+        Ok(n) if n > 0 => tracing::info!(sign_ins = n, "the browser got the pod code's sign-ins"),
+        Ok(_) => {}
+        Err(e) => tracing::warn!(status = %e.0, "the browser's session got no sign-ins"),
     }
     let added = host
         .blocking(move |h| h.store.insert_web_credential(&pod_id, &hash))
