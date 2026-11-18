@@ -260,14 +260,30 @@ pub fn state(store: &Store) -> rusqlite::Result<Option<(State, Health)>> {
 }
 
 /// Save `state` (and its cursor) after a good answer from the runner.
-/// Nothing is saved once signed out.
+/// Nothing is saved once signed out. A run stored at a newer version than
+/// `state` has (a route stored the runner's answer while the follower held
+/// an older copy) is kept, so a save never takes a run back.
 pub fn save(store: &Store, state: &State, now: i64) -> rusqlite::Result<()> {
     store.with_conn(|c| {
+        let stored: Option<State> = c
+            .query_row(
+                "SELECT state_json FROM agents_state WHERE id = 1",
+                [],
+                |r| r.get::<_, String>(0),
+            )
+            .optional()?
+            .and_then(|j| serde_json::from_str(&j).ok());
+        let mut state = state.clone();
+        for (id, run) in stored.map(|s| s.runs).unwrap_or_default() {
+            if state.runs.get(&id).is_some_and(|r| r.version < run.version) {
+                state.runs.insert(id, run);
+            }
+        }
         c.execute(
             "UPDATE agents_state SET state_json = ?1, cursor = ?2, connected = 1,
              last_error = NULL, last_ok_at = ?3, updated_at = ?3 WHERE id = 1",
             params![
-                serde_json::to_string(state).expect("serializes"),
+                serde_json::to_string(&state).expect("serializes"),
                 state.cursor,
                 now
             ],
@@ -744,5 +760,50 @@ mod tests {
         assert_eq!(schedule(&store, "nightly").unwrap().unwrap().id, "sch_a");
         assert!(delete_schedule(&store, "sch_a").unwrap());
         assert!(schedules(&store).unwrap().is_empty());
+    }
+
+    /// The follower saves its whole copy of the state; a run a route
+    /// stored since at a newer version (the runner's answer to a review)
+    /// stays, and a run the copy drops still goes.
+    #[test]
+    fn a_save_never_takes_a_run_back() {
+        let store = Store::open_in_memory().unwrap();
+        store
+            .transaction(|tx| {
+                for step in MIGRATIONS {
+                    match &step.run {
+                        pod_core::migrations::Migration::Sql(sql) => tx.execute_batch(sql)?,
+                        pod_core::migrations::Migration::Rust(f) => f(tx)?,
+                    }
+                }
+                Ok(())
+            })
+            .unwrap();
+        let runner = Runner {
+            url: "https://runner.example".into(),
+            token: "t".into(),
+        };
+        let run = |id: &str, version: i64, title: &str| crate::state::Run {
+            id: id.into(),
+            version,
+            title: title.into(),
+            ..Default::default()
+        };
+        let mut old = State::default();
+        old.runs
+            .insert("run_a".into(), run("run_a", 1, "needs review"));
+        old.runs.insert("run_b".into(), run("run_b", 1, "gone"));
+        sign_in(&store, &runner, &old, 1).unwrap();
+        let mut newer = old.clone();
+        newer
+            .runs
+            .insert("run_a".into(), run("run_a", 2, "reviewed"));
+        save(&store, &newer, 2).unwrap();
+        // The follower's older copy, without run_b.
+        old.runs.remove("run_b");
+        save(&store, &old, 3).unwrap();
+        let st = state(&store).unwrap().unwrap().0;
+        assert_eq!(st.runs["run_a"].title, "reviewed");
+        assert!(!st.runs.contains_key("run_b"));
     }
 }
