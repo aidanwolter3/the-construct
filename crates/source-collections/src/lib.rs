@@ -960,6 +960,9 @@ async fn write_row(
         followed.publish(pod, origin.as_deref().filter(|_| !computed));
     }
     compute::spawn(pod, collection, jobs);
+    // Agents that research this collection's rows (decision
+    // `research-per-row`).
+    fill::research_soon(pod, collection);
     Ok(out)
 }
 

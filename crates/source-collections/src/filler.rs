@@ -16,7 +16,11 @@
 //! - `range`: one row per day, week or month of a window that moves with
 //!   today (decision `range-filler`), made from the date alone.
 //! - `agent`: a model with web search and fetch, a prompt and a budget,
-//!   answering rows that fit the collection's fields.
+//!   answering rows that fit the collection's fields. With `for_each` it
+//!   researches each row of another collection on its own (decision
+//!   `research-per-row`): a shopping list's items, each answered as rows
+//!   here (its options) that point back at it through a ref, with the item's
+//!   own fields and `context` rows (the owner's preferences) in the request.
 //!
 //! Each row remembers the filler that wrote it, and a filler only ever
 //! touches its own rows. Rows are written by `mode`: `replace` (its rows are
@@ -32,7 +36,7 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 
-use crate::model::{Definition, Kind};
+use crate::model::{Condition, Definition, Defs, Kind};
 
 /// Most fillers per collection.
 pub const MAX_FILLERS: usize = 50;
@@ -54,6 +58,12 @@ pub const MIN_AGENT_EVERY: u32 = 60;
 /// `on_open_minutes` bounds.
 pub const MIN_ON_OPEN: u32 = 1;
 pub const MAX_ON_OPEN: u32 = 24 * 60;
+/// Most `context` lists of a `for_each` agent, and rows of one.
+pub const MAX_CONTEXTS: usize = 5;
+pub const MAX_CONTEXT_ROWS: u32 = 100;
+pub const DEFAULT_CONTEXT_ROWS: u32 = 50;
+/// Most rows a `for_each` agent researches in one fill.
+pub const MAX_EACH_PER_FILL: usize = 10;
 /// Agent budget bounds and defaults.
 pub const MAX_SEARCHES: u32 = 20;
 pub const MAX_FETCHES: u32 = 30;
@@ -276,7 +286,46 @@ pub enum Source {
         max_searches: u32,
         max_fetches: u32,
         fills_per_day: u32,
+        /// Research each row of another collection on its own.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        for_each: Option<ForEach>,
     },
+}
+
+/// What a `for_each` agent researches (decision `research-per-row`): each
+/// live row of `collection` that matches `conditions`, its rows here linked
+/// back through `link`. Fields of the other collections are kept by name
+/// (renames leave aliases), resolved when the fill runs.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ForEach {
+    pub collection: String,
+    /// This collection's ref field (id) to `collection`: the pod sets it.
+    pub link: String,
+    /// The researched row's fields the request gives (names); empty: every
+    /// live field but true/false ones.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub from: Vec<String>,
+    /// Only rows where every condition holds (field names).
+    #[serde(default, rename = "where", skip_serializing_if = "Vec::is_empty")]
+    pub conditions: Vec<Condition>,
+    /// Rows of other collections given with every request (the owner's
+    /// preferences, what they liked).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub context: Vec<Context>,
+}
+
+/// Rows of another collection a `for_each` request carries.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Context {
+    pub collection: String,
+    /// Only rows where every condition holds (field names).
+    #[serde(default, rename = "where", skip_serializing_if = "Vec::is_empty")]
+    pub conditions: Vec<Condition>,
+    /// The fields given (names); empty: every live field but true/false
+    /// ones.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub fields: Vec<String>,
+    pub limit: u32,
 }
 
 /// What one row of a `range` filler covers.
@@ -507,6 +556,10 @@ pub struct Filler {
     /// Per-row fillers: what an empty answer does (default `keep`).
     #[serde(default, skip_serializing_if = "is_keep")]
     pub on_empty: OnEmpty,
+    /// Rows matching every condition (field ids) stay when a refill leaves
+    /// them out (an option someone put in their bag).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub keep: Vec<Condition>,
 }
 
 fn is_keep(o: &OnEmpty) -> bool {
@@ -559,8 +612,29 @@ impl Filler {
             Source::Fetch { map, .. } | Source::Mcp { map, .. } | Source::Range { map, .. } => {
                 map.keys().cloned().collect()
             }
-            Source::Agent { fields, .. } => fields.clone(),
+            Source::Agent {
+                fields, for_each, ..
+            } => {
+                let mut out = fields.clone();
+                if let Some(fe) = for_each {
+                    out.push(fe.link.clone());
+                }
+                out
+            }
         }
+    }
+
+    /// What a `for_each` agent researches.
+    pub fn for_each(&self) -> Option<&ForEach> {
+        match &self.source {
+            Source::Agent { for_each, .. } => for_each.as_ref(),
+            _ => None,
+        }
+    }
+
+    /// Whether a refill keeps row `values` though the answer left it out.
+    pub fn keeps(&self, def: &Definition, values: &Map<String, Value>) -> bool {
+        !self.keep.is_empty() && self.keep.iter().all(|c| c.matches(def, values))
     }
 
     /// Every field id it writes: the mapped ones and the details'.
@@ -603,11 +677,13 @@ impl Filler {
 
     /// When a per-row filler fills a row again.
     pub fn refresh(&self) -> Refresh {
-        self.refresh.unwrap_or(if self.query_field().is_some() {
-            Refresh::Once
-        } else {
-            Refresh::Every
-        })
+        self.refresh.unwrap_or(
+            if self.query_field().is_some() || self.for_each().is_some() {
+                Refresh::Once
+            } else {
+                Refresh::Every
+            },
+        )
     }
 
     /// How its pages are rendered (`fetch` with `render`).
@@ -831,12 +907,19 @@ impl Filler {
                 max_searches,
                 max_fetches,
                 fills_per_day,
-            } => json!({
-                "kind": "agent", "prompt": prompt,
-                "fields": fields.iter().map(|f| name(f)).collect::<Vec<_>>(),
-                "max_searches": max_searches, "max_fetches": max_fetches,
-                "fills_per_day": fills_per_day,
-            }),
+                for_each,
+            } => {
+                let mut v = json!({
+                    "kind": "agent", "prompt": prompt,
+                    "fields": fields.iter().map(|f| name(f)).collect::<Vec<_>>(),
+                    "max_searches": max_searches, "max_fetches": max_fetches,
+                    "fills_per_day": fills_per_day,
+                });
+                if let Some(fe) = for_each {
+                    v["for_each"] = fe.describe(def);
+                }
+                v
+            }
         };
         v["id"] = json!(self.id);
         v["title"] = json!(self.title);
@@ -856,6 +939,53 @@ impl Filler {
         if self.per_row() {
             v["refresh"] = json!(self.refresh().as_str());
             v["on_empty"] = json!(self.on_empty.as_str());
+        }
+        if self.for_each().is_some() {
+            v["refresh"] = json!(self.refresh().as_str());
+        }
+        if !self.keep.is_empty() {
+            v["keep"] = conditions_json(&self.keep, &name);
+        }
+        v
+    }
+}
+
+/// Conditions as `[{field, equals}]`, fields named by `name`.
+fn conditions_json(c: &[Condition], name: &dyn Fn(&str) -> String) -> Value {
+    json!(
+        c.iter()
+            .map(|c| json!({"field": name(&c.field), "equals": c.equals}))
+            .collect::<Vec<_>>()
+    )
+}
+
+impl ForEach {
+    /// As a spec, for Claude.
+    pub fn describe(&self, def: &Definition) -> Value {
+        let same = |n: &str| n.to_owned();
+        let mut v = json!({"collection": self.collection, "link": def.name_of(&self.link)});
+        if !self.from.is_empty() {
+            v["from"] = json!(self.from);
+        }
+        if !self.conditions.is_empty() {
+            v["where"] = conditions_json(&self.conditions, &same);
+        }
+        if !self.context.is_empty() {
+            v["context"] = json!(
+                self.context
+                    .iter()
+                    .map(|c| {
+                        let mut x = json!({"collection": c.collection, "limit": c.limit});
+                        if !c.conditions.is_empty() {
+                            x["where"] = conditions_json(&c.conditions, &same);
+                        }
+                        if !c.fields.is_empty() {
+                            x["fields"] = json!(c.fields);
+                        }
+                        x
+                    })
+                    .collect::<Vec<_>>()
+            );
         }
         v
     }
@@ -971,9 +1101,21 @@ fn default_title(url: Option<&str>, kind: &str) -> String {
 
 /// Parse a filler spec (field names, resolved against `def`) as filler
 /// `id`. `allow_private`: URLs may name private hosts (tests, the
-/// operator's choice).
+/// operator's choice). A `for_each` agent needs [`parse_in`].
 pub fn parse(
     def: &Definition,
+    v: &Value,
+    id: String,
+    allow_private: bool,
+) -> Result<Filler, String> {
+    parse_in(def, &Defs::default(), v, id, allow_private)
+}
+
+/// [`parse`], with the pod's other collections (`others`) a `for_each`
+/// agent reads.
+pub fn parse_in(
+    def: &Definition,
+    others: &Defs,
     v: &Value,
     id: String,
     allow_private: bool,
@@ -1385,12 +1527,28 @@ pub fn parse(
             if fills_per_day == 0 {
                 return Err("filler.fills_per_day is at least 1".into());
             }
+            let for_each = match o.get("for_each") {
+                None | Some(Value::Null) => None,
+                Some(fe) => Some(parse_for_each(def, others, fe)?),
+            };
+            // The pod sets the link; the model never answers it.
+            let fields = match &for_each {
+                Some(fe) => {
+                    let f: Vec<String> = fields.into_iter().filter(|f| *f != fe.link).collect();
+                    if f.is_empty() {
+                        return Err("an agent filler fills at least one field".into());
+                    }
+                    f
+                }
+                None => fields,
+            };
             Source::Agent {
                 prompt: prompt.to_owned(),
                 fields,
                 max_searches: bounded("max_searches", MAX_SEARCHES, DEFAULT_SEARCHES)?,
                 max_fetches: bounded("max_fetches", MAX_FETCHES, DEFAULT_FETCHES)?,
                 fills_per_day,
+                for_each,
             }
         }
         other => {
@@ -1451,10 +1609,17 @@ pub fn parse(
             ..
         }
     );
+    let each = matches!(
+        &source,
+        Source::Agent {
+            for_each: Some(_),
+            ..
+        }
+    );
     let refresh = match text(o, "refresh") {
         "" => None,
-        _ if !per_row => {
-            return Err("filler.refresh is for url_field and query_field fillers".into());
+        _ if !per_row && !each => {
+            return Err("filler.refresh is for url_field, query_field and for_each fillers".into());
         }
         "once" => Some(Refresh::Once),
         "every" => Some(Refresh::Every),
@@ -1474,6 +1639,10 @@ pub fn parse(
         None if matches!(source, Source::Range { .. }) => Some(RANGE_EVERY),
         m => m,
     };
+    let keep = conditions_in(o.get("keep"), "filler.keep", &|n| field_id(def, n, "keep"))?;
+    if !keep.is_empty() && per_row {
+        return Err("filler.keep is for fillers that add and remove rows".into());
+    }
     Ok(Filler {
         id,
         title,
@@ -1485,6 +1654,150 @@ pub fn parse(
         upcoming,
         refresh,
         on_empty,
+        keep,
+    })
+}
+
+/// `[{field, equals}]` (or one), each field resolved by `field`.
+fn conditions_in(
+    v: Option<&Value>,
+    at: &str,
+    field: &dyn Fn(&str) -> Result<String, String>,
+) -> Result<Vec<Condition>, String> {
+    let items: Vec<&Value> = match v {
+        None | Some(Value::Null) => return Ok(Vec::new()),
+        Some(Value::Array(a)) => a.iter().collect(),
+        Some(one @ Value::Object(_)) => vec![one],
+        Some(_) => return Err(format!("{at} is {{field, equals}} or a list of them")),
+    };
+    if items.len() > 10 {
+        return Err(format!("{at} has at most 10 conditions"));
+    }
+    let mut out = Vec::new();
+    for c in items {
+        let name = c.get("field").and_then(Value::as_str).unwrap_or("").trim();
+        let equals = match c.get("equals") {
+            Some(Value::String(s)) => s.clone(),
+            Some(v @ (Value::Bool(_) | Value::Number(_))) => v.to_string(),
+            _ => {
+                return Err(format!(
+                    "{at}: each condition is {{field, equals}} (equals: text, true, false or a number)"
+                ));
+            }
+        };
+        out.push(Condition {
+            field: field(name)?,
+            equals,
+        });
+    }
+    Ok(out)
+}
+
+/// A live field of `def` named `n` (or an alias): its name as stored.
+fn other_field(def: &Definition, n: &str, at: &str) -> Result<String, String> {
+    match def.field(n) {
+        Some(f) if f.live() => Ok(f.name.clone()),
+        _ => Err(format!(
+            "{at}: collection '{}' has no field '{n}' (fields: {})",
+            def.name,
+            def.live_fields()
+                .map(|f| f.name.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
+        )),
+    }
+}
+
+fn names_in(v: Option<&Value>, at: &str, def: &Definition) -> Result<Vec<String>, String> {
+    match v {
+        None | Some(Value::Null) => Ok(Vec::new()),
+        Some(Value::Array(a)) => {
+            let mut out: Vec<String> = Vec::new();
+            for n in a {
+                let n = other_field(def, n.as_str().unwrap_or(""), at)?;
+                if !out.contains(&n) {
+                    out.push(n);
+                }
+            }
+            Ok(out)
+        }
+        Some(_) => Err(format!("{at} is a list of field names")),
+    }
+}
+
+/// `{collection, link, from?, where?, context?}` of a `for_each` agent.
+fn parse_for_each(def: &Definition, others: &Defs, v: &Value) -> Result<ForEach, String> {
+    let Value::Object(o) = v else {
+        return Err("filler.for_each is {collection, link, from?, where?, context?}".into());
+    };
+    let collection = text(o, "collection").to_owned();
+    if collection == def.name {
+        return Err("filler.for_each.collection is another collection".into());
+    }
+    let Some(parent) = others.get(&collection) else {
+        return Err(format!(
+            "filler.for_each.collection: no collection '{collection}'"
+        ));
+    };
+    let link_name = text(o, "link");
+    let link = field_id(def, link_name, "for_each.link")?;
+    let lf = def.by_id(&link).ok_or("for_each.link: no such field")?;
+    if lf.kind != Kind::Ref || lf.collection.as_deref() != Some(collection.as_str()) {
+        return Err(format!(
+            "filler.for_each.link '{}' must be a ref field to '{collection}' (each row here points at the row it was researched for)",
+            lf.name
+        ));
+    }
+    let from = names_in(o.get("from"), "filler.for_each.from", parent)?;
+    let conditions = conditions_in(o.get("where"), "filler.for_each.where", &|n| {
+        other_field(parent, n, "filler.for_each.where")
+    })?;
+    let mut context = Vec::new();
+    match o.get("context") {
+        None | Some(Value::Null) => {}
+        Some(Value::Array(a)) => {
+            if a.len() > MAX_CONTEXTS {
+                return Err(format!(
+                    "filler.for_each.context has at most {MAX_CONTEXTS} lists"
+                ));
+            }
+            for c in a {
+                let Value::Object(co) = c else {
+                    return Err(
+                        "each filler.for_each.context is {collection, where?, fields?, limit?}"
+                            .into(),
+                    );
+                };
+                let cname = text(co, "collection").to_owned();
+                let Some(cdef) = others.get(&cname) else {
+                    return Err(format!("filler.for_each.context: no collection '{cname}'"));
+                };
+                let limit = uint(co, "limit")?.unwrap_or(DEFAULT_CONTEXT_ROWS);
+                if !(1..=MAX_CONTEXT_ROWS).contains(&limit) {
+                    return Err(format!(
+                        "filler.for_each.context limit is 1..={MAX_CONTEXT_ROWS}"
+                    ));
+                }
+                context.push(Context {
+                    conditions: conditions_in(
+                        co.get("where"),
+                        "filler.for_each.context.where",
+                        &|n| other_field(cdef, n, "filler.for_each.context.where"),
+                    )?,
+                    fields: names_in(co.get("fields"), "filler.for_each.context.fields", cdef)?,
+                    collection: cname,
+                    limit,
+                });
+            }
+        }
+        Some(_) => return Err("filler.for_each.context is a list".into()),
+    }
+    Ok(ForEach {
+        collection,
+        link,
+        from,
+        conditions,
+        context,
     })
 }
 
@@ -1665,7 +1978,7 @@ fn check_one(def: &Definition, f: &Filler, max_fills_per_day: u32) -> Result<(),
                 x.name
             ));
         }
-        if x.kind == Kind::Ref {
+        if x.kind == Kind::Ref && f.for_each().is_none_or(|fe| fe.link != *id) {
             return Err(format!(
                 "field '{}' is a ref, so it can't be filled (a page holds no row ids; fill a text field and look it up)",
                 x.name

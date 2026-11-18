@@ -2159,8 +2159,17 @@ pub fn check_definition(def: &Definition, max_fields: usize) -> Result<(), Strin
         }
         for id in f.compute_sources() {
             match def.by_id(&id) {
+                // An expression may read its own last value (decision
+                // `research-per-row`): `entity.price_now < entity.price_low
+                // ? entity.price_now : entity.price_low`.
+                Some(src)
+                    if src.id == f.id
+                        && f.compute.iter().all(|c| matches!(c, Compute::Expr { .. })) => {}
                 Some(src) if src.id == f.id => {
-                    return Err(format!("field '{}' can't be computed from itself", f.name));
+                    return Err(format!(
+                        "field '{}' can't be computed from itself (only an expression may read its own last value)",
+                        f.name
+                    ));
                 }
                 Some(src) if !src.live() => {
                     return Err(format!(

@@ -8,6 +8,9 @@
 //!   `0`;
 //! - a condition tests any value (empty text, `0`, `false` and empty
 //!   values are false);
+//! - `*` multiplies numbers; `<`, `<=`, `>` and `>=` compare two numbers,
+//!   or two texts in order (so `YYYY-MM-DD` dates compare as dates), and
+//!   answer `true` or `false` (decision `research-per-row`);
 //! - parentheses group, and ternaries may nest.
 //!
 //! No calls, no loops, no access to anything but the row: an expression is
@@ -29,7 +32,40 @@ pub enum Expr {
     Not(Box<Expr>),
     Add(Box<Expr>, Box<Expr>),
     Sub(Box<Expr>, Box<Expr>),
+    Mul(Box<Expr>, Box<Expr>),
+    /// A comparison: `<`, `<=`, `>` or `>=`.
+    Cmp(Cmp, Box<Expr>, Box<Expr>),
     Cond(Box<Expr>, Box<Expr>, Box<Expr>),
+}
+
+/// A comparison's operator.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Cmp {
+    Lt,
+    Le,
+    Gt,
+    Ge,
+}
+
+impl Cmp {
+    fn text(self) -> &'static str {
+        match self {
+            Cmp::Lt => "<",
+            Cmp::Le => "<=",
+            Cmp::Gt => ">",
+            Cmp::Ge => ">=",
+        }
+    }
+
+    fn holds(self, o: std::cmp::Ordering) -> bool {
+        use std::cmp::Ordering::*;
+        match self {
+            Cmp::Lt => o == Less,
+            Cmp::Le => o != Greater,
+            Cmp::Gt => o == Greater,
+            Cmp::Ge => o != Less,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -39,6 +75,8 @@ enum Tok {
     Bang,
     Plus,
     Minus,
+    Star,
+    Compare(Cmp),
     Question,
     Colon,
     Open,
@@ -56,6 +94,17 @@ fn lex(s: &str) -> Result<Vec<Tok>, String> {
             b'!' => (out.push(Tok::Bang), i += 1).1,
             b'+' => (out.push(Tok::Plus), i += 1).1,
             b'-' => (out.push(Tok::Minus), i += 1).1,
+            b'*' => (out.push(Tok::Star), i += 1).1,
+            b'<' | b'>' => {
+                let eq = b.get(i + 1) == Some(&b'=');
+                out.push(Tok::Compare(match (c, eq) {
+                    (b'<', false) => Cmp::Lt,
+                    (b'<', true) => Cmp::Le,
+                    (_, false) => Cmp::Gt,
+                    (_, true) => Cmp::Ge,
+                }));
+                i += if eq { 2 } else { 1 };
+            }
             b'?' => (out.push(Tok::Question), i += 1).1,
             b':' => (out.push(Tok::Colon), i += 1).1,
             b'(' => (out.push(Tok::Open), i += 1).1,
@@ -109,7 +158,7 @@ fn lex(s: &str) -> Result<Vec<Tok>, String> {
             }
             _ => {
                 return Err(format!(
-                    "'{}' is not part of the expression language (entity.<field>, literals, !, +, -, ? :, parentheses)",
+                    "'{}' is not part of the expression language (entity.<field>, literals, !, +, -, *, < <= > >=, ? :, parentheses)",
                     s[i..].chars().next().unwrap_or(' ')
                 ));
             }
@@ -158,7 +207,7 @@ impl Parser {
 
     fn expr(&mut self) -> Result<Expr, String> {
         self.deeper()?;
-        let cond = self.sum()?;
+        let cond = self.compare()?;
         let out = if self.eat(&Tok::Question) {
             let then = self.expr()?;
             if !self.eat(&Tok::Colon) {
@@ -173,17 +222,39 @@ impl Parser {
         Ok(out)
     }
 
+    /// A sum, or two compared (one comparison: `a < b < c` doesn't parse).
+    fn compare(&mut self) -> Result<Expr, String> {
+        let left = self.sum()?;
+        if let Some(Tok::Compare(op)) = self.peek().cloned() {
+            self.at += 1;
+            let right = self.sum()?;
+            if let Some(Tok::Compare(_)) = self.peek() {
+                return Err("compare two values at a time (a < b ? ... : ...)".into());
+            }
+            return Ok(Expr::Cmp(op, Box::new(left), Box::new(right)));
+        }
+        Ok(left)
+    }
+
     fn sum(&mut self) -> Result<Expr, String> {
-        let mut left = self.unary()?;
+        let mut left = self.product()?;
         loop {
             if self.eat(&Tok::Plus) {
-                left = Expr::Add(Box::new(left), Box::new(self.unary()?));
+                left = Expr::Add(Box::new(left), Box::new(self.product()?));
             } else if self.eat(&Tok::Minus) {
-                left = Expr::Sub(Box::new(left), Box::new(self.unary()?));
+                left = Expr::Sub(Box::new(left), Box::new(self.product()?));
             } else {
                 return Ok(left);
             }
         }
+    }
+
+    fn product(&mut self) -> Result<Expr, String> {
+        let mut left = self.unary()?;
+        while self.eat(&Tok::Star) {
+            left = Expr::Mul(Box::new(left), Box::new(self.unary()?));
+        }
+        Ok(left)
     }
 
     fn unary(&mut self) -> Result<Expr, String> {
@@ -235,6 +306,8 @@ fn tok_text(t: &Tok) -> String {
         Tok::Bang => "!".into(),
         Tok::Plus => "+".into(),
         Tok::Minus => "-".into(),
+        Tok::Star => "*".into(),
+        Tok::Compare(c) => c.text().into(),
         Tok::Question => "?".into(),
         Tok::Colon => ":".into(),
         Tok::Open => "(".into(),
@@ -283,7 +356,7 @@ impl Expr {
             Expr::Lit(_) => {}
             Expr::Field(n) => f(n),
             Expr::Not(a) => a.walk(f),
-            Expr::Add(a, b) | Expr::Sub(a, b) => {
+            Expr::Add(a, b) | Expr::Sub(a, b) | Expr::Mul(a, b) | Expr::Cmp(_, a, b) => {
                 a.walk(f);
                 b.walk(f);
             }
@@ -305,6 +378,8 @@ impl Expr {
             Expr::Not(a) => Expr::Not(bx(a)?),
             Expr::Add(a, b) => Expr::Add(bx(a)?, bx(b)?),
             Expr::Sub(a, b) => Expr::Sub(bx(a)?, bx(b)?),
+            Expr::Mul(a, b) => Expr::Mul(bx(a)?, bx(b)?),
+            Expr::Cmp(op, a, b) => Expr::Cmp(*op, bx(a)?, bx(b)?),
             Expr::Cond(c, a, b) => Expr::Cond(bx(c)?, bx(a)?, bx(b)?),
         })
     }
@@ -312,10 +387,12 @@ impl Expr {
     fn prec(&self) -> u8 {
         match self {
             Expr::Cond(..) => 0,
-            Expr::Add(..) | Expr::Sub(..) => 1,
-            Expr::Not(_) => 2,
-            Expr::Lit(Value::Number(n)) if n.as_f64().is_some_and(|x| x < 0.0) => 2,
-            Expr::Lit(_) | Expr::Field(_) => 3,
+            Expr::Cmp(..) => 1,
+            Expr::Add(..) | Expr::Sub(..) => 2,
+            Expr::Mul(..) => 3,
+            Expr::Not(_) => 4,
+            Expr::Lit(Value::Number(n)) if n.as_f64().is_some_and(|x| x < 0.0) => 4,
+            Expr::Lit(_) | Expr::Field(_) => 5,
         }
     }
 
@@ -334,9 +411,11 @@ impl std::fmt::Display for Expr {
         match self {
             Expr::Lit(v) => write!(f, "{v}"),
             Expr::Field(n) => write!(f, "entity.{n}"),
-            Expr::Not(a) => write!(f, "!{}", a.child(2)),
-            Expr::Add(a, b) => write!(f, "{} + {}", a.child(1), b.child(2)),
-            Expr::Sub(a, b) => write!(f, "{} - {}", a.child(1), b.child(2)),
+            Expr::Not(a) => write!(f, "!{}", a.child(4)),
+            Expr::Add(a, b) => write!(f, "{} + {}", a.child(2), b.child(3)),
+            Expr::Sub(a, b) => write!(f, "{} - {}", a.child(2), b.child(3)),
+            Expr::Mul(a, b) => write!(f, "{} * {}", a.child(3), b.child(4)),
+            Expr::Cmp(op, a, b) => write!(f, "{} {} {}", a.child(2), op.text(), b.child(2)),
             Expr::Cond(c, a, b) => write!(f, "{} ? {} : {}", c.child(1), a.child(0), b.child(0)),
         }
     }
@@ -401,6 +480,18 @@ pub fn eval(e: &Expr, get: &dyn Fn(&str) -> Value) -> Result<Value, String> {
         }
         Expr::Sub(a, b) => number(num(&eval(a, get)?)? - num(&eval(b, get)?)?)
             .ok_or_else(|| "the difference is too large".into()),
+        Expr::Mul(a, b) => number(num(&eval(a, get)?)? * num(&eval(b, get)?)?)
+            .ok_or_else(|| "the product is too large".into()),
+        Expr::Cmp(op, a, b) => {
+            let (a, b) = (eval(a, get)?, eval(b, get)?);
+            let order = match (&a, &b) {
+                (Value::String(x), Value::String(y)) => x.trim().cmp(y.trim()),
+                _ => num(&a)?
+                    .partial_cmp(&num(&b)?)
+                    .ok_or("the numbers can't be compared")?,
+            };
+            Ok(json!(op.holds(order)))
+        }
         Expr::Cond(c, a, b) => {
             if truthy(&eval(c, get)?) {
                 eval(a, get)
@@ -467,13 +558,47 @@ mod tests {
     }
 
     #[test]
+    fn products_and_comparisons() {
+        let row = json!({"now": 50, "low": 60, "d": "2026-11-18", "e": "2026-11-20"});
+        assert_eq!(run("entity.now * 2 + 1", row.clone()), Ok(json!(101)));
+        assert_eq!(run("2 + entity.now * 2", row.clone()), Ok(json!(102)));
+        assert_eq!(run("entity.now < entity.low", row.clone()), Ok(json!(true)));
+        assert_eq!(
+            run("entity.now >= entity.low", row.clone()),
+            Ok(json!(false))
+        );
+        assert_eq!(run("entity.now <= 50", row.clone()), Ok(json!(true)));
+        assert_eq!(run("entity.now > 50", row.clone()), Ok(json!(false)));
+        assert_eq!(run("entity.d < entity.e", row.clone()), Ok(json!(true)));
+        assert_eq!(
+            run(
+                "entity.now * 100 <= entity.low * 85 ? \"Deal\" : \"\"",
+                row.clone()
+            ),
+            Ok(json!("Deal"))
+        );
+        // A running lowest: the field's last value (here `low`) or today's.
+        assert_eq!(
+            run(
+                "entity.now ? (entity.low ? (entity.now < entity.low ? entity.now : entity.low) : entity.now) : entity.low",
+                row
+            ),
+            Ok(json!(50))
+        );
+        assert!(run("entity.s * 2", json!({"s": "x"})).is_err());
+    }
+
+    #[test]
     fn only_the_small_language_parses() {
         for bad in [
             "",
             "entity.",
             "name",
             "size(entity.list)",
-            "entity.a * 2",
+            "entity.a ** 2",
+            "1 < 2 < 3",
+            "entity.a =< 2",
+            "entity.a && 1",
             "entity.a ? 1",
             "(entity.a",
             "entity.a entity.b",
@@ -497,6 +622,10 @@ mod tests {
             "entity.a ? entity.b ? 1 : 2 : 3",
             "entity.n + -1",
             "\"quote \\\" inside\"",
+            "entity.a * (entity.b + 1)",
+            "entity.p * 100 <= entity.q * 85 ? \"Deal\" : \"\"",
+            "(entity.a < 1) + 1",
+            "-entity.a * 2",
         ] {
             let e = parse(s).unwrap();
             assert_eq!(parse(&e.to_string()).unwrap(), e, "{s} -> {e}");

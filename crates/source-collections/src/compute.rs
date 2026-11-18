@@ -585,7 +585,8 @@ enum Answer {
     None,
 }
 
-/// Compute `field` over `row`'s values (the field itself left out): each
+/// Compute `field` over `row`'s values (the field itself left out, but
+/// for an expression's): each
 /// kind in order until one answers.
 fn answer(
     conn: &Connection,
@@ -596,7 +597,16 @@ fn answer(
     max_chars: usize,
 ) -> rusqlite::Result<Answer> {
     let mut values = row.values.clone();
-    values.remove(&field.id);
+    // An expression may read the field's own last value (a running lowest,
+    // a first price seen: decision `research-per-row`); other kinds never
+    // see it.
+    if !field
+        .compute
+        .iter()
+        .all(|c| matches!(c, Compute::Expr { .. }))
+    {
+        values.remove(&field.id);
+    }
     // `entity.id` in an expression: the row's own id (never a field id).
     values.insert(model::ROW_ID.to_owned(), json!(row.id));
     let learning = field.learning_lookup();

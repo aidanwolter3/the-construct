@@ -233,13 +233,19 @@ impl FillAgent for PodAgent {
             };
             let mut task = tasks::research(&input, MAX_TURNS);
             let mut own_tools = false;
+            let mut seen = None;
             match pod_web(req.pod) {
                 Some(web) => {
                     own_tools = true;
                     // `web_fetch` reads only what the task has seen: the
                     // request's own URLs to start with (decision
                     // `web-fetch-provenance`).
-                    web.seen.add_text(&tasks::research_prompt(&input));
+                    let prompt = tasks::research_prompt(&input);
+                    web.seen.add_text(&prompt);
+                    // The request's own text (its current rows' quotes) counts
+                    // as read.
+                    web.seen.add_read(&prompt);
+                    seen = Some(web.seen.clone());
                     if req.max_searches > 0 {
                         task.tools
                             .push(Arc::new(web_extract::tools::SearchTool::new(
@@ -267,7 +273,20 @@ impl FillAgent for PodAgent {
             let Some(input) = out.finished.as_ref() else {
                 return Err("the model answered without saving rows".into());
             };
-            let rows = tasks::rows_in(input);
+            let mut rows = tasks::rows_in(input);
+            // With the pod's own tools, every link in the answer must be one
+            // the task saw and every quote on a page it read (decision
+            // `research-per-row`).
+            if let Some(seen) = &seen {
+                let cited = seen.check_rows(&mut rows);
+                if cited != web_extract::tools::Cited::default() {
+                    tracing::info!(
+                        urls = cited.urls_dropped,
+                        quotes = cited.quotes_dropped,
+                        "research answer: unseen links and unfound quotes left out"
+                    );
+                }
+            }
             let (searches, fetches) = if own_tools {
                 // The pod's tools: each call is a search or a fetch.
                 (out.tool_calls, 0)

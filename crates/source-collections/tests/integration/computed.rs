@@ -785,3 +785,77 @@ async fn a_learning_lookup_makes_its_rules_collection() {
     .await;
     assert_eq!(v["created_rules"], json!([]), "{v}");
 }
+
+/// An expression may read its own last value and compare numbers (decision
+/// `research-per-row`): a running lowest price and a deal flag.
+#[tokio::test]
+async fn an_expr_field_keeps_a_running_lowest_and_compares_numbers() {
+    let pod = pod(None);
+    ok(
+        &pod,
+        "define_collection",
+        json!({"name": "prices", "title": "Prices", "fields": [
+            {"name": "name", "type": "text"},
+            {"name": "price", "type": "number", "optional": true},
+            {"name": "price_now", "type": "number", "optional": true},
+            {"name": "price_low", "type": "number", "optional": true, "compute": {"kind": "expr",
+             "expr": "entity.price_now ? (entity.price_low ? (entity.price_now < entity.price_low ? entity.price_now : entity.price_low) : entity.price_now) : entity.price_low"}},
+            {"name": "deal", "type": "text", "optional": true, "compute": {"kind": "expr",
+             "expr": "entity.price_now ? (entity.price_now * 100 <= entity.price * 85 ? \"Deal\" : \"\") : \"\""}}]}),
+    )
+    .await;
+    let (status, v) = call(
+        &pod,
+        "POST",
+        "/v1/collections/prices/create",
+        "phone",
+        Some(json!({"name": "Jeans", "price": 80})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{v}");
+    let id = v["id"].as_str().unwrap().to_owned();
+    let read = |pod: Pod| async move {
+        let (_, b) = call(&pod, "GET", "/v1/collections/prices/rows", "phone", None).await;
+        let u = b["queries"]["collection:prices"][0]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        let e = &b["entities"][&u];
+        (
+            e["price_low"].clone(),
+            e["deal"].as_str().unwrap_or("").to_owned(),
+        )
+    };
+    for (now, low, deal) in [
+        (75, 75, ""),
+        (70, 70, ""),
+        (78, 70, ""),
+        (68, 68, "Deal"),
+        (79, 68, ""),
+    ] {
+        let (status, v) = call(
+            &pod,
+            "POST",
+            "/v1/collections/prices/update",
+            "phone",
+            Some(json!({"id": id, "price_now": now})),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{v}");
+        assert_eq!(
+            read(pod.clone()).await,
+            (json!(low), deal.to_owned()),
+            "at {now}"
+        );
+    }
+    // Only an expression reads itself.
+    let (err, v) = tool(
+        &pod,
+        "apply_change",
+        json!({"collection": "prices", "changes": [
+            {"op": "add_field", "name": "kind", "type": "text", "optional": true,
+             "compute": {"kind": "model", "from": "kind", "prompt": "x"}}]}),
+    )
+    .await;
+    assert!(err, "{v}");
+}

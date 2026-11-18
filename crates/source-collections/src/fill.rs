@@ -20,7 +20,10 @@
 //!   row's own page fills that row. `details` then reads each new row's
 //!   own page (at most [`MAX_DETAILS`] a fill).
 //! - **agent**: [`crate::agent`], within the filler's daily budget and the
-//!   pod's.
+//!   pod's. With `for_each`, one request per row of the other collection
+//!   (each counts toward the budgets), each answer stored as that row's own
+//!   rows here ([`store`] scoped by the link), refreshed `once` (when the
+//!   row's text or the context changes) or `every` fill.
 //!
 //! The filler's rows are written in one transaction ([`store`]): `replace`
 //! makes them the answer (rows it no longer lists are deleted for good, not
@@ -62,6 +65,15 @@ pub const NO_AGENT: &str = "this filler needs a model: set CONSTRUCT_INFER_API_K
 pub const FETCH_FILL_TIMEOUT: Duration = Duration::from_secs(5 * 60);
 /// A whole model fill's time limit.
 pub const AGENT_FILL_TIMEOUT: Duration = Duration::from_secs(15 * 60);
+/// A `for_each` agent's fill: several researched rows, one after another.
+pub const EACH_FILL_TIMEOUT: Duration = Duration::from_secs(60 * 60);
+/// How long after a row is written its research starts (its computed
+/// fields settle first, so it is researched once).
+pub const RESEARCH_DELAY: Duration = Duration::from_secs(20);
+/// While a fill runs, how often (and how many times) a write's research
+/// tries again.
+const RESEARCH_RETRY: Duration = Duration::from_secs(60);
+const RESEARCH_TRIES: usize = 30;
 /// Empty fills in a row before a filler reads "empty".
 pub const EMPTY_AFTER: i64 = 3;
 /// New rows' own pages read per fill (`details`).
@@ -731,8 +743,36 @@ pub fn store(
     now: i64,
     caps: Caps,
 ) -> rusqlite::Result<Result<StoreResult, String>> {
+    store_scoped(tx, def, filler, items, now, caps, None)
+}
+
+/// [`store`] among the rows whose field `scope.0` (a ref) holds `scope.1`
+/// only, each item linked there (a `for_each` agent's answer for one row).
+pub fn store_scoped(
+    tx: &Connection,
+    def: &Definition,
+    filler: &Filler,
+    items: Vec<Map<String, Value>>,
+    now: i64,
+    caps: Caps,
+    scope: Option<(&str, &str)>,
+) -> rusqlite::Result<Result<StoreResult, String>> {
     let name = &def.name;
     let mapped = filler.mapped();
+    let items: Vec<Map<String, Value>> = match scope {
+        Some((link, parent)) => items
+            .into_iter()
+            .map(|mut i| {
+                i.insert(link.to_owned(), json!(parent));
+                i
+            })
+            .collect(),
+        None => items,
+    };
+    let in_scope = |r: &Row| {
+        scope
+            .is_none_or(|(link, parent)| r.values.get(link).and_then(Value::as_str) == Some(parent))
+    };
     let writer = db::filler_writer(&filler.id);
     let mut out = Stored::default();
     let mut jobs = Vec::new();
@@ -763,7 +803,7 @@ pub fn store(
     };
     let existing: Vec<Row> = db::all_rows(tx, name, true)?
         .into_iter()
-        .filter(|r| r.filler.as_deref() == Some(filler.id.as_str()))
+        .filter(|r| r.filler.as_deref() == Some(filler.id.as_str()) && in_scope(r))
         .collect();
     if let Some(key) = &filler.key {
         let mut by_key: HashMap<String, Row> = HashMap::new();
@@ -833,13 +873,17 @@ pub fn store(
             }
         }
         if filler.owns_rows() {
+            // `keep`: a row someone marked (put in their bag) stays.
             for (k, r) in &by_key {
-                if !seen.contains(k) {
+                if !seen.contains(k) && !filler.keeps(def, &r.values) {
                     hard_delete(tx, name, &r.id)?;
                     out.removed += 1;
                 }
             }
             for r in &unkeyed {
+                if filler.keeps(def, &r.values) {
+                    continue;
+                }
                 hard_delete(tx, name, &r.id)?;
                 out.removed += 1;
             }
@@ -909,6 +953,9 @@ pub fn store(
                 out.updated += 1;
             }
             for (r, _) in existing.iter().zip(&kept).filter(|(_, k)| !**k) {
+                if filler.keeps(def, &r.values) {
+                    continue;
+                }
                 hard_delete(tx, name, &r.id)?;
                 out.removed += 1;
             }
@@ -1152,9 +1199,23 @@ enum Fetch {
         skipped: usize,
         failed: Vec<String>,
     },
+    /// `for_each`: each researched row's answer, `(row id, items, source
+    /// key)`; the rows that exist there (live), for removing the rows of
+    /// those that don't; the model calls made.
+    Each {
+        answers: Vec<Researched>,
+        parents: HashSet<String>,
+        items: usize,
+        skipped: usize,
+        calls: i64,
+        failed: Vec<String>,
+    },
     Unchanged,
     Failed(String, Option<i64>),
 }
+
+/// One researched row's answer: `(row id, items, source key)`.
+type Researched = (String, Vec<Map<String, Value>>, String);
 
 fn hash_of(bytes: &[u8]) -> String {
     use sha2::{Digest, Sha256};
@@ -1852,6 +1913,7 @@ async fn run_agent(
     def: &Definition,
     filler: &Filler,
     state: &State,
+    force: bool,
     now: i64,
 ) -> Result<(Fetch, String), String> {
     let Source::Agent {
@@ -1867,6 +1929,9 @@ async fn run_agent(
     let Some(agent) = adapter.agent() else {
         return Err(NO_AGENT.into());
     };
+    if filler.for_each().is_some() {
+        return run_each(pod, adapter, def, filler, state, force, now).await;
+    }
     let day = take_model_budget(pod, adapter, filler, state, now).await?;
     let agent_fields = agent_fields(def, fields);
     let name = def.name.clone();
@@ -1926,6 +1991,302 @@ async fn run_agent(
             etag: None,
             last_modified: None,
             hash: None,
+        },
+        day,
+    ))
+}
+
+/// A value as one line of a request (`None`: empty, or a ref's bare id).
+fn line_value(f: &model::Field, v: &Value) -> Option<String> {
+    if f.kind == Kind::Ref {
+        return None;
+    }
+    if f.kind == Kind::Quantity {
+        let t = crate::quantity::text_of(v);
+        return (!t.trim().is_empty()).then_some(t);
+    }
+    crate::lookup::text_of(v)
+}
+
+/// The fields of `def` named `names` (live; aliases too), or every live
+/// field but true/false ones and refs when `names` is empty.
+fn named_fields<'a>(def: &'a Definition, names: &[String]) -> Vec<&'a model::Field> {
+    if names.is_empty() {
+        return def
+            .live_fields()
+            .filter(|f| !matches!(f.kind, Kind::Bool | Kind::Ref))
+            .collect();
+    }
+    names
+        .iter()
+        .filter_map(|n| def.field(n).filter(|f| f.live()))
+        .collect()
+}
+
+/// Conditions by field name as conditions by `def`'s ids (`None`: a field
+/// is gone).
+fn resolved(def: &Definition, c: &[model::Condition]) -> Option<Vec<model::Condition>> {
+    c.iter()
+        .map(|c| {
+            def.field(&c.field).map(|f| model::Condition {
+                field: f.id.clone(),
+                equals: c.equals.clone(),
+            })
+        })
+        .collect()
+}
+
+/// A `for_each` agent's fill (decision `research-per-row`): each live row of
+/// the other collection that matches, whose text (or the context) is new or
+/// changed since its last research (`refresh: once`) or every time
+/// (`every`), up to [`crate::filler::MAX_EACH_PER_FILL`] and the budgets
+/// left today: rows never researched first, then the longest ago. Answers
+/// `(fill, the day the budget was counted on, calls)`.
+async fn run_each(
+    pod: &Pod,
+    adapter: &CollectionsAdapter,
+    def: &Definition,
+    filler: &Filler,
+    state: &State,
+    force: bool,
+    now: i64,
+) -> Result<(Fetch, String), String> {
+    let Source::Agent {
+        prompt,
+        fields,
+        max_searches,
+        max_fetches,
+        fills_per_day,
+        for_each: Some(fe),
+    } = &filler.source
+    else {
+        return Err("not a for_each agent filler".into());
+    };
+    let Some(agent) = adapter.agent() else {
+        return Err(NO_AGENT.into());
+    };
+    let fe = fe.clone();
+    let (name, fid) = (def.name.clone(), filler.id.clone());
+    let read = pod
+        .blocking(move |s| {
+            s.with_conn(|c| {
+                let parent = db::latest_def(c, &fe.collection)?.map(|(_, d)| d);
+                let parent_rows = match &parent {
+                    Some(_) => db::all_rows(c, &fe.collection, false)?,
+                    None => Vec::new(),
+                };
+                let mut contexts = Vec::new();
+                for x in &fe.context {
+                    if let Some((_, d)) = db::latest_def(c, &x.collection)? {
+                        let rows = db::all_rows(c, &x.collection, false)?;
+                        contexts.push((x.clone(), d, rows));
+                    }
+                }
+                Ok((
+                    fe,
+                    parent,
+                    parent_rows,
+                    contexts,
+                    db::all_rows(c, &name, false)?,
+                    row_marks(c, &name, &fid)?,
+                ))
+            })
+        })
+        .await
+        .map_err(|_| "the collections could not be read".to_owned())?;
+    let (fe, parent, parent_rows, contexts, own_rows, marks) = read;
+    let Some(parent) = parent else {
+        return Err(format!(
+            "for_each: there is no collection '{}' any more",
+            fe.collection
+        ));
+    };
+    let Some(conditions) = resolved(&parent, &fe.conditions) else {
+        return Err(format!(
+            "for_each.where names a field '{}' no longer has",
+            fe.collection
+        ));
+    };
+    let from = named_fields(&parent, &fe.from);
+    // The context: the same for every row of this fill.
+    let mut context = String::new();
+    for (x, d, rows) in &contexts {
+        let Some(cond) = resolved(d, &x.conditions) else {
+            continue;
+        };
+        let fs = named_fields(d, &x.fields);
+        let lines: Vec<String> = rows
+            .iter()
+            .filter(|r| cond.iter().all(|c| c.matches(d, &r.values)))
+            .take(x.limit as usize)
+            .filter_map(|r| {
+                let o: Map<String, Value> = fs
+                    .iter()
+                    .filter_map(|f| {
+                        let v = r.values.get(&f.id)?;
+                        let t = line_value(f, v)
+                            .or_else(|| (f.kind == Kind::Bool).then(|| v.to_string()))?;
+                        Some((f.name.clone(), json!(t)))
+                    })
+                    .collect();
+                (!o.is_empty()).then(|| Value::Object(o).to_string())
+            })
+            .collect();
+        if !lines.is_empty() {
+            context.push_str(&format!(
+                "\n\nFrom \"{}\" ({} rows):\n{}",
+                d.title,
+                lines.len(),
+                lines.join("\n")
+            ));
+        }
+    }
+    let parents: HashSet<String> = parent_rows.iter().map(|r| r.id.clone()).collect();
+    let force_all = force || state.fingerprint != filler.fingerprint();
+    let refresh = filler.refresh();
+    // Each matching row: its request text and that text's key.
+    let mut todo: Vec<(&Row, String, String, Option<i64>)> = parent_rows
+        .iter()
+        .filter(|r| conditions.iter().all(|c| c.matches(&parent, &r.values)))
+        .filter_map(|r| {
+            let lines: Vec<String> = from
+                .iter()
+                .filter_map(|f| {
+                    let t = line_value(f, r.values.get(&f.id)?)?;
+                    Some(format!("- {}: {t}", f.name))
+                })
+                .collect();
+            if lines.is_empty() {
+                return None;
+            }
+            let text = lines.join("\n");
+            let key = hash_of(format!("{text}\n{context}").as_bytes());
+            let filled = marks
+                .get(&r.id)
+                .filter(|(s, _, _)| *s == key)
+                .map(|(_, _, at)| *at);
+            Some((r, text, key, filled))
+        })
+        .filter(|(_, _, _, filled)| {
+            force_all || refresh == crate::filler::Refresh::Every || filled.is_none()
+        })
+        .collect();
+    let day = today(pod.store(), now);
+    if todo.is_empty() {
+        return Ok((
+            Fetch::Each {
+                answers: Vec::new(),
+                parents,
+                items: 0,
+                skipped: 0,
+                calls: 0,
+                failed: Vec::new(),
+            },
+            day,
+        ));
+    }
+    todo.sort_by_key(|(r, _, _, filled)| {
+        let last = marks.get(&r.id).map(|(_, _, at)| *at);
+        (filled.is_some(), last.is_some(), last.unwrap_or(0))
+    });
+    // Budgets left today: the filler's and the pod's.
+    let mine = if state.day.as_deref() == Some(day.as_str()) {
+        state.day_fills
+    } else {
+        0
+    };
+    let d = day.clone();
+    let pod_total = pod
+        .blocking(move |s| s.with_conn(|c| pod_model_fills_today(c, &d)))
+        .await
+        .unwrap_or(0);
+    let left = (i64::from(*fills_per_day) - mine)
+        .min(i64::from(adapter.caps().agent_fills_per_day) - pod_total)
+        .max(0) as usize;
+    if left == 0 {
+        return Err(format!(
+            "this filler already researched {mine} rows today (fills_per_day {fills_per_day}, or the pod's limit)"
+        ));
+    }
+    let agent_fields = agent_fields(def, fields);
+    let key_name = filler.key.as_ref().map(|k| def.name_of(k));
+    let caps = adapter.caps();
+    let mut answers = Vec::new();
+    let (mut items, mut skipped, mut calls) = (0, 0, 0);
+    let mut failed = Vec::new();
+    for (r, text, key, _) in todo
+        .into_iter()
+        .take(left.min(crate::filler::MAX_EACH_PER_FILL))
+    {
+        let current: Vec<Map<String, Value>> = own_rows
+            .iter()
+            .filter(|o| {
+                o.filler.as_deref() == Some(filler.id.as_str())
+                    && o.values.get(&fe.link).and_then(Value::as_str) == Some(r.id.as_str())
+            })
+            .take(crate::agent::MAX_CURRENT)
+            .map(|o| {
+                fields
+                    .iter()
+                    .filter_map(|id| {
+                        let f = def.by_id(id)?;
+                        Some((
+                            f.name.clone(),
+                            o.values.get(id).cloned().unwrap_or(Value::Null),
+                        ))
+                    })
+                    .collect()
+            })
+            .collect();
+        let request = format!(
+            "{prompt}\n\nResearch this row of \"{}\" (every row you save is for it):\n{text}{context}",
+            parent.title
+        );
+        calls += 1;
+        let answer = agent
+            .fill(AgentRequest {
+                pod,
+                title: &def.title,
+                prompt: &request,
+                fields: &agent_fields,
+                today: &day,
+                max_searches: *max_searches,
+                max_fetches: *max_fetches,
+                key: key_name.as_deref(),
+                current: &current,
+            })
+            .await;
+        match answer {
+            Ok(a) => {
+                let (vals, s) = coerce_all(
+                    def,
+                    by_ids(def, a.rows, fields),
+                    caps.fill_items,
+                    caps.text_chars,
+                    None,
+                    upcoming(filler, now),
+                );
+                skipped += s;
+                // An empty answer keeps the row's last options and is asked
+                // again next time.
+                if vals.is_empty() {
+                    failed.push(format!("{}: no rows", r.id));
+                    continue;
+                }
+                items += vals.len();
+                answers.push((r.id.clone(), vals, key));
+            }
+            Err(e) => failed.push(format!("{}: {e}", r.id)),
+        }
+    }
+    Ok((
+        Fetch::Each {
+            answers,
+            parents,
+            items,
+            skipped,
+            calls,
+            failed,
         },
         day,
     ))
@@ -2129,6 +2490,7 @@ pub async fn fill(pod: &Pod, collection: &str, filler_id: &str, force: bool) -> 
     publish_filler(pod, collection, filler_id);
     let now = pod_core::util::now_secs();
     let mut day = None;
+    let mut extra_calls = 0;
     let off = off(pod).await;
     let fetched = if off.stops(&filler) {
         Fetch::Failed(
@@ -2148,14 +2510,29 @@ pub async fn fill(pod: &Pod, collection: &str, filler_id: &str, force: bool) -> 
             Err(_) => Fetch::Failed("the fill timed out".into(), None),
         }
     } else if filler.is_agent() {
+        let limit = if filler.for_each().is_some() {
+            EACH_FILL_TIMEOUT
+        } else {
+            AGENT_FILL_TIMEOUT
+        };
         match tokio::time::timeout(
-            AGENT_FILL_TIMEOUT,
-            run_agent(pod, adapter, &def, &filler, &st, now),
+            limit,
+            run_agent(pod, adapter, &def, &filler, &st, force, now),
         )
         .await
         {
             Ok(Ok((f, d))) => {
-                day = Some(d);
+                match &f {
+                    // Each researched row counts toward the budgets; a fill
+                    // with nothing to research counts nothing.
+                    Fetch::Each { calls, .. } => {
+                        if *calls > 0 {
+                            day = Some(d);
+                            extra_calls = calls - 1;
+                        }
+                    }
+                    _ => day = Some(d),
+                }
                 f
             }
             Ok(Err(e)) => Fetch::Failed(e, None),
@@ -2184,7 +2561,7 @@ pub async fn fill(pod: &Pod, collection: &str, filler_id: &str, force: bool) -> 
             st.day = Some(d);
             st.day_fills = 0;
         }
-        st.day_fills += 1;
+        st.day_fills += 1 + extra_calls;
     }
     let scheduled = filler.every_minutes.map(|m| now + i64::from(m) * 60);
     let fingerprint = filler.fingerprint();
@@ -2246,6 +2623,107 @@ pub async fn fill(pod: &Pod, collection: &str, filler_id: &str, force: bool) -> 
                         },
                         jobs,
                     )
+                }
+                Err(e) => {
+                    let msg = e["error"]
+                        .as_str()
+                        .or(e["detail"].as_str())
+                        .unwrap_or("the rows could not be stored")
+                        .to_owned();
+                    st.failures += 1;
+                    st.last_error = Some(msg.clone());
+                    st.next_at = Some(backoff(&filler, st.failures, None, now));
+                    (Outcome::Failed(msg), Vec::new())
+                }
+            }
+        }
+        Fetch::Each {
+            answers,
+            parents,
+            items,
+            skipped,
+            calls,
+            failed,
+        } => {
+            let (d2, f2) = (def.clone(), filler.clone());
+            let link = filler
+                .for_each()
+                .map(|fe| fe.link.clone())
+                .unwrap_or_default();
+            let any = !answers.is_empty();
+            let stored = crate::refusable(pod, move |tx| {
+                let mut out = Stored::default();
+                let mut jobs = Vec::new();
+                let mut created = Vec::new();
+                let mut marks = Vec::new();
+                for (parent, items, key) in answers {
+                    match store_scoped(tx, &d2, &f2, items, now, caps, Some((&link, &parent)))? {
+                        Ok((s, j, c)) => {
+                            out.created += s.created;
+                            out.updated += s.updated;
+                            out.removed += s.removed;
+                            out.unchanged += s.unchanged;
+                            out.dropped += s.dropped;
+                            jobs.extend(j);
+                            created.extend(c);
+                            marks.push((parent.clone(), key, String::new()));
+                        }
+                        Err(e) => return Ok(Err(json!({ "error": e }))),
+                    }
+                }
+                // Rows of a researched row that's gone (deleted or removed)
+                // go too, unless kept.
+                for r in db::all_rows(tx, &d2.name, true)? {
+                    if r.filler.as_deref() != Some(f2.id.as_str()) {
+                        continue;
+                    }
+                    let p = r.values.get(&link).and_then(Value::as_str).unwrap_or("");
+                    if !parents.contains(p) && !f2.keeps(&d2, &r.values) {
+                        hard_delete(tx, &d2.name, &r.id)?;
+                        out.removed += 1;
+                    }
+                }
+                save_marks(tx, &d2.name, &f2.id, &marks, now)?;
+                Ok(Ok((out, jobs, created)))
+            })
+            .await;
+            let total = calls as usize;
+            match stored {
+                Ok((stored, jobs, created)) if failed.is_empty() || any => {
+                    created_rows = created;
+                    st.failures = 0;
+                    st.last_ok_at = Some(now);
+                    st.last_error = (!failed.is_empty()).then(|| {
+                        web_extract::html::truncate(
+                            &format!(
+                                "{} of {total} rows found nothing: {}",
+                                failed.len(),
+                                failed.join("; ")
+                            ),
+                            300,
+                        )
+                    });
+                    st.next_at = scheduled;
+                    st.fingerprint = fingerprint.clone();
+                    st.last_rows = Some(items as i64);
+                    st.last_skipped = Some((skipped + stored.dropped) as i64);
+                    st.last_past = None;
+                    st.empty_runs = 0;
+                    (
+                        Outcome::Filled {
+                            items,
+                            skipped,
+                            stored,
+                        },
+                        jobs,
+                    )
+                }
+                Ok(_) => {
+                    let e = format!("every row failed: {}", failed.join("; "));
+                    st.failures += 1;
+                    st.last_error = Some(web_extract::html::truncate(&e, 300));
+                    st.next_at = Some(backoff(&filler, st.failures, None, now));
+                    (Outcome::Failed(e), Vec::new())
                 }
                 Err(e) => {
                     let msg = e["error"]
@@ -2417,6 +2895,47 @@ pub fn spawn(pod: &Pod, collection: &str, filler: Option<&str>, force: bool) {
         };
         for f in ids {
             fill(&pod, &c, &f, force).await;
+        }
+    });
+}
+
+/// A row of `collection` was written (by a person, an action or Claude):
+/// start, after [`RESEARCH_DELAY`], the `for_each` agents that research its
+/// rows (decision `research-per-row`). A fill with nothing new or changed
+/// calls no model; while one runs, this tries again.
+pub fn research_soon(pod: &Pod, collection: &str) {
+    let pod = pod.clone();
+    let c = collection.to_owned();
+    tokio::spawn(async move {
+        let c2 = c.clone();
+        let targets: Vec<(String, String)> = pod
+            .blocking(move |s| {
+                s.with_conn(|conn| {
+                    Ok(db::all_defs(conn)?
+                        .into_iter()
+                        .flat_map(|(_, d)| {
+                            d.fillers
+                                .iter()
+                                .filter(|f| f.for_each().is_some_and(|fe| fe.collection == c2))
+                                .map(|f| (d.name.clone(), f.id.clone()))
+                                .collect::<Vec<_>>()
+                        })
+                        .collect())
+                })
+            })
+            .await
+            .unwrap_or_default();
+        if targets.is_empty() {
+            return;
+        }
+        tokio::time::sleep(RESEARCH_DELAY).await;
+        for (col, f) in targets {
+            for _ in 0..RESEARCH_TRIES {
+                if !matches!(fill(&pod, &col, &f, false).await, Outcome::Busy) {
+                    break;
+                }
+                tokio::time::sleep(RESEARCH_RETRY).await;
+            }
         }
     });
 }
