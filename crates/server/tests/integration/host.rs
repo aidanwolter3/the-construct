@@ -1956,6 +1956,23 @@ mod web {
             .await
             .unwrap();
         assert_eq!(page.status(), StatusCode::OK);
+        // One row's page, by its name (decision `public-row-links`): titled
+        // with the row; a name no row has is the list's page.
+        let row = client()
+            .get(env.url("/cook/our-meals/shakshuka"))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(row.status(), StatusCode::OK);
+        let row = row.text().await.unwrap();
+        assert!(row.contains("<title>Shakshuka · "), "{row}");
+        let gone = client()
+            .get(env.url("/cook/our-meals/lentil-stew"))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(gone.status(), StatusCode::OK);
+        assert!(!gone.text().await.unwrap().contains("Shakshuka"));
         assert_eq!(
             client()
                 .get(env.url("/cook/nope/view"))

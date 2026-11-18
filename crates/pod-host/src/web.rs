@@ -120,7 +120,8 @@ pub(crate) fn public_routes() -> Router<Arc<Host>> {
         .route("/web/%40{handle}/{slug}", get(short_variant))
 }
 
-/// What a short path, `/<handle>/<slug>` (and `…/view`, `…/image`, `…/`),
+/// What a short path, `/<handle>/<slug>` (and `…/view`, `…/image`, `…/`,
+/// and `…/<row>` for one row's screen, decision `public-row-links`),
 /// answers, or `None` for any other request. The host's fallback asks this
 /// before it forwards a request to a pod: a route for `/{handle}/{slug}`
 /// would also take the pods' own two-segment paths (`/v1/<x>`) and their
@@ -160,6 +161,9 @@ pub(crate) async fn short_path(
         Some("view") if lower => view_of(host.clone(), named).await,
         Some("image") if lower => {
             image_of(host.clone(), named, uri.query().map(str::to_owned)).await
+        }
+        Some(row) if lower && protocol::public_rows::is_row_name(row) => {
+            row_page(host.clone(), named, Some(row), headers.clone()).await
         }
         Some(_) => return None,
     })
@@ -317,13 +321,29 @@ async fn public_page(
 }
 
 async fn page_of(host: Arc<Host>, named: Named, headers: HeaderMap) -> Response {
+    row_page(host, named, None, headers).await
+}
+
+/// The page, opening one row's screen when `row` names one (decision
+/// `public-row-links`): titled with the row's title then the copy's. A name
+/// no row has (a row renamed or gone) answers the page as it is, which
+/// opens on the list.
+async fn row_page(
+    host: Arc<Host>,
+    named: Named,
+    row: Option<&str>,
+    headers: HeaderMap,
+) -> Response {
     let (Some(d), Some(c)) = (dir(&host), public_copy(&host, named).await) else {
         return not_found();
     };
     let Some((page, kind)) = file(d, "index.html").await else {
         return not_found();
     };
-    let title = escape_html(&c.title);
+    let title = match row.and_then(|r| protocol::public_rows::row(&c.copy, r)) {
+        Some(r) if !r.title.is_empty() => escape_html(&format!("{} · {}", r.title, c.title)),
+        _ => escape_html(&c.title),
+    };
     let page = String::from_utf8_lossy(&page).replace(
         "<title>The Construct</title>",
         &format!(

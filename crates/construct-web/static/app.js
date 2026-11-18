@@ -15,14 +15,17 @@ async function hasSession() {
   return r.ok;
 }
 
-// A public link (/s/<link>, or a chosen /<handle>/<slug>; decisions `public-web-links`,
-// `public-links-share-the-closure`): its copy, read-only, for anyone; no pod, no sign-in.
-const shared = location.pathname.match(/^(\/s\/pub-[a-z0-9]+|\/@?[a-z][a-z0-9-]+\/[a-z0-9-]+)\/?$/);
+// A public link (/s/<link>, or a chosen /<handle>/<slug>, with /<row> for one row's screen; decisions
+// `public-web-links`, `public-links-share-the-closure`, `public-row-links`): its copy, read-only, for anyone; no
+// pod, no sign-in.
+const shared = location.pathname.match(
+  /^(\/s\/pub-[a-z0-9]+|\/@?[a-z][a-z0-9-]+\/[a-z0-9-]+)(?:\/([a-z0-9_-]+))?\/?$/,
+);
 
 async function run() {
   if (shared) {
     await init();
-    await start_public(shared[1]);
+    await start_public(shared[1], shared[2]);
     $("loading").hidden = true;
     return;
   }

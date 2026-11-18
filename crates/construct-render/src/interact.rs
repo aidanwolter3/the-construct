@@ -2404,6 +2404,11 @@ impl Session {
         &self.stack[self.top_index()].id
     }
 
+    /// The `$route` of the layout or screen taps go to.
+    pub fn top_route(&self) -> &BTreeMap<String, String> {
+        &self.stack[self.top_index()].route
+    }
+
     /// The entry taps go to: the last one not closing.
     fn top_index(&self) -> usize {
         self.stack

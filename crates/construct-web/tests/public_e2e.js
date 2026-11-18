@@ -131,9 +131,20 @@ async function tool(name, args) {
   await page.waitForTimeout(1200);
   await page.screenshot({ path: out + '/public-pushed.png' });
   check(green(await pixel(page, 195, 600)), 'tapping a meal pushes its recipe from the copy');
+  check(page.url().endsWith('/webcook/meals/lentil-soup'), 'the recipe shows its own address: ' + page.url());
   await page.keyboard.press('Escape');
   await page.waitForTimeout(1200);
   check(!green(await pixel(page, 195, 600)), 'Back returns to the list');
+  check(page.url().endsWith('/webcook/meals'), 'and its address: ' + page.url());
+
+  // One recipe's address (decision `public-row-links`) opens it, and Back goes to the list.
+  await page.goto(base + '/webcook/meals/shakshuka');
+  await page.waitForSelector('body.ready', { timeout: 60000 });
+  await page.waitForTimeout(1200);
+  check(green(await pixel(page, 195, 600)), 'a recipe\'s address opens its recipe');
+  await page.goBack();
+  await page.waitForTimeout(1200);
+  check(!green(await pixel(page, 195, 600)), 'the browser\'s Back shows the list');
 
   // A link opens in a new tab and the page keeps working. Desktop Chrome runs the page's frame (and a pointerleave)
   // inside window.open as the tab opens; the client used to be holding itself there, panicked, and froze.
