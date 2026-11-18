@@ -1049,7 +1049,7 @@ pub fn tool_specs() -> Vec<Value> {
 
 /// The base URL visitors use: the host's chosen one (`CONSTRUCT_PUBLIC_URL`),
 /// else the MCP request's.
-fn base_url(headers: &HeaderMap) -> Option<String> {
+pub fn base_url(headers: &HeaderMap) -> Option<String> {
     if let Ok(u) = std::env::var("CONSTRUCT_PUBLIC_URL")
         && !u.trim().is_empty()
     {

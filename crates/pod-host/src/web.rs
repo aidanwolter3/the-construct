@@ -100,6 +100,9 @@ pub(crate) fn public_routes() -> Router<Arc<Host>> {
         .route("/s/{link}/image", get(public_image))
         .route("/@{handle}/{slug}", get(short_page))
         .route("/@{handle}/{slug}/view", get(short_view))
+        // Calendar feeds (decision `ical-feeds`): a subscriber's app reads
+        // the text the pod last rendered, never the pod.
+        .route("/ical/{file}", get(calendar_feed))
         .route("/@{handle}/{slug}/image", get(short_image))
         // The same pages as people's apps write them: a trailing slash, and
         // `@` sent as `%40`. Each redirects to the address above, so the
@@ -154,6 +157,7 @@ pub(crate) fn paused_routes() -> Router<Arc<Host>> {
         .route("/s/{link}/{*rest}", get(paused))
         .route("/@{handle}/{slug}", get(paused))
         .route("/@{handle}/{slug}/{*rest}", get(paused))
+        .route("/ical/{file}", get(paused))
 }
 
 /// The page a public link answers while sharing is paused.
@@ -174,6 +178,41 @@ async fn paused() -> Response {
     );
     h.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-cache"));
     h.insert(header::RETRY_AFTER, HeaderValue::from_static("3600"));
+    r
+}
+
+/// `GET /ical/<token>.ics`: a calendar feed's text as its pod last rendered
+/// it (decision `ical-feeds`), for a calendar app that subscribed to it.
+async fn calendar_feed(State(host): State<Arc<Host>>, Path(file): Path<String>) -> Response {
+    use pod_core::construct::share::Shelf;
+    let Some(token) = file
+        .strip_suffix(".ics")
+        .filter(|t| pod_core::ical::is_token(t))
+        .map(str::to_owned)
+    else {
+        return not_found();
+    };
+    let shelf = crate::shelf::HostShelf::new(host.store.clone()).with_public_links(true);
+    let found = host
+        .blocking(move |_| shelf.calendar_by_token(&token))
+        .await
+        .ok()
+        .and_then(Result::ok)
+        .flatten();
+    let Some(c) = found else {
+        return not_found();
+    };
+    let mut r = c.ics.into_response();
+    let h = r.headers_mut();
+    h.insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_static("text/calendar; charset=utf-8"),
+    );
+    h.insert(
+        header::CACHE_CONTROL,
+        HeaderValue::from_static("private, no-cache"),
+    );
+    h.insert("x-robots-tag", HeaderValue::from_static("noindex"));
     r
 }
 

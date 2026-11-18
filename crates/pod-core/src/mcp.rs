@@ -227,6 +227,8 @@ fn all_tools(pod: &Pod) -> Vec<Value> {
     // Public links, where the host serves them (decision `public-web-links`).
     if pod.shelf().is_some_and(|(_, s)| s.public_links_enabled()) {
         out.extend(crate::public_copy::tool_specs());
+        // Calendar feeds go out the same way (decision `ical-feeds`).
+        out.extend(crate::ical::tool_specs());
     }
     for a in pod.catalog().adapters() {
         out.extend(a.mcp_tools());
@@ -467,6 +469,10 @@ async fn call_tool(pod: &Pod, headers: &HeaderMap, params: &Value) -> Value {
     }
     // Public links (decision `public-web-links`).
     if let Some(r) = crate::public_copy::tool(pod, headers, name, &args).await {
+        return tool_result(r);
+    }
+    // Calendar feeds (decision `ical-feeds`).
+    if let Some(r) = crate::ical::tool(pod, headers, name, &args).await {
         return tool_result(r);
     }
     // Sharing between the server's pods (decision `sharing`).

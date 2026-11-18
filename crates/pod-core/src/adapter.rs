@@ -339,6 +339,19 @@ pub trait Source: Any + Send + Sync {
         crate::public_copy::PublicData::default()
     }
 
+    /// Calendar feeds (decision `ical-feeds`): the events `sources` (a
+    /// feed's sources, as the owner gave them) map from this source's data,
+    /// or a refusal naming what is wrong (`{"error", "detail"}`). Only what
+    /// a source maps goes into an event. `None`: this source makes none.
+    fn calendar_events<'a>(
+        &'a self,
+        pod: &'a Pod,
+        sources: &'a [serde_json::Value],
+    ) -> Option<BoxFuture<'a, Result<Vec<crate::ical::Event>, serde_json::Value>>> {
+        let _ = (pod, sources);
+        None
+    }
+
     fn share_inputs(
         &self,
         conn: &rusqlite::Connection,

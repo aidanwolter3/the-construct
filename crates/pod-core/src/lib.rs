@@ -15,6 +15,7 @@ pub mod adapter;
 pub mod components;
 pub mod construct;
 pub mod disk;
+pub mod ical;
 pub mod jacks;
 pub mod layouts;
 pub mod mcp;
@@ -450,6 +451,8 @@ impl AppState {
         }
         // Public links follow the data they copy (decision `public-web-links`).
         public_copy::watch(self);
+        // Calendar feeds follow their rows too (decision `ical-feeds`).
+        ical::watch(self);
         let weak = Arc::downgrade(self);
         rt.spawn(async move {
             loop {

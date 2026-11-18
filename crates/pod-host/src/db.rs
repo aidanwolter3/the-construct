@@ -171,6 +171,22 @@ const MIGRATIONS: &[Step] = &[
      CREATE UNIQUE INDEX public_copies_live_slug ON public_copies(owner_pod, slug)
          WHERE slug IS NOT NULL AND revoked_at IS NULL;",
     ),
+    // 9 (decision `ical-feeds`): calendar feeds' text, rendered by their pod
+    // and answered at `/ical/<token>.ics`. A revoked feed keeps its row
+    // without its text, so its token never answers again.
+    Step::sql(
+        "calendar_feeds",
+        "CREATE TABLE calendar_feeds (
+         token      TEXT PRIMARY KEY NOT NULL,
+         owner_pod  TEXT NOT NULL REFERENCES pods(id),
+         name       TEXT NOT NULL,
+         ics        TEXT NOT NULL,
+         created_at INTEGER NOT NULL,
+         updated_at INTEGER NOT NULL,
+         revoked_at INTEGER
+     );
+     CREATE INDEX calendar_feeds_owner ON calendar_feeds(owner_pod);",
+    ),
 ];
 
 /// What a credential is for (`credentials.kind`).

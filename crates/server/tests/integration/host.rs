@@ -2020,3 +2020,6 @@ mod web {
         assert_eq!(answer["error"], "public_links_off", "{answer}");
     }
 }
+
+/// Decision `ical-feeds`.
+mod calendar_feeds;
