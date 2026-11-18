@@ -1577,6 +1577,68 @@ mod web {
             .unwrap();
         assert_eq!(unknown.status(), StatusCode::NOT_FOUND);
 
+        // New rows go out without a review; a layout edited since doesn't.
+        let view = || async {
+            client()
+                .get(env.url(&format!("/s/{link}/view")))
+                .send()
+                .await
+                .unwrap()
+                .text()
+                .await
+                .unwrap()
+        };
+        let add = |t: &'static str| {
+            tool(
+                &env,
+                &key,
+                "add_row",
+                json!({ "collection": "recipes", "values": { "title": t, "notes": "for Dana's birthday" } }),
+            )
+        };
+        add("Pho").await;
+        let mut shown = false;
+        for _ in 0..100 {
+            if view().await.contains("Pho") {
+                shown = true;
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+        assert!(shown, "a new row reaches the page: {}", view().await);
+        let row_shows_notes = json!({ "type": "core://Page", "id": "recipes", "title": "Recipes <b>", "root":
+            { "type": "core://List", "query_key": "collection:recipes", "item_template":
+              { "type": "core://Column", "children": [
+                { "type": "core://Text", "style": "Body", "value_expr": "$item.title" },
+                { "type": "core://Text", "style": "Body", "value_expr": "$item.notes" } ] } } });
+        let edited = tool(
+            &env,
+            &key,
+            "update_layout",
+            json!({ "id": layout, "layout": row_shows_notes }),
+        )
+        .await;
+        assert!(edited.get("error").is_none(), "{edited}");
+        add("Dal").await;
+        // Past the refresh's settling time: the page keeps its reviewed copy.
+        tokio::time::sleep(Duration::from_secs(4)).await;
+        let held = view().await;
+        assert!(
+            !held.contains("birthday") && !held.contains("Dal"),
+            "an unreviewed layout went out: {held}"
+        );
+        // Shared again with a new review, the same link shows the edit.
+        let review = tool(&env, &key, "share_publicly", json!({ "layout": layout })).await;
+        let again = tool(
+            &env,
+            &key,
+            "share_publicly",
+            json!({ "layout": layout, "confirm": review["review_id"] }),
+        )
+        .await;
+        assert_eq!(again["link"], link.as_str(), "{again}");
+        assert!(view().await.contains("birthday"));
+
         // Revoked: gone at once.
         let gone = tool(&env, &key, "unshare_publicly", json!({ "link": link })).await;
         assert_eq!(gone["ok"], true, "{gone}");
