@@ -391,6 +391,8 @@ async fn file(base: &FsPath, name: &str) -> Option<(Vec<u8>, &'static str)> {
         "wasm" => "application/wasm",
         "css" => "text/css; charset=utf-8",
         "ttf" => "font/ttf",
+        "ico" => "image/x-icon",
+        "png" => "image/png",
         _ => return None,
     };
     let bytes = tokio::fs::read(base.join(name)).await.ok()?;
@@ -486,7 +488,7 @@ async fn page(State(host): State<Arc<Host>>, headers: HeaderMap) -> Response {
     }
 }
 
-/// `GET /web/<file>`: the client's script, WebAssembly and style; a hashed
+/// `GET /web/<file>`: the client's script, WebAssembly, style and icon; a hashed
 /// name is kept for good.
 async fn asset(
     State(host): State<Arc<Host>>,
