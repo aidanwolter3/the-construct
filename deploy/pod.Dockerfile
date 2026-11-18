@@ -50,6 +50,7 @@ RUN v=$(grep -A1 '^name = "wasm-bindgen"$' Cargo.lock | grep version | cut -d'"'
 COPY Cargo.toml Cargo.lock ./
 COPY crates ./crates
 COPY fake-pixelfed ./fake-pixelfed
+COPY assets/icon ./assets/icon
 COPY scripts/web_build.sh ./scripts/web_build.sh
 RUN scripts/web_build.sh /web
 

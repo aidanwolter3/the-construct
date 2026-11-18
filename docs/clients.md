@@ -106,7 +106,8 @@ the next reload picks up, a phone-sized window and logging out.
 - **Fonts and images** are fetched, not built in: the faces before the first frame, the symbol and emoji fallbacks
   after it (`/web/fonts/<file>`). Images of other sites go through the pod's proxy (`/web/image`).
 - **Caching**: `scripts/web_build.sh` names the script, WebAssembly and style by a hash of their content
-  (`app.<hash>.js`, `construct_web_bg.<hash>.wasm`, …) and the fonts by a `?v=<hash>`; those are cached for good
+  (`app.<hash>.js`, `construct_web_bg.<hash>.wasm`, the app icon's `favicon.<hash>.ico` and `icon.<hash>.png`, …)
+  and the fonts by a `?v=<hash>`; those are cached for good
   (`immutable`), so a reload downloads nothing but the page, which is revalidated (`no-cache` with an `ETag`, `304`
   when unchanged). A deploy changes the names, so the next load takes the new client (decision
   [`web-client-cache`](decisions/web-client-cache.md)).

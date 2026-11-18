@@ -1068,6 +1068,8 @@ mod web {
         std::fs::write(files.path().join("fonts/Face.ttf"), b"font").unwrap();
         std::fs::write(files.path().join("app.0123456789abcdef.js"), b"app").unwrap();
         std::fs::write(files.path().join("app.js"), b"app").unwrap();
+        std::fs::write(files.path().join("favicon.0123456789abcdef.ico"), b"ico").unwrap();
+        std::fs::write(files.path().join("icon.0123456789abcdef.png"), b"png").unwrap();
         std::fs::write(files.path().join("secret.txt"), b"no").unwrap();
         let env = env_with(HostConfig {
             web: Some(WebConfig {
@@ -1186,6 +1188,8 @@ mod web {
         for p in [
             "/web/app.0123456789abcdef.js",
             "/web/fonts/Face.ttf?v=0123abcd",
+            "/web/favicon.0123456789abcdef.ico",
+            "/web/icon.0123456789abcdef.png",
         ] {
             let r = get(p, None).await;
             assert_eq!(r.status(), StatusCode::OK, "{p}");
@@ -1207,6 +1211,19 @@ mod web {
             assert!(again.bytes().await.unwrap().is_empty(), "{p}");
             let other = get(p, Some("\"stale\"".into())).await;
             assert_eq!(other.status(), StatusCode::OK, "{p}");
+        }
+    }
+
+    #[tokio::test]
+    async fn the_icon_is_served_as_an_image() {
+        let (env, _files) = web_env().await;
+        for (p, kind) in [
+            ("/web/favicon.0123456789abcdef.ico", "image/x-icon"),
+            ("/web/icon.0123456789abcdef.png", "image/png"),
+        ] {
+            let r = client().get(env.url(p)).send().await.unwrap();
+            assert_eq!(r.status(), StatusCode::OK, "{p}");
+            assert_eq!(r.headers()["content-type"], kind, "{p}");
         }
     }
 
