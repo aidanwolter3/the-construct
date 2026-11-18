@@ -2,7 +2,9 @@
 // (scripts/web_e2e.sh starts one): an agent makes a made-up recipes collection and layout over MCP, reviews and
 // shares it; a visitor with no pod opens the page; a new row reaches it; a field the page doesn't show never does;
 // unsharing stops it. Then (decision `public-links-share-the-closure`) a list whose rows push their recipe is shared
-// with a short path: a visitor taps a row, the recipe shows, and Back returns. Screenshots go to the directory given.
+// with a short path: a visitor taps a row, the recipe shows, and Back returns. Last, a link opens in a new tab as
+// desktop Chrome opens one (running the page's frame inside window.open) and the page still answers taps after.
+// Screenshots go to the directory given.
 //   node crates/construct-web/tests/public_e2e.js <base url> <mcp key> <out dir>
 const { chromium } = require('playwright');
 const [base, key, out] = process.argv.slice(2);
@@ -132,6 +134,51 @@ async function tool(name, args) {
   await page.keyboard.press('Escape');
   await page.waitForTimeout(1200);
   check(!green(await pixel(page, 195, 600)), 'Back returns to the list');
+
+  // A link opens in a new tab and the page keeps working. Desktop Chrome runs the page's frame (and a pointerleave)
+  // inside window.open as the tab opens; the client used to be holding itself there, panicked, and froze.
+  const links = await tool('create_layout', { title: 'Links', feeds, layout: { type: 'core://Page', id: 'links',
+    title: 'Links', root: { type: 'core://Column', children: [
+      { type: 'core://Tappable', on_click: { intent: 'action.link.open', url: 'https://shop.example/' },
+        content: { type: 'core://Box', height_dp: 64, padding_h_dp: 16,
+          content: { type: 'core://Text', style: 'Title', value_expr: 'View' } } },
+      { type: 'core://List', query_key: 'collection:meals', item_template: { type: 'core://Tappable',
+        on_click: { intent: 'action.navigation.open', ref: recipe.id, params: { id: '$item.id' }, presentation: 'Push' },
+        content: { type: 'core://Box', height_dp: 64, padding_h_dp: 16,
+          content: { type: 'core://Text', style: 'Title', value_expr: '$item.name' } } } }] } } });
+  const linksReview = await tool('share_publicly', { layout: links.id, slug: 'links' });
+  await tool('share_publicly', { layout: links.id, slug: 'links', confirm: linksReview.review_id });
+  const shop = await browser.newPage({ viewport: { width: 390, height: 844 } });
+  shop.on('pageerror', (e) => errors.push(e.message));
+  await shop.context().route('https://shop.example/**', (r) => r.fulfill({ body: '<h1>Shop</h1>', contentType: 'text/html' }));
+  await shop.addInitScript(() => {
+    const pending = [];
+    const raf = window.requestAnimationFrame.bind(window);
+    window.requestAnimationFrame = (cb) => {
+      pending.push(cb);
+      return raf((t) => {
+        const i = pending.indexOf(cb);
+        if (i >= 0) { pending.splice(i, 1); cb(t); }
+      });
+    };
+    const open = window.open.bind(window);
+    window.open = (...a) => {
+      document.getElementById('construct').dispatchEvent(new PointerEvent('pointerleave', { pointerType: 'mouse', isPrimary: true }));
+      for (const cb of pending.splice(0)) cb(performance.now());
+      return open(...a);
+    };
+  });
+  await shop.goto(base + '/@webcook/links');
+  await shop.waitForSelector('body.ready', { timeout: 60000 });
+  await shop.waitForTimeout(800);
+  const popup = shop.waitForEvent('popup', { timeout: 5000 }).catch(() => null);
+  await shop.mouse.click(40, 14); // on "View": a lone Tappable is as wide as what it holds
+  const opened = await popup;
+  check(opened && opened.url() === 'https://shop.example/', 'a link opens in a new tab');
+  await shop.bringToFront();
+  await shop.mouse.click(195, 96);
+  await shop.waitForTimeout(1200);
+  check(green(await pixel(shop, 195, 600)), 'the page still answers taps after the link opened');
 
   check(errors.length === 0, 'no page errors' + (errors.length ? ': ' + errors.join('; ') : ''));
   await browser.close();

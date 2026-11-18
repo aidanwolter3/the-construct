@@ -809,6 +809,49 @@ struct App {
     /// `web-touch-fling`): the renderer's fling, as the Android app flings,
     /// and where it started.
     fling: Option<(Flinging, f32, f32)>,
+    /// Links to open in new tabs when the handler that tapped them lets the
+    /// app go.
+    links: Vec<String>,
+}
+
+/// The app, held by one event handler at a time. The browser can run the
+/// page's other handlers (and its frame) inside a call the app makes:
+/// Chrome draws a frame inside `window.open`. Those find the app held and
+/// skip, rather than panic, which would stop the frame loop for good.
+fn lease(app: &RefCell<App>) -> Option<Lease<'_>> {
+    app.try_borrow_mut().ok().map(|a| Lease(Some(a)))
+}
+
+/// A handler's hold on the app; letting go opens the links it tapped.
+struct Lease<'a>(Option<std::cell::RefMut<'a, App>>);
+
+impl std::ops::Deref for Lease<'_> {
+    type Target = App;
+    fn deref(&self) -> &App {
+        self.0.as_ref().expect("held until dropped")
+    }
+}
+
+impl std::ops::DerefMut for Lease<'_> {
+    fn deref_mut(&mut self) -> &mut App {
+        self.0.as_mut().expect("held until dropped")
+    }
+}
+
+impl Drop for Lease<'_> {
+    fn drop(&mut self) {
+        let links = self
+            .0
+            .as_mut()
+            .map(|a| std::mem::take(&mut a.links))
+            .unwrap_or_default();
+        // Let go first: the browser may run the page's handlers inside
+        // `window.open`, and they must find the app free.
+        self.0 = None;
+        for url in links {
+            let _ = window().open_with_url_and_target_and_features(&url, "_blank", "noopener");
+        }
+    }
 }
 
 /// When an event happened (seconds on the page's clock), not when it is
@@ -879,14 +922,14 @@ impl App {
 
     fn event(&mut self, e: Event) {
         let out = self.controller.handle(e);
-        // A link opens in a new tab, not over the pod.
+        // A link opens in a new tab, not over the pod, once the app is let
+        // go (`Lease`): the browser runs the page's code inside `window.open`.
         for effect in out.iter().flat_map(|o| &o.effects) {
             match effect {
                 construct_render::interact::Effect::OpenLink { url }
                     if url.starts_with("https://") || url.starts_with("http://") =>
                 {
-                    let _ =
-                        window().open_with_url_and_target_and_features(url, "_blank", "noopener");
+                    self.links.push(url.clone());
                 }
                 // Settings' "Leave pod on this device": this browser logs
                 // out (its session ends; the pod code still works) and asks
@@ -1093,6 +1136,7 @@ async fn mount(session: Session) -> Result<(), JsValue> {
         down: None,
         tracker: VelocityTracker::new(),
         fling: None,
+        links: Vec::new(),
     }));
     app.borrow_mut().resize();
     let _ = doc.body().map(|b| b.class_list().add_1("ready"));
@@ -1106,7 +1150,11 @@ async fn mount(session: Session) -> Result<(), JsValue> {
 
     listen(&window(), "resize", {
         let app = app.clone();
-        move |_: web_sys::Event| app.borrow_mut().resize()
+        move |_: web_sys::Event| {
+            if let Some(mut a) = lease(&app) {
+                a.resize();
+            }
+        }
     });
     listen(&canvas, "pointerdown", {
         let app = app.clone();
@@ -1115,7 +1163,9 @@ async fn mount(session: Session) -> Result<(), JsValue> {
                 return;
             }
             let (x, y) = (e.offset_x() as f32, e.offset_y() as f32);
-            let mut a = app.borrow_mut();
+            let Some(mut a) = lease(&app) else {
+                return;
+            };
             // A finger landing on a moving fling catches it: it stops, and
             // the touch is no tap.
             let caught = a.fling.take().is_some_and(|(f, _, _)| f.caught(secs()));
@@ -1129,7 +1179,9 @@ async fn mount(session: Session) -> Result<(), JsValue> {
     listen(&canvas, "pointermove", {
         let app = app.clone();
         move |e: PointerEvent| {
-            let mut a = app.borrow_mut();
+            let Some(mut a) = lease(&app) else {
+                return;
+            };
             let Some((x0, y0, _, ly, at, moved)) = a.down else {
                 // A mouse with no button down: what it rests over is drawn
                 // hovered (a finger never hovers).
@@ -1155,7 +1207,9 @@ async fn mount(session: Session) -> Result<(), JsValue> {
     listen(&canvas, "pointerup", {
         let app = app.clone();
         move |e: PointerEvent| {
-            let mut a = app.borrow_mut();
+            let Some(mut a) = lease(&app) else {
+                return;
+            };
             let Some((x, y, _, _, at, moved)) = a.down.take() else {
                 return;
             };
@@ -1178,13 +1232,19 @@ async fn mount(session: Session) -> Result<(), JsValue> {
     });
     listen(&canvas, "pointerleave", {
         let app = app.clone();
-        move |_: PointerEvent| app.borrow_mut().hover(None)
+        move |_: PointerEvent| {
+            if let Some(mut a) = lease(&app) {
+                a.hover(None);
+            }
+        }
     });
     // The browser took the touch over (or it left): no tap, no fling.
     listen(&canvas, "pointercancel", {
         let app = app.clone();
         move |_: PointerEvent| {
-            app.borrow_mut().down = None;
+            if let Some(mut a) = lease(&app) {
+                a.down = None;
+            }
         }
     });
     listen(&canvas, "wheel", {
@@ -1194,7 +1254,9 @@ async fn mount(session: Session) -> Result<(), JsValue> {
             let (x, y) = (e.offset_x() as f32, e.offset_y() as f32);
             // Lines (Firefox) to points.
             let k = if e.delta_mode() == 1 { 40.0 } else { 1.0 };
-            let mut a = app.borrow_mut();
+            let Some(mut a) = lease(&app) else {
+                return;
+            };
             if e.delta_x().abs() > e.delta_y().abs() {
                 a.event(Event::ScrollSideways {
                     x,
@@ -1216,15 +1278,19 @@ async fn mount(session: Session) -> Result<(), JsValue> {
         move |_: web_sys::Event| {
             let text = input.value();
             input.set_value("");
-            if !text.is_empty() {
-                app.borrow_mut().event(Event::Text(text));
+            if !text.is_empty()
+                && let Some(mut a) = lease(&app)
+            {
+                a.event(Event::Text(text));
             }
         }
     });
     listen(&window(), "keydown", {
         let app = app.clone();
         move |e: KeyboardEvent| {
-            let mut a = app.borrow_mut();
+            let Some(mut a) = lease(&app) else {
+                return;
+            };
             let typing = a.controller.focused().is_some();
             let shift = e.shift_key();
             let ev = match e.key().as_str() {
@@ -1256,9 +1322,16 @@ async fn mount(session: Session) -> Result<(), JsValue> {
     let tick: Rc<RefCell<Option<FrameCallback>>> = Rc::default();
     let again = tick.clone();
     *tick.borrow_mut() = Some(Closure::new(move || {
-        app.borrow_mut().frame();
+        // The next frame is asked for first: a frame that can't draw (or
+        // fails) must not end the loop, or the page freezes.
         if let Some(cb) = again.borrow().as_ref() {
             let _ = window().request_animation_frame(cb.as_ref().unchecked_ref());
+        }
+        // Busy: the browser ran this frame from inside a handler (Chrome
+        // draws a frame inside `window.open` as the new tab opens). The
+        // handler wakes the next one.
+        if let Some(mut a) = lease(&app) {
+            a.frame();
         }
     }));
     if let Some(cb) = tick.borrow().as_ref() {
