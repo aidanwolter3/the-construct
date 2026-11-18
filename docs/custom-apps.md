@@ -360,7 +360,8 @@ A collection can keep itself current from the web (decision
   only pages it has seen (a URL in the prompt or the rows, a search result, or a link on a page it read), so a page
   can't have it send the rows elsewhere in a URL (decision [`web-fetch-provenance`](decisions/web-fetch-provenance.md)).
   Its answer is checked against what it read: a link it never saw is dropped, and so is a line quoting three or more
-  words that are on no page it read; `web_fetch` lists each page's main pictures (`og:image`, JSON-LD `image`), so
+  words that are on no page it read (and a value the model ran on into the next fields, `..." ,"details":"...`,
+  is split back into them); `web_fetch` lists each page's main pictures (`og:image`, JSON-LD `image`), so
   an image field gets the store's own photo.
 - **Research per row** (decision [`research-per-row`](decisions/research-per-row.md)): an `agent` with `for_each:
   {collection, link, where?, from?, context?}` researches each row of another collection on its own (a shopping

@@ -303,6 +303,88 @@ fn stray_json_at(s: &str) -> Option<usize> {
     MARKERS.iter().filter_map(|m| s.find(m)).min()
 }
 
+/// Where, in `s`, a model ran the next fields of its row into this value as
+/// raw JSON (`...no all-black minimal." ,"details":"Pros ...`): the byte
+/// where the stray part starts and the name of the field it opens, which must
+/// be one of `names`.
+fn run_on_at<'a>(s: &str, names: &'a [String]) -> Option<(usize, &'a str)> {
+    let b = s.as_bytes();
+    let mut i = 0;
+    while let Some(q) = s[i..].find('"') {
+        let at = i + q;
+        // `"`, spaces, `,`, spaces, `"name"`, spaces, `:`
+        let mut j = at + 1;
+        while j < b.len() && b[j] == b' ' {
+            j += 1;
+        }
+        if j < b.len() && b[j] == b',' {
+            j += 1;
+            while j < b.len() && b[j] == b' ' {
+                j += 1;
+            }
+            if j < b.len() && b[j] == b'"' {
+                let rest = &s[j + 1..];
+                if let Some(end) = rest.find('"') {
+                    let name = &rest[..end];
+                    let after = rest[end + 1..].trim_start();
+                    if after.starts_with(':')
+                        && let Some(n) = names.iter().find(|n| n.as_str() == name)
+                    {
+                        return Some((at, n.as_str()));
+                    }
+                }
+            }
+        }
+        i = at + 1;
+    }
+    None
+}
+
+/// Split values a model ran on into the next fields (decision
+/// `research-per-row`): a text value holding `" ,"<field>": ...` is cut
+/// there, and the rest, read as JSON, gives those fields their values when
+/// the row has none. `names` are the row's fields. Answers how many values
+/// were split.
+pub fn split_run_on_fields(rows: &mut [Map<String, Value>], names: &[String]) -> usize {
+    let mut split = 0;
+    for row in rows.iter_mut() {
+        let keys: Vec<String> = row.keys().cloned().collect();
+        for k in keys {
+            let Some(s) = row.get(&k).and_then(Value::as_str).map(str::to_owned) else {
+                continue;
+            };
+            let Some((at, _)) = run_on_at(&s, names) else {
+                continue;
+            };
+            split += 1;
+            let head = s[..at].trim_end().to_owned();
+            // The rest: `,"details":"..."` and maybe more fields; read it as
+            // an object, closing what the model left open.
+            let tail = s[at + 1..].trim_start().trim_start_matches(',');
+            let found = ["}", "\"}"].iter().find_map(|close| {
+                serde_json::from_str::<Map<String, Value>>(&format!("{{{tail}{close}")).ok()
+            });
+            row.insert(
+                k.clone(),
+                if head.is_empty() {
+                    Value::Null
+                } else {
+                    json!(head)
+                },
+            );
+            for (n, v) in found.into_iter().flatten() {
+                let empty = row
+                    .get(&n)
+                    .is_none_or(|x| x.is_null() || x.as_str().is_some_and(|t| t.trim().is_empty()));
+                if names.contains(&n) && empty {
+                    row.insert(n, v);
+                }
+            }
+        }
+    }
+    split
+}
+
 /// Check rows against the text they came from: a URL that doesn't appear in
 /// `source` (the page, or the search results) is set to null, and text cut
 /// where stray JSON begins.
@@ -378,6 +460,41 @@ mod tests {
                 options: vec![],
             },
         ]
+    }
+
+    #[test]
+    fn a_value_run_on_into_the_next_fields_is_split_back() {
+        let names: Vec<String> = ["why", "details", "reviews", "url"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        let mut rows = vec![
+            json!({
+                "why": "Soft micromodal. Skip black; you said no all-black minimal.\" ,\"details\":\"Pros\\n+ Very soft\\nCons\\n- Pricey\",\"reviews\":\"\\\"Super soft\\\" (a.example)",
+                "details": null,
+                "reviews": "",
+                "url": "https://a.example/p"
+            })
+            .as_object()
+            .unwrap()
+            .clone(),
+            json!({"why": "A plain \"tee\", well made.", "details": "Pros"})
+                .as_object()
+                .unwrap()
+                .clone(),
+        ];
+        assert_eq!(split_run_on_fields(&mut rows, &names), 1);
+        assert_eq!(
+            rows[0]["why"],
+            "Soft micromodal. Skip black; you said no all-black minimal."
+        );
+        assert_eq!(rows[0]["details"], "Pros\n+ Very soft\nCons\n- Pricey");
+        assert_eq!(rows[0]["reviews"], "\"Super soft\" (a.example)");
+        assert_eq!(rows[0]["url"], "https://a.example/p");
+        assert_eq!(
+            rows[1]["why"], "A plain \"tee\", well made.",
+            "quotes in prose stay"
+        );
     }
 
     #[test]
