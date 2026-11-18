@@ -255,7 +255,23 @@ impl Provider {
             Self::Brave { .. } => {
                 let v: Value = serde_json::from_str(body)
                     .map_err(|_| "Brave's answer is not JSON".to_owned())?;
-                json_results(&v["web"]["results"], "description")
+                let mut out = json_results(&v["web"]["results"], "description");
+                // Brave can attach a result's product data (schema.org
+                // offers): its price and stock join the snippet, for
+                // shops whose pages refuse the pod (decision
+                // `search-product-data`).
+                if let Some(list) = v["web"]["results"].as_array() {
+                    for (r, raw) in out.iter_mut().zip(list) {
+                        let facts = product_facts(raw);
+                        if !facts.is_empty() {
+                            if !r.snippet.is_empty() {
+                                r.snippet.push_str(" · ");
+                            }
+                            r.snippet.push_str(&facts);
+                        }
+                    }
+                }
+                out
             }
             Self::Searxng { .. } => {
                 let v: Value = serde_json::from_str(body).map_err(|_| {
@@ -277,6 +293,73 @@ fn clean(s: &str) -> String {
         .split_whitespace()
         .collect::<Vec<_>>()
         .join(" ")
+}
+
+/// The keys of a Brave result's `product`, `schemas` and `extra_snippets`
+/// worth a model's reading: prices and stock.
+const PRODUCT_KEYS: &[&str] = &[
+    "price",
+    "lowPrice",
+    "highPrice",
+    "original_price",
+    "priceCurrency",
+    "availability",
+];
+/// At most this many product facts per result.
+const MAX_FACTS: usize = 8;
+
+/// A Brave result's price and stock facts (`price: 74.95 · priceCurrency:
+/// USD`), from its `product` and `schemas` (schema.org objects, read
+/// wherever the keys sit), then its `extra_snippets` that name a price.
+/// Empty when it has none.
+fn product_facts(raw: &Value) -> String {
+    let mut facts: Vec<String> = Vec::new();
+    for v in [&raw["product"], &raw["schemas"]] {
+        collect_facts(v, &mut facts, 0);
+    }
+    if let Some(extra) = raw["extra_snippets"].as_array() {
+        for e in extra.iter().filter_map(Value::as_str) {
+            let e = clean(e);
+            if e.contains('$') && facts.len() < MAX_FACTS && !facts.contains(&e) {
+                facts.push(e);
+            }
+        }
+    }
+    facts.join(" · ")
+}
+
+fn collect_facts(v: &Value, facts: &mut Vec<String>, depth: usize) {
+    if depth > 6 || facts.len() >= MAX_FACTS {
+        return;
+    }
+    match v {
+        Value::Array(a) => a.iter().for_each(|x| collect_facts(x, facts, depth + 1)),
+        Value::Object(o) => {
+            for (k, x) in o {
+                if facts.len() >= MAX_FACTS {
+                    return;
+                }
+                let text = match x {
+                    Value::String(t) => Some(clean(t)),
+                    Value::Number(n) => Some(n.to_string()),
+                    _ => None,
+                };
+                match text {
+                    Some(t) if !t.is_empty() && PRODUCT_KEYS.contains(&k.as_str()) => {
+                        let t = t
+                            .trim_start_matches("https://schema.org/")
+                            .trim_start_matches("http://schema.org/");
+                        let fact = format!("{k}: {t}");
+                        if !facts.contains(&fact) {
+                            facts.push(fact);
+                        }
+                    }
+                    _ => collect_facts(x, facts, depth + 1),
+                }
+            }
+        }
+        _ => {}
+    }
 }
 
 fn json_results(list: &Value, snippet_key: &str) -> Vec<SearchResult> {
@@ -567,6 +650,16 @@ mod tests {
         assert_eq!(r.len(), 1);
         assert_eq!(r[0].title, "AeroPress Filters");
         assert_eq!(r[0].snippet, "350 count");
+        // Product data: its price and stock join the snippet.
+        let brave = r#"{"web":{"results":[{"title":"541 Jeans","url":"https://shop.example/541","description":"Athletic taper",
+            "product":{"name":"541","offers":[{"price":"74.95","priceCurrency":"USD","url":"https://shop.example/541"}]},
+            "schemas":[{"@type":"Product","offers":{"@type":"Offer","price":74.95,"availability":"https://schema.org/InStock"}}],
+            "extra_snippets":["Free returns","Now $74.95, was $98"]}]}}"#;
+        let r = Provider::Brave { key: "k".into() }.parse(brave, 5).unwrap();
+        assert_eq!(
+            r[0].snippet,
+            "Athletic taper · price: 74.95 · priceCurrency: USD · availability: InStock · Now $74.95, was $98"
+        );
         let sx = r#"{"results":[{"title":"Soap","url":"https://soap.example/bar","content":"Lavender"}]}"#;
         let r = Provider::Searxng {
             base_url: "https://s.example".into(),

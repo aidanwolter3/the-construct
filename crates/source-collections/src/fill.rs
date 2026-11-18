@@ -1738,9 +1738,17 @@ async fn run_fetch(
                 .collect();
             (Ok(found), key)
         } else if let Some(web) = &web {
+            // `every` searches afresh each run: a price can change within
+            // the search cache's day.
+            let fresh = web_extract::search::SearchCache::default();
+            let cache = if refresh == crate::filler::Refresh::Every {
+                &fresh
+            } else {
+                &web.cache
+            };
             let results = match web_extract::search::search(
                 &web.hosts,
-                &web.cache,
+                cache,
                 &web.client,
                 &web.provider,
                 &src,
@@ -1758,14 +1766,9 @@ async fn run_fetch(
                     continue;
                 }
             };
-            let key = hash_of(
-                results
-                    .iter()
-                    .map(|x| x.url.as_str())
-                    .collect::<Vec<_>>()
-                    .join("\n")
-                    .as_bytes(),
-            );
+            // What the model would read: a new price in a snippet asks it
+            // again, the same results don't.
+            let key = hash_of(web_extract::search::results_text(&results).as_bytes());
             if !force_all && prev_key.as_deref() == Some(key.as_str()) {
                 continue;
             }
