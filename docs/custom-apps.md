@@ -155,6 +155,37 @@ admin pod: a temporary pod can't share a public page (decision [`web-on-staging`
   does is left out, and so are built-in layouts (Settings, the inbox). A copy holds at most 16 layouts and 2 MiB.
 - `list_public_links` lists them; `unshare_publicly {link}` stops one at once and its copy leaves the server.
 
+### Calendar feeds
+
+Where the server serves public links (the same setting), Claude can give a calendar app a private `.ics` URL of
+chosen rows, such as Proton Calendar's "Add calendar from link" (decision [`ical-feeds`](decisions/ical-feeds.md)).
+A pod keeps up to five feeds; each lists up to ten sources:
+
+```json
+{ "name": "mine", "title": "My plans", "sources": [
+  { "collection": "focus_days", "start": "date", "title": "{area} day" },
+  { "collection": "workouts", "start": "date", "time": "time", "end_time": "ends", "title": "{kind}" },
+  { "collection": "events", "where": { "field": "going", "equals": true },
+    "start": "start", "end": "end", "title": "{title}", "location": "{venue}" },
+  { "collection": "one_offs", "start": "start", "end": "end", "title": "{title}",
+    "location": "{location}", "description": "{notes}" } ] }
+```
+
+- `start` is a date or datetime field; a date with no time is an all-day event. `time` and `end_time` are text
+  fields read as "8:00 AM", "8am", "15:45" or "09:00"; `end` a date or datetime field; `duration_minutes` a number
+  or a number field. A timed event with no end lasts an hour. `where` is a view's. Times without an offset are read
+  in the pod's time zone (`set_time_zone`) and written in UTC.
+- `title`, `location` and `description` are templates of the row's fields. Only what they and the times read
+  goes into the feed: no other field of a row leaves the pod.
+- `set_calendar_feed {name, title?, sources}` answers a review (every title, location and description a
+  subscriber would read, and the next ten events) and publishes nothing; with `confirm: <review_id>` the feed goes
+  out and answers its `url`, `/ical/cal-….ics`. Events from 30 days ago on are included, and the feed is rendered
+  again whenever its rows change. An edited row keeps its event's UID, so the calendar updates it in place.
+- `list_calendar_feeds` lists them with their URLs; `rotate_calendar_feed {name}` gives one a new URL (the old one
+  stops at once; subscribe again); `revoke_calendar_feed {name}` stops one.
+- An event that no filler fetches (one from an email) goes in a plain collection, such as `one_offs` above, with
+  `add_row`; a collection a `replace` filler fills can't hold hand-added rows.
+
 ## Collections
 
 Collections is a built-in data source (`crates/source-collections`) that stores any collection Claude declares. Claude

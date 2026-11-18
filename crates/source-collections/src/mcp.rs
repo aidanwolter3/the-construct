@@ -115,7 +115,10 @@ insert-from-query: for each row of a source collection matching where, it finds 
 by match and adds a child row to another collection (or, with delete: true, deletes the rows of this collection \
 matching where, e.g. a grocery list's \"Clear bag\"; or, with only update, updates them, e.g. the \
 notifications' \"Mark all read\"); run it with run_action, or from a layout with \
-action.mutation.optimistic posting to /v1/collections/<collection>/actions/<action>; undo_edit reverts a call.";
+action.mutation.optimistic posting to /v1/collections/<collection>/actions/<action>; undo_edit reverts a call. \
+A calendar app (Proton Calendar's Add calendar from link) can subscribe to rows: set_calendar_feed, where the server \
+lists it, maps rows of collections to events (start, end or time fields, title templates); an event the user \
+mentions that no filler fetches goes in a plain collection that is one of the feed's sources, with add_row.";
 
 fn tool(name: &str, description: &str, properties: Value, required: &[&str]) -> Value {
     json!({

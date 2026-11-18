@@ -251,8 +251,24 @@ pub trait Shelf: Send + Sync {
     fn revoke_public(&self, _pod: &str, _link: &str) -> Result<bool, ShelfError> {
         Ok(false)
     }
+
+    /// Put a calendar feed's text (decision `ical-feeds`): a new token, or
+    /// the next text of a live one; a revoked token stays revoked.
+    fn put_calendar(&self, _c: CalendarCopy) -> Result<(), ShelfError> {
+        Err(ShelfError::Store("public links are off".into()))
+    }
+    /// A live calendar feed by its token.
+    fn calendar_by_token(&self, _token: &str) -> Result<Option<CalendarCopy>, ShelfError> {
+        Ok(None)
+    }
+    /// Revoke the pod's live feed: its text leaves the host. False when
+    /// there was none.
+    fn revoke_calendar(&self, _pod: &str, _token: &str) -> Result<bool, ShelfError> {
+        Ok(false)
+    }
 }
 
+pub use crate::ical::CalendarCopy;
 pub use crate::public_copy::PublicCopy;
 
 fn refuse(error: &str, detail: impl Into<String>) -> Value {

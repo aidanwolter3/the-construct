@@ -50,6 +50,7 @@ pub mod actions;
 pub mod agent;
 pub mod alerts;
 pub mod bindings;
+pub mod calendar;
 pub mod changes;
 pub mod compute;
 pub mod db;
@@ -591,6 +592,15 @@ impl Source for CollectionsAdapter {
             uris: vec!["collections://"],
             queries: vec!["collection:"],
         }
+    }
+
+    /// Calendar feeds of rows (decision `ical-feeds`).
+    fn calendar_events<'a>(
+        &'a self,
+        pod: &'a Pod,
+        sources: &'a [Value],
+    ) -> Option<BoxFuture<'a, Result<Vec<pod_core::ical::Event>, Value>>> {
+        Some(Box::pin(calendar::events(pod, sources)))
     }
 
     fn share_inputs(

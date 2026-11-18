@@ -6,7 +6,7 @@
 use std::sync::Arc;
 
 use pod_core::construct::share::{
-    NewVersion, PublicCopy, Publication, Shelf, ShelfError, VISIBILITY_LINK, new_link,
+    CalendarCopy, NewVersion, PublicCopy, Publication, Shelf, ShelfError, VISIBILITY_LINK, new_link,
 };
 use pod_core::util::now_secs;
 use rusqlite::{Connection, OptionalExtension, params};
@@ -113,6 +113,7 @@ pub(crate) fn forget_pod(conn: &Connection, pod_id: &str) -> rusqlite::Result<()
     )?;
     conn.execute("DELETE FROM publications WHERE owner_pod = ?1", [pod_id])?;
     conn.execute("DELETE FROM public_copies WHERE owner_pod = ?1", [pod_id])?;
+    conn.execute("DELETE FROM calendar_feeds WHERE owner_pod = ?1", [pod_id])?;
     conn.execute("DELETE FROM handles WHERE pod_id = ?1", [pod_id])?;
     collect_garbage(conn)?;
     Ok(())
@@ -448,6 +449,56 @@ impl Shelf for HostShelf {
             .map_err(err)?;
         Ok(n > 0)
     }
+
+    fn put_calendar(&self, c: CalendarCopy) -> Result<(), ShelfError> {
+        self.store
+            .conn()
+            .execute(
+                "INSERT INTO calendar_feeds (token, owner_pod, name, ics, created_at, updated_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?5)
+                 ON CONFLICT(token) DO UPDATE SET name = ?3, ics = ?4, updated_at = ?5
+                 WHERE owner_pod = ?2 AND revoked_at IS NULL",
+                params![c.token, c.owner_pod, c.name, c.ics, now_secs()],
+            )
+            .map_err(err)?;
+        Ok(())
+    }
+
+    fn calendar_by_token(&self, token: &str) -> Result<Option<CalendarCopy>, ShelfError> {
+        self.store
+            .conn()
+            .query_row(
+                "SELECT token, owner_pod, name, ics, created_at, updated_at, revoked_at
+                 FROM calendar_feeds WHERE token = ?1 AND revoked_at IS NULL",
+                [token],
+                |r| {
+                    Ok(CalendarCopy {
+                        token: r.get(0)?,
+                        owner_pod: r.get(1)?,
+                        name: r.get(2)?,
+                        ics: r.get(3)?,
+                        created_at: r.get(4)?,
+                        updated_at: r.get(5)?,
+                        revoked_at: r.get(6)?,
+                    })
+                },
+            )
+            .optional()
+            .map_err(err)
+    }
+
+    fn revoke_calendar(&self, pod: &str, token: &str) -> Result<bool, ShelfError> {
+        let n = self
+            .store
+            .conn()
+            .execute(
+                "UPDATE calendar_feeds SET revoked_at = ?3, updated_at = ?3, ics = ''
+                 WHERE token = ?1 AND owner_pod = ?2 AND revoked_at IS NULL",
+                params![token, pod, now_secs()],
+            )
+            .map_err(err)?;
+        Ok(n > 0)
+    }
 }
 
 #[cfg(test)]
@@ -584,6 +635,41 @@ mod tests {
             .unwrap();
         forget_pod(&store.conn(), "a").unwrap();
         assert!(shelf.public_of_pod("a").unwrap().is_empty());
+    }
+
+    /// Decision `ical-feeds`: a feed's text is kept per token, updated in
+    /// place by its pod only, gone once revoked (a refresh can't bring a
+    /// revoked token back) or its pod is.
+    #[test]
+    fn calendar_feeds_update_revoke_and_go_with_their_pod() {
+        let (shelf, store) = shelf();
+        let shelf = shelf.with_public_links(true);
+        let feed = |token: &str, ics: &str| CalendarCopy {
+            token: token.into(),
+            owner_pod: "a".into(),
+            name: "mine".into(),
+            ics: ics.into(),
+            created_at: 0,
+            updated_at: 0,
+            revoked_at: None,
+        };
+        let t = "cal-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        shelf.put_calendar(feed(t, "one")).unwrap();
+        shelf.put_calendar(feed(t, "two")).unwrap();
+        assert_eq!(shelf.calendar_by_token(t).unwrap().unwrap().ics, "two");
+        let mut theirs = feed(t, "hijacked");
+        theirs.owner_pod = "b".into();
+        shelf.put_calendar(theirs).unwrap();
+        assert_eq!(shelf.calendar_by_token(t).unwrap().unwrap().ics, "two");
+        assert!(!shelf.revoke_calendar("b", t).unwrap());
+        assert!(shelf.revoke_calendar("a", t).unwrap());
+        assert!(shelf.calendar_by_token(t).unwrap().is_none());
+        shelf.put_calendar(feed(t, "three")).unwrap();
+        assert!(shelf.calendar_by_token(t).unwrap().is_none());
+        let u = "cal-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+        shelf.put_calendar(feed(u, "x")).unwrap();
+        forget_pod(&store.conn(), "a").unwrap();
+        assert!(shelf.calendar_by_token(u).unwrap().is_none());
     }
 
     /// Decision `public-links-share-the-closure`: a chosen short path

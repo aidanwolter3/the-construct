@@ -127,6 +127,17 @@ a page saying sharing is paused, and the copies stay stored. A page address with
 Pods make and revoke them with the MCP tools `share_publicly`, `list_public_links` and `unshare_publicly`
 ([custom-apps.md](custom-apps.md#public-links-for-people-without-a-pod)).
 
+**Calendar feeds** (decision [`ical-feeds`](decisions/ical-feeds.md)), under the same settings: a calendar app
+subscribes to the text the pod last rendered, never reaching the pod. With `CONSTRUCT_PUBLIC_WEB` unset it answers
+503 and the feeds stay stored.
+
+| Route | |
+|---|---|
+| `GET /ical/<token>.ics` *public* | The feed (`text/calendar; charset=utf-8`, RFC 5545: CRLF lines folded at 75 octets, times in UTC or whole days). 404 for an unknown, revoked or rotated token. |
+
+Pods make, list, rotate and revoke them with the MCP tools `set_calendar_feed`, `list_calendar_feeds`,
+`rotate_calendar_feed` and `revoke_calendar_feed` ([custom-apps.md](custom-apps.md#calendar-feeds)).
+
 ## Development and test routes
 
 | Call | Answer |
