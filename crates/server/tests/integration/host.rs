@@ -1296,6 +1296,45 @@ mod web {
         );
     }
 
+    /// Decision `web-sessions-share-sign-ins`: typing the pod code in a
+    /// browser starts it signed in where the code is, on the same server;
+    /// logging the browser out leaves the code's sign-in alone.
+    #[tokio::test]
+    async fn a_browser_starts_with_the_pod_codes_sign_ins() {
+        let (env, _files) = web_env().await;
+        let code = env.create("shared").await;
+        sign_in(&env, &code).await;
+        let cookie = open(&env, &code, true).await.1.expect("a cookie");
+        let cookie = cookie.split(';').next().unwrap().to_owned();
+        let sign_ins = client()
+            .get(env.url("/v1/auth/sign-ins"))
+            .header("cookie", &cookie)
+            .header("x-construct-client", "web")
+            .send()
+            .await
+            .unwrap()
+            .json::<Value>()
+            .await
+            .unwrap();
+        let pixelfed = &sign_ins["sign_ins"][0];
+        assert_eq!(pixelfed["id"], "pixelfed", "{sign_ins}");
+        assert_eq!(
+            pixelfed["server"].as_str().map(|s| s.trim_end_matches('/')),
+            Some(env.fake.url.trim_end_matches('/')),
+            "the server the code signed in to: {sign_ins}"
+        );
+
+        client()
+            .post(env.url("/web/logout"))
+            .header("cookie", &cookie)
+            .header("x-construct-client", "web")
+            .send()
+            .await
+            .unwrap();
+        let (_, _, own) = get(&env.url("/v1/auth/sign-ins"), Some(&code)).await;
+        assert_eq!(own["sign_ins"][0]["id"], "pixelfed", "{own}");
+    }
+
     #[tokio::test]
     async fn the_image_proxy_needs_a_session_and_a_public_url() {
         let (env, _files) = web_env().await;

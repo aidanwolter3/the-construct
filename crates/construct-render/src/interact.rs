@@ -3339,6 +3339,16 @@ impl Session {
                 vec![Effect::Focused { field }]
             }
             Some(Tap::Intent { intent }) => match self.bind_form(&intent) {
+                // A screen of the layout in a panel (its post, its New
+                // post): opened from that layout, not the one under it.
+                Some(bound) if self.panel_screen(&node, &bound).is_some() => {
+                    let mut out = Vec::new();
+                    if let Some((layout, uri)) = self.panel_screen(&node, &bound) {
+                        self.open_screen_from(&uri, Some(&layout), &mut out);
+                    }
+                    moved_only = self.merges == merges;
+                    out
+                }
                 Some(bound) if panel_intent(&bound) && self.panel_slot_of(&node).is_some() => {
                     let mut out = Vec::new();
                     self.in_panels(&node, &bound, &mut out);
@@ -4409,6 +4419,29 @@ impl Session {
         None
     }
 
+    /// A tapped screen open (`action.navigation.open` of a `target_uri`, no
+    /// layout) inside panel k of a host: that panel's layout and the
+    /// address, when one of its screens has the route. `None` elsewhere (the
+    /// top entry's screens take it, as before).
+    fn panel_screen(&self, node: &SemanticNode, intent: &Value) -> Option<(String, String)> {
+        if intent["intent"] != "action.navigation.open"
+            || intent["layout"].as_str().is_some_and(|l| !l.is_empty())
+        {
+            return None;
+        }
+        let uri = intent["target_uri"].as_str().filter(|t| !t.is_empty())?;
+        let (host, slot) = self.panel_slot_of(node)?;
+        let e = &self.stack[self.top_index()];
+        let layout = &e.panels.get(&host)?.get(slot.checked_sub(1)?)?.layout;
+        let UiNode::Page { screens, .. } = self.layouts.get(layout)? else {
+            return None;
+        };
+        screens
+            .iter()
+            .any(|s| match_route(&s.route, uri).is_some())
+            .then(|| (layout.clone(), uri.to_owned()))
+    }
+
     /// A push or Back tapped inside a panel host: the push opens a panel
     /// right of the column it came from (closing those past it), and Back
     /// in a panel closes it and those past it.
@@ -4497,15 +4530,29 @@ impl Session {
     /// Opens the screen of the top layout whose route matches `uri`, loading
     /// its data; false when no screen matches.
     fn open_screen(&mut self, uri: &str, out: &mut Vec<Effect>) -> bool {
+        self.open_screen_from(uri, None, out)
+    }
+
+    /// [`Session::open_screen`] from the screens of `from` (a layout shown
+    /// in a panel of the top entry) instead of the top entry's: the screen
+    /// is pushed over the whole window.
+    fn open_screen_from(&mut self, uri: &str, from: Option<&str>, out: &mut Vec<Effect>) -> bool {
         let top = &self.stack[self.top_index()];
-        let Some((screen, route)) = top
-            .screens
+        let (id, screens, frame, size) = match from {
+            Some(layout) => match self.layouts.get(layout) {
+                Some(UiNode::Page { screens, .. }) => {
+                    (layout.to_owned(), screens.clone(), Frame::Full, None)
+                }
+                _ => return false,
+            },
+            None => (top.id.clone(), top.screens.clone(), top.frame, top.size),
+        };
+        let Some((screen, route)) = screens
             .iter()
             .find_map(|s| match_route(&s.route, uri).map(|r| (s.clone(), r)))
         else {
             return false;
         };
-        let (id, screens, frame, size) = (top.id.clone(), top.screens.clone(), top.frame, top.size);
         let mut root = serde_json::to_value(&screen.root).unwrap_or(Value::Null);
         bind_route(&mut root, &route);
         let Ok(root) = serde_json::from_value::<UiNode>(root) else {

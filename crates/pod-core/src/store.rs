@@ -27,7 +27,11 @@ pub fn pod_setting_on(tx: &Connection, key: &str) -> rusqlite::Result<Option<Str
 
 use crate::util::now_secs;
 
-fn attach_sign_in_on(conn: &Connection, token_hash: &str, sign_in: &str) -> rusqlite::Result<()> {
+pub(crate) fn attach_sign_in_on(
+    conn: &Connection,
+    token_hash: &str,
+    sign_in: &str,
+) -> rusqlite::Result<()> {
     conn.execute(
         "INSERT OR IGNORE INTO session_sign_ins (token_hash, provider, created_at)
          VALUES (?1, ?2, ?3)",
