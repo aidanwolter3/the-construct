@@ -394,7 +394,7 @@ A collection can keep itself current from the web (decision
   from rows a person wrote (decision [`agents-cap-v3`](decisions/agents-cap-v3.md), issue #243).
 - **Alerts** notify once when a row matches: `any` / `all` / `none` phrases, a filler, days of the week, a window on a
   date field. Rows are served with `alert_matched` and `alert_names`. With `repeat: true` a row that stops matching
-  is forgotten, so it notifies again the next time it matches (a deal field an `expr` fills from today's price).
+  is forgotten (its notification removed), so it notifies again the next time it matches (a deal field an `expr` fills from today's price).
 
 | A layout uses | |
 |---|---|

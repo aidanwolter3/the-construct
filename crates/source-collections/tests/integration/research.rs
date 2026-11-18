@@ -386,9 +386,9 @@ async fn a_repeating_alert_notifies_each_time_a_row_comes_back_into_a_match() {
     )
     .await;
     let id = create(&pod, "watch", json!({"name": "Jeans", "price": 80})).await;
-    // A notification goes when its row stops matching (decision
-    // `notifications-follow-their-alerts`); with `repeat` the next drop
-    // notifies again.
+    // With `repeat`, a row that stops matching loses its (stale)
+    // notification, and the next drop notifies again: one notification, the
+    // latest.
     let notified = |pod: &Pod| pod.stored_notifications().unwrap().len();
     for (now, want) in [(78, 0), (65, 1), (60, 1), (79, 0), (64, 1)] {
         update(&pod, "watch", json!({"id": id, "price_now": now})).await;
