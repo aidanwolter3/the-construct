@@ -368,7 +368,7 @@ A collection can keep itself current from the web (decision
   the turns before it back), and the second-to-last request tells the model to save the rows it has.
 - **Research per row** (decision [`research-per-row`](decisions/research-per-row.md)): an `agent` with `for_each:
   {collection, link, where?, from?, context?}` researches each row of another collection on its own (a shopping
-  list's items), one model call each, counted toward `fills_per_day` and the pod's limit, at most 10 a fill. The
+  list's items), one model call each, counted toward `fills_per_day` and the pod's limit as it is made (a fill that times out still counts its calls), at most 10 a fill. The
   request is the prompt, the row's fields (`from`, default every field but true/false ones and refs) and the
   `context` rows (`[{collection, where?, fields?, limit?}]`: the owner's preferences); its rows here are that
   row's answer (`replace` among them only, by `key`), linked back through `link`, a ref field the pod sets. A row

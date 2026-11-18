@@ -23,6 +23,8 @@ struct Researcher {
     /// `(text in the request, rows)`.
     answers: Mutex<Vec<(String, Vec<Value>)>>,
     asked: Mutex<Vec<(String, usize)>>,
+    /// A request with this text never answers (a research that runs on).
+    hang: Mutex<Option<String>>,
 }
 
 impl FillAgent for Researcher {
@@ -32,6 +34,10 @@ impl FillAgent for Researcher {
                 .lock()
                 .unwrap()
                 .push((req.prompt.to_owned(), req.current.len()));
+            let hang = self.hang.lock().unwrap().clone();
+            if hang.is_some_and(|h| req.prompt.contains(h.as_str())) {
+                std::future::pending::<()>().await;
+            }
             let rows = self
                 .answers
                 .lock()
@@ -448,4 +454,39 @@ async fn with_refresh_every_a_row_is_researched_again_only_when_its_interval_has
     // A refresh asks for every row again.
     fill::fill(&pod, "options", &filler, true).await;
     assert_eq!(agent.asked.lock().unwrap().len(), 5);
+}
+
+/// A fill that runs past its time still spent the model calls it made:
+/// they count toward the filler's `fills_per_day` (and the pod's), so a
+/// research that never ends can't be started again without limit.
+#[tokio::test(start_paused = true)]
+async fn a_fill_that_times_out_counts_its_calls() {
+    let agent = Arc::new(Researcher::default());
+    let pod = pod(agent.clone());
+    let filler = define(&pod, 2).await;
+    *agent.answers.lock().unwrap() = vec![("Lamp".into(), vec![option("lamps", 40)])];
+    *agent.hang.lock().unwrap() = Some("Rug".into());
+    create(&pod, "items", json!({"name": "Lamp"})).await;
+    create(&pod, "items", json!({"name": "Rug"})).await;
+    // The research the new rows start, or this one: it times out on the rug
+    // (the paused clock runs on while nothing else can).
+    loop {
+        match fill::fill(&pod, "options", &filler, false).await {
+            Outcome::Busy => tokio::time::sleep(std::time::Duration::from_millis(10)).await,
+            _ if agent.asked.lock().unwrap().len() >= 2 => break,
+            _ => tokio::time::sleep(std::time::Duration::from_millis(10)).await,
+        }
+    }
+    // Both calls counted: the next fill researches nothing more today.
+    let out = loop {
+        match fill::fill(&pod, "options", &filler, false).await {
+            Outcome::Busy => tokio::time::sleep(std::time::Duration::from_millis(10)).await,
+            out => break out,
+        }
+    };
+    let Outcome::Failed(why) = &out else {
+        panic!("{out:?}")
+    };
+    assert!(why.contains("already researched 2 rows today"), "{why}");
+    assert_eq!(agent.asked.lock().unwrap().len(), 2, "no row asked again");
 }
