@@ -12,7 +12,10 @@
 //!   `where.field` (or each `where[].field`);
 //! - a `core://Text` or `core://Conditional` `count`'s `where[].field` when
 //!   its `query_key` is `collection:<c>`;
-//! - `${collections://<c>/...#<f>}`;
+//! - `${collections://<c>/<id>#<f>}`; `${collections://<c>/fillers/<id>#<f>}`
+//!   and `${collections://<c>/alerts/<id>#<f>}` name a field of a filler's
+//!   or an alert's entity instead ([`crate::db::FILLER_FIELDS`],
+//!   [`crate::db::ALERT_FIELDS`]);
 //! - a mutation of `collections://<c>/...` (or of `$item.uri` in such a
 //!   list): its `field`, `also[].field` and `entity.<f>` in `value_expr`;
 //!   a create's `entity` keys;
@@ -50,6 +53,26 @@ fn collection_of_uri(uri: &str) -> Option<&str> {
     let rest = uri.trim().strip_prefix("collections://")?;
     let c = rest.split('/').next().unwrap_or("");
     (!c.is_empty()).then_some(c)
+}
+
+/// What a `collections://<c>/...` URI names: a row, a filler or an alert.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Named {
+    Row,
+    Filler,
+    Alert,
+}
+
+/// The kind of entity `uri` (`collections://<c>/<rest>`) names: a filler
+/// is `fillers/<id>`, an alert `alerts/<id>`, anything else a row.
+fn named_by_uri(uri: &str) -> Named {
+    let rest = uri.trim().strip_prefix("collections://").unwrap_or("");
+    let mut parts = rest.split('/').skip(1);
+    match (parts.next(), parts.next()) {
+        (Some("fillers"), Some(id)) if !id.is_empty() => Named::Filler,
+        (Some("alerts"), Some(id)) if !id.is_empty() => Named::Alert,
+        _ => Named::Row,
+    }
 }
 
 /// `(collection, op)` of a `/v1/collections/<c>/<op>` path.
@@ -401,8 +424,26 @@ impl<'a> Checker<'a> {
             let (uri, field) = inner.split_once('#').unwrap_or((inner, ""));
             if let Some(c) = collection_of_uri(uri) {
                 let def = self.def(at, c)?;
-                if !field.is_empty() {
-                    self.bindable(at, def, field, &format!("the binding '${{{inner}}}'"))?;
+                if field.is_empty() {
+                    continue;
+                }
+                let what = format!("the binding '${{{inner}}}'");
+                let (fields, kind): (&[&str], &str) = match named_by_uri(uri) {
+                    Named::Row => {
+                        self.bindable(at, def, field, &what)?;
+                        continue;
+                    }
+                    Named::Filler => (&crate::db::FILLER_FIELDS, "a filler"),
+                    Named::Alert => (&crate::db::ALERT_FIELDS, "an alert"),
+                };
+                if !fields.contains(&field) {
+                    return Err(err(
+                        at,
+                        format!(
+                            "{what} names '{field}', which is not a field of {kind} of collection '{c}'"
+                        ),
+                        fields.iter().map(|f| (*f).to_owned()).collect(),
+                    ));
                 }
             }
         }
@@ -641,5 +682,53 @@ mod tests {
         );
         assert_eq!(list_of_key("collection:todos:fillers"), None);
         assert_eq!(list_of_key("collection:todos:view:"), None);
+    }
+
+    /// A filler's or an alert's entity is checked against its own fields,
+    /// not the collection's: `alerts_text` is a filler's.
+    #[test]
+    fn filler_and_alert_bindings_name_their_own_fields() {
+        let text = |v: &str| json!({"type": "core://Text", "value_expr": v});
+        for ok in [
+            "${collections://todos/fillers/$route.id#alerts_text}",
+            "${collections://todos/fillers/s1#title}",
+            "${collections://todos/alerts/a1#summary}",
+            "${collections://todos/alerts/$item.id#filler_id}",
+        ] {
+            assert_eq!(check(&text(ok), &[], &defs()), Ok(()), "{ok}");
+        }
+        let e = check(
+            &text("${collections://todos/fillers/s1#done}"),
+            &[],
+            &defs(),
+        )
+        .unwrap_err();
+        assert!(
+            e.message.contains("not a field of a filler"),
+            "{}",
+            e.message
+        );
+        assert!(e.allowed.contains(&"alerts_text".to_owned()));
+        let e = check(
+            &text("${collections://todos/alerts/a1#title}"),
+            &[],
+            &defs(),
+        )
+        .unwrap_err();
+        assert!(
+            e.message.contains("not a field of an alert"),
+            "{}",
+            e.message
+        );
+        // A row is still a row, and the collection must exist.
+        assert!(check(&text("${collections://todos/1#alerts_text}"), &[], &defs()).is_err());
+        assert!(
+            check(
+                &text("${collections://events/fillers/s1#title}"),
+                &[],
+                &defs()
+            )
+            .is_err()
+        );
     }
 }

@@ -847,6 +847,11 @@ pub fn fillers_key(collection: &str) -> String {
     format!("collection:{collection}:fillers")
 }
 
+/// The query key of a collection's alerts (each site's rules).
+pub fn alerts_key(collection: &str) -> String {
+    format!("collection:{collection}:alerts")
+}
+
 /// The query key of a collection's rows some alert matches.
 pub fn alerted_key(collection: &str) -> String {
     format!("collection:{collection}:alerted")
@@ -861,6 +866,26 @@ pub fn filler_uri(collection: &str, id: &str) -> String {
 pub fn alert_uri(collection: &str, id: &str) -> String {
     format!("collections://{collection}/alerts/{id}")
 }
+
+/// The fields of a filler's entity ([`filler_record`]), for the layout
+/// check of `${collections://<c>/fillers/<id>#<field>}`.
+pub const FILLER_FIELDS: [&str; 12] = [
+    "id",
+    "uri",
+    "title",
+    "kind",
+    "url",
+    "state",
+    "detail",
+    "failing",
+    "refreshing",
+    "can_check",
+    "alert_count",
+    "alerts_text",
+];
+
+/// The fields of an alert's entity ([`alert_record`]).
+pub const ALERT_FIELDS: [&str; 5] = ["id", "uri", "name", "summary", "filler_id"];
 
 /// What a filler's entity needs besides its definition and state.
 #[derive(Debug, Clone, Copy)]
@@ -917,7 +942,11 @@ pub fn filler_record(
     EntityRecord(e)
 }
 
-/// An alert as an entity: its name, summary and filler.
+/// An alert as an entity: its name, its rule in one line (`summary`, as
+/// the site screen shows it) and its filler (`filler_id`, the one site it
+/// watches; empty: every row of the collection). An alert has at most one
+/// filler, so a layout lists one site's with `where: {field: filler_id,
+/// equals: $route.id}`.
 pub fn alert_record(def: &Definition, a: &crate::alerts::Alert) -> EntityRecord {
     let mut e = Map::new();
     for (k, v) in [
@@ -940,7 +969,8 @@ fn fills_off(conn: &Connection) -> rusqlite::Result<crate::fill::Off> {
 
 /// A collection's list as a `DataBundle`: each live row at
 /// `collections://<name>/<id>`, in order under `collection:<name>`; with
-/// fillers also `collection:<name>:fillers`, with alerts
+/// fillers also `collection:<name>:fillers`, its alerts (in order, none
+/// when it has none) `collection:<name>:alerts`, with alerts
 /// `collection:<name>:alerted` (the rows an alert matches), and each view
 /// as `collection:<name>:view:<view>` (decision `collection-views`).
 pub fn bundle(
@@ -978,6 +1008,14 @@ pub fn bundle(
     if !def.alerts.is_empty() {
         data.queries.insert(alerted_key(&def.name), alerted);
     }
+    // Always answered, so a list of them empties when the last one goes.
+    let mut alerts = Vec::new();
+    for a in &def.alerts {
+        let uri = alert_uri(&def.name, &a.id);
+        data.entities.insert(uri.clone(), alert_record(def, a));
+        alerts.push(uri);
+    }
+    data.queries.insert(alerts_key(&def.name), alerts);
     if !def.fillers.is_empty() {
         let off = fills_off(conn)?;
         let today = crate::fill::today_on(conn, now)?;

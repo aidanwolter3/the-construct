@@ -1991,6 +1991,138 @@ mod web {
         assert_eq!(renamed["error"], "handle_in_use", "{renamed}");
     }
 
+    /// A collection's alerts (`collection:<c>:alerts`, from its feed) go out
+    /// with a public link, and the page follows an alert added, edited or
+    /// removed without a new review, as it follows rows.
+    #[tokio::test]
+    async fn a_public_link_carries_alerts_and_follows_their_edits() {
+        let files = tempfile::tempdir().unwrap();
+        std::fs::write(
+            files.path().join("index.html"),
+            "<title>The Construct</title>",
+        )
+        .unwrap();
+        let env = env_with(HostConfig {
+            web: Some(WebConfig {
+                dir: files.path().to_owned(),
+            }),
+            public_web: true,
+            ..HostConfig::default()
+        })
+        .await;
+        env.create("gigs").await;
+        let key = mcp_key(&env, "gigs").await;
+        let def = tool(
+            &env,
+            &key,
+            "define_collection",
+            json!({ "name": "shows", "fields": [
+            { "name": "title", "type": "text" } ] }),
+        )
+        .await;
+        assert!(def.get("error").is_none(), "{def}");
+        let change = |changes: Value| {
+            tool(
+                &env,
+                &key,
+                "apply_change",
+                json!({ "collection": "shows", "changes": changes }),
+            )
+        };
+        let added = change(json!([{ "op": "add_alert", "name": "Budget cuts",
+            "any": ["budget cuts"], "none": ["class", "workshop"] }]))
+        .await;
+        assert!(added.get("error").is_none(), "{added}");
+        let made = tool(&env, &key, "create_layout", json!({ "title": "Rules",
+            "feeds": [["collections", "shows"]],
+            "layout": { "type": "core://Page", "id": "rules", "title": "Rules", "root":
+              { "type": "core://List", "query_key": "collection:shows:alerts", "item_template":
+                { "type": "core://Text", "style": "Body", "value_expr": "$item.name: $item.summary" } } } }))
+        .await;
+        let layout = made["id"]
+            .as_str()
+            .unwrap_or_else(|| panic!("{made}"))
+            .to_owned();
+        let review = tool(&env, &key, "share_publicly", json!({ "layout": layout })).await;
+        let shared = tool(
+            &env,
+            &key,
+            "share_publicly",
+            json!({ "layout": layout, "confirm": review["review_id"] }),
+        )
+        .await;
+        let link = shared["link"]
+            .as_str()
+            .unwrap_or_else(|| panic!("{shared}"))
+            .to_owned();
+        let view = || async {
+            client()
+                .get(env.url(&format!("/s/{link}/view")))
+                .send()
+                .await
+                .unwrap()
+                .json::<Value>()
+                .await
+                .unwrap()
+        };
+        let summaries = |v: &Value| -> Vec<String> {
+            let data = &v["copy"]["data"];
+            let data = if data.is_null() { &v["data"] } else { data };
+            data["queries"]["collection:shows:alerts"]
+                .as_array()
+                .unwrap_or_else(|| panic!("no alerts in the copy: {v}"))
+                .iter()
+                .map(|u| {
+                    data["entities"][u.as_str().unwrap()]["summary"]
+                        .as_str()
+                        .unwrap_or("")
+                        .to_owned()
+                })
+                .collect()
+        };
+        assert_eq!(
+            summaries(&view().await),
+            ["\"budget cuts\" · not \"class\" or \"workshop\""]
+        );
+        // Each change reaches the page after the refresh settles.
+        let until = |want: Vec<&'static str>| {
+            let view = &view;
+            async move {
+                for _ in 0..100 {
+                    if summaries(&view().await) == want {
+                        return;
+                    }
+                    tokio::time::sleep(Duration::from_millis(100)).await;
+                }
+                panic!(
+                    "the page shows {:?}, not {want:?}",
+                    summaries(&view().await)
+                );
+            }
+        };
+        let d = tool(
+            &env,
+            &key,
+            "describe_collection",
+            json!({ "collection": "shows" }),
+        )
+        .await;
+        let id = d["definition"]["alerts"][0]["id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        change(json!([{ "op": "add_alert", "name": "Lineup", "any": ["lineup"] }])).await;
+        until(vec![
+            "\"budget cuts\" · not \"class\" or \"workshop\"",
+            "\"lineup\"",
+        ])
+        .await;
+        change(json!([{ "op": "update_alert", "alert": id, "none": ["class"] }])).await;
+        until(vec!["\"budget cuts\" · not \"class\"", "\"lineup\""]).await;
+        change(json!([{ "op": "remove_alert", "alert": id }])).await;
+        until(vec!["\"lineup\""]).await;
+    }
+
     /// A temporary pod (anyone can make one) can't share a public page,
     /// even where the server serves them.
     #[tokio::test]

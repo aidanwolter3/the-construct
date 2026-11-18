@@ -32,8 +32,10 @@
 //! | `POST /v1/collections/<c>/import?format=&note=` (a JSON, JSON lines or CSV file) | preview its row edits ([`import`]) and keep them for `edit_rows {collection, confirm}`; changes nothing |
 //!
 //! With fillers, the feed also fills `collection:<c>:fillers` (each filler's
-//! title, URL and health); with alerts, `collection:<c>:alerted` (the rows
-//! an alert matches).
+//! title, URL and health); `collection:<c>:alerts` its alerts (each with
+//! `name`, `summary` and `filler_id`, so a public page can show a site's
+//! rules: public links can't load data paths); with alerts,
+//! `collection:<c>:alerted` (the rows an alert matches).
 //!
 //! Rows are entities `collections://<c>/<id>` with every field by name,
 //! plus `id`, `deleted` (always `false` when served: a layout's list hides
@@ -157,10 +159,11 @@ pub const MANIFEST: SourceManifest = SourceManifest {
         query_keys: &[
             "collection:{collection}",
             "collection:{collection}:fillers",
+            "collection:{collection}:alerts",
             "collection:{collection}:alerted",
             "collection:{collection}:view:{view}",
         ],
-        doc: "The rows of one collection, in its order (list the collection's name as the feed: [\"collections\", \"todos\"]); each of its views (define_collection views, apply_change set_view) as collection:<name>:view:<view>, the rows it keeps in its order.",
+        doc: "The rows of one collection, in its order (list the collection's name as the feed: [\"collections\", \"todos\"]); each of its views (define_collection views, apply_change set_view) as collection:<name>:view:<view>, the rows it keeps in its order; its fillers (sites) as collection:<name>:fillers and its alerts as collection:<name>:alerts (name, summary, filler_id: one site's with where [{field: filler_id, equals: $route.id}]).",
     }],
     data_paths: &[
         PathSpec {
@@ -168,6 +171,7 @@ pub const MANIFEST: SourceManifest = SourceManifest {
             query_keys: &[
                 "collection:{collection}",
                 "collection:{collection}:fillers",
+                "collection:{collection}:alerts",
                 "collection:{collection}:alerted",
                 "collection:{collection}:view:{view}",
             ],
@@ -222,7 +226,7 @@ pub const MANIFEST: SourceManifest = SourceManifest {
     ],
     entities: &[EntityDoc {
         uri: "collections://{collection}/{id}",
-        doc: "A row of a collection: every field by name (see describe_collection), and the system fields; a ref field holds the id of the row it points at (read through it with ${collections://<target>/$item.<ref>#<field>}); a quantity field also as <name>_text (1 1/2 cups); a datetime field also as <name>_date (YYYY-MM-DD), <name>_time (7:30 PM) and <name>_text (Fri Nov 6 · 7:30 PM); with fillers filler_id and filler_title; with alerts alert_matched and alert_names. A filler is collections://{collection}/fillers/{id} (title, kind, url, state, detail, failing, alerts_text; refreshing: a fill of it is running, and clients are told when one starts and ends; can_check: false once an agent filled its fills_per_day times today, when POST /v1/collections/{collection}/refresh {filler} answers 429 checked_today), an alert collections://{collection}/alerts/{id} (name, summary).",
+        doc: "A row of a collection: every field by name (see describe_collection), and the system fields; a ref field holds the id of the row it points at (read through it with ${collections://<target>/$item.<ref>#<field>}); a quantity field also as <name>_text (1 1/2 cups); a datetime field also as <name>_date (YYYY-MM-DD), <name>_time (7:30 PM) and <name>_text (Fri Nov 6 · 7:30 PM); with fillers filler_id and filler_title; with alerts alert_matched and alert_names. A filler is collections://{collection}/fillers/{id} (title, kind, url, state, detail, failing, alerts_text; refreshing: a fill of it is running, and clients are told when one starts and ends; can_check: false once an agent filled its fills_per_day times today, when POST /v1/collections/{collection}/refresh {filler} answers 429 checked_today), an alert collections://{collection}/alerts/{id} (name, summary, filler_id: the site it watches, empty for every row).",
         fields: &[
             (
                 "id",

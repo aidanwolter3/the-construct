@@ -795,6 +795,90 @@ async fn event_sites_fill_one_collection_and_alerts_notify_once() {
         listed(&screen, &format!("collection:events:filler:{}", ids[0]))[0]["alerts_text"],
         "Watching for Brass Lanterns"
     );
+    // The feed lists every alert too (a public page can't load the filler's
+    // data path): its rule as the site screen shows it, and its site.
+    let alerts = listed(&b, "collection:events:alerts");
+    let shown: Vec<(&str, &str, &str)> = alerts
+        .iter()
+        .map(|a| {
+            (
+                a["name"].as_str().unwrap(),
+                a["summary"].as_str().unwrap(),
+                a["filler_id"].as_str().unwrap(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        shown,
+        [
+            (
+                "Brass Lanterns",
+                "\"Brass Lanterns\" · not \"class\"",
+                ids[0].as_str()
+            ),
+            ("BL (plain)", "\"brass lanterns\"", ids[1].as_str())
+        ]
+    );
+    assert_eq!(
+        alerts,
+        listed(
+            &screen,
+            &format!("collection:events:filler:{}:alerts", ids[0])
+        )
+        .into_iter()
+        .chain(listed(
+            &get_data(&pod, &format!("/v1/collections/events/fillers/{}", ids[1])).await,
+            &format!("collection:events:filler:{}:alerts", ids[1]),
+        ))
+        .collect::<Vec<_>>(),
+        "the same entities as each site's screen"
+    );
+    let keys = |e: &Value| {
+        let mut k: Vec<String> = e.as_object().unwrap().keys().cloned().collect();
+        k.sort();
+        k
+    };
+    let sorted = |f: &[&str]| {
+        let mut k: Vec<String> = f.iter().map(|s| (*s).to_owned()).collect();
+        k.sort();
+        k
+    };
+    assert_eq!(
+        keys(&alerts[0]),
+        sorted(&source_collections::db::ALERT_FIELDS)
+    );
+    assert_eq!(
+        keys(&listed(&b, "collection:events:fillers")[0]),
+        sorted(&source_collections::db::FILLER_FIELDS),
+        "the layout check reads these names"
+    );
+    // A site screen binds its filler's fields and lists its alerts from
+    // the feed: the layout check reads fillers/<id> as a filler, not a row.
+    let site = ok(
+        &pod,
+        "create_layout",
+        json!({"title": "Site", "feeds": [["collections", "events"]],
+            "layout": {"type": "core://Page", "id": "site", "title": "Site", "root": {
+                "type": "core://Column", "children": [
+                    {"type": "core://Text", "style": "Body",
+                        "value_expr": "${collections://events/fillers/$route.id#alerts_text}"},
+                    {"type": "core://List", "query_key": "collection:events:alerts",
+                        "where": [{"field": "filler_id", "equals": "$route.id"}],
+                        "item_template": {"type": "core://Text", "style": "Body",
+                            "value_expr": "$item.name: $item.summary"}}]}}}),
+    )
+    .await;
+    let (err, e) = tool(
+        &pod,
+        "update_layout",
+        json!({"id": site["id"], "layout": {"type": "core://Page", "id": "site", "title": "Site",
+            "root": {"type": "core://Text", "style": "Body",
+                "value_expr": "${collections://events/fillers/$route.id#venue}"}}}),
+    )
+    .await;
+    assert!(err, "a row field read of a filler is refused: {e}");
+    assert!(e.to_string().contains("not a field of a filler"), "{e}");
+    ok(&pod, "delete_layout", json!({"id": site["id"]})).await;
     // Notifications need an app showing the collection.
     let app = ok(
         &pod,
