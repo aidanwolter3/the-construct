@@ -46,7 +46,7 @@ A layout of the pod is a name (`c-` and 10 characters, except `home`) pointing t
 and a node; the name keeps its history, and `restore_version` moves it back. Devices show a layout's `title` and
 `icon` from its element.
 
-**Home owns the feeds** (`["pixelfed", "home"]`, `["collections", "todos"]`, `["collections", "recipes"]`, at most 32): every
+**Home owns the feeds** (`["pixelfed", "home"]`, `["collections", "todos"]`, `["collections", "recipes"]`, at most 100): every
 layout may bind any of them, and a layout's request loads only the feeds whose query keys it binds. Feeds named when
 creating a layout (or renaming one) are added to home's. Changing home's own feed list is refused (`feed_in_use`,
 naming the layout) while another layout still binds a feed it would drop. Home's event stream carries every change of
