@@ -1381,6 +1381,12 @@ async fn dispatch(State(host): State<Arc<Host>>, mut req: Request) -> Response {
                 && let Ok(v) = HeaderValue::from_str(&format!("Bearer {t}"))
             {
                 req.headers_mut().insert(header::AUTHORIZATION, v);
+                // The cookie is `HttpOnly`: the pod answers the page's script
+                // without its value (`pod_core::CREDENTIAL_WEB`).
+                req.headers_mut().insert(
+                    pod_core::CREDENTIAL_HEADER,
+                    HeaderValue::from_static(pod_core::CREDENTIAL_WEB),
+                );
             }
             Some(id)
         }
@@ -1682,6 +1688,7 @@ async fn public_route(
     // The host route's path parameters must not reach the pod's router.
     req.extensions_mut().clear();
     req.headers_mut().remove(header::AUTHORIZATION);
+    req.headers_mut().remove(pod_core::CREDENTIAL_HEADER);
     set_prefix(req.headers_mut(), &pod_id);
     match open.router.clone().oneshot(req).await {
         Ok(r) => r,

@@ -170,9 +170,15 @@ pub struct AppState {
 }
 
 /// Request header a pod host sets on a request whose bearer was an MCP
-/// credential (`mcp`, decision `mcp-connector`); the host removes any value
+/// credential (`mcp`, decision `mcp-connector`) or whose session came from
+/// the web client's cookie ([`CREDENTIAL_WEB`]); the host removes any value
 /// a client sent. Trusted only by a hosted pod ([`AppState::set_hosted`]).
 pub const CREDENTIAL_HEADER: &str = "x-construct-credential";
+
+/// [`CREDENTIAL_HEADER`] on a request whose session came from the web
+/// client's `HttpOnly` cookie (decision `web-client`): an answer leaves that
+/// session's token out, so the page's script never holds it.
+pub const CREDENTIAL_WEB: &str = "web";
 
 impl AppState {
     /// State over `store` serving `adapters`, after running their migrations
@@ -476,7 +482,7 @@ impl AppState {
         self.hosted.store(true, std::sync::atomic::Ordering::SeqCst);
     }
 
-    /// The credential kind a pod host vouched for (`mcp`), if hosted.
+    /// The credential kind a pod host vouched for (`mcp`, `web`), if hosted.
     pub fn host_credential(&self, headers: &HeaderMap) -> Option<String> {
         if !self.hosted.load(std::sync::atomic::Ordering::SeqCst) {
             return None;
