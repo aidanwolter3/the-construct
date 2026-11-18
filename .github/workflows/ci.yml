@@ -158,6 +158,15 @@ jobs:
           key: android
       - name: Install cargo-ndk
         run: command -v cargo-ndk >/dev/null || cargo install --locked cargo-ndk --version 4.1.2
+      # The jars android_native.sh takes from Maven Central, kept between runs: Maven Central answers runners'
+      # shared addresses with 429 when they ask too often, which failed the build. The script checks each file's hash,
+      # so a cached file is used only if it is the right one.
+      - name: Cache the Maven Central jars
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: build/android-native/libs
+          key: android-libs-${{ hashFiles('scripts/android_native.sh') }}
+          restore-keys: android-libs-
       - run: scripts/android_native.sh
       - name: Upload the APK
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2

@@ -99,12 +99,14 @@ done
 # extends its receiver, `PushKeys` keeps its keys in Rust), the embedded FCM distributor (push through Play services
 # on phones without a distributor app; it registers with the pod's VAPID key, so no Firebase project), and the Kotlin
 # libraries they need. Not Tink, protobuf or gson, the connector's own key store's: `PushKeys` replaces it, so they
-# never load. Downloaded once from Maven Central into build/android-native/libs, and checked against these hashes.
+# never load. Downloaded once from Maven Central into build/android-native/libs (CI keeps that directory between
+# runs), and checked against these hashes. Maven Central can answer 429 when asked too often: curl waits and tries
+# again, for about four minutes in all.
 LIBS=$OUT/libs
 mkdir -p "$LIBS"
 fetch() { # path on Maven Central, file, sha256
   if [[ ! -f $LIBS/$2 ]] || ! echo "$3  $LIBS/$2" | shasum -a 256 -c --status - 2>/dev/null; then
-    curl -fsSL --retry 4 -o "$LIBS/$2" "https://repo1.maven.org/maven2/$1/$2"
+    curl -fsSL --retry 7 -o "$LIBS/$2" "https://repo1.maven.org/maven2/$1/$2"
     echo "$3  $LIBS/$2" | shasum -a 256 -c --status - || { echo "$2: unexpected contents" >&2; rm -f "$LIBS/$2"; exit 1; }
   fi
 }

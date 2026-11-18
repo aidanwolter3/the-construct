@@ -89,6 +89,15 @@ jobs:
           fi
           printf '%s' "$KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/release.keystore"
           echo "CONSTRUCT_ANDROID_KEYSTORE=$RUNNER_TEMP/release.keystore" >> "$GITHUB_ENV"
+      # The jars android_native.sh takes from Maven Central, kept between runs: Maven Central answers runners'
+      # shared addresses with 429 when they ask too often, which failed the build. The script checks each file's hash,
+      # so a cached file is used only if it is the right one.
+      - name: Cache the Maven Central jars
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: build/android-native/libs
+          key: android-libs-${{ hashFiles('scripts/android_native.sh') }}
+          restore-keys: android-libs-
       - name: Build
         env:
           CONSTRUCT_VERSION_NAME: ${{ needs.version.outputs.name }}
