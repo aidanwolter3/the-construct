@@ -177,10 +177,14 @@ pub fn record_llm(feature: &str, success: bool, answer: Option<&serde_json::Valu
         return;
     };
     let tokens = |k: &str| usage[k].as_u64().unwrap_or(0);
-    let input = tokens("input_tokens")
-        + tokens("cache_creation_input_tokens")
-        + tokens("cache_read_input_tokens");
-    for (direction, n) in [("input", input), ("output", tokens("output_tokens"))] {
+    // Cache writes and reads are counted apart from uncached input: they
+    // cost differently (a read is a twentieth of an uncached token).
+    for (direction, n) in [
+        ("input", tokens("input_tokens")),
+        ("cache_write", tokens("cache_creation_input_tokens")),
+        ("cache_read", tokens("cache_read_input_tokens")),
+        ("output", tokens("output_tokens")),
+    ] {
         if n > 0 {
             add(
                 LLM_TOKENS,
@@ -414,14 +418,23 @@ mod tests {
     fn model_calls_and_tokens() {
         let f = "metrics_test";
         let ok = json!({ "stop_reason": "end_turn",
-            "usage": { "input_tokens": 100, "cache_read_input_tokens": 20, "output_tokens": 7 } });
+            "usage": { "input_tokens": 100, "cache_creation_input_tokens": 30,
+                "cache_read_input_tokens": 20, "output_tokens": 7 } });
         record_llm(f, true, Some(&ok));
         record_llm(f, true, Some(&json!({ "stop_reason": "refusal" })));
         record_llm(f, false, None);
         let req = |o| get(LLM_REQUESTS, &[("feature", f), ("outcome", o)]);
         assert_eq!((req("ok"), req("refused"), req("error")), (1, 1, 1));
         let tok = |d| get(LLM_TOKENS, &[("feature", f), ("direction", d)]);
-        assert_eq!((tok("input"), tok("output")), (120, 7));
+        assert_eq!(
+            (
+                tok("input"),
+                tok("cache_write"),
+                tok("cache_read"),
+                tok("output")
+            ),
+            (100, 30, 20, 7)
+        );
     }
 
     #[test]

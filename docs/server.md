@@ -97,7 +97,7 @@ settings are logged at startup.
 |---|---|---|
 | `CONSTRUCT_METRICS_ADDR` | unset | Serve Prometheus `GET /metrics` on this separate address. |
 | `CONSTRUCT_MONITOR_AUTH_FAILURES_PER_HOUR` | `20` | The monitoring source warns above this many wrong pod codes and unknown tokens an hour. |
-| `CONSTRUCT_MONITOR_LLM_TOKENS_PER_DAY` | `1000000` | It warns above this many model tokens a day. |
+| `CONSTRUCT_MONITOR_LLM_TOKENS_PER_DAY` | `1000000` | It warns above this many model tokens a day: uncached input, cache writes and output. Tokens read from the prompt cache (a twentieth of the price) are counted (`direction="cache_read"`) and shown, but not toward this. |
 | `CONSTRUCT_MONITOR_TEMP_PODS_PERCENT` | `80` | It warns once live temporary pods reach this share of `CONSTRUCT_TEMP_POD_MAX` (40 of 50), before new ones are refused. |
 | `CONSTRUCT_AGENTS_PRIVATE_HOSTS` | unset | `1`: the Agents source may sign in to a runner on any address over http (local development only); otherwise `https://` public hosts. |
 | `CONSTRUCT_SHOW_DEV_APPS` | unset | `1`: MCP also lists the dev blueprints and sources (`pixelfed_sample_no_login`; it works either way). |
@@ -197,7 +197,7 @@ does when it finishes.
 
 The server counts what an operator wants to notice: wrong pod codes and unknown tokens, rate limits hit, credentials
 used out of scope, new Claude connections, 5xx responses, temporary pod requests, and model calls and tokens per
-feature, plus pods, credentials and free disk (decision [`server-monitoring`](decisions/server-monitoring.md)).
+feature (by direction: `input`, `cache_write`, `cache_read`, `output`), plus pods, credentials and free disk (decision [`server-monitoring`](decisions/server-monitoring.md)).
 Counts live in memory and restart from zero.
 
 - **In a pod:** the **Server monitoring** data source (`monitor`, feed `overview`) serves a summary, plain-language

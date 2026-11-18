@@ -27,7 +27,7 @@ use crate::hosts::Hosts;
 use crate::search::{Provider, SearchCache};
 
 /// Most page text a fetch hands the model.
-pub const MAX_FETCH_CHARS: usize = 30_000;
+pub const MAX_FETCH_CHARS: usize = 12_000;
 /// Most text one task keeps of what it read, for checking quotes.
 pub const MAX_READ_CHARS: usize = 2_000_000;
 /// Most pictures a fetch lists.
@@ -36,7 +36,7 @@ pub const MAX_FETCH_IMAGES: usize = 4;
 pub const MIN_QUOTE_WORDS: usize = 3;
 
 /// Most links a fetch lists after the page's text.
-pub const MAX_FETCH_LINKS: usize = 150;
+pub const MAX_FETCH_LINKS: usize = 40;
 
 /// What the tools share: the pod's host policy and search cache, an HTTP
 /// client, the search provider, and the URLs this task has seen.
@@ -456,35 +456,43 @@ impl Tool for FetchTool {
                 return Err("the page answered nothing".into());
             };
             let html = String::from_utf8_lossy(&bytes);
-            let text = crate::html::to_text(&html);
-            // Quotes may come from anywhere on the page, not only the part
-            // the model was shown.
-            self.web.seen.add_read(&text);
-            let mut out = crate::html::truncate(&text, MAX_FETCH_CHARS);
-            let images = page_images(&html, &url, MAX_FETCH_IMAGES);
-            if !images.is_empty() {
-                out.push_str("\n\nImages:");
-                for i in &images {
-                    out.push_str(&format!("\n- {i}"));
-                    self.web.seen.add(i);
-                }
-            }
-            let links = page_links(&html, &url, MAX_FETCH_LINKS);
-            if !links.is_empty() {
-                out.push_str("\n\nLinks:");
-                for (text, link) in &links {
-                    if text.is_empty() {
-                        out.push_str(&format!("\n- {link}"));
-                    } else {
-                        out.push_str(&format!("\n- {text}: {link}"));
-                    }
-                    self.web.seen.add(link);
-                }
-            }
-            self.web.seen.add_text(&out);
-            Ok(out)
+            Ok(page_answer(&self.web.seen, &html, &url))
         })
     }
+}
+
+/// What `web_fetch` hands the model for the page `html` at `url`: its text
+/// (cut at [`MAX_FETCH_CHARS`]), pictures and links (at most
+/// [`MAX_FETCH_LINKS`]). The whole text is kept for checking quotes, and
+/// what was shown marks its URLs seen.
+fn page_answer(seen: &Seen, html: &str, url: &str) -> String {
+    let text = crate::html::to_text(html);
+    // Quotes may come from anywhere on the page, not only the part
+    // the model was shown.
+    seen.add_read(&text);
+    let mut out = crate::html::truncate(&text, MAX_FETCH_CHARS);
+    let images = page_images(html, url, MAX_FETCH_IMAGES);
+    if !images.is_empty() {
+        out.push_str("\n\nImages:");
+        for i in &images {
+            out.push_str(&format!("\n- {i}"));
+            seen.add(i);
+        }
+    }
+    let links = page_links(html, url, MAX_FETCH_LINKS);
+    if !links.is_empty() {
+        out.push_str("\n\nLinks:");
+        for (text, link) in &links {
+            if text.is_empty() {
+                out.push_str(&format!("\n- {link}"));
+            } else {
+                out.push_str(&format!("\n- {text}: {link}"));
+            }
+            seen.add(link);
+        }
+    }
+    seen.add_text(&out);
+    out
 }
 
 #[cfg(test)]
@@ -573,6 +581,41 @@ mod tests {
                 "https://c.example"
             ]
         );
+    }
+
+    #[test]
+    fn a_read_shows_part_of_a_long_page_and_keeps_all_of_it_for_quotes() {
+        let mut html = format!(
+            "<p>{}</p><p>Near the end: soft thick cotton</p>",
+            "word ".repeat(5_000)
+        );
+        for i in 0..100 {
+            html.push_str(&format!("<a href=\"/p/{i}\">Item {i}</a>"));
+        }
+        let seen = Seen::default();
+        let out = page_answer(&seen, &html, "https://shop.example/");
+        let (text, links) = out.split_once("\n\nLinks:").unwrap();
+        assert_eq!(
+            text.chars().count(),
+            MAX_FETCH_CHARS + 1,
+            "cut, with an ellipsis"
+        );
+        assert!(!text.contains("Near the end"));
+        assert_eq!(
+            links.lines().filter(|l| l.starts_with("- ")).count(),
+            MAX_FETCH_LINKS
+        );
+        assert!(seen.contains("https://shop.example/p/39"));
+        assert!(!seen.contains("https://shop.example/p/40"));
+        // A quote from past the cut still checks out.
+        seen.add("https://shop.example/");
+        let mut rows = vec![
+            json!({ "reviews": "\"Near the end: soft thick cotton\" (shop.example)" })
+                .as_object()
+                .unwrap()
+                .clone(),
+        ];
+        assert_eq!(seen.check_rows(&mut rows), Cited::default());
     }
 
     #[test]

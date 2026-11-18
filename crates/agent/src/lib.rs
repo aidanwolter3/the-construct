@@ -142,6 +142,16 @@ impl Task {
         self.finish_tool.as_ref().and_then(|t| t["name"].as_str())
     }
 
+    /// Whether the task may take more than one request, so its prefix is
+    /// worth caching: later turns resend the whole conversation. A
+    /// one-shot task would pay for the cache write and never read it.
+    fn multi_turn(&self) -> bool {
+        self.max_turns > 1
+            || !self.tools.is_empty()
+            || !self.server_tools.is_empty()
+            || self.finish_tool.is_some()
+    }
+
     /// The request body for `model`.
     pub fn body(&self, model: &str) -> Value {
         let mut body = json!({
@@ -150,6 +160,12 @@ impl Task {
             "messages": self.messages,
             "fallbacks": "default",
         });
+        if self.multi_turn() {
+            // Caches up to the last block; each turn reads the turns before
+            // it back, as long as the loop only appends (the tools, system
+            // text and earlier messages stay byte for byte the same).
+            body["cache_control"] = json!({ "type": "ephemeral" });
+        }
         if let Some(s) = &self.system {
             body["system"] = json!(s);
         }
@@ -541,7 +557,7 @@ impl Agent {
             .to_owned();
         let mut out = Output::default();
         let turns = task.max_turns.max(1);
-        for _ in 0..turns {
+        for turn in 0..turns {
             let body = task.body(&model);
             let answer = self.post(store, &task, &body).await?;
             out.turns += 1;
@@ -593,6 +609,14 @@ impl Agent {
                         "is_error": is_error,
                     }));
                 }
+                // The next request is the second to last: tell the model to
+                // finish, in this same message (appended, never removed
+                // later, so the cached prefix holds).
+                if let Some(name) = task.finish_name()
+                    && turn + 3 == turns
+                {
+                    results.push(json!({ "type": "text", "text": last_turns_nudge(name) }));
+                }
                 task.messages
                     .push(json!({ "role": "assistant", "content": content }));
                 task.messages
@@ -622,6 +646,14 @@ impl Agent {
         }
         Ok(out)
     }
+}
+
+/// What the model is told before its second-to-last request.
+fn last_turns_nudge(finish: &str) -> String {
+    format!(
+        "You have 2 requests left. Call {finish} next with every row you have; \
+         use null for anything not found."
+    )
 }
 
 fn count_server_tools(answer: &Value, out: &mut Output, feature: &str) {
@@ -796,6 +828,113 @@ mod tests {
         let second = &bodies[1]["messages"];
         assert_eq!(second[2]["content"][0]["tool_use_id"], "t1");
         assert_eq!(second[2]["content"][0]["content"], "echo \"hi\"");
+    }
+
+    fn echo_call(id: &str) -> Result<(u16, Value), String> {
+        Ok((
+            200,
+            json!({ "stop_reason": "tool_use", "content": [
+                { "type": "tool_use", "id": id, "name": "echo", "input": { "q": id } }
+            ]}),
+        ))
+    }
+
+    fn research_task(max_turns: usize) -> Task {
+        let mut task = Task::new("fill_agent", Tier::Capable, "research").system("sys");
+        task.tools = vec![Arc::new(Echo)];
+        task.finish_tool =
+            Some(json!({ "name": "save_rows", "input_schema": { "type": "object" } }));
+        task.max_turns = max_turns;
+        task
+    }
+
+    #[tokio::test]
+    async fn multi_turn_tasks_cache_and_only_append() {
+        let s = Script::new(vec![
+            echo_call("t1"),
+            echo_call("t2"),
+            Ok((
+                200,
+                json!({ "stop_reason": "tool_use", "content": [
+                    { "type": "tool_use", "id": "t3", "name": "save_rows", "input": {} }
+                ]}),
+            )),
+        ]);
+        let store = Store::open_in_memory().unwrap();
+        agent(&s).run(&store, research_task(12)).await.unwrap();
+        let bodies = s.bodies.lock().unwrap().clone();
+        assert_eq!(bodies.len(), 3);
+        for b in bodies.iter() {
+            assert_eq!(b["cache_control"], json!({ "type": "ephemeral" }));
+            // The cached prefix stays the same from turn to turn.
+            assert_eq!(b["tools"], bodies[0]["tools"]);
+            assert_eq!(b["system"], bodies[0]["system"]);
+        }
+        for w in bodies.windows(2) {
+            let (a, b) = (
+                w[0]["messages"].as_array().unwrap(),
+                w[1]["messages"].as_array().unwrap(),
+            );
+            assert_eq!(
+                &b[..a.len()],
+                &a[..],
+                "earlier messages are resent unchanged"
+            );
+        }
+
+        // A one-shot task never reads a cache back, so it writes none.
+        let s = Script::new(vec![Ok((200, text("ok")))]);
+        agent(&s)
+            .run(&store, Task::new("fill_page", Tier::Capable, "q"))
+            .await
+            .unwrap();
+        assert!(s.bodies.lock().unwrap()[0].get("cache_control").is_none());
+    }
+
+    #[tokio::test]
+    async fn the_second_to_last_request_asks_the_model_to_finish() {
+        let s = Script::new(vec![
+            echo_call("t1"),
+            echo_call("t2"),
+            echo_call("t3"),
+            echo_call("t4"),
+        ]);
+        let store = Store::open_in_memory().unwrap();
+        let e = agent(&s).run(&store, research_task(4)).await.unwrap_err();
+        assert!(matches!(e, AgentError::Failed(_)), "{e:?}");
+        let bodies = s.bodies.lock().unwrap();
+        assert_eq!(bodies.len(), 4);
+        let last_user = |b: &Value| {
+            let m = b["messages"].as_array().unwrap();
+            m.last().unwrap()["content"]
+                .as_array()
+                .cloned()
+                .unwrap_or_default()
+        };
+        // The second request has no nudge; the third ends with it, after
+        // its tool result; the fourth still carries it, unchanged.
+        assert!(
+            last_user(&bodies[1])
+                .iter()
+                .all(|b| b["type"] == "tool_result")
+        );
+        let third = last_user(&bodies[2]);
+        assert_eq!(third[0]["type"], "tool_result");
+        let nudge = third.last().unwrap();
+        assert_eq!(nudge["type"], "text");
+        assert!(
+            nudge["text"]
+                .as_str()
+                .unwrap()
+                .starts_with("You have 2 requests left. Call save_rows next")
+        );
+        let fourth = bodies[3]["messages"].as_array().unwrap();
+        assert_eq!(fourth[4]["content"], json!(third));
+        assert!(
+            last_user(&bodies[3])
+                .iter()
+                .all(|b| b["type"] == "tool_result")
+        );
     }
 
     #[test]
