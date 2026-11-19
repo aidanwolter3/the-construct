@@ -59,6 +59,8 @@ scenario tiles-home tiles_home \
 scenario screen-sizes screen_sizes \
   "assert-text compact window; shot phone; screen tablet; assert-text medium window; shot tablet; \
 screen desktop; assert-text Shown only on a wide window; shot desktop"
+scenario list-trailing list_trailing \
+  "assert-text No extras yet; shot light; mode dark; shot dark"
 for page in home groceries log; do
   echo "== theme-$page"
   for mode in light dark; do

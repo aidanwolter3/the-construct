@@ -272,6 +272,12 @@ pub enum UiNode {
         /// wide window several.
         #[serde(default, skip_serializing_if = "is_zero")]
         min_column_dp: u16,
+        /// Feature `list_trailing`: one more cell after the items, such as
+        /// an add button at the end of a grid. It is bound like the list
+        /// (no `$item`), placed as the next cell (in a grid, after the last
+        /// item in its row), and drawn when the list is empty too.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        trailing: Option<Box<UiNode>>,
     },
     /// An image from a URL (a literal or a binding such as
     /// `"$item.avatar_url"`). `size_dp` makes it a square of that size;
@@ -825,9 +831,11 @@ impl UiNode {
             UiNode::List {
                 item_template,
                 group_by,
+                trailing,
                 ..
             } => std::iter::once(item_template.as_ref())
                 .chain(group_by.as_ref().map(|g| g.header.as_ref()))
+                .chain(trailing.as_deref())
                 .collect(),
             UiNode::Carousel { item_template, .. } => vec![item_template],
             UiNode::Conditional { content, .. }
