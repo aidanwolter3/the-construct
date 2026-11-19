@@ -147,7 +147,7 @@ admin pod: a temporary pod can't share a public page (decision [`web-on-staging`
   for each listed row; `leave_out: [<layout>]` keeps one out (its openers go). `params: {id: <meal id>}` draws a
   screen that reads `$route.id`; `item` draws the layout with one row as `$item`; `rows: [<entity URI>]` limits
   the root's lists. `share_publicly {layout, confirm: <review_id>}` shares it and answers its `url` (`/s/pub-…`);
-  with `slug` (and the pod's handle, `set_handle`) also a `short_url`, `/<handle>/<slug>`. Sharing the same layout,
+  with `slug` (and the pod's handle, `set_handle`) also a `short_url`, `/<handle>/<slug>`; each row a list's tap opens is at `/<handle>/<slug>/<row name>` (decision `public-row-links`). Sharing the same layout,
   rows, item and params again updates the same link; other params are another link.
 - The copy is made again when the pod's Collections data changes, so new rows the layouts show appear on the
   page. Only rows go out without a review: once a carried layout is edited (a field it now shows, a screen it now

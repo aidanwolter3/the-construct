@@ -12,6 +12,7 @@ pub mod expr;
 pub mod features;
 pub mod intent;
 pub mod notify;
+pub mod public_rows;
 
 pub use ast::{
     Align, BorderStyle, CAPS_TRACKING, ChoiceOption, DateFormat, DateTest, DockTab, DrawerPage,

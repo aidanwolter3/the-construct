@@ -817,6 +817,9 @@ struct App {
     /// ([`Session::back_steps`]), so the browser's Back closes the top one
     /// instead of leaving the page.
     history_at: usize,
+    /// On a public link's page: a row's screen shows its own address
+    /// (`/<handle>/<slug>/<row>`), so a visitor can copy it.
+    public: Option<Public>,
 }
 
 /// The app, held by one event handler at a time. The browser can run the
@@ -964,12 +967,25 @@ impl App {
         while self.history_at < want {
             self.history_at += 1;
             let at = JsValue::from_f64(self.history_at as f64);
-            let _ = history.push_state(&at, "");
+            let _ = history.push_state_with_url(&at, "", self.address(want).as_deref());
         }
         if want < self.history_at {
             let _ = history.go_with_delta(want as i32 - self.history_at as i32);
             self.history_at = want;
         }
+    }
+
+    /// The address of a history entry pushed for one step of the back
+    /// stack, on a public link's page (`None`: the address stays): a row's
+    /// screen opened from the list is `<base>/<row>`.
+    fn address(&self, want: usize) -> Option<String> {
+        let p = self.public.as_ref()?;
+        if self.history_at != 1 || want != 1 {
+            return None;
+        }
+        let route = self.controller.session.top_route();
+        protocol::public_rows::row_with_params(&p.rows, route)
+            .map(|r| format!("{}/{}", p.base, r.name))
     }
 
     /// The browser went back (or forward) to the history entry `at`: Back
@@ -1095,26 +1111,52 @@ pub async fn start() -> Result<(), JsValue> {
     session.loader = Some(Box::new(loader.clone()));
     fetch_images(&session.images, "/web/image");
     loader.listen();
-    mount(session).await
+    mount(session, None).await
 }
 
 /// A public link's page (decisions `public-web-links`,
 /// `public-links-share-the-closure`): its copy, drawn read-only with no pod
 /// behind it (nothing it draws can write); the layouts it opens come from
-/// the copy. `base` is the page's path: `/s/<link>` or `/<handle>/<slug>`.
-pub async fn start_public(base: &str) -> Result<(), JsValue> {
+/// the copy. `base` is the page's path: `/s/<link>` or `/<handle>/<slug>`;
+/// `row`, the name of one of its rows (`/<handle>/<slug>/<row>`, decision
+/// `public-row-links`), opens that row's screen over the list.
+pub async fn start_public(base: &str, row: Option<&str>) -> Result<(), JsValue> {
     load_fonts(&construct_render::text::FACE_FILES).await;
     let copy = get_json(&format!("{base}/view"))
         .await
         .map_err(|_| JsValue::from_str("This page isn't shared any more."))?;
-    let session = construct_render::public::session(&copy, Viewport::PHONE)
+    let mut session = construct_render::public::session(&copy, Viewport::PHONE)
         .map_err(|e| JsValue::from_str(&e))?;
     fetch_images(&session.images, &format!("{base}/image"));
-    mount(session).await
+    let public = Public {
+        base: base.to_owned(),
+        rows: protocol::public_rows::rows(&copy),
+    };
+    if let Some(name) = row {
+        // The list is the page's first history entry, at the list's
+        // address; the row's screen pushes its own over it (`sync_history`).
+        if history_at() == 0
+            && let Ok(h) = window().history()
+        {
+            let _ = h.replace_state_with_url(&JsValue::from_f64(0.0), "", Some(base));
+        }
+        // A name no row has (renamed, gone): the list.
+        if let Some(r) = public.rows.iter().find(|r| r.name == name) {
+            let _ = session.dispatch(&r.intent);
+        }
+    }
+    mount(session, Some(public)).await
+}
+
+/// A public link's page: its path, and its rows by name, so the address
+/// follows the screen a row opens.
+struct Public {
+    base: String,
+    rows: Vec<protocol::public_rows::Row>,
 }
 
 /// Puts a session on the page's canvas and runs it.
-async fn mount(session: Session) -> Result<(), JsValue> {
+async fn mount(session: Session, public: Option<Public>) -> Result<(), JsValue> {
     // A panic says what it was in the console (else only "unreachable").
     std::panic::set_hook(Box::new(|info| {
         web_sys::console::error_1(&format!("construct-web: {info}").into())
@@ -1178,6 +1220,7 @@ async fn mount(session: Session) -> Result<(), JsValue> {
         fling: None,
         links: Vec::new(),
         history_at: history_at(),
+        public,
     }));
     app.borrow_mut().resize();
     // A reload on one of this app's entries goes back to the page's own.

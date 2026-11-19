@@ -127,6 +127,32 @@ mod tests {
         );
     }
 
+    /// A row's address (decision `public-row-links`) opens its screen with
+    /// its params, as a tap on it does, and the open screen names its row.
+    #[test]
+    fn a_row_named_in_the_address_opens_its_screen() {
+        let copy = json!({ "format": 2, "layout": "c-meals", "title": "Meals",
+            "node": { "type": "core://List", "query_key": "collection:meals", "item_template":
+                { "type": "core://Tappable", "content": { "type": "core://Text", "style": "Body", "value_expr": "$item.name" },
+                  "on_click": { "intent": "action.navigation.open", "layout": "c-recipe",
+                    "params": { "id": "$item.id" }, "presentation": "Push" } } },
+            "layouts": { "c-recipe": { "type": "core://Text", "style": "Title",
+                "value_expr": "Cook ${collections://meals/$route.id#name}" } },
+            "data": { "entities": {
+                "collections://meals/m1": { "id": "m1", "name": "Lentil soup" },
+                "collections://meals/m2": { "id": "m2", "name": "Shakshuka" } },
+              "queries": { "collection:meals": ["collections://meals/m1", "collections://meals/m2"] } } });
+        let mut s = session(&copy, Viewport::PHONE).unwrap();
+        let rows = protocol::public_rows::rows(&copy);
+        let row = rows.iter().find(|r| r.name == "shakshuka").unwrap();
+        s.dispatch(&row.intent).unwrap();
+        s.settle(std::time::Duration::from_secs(2));
+        assert!(texts(&mut s).contains(&"Cook Shakshuka".to_owned()));
+        assert_eq!(s.back_steps(), 1);
+        let open = protocol::public_rows::row_with_params(&rows, s.top_route()).unwrap();
+        assert_eq!(open.name, "shakshuka");
+    }
+
     /// A root drawn with `params` reads them as `$route`.
     #[test]
     fn the_root_reads_its_params() {

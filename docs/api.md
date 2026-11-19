@@ -115,7 +115,7 @@ answers it 403 `web_credential_scope`. Rotating the pod code ends every browser'
 **Public links** (decisions [`public-web-links`](decisions/public-web-links.md),
 [`public-links-share-the-closure`](decisions/public-links-share-the-closure.md)), only with `CONSTRUCT_WEB=1` and
 `CONSTRUCT_PUBLIC_WEB=1`; anyone with the link reads them, and they never reach the pod. Each route also answers at a
-chosen short path, `/<handle>/<slug>` (and `…/view`, `…/image`; the first form, `/@<handle>/<slug>`, redirects to it). With `CONSTRUCT_PUBLIC_WEB` unset they answer 503,
+chosen short path, `/<handle>/<slug>` (and `…/view`, `…/image`; the first form, `/@<handle>/<slug>`, redirects to it). `/<handle>/<slug>/<row>` is the page opening one row's screen, the row named by its name (decision `public-row-links`). With `CONSTRUCT_PUBLIC_WEB` unset they answer 503,
 a page saying sharing is paused, and the copies stay stored. A page address with a trailing slash, `%40` for `@`, capitals or a `/web` prefix redirects (308) to its own address:
 
 | Route | |
