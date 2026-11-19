@@ -343,9 +343,10 @@ fn schedule_name<'a>(r: &Run, schedules: &'a [Schedule]) -> &'a str {
         .map_or("", |s| s.name.as_str())
 }
 
-/// The `sessions` feed: `agents:status` and `agents:sessions` (runs that
+/// The `sessions` feed: `agents:status`, `agents:sessions` (runs that
 /// need you, then running, then queued, then ended ones waiting on their
-/// outcome, then the rest, each newest first).
+/// outcome, then the rest, each newest first) and, for each schedule,
+/// `agents:schedule_runs:<name>` (its runs, the latest started first).
 pub fn sessions(
     st: Option<&(State, Health)>,
     schedules: &[Schedule],
@@ -362,7 +363,7 @@ pub fn sessions(
         .unwrap_or_default();
     list.sort_by_key(|r| (rank(r), -r.last_at(), r.id.clone()));
     let mut order = Vec::new();
-    for r in list {
+    for r in &list {
         let uri = format!("agents://sessions/{}", r.id);
         b.entities.insert(
             uri.clone(),
@@ -371,7 +372,24 @@ pub fn sessions(
         order.push(uri);
     }
     b.queries.insert(crate::SESSIONS_QUERY.into(), order);
+    // Each schedule's runs, the latest started first (a schedule with no
+    // runs gets an empty list, so a screen can bind it either way).
+    let mut by_start = list;
+    by_start.sort_by_key(|r| (-r.queued_at.max(r.started_at), r.id.clone()));
+    for sc in schedules {
+        let runs = by_start
+            .iter()
+            .filter(|r| r.origin == crate::cap::ORIGIN_SCHEDULE && r.work_item_id == sc.id)
+            .map(|r| format!("agents://sessions/{}", r.id))
+            .collect();
+        b.queries.insert(schedule_runs_query(&sc.name), runs);
+    }
     b
+}
+
+/// The query of schedule `name`'s runs, latest first: `agents:schedule_runs:<name>`.
+pub fn schedule_runs_query(name: &str) -> String {
+    format!("agents:schedule_runs:{name}")
 }
 
 /// A sandbox state's word and colour.
@@ -694,6 +712,47 @@ mod tests {
                 last_ok_at: Some(60_000),
             },
         )
+    }
+
+    #[test]
+    fn a_schedules_runs_list_latest_first() {
+        let (mut s, h) = st();
+        for (id, at) in [
+            ("ended_old", 5),
+            ("park", 1),
+            ("queue", 9),
+            ("ended_new", 8),
+        ] {
+            let run = s.runs.get_mut(id).unwrap();
+            run.origin = crate::cap::ORIGIN_SCHEDULE.into();
+            run.work_item_id = if id == "ended_new" { "sch_b" } else { "sch_a" }.into();
+            run.queued_at = at * 1000;
+        }
+        let sc = |id: &str, name: &str| Schedule {
+            id: id.into(),
+            name: name.into(),
+            ..Default::default()
+        };
+        let list = [
+            sc("sch_a", "nightly"),
+            sc("sch_b", "weekly"),
+            sc("sch_c", "never"),
+        ];
+        let b = sessions(Some(&(s, h)), &list, "runner.example", 120_000);
+        // Not by what they need (park first in agents:sessions): by start.
+        assert_eq!(
+            b.queries["agents:schedule_runs:nightly"],
+            [
+                "agents://sessions/queue",
+                "agents://sessions/ended_old",
+                "agents://sessions/park",
+            ]
+        );
+        assert_eq!(
+            b.queries["agents:schedule_runs:weekly"],
+            ["agents://sessions/ended_new"]
+        );
+        assert!(b.queries["agents:schedule_runs:never"].is_empty());
     }
 
     #[test]

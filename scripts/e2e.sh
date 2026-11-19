@@ -39,9 +39,11 @@ done
 
 run_suite() {
   # The in-process pods seal upstream credentials, as staging does (a throwaway key).
-  CONSTRUCT_SECRETS_KEY="${CONSTRUCT_SECRETS_KEY:-$(head -c 32 /dev/urandom | base64)}" \
-  # One test binary for all of e2e's tests; the filters pick the suite's modules.
-  cargo test -p e2e --test integration -- --nocapture suite:: notifications:: ${extra[@]+"${extra[@]}"}
+  export CONSTRUCT_SECRETS_KEY="${CONSTRUCT_SECRETS_KEY:-$(head -c 32 /dev/urandom | base64)}"
+  # One test binary for all of e2e's tests; the filters pick the suite's modules. The tests share one upstream
+  # (each resets it and signs in), so they run one at a time.
+  cargo test -p e2e --test integration -- --nocapture --test-threads=1 suite:: notifications:: \
+    ${extra[@]+"${extra[@]}"}
 }
 
 case "$upstream" in

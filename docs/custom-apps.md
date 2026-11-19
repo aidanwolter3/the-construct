@@ -314,7 +314,9 @@ never writes code: it declares typed fields (`text`, `number`, `bool`, `date`, `
   [`notifications-in-a-collection`](decisions/notifications-in-a-collection.md), [notifications.md](notifications.md)):
   every pod has them, layouts bind them, and they don't count against the limits above.
 - **Deleting.** `delete_collection` removes a collection once no layout binds it and no other collection's ref,
-  lookup, count, rollup or action names it (the refusal names them); home's feed for it is dropped too. It is restorable with `restore_collection`
+  lookup, count, rollup or action names it (the refusal names them); home's feed for it is dropped too, read and
+  written in one transaction so deletes at once each drop their own. A pod whose home still binds a deleted
+  collection drops that feed when it opens (issue #358). It is restorable with `restore_collection`
   for 30 days, then purged (decision [`collection-delete`](decisions/collection-delete.md)); sooner when what the
   pod keeps for undoing passes twice its bytes cap (the oldest goes first). A stale feed alone is
   dropped with `rename_layout` on home, passing home's whole feed list without it.

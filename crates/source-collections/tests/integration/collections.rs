@@ -1116,3 +1116,124 @@ async fn a_collection_is_deleted_restored_and_purged() {
     assert_eq!(l["collections"][0]["rows"], 0);
     assert_eq!(l["collections"][0]["version"], 1);
 }
+
+/// Issue #358: collections deleted at once each drop their own feed from
+/// home's, so none is left behind to refuse later layout writes.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn collections_deleted_at_once_all_leave_homes_feeds() {
+    let pod = pod();
+    let names: Vec<String> = (0..6).map(|i| format!("gone{i}")).collect();
+    for n in &names {
+        ok(
+            &pod,
+            "define_collection",
+            json!({"name": n, "fields": [{"name": "title", "type": "text"}]}),
+        )
+        .await;
+    }
+    let feeds: Vec<Value> = names.iter().map(|n| json!(["collections", n])).collect();
+    let app = ok(
+        &pod,
+        "create_layout",
+        json!({"title": "All", "icon": "dashboard", "feeds": feeds, "layout":
+            {"type": "core://Workspace", "id": "x", "title": "All", "slots": []}}),
+    )
+    .await["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    ok(&pod, "delete_layout", json!({"id": app})).await;
+    let home = || {
+        pod.store()
+            .with_conn(|c| Ok::<_, rusqlite::Error>(pod_core::layouts::home_feeds(c)))
+            .unwrap()
+    };
+    assert!(home().contains(&("collections".into(), "gone0".into())));
+
+    let deletes: Vec<_> = names
+        .iter()
+        .map(|n| {
+            let (pod, n) = (pod.clone(), n.clone());
+            tokio::spawn(
+                async move { ok(&pod, "delete_collection", json!({"collection": n})).await },
+            )
+        })
+        .collect();
+    for d in deletes {
+        assert_eq!(d.await.unwrap()["dropped_from_home_feeds"], true);
+    }
+    let left = home();
+    assert!(
+        names
+            .iter()
+            .all(|n| !left.contains(&("collections".into(), n.clone()))),
+        "{left:?}"
+    );
+    // Layout writes still succeed.
+    define_todos(&pod).await;
+    create_app(&pod, "Todos", todo_layout("")).await;
+}
+
+/// Issue #358: a pod whose home already binds a deleted collection (left by
+/// an earlier race) drops that feed when it opens, and saves layouts again.
+#[tokio::test]
+async fn a_deleted_collections_feed_leaves_home_when_the_pod_opens() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("server.db");
+    let open = || -> Pod {
+        let pod: Pod = Arc::new(AppState::new(
+            pod_core::store::Store::open(&path).unwrap(),
+            vec![Arc::new(CollectionsAdapter::with_caps(Caps::default()))],
+        ));
+        let _ = pod.store().create_pinned_session(&session_hash("pod"));
+        pod
+    };
+    let stale = ("collections".to_owned(), "glossary".to_owned());
+    let home = |pod: &Pod| {
+        pod.store()
+            .with_conn(|c| Ok::<_, rusqlite::Error>(pod_core::layouts::home_feeds(c)))
+            .unwrap()
+    };
+    {
+        let pod = open();
+        ok(
+            &pod,
+            "define_collection",
+            json!({"name": "glossary", "fields": [{"name": "title", "type": "text"}]}),
+        )
+        .await;
+        let app = ok(
+            &pod,
+            "create_layout",
+            json!({"title": "Glossary", "icon": "dashboard", "feeds": [["collections", "glossary"]],
+                "layout": {"type": "core://Workspace", "id": "x", "title": "Glossary", "slots": []}}),
+        )
+        .await["id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        ok(&pod, "delete_layout", json!({"id": app})).await;
+        // Deleted behind home's back, as the race left it.
+        pod.store()
+            .with_conn(|c| {
+                c.execute(
+                    "INSERT INTO collections_deleted (name, deleted_at) VALUES ('glossary', 1)",
+                    [],
+                )
+            })
+            .unwrap();
+        assert!(home(&pod).contains(&stale));
+        define_todos(&pod).await;
+        let (err, e) = tool(
+            &pod,
+            "create_layout",
+            json!({"title": "Todos", "icon": "dashboard", "feeds": [["collections", "todos"]],
+                "layout": todo_layout("")}),
+        )
+        .await;
+        assert!(err && e.to_string().contains("names no collection"), "{e}");
+    }
+    let pod = open();
+    assert!(!home(&pod).contains(&stale), "{:?}", home(&pod));
+    create_app(&pod, "Todos", todo_layout("")).await;
+}

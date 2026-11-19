@@ -67,7 +67,8 @@ is plugged and to which URL; `unplug_jack agent_runner` signs out, like `POST /v
   `agents:status.stale` true and a "Can't reach …" line.
 - **Feeds:** `sessions` (`agents:status` and `agents:sessions`: runs that need you or are parked, then running ones,
   then queued, then ended ones waiting on their outcome, then the rest, each newest first; entity
-  `agents://sessions/<run id>`), `sandboxes` (down first, then degraded or suspended, then awake), `checks`,
+  `agents://sessions/<run id>`; and `agents:schedule_runs:<name>`, each schedule's runs with the latest started
+  first, for a schedule's list of runs), `sandboxes` (down first, then degraded or suspended, then awake), `checks`,
   `schedules` (the pod's own, below); and `/v1/agents/sessions/timeline?id=<run id>` (`agents:timeline:<id>`), the
   run's log read from the runner when the screen opens (its first 500 lines, kept 10 s, at most 16 logs a pod). `agents:status.summary_text` reads e.g. "1
   working · 1 needs you · 2 queued · 1 waiting" or "Nothing running". A run's `status_text` is one of Queued,
@@ -82,7 +83,9 @@ is plugged and to which URL; `unplug_jack agent_runner` signs out, like `POST /v
 - **Actions:** `/v1/agents/sessions/stop {run_id}` (`session_id` is read the same way, for older layouts),
   `/v1/agents/sandboxes/wake {workspace, minutes?}`, `/v1/agents/sandboxes/repair {workspace}` (asks first),
   `/v1/agents/tasks/start {workspace, title, prompt, task_id?, model?, max_runtime_min?}`, `/v1/agents/tasks/reopen`
-  (`{id, message}` for a linked task's row; `{run_id, message}` for any ended run, a task's or a schedule's),
+  (`{id, message}` for a linked task's row; `{run_id, message}` for any ended run, a task's or a schedule's; the
+  message is sent with a closing line asking the agent to report again when it has finished, since a resumed
+  conversation that only replies and stops leaves its run needing you, then parked, with its work done),
   `/v1/agents/sessions/continue {run_id}`, `/v1/agents/sessions/review {run_id}`, and the schedule actions below.
   They need a valid pod session; runner refusals come back as 400, 404 or 409 `runner_refused`, and 502 otherwise
   (never 401, which would sign the device out).

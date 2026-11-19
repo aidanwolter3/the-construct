@@ -21,6 +21,9 @@ Decision:
 - **Home's feed goes with it.** If home still lists `["collections", <c>]` (nothing binds it, or the delete would
   have been refused), the delete drops it first, through the same home feed update as `rename_layout`: a layout that
   names a collection that doesn't exist fails validation, so a stale feed would block every later save of home.
+  Home's feeds are re-read inside that write's transaction (`construct::write::drop_home_feed`), so collections
+  deleted at once each drop their own; a pod a race already left with a deleted collection's feed drops it when it
+  opens (`Source::has_feed`, next to `drop_unknown_feeds`; issue #358).
 - **Soft, 30 days.** A deleted collection is a row in `collections_deleted` (migration `deleted_collections`). Its
   data stays but everything that reads live definitions skips it: routes answer 404, fillers and reminders stop, its
   rows don't count toward the caps. `list_collections` lists it under `deleted` with `purged_after`.

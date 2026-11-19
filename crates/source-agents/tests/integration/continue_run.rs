@@ -136,7 +136,10 @@ async fn a_schedule_run_can_be_reopened() {
     let sent = fake.sent("start_run").last().unwrap().clone();
     assert_eq!(sent["resume_from"], "run_old");
     assert_eq!(sent["origin"], "schedule");
-    assert_eq!(sent["prompt"], "Also bump the dev tools");
+    assert_eq!(
+        sent["prompt"],
+        source_agents::follow_up_prompt("Also bump the dev tools")
+    );
     assert!(
         sent["request_id"]
             .as_str()
