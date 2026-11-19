@@ -35,7 +35,8 @@ async fn a_session_from_before_v11_stays_signed_in() {
                  OR (type = 'table' AND name IN ('pod_settings', 'uploads', 'notifications',
                      'notification_polls', 'devices', 'device_channel_prefs', 'notification_switches',
                      'pixelfed_notify_cursor', 'custom_apps', 'components', 'jacks', 'agent_usage',
-                     'mcp_servers'))",
+                     'mcp_servers', 'client_devices', 'client_days', 'server_builds',
+                     'device_watches'))",
             )
             .unwrap()
             .query_map([], |r| r.get(0))
