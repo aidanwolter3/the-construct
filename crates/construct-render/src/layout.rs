@@ -3696,6 +3696,15 @@ impl Laid {
         &self.theme
     }
 
+    /// The top and bottom of the screen's content: inside the window's
+    /// insets (the system bars), on a screen `height` tall.
+    fn content_edges(&self, height: f32) -> (f32, f32) {
+        match self.tree.layout(self.elems[self.root].node) {
+            Ok(root) => (root.padding.top, height - root.padding.bottom),
+            Err(_) => (0.0, height),
+        }
+    }
+
     /// The page colour at each edge of the content (top, right, bottom,
     /// left), for the window's insets around it (the system bars): the
     /// opaque, square box drawn last (on top) that spans that whole edge,
@@ -3937,13 +3946,14 @@ impl Laid {
         }
         if scrolls {
             // Content passing under a header or a bottom bar (an end of the
-            // view inside the area it is drawn in, not the screen's edge)
-            // fades out into what is behind it, as much as there is left to
-            // scroll that way.
+            // view short of the screen's edge, even where an embedded layout
+            // ends there) fades out into what is behind it, as much as there
+            // is left to scroll that way.
             let max = (self.content_height(e) - h).max(0.0);
             let shown = intersect(rect, inner_clip);
-            let top_meets = shown[1] > clip[1] + 0.5;
-            let bottom_meets = shown[1] + shown[3] < clip[1] + clip[3] - 0.5;
+            let (top, bottom) = self.content_edges(scene.height);
+            let top_meets = shown[1] > top + 0.5;
+            let bottom_meets = shown[1] + shown[3] < bottom - 0.5;
             let above = if top_meets { oy } else { 0.0 };
             let below = if bottom_meets { max - oy } else { 0.0 };
             edge_fades(scene, shown, kid_at.backdrop, above, below);
