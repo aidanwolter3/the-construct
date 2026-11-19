@@ -179,7 +179,8 @@ A pod keeps up to five feeds; each lists up to ten sources:
   goes into the feed: no other field of a row leaves the pod.
 - `set_calendar_feed {name, title?, sources}` answers a review (every title, location and description a
   subscriber would read, and the next ten events) and publishes nothing; with `confirm: <review_id>` the feed goes
-  out and answers its `url`, `/ical/cal-….ics`. Events from 30 days ago on are included, and the feed is rendered
+  out and answers its `url`, `/ical/cal-….ics`. Events from 30 days ago on are included (the earliest 3000 that fit
+  in 2 MiB of text), and the feed is rendered
   again whenever its rows change. An edited row keeps its event's UID, so the calendar updates it in place.
 - `list_calendar_feeds` lists them with their URLs; `rotate_calendar_feed {name}` gives one a new URL (the old one
   stops at once; subscribe again); `revoke_calendar_feed {name}` stops one.

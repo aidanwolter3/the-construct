@@ -31,6 +31,10 @@ pub const MAX_FEEDS: usize = 5;
 pub const MAX_SOURCES: usize = 10;
 /// Most events one feed carries (the earliest, after [`PAST_DAYS`]).
 pub const MAX_EVENTS: usize = 3000;
+/// Most bytes of one feed's text: the host keeps it in `host.db`, outside
+/// every pod's storage quota (as a public link's copy,
+/// [`crate::public_copy::MAX_COPY_BYTES`]). Events past it are left out.
+pub const MAX_FEED_BYTES: usize = 2 * 1024 * 1024;
 /// How far back a feed reaches: events that ended in the last 30 days stay.
 pub const PAST_DAYS: i64 = 30;
 /// Events in a review's `next`.
@@ -192,8 +196,11 @@ pub fn uid_domain(pod_id: &str) -> String {
 /// The feed as RFC 5545 text (CRLF line ends, folded at 75 octets): a
 /// `VCALENDAR` named `title` with one `VEVENT` per event, in order. Times
 /// are UTC (`…Z`) or whole days, never floating; `zone` is the owner's
-/// time zone, said for apps that show it (`X-WR-TIMEZONE`).
-pub fn write(title: &str, zone: Option<&str>, domain: &str, events: &[Event]) -> String {
+/// time zone, said for apps that show it (`X-WR-TIMEZONE`). Only the
+/// events that fit in [`MAX_FEED_BYTES`] are written, from the first; the
+/// answer says how many.
+pub fn write(title: &str, zone: Option<&str>, domain: &str, events: &[Event]) -> (String, usize) {
+    const END: &str = "END:VCALENDAR\r\n";
     let mut out = String::new();
     let mut line = |l: String| fold(&l, &mut out);
     line("BEGIN:VCALENDAR".into());
@@ -207,41 +214,55 @@ pub fn write(title: &str, zone: Option<&str>, domain: &str, events: &[Event]) ->
     }
     line(format!("REFRESH-INTERVAL;VALUE=DURATION:{TTL}"));
     line(format!("X-PUBLISHED-TTL:{TTL}"));
+    let mut kept = 0;
     for e in events {
-        let uid: String = e
-            .key
-            .chars()
-            .map(|c| {
-                if c.is_ascii_alphanumeric() || c == '_' || c == '-' {
-                    c
-                } else {
-                    '-'
-                }
-            })
-            .collect();
-        line("BEGIN:VEVENT".into());
-        line(format!("UID:{uid}@{domain}"));
-        // The row's last change: an edited row is a newer version of the
-        // same event.
-        line(format!("DTSTAMP:{}", utc(e.modified)));
-        line(format!("CREATED:{}", utc(e.created)));
-        line(format!("LAST-MODIFIED:{}", utc(e.modified)));
-        line(format!("SEQUENCE:{}", (e.modified - e.created).max(0)));
-        line(property("DTSTART", &e.start));
-        line(property("DTEND", &e.end));
-        line(format!("SUMMARY:{}", escape(&e.summary)));
-        if let Some(l) = e.location.as_deref().filter(|l| !l.is_empty()) {
-            line(format!("LOCATION:{}", escape(l)));
+        let event = vevent(e, domain);
+        if out.len() + event.len() + END.len() > MAX_FEED_BYTES {
+            break;
         }
-        if let Some(d) = e.description.as_deref().filter(|d| !d.is_empty()) {
-            line(format!("DESCRIPTION:{}", escape(d)));
-        }
-        if matches!(e.start, EventTime::Day(_)) {
-            line("TRANSP:TRANSPARENT".into());
-        }
-        line("END:VEVENT".into());
+        out.push_str(&event);
+        kept += 1;
     }
-    line("END:VCALENDAR".into());
+    out.push_str(END);
+    (out, kept)
+}
+
+/// One event's `VEVENT`, folded, with its CRLFs.
+fn vevent(e: &Event, domain: &str) -> String {
+    let mut out = String::new();
+    let mut line = |l: String| fold(&l, &mut out);
+    let uid: String = e
+        .key
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '_' || c == '-' {
+                c
+            } else {
+                '-'
+            }
+        })
+        .collect();
+    line("BEGIN:VEVENT".into());
+    line(format!("UID:{uid}@{domain}"));
+    // The row's last change: an edited row is a newer version of the
+    // same event.
+    line(format!("DTSTAMP:{}", utc(e.modified)));
+    line(format!("CREATED:{}", utc(e.created)));
+    line(format!("LAST-MODIFIED:{}", utc(e.modified)));
+    line(format!("SEQUENCE:{}", (e.modified - e.created).max(0)));
+    line(property("DTSTART", &e.start));
+    line(property("DTEND", &e.end));
+    line(format!("SUMMARY:{}", escape(&e.summary)));
+    if let Some(l) = e.location.as_deref().filter(|l| !l.is_empty()) {
+        line(format!("LOCATION:{}", escape(l)));
+    }
+    if let Some(d) = e.description.as_deref().filter(|d| !d.is_empty()) {
+        line(format!("DESCRIPTION:{}", escape(d)));
+    }
+    if matches!(e.start, EventTime::Day(_)) {
+        line("TRANSP:TRANSPARENT".into());
+    }
+    line("END:VEVENT".into());
     out
 }
 
@@ -329,9 +350,11 @@ async fn render(
     title: &str,
     sources: &[Value],
 ) -> Result<(String, Vec<Event>), Value> {
-    let evs = events(pod, sources, crate::util::now_secs()).await?;
+    let mut evs = events(pod, sources, crate::util::now_secs()).await?;
     let (_, zone_name) = zone(pod).await;
-    let ics = write(title, zone_name.as_deref(), &uid_domain(pod_id), &evs);
+    let (ics, kept) = write(title, zone_name.as_deref(), &uid_domain(pod_id), &evs);
+    // The review and the count say only what goes out.
+    evs.truncate(kept);
     Ok((ics, evs))
 }
 
@@ -771,12 +794,13 @@ mod tests {
                 modified: 1_700_000_000,
             },
         ];
-        let ics = write(
+        let (ics, kept) = write(
             "My plans",
             Some("America/Denver"),
             "x.calendar.the-construct",
             &evs,
         );
+        assert_eq!(kept, 2);
         assert!(ics.starts_with("BEGIN:VCALENDAR\r\nVERSION:2.0\r\n"));
         assert!(ics.ends_with("END:VCALENDAR\r\n"));
         assert!(!ics.replace("\r\n", "").contains('\n'));
@@ -800,6 +824,31 @@ mod tests {
         {
             assert!(l.contains("VALUE=DATE:") || l.ends_with('Z'), "{l}");
         }
+    }
+
+    /// The host keeps a feed's text outside every pod's quota: a feed of
+    /// long texts keeps the earliest events that fit, each whole.
+    #[test]
+    fn a_feed_stops_at_its_byte_cap() {
+        let evs: Vec<Event> = (0..MAX_EVENTS as i64)
+            .map(|i| Event {
+                key: format!("notes/r{i}"),
+                summary: "😀".repeat(1000),
+                location: Some("😀".repeat(1000)),
+                description: Some("😀".repeat(1000)),
+                start: EventTime::At(1_796_000_000 + i * 3600),
+                end: EventTime::At(1_796_003_600 + i * 3600),
+                created: 1_700_000_000,
+                modified: 1_700_000_000,
+            })
+            .collect();
+        let (ics, kept) = write("Long", None, "x.calendar.the-construct", &evs);
+        assert!(ics.len() <= MAX_FEED_BYTES, "{} bytes", ics.len());
+        assert!(0 < kept && kept < evs.len(), "{kept}");
+        assert_eq!(ics.matches("BEGIN:VEVENT").count(), kept);
+        assert_eq!(ics.matches("END:VEVENT").count(), kept);
+        assert!(ics.contains("UID:notes-r0@"));
+        assert!(ics.ends_with("END:VEVENT\r\nEND:VCALENDAR\r\n"));
     }
 
     #[test]
