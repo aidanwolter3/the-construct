@@ -317,8 +317,11 @@ sees one and changing one needs no app build. Use one anywhere a node goes:
   `slot:<id>`, or a name from the file's `"parts"`).
 - **`pod:` components** are the pod's own, defined by an agent (MCP `define_component`, `copy_component`), versioned
   and deletable while no layout uses them.
-- **A definition** is `{"doc", "params": [{"name", "type": "text|number|bool|uri|binding", "default"?, "required"?,
-  "doc"}], "children"?: true, "template", "examples": [{"args", "children"?, "note"}]}`. In the template,
+- **A definition** is `{"doc", "params": [{"name", "type": "text|number|bool|uri|binding|json", "default"?,
+  "required"?, "doc"}], "children"?: true, "template", "examples": [{"args", "children"?, "note"}]}`. A `json`
+  parameter takes any JSON value but null, for the parts of a node that are objects or lists: an intent (`on_click`),
+  a `count` query, `where` conditions (decision `component-json-params`; the app must list feature
+  `component_json_params` to expand a component that has one). In the template,
   `$arg.<name>` is an argument (a string that is only `"$arg.n"` keeps the argument's type; it may name a key too),
   `{"type": "core://Children"}` is where the caller's children go (`"at": i` for one), `{"type": "core://IfArg",
   "arg", "equals"?, "then", "else"?}` keeps a branch, and `{"type": "core://Fragment", "children"}` is several

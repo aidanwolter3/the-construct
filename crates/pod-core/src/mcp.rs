@@ -369,7 +369,7 @@ fn base_tools() -> Vec<Value> {
         ),
         tool(
             "define_component",
-            "Define a component of the user's own (@me/<name>) any layout on this pod can use: {doc, params: [{name, type: text|number|bool|uri|binding, default?, required?, doc}], children?: true, template, examples: [{args, children?, note}]}. In the template, $arg.<name> is an argument (a whole \"$arg.n\" keeps its type), {\"type\": \"core://Children\"} is where the caller's children go (\"at\": i for one), and {\"type\": \"core://IfArg\", \"arg\", \"equals\"?, \"then\", \"else\"?} picks a branch. Every example must expand.",
+            "Define a component of the user's own (@me/<name>) any layout on this pod can use: {doc, params: [{name, type: text|number|bool|uri|binding|json, default?, required?, doc}], children?: true, template, examples: [{args, children?, note}]}. A json parameter takes any JSON value (an intent such as an on_click, a count query, a list of where conditions); prefer the others where they fit. In the template, $arg.<name> is an argument (a whole \"$arg.n\" keeps its type), {\"type\": \"core://Children\"} is where the caller's children go (\"at\": i for one), and {\"type\": \"core://IfArg\", \"arg\", \"equals\"?, \"then\", \"else\"?} picks a branch. Every example must expand.",
             json!({ "name": { "type": "string", "description": "<name> (@me/<name>)" }, "component": { "type": "object" }, "note": note }),
             &["name", "component"],
         ),

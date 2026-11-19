@@ -540,6 +540,39 @@ mod tests {
     }
 
     #[test]
+    fn a_json_parameter_puts_an_intent_or_a_query_in_whole() {
+        let link = json!({"kind": "element", "doc": "A text link",
+            "params": [{"name": "label", "type": "text", "required": true},
+                {"name": "on_click", "type": "json", "required": true}],
+            "node": {"type": "core://Tappable", "on_click": "$arg.on_click",
+                "content": {"type": "core://Text", "value_expr": "$arg.label"}}});
+        let empty = json!({"kind": "element", "doc": "What an empty list says",
+            "params": [{"name": "text", "type": "text", "required": true},
+                {"name": "count", "type": "json", "required": true}],
+            "node": {"type": "core://Conditional", "count": "$arg.count", "not": true,
+                "content": {"type": "core://Text", "value_expr": "$arg.text"}}});
+        let (mut objs, ids) = store(&[link, empty]);
+        let open = json!({"intent": "action.link.open", "url": "$item.url"});
+        let count = json!({"query_key": "collection:log", "where": [{"field": "private", "equals": "false"}]});
+        let page = json!({"kind": "element", "node": {"type": "core://Column", "children": [
+            {"type": "core://Use", "ref": {"name": "@me/text_link", "el": ids[0]},
+                "args": {"label": "Open", "on_click": open}},
+            {"type": "core://Use", "ref": {"name": "@me/empty_note", "el": ids[1]},
+                "args": {"text": "Nothing yet", "count": count}},
+            // Null is no argument: a required one is missing, so a placeholder.
+            {"type": "core://Use", "ref": {"name": "@me/text_link", "el": ids[0]},
+                "args": {"label": "Open", "on_click": null}}]}});
+        let pid = object_id(&page);
+        objs.insert(pid.clone(), Arc::new(page));
+        let m = materialize(&objs, &pid).unwrap();
+        let kids = &m.node["children"];
+        assert_eq!(kids[0]["on_click"], open);
+        assert_eq!(kids[0]["content"]["value_expr"], json!("Open"));
+        assert_eq!(kids[1]["count"], count);
+        assert_eq!(kids[2], placeholder());
+    }
+
+    #[test]
     fn a_missing_component_is_a_placeholder_and_listed() {
         let page = json!({"kind": "element", "node": {"type": "core://Use",
             "ref": {"name": "@me/x", "el": "e1-gone"}}});
