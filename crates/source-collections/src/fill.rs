@@ -34,6 +34,7 @@
 //! most a day, at least `Retry-After`).
 
 use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 use std::sync::atomic::{AtomicI64, Ordering};
 use std::time::Duration;
 
@@ -997,6 +998,77 @@ impl Drop for BusyGuard<'_> {
     }
 }
 
+/// Agent fills reserved against the pod's daily cap
+/// (`Caps::agent_fills_per_day`) by fills still running, by day: a fill
+/// writes its count to `collections_fills` only when it ends, so fillers
+/// running at once would each see the whole budget left. A fill reserves
+/// what it plans to spend before it calls the model (read together with
+/// today's written count, under this lock) and releases it once its count
+/// is written, which refunds what it didn't spend.
+#[derive(Default)]
+pub struct Reserved(std::sync::Mutex<HashMap<String, i64>>);
+
+/// One fill's reservation (day and count), released when dropped: `fill`
+/// drops it after it writes the fill's count.
+struct Held {
+    reserved: Arc<Reserved>,
+    taken: std::sync::Mutex<Option<(String, i64)>>,
+}
+
+impl Held {
+    fn new(pod: &Pod) -> Self {
+        Self {
+            reserved: pod.local::<Reserved>(),
+            taken: std::sync::Mutex::new(None),
+        }
+    }
+
+    /// Reserve up to `want` agent fills of the pod's `cap` on `day`:
+    /// answers how many were granted (0 when the budget is spent or can't
+    /// be read).
+    async fn reserve(&self, pod: &Pod, day: &str, want: i64, cap: i64) -> i64 {
+        let reserved = self.reserved.clone();
+        let d = day.to_owned();
+        let granted = pod
+            .blocking(move |s| {
+                s.with_conn(|c| {
+                    let mut r = reserved.0.lock().unwrap_or_else(|e| e.into_inner());
+                    let written = pod_model_fills_today(c, &d)?;
+                    let running = r.get(&d).copied().unwrap_or(0);
+                    let n = want.min(cap - written - running).max(0);
+                    if n > 0 {
+                        r.retain(|k, v| *k == d || *v > 0);
+                        *r.entry(d).or_default() += n;
+                    }
+                    Ok(n)
+                })
+            })
+            .await
+            .unwrap_or(0);
+        if granted > 0 {
+            let mut t = self.taken.lock().unwrap_or_else(|e| e.into_inner());
+            let e = t.get_or_insert_with(|| (day.to_owned(), 0));
+            e.1 += granted;
+        }
+        granted
+    }
+}
+
+impl Drop for Held {
+    fn drop(&mut self) {
+        let Some((day, n)) = self.taken.lock().unwrap_or_else(|e| e.into_inner()).take() else {
+            return;
+        };
+        let mut r = self.reserved.0.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(v) = r.get_mut(&day) {
+            *v -= n;
+            if *v <= 0 {
+                r.remove(&day);
+            }
+        }
+    }
+}
+
 fn busy_key(collection: &str, filler: &str) -> String {
     format!("{collection}/{filler}")
 }
@@ -1293,14 +1365,16 @@ fn by_ids(
 }
 
 /// Count a model fill toward today's budgets: the filler's own (an agent's
-/// `fills_per_day`) and, for agents, the pod's. Answers today's date; `Err`
-/// when a budget is spent.
+/// `fills_per_day`) and, for agents, the pod's, reserved in `held` (agent
+/// fills pass one) so fills running at once can't both take its last fill.
+/// Answers today's date; `Err` when a budget is spent.
 async fn take_model_budget(
     pod: &Pod,
     adapter: &CollectionsAdapter,
     filler: &Filler,
     st: &State,
     now: i64,
+    held: Option<&Held>,
 ) -> Result<String, String> {
     let day = today(pod.store(), now);
     let mine = if st.day.as_deref() == Some(day.as_str()) {
@@ -1315,16 +1389,11 @@ async fn take_model_budget(
             "this filler already filled {mine} times today (fills_per_day {fills_per_day})"
         ));
     }
-    if filler.is_agent() {
-        let d = day.clone();
-        let pod_total = pod
-            .blocking(move |s| s.with_conn(|c| pod_model_fills_today(c, &d)))
-            .await
-            .unwrap_or(0);
+    if let Some(held) = held.filter(|_| filler.is_agent()) {
         let cap = i64::from(adapter.caps().agent_fills_per_day);
-        if pod_total >= cap {
+        if held.reserve(pod, &day, 1, cap).await == 0 {
             return Err(format!(
-                "the pod's agents already filled {pod_total} times today (the operator's limit is {cap})"
+                "the pod's agents already used today's fills (the operator's limit is {cap})"
             ));
         }
     }
@@ -1582,7 +1651,7 @@ async fn run_fetch(
             return Fetch::Unchanged;
         }
         if filler.is_llm() {
-            match take_model_budget(pod, adapter, filler, state, now).await {
+            match take_model_budget(pod, adapter, filler, state, now, None).await {
                 Ok(d) => *day = Some(d),
                 Err(e) => return Fetch::Failed(e, None),
             }
@@ -1774,7 +1843,7 @@ async fn run_fetch(
                 continue;
             }
             if !budget_taken {
-                match take_model_budget(pod, adapter, filler, state, now).await {
+                match take_model_budget(pod, adapter, filler, state, now, None).await {
                     Ok(d) => *day = Some(d),
                     Err(e) => return Fetch::Failed(e, None),
                 }
@@ -1838,7 +1907,7 @@ async fn run_fetch(
                 continue;
             }
             if filler.is_llm() && !budget_taken {
-                match take_model_budget(pod, adapter, filler, state, now).await {
+                match take_model_budget(pod, adapter, filler, state, now, None).await {
                     Ok(d) => *day = Some(d),
                     Err(e) => return Fetch::Failed(e, None),
                 }
@@ -1921,6 +1990,7 @@ async fn run_agent(
     force: bool,
     now: i64,
     spent: &AtomicI64,
+    held: &Held,
 ) -> Result<(Fetch, String), String> {
     let Source::Agent {
         prompt,
@@ -1936,9 +2006,9 @@ async fn run_agent(
         return Err(NO_AGENT.into());
     };
     if filler.for_each().is_some() {
-        return run_each(pod, adapter, def, filler, state, force, now, spent).await;
+        return run_each(pod, adapter, def, filler, state, force, now, spent, held).await;
     }
-    let day = take_model_budget(pod, adapter, filler, state, now).await?;
+    let day = take_model_budget(pod, adapter, filler, state, now, Some(held)).await?;
     spent.store(1, Ordering::SeqCst);
     let agent_fields = agent_fields(def, fields);
     let name = def.name.clone();
@@ -2060,6 +2130,7 @@ async fn run_each(
     force: bool,
     now: i64,
     spent: &AtomicI64,
+    held: &Held,
 ) -> Result<(Fetch, String), String> {
     let Source::Agent {
         prompt,
@@ -2214,14 +2285,17 @@ async fn run_each(
     } else {
         0
     };
-    let d = day.clone();
-    let pod_total = pod
-        .blocking(move |s| s.with_conn(|c| pod_model_fills_today(c, &d)))
-        .await
-        .unwrap_or(0);
-    let left = (i64::from(*fills_per_day) - mine)
-        .min(i64::from(adapter.caps().agent_fills_per_day) - pod_total)
-        .max(0) as usize;
+    // The pod's is reserved before any model call (released when the fill
+    // has written its count), so fillers running at once share it.
+    let want = (i64::from(*fills_per_day) - mine)
+        .min(todo.len().min(crate::filler::MAX_EACH_PER_FILL) as i64)
+        .max(0);
+    let left = if want > 0 {
+        let cap = i64::from(adapter.caps().agent_fills_per_day);
+        held.reserve(pod, &day, want, cap).await as usize
+    } else {
+        0
+    };
     if left == 0 {
         return Err(format!(
             "this filler already researched {mine} rows today (fills_per_day {fills_per_day}, or the pod's limit)"
@@ -2233,10 +2307,7 @@ async fn run_each(
     let mut answers = Vec::new();
     let (mut items, mut skipped, mut calls) = (0, 0, 0);
     let mut failed = Vec::new();
-    for (r, text, key, _) in todo
-        .into_iter()
-        .take(left.min(crate::filler::MAX_EACH_PER_FILL))
-    {
+    for (r, text, key, _) in todo.into_iter().take(left) {
         let current: Vec<Map<String, Value>> = own_rows
             .iter()
             .filter(|o| {
@@ -2511,6 +2582,9 @@ pub async fn fill(pod: &Pod, collection: &str, filler_id: &str, force: bool) -> 
     let now = pod_core::util::now_secs();
     let mut day = None;
     let mut extra_calls = 0;
+    // The pod's agent budget this fill reserves, released once its count
+    // is written below.
+    let held = Held::new(pod);
     let off = off(pod).await;
     let fetched = if off.stops(&filler) {
         Fetch::Failed(
@@ -2540,7 +2614,7 @@ pub async fn fill(pod: &Pod, collection: &str, filler_id: &str, force: bool) -> 
         let spent = AtomicI64::new(0);
         match tokio::time::timeout(
             limit,
-            run_agent(pod, adapter, &def, &filler, &st, force, now, &spent),
+            run_agent(pod, adapter, &def, &filler, &st, force, now, &spent, &held),
         )
         .await
         {
@@ -2887,6 +2961,8 @@ pub async fn fill(pod: &Pod, collection: &str, filler_id: &str, force: bool) -> 
     let _ = pod
         .blocking(move |s| s.with_conn(|c| save_state(c, &name, &fid, &st2)))
         .await;
+    // Its count is written: what it reserved is released (the rest refunded).
+    drop(held);
     // Done: clients reload with `refreshing` false and the new health.
     drop(guard);
     if let Outcome::Filled { stored, .. } = &outcome

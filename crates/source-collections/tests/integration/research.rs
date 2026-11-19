@@ -25,6 +25,8 @@ struct Researcher {
     asked: Mutex<Vec<(String, usize)>>,
     /// A request with this text never answers (a research that runs on).
     hang: Mutex<Option<String>>,
+    /// Each answer waits a little first, so fills started together overlap.
+    slow: std::sync::atomic::AtomicBool,
 }
 
 impl FillAgent for Researcher {
@@ -37,6 +39,9 @@ impl FillAgent for Researcher {
             let hang = self.hang.lock().unwrap().clone();
             if hang.is_some_and(|h| req.prompt.contains(h.as_str())) {
                 std::future::pending::<()>().await;
+            }
+            if self.slow.load(std::sync::atomic::Ordering::SeqCst) {
+                tokio::time::sleep(std::time::Duration::from_millis(20)).await;
             }
             let rows = self
                 .answers
@@ -59,8 +64,11 @@ impl FillAgent for Researcher {
 }
 
 fn pod(agent: Arc<Researcher>) -> Pod {
-    let adapter = CollectionsAdapter::with_caps(Caps::default())
-        .with_agent(Some(agent as Arc<dyn FillAgent>));
+    pod_with(agent, Caps::default())
+}
+
+fn pod_with(agent: Arc<Researcher>, caps: Caps) -> Pod {
+    let adapter = CollectionsAdapter::with_caps(caps).with_agent(Some(agent as Arc<dyn FillAgent>));
     let pod: Pod = Arc::new(AppState::in_memory(vec![Arc::new(adapter)]));
     pod.store()
         .create_pinned_session(&session_hash("pod"))
@@ -326,6 +334,68 @@ async fn each_researched_item_counts_toward_the_daily_budget() {
     assert!(matches!(out, Outcome::Failed(_)), "{out:?}");
     assert_eq!(agent.asked.lock().unwrap().len(), 2);
     assert_eq!(rows(&pod, "options").await.len(), 2);
+}
+
+/// The pod's daily cap on agent fills holds across fillers running at
+/// once: each reserves its share before it calls the model, so two
+/// `for_each` fillers started together research no more rows between them
+/// than `agent_fills_per_day`.
+#[tokio::test]
+async fn fillers_started_together_share_the_pods_daily_cap() {
+    let agent = Arc::new(Researcher::default());
+    let caps = Caps {
+        agent_fills_per_day: 3,
+        ..Caps::default()
+    };
+    let pod = pod_with(agent.clone(), caps);
+    let first = define(&pod, 3).await;
+    ok(
+        &pod,
+        "define_collection",
+        json!({"name": "picks", "title": "Picks", "fields": [
+            {"name": "item", "type": "ref", "collection": "items"},
+            {"name": "store", "type": "text"},
+            {"name": "url", "type": "text"},
+            {"name": "price", "type": "number", "optional": true}],
+        "fillers": [{"kind": "agent", "title": "Pick",
+            "prompt": "Pick the best place to buy this item.",
+            "fields": ["store", "url", "price"], "key": "url", "fills_per_day": 3,
+            "for_each": {"collection": "items", "link": "item"}}]}),
+    )
+    .await;
+    settle(&pod, "picks").await;
+    let second = filler_ids(&pod, "picks").await.remove(0);
+    for n in ["Lamp", "Rug", "Throw blanket", "Vase"] {
+        create(&pod, "items", json!({"name": n})).await;
+    }
+    *agent.answers.lock().unwrap() = vec![
+        ("Lamp".into(), vec![option("lamps", 40)]),
+        ("Rug".into(), vec![option("rugs", 90)]),
+        ("Throw".into(), vec![option("throws", 30)]),
+        ("Vase".into(), vec![option("vases", 20)]),
+    ];
+    agent.slow.store(true, std::sync::atomic::Ordering::SeqCst);
+    let (a, b) = tokio::join!(
+        fill::fill(&pod, "options", &first, false),
+        fill::fill(&pod, "picks", &second, false)
+    );
+    assert!(
+        matches!(a, Outcome::Filled { .. }) || matches!(b, Outcome::Filled { .. }),
+        "{a:?} {b:?}"
+    );
+    assert_eq!(
+        agent.asked.lock().unwrap().len(),
+        3,
+        "the pod's cap, shared"
+    );
+    // Today's budget is spent for both.
+    let (a, b) = tokio::join!(
+        fill::fill(&pod, "options", &first, true),
+        fill::fill(&pod, "picks", &second, true)
+    );
+    assert!(matches!(a, Outcome::Failed(_)), "{a:?}");
+    assert!(matches!(b, Outcome::Failed(_)), "{b:?}");
+    assert_eq!(agent.asked.lock().unwrap().len(), 3);
 }
 
 #[tokio::test]
