@@ -2427,6 +2427,7 @@ impl<'i> Build<'_, 'i> {
                 indent,
                 stack,
                 min_column_dp,
+                trailing,
             } => {
                 let Some(all) = ctx.query(query_key) else {
                     // Not loaded yet: nothing, as the app shows while loading.
@@ -2526,6 +2527,40 @@ impl<'i> Build<'_, 'i> {
                     }
                     kids.push(this.push(style, std::mem::take(cells), Paint::None, None, false));
                 };
+                // A cell goes into the row being filled (a grid) or the list.
+                let place = |this: &mut Self,
+                             cell: usize,
+                             cells: &mut Vec<usize>,
+                             kids: &mut Vec<usize>| {
+                    if cols > 1 {
+                        let wrap = Style {
+                            flex_grow: 1.0,
+                            flex_basis: length(0.0),
+                            min_size: Size {
+                                width: length(0.0),
+                                height: auto(),
+                            },
+                            display: Display::Flex,
+                            flex_direction: FlexDirection::Column,
+                            ..Default::default()
+                        };
+                        let w = this.push(wrap, vec![cell], Paint::None, None, false);
+                        cells.push(w);
+                        if cells.len() == cols {
+                            flush(this, cells, kids);
+                        }
+                    } else {
+                        kids.push(cell);
+                    }
+                };
+                // Every cell fills its column, as the app's list does.
+                let fill = |this: &mut Self, cell: usize| {
+                    let node = this.elems[cell].node;
+                    let mut s = this.tree.style(node).cloned().unwrap_or_default();
+                    s.align_self = Some(AlignSelf::STRETCH);
+                    s.flex_shrink = 0.0;
+                    this.restyle(node, s);
+                };
                 for (i, uri) in uris.iter().enumerate() {
                     let item = ctx.entity(uri).expect("filtered");
                     let ib = B {
@@ -2580,38 +2615,19 @@ impl<'i> Build<'_, 'i> {
                         },
                         None => Paint::None,
                     };
-                    // Every item fills its column, as the app's list does.
-                    let tstyle = &mut self
-                        .tree
-                        .style(self.elems[cell].node)
-                        .cloned()
-                        .unwrap_or_default();
-                    tstyle.align_self = Some(AlignSelf::STRETCH);
-                    tstyle.flex_shrink = 0.0;
-                    self.restyle(self.elems[cell].node, tstyle.clone());
+                    fill(self, cell);
                     if indent.is_some() || focused {
                         cell = self.push(style, vec![cell], paint, None, false);
                     }
-                    if cols > 1 {
-                        let wrap = Style {
-                            flex_grow: 1.0,
-                            flex_basis: length(0.0),
-                            min_size: Size {
-                                width: length(0.0),
-                                height: auto(),
-                            },
-                            display: Display::Flex,
-                            flex_direction: FlexDirection::Column,
-                            ..Default::default()
-                        };
-                        let w = self.push(wrap, vec![cell], Paint::None, None, false);
-                        row_cells.push(w);
-                        if row_cells.len() == cols {
-                            flush(self, &mut row_cells, &mut kids);
-                        }
-                    } else {
-                        kids.push(cell);
-                    }
+                    place(self, cell, &mut row_cells, &mut kids);
+                }
+                // The trailing cell (feature `list_trailing`): the next cell
+                // after the items, bound like the list, never a deck's.
+                if let Some(t) = trailing.as_deref().filter(|_| !*stack)
+                    && let Some(cell) = self.node(t, &b.child("trailing", Axis::Column))
+                {
+                    fill(self, cell);
+                    place(self, cell, &mut row_cells, &mut kids);
                 }
                 flush(self, &mut row_cells, &mut kids);
                 let mut style = column(*spacing_dp, pad(*padding_h_dp, 0), AlignItems::STRETCH);

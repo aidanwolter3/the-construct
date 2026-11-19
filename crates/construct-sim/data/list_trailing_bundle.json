@@ -1,0 +1,215 @@
+{
+ "version": "1.0.0",
+ "workspace": {
+  "type": "core://Page",
+  "id": "list_trailing",
+  "title": "Workouts",
+  "root": {
+   "type": "core://Box",
+   "fill": true,
+   "background": "${local://theme#page}",
+   "content": {
+    "type": "core://Scroll",
+    "content": {
+     "type": "core://Column",
+     "padding_h_dp": 16,
+     "padding_v_dp": 16,
+     "spacing_dp": 12,
+     "children": [
+      {
+       "type": "core://Text",
+       "style": "Headline",
+       "value_expr": "Workouts"
+      },
+      {
+       "type": "core://Text",
+       "style": "Label",
+       "value_expr": "This week"
+      },
+      {
+       "type": "core://List",
+       "query_key": "sessions",
+       "columns": 4,
+       "spacing_dp": 8,
+       "item_template": {
+        "type": "core://Tappable",
+        "tag": "session:$item.id",
+        "content_description": "$item.day $item.kind",
+        "on_click": {
+         "intent": "action.navigation.back"
+        },
+        "content": {
+         "type": "core://Box",
+         "background": "${local://theme#card}",
+         "border_color": "${local://theme#card_border}",
+         "corner_dp": 12,
+         "height_dp": 84,
+         "padding_h_dp": 8,
+         "padding_v_dp": 10,
+         "content": {
+          "type": "core://Column",
+          "spacing_dp": 2,
+          "children": [
+           {
+            "type": "core://Text",
+            "style": "Label",
+            "value_expr": "$item.day"
+           },
+           {
+            "type": "core://Text",
+            "style": "Body",
+            "value_expr": "$item.kind",
+            "weight": "SemiBold"
+           }
+          ]
+         }
+        }
+       },
+       "trailing": {
+        "type": "core://Tappable",
+        "tag": "add:week",
+        "content_description": "Add a workout",
+        "on_click": {
+         "intent": "action.navigation.back"
+        },
+        "content": {
+         "type": "core://Box",
+         "height_dp": 84,
+         "corner_dp": 12,
+         "background": "${local://theme#page}",
+         "border_color": "${local://theme#card_border}",
+         "border_style": "Dashed",
+         "content_color": "${local://theme#muted_text}",
+         "content": {
+          "type": "core://Column",
+          "align": "Center",
+          "justify": "center",
+          "children": [
+           {
+            "type": "core://Text",
+            "style": "Title",
+            "value_expr": "+"
+           }
+          ]
+         }
+        }
+       }
+      },
+      {
+       "type": "core://Text",
+       "style": "Label",
+       "value_expr": "Extras"
+      },
+      {
+       "type": "core://List",
+       "query_key": "extras",
+       "columns": 4,
+       "spacing_dp": 8,
+       "item_template": {
+        "type": "core://Tappable",
+        "tag": "session:$item.id",
+        "content_description": "$item.day $item.kind",
+        "on_click": {
+         "intent": "action.navigation.back"
+        },
+        "content": {
+         "type": "core://Box",
+         "background": "${local://theme#card}",
+         "border_color": "${local://theme#card_border}",
+         "corner_dp": 12,
+         "height_dp": 84,
+         "padding_h_dp": 8,
+         "padding_v_dp": 10,
+         "content": {
+          "type": "core://Column",
+          "spacing_dp": 2,
+          "children": [
+           {
+            "type": "core://Text",
+            "style": "Label",
+            "value_expr": "$item.day"
+           },
+           {
+            "type": "core://Text",
+            "style": "Body",
+            "value_expr": "$item.kind",
+            "weight": "SemiBold"
+           }
+          ]
+         }
+        }
+       },
+       "trailing": {
+        "type": "core://Tappable",
+        "tag": "add:extras",
+        "content_description": "Add an extra",
+        "on_click": {
+         "intent": "action.navigation.back"
+        },
+        "content": {
+         "type": "core://Box",
+         "height_dp": 84,
+         "corner_dp": 12,
+         "background": "${local://theme#page}",
+         "border_color": "${local://theme#card_border}",
+         "border_style": "Dashed",
+         "content_color": "${local://theme#muted_text}",
+         "content": {
+          "type": "core://Column",
+          "align": "Center",
+          "justify": "center",
+          "children": [
+           {
+            "type": "core://Text",
+            "style": "Title",
+            "value_expr": "+"
+           }
+          ]
+         }
+        }
+       },
+       "empty_text": "No extras yet"
+      }
+     ]
+    }
+   }
+  }
+ },
+ "entities": {
+  "demo://sessions/1": {
+   "id": "1",
+   "day": "Mon",
+   "kind": "Class"
+  },
+  "demo://sessions/2": {
+   "id": "2",
+   "day": "Tue",
+   "kind": "Swim"
+  },
+  "demo://sessions/3": {
+   "id": "3",
+   "day": "Wed",
+   "kind": "Class"
+  },
+  "demo://sessions/4": {
+   "id": "4",
+   "day": "Thu",
+   "kind": "Swim"
+  },
+  "demo://sessions/5": {
+   "id": "5",
+   "day": "Fri",
+   "kind": "Class"
+  }
+ },
+ "queries": {
+  "sessions": [
+   "demo://sessions/1",
+   "demo://sessions/2",
+   "demo://sessions/3",
+   "demo://sessions/4",
+   "demo://sessions/5"
+  ],
+  "extras": []
+ }
+}

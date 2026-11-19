@@ -15,6 +15,7 @@ mod golden;
 mod gpu;
 mod interaction;
 mod layout_math;
+mod list_trailing;
 mod main_axis;
 mod markdown_text;
 mod media;

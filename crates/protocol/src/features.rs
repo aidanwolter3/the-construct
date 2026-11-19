@@ -226,9 +226,13 @@ fn node_features(node: &UiNode, out: &mut BTreeSet<&'static str>) {
             focus,
             stack,
             min_column_dp,
+            trailing,
             ..
         } => {
             add(feature::LIST);
+            if trailing.is_some() {
+                add(feature::LIST_TRAILING);
+            }
             if *min_column_dp > 0 {
                 add(feature::LIST_AUTO_COLUMNS);
             }
@@ -1124,6 +1128,32 @@ mod tests {
         };
         assert_eq!(w.conditions().len(), 2);
         assert_eq!(w.conditions()[1].field, "category");
+    }
+
+    /// A list's `trailing` cell is feature `list_trailing`, and the
+    /// features of what it draws count too.
+    #[test]
+    fn a_list_s_trailing_cell_needs_its_feature() {
+        let list = node(
+            json!({"type": "core://List", "query_key": "q", "columns": 3,
+            "item_template": {"type": "core://Divider"},
+            "trailing": {"type": "core://Box", "content": {"type": "core://Divider"}}}),
+        );
+        assert_eq!(
+            required_features(&list),
+            ["box", "divider", "list", "list_grid", "list_trailing"]
+        );
+        assert_eq!(list.children().len(), 2);
+        let back = serde_json::to_value(&list).unwrap();
+        assert_eq!(back["trailing"]["type"], "core://Box");
+        let plain = node(json!({"type": "core://List", "query_key": "q",
+            "item_template": {"type": "core://Divider"}}));
+        assert!(
+            serde_json::to_value(&plain)
+                .unwrap()
+                .get("trailing")
+                .is_none()
+        );
     }
 
     /// Decision `screen-sizes`: a column's `max_width_dp`, a list's

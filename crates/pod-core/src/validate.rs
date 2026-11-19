@@ -567,10 +567,14 @@ fn check_values(node: &UiNode) -> Result<(), String> {
             focus,
             stack,
             min_column_dp,
+            trailing,
             ..
         } => {
             if *stack && (*columns > 1 || *min_column_dp > 0 || group_by.is_some()) {
                 return Err("a stacked list (a deck) has no columns or group_by".into());
+            }
+            if *stack && trailing.is_some() {
+                return Err("a stacked list (a deck) has no trailing cell".into());
             }
             if *min_column_dp > 0 && !COLUMN_DP_RANGE.contains(min_column_dp) {
                 return Err(format!(
@@ -1676,6 +1680,29 @@ mod tests {
         };
         assert_eq!(check_values(&list(json!({"padding_h_dp": 16}))), Ok(()));
         assert!(check_values(&list(json!({"columns": 2}))).is_err());
+        assert!(
+            check_values(&list(json!({"trailing": {"type": "core://Divider"}}))).is_err(),
+            "a deck has no trailing cell"
+        );
+    }
+
+    /// Feature `list_trailing`: a grid's trailing cell is checked like any
+    /// other node in the layout.
+    #[test]
+    fn a_list_s_trailing_cell_is_checked() {
+        let grid = |trailing: Value| {
+            node(
+                json!({"type": "core://List", "query_key": "q", "columns": 3,
+                "item_template": {"type": "core://Divider"}, "trailing": trailing}),
+            )
+        };
+        assert_eq!(
+            check_node_values(&grid(json!({"type": "core://Divider"}))),
+            Ok(())
+        );
+        let bad = json!({"type": "core://Text", "style": "Body", "value_expr": "+",
+            "max_lines": 0});
+        assert!(check_node_values(&grid(bad)).is_err());
     }
 
     #[test]
