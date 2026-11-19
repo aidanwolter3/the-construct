@@ -106,10 +106,11 @@ pub const MANIFEST: SourceManifest = SourceManifest {
     feeds: &[
         FeedSpec {
             name: SESSIONS_FEED,
-            query_keys: &[STATUS_QUERY, SESSIONS_QUERY],
+            query_keys: &[STATUS_QUERY, SESSIONS_QUERY, "agents:schedule_runs:{name}"],
             doc: "The agent runner's runs (one attempt at one piece of work each): the ones that \
                   need you (or are parked), then running, queued, ended ones waiting on CI, review \
-                  or deploy, and the rest; and agents:status: whether the pod is signed in to a \
+                  or deploy, and the rest; agents:schedule_runs:<name>, a schedule's runs with \
+                  the latest started first; and agents:status: whether the pod is signed in to a \
                   runner and reaches it, with a one-line summary such as \
                   1 working · 1 needs you · 2 queued · 1 waiting.",
         },
