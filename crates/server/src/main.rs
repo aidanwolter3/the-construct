@@ -373,6 +373,11 @@ async fn serve(local: LocalPod) -> Result<(), String> {
     if let Some(aside) = server::host::backup::restore_pending(&dir)? {
         tracing::warn!(replaced = %aside.display(), "restored the data from a backup");
     }
+    // Before any render: keep the headless browser off Fly's private network
+    // (decision `browser-private-network`); logs and serves on if it can't.
+    if web_extract::render::Browser::from_env(false).is_some() {
+        web_extract::render::block_private_network().await;
+    }
     let pixelfed = server::PixelfedConfig::from_env();
     tracing::info!(
         instance = %pixelfed.instance_url,

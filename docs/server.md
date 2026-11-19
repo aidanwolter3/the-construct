@@ -89,7 +89,7 @@ settings are logged at startup.
 | `CONSTRUCT_FILL_MODEL` | `claude-opus-5-5` | The agent module's capable model: `agent`, `extract: llm` and `query_field` fillers (same key and endpoint). Without a key those fillers report themselves unavailable. Each pod's model calls have daily budgets per feature (`agent_usage`). |
 | `CONSTRUCT_FILL_AGENT_DAILY` | `20` | Agent filler runs per pod per day. |
 | `CONSTRUCT_FILL_PRIVATE_HOSTS` | unset | `1`: fetch fillers may read private addresses, and MCP servers may be on them (local development only). |
-| `CONSTRUCT_BROWSER` | the first `chromium`, `chromium-browser`, `headless_shell`, `chrome-headless-shell` or `google-chrome` on `PATH` | The headless browser of rendered fillers (`render`, decision `rendered-fetches`); `off`: none, and rendered fillers say so. The image sets `/usr/bin/chromium`. It starts with none of the server's environment, and as `nobody` (uid 65534) when the server is root, so a page that takes over a renderer can read neither the keys nor the pods' data. It runs with Chromium's sandbox and site isolation where they work: the first render after the server starts tries them and logs `browser sandbox: on`, or falls back to `--no-sandbox` and logs a `browser sandbox: off` warning with the reason (decision `browser-sandbox`). |
+| `CONSTRUCT_BROWSER` | the first `chromium`, `chromium-browser`, `headless_shell`, `chrome-headless-shell` or `google-chrome` on `PATH` | The headless browser of rendered fillers (`render`, decision `rendered-fetches`); `off`: none, and rendered fillers say so. The image sets `/usr/bin/chromium`. It starts with none of the server's environment, and as `nobody` (uid 65534) when the server is root, so a page that takes over a renderer can read neither the keys nor the pods' data. It runs with Chromium's sandbox and site isolation where they work: the first render after the server starts tries them and logs `browser sandbox: on`, or falls back to `--no-sandbox` and logs a `browser sandbox: off` warning with the reason (decision `browser-sandbox`). At startup a root server also keeps that user off Fly's private network (`fdaa::/16`) with an nftables rule and logs `browser private network block: on`, or a `browser private network block: off` warning with the reason (no `nft`, no netfilter) and serves anyway (decision `browser-private-network`). |
 
 ### Monitoring and development
 
@@ -268,7 +268,16 @@ flyctl deploy . --config deploy/fly/pod.toml --dockerfile deploy/pod.Dockerfile 
 ```
 
 Whether staging's browser runs sandboxed shows in its log after the first render since the deploy (a fetch filler
-or `collections_preview` with `render`): `fly logs -a the-construct-pod | grep "browser sandbox"`.
+or `collections_preview` with `render`): `fly logs -a the-construct-pod | grep "browser sandbox"`. Whether its user
+is kept off Fly's private network shows at every start: `grep "browser private network"` (decision
+`browser-private-network`). To check the block itself, `fly ssh console -a the-construct-pod`, then
+`nft list table inet construct_browser` shows the rule, and connecting to the machine's own 6PN address (from
+`fly ips private`) on the metrics port is refused as the browser's user but works as root:
+
+```bash
+setpriv --reuid=65534 --regid=65534 --clear-groups bash -c 'echo > /dev/tcp/<fdaa address>/9091'   # refused
+bash -c 'echo > /dev/tcp/<fdaa address>/9091'                                                      # connects
+```
 
 Set secrets with `flyctl secrets set`, never in the file: at least `CONSTRUCT_SECRETS_KEY`, and
 `CONSTRUCT_INFER_API_KEY` for model features. The staging server talks to a fake Pixelfed deployed separately
