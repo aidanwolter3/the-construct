@@ -122,6 +122,12 @@ the next reload picks up, a phone-sized window and logging out.
   tapped it has let the app go: desktop Chrome runs the page's frame inside `window.open`, so the client opens links
   last, and a handler or frame that finds the app held by another skips rather than panics (a panic in the frame
   loop would stop it and freeze the page).
+- **The console** says what each click or tap did, so one that seems to do nothing says why: the node it hit and
+  each effect (`tap at 300,224 on core://Tappable … "Open Todo one": opened_screen task`), `nothing there to tap`,
+  `nothing (it has no action)`, or a `not_sent action.navigation.open target_uri=… (no screen here matches it)`. A
+  screen's data that fails to load is logged with its path, HTTP status and the pod's error code (`loading …: HTTP
+  403 …`), also where the screen's layout doesn't draw `local://screen#error`. The lines name layouts, screens,
+  paths and fields, never a typed value, a link or a token (`Effect::summary`, `construct_web::tap_log`).
 - **On staging**: `https://the-construct-pod.fly.dev/web` takes an admin pod's code, or a temporary pod's
   (`POST /v1/pods/temporary`); the image builds the client into `/web` (`deploy/pod.Dockerfile`).
 - **Public links**: with `CONSTRUCT_PUBLIC_WEB=1` too (staging has it), `/s/<link>` (or a chosen `/<handle>/<slug>`)

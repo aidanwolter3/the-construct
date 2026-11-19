@@ -578,6 +578,11 @@ impl Loader for WebLoader {
             let r = get_json(&path)
                 .await
                 .and_then(|v| serde_json::from_value(v).map_err(|e| e.to_string()));
+            // The screen shows the error only where its layout draws
+            // `local://screen#error`: the console always has it.
+            if let Err(e) = &r {
+                log(&format!("loading {path}: {e}"));
+            }
             done(r);
             wake();
         });
@@ -974,7 +979,17 @@ impl App {
     }
 
     fn event(&mut self, e: Event) {
+        // A tap's outcome goes to the console: a click that seems to do
+        // nothing says why (nothing there, no action, no screen matches).
+        let tapped = match e {
+            Event::Tap { x, y } => Some(("tap", (x, y))),
+            Event::LongPress { x, y } => Some(("long press", (x, y))),
+            _ => None,
+        };
         let out = self.controller.handle(e);
+        if let Some((what, at)) = tapped {
+            log(&crate::tap_log(what, at, out.as_ref()));
+        }
         // A link opens in a new tab, not over the pod, once the app is let
         // go (`Lease`): the browser runs the page's code inside `window.open`.
         for effect in out.iter().flat_map(|o| &o.effects) {
