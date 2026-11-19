@@ -7,6 +7,7 @@ mod common;
 mod construct_stub;
 mod dates;
 mod device;
+mod edge_fades;
 #[cfg(feature = "remote")]
 mod engine;
 mod golden;

@@ -3936,11 +3936,17 @@ impl Laid {
             stretch_content(scene, drawn, anchor, 1.0 + stretch.abs(), inner_clip);
         }
         if scrolls {
-            // Content passing under the view's ends fades out into what is
-            // behind it, as much as there is left to scroll that way.
+            // Content passing under a header or a bottom bar (an end of the
+            // view inside the area it is drawn in, not the screen's edge)
+            // fades out into what is behind it, as much as there is left to
+            // scroll that way.
             let max = (self.content_height(e) - h).max(0.0);
             let shown = intersect(rect, inner_clip);
-            edge_fades(scene, shown, kid_at.backdrop, oy, max - oy);
+            let top_meets = shown[1] > clip[1] + 0.5;
+            let bottom_meets = shown[1] + shown[3] < clip[1] + clip[3] - 0.5;
+            let above = if top_meets { oy } else { 0.0 };
+            let below = if bottom_meets { max - oy } else { 0.0 };
+            edge_fades(scene, shown, kid_at.backdrop, above, below);
         }
         // Sticky nodes pinned in this view go over its content.
         for p in own_pins {
