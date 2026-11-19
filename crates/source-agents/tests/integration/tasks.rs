@@ -395,10 +395,17 @@ async fn reopen_resumes_the_last_run() {
         sent,
         json!({"type": "start_run", "request_id": sent["request_id"], "workspace": "sample-repo",
             "work_item_id": id, "origin": "task",
-            "title": "Fix the footer", "prompt": "The Android build fails, fix it",
+            "title": "Fix the footer",
+            "prompt": source_agents::follow_up_prompt("The Android build fails, fix it"),
             "resume_from": first})
     );
     assert!(sent["request_id"].as_str().unwrap().starts_with("reopen_"));
+    assert!(
+        sent["prompt"]
+            .as_str()
+            .unwrap()
+            .ends_with(source_agents::FOLLOW_UP_REMINDER)
+    );
     assert_eq!(field(&pod, &id, "status"), "queued");
     assert_eq!(field(&pod, &id, "run_id"), "run_again");
     // The old run doesn't pull the row back, and nothing else is started.
