@@ -210,10 +210,10 @@ fn node_features(node: &UiNode, out: &mut BTreeSet<&'static str>) {
                     add(feature::LIST_WHERE_AGE);
                 }
             }
-            // `weight`, `caps`, `max_lines` and `strike`
+            // `weight`, `caps`, `max_lines`, `strike` and `markdown`
             // (feature::TEXT_WEIGHT, TEXT_CAPS, TEXT_MAX_LINES,
-            // TEXT_STRIKE) need nothing: a client without them ignores the
-            // fields and draws the text in its style.
+            // TEXT_STRIKE, TEXT_MARKDOWN) need nothing: a client without
+            // them ignores the fields and draws the text in its style.
         }
         UiNode::Button { .. } => add(feature::BUTTON),
         UiNode::List {

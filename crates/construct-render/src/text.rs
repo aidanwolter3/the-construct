@@ -2,7 +2,9 @@
 //! only (no system fonts), so a layout measures and draws the same on every
 //! machine: the pod, CI and each client.
 
-use cosmic_text::{Attrs, Buffer, Family, FontSystem, Metrics, Shaping, Weight, fontdb};
+use cosmic_text::{
+    Attrs, Buffer, Color, Family, FontSystem, Metrics, Shaping, Style, Weight, fontdb,
+};
 use std::collections::{BTreeMap, HashMap};
 
 use crate::style::{Face, Type};
@@ -24,10 +26,11 @@ pub const FACE_FILES: [&str; 8] = [
 ];
 /// The fallbacks' files (below), which a web build loads after the first
 /// frame.
-pub const FALLBACK_FILES: [&str; 3] = [
+pub const FALLBACK_FILES: [&str; 4] = [
     "DejaVuSans-Symbols.ttf",
     "DejaVuSans-Bold-Fractions.ttf",
     "NotoEmoji-Regular.ttf",
+    "DejaVuSansMono.ttf",
 ];
 #[cfg(not(target_arch = "wasm32"))]
 const FACES: [&[u8]; 8] = [
@@ -51,6 +54,50 @@ const SYMBOLS_BOLD: &[u8] = include_bytes!("../fonts/DejaVuSans-Bold-Fractions.t
 /// Emoji and symbols DejaVu lacks (⏰, 📅), drawn as monochrome outlines.
 #[cfg(not(target_arch = "wasm32"))]
 const EMOJI: &[u8] = include_bytes!("../fonts/NotoEmoji-Regular.ttf");
+/// The monospace face of Markdown's code ([`RichSpan::mono`]): DejaVu Sans
+/// Mono subset to Latin, punctuation, arrows and box drawing. Loaded with
+/// the fallbacks, after the faces are named (its name has "Sans" in it).
+#[cfg(not(target_arch = "wasm32"))]
+const MONO: &[u8] = include_bytes!("../fonts/DejaVuSansMono.ttf");
+/// Its family name.
+const MONO_FAMILY: &str = "DejaVu Sans Mono";
+/// How large monospace text is beside its text's own face (DejaVu's
+/// letters stand taller than Instrument Sans's at the same size).
+pub const MONO_SCALE: f32 = 0.86;
+
+/// A styled byte range of a text (a `core://Text` `markdown`'s inline
+/// styles, decision `text-markdown`): bold, italic (slanted, as the faces
+/// have no italic cut), monospace, struck through, and in its own colour
+/// (sRGB bytes) when it has one. Ranges are in order and don't overlap.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize)]
+pub struct RichSpan {
+    pub start: usize,
+    pub end: usize,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub bold: bool,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub italic: bool,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub mono: bool,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub strike: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub color: Option<[u8; 4]>,
+}
+
+/// A hash of `spans`, for the caches keyed by what a text is shaped from.
+pub fn spans_key(spans: &[RichSpan]) -> u64 {
+    use std::hash::{Hash, Hasher};
+    if spans.is_empty() {
+        return 0;
+    }
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    spans.hash(&mut h);
+    h.finish() | 1
+}
+
+/// The glyph metadata of a struck-through span ([`strike_lines`]).
+const STRIKE_META: usize = 1;
 
 /// Fonts added at run time, for every text engine: a web build's fetched
 /// faces before its first frame, then its fallbacks (decision
@@ -136,7 +183,7 @@ pub fn nearest_stop(stops: &[CaretStop], x: f32, y: f32) -> Option<CaretStop> {
 
 /// What a measurement depends on: the text, its face, size, wrap width,
 /// scale, letter spacing and line limit.
-type MeasureKey = (String, Face, u32, u32, u32, u32, u8);
+type MeasureKey = (String, Face, u32, u32, u32, u32, u8, u64);
 
 /// Fonts, shaping and a measurement cache. Measuring happens at the frame's
 /// scale (device pixels), so line breaks match what is drawn.
@@ -177,7 +224,7 @@ impl TextEngine {
         let serif = family(false);
         // The fallbacks, loaded after the faces are named.
         #[cfg(not(target_arch = "wasm32"))]
-        for data in [SYMBOLS, SYMBOLS_BOLD, EMOJI] {
+        for data in [SYMBOLS, SYMBOLS_BOLD, EMOJI, MONO] {
             db.load_font_data(data.to_vec());
         }
         TextEngine {
@@ -235,14 +282,64 @@ impl TextEngine {
         }
     }
 
-    /// `text` shaped as it is: every line, wrapping at `max_width` points.
-    fn shape(&mut self, text: &str, ty: Type, max_width: Option<f32>, scale: f32) -> Buffer {
+    /// `text` shaped as it is: every line, wrapping at `max_width` points,
+    /// with `spans` styled.
+    fn shape(
+        &mut self,
+        text: &str,
+        spans: &[RichSpan],
+        ty: Type,
+        max_width: Option<f32>,
+        scale: f32,
+    ) -> Buffer {
         self.catch_up();
         let metrics = Metrics::new(ty.size * scale, ty.line_height * scale);
         let mut buffer = Buffer::new(&mut self.fonts, metrics);
         buffer.set_size(max_width.map(|w| w * scale), None);
         let attrs = self.attrs(ty);
-        buffer.set_text(text, &attrs, Shaping::Advanced, None);
+        if spans.is_empty() {
+            buffer.set_text(text, &attrs, Shaping::Advanced, None);
+        } else {
+            let mut parts: Vec<(&str, Attrs)> = Vec::new();
+            let mut at = 0;
+            for sp in spans {
+                let (a, b) = (sp.start.clamp(at, text.len()), sp.end.min(text.len()));
+                if a >= b || !text.is_char_boundary(a) || !text.is_char_boundary(b) {
+                    continue;
+                }
+                if at < a {
+                    parts.push((&text[at..a], attrs.clone()));
+                }
+                let mut x = attrs.clone();
+                if sp.mono {
+                    x = x
+                        .family(Family::Name(MONO_FAMILY))
+                        .weight(Weight(400))
+                        .metrics(Metrics::new(
+                            ty.size * MONO_SCALE * scale,
+                            ty.line_height * scale,
+                        ));
+                }
+                if sp.bold {
+                    x = x.weight(Weight(700));
+                }
+                if sp.italic {
+                    x = x.style(Style::Italic);
+                }
+                if let Some([r, g, b, a]) = sp.color {
+                    x = x.color(Color::rgba(r, g, b, a));
+                }
+                if sp.strike {
+                    x = x.metadata(STRIKE_META);
+                }
+                parts.push((&text[a..b], x));
+                at = b;
+            }
+            if at < text.len() {
+                parts.push((&text[at..], attrs.clone()));
+            }
+            buffer.set_rich_text(parts, &attrs, Shaping::Advanced, None);
+        }
         buffer.shape_until_scroll(&mut self.fonts, false);
         buffer
     }
@@ -252,13 +349,25 @@ impl TextEngine {
     /// that takes more lines is cut so that it ends, in an ellipsis, on the
     /// last of them ([`TextEngine::fitted`]).
     pub fn buffer(&mut self, text: &str, ty: Type, max_width: Option<f32>, scale: f32) -> Buffer {
-        let buffer = self.shape(text, ty, max_width, scale);
+        self.buffer_rich(text, &[], ty, max_width, scale)
+    }
+
+    /// [`TextEngine::buffer`] with `spans` styled.
+    pub fn buffer_rich(
+        &mut self,
+        text: &str,
+        spans: &[RichSpan],
+        ty: Type,
+        max_width: Option<f32>,
+        scale: f32,
+    ) -> Buffer {
+        let buffer = self.shape(text, spans, ty, max_width, scale);
         let lines = usize::from(ty.max_lines);
         if lines == 0 || buffer.layout_runs().count() <= lines {
             return buffer;
         }
-        let fitted = self.fitted(text, ty, max_width, scale, &buffer);
-        self.shape(&fitted, ty, max_width, scale)
+        let (fitted, spans) = self.fitted(text, spans, ty, max_width, scale, &buffer);
+        self.shape(&fitted, &spans, ty, max_width, scale)
     }
 
     /// `text` cut to `ty.max_lines` lines (it takes more in `buffer`): the
@@ -266,11 +375,12 @@ impl TextEngine {
     fn fitted(
         &mut self,
         text: &str,
+        spans: &[RichSpan],
         ty: Type,
         max_width: Option<f32>,
         scale: f32,
         buffer: &Buffer,
-    ) -> String {
+    ) -> (String, Vec<RichSpan>) {
         let lines = usize::from(ty.max_lines);
         // Where the last line that may be kept ends: no longer start fits.
         let mut para = vec![0usize];
@@ -292,19 +402,38 @@ impl TextEngine {
             .chain(text.is_char_boundary(end).then_some(end))
             .collect();
         let with_ellipsis = |n: usize| format!("{}\u{2026}", text[..n].trim_end());
+        // The spans of a cut, ending where its kept text does.
+        let cut_spans = |n: usize| -> Vec<RichSpan> {
+            let end = text[..n].trim_end().len();
+            spans
+                .iter()
+                .filter(|s| s.start < end)
+                .map(|s| RichSpan {
+                    end: s.end.min(end),
+                    ..*s
+                })
+                .collect()
+        };
         // The longest cut that fits, by bisection (a longer start never
         // takes fewer lines).
         let (mut lo, mut hi) = (0usize, cuts.len());
         while lo + 1 < hi {
             let mid = (lo + hi) / 2;
-            let shaped = self.shape(&with_ellipsis(cuts[mid]), ty, max_width, scale);
+            let shaped = self.shape(
+                &with_ellipsis(cuts[mid]),
+                &cut_spans(cuts[mid]),
+                ty,
+                max_width,
+                scale,
+            );
             if shaped.layout_runs().count() <= lines {
                 lo = mid;
             } else {
                 hi = mid;
             }
         }
-        with_ellipsis(cuts.get(lo).copied().unwrap_or(0))
+        let n = cuts.get(lo).copied().unwrap_or(0);
+        (with_ellipsis(n), cut_spans(n))
     }
 
     /// Where a caret can stand in `text` laid out as it is drawn (wrapped
@@ -403,6 +532,18 @@ impl TextEngine {
         max_width: Option<f32>,
         scale: f32,
     ) -> Measured {
+        self.measure_rich(text, &[], ty, max_width, scale)
+    }
+
+    /// [`TextEngine::measure`] with `spans` styled.
+    pub fn measure_rich(
+        &mut self,
+        text: &str,
+        spans: &[RichSpan],
+        ty: Type,
+        max_width: Option<f32>,
+        scale: f32,
+    ) -> Measured {
         self.catch_up();
         let key = (
             text.to_owned(),
@@ -412,11 +553,18 @@ impl TextEngine {
             scale.to_bits(),
             ty.tracking.to_bits(),
             ty.max_lines,
+            spans_key(spans),
         );
         if let Some(m) = self.cache.get(&key) {
             return *m;
         }
-        let buffer = self.buffer(text, ty, max_width.map(|w| w.max(0.0).floor()), scale);
+        let buffer = self.buffer_rich(
+            text,
+            spans,
+            ty,
+            max_width.map(|w| w.max(0.0).floor()),
+            scale,
+        );
         let mut width: f32 = 0.0;
         let mut lines = 0;
         for run in buffer.layout_runs() {
@@ -442,20 +590,51 @@ pub const STRIKE_RISE: f32 = 0.3;
 /// [`STRIKE_RISE`] above its baseline. Device pixels, whole, from the
 /// buffer's origin (x, y, width, height), so the CPU and the GPU renderer
 /// draw the same pixels.
+///
+/// Without `ty.strike`, the lines go through the struck-through spans
+/// ([`RichSpan::strike`]) only: one per run of them on each line.
 pub fn strike_lines(buffer: &Buffer, ty: Type, scale: f32) -> Vec<[i32; 4]> {
     let thick = scale.round().max(1.0) as i32;
-    buffer
-        .layout_runs()
-        .filter_map(|run| {
-            let left = run.glyphs.iter().map(|g| g.x).reduce(f32::min)?;
-            let right = run.glyphs.iter().map(|g| g.x + g.w).reduce(f32::max)?;
+    let mut out = Vec::new();
+    for run in buffer.layout_runs() {
+        let mid = run.line_y.round() - STRIKE_RISE * ty.size * scale;
+        let y = (mid - thick as f32 / 2.0).round() as i32;
+        let mut line = |left: f32, right: f32| {
             let x = left.round() as i32;
             let w = (right.round() as i32 - x).max(0);
-            let mid = run.line_y.round() - STRIKE_RISE * ty.size * scale;
-            let y = (mid - thick as f32 / 2.0).round() as i32;
-            (w > 0).then_some([x, y, w, thick])
-        })
-        .collect()
+            if w > 0 {
+                out.push([x, y, w, thick]);
+            }
+        };
+        if ty.strike {
+            let left = run.glyphs.iter().map(|g| g.x).reduce(f32::min);
+            let right = run.glyphs.iter().map(|g| g.x + g.w).reduce(f32::max);
+            if let (Some(l), Some(r)) = (left, right) {
+                line(l, r);
+            }
+            continue;
+        }
+        let mut open: Option<(f32, f32)> = None;
+        for g in run.glyphs {
+            if g.metadata & STRIKE_META != 0 {
+                open = Some(match open {
+                    Some((l, r)) => (l.min(g.x), r.max(g.x + g.w)),
+                    None => (g.x, g.x + g.w),
+                });
+            } else if let Some((l, r)) = open.take() {
+                line(l, r);
+            }
+        }
+        if let Some((l, r)) = open {
+            line(l, r);
+        }
+    }
+    out
+}
+
+/// Whether a text has anything [`strike_lines`] draws.
+pub fn has_strike(ty: Type, spans: &[RichSpan]) -> bool {
+    ty.strike || spans.iter().any(|s| s.strike)
 }
 
 #[cfg(test)]

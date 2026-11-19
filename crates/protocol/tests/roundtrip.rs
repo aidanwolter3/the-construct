@@ -54,6 +54,7 @@ fn post_template(author_tag: Option<String>, items: ListBinding) -> UiNode {
                         caps: false,
                         max_lines: None,
                         strike: false,
+                        markdown: false,
                     },
                 ],
             },
@@ -161,6 +162,7 @@ fn full_workspace() -> UiNode {
                             caps: false,
                             max_lines: None,
                             strike: false,
+                            markdown: false,
                         },
                         UiNode::Button {
                             label: "Back".into(),
@@ -222,6 +224,7 @@ fn full_workspace() -> UiNode {
                                     caps: false,
                                     max_lines: None,
                                     strike: false,
+                                    markdown: false,
                                 }),
                             }),
                             where_: Some(
@@ -848,6 +851,7 @@ fn text_format_and_count_round_trip_and_need_their_features() {
             caps: false,
             max_lines: None,
             strike: false,
+            markdown: false,
         }
     );
     assert_eq!(serde_json::to_string(&parsed).unwrap(), wire);
@@ -888,6 +892,7 @@ fn text_weight_caps_and_lines_round_trip_and_still_draw_without_their_features()
             caps: true,
             max_lines: Some(2),
             strike: false,
+            markdown: false,
         }
     );
     assert_eq!(serde_json::to_string(&parsed).unwrap(), wire);
@@ -935,6 +940,7 @@ fn text_weight_caps_and_lines_round_trip_and_still_draw_without_their_features()
             caps: false,
             max_lines: None,
             strike: false,
+            markdown: false,
             ..
         }
     ));
@@ -1150,4 +1156,30 @@ fn additive_features(node: &protocol::UiNode) -> Vec<&'static str> {
         .into_iter()
         .filter(|f| !NUMBERED.contains(f))
         .collect()
+}
+
+#[test]
+fn text_markdown_round_trips_and_still_draws_without_its_feature() {
+    let wire =
+        r#"{"type":"core://Text","value_expr":"$item.summary","style":"Body","markdown":true}"#;
+    let parsed: UiNode = serde_json::from_str(wire).unwrap();
+    assert!(matches!(parsed, UiNode::Text { markdown: true, .. }));
+    assert_eq!(serde_json::to_string(&parsed).unwrap(), wire);
+    let plain: UiNode = serde_json::from_value(
+        json!({"type": "core://Text", "value_expr": "Hi", "style": "Body", "markdown": false}),
+    )
+    .unwrap();
+    assert_eq!(
+        serde_json::to_string(&plain).unwrap(),
+        r#"{"type":"core://Text","value_expr":"Hi","style":"Body"}"#
+    );
+    // It doesn't gate the layout: a client without it draws the text as written.
+    assert!(protocol::FEATURES.contains(&"text_markdown"));
+    assert!(additive_features(&parsed).is_empty());
+    let mut old = protocol::ClientCaps::this_build();
+    old.features.remove("text_markdown");
+    assert_eq!(
+        old.can_draw(&protocol::required_features(&parsed)),
+        protocol::Compatibility::Compatible
+    );
 }
