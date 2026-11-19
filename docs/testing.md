@@ -51,6 +51,8 @@ scripts/e2e.sh --faults                 # plus the fault tests
 scripts/e2e.sh --upstream real          # against a real Pixelfed (default http://localhost:8090, user alice)
 ```
 
+`scripts/e2e.sh` runs its tests one at a time: they share one upstream, and each resets it and signs in.
+
 - **Fake** (`E2E_UPSTREAM=fake`, default): `E2E_FAKE_URL=<url>` uses an already running fake and resets it first.
 - **Real** (`E2E_UPSTREAM=real`): `PIXELFED_INSTANCE_URL`, `E2E_PIXELFED_LOGIN` / `E2E_PIXELFED_PASSWORD` (default
   `alice` / `alice-dev-pass`) and `E2E_PIXELFED_TOKEN` to check upstream state.
