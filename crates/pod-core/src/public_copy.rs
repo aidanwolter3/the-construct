@@ -224,24 +224,64 @@ pub fn strip(v: &Value, carried: &BTreeSet<String>, removed: &mut Removed) -> Op
     }
 }
 
-/// The field names a node reads: `$item.<f>`, `#<f>}` and quoted names
-/// (a list's `where`, `group_by`, `filter`).
-fn fields_read(node: &str) -> BTreeSet<String> {
+/// The field names a node reads: `$item.<f>` and `${<uri>#<f>}` in its
+/// strings, and the names under the keys that hold a field name (a list's
+/// `where`, `filter` and `group_by`, a count's `where`, `indent`, a
+/// carousel's `aspect_field`). Other keys and values of the plumbing
+/// (`"label"`, `"title"`, `"style"`…) are not field names: a row field named
+/// like one stays out unless something reads it.
+fn fields_read(node: &Value) -> BTreeSet<String> {
     let mut out = BTreeSet::new();
-    for (i, _) in node.match_indices("$item.") {
-        out.insert(word(&node[i + 6..]).to_owned());
-    }
-    for (i, _) in node.match_indices('#') {
-        out.insert(word(&node[i + 1..]).to_owned());
-    }
-    for (i, _) in node.match_indices('"') {
-        let w = word(&node[i + 1..]);
-        if node[i + 1 + w.len()..].starts_with('"') {
-            out.insert(w.to_owned());
-        }
-    }
+    read_fields(node, &mut out);
     out.remove("");
     out
+}
+
+fn read_fields(v: &Value, out: &mut BTreeSet<String>) {
+    match v {
+        Value::String(s) => {
+            for (i, _) in s.match_indices("$item.") {
+                out.insert(word(&s[i + 6..]).to_owned());
+            }
+            for (i, _) in s.match_indices('#') {
+                let w = word(&s[i + 1..]);
+                if s[i + 1 + w.len()..].starts_with('}') {
+                    out.insert(w.to_owned());
+                }
+            }
+        }
+        Value::Array(a) => a.iter().for_each(|x| read_fields(x, out)),
+        Value::Object(o) => {
+            for (k, x) in o {
+                match k.as_str() {
+                    // One condition or a list of them: each names its field.
+                    "where" => {
+                        let all = x.as_array().map_or(std::slice::from_ref(x), Vec::as_slice);
+                        for c in all {
+                            names(&c["field"], out);
+                        }
+                    }
+                    "filter" => names(&x["fields"], out),
+                    "group_by" | "indent" => names(&x["field"], out),
+                    "aspect_field" => names(x, out),
+                    _ => {}
+                }
+                read_fields(x, out);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// A field name, or a list of them, as written.
+fn names(v: &Value, out: &mut BTreeSet<String>) {
+    match v {
+        Value::String(s) => {
+            out.insert(s.clone());
+        }
+        Value::Array(a) => a.iter().for_each(|x| names(x, out)),
+        _ => {}
+    }
 }
 
 /// The name at the start of `s` (letters, digits, `_`).
@@ -347,7 +387,7 @@ impl<'a> Shows<'a> {
                 continue;
             };
             if let Some(i) = &u.item {
-                let read = fields_read(&node.to_string());
+                let read = fields_read(node);
                 self.show(&id, i, read);
             }
             let item = u.item.clone();
@@ -487,7 +527,7 @@ impl<'a> Shows<'a> {
                     // A list (or a dock, chips): the rows it keeps, each
                     // with what its template reads, and its template per row.
                     let (key, rows) = self.kept_rows(layout, o, u, item);
-                    let read = fields_read(&v.to_string());
+                    let read = fields_read(v);
                     self.queries.entry(key).or_default().extend(rows.clone());
                     templates = &["item_template", "item"];
                     for r in &rows {
@@ -504,7 +544,7 @@ impl<'a> Shows<'a> {
                 {
                     // A count: its rows, with only the fields its `where` reads.
                     let (key, rows) = self.kept_rows(layout, c, u, item);
-                    let read = fields_read(&Value::Object(c.clone()).to_string());
+                    let read = fields_read(&o["count"]);
                     self.queries.entry(key).or_default().extend(rows.clone());
                     for r in &rows {
                         self.show(layout, r, read.clone());
@@ -1431,6 +1471,39 @@ mod tests {
             vec!["notes://recipes/2".to_owned()]
         );
         assert_eq!(rows_of(&one).len(), 1);
+    }
+
+    #[test]
+    fn a_field_named_like_a_layout_key_stays_out_unless_read() {
+        let data: DataBundle = serde_json::from_value(json!({
+            "entities": {
+                "notes://people/1": { "id": "1", "name": "Rowan", "label": "owes me money",
+                    "title": "private", "kind": "friend", "city": "Northvale", "bio": "x" } },
+            "queries": { "note:people": ["notes://people/1"] } }))
+        .unwrap();
+        // Plumbing keys and values (`label`, `title`, `style`, `Body`) are
+        // not field names: only what the page reads goes.
+        let node = json!({ "type": "core://List", "query_key": "note:people",
+            "item_template": { "type": "core://Column", "children": [
+                { "type": "core://Text", "style": "Body", "value_expr": "$item.name" },
+                { "type": "core://Button", "label": "Say hi",
+                  "on_click": { "intent": "action.navigation.back" } } ] } });
+        let rows = rows_of(&minimize(&data, &node, &[], Use::default()));
+        assert_eq!(
+            rows["notes://people/1"],
+            json!({ "id": "1", "name": "Rowan" })
+        );
+        // Names under a field-name key are read: `where`, `filter`, `group_by`.
+        let node = json!({ "type": "core://List", "query_key": "note:people",
+            "where": { "field": "kind", "equals": "$form.kind" },
+            "filter": { "value": "$form.q", "fields": ["city"] },
+            "group_by": { "field": "title", "header": { "type": "core://Divider" } },
+            "item_template": { "type": "core://Text", "value_expr": "${notes://people/1#bio}" } });
+        let rows = rows_of(&minimize(&data, &node, &[], Use::default()));
+        assert_eq!(
+            rows["notes://people/1"],
+            json!({ "id": "1", "kind": "friend", "city": "Northvale", "title": "private", "bio": "x" })
+        );
     }
 
     #[test]

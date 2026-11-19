@@ -35,8 +35,9 @@ served to anyone with the link by the web client. Only where the host allows it 
     lets its rows out; a layout that draws anything else (Pixelfed, Events) is refused. The theme
     (`core://theme`, colours) goes too;
   - **only what shows**: rows the copy's lists hold (or only `rows`, or the `item` drawn as `$item`), each with
-    only the fields the layout reads (`$item.<f>`, `#<f>`, quoted names); a field the page doesn't show never
-    leaves the pod;
+    only the fields the layout reads (`$item.<f>`, `${<uri>#<f>}`, and the names under a list's or count's
+    `where`, `filter`, `group_by`, `indent` and a carousel's `aspect_field`; a plumbing key such as `label` is
+    not a field read); a field the page doesn't show never leaves the pod;
   - at most 512 KiB (2 MiB since decision [public-link-size](public-link-size.md)); at most 20 live links per pod (the shelf counts and inserts in one transaction, so shares at once can't pass it).
 - **Review**: `share_publicly` without `confirm` answers every text and value a visitor would read, every URL, the
   rows and fields, and what was taken out, and says the copy follows new data. `confirm` must repeat the review's id
