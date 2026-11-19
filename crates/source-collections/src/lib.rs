@@ -392,6 +392,12 @@ impl Source for CollectionsAdapter {
         NAME
     }
 
+    /// A feed names a collection; a deleted one's feed leaves home when the
+    /// pod opens (issue #358).
+    fn has_feed(&self, conn: &rusqlite::Connection, feed: &str) -> bool {
+        !matches!(db::latest_def(conn, feed), Ok(None))
+    }
+
     fn blueprints(&self) -> Vec<BlueprintInfo> {
         Vec::new()
     }

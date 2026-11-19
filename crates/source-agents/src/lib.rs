@@ -106,10 +106,11 @@ pub const MANIFEST: SourceManifest = SourceManifest {
     feeds: &[
         FeedSpec {
             name: SESSIONS_FEED,
-            query_keys: &[STATUS_QUERY, SESSIONS_QUERY],
+            query_keys: &[STATUS_QUERY, SESSIONS_QUERY, "agents:schedule_runs:{name}"],
             doc: "The agent runner's runs (one attempt at one piece of work each): the ones that \
                   need you (or are parked), then running, queued, ended ones waiting on CI, review \
-                  or deploy, and the rest; and agents:status: whether the pod is signed in to a \
+                  or deploy, and the rest; agents:schedule_runs:<name>, a schedule's runs with \
+                  the latest started first; and agents:status: whether the pod is signed in to a \
                   runner and reaches it, with a one-line summary such as \
                   1 working · 1 needs you · 2 queued · 1 waiting.",
         },
@@ -1254,7 +1255,7 @@ async fn reopen_route(State(pod): State<Pod>, headers: HeaderMap, body: Bytes) -
         Err(r) => return r,
     };
     let message = match field(&body, "message", 20_000) {
-        Ok(m) => m,
+        Ok(m) => follow_up_prompt(&m),
         Err(r) => return r,
     };
     // The row, or a run of it (a run's screen knows only the run).
@@ -1295,6 +1296,18 @@ async fn reopen_route(State(pod): State<Pod>, headers: HeaderMap, body: Bytes) -
             detail,
         ),
     }
+}
+
+/// What closes every Reopen message. A resumed conversation gets only the
+/// developer's words, and an agent that answers them and stops without
+/// reporting leaves its run needing you (then parked) though its work is done.
+pub const FOLLOW_UP_REMINDER: &str = "When you have finished, report again as the task asks \
+(`foreman report`), so this run ends. Don't stop with only a reply unless you need the developer.";
+
+/// A Reopen message as the new run gets it: the developer's words, then
+/// [`FOLLOW_UP_REMINDER`].
+pub fn follow_up_prompt(message: &str) -> String {
+    format!("{}\n\n{FOLLOW_UP_REMINDER}", message.trim_end())
 }
 
 /// What Continue tells the run that carries on a timed-out one.

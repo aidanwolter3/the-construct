@@ -1,0 +1,56 @@
+{
+  "note": "First version: the quiet accent text that opens or does something (Browse events, All meals, Clear)",
+  "component": {
+    "doc": "A quiet text link: accent Label text, padded 4 dp across and 8 dp down so it is easy to tap, that runs on_click. For a header's action in words rather than an icon, or a small action beside a list (Clear, See all). For a filled button use core://Button.",
+    "params": [
+      {
+        "name": "label",
+        "type": "text",
+        "doc": "The link's text (bindings allowed).",
+        "required": true
+      },
+      {
+        "name": "description",
+        "type": "text",
+        "doc": "What it does, for screen readers (often the label itself).",
+        "required": true
+      },
+      {
+        "name": "on_click",
+        "type": "json",
+        "doc": "The intent it runs (action.navigation.open, action.sequence, ...).",
+        "required": true
+      }
+    ],
+    "template": {
+      "type": "core://Tappable",
+      "content_description": "$arg.description",
+      "on_click": "$arg.on_click",
+      "content": {
+        "type": "core://Box",
+        "content_color": "${local://theme#accent}",
+        "padding_h_dp": 4,
+        "padding_v_dp": 8,
+        "content": {
+          "type": "core://Text",
+          "value_expr": "$arg.label",
+          "style": "Label"
+        }
+      }
+    },
+    "examples": [
+      {
+        "args": {
+          "label": "See all",
+          "description": "See all events",
+          "on_click": {
+            "intent": "action.navigation.open",
+            "target_uri": "collections://events",
+            "presentation": "Push"
+          }
+        },
+        "note": "a small action beside a section's heading"
+      }
+    ]
+  }
+}

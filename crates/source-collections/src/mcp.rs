@@ -1556,13 +1556,11 @@ async fn delete(pod: &Pod, caps: Caps, args: &Value) -> Result<Value, Value> {
             ),
         ));
     }
-    let (apps, others, home) = pod
+    let (apps, others) = pod
         .blocking(move |s| {
             let apps = pod_layouts::layouts_with_source(s, NAME)?;
-            let (others, home) = s.with_conn(|c| -> rusqlite::Result<_> {
-                Ok((db::defs_by_name(c)?, pod_layouts::home_feeds(c)))
-            })?;
-            Ok((apps, others, home))
+            let others = s.with_conn(db::defs_by_name)?;
+            Ok((apps, others))
         })
         .await
         .map_err(db_err)?;
@@ -1606,14 +1604,11 @@ async fn delete(pod: &Pod, caps: Caps, args: &Value) -> Result<Value, Value> {
         );
     }
     // Home's feed goes first: a layout naming a collection that doesn't
-    // exist fails validation, so a stale feed would block home's saves.
-    let feed = (NAME.to_owned(), name.clone());
-    let mut dropped_feed = false;
-    if home.contains(&feed) {
-        let rest: Vec<_> = home.into_iter().filter(|f| *f != feed).collect();
-        pod_core::construct::write::set_home_feeds_to(pod, rest).await?;
-        dropped_feed = true;
-    }
+    // exist fails validation, so a stale feed would block home's saves. It
+    // is dropped from home's feeds as they are when written, so deletes at
+    // once each drop their own (issue #358).
+    let dropped_feed =
+        pod_core::construct::write::drop_home_feed(pod, (NAME.to_owned(), name.clone())).await?;
     let target = name.clone();
     let now = pod_core::util::now_secs();
     refusable(pod, move |tx| {

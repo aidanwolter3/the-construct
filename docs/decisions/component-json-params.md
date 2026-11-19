@@ -27,5 +27,7 @@ an argument that isn't a valid intent where an intent goes is refused on the wri
   argument is, and a wrong one is refused at the use rather than in the expansion. `json` is for the parts of a
   node that are objects or lists.
 
-Not done: no `core:` component takes a `json` parameter yet. `core:muted_note` could gain a `count` (a new
-`0002.json`, so a use draws the whole empty state) once clients with the feature are out.
+Since (issue #405, once clients with the feature were out): `core:muted_note` 0002 takes an optional `count`, so a
+use draws the whole empty state, and `core:text_link` takes its `on_click`. A client without the feature is served
+`core:muted_note` 0001, which ignores `count` and always shows the note, and draws `core:text_link` as "This part
+isn't available.".
