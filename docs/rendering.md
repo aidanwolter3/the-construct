@@ -163,7 +163,7 @@ form, starting at the release speed), 50 to 8000 points per second; a finger lan
 per second stops it without tapping. Past an end, a view whose content scrolls stretches as Android 12's do: a pull
 stretches it (pushing back undoes that first), letting go springs it back, and a fling that meets the end bumps it;
 the content draws scaled along the axis from that end (`stretch:<id>` among the scroll offsets, up to about 10%;
-images move but keep their size, since each size is cut anew). A mouse wheel notch glides 64 points over about
+images move but keep their size, since each size is cut anew). Where a scrolling view's top or bottom stops short of the screen's edge (inside the system bars; a header above it, a tab bar below it, also when the view is in an embedded layout that ends there), content passing under it fades into the colour behind the view over 24 points, growing in over the first 24 points of scrolling that way, so a fade shows only while there is more content beyond that end (`edge_fades`, drawn as strips of that colour, so every renderer draws it alike). A mouse wheel notch glides 64 points over about
 120 ms; trackpad deltas apply as they come (macOS adds its own momentum). A drag's scrolling is applied once per frame, and the GPU renderer keeps shaped text between frames. The session follows the platform's light or dark mode (`Session::set_dark`). Dark mode draws the theme's dark palette
 (decision `dark-palette`): the background is the `page` token, dialogs, sheets, panels and the edit bar draw on
 `card`, and each mode takes only its own token values from `core://theme` (`<token>`, `<token>_dark`), any token
