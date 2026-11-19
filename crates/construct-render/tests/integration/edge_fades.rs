@@ -1,5 +1,6 @@
-//! A scrolling view's content fades where it passes under a header or a
-//! bottom bar, and not at the screen's own edges.
+//! A scrolling view's content fades where it passes under a header, a
+//! sticky node pinned at its top or a bottom bar, and at the bottom of the
+//! screen (over the phone's gesture bar), but not at the screen's top.
 
 use construct_render::Viewport;
 use construct_render::interact::Session;
@@ -133,11 +134,55 @@ fn an_embedded_layout_above_a_tab_bar_fades_into_it() {
 }
 
 #[test]
-fn a_view_filling_the_screen_does_not_fade_at_its_edges() {
+fn a_view_filling_the_screen_fades_only_at_the_bottom() {
     let mut s = session(false);
     s.scroll_by(None, 200.0).unwrap();
-    assert_eq!(fades(&mut s), (0, 0));
-    // Nor under the system bars, inside which the screen's content sits.
+    let (top, bottom) = fades(&mut s);
+    assert_eq!(top, 0, "the screen's top");
+    assert!(bottom > 0, "over the gesture bar");
+    // Nor under the status bar, inside which the screen's content starts.
     s.set_insets([24.0, 0.0, 16.0, 0.0]);
-    assert_eq!(fades(&mut s), (0, 0));
+    let (top, bottom) = fades(&mut s);
+    assert_eq!(top, 0, "under the status bar");
+    assert!(bottom > 0, "over the gesture bar");
+}
+
+#[test]
+fn content_fades_under_a_pinned_sticky_node_not_behind_it() {
+    // As the Events and Meals screens: chips or a search box pinned at the
+    // top of a list that fills the screen under its title.
+    let mut s = session_with(|scroll| {
+        let mut rows = scroll["content"]["children"].as_array().unwrap().clone();
+        rows.insert(
+            0,
+            json!({ "type": "core://Sticky", "content":
+            { "type": "core://Text", "value_expr": "Search meals", "style": "Title" } }),
+        );
+        json!({ "type": "core://Scroll", "content": { "type": "core://Column", "children": rows } })
+    });
+    s.scroll_by(None, 200.0).unwrap();
+    let scene = s.scene().unwrap();
+    let pinned = scene.find_text("Search meals").unwrap().bounds;
+    let view = scroll_view(scene).bounds;
+    let top_strips: Vec<f32> = scene
+        .draws
+        .iter()
+        .filter_map(|d| match d {
+            Draw::Quad(q)
+                if q.rect[3] <= 1.0
+                    && q.rect[2] == view[2]
+                    && q.bg_color[3] < 1.0
+                    && q.rect[1] < view[1] + view[3] / 2.0 =>
+            {
+                Some(q.rect[1])
+            }
+            _ => None,
+        })
+        .collect();
+    assert!(!top_strips.is_empty(), "a fade under the pinned node");
+    let first = top_strips.iter().copied().fold(f32::MAX, f32::min);
+    assert!(
+        first >= pinned[1] + pinned[3] - 0.5,
+        "the fade starts below it: {first} vs {pinned:?}"
+    );
 }
