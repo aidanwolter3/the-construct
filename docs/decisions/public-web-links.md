@@ -38,7 +38,7 @@ served to anyone with the link by the web client. Only where the host allows it 
     only the fields the layout reads (`$item.<f>`, `${<uri>#<f>}`, and the names under a list's or count's
     `where`, `filter`, `group_by`, `indent` and a carousel's `aspect_field`; a plumbing key such as `label` is
     not a field read); a field the page doesn't show never leaves the pod;
-  - at most 512 KiB (2 MiB since decision [public-link-size](public-link-size.md)); at most 20 live links per pod.
+  - at most 512 KiB (2 MiB since decision [public-link-size](public-link-size.md)); at most 20 live links per pod (the shelf counts and inserts in one transaction, so shares at once can't pass it).
 - **Review**: `share_publicly` without `confirm` answers every text and value a visitor would read, every URL, the
   rows and fields, and what was taken out, and says the copy follows new data. `confirm` must repeat the review's id
   (a hash of the copy): anything that changed asks again.
@@ -50,7 +50,7 @@ served to anyone with the link by the web client. Only where the host allows it 
   live links again. A copy that can't be made (the layout was deleted, now draws other data) keeps the last one.
   New rows the layout shows go out without a new review: the review says so.
 - **Revoke**: `unshare_publicly` takes the copy off the host at once (the row stays, marked revoked, for the
-  owner's list); a deleted pod takes its copies.
+  owner's list; a pod keeps its newest 20 revoked rows, older ones are deleted); a deleted pod takes its copies.
 - **The page**: `start_public` draws the copy with no loader (nothing it draws can write), images through its own
   proxy; a link it opens goes to a new tab.
 

@@ -188,6 +188,8 @@ pub enum ShelfError {
     HandleInUse,
     /// Another live public link of the pod has the slug.
     SlugTaken,
+    /// The pod already keeps the most live public links it may.
+    TooManyLinks,
     Store(String),
 }
 
@@ -205,6 +207,13 @@ impl ShelfError {
             ShelfError::SlugTaken => refuse(
                 "slug_taken",
                 "another live public link of this pod has that slug: pick another",
+            ),
+            ShelfError::TooManyLinks => refuse(
+                "too_many_links",
+                format!(
+                    "a pod keeps at most {} public links: unshare one first",
+                    crate::public_copy::MAX_LIVE
+                ),
             ),
             ShelfError::Store(e) => refuse("shelf_error", e.clone()),
         }
@@ -241,7 +250,10 @@ pub trait Shelf: Send + Sync {
         false
     }
     /// Put a public copy: a new link, or the next copy of a live one (by
-    /// `link`); answers it as stored.
+    /// `link`); answers it as stored. A new link is refused with
+    /// [`ShelfError::TooManyLinks`] once the pod keeps
+    /// [`MAX_LIVE`](crate::public_copy::MAX_LIVE) live ones, counted in the
+    /// same transaction as the insert.
     fn put_public(&self, _c: PublicCopy) -> Result<PublicCopy, ShelfError> {
         Err(ShelfError::Store("public links are off".into()))
     }
@@ -257,8 +269,9 @@ pub trait Shelf: Send + Sync {
     fn public_by_slug(&self, _handle: &str, _slug: &str) -> Result<Option<PublicCopy>, ShelfError> {
         Ok(None)
     }
-    /// Revoke the pod's live public link: its copy leaves the host. False
-    /// when there was none.
+    /// Revoke the pod's live public link: its copy leaves the host, and the
+    /// pod keeps only its newest [`MAX_REVOKED`](crate::public_copy::MAX_REVOKED)
+    /// revoked rows. False when there was none.
     fn revoke_public(&self, _pod: &str, _link: &str) -> Result<bool, ShelfError> {
         Ok(false)
     }

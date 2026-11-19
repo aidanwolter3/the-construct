@@ -56,6 +56,8 @@ impl PublicData {
 pub const MAX_COPY_BYTES: usize = 2 * 1024 * 1024;
 /// Most public links a pod keeps live.
 pub const MAX_LIVE: usize = 20;
+/// Most revoked public links a pod's list keeps; older ones are deleted.
+pub const MAX_REVOKED: usize = 20;
 /// Wait this long after a data change before copying again, so a burst of
 /// writes makes one copy.
 const SETTLE: std::time::Duration = std::time::Duration::from_secs(2);
@@ -1270,12 +1272,8 @@ async fn share(
             && c.layout == ask.layout
             && Ask::from_key(&c.layout, &c.rows).identity() == ask.identity()
     });
-    if existing.is_none() && live.iter().filter(|c| c.revoked_at.is_none()).count() >= MAX_LIVE {
-        return Err(refuse(
-            "too_many_links",
-            format!("a pod keeps at most {MAX_LIVE} public links: unshare one first"),
-        ));
-    }
+    // The shelf holds the cap (MAX_LIVE): it counts and inserts in one
+    // transaction, so two shares at once can't both pass.
     let title = made.copy["title"]
         .as_str()
         .unwrap_or(&ask.layout)
@@ -1299,6 +1297,10 @@ async fn share(
             crate::construct::share::ShelfError::SlugTaken => refuse(
                 "slug_taken",
                 "another live public link of this pod has that slug: pick another",
+            ),
+            crate::construct::share::ShelfError::TooManyLinks => refuse(
+                "too_many_links",
+                format!("a pod keeps at most {MAX_LIVE} public links: unshare one first"),
             ),
             e => refuse("shelf_error", format!("{e:?}")),
         })?;
