@@ -1,5 +1,7 @@
 # Layouts are plumbing the app draws and porcelain the pod expands, defined as data
 
+Superseded in part by [component-json-params](component-json-params.md): a parameter may also be `json`.
+
 Date: 2026-11-05. Related: [layout-parts](layout-parts.md), [named-vocabulary](named-vocabulary.md),
 [blueprints-and-home](blueprints-and-home.md), [layouts-not-apps](layouts-not-apps.md),
 [pinned-app-title](pinned-app-title.md), [retired-layout-files](retired-layout-files.md), issue #124.

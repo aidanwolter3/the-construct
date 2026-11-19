@@ -114,9 +114,14 @@ pub fn derive(
         .is_some_and(|m| m.edges.iter().any(|e| !e.bind.is_empty()));
     if layout && (binds || !construct_elements::template::inputs_of(&el).is_empty()) {
         features.push(protocol::feature::LAYOUT_BIND);
-        features.sort_unstable();
-        features.dedup();
     }
+    // The engine reads a component's definition to expand it: one with a
+    // `json` parameter needs a client that knows the type.
+    if has_json_param(&el) {
+        features.push(protocol::feature::COMPONENT_JSON_PARAMS);
+    }
+    features.sort_unstable();
+    features.dedup();
     let features = features.join(",");
     (
         json!({
@@ -160,6 +165,14 @@ fn drawn_features(node: &Value) -> Vec<&'static str> {
     serde_json::from_value::<protocol::UiNode>(as_expanded(node))
         .map(|n| protocol::required_features(&n))
         .unwrap_or_default()
+}
+
+/// Whether `el` (an element) has a parameter of type `json` (decision
+/// `component-json-params`).
+fn has_json_param(el: &Value) -> bool {
+    el["params"]
+        .as_array()
+        .is_some_and(|ps| ps.iter().any(|p| p["type"] == "json"))
 }
 
 /// A migration step (scope `construct`): the features of the stored
@@ -1013,6 +1026,28 @@ mod tests {
                 {"type": "core://Children"},
                 {"type": "core://IfArg", "arg": "chevron",
                     "then": {"type": "core://Text", "style": "Title", "value_expr": "›"}}]}})
+    }
+
+    #[test]
+    fn only_a_json_parameter_needs_the_json_params_feature() {
+        assert!(!has_json_param(&component()));
+        let mut v = component();
+        v["params"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!({"name": "on_click", "type": "json", "required": true}));
+        assert!(has_json_param(&v));
+        // Recorded on the element, so a client without it is served an older
+        // entry of the name.
+        let catalog = Catalog::empty();
+        let features = |el: &Value| {
+            let id = object_id(el);
+            let objects = BTreeMap::from([(id.clone(), Arc::new(el.clone()))]);
+            derive(&catalog, &[], &objects, &id, false).1
+        };
+        let json_params = protocol::feature::COMPONENT_JSON_PARAMS;
+        assert!(features(&v).split(',').any(|f| f == json_params));
+        assert!(!features(&component()).split(',').any(|f| f == json_params));
     }
 
     #[test]
