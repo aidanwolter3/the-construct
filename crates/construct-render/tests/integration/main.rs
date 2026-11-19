@@ -16,6 +16,7 @@ mod gpu;
 mod interaction;
 mod layout_math;
 mod main_axis;
+mod markdown_text;
 mod media;
 mod panels;
 mod reuse;

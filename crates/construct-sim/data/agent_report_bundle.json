@@ -1,0 +1,110 @@
+{
+  "version": "1.0.0",
+  "workspace": {
+    "type": "core://Page",
+    "id": "agent_report",
+    "title": "Agent report",
+    "root": {
+      "type": "core://Box",
+      "fill": true,
+      "background": "${local://theme#page}",
+      "content": {
+        "type": "core://Scroll",
+        "content": {
+          "type": "core://Column",
+          "spacing_dp": 12,
+          "padding_h_dp": 16,
+          "padding_v_dp": 16,
+          "children": [
+            {
+              "type": "core://Text",
+              "style": "Title",
+              "value_expr": "Agent runs",
+              "weight": "SemiBold"
+            },
+            {
+              "type": "core://List",
+              "query_key": "agents:sessions",
+              "spacing_dp": 8,
+              "item_template": {
+                "type": "core://Box",
+                "background": "${local://theme#card}",
+                "border_color": "${local://theme#card_border}",
+                "corner_dp": 14,
+                "padding_h_dp": 16,
+                "padding_v_dp": 12,
+                "content": {
+                  "type": "core://Column",
+                  "spacing_dp": 2,
+                  "children": [
+                    {
+                      "type": "core://Text",
+                      "style": "Label",
+                      "value_expr": "$item.title"
+                    },
+                    {
+                      "type": "core://Box",
+                      "content_color": "${local://theme#muted_text}",
+                      "content": {
+                        "type": "core://Text",
+                        "style": "Secondary",
+                        "value_expr": "$item.summary",
+                        "markdown": true,
+                        "max_lines": 2
+                      }
+                    }
+                  ]
+                }
+              }
+            },
+            {
+              "type": "core://Box",
+              "background": "${local://theme#highlight}",
+              "border_color": "${local://theme#card_border}",
+              "corner_dp": 14,
+              "padding_h_dp": 16,
+              "padding_v_dp": 12,
+              "content": {
+                "type": "core://Text",
+                "style": "Body",
+                "markdown": true,
+                "value_expr": "${agents://sessions/r1#needs_you_text}"
+              }
+            },
+            {
+              "type": "core://Box",
+              "background": "${local://theme#card}",
+              "border_color": "${local://theme#card_border}",
+              "corner_dp": 14,
+              "padding_h_dp": 16,
+              "padding_v_dp": 12,
+              "content": {
+                "type": "core://Text",
+                "style": "Body",
+                "markdown": true,
+                "value_expr": "${agents://sessions/r1#summary}"
+              }
+            }
+          ]
+        }
+      }
+    }
+  },
+  "entities": {
+    "agents://sessions/r1": {
+      "title": "Fix the login redirect",
+      "summary": "## Summary\n\nFixed the **login redirect** loop: `auth::callback` now keeps the `next` parameter, so signing in lands you where you started. See [the PR](https://github.example/acme/app/pull/42).\n\n### What changed\n\n- `crates/auth/src/callback.rs`: keep *only* same-site `next` values\n- Added 3 tests for the redirect\n  - open redirects are refused\n  - ~~old~~ legacy paths still work\n- [x] CI green\n- [ ] Deploy to staging\n\n1. Merge the PR\n2. Watch the deploy\n\n> Heads up: sessions signed in before the fix still have the old cookie.\n\n```rust\nif !next.starts_with('/') {\n    return Redirect::to(\"/\");\n}\n```\n\n| Check | Result |\n|---|---|\n| Unit tests | 128 passed |\n| Clippy | clean |\n\n---\nNext I'd look at the *sign-out* flow.",
+      "needs_you_text": "Should I **merge** now, or wait for review on `#42`?"
+    },
+    "agents://sessions/r2": {
+      "title": "Tidy the settings page",
+      "summary": "## Done\n\nMoved **Theme** under *Appearance* and renamed `dark_mode` to `theme`; all tests pass and the screenshots are attached to the PR."
+    }
+  },
+  "queries": {
+    "agents:sessions": [
+      "agents://sessions/r1",
+      "agents://sessions/r2"
+    ]
+  }
+}

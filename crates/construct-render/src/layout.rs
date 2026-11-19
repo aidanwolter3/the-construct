@@ -13,11 +13,12 @@ use taffy::prelude::*;
 use taffy::{LayoutInput, LayoutOutput, compute_leaf_layout};
 
 use crate::bind::{Ctx, ReadLog, Reads, fold, render};
+use crate::markdown::{self, Block, Inline, Mark};
 use crate::scene::{
     Draw, IconRun, ImageRun, NO_CLIP, QuadInstance, Scene, SemanticNode, Tap, TextRun,
 };
 use crate::style::{CHIP_LABEL, LABEL_LARGE, Rgba, Theme, Type, type_for};
-use crate::text::TextEngine;
+use crate::text::{RichSpan, TextEngine};
 
 /// Logical size and device pixels per point of a frame.
 #[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -116,7 +117,11 @@ const MAX_EMBED_DEPTH: usize = 4;
 
 /// What a leaf measures.
 enum Leaf {
-    Text { text: String, ty: Type },
+    Text {
+        text: String,
+        ty: Type,
+        spans: Vec<RichSpan>,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -156,6 +161,7 @@ enum Paint {
         text: String,
         ty: Type,
         color: Rgba,
+        spans: Vec<RichSpan>,
     },
     Icon {
         name: String,
@@ -607,6 +613,23 @@ impl SceneBuilder {
     }
 }
 
+/// Space between a Markdown text's blocks, between a list's items, and
+/// above a heading that follows another block (points).
+const MD_GAP: u16 = 8;
+const MD_ITEM_GAP: u16 = 4;
+const MD_HEADING_SPACE: f32 = 6.0;
+
+/// A Markdown text's style: it may shrink below its longest word and wrap.
+fn md_shrinks() -> Style {
+    Style {
+        min_size: Size {
+            width: length(0.0),
+            height: auto(),
+        },
+        ..Default::default()
+    }
+}
+
 fn pad(h: u16, v: u16) -> Rect<LengthPercentage> {
     Rect {
         left: length(h as f32),
@@ -652,6 +675,12 @@ fn fills_width(n: &UiNode) -> bool {
         | UiNode::Page { .. }
         | UiNode::Dock { .. } => true,
         UiNode::Image { size_dp, .. } => size_dp.is_none(),
+        // Markdown's blocks (a code card, a table) span the width.
+        UiNode::Text {
+            markdown: true,
+            max_lines: None,
+            ..
+        } => true,
         UiNode::Box {
             fill,
             width_dp,
@@ -920,6 +949,342 @@ impl<'i> Build<'_, 'i> {
         color: Rgba,
         sem: Option<Sem>,
     ) -> usize {
+        self.rich_leaf(style, text, Vec::new(), ty, color, sem)
+    }
+
+    /// A `core://Text` `markdown` (decision `text-markdown`): its blocks
+    /// down a column, in the text's type and colour; with `max_lines`, its
+    /// inline styles only, on that many lines. Screen readers get it as one
+    /// text without its markup.
+    fn markdown(&mut self, source: &str, ty: Type, color: Rgba, b: &B, n: &UiNode) -> usize {
+        let blocks = markdown::parse(source);
+        let flat = markdown::flatten(&blocks);
+        let sem = self.sem(b, n, Some(flat.text.clone()), None);
+        if ty.max_lines > 0 || blocks.is_empty() {
+            let spans = self.rich_spans(&flat.spans);
+            return self.rich_leaf(Style::default(), flat.text, spans, ty, color, Some(sem));
+        }
+        let ty = Type {
+            strike: false,
+            ..ty
+        };
+        let kids = self.md_blocks(&blocks, ty, color, 0);
+        self.push(
+            column(MD_GAP, pad(0, 0), AlignItems::STRETCH),
+            kids,
+            Paint::None,
+            Some(sem),
+            false,
+        )
+    }
+
+    /// Markdown's inline marks as the text engine's spans: links in the
+    /// theme's accent.
+    fn rich_spans(&self, spans: &[markdown::Span]) -> Vec<RichSpan> {
+        let link = self.theme.token("accent").unwrap_or(self.theme.primary);
+        spans
+            .iter()
+            .map(|s| RichSpan {
+                start: s.start,
+                end: s.end,
+                bold: s.mark.has(Mark::BOLD),
+                italic: s.mark.has(Mark::ITALIC),
+                mono: s.mark.has(Mark::CODE),
+                strike: s.mark.has(Mark::STRIKE),
+                color: s.mark.has(Mark::LINK).then(|| link.to_u8()),
+            })
+            .collect()
+    }
+
+    fn md_text(&mut self, text: &Inline, ty: Type, color: Rgba) -> usize {
+        let spans = self.rich_spans(&text.spans);
+        self.rich_leaf(md_shrinks(), text.text.clone(), spans, ty, color, None)
+    }
+
+    fn md_blocks(&mut self, blocks: &[Block], ty: Type, color: Rgba, lists: usize) -> Vec<usize> {
+        let mut out = Vec::new();
+        for (i, block) in blocks.iter().enumerate() {
+            let k = self.md_block(block, ty, color, lists);
+            // A heading stands a little apart from what comes before it.
+            if i > 0 && matches!(block, Block::Heading { level, .. } if *level <= 3) {
+                let node = self.elems[k].node;
+                let mut st = self.tree.style(node).cloned().unwrap_or_default();
+                st.margin.top = length(MD_HEADING_SPACE);
+                let _ = self.tree.set_style(node, st);
+            }
+            out.push(k);
+        }
+        out
+    }
+
+    /// `lists`: how many lists it is in (a nested list's bullets are rings).
+    fn md_block(&mut self, block: &Block, ty: Type, color: Rgba, lists: usize) -> usize {
+        let theme = self.theme.clone();
+        let tint = theme
+            .token("muted_surface")
+            .unwrap_or(theme.surface_variant);
+        let border = theme.token("card_border").unwrap_or(theme.outline);
+        match block {
+            Block::Heading { level, text } => {
+                let (scale, weight) = match level {
+                    1 => (1.43, protocol::TextWeight::Bold),
+                    2 => (1.25, protocol::TextWeight::Bold),
+                    3 => (1.1, protocol::TextWeight::SemiBold),
+                    _ => (1.0, protocol::TextWeight::SemiBold),
+                };
+                let size = (ty.size * scale).round();
+                let h = Type {
+                    face: ty.face.with_weight(weight),
+                    size,
+                    line_height: (size * 1.3).round().max(ty.line_height),
+                    ..ty
+                };
+                self.md_text(text, h, color)
+            }
+            Block::Paragraph(text) => self.md_text(text, ty, color),
+            Block::List { start, items } => {
+                let mut rows = Vec::new();
+                // Numbers line up: each marker as wide as the widest.
+                let widest = markdown::marker(*start, items.len().saturating_sub(1), None)
+                    .chars()
+                    .count();
+                for (i, item) in items.iter().enumerate() {
+                    let m = match (item.task, start) {
+                        (None, None) => self.md_bullet(ty, lists),
+                        _ => {
+                            let mark = markdown::marker(*start, i, item.task);
+                            let mark_color = match item.task {
+                                Some(true) => theme.token("accent").unwrap_or(theme.primary),
+                                _ => theme.muted_text,
+                            };
+                            let mst = Style {
+                                flex_shrink: 0.0,
+                                min_size: Size {
+                                    width: length(match item.task {
+                                        None => ty.size * 0.6 * widest as f32,
+                                        Some(_) => ty.size,
+                                    }),
+                                    height: auto(),
+                                },
+                                ..Default::default()
+                            };
+                            self.text_leaf(mst, mark, ty, mark_color, None)
+                        }
+                    };
+                    // A done task's text recedes.
+                    let item_color = if item.task == Some(true) {
+                        theme.muted_text
+                    } else {
+                        color
+                    };
+                    let inner = self.md_blocks(&item.blocks, ty, item_color, lists + 1);
+                    let mut body = column(MD_ITEM_GAP, pad(0, 0), AlignItems::STRETCH);
+                    body.flex_grow = 1.0;
+                    body.flex_shrink = 1.0;
+                    body.flex_basis = length(0.0);
+                    body.min_size.width = length(0.0);
+                    let body = self.push(body, inner, Paint::None, None, false);
+                    rows.push(self.push(
+                        row(6, pad(0, 0), AlignItems::FLEX_START),
+                        vec![m, body],
+                        Paint::None,
+                        None,
+                        false,
+                    ));
+                }
+                self.push(
+                    column(MD_ITEM_GAP, pad(0, 0), AlignItems::STRETCH),
+                    rows,
+                    Paint::None,
+                    None,
+                    false,
+                )
+            }
+            Block::Quote(inner) => {
+                let bar = Style {
+                    size: Size {
+                        width: length(3.0),
+                        height: auto(),
+                    },
+                    flex_shrink: 0.0,
+                    ..Default::default()
+                };
+                let accent = theme.token("accent").unwrap_or(theme.primary);
+                let bar = self.push(
+                    bar,
+                    Vec::new(),
+                    Paint::Quad {
+                        bg: accent.with_alpha(0.45),
+                        border: None,
+                        dashed: false,
+                        radius: 1.5,
+                    },
+                    None,
+                    false,
+                );
+                let kids = self.md_blocks(inner, ty, theme.muted_text, lists);
+                let mut body = column(MD_GAP, pad(0, 2), AlignItems::STRETCH);
+                body.flex_grow = 1.0;
+                body.flex_basis = length(0.0);
+                body.min_size.width = length(0.0);
+                let body = self.push(body, kids, Paint::None, None, false);
+                self.push(
+                    row(10, pad(0, 0), AlignItems::STRETCH),
+                    vec![bar, body],
+                    Paint::None,
+                    None,
+                    false,
+                )
+            }
+            Block::Code(code) => {
+                let spans = vec![RichSpan {
+                    start: 0,
+                    end: code.len(),
+                    bold: false,
+                    italic: false,
+                    mono: true,
+                    strike: false,
+                    color: None,
+                }];
+                let t = self.rich_leaf(md_shrinks(), code.clone(), spans, ty, color, None);
+                self.push(
+                    column(0, pad(12, 10), AlignItems::STRETCH),
+                    vec![t],
+                    Paint::Quad {
+                        bg: tint,
+                        border: Some(border),
+                        dashed: false,
+                        radius: 8.0,
+                    },
+                    None,
+                    false,
+                )
+            }
+            Block::Table { head, rows } => {
+                let bold = Type {
+                    face: ty.face.with_weight(protocol::TextWeight::SemiBold),
+                    ..ty
+                };
+                let mut lines = Vec::new();
+                for (r, cells) in std::iter::once(head).chain(rows).enumerate() {
+                    if r > 0 {
+                        lines.push(self.md_rule(border));
+                    }
+                    let mut kids = Vec::new();
+                    for cell in cells {
+                        let t = self.md_text(cell, if r == 0 { bold } else { ty }, color);
+                        let mut c = column(0, pad(10, 6), AlignItems::STRETCH);
+                        c.flex_grow = 1.0;
+                        c.flex_shrink = 1.0;
+                        c.flex_basis = length(0.0);
+                        c.min_size.width = length(0.0);
+                        kids.push(self.push(c, vec![t], Paint::None, None, false));
+                    }
+                    let paint = if r == 0 {
+                        Paint::Quad {
+                            bg: tint,
+                            border: None,
+                            dashed: false,
+                            radius: 0.0,
+                        }
+                    } else {
+                        Paint::None
+                    };
+                    lines.push(self.push(
+                        row(0, pad(0, 0), AlignItems::FLEX_START),
+                        kids,
+                        paint,
+                        None,
+                        false,
+                    ));
+                }
+                self.push(
+                    column(0, pad(0, 0), AlignItems::STRETCH),
+                    lines,
+                    Paint::Quad {
+                        bg: Rgba::TRANSPARENT,
+                        border: Some(border),
+                        dashed: false,
+                        radius: 8.0,
+                    },
+                    None,
+                    true,
+                )
+            }
+            Block::Rule => self.md_rule(border),
+        }
+    }
+
+    /// A bullet: a dot centred on the first line, a ring in a nested list.
+    fn md_bullet(&mut self, ty: Type, lists: usize) -> usize {
+        let muted = self.theme.muted_text;
+        let d = (ty.size * 0.36).round().max(4.0);
+        let dot = Style {
+            size: Size {
+                width: length(d),
+                height: length(d),
+            },
+            ..Default::default()
+        };
+        let paint = if lists.is_multiple_of(2) {
+            Paint::Quad {
+                bg: muted,
+                border: None,
+                dashed: false,
+                radius: d / 2.0,
+            }
+        } else {
+            Paint::Quad {
+                bg: Rgba::TRANSPARENT,
+                border: Some(muted),
+                dashed: false,
+                radius: d / 2.0,
+            }
+        };
+        let dot = self.push(dot, Vec::new(), paint, None, false);
+        let mut cell = row(0, pad(0, 0), AlignItems::CENTER);
+        cell.justify_content = JustifyContent::CENTER;
+        cell.size = Size {
+            width: length(ty.size),
+            height: length(ty.line_height),
+        };
+        cell.flex_shrink = 0.0;
+        self.push(cell, vec![dot], Paint::None, None, false)
+    }
+
+    fn md_rule(&mut self, color: Rgba) -> usize {
+        let st = Style {
+            size: Size {
+                width: auto(),
+                height: length(1.0),
+            },
+            flex_shrink: 0.0,
+            ..Default::default()
+        };
+        self.push(
+            st,
+            Vec::new(),
+            Paint::Quad {
+                bg: color,
+                border: None,
+                dashed: false,
+                radius: 0.0,
+            },
+            None,
+            false,
+        )
+    }
+
+    /// A text with styled ranges ([`RichSpan`]).
+    fn rich_leaf(
+        &mut self,
+        style: Style,
+        text: String,
+        spans: Vec<RichSpan>,
+        ty: Type,
+        color: Rgba,
+        sem: Option<Sem>,
+    ) -> usize {
         let node = self
             .tree
             .new_leaf_with_context(
@@ -927,12 +1292,18 @@ impl<'i> Build<'_, 'i> {
                 Leaf::Text {
                     text: text.clone(),
                     ty,
+                    spans: spans.clone(),
                 },
             )
             .expect("taffy leaf");
         self.elems.push(Elem {
             node,
-            paint: Paint::Text { text, ty, color },
+            paint: Paint::Text {
+                text,
+                ty,
+                color,
+                spans,
+            },
             sem,
             kids: Vec::new(),
             clip: false,
@@ -1198,13 +1569,13 @@ impl<'i> Build<'_, 'i> {
                     style,
                     |_, _| 0.0,
                     |known, avail| match ctx {
-                        Some(Leaf::Text { text: s, ty }) => {
+                        Some(Leaf::Text { text: s, ty, spans }) => {
                             let max = known.width.or(match avail.width {
                                 AvailableSpace::Definite(w) => Some(w),
                                 AvailableSpace::MinContent => Some(0.0),
                                 AvailableSpace::MaxContent => None,
                             });
-                            let m = text.measure(s, *ty, max, scale);
+                            let m = text.measure_rich(s, spans, *ty, max, scale);
                             Size {
                                 width: known.width.unwrap_or(m.width),
                                 height: known.height.unwrap_or(m.height),
@@ -1388,6 +1759,7 @@ impl<'i> Build<'_, 'i> {
                 caps,
                 max_lines,
                 strike,
+                markdown,
             } => {
                 let mut text = match format {
                     Some(f) => self.dated(value_expr, f, &ctx),
@@ -1412,6 +1784,9 @@ impl<'i> Build<'_, 'i> {
                 } else {
                     self.fg(b)
                 };
+                if *markdown {
+                    return Some(self.markdown(&text, ty, color, b, n));
+                }
                 // Screen readers get the text as written, and whole.
                 let sem = self.sem(b, n, Some(text.clone()), None);
                 if *caps {
@@ -4114,7 +4489,12 @@ impl Laid {
                 q.clip = clip;
                 scene.draws.push(Draw::Quad(q));
             }
-            Paint::Text { text, ty, color } => {
+            Paint::Text {
+                text,
+                ty,
+                color,
+                spans,
+            } => {
                 if text.is_empty() {
                     return;
                 }
@@ -4130,6 +4510,7 @@ impl Laid {
                     tracking: ty.tracking,
                     max_lines: ty.max_lines,
                     strike: ty.strike,
+                    spans: spans.clone(),
                     color: *color,
                     rect: [px, py, pw, ph],
                     clip,

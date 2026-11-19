@@ -164,7 +164,15 @@ pub struct RenderStats {
 
 /// A text run's shape: its text, face, size, line height, wrap width and
 /// scale (the floats as bits).
-type ShapeKey = (String, crate::style::Face, u32, u32, u32, u32, (u32, u8));
+type ShapeKey = (
+    String,
+    crate::style::Face,
+    u32,
+    u32,
+    u32,
+    u32,
+    (u32, u8, u64),
+);
 
 /// Shaped runs not drawn for this many frames are dropped once the cache
 /// holds more than [`SHAPED_MAX`].
@@ -520,7 +528,11 @@ impl Renderer {
                 t.line_height.to_bits(),
                 (t.rect[2] + 0.5).to_bits(),
                 s.to_bits(),
-                (t.tracking.to_bits(), t.max_lines),
+                (
+                    t.tracking.to_bits(),
+                    t.max_lines,
+                    crate::text::spans_key(&t.spans),
+                ),
             )
         };
         // Shape at the frame's scale, as the CPU path does; runs drawn
@@ -533,7 +545,7 @@ impl Renderer {
                     None => {
                         let started = crate::time::Instant::now();
                         let ty = t.ty();
-                        let b = text.buffer(&t.text, ty, Some(t.rect[2] + 0.5), s);
+                        let b = text.buffer_rich(&t.text, &t.spans, ty, Some(t.rect[2] + 0.5), s);
                         self.shaped.insert(k, (b, frame_no));
                         stats.shaped = stats.shaped.saturating_add(1);
                         stats.shape += started.elapsed();
@@ -555,7 +567,7 @@ impl Renderer {
                 .iter()
                 .zip(&buffers)
                 .map(|(t, b)| {
-                    if !t.strike {
+                    if !crate::text::has_strike(t.ty(), &t.spans) {
                         return Vec::new();
                     }
                     crate::text::strike_lines(b, t.ty(), s)
