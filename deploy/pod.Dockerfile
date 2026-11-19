@@ -44,7 +44,7 @@ RUN cargo build --release --locked -p server \
 
 # The web client (decision `web-client`): construct-web for wasm32 and its JavaScript glue, with the wasm-bindgen
 # CLI at Cargo.lock's version, as scripts/web_build.sh builds it (CI's web job runs the same); served at /web from
-# CONSTRUCT_WEB_DIR. Its dependencies are compiled with it (a minute or two of the build).
+# CONSTRUCT_WEB_DIR. Its dependencies are compiled with it (a minute or two of the build), after the server's.
 FROM chef AS web
 RUN rustup target add wasm32-unknown-unknown
 COPY Cargo.lock ./
@@ -55,6 +55,9 @@ COPY crates ./crates
 COPY fake-pixelfed ./fake-pixelfed
 COPY assets/icon ./assets/icon
 COPY scripts/web_build.sh ./scripts/web_build.sh
+# Waits for the server's build, so the two release builds (each with LTO) don't run at once on the builder:
+# together they ran out of memory there (rustc killed). The setup above still runs alongside the server's build.
+COPY --from=build /server /tmp/server-built-first
 ARG CONSTRUCT_BUILD=
 RUN scripts/web_build.sh /web
 
