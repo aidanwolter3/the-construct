@@ -127,7 +127,11 @@ share screen.
 - `describe_publication {link}` shows what a link holds; `adopt {link, bindings}` copies it into the pod bound to
   the user's own collections (`{"chores": {"collection": "tasks", "fields": {"title": "name"}}}`, or `{"new":
   "chores"}` for an empty one from the suggested schema) and answers the reference to put in home. Without
-  bindings it proposes them.
+  bindings it proposes them. Every answer lists the publication's `flags` (each literal text and URL it carries)
+  for the user to see. A URL that would put the user's own data into a request to another server when it draws
+  (an image URL with `$item.…` or `$in.…`, flagged `reads_data`) is refused (`sends_data`) unless the user agrees
+  and Claude passes it in `accept_data_urls`; `update_adoption` asks the same for a new version that adds one
+  (decision [`adopt-shows-urls`](decisions/adopt-shows-urls.md)).
 - `list_adoptions` and `update_adoption` follow new versions while they fit the bindings; `list_publications` and
   `revoke_publication` manage the pod's own. A revoked publication keeps drawing where it was adopted.
 
