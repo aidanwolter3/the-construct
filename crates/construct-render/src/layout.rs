@@ -3906,6 +3906,9 @@ struct Pinned {
     view_top: f32,
     /// What fills that band: the background behind the node.
     backdrop: Rgba,
+    /// How far it is moved down from where it lies in the content (how
+    /// far the content has scrolled under it).
+    shift: f32,
 }
 
 /// A sticky node this close to the top of its view when nothing is
@@ -4071,13 +4074,12 @@ impl Laid {
         &self.theme
     }
 
-    /// The top and bottom of the screen's content: inside the window's
-    /// insets (the system bars), on a screen `height` tall.
-    fn content_edges(&self, height: f32) -> (f32, f32) {
-        match self.tree.layout(self.elems[self.root].node) {
-            Ok(root) => (root.padding.top, height - root.padding.bottom),
-            Err(_) => (0.0, height),
-        }
+    /// The top of the screen's content: below the window's inset there
+    /// (the status bar).
+    fn content_top(&self) -> f32 {
+        self.tree
+            .layout(self.elems[self.root].node)
+            .map_or(0.0, |root| root.padding.top)
     }
 
     /// The page colour at each edge of the content (top, right, bottom,
@@ -4219,6 +4221,7 @@ impl Laid {
                     parent_sem,
                     view_top: top,
                     backdrop: at.backdrop,
+                    shift: to - y,
                 });
                 return;
             }
@@ -4320,18 +4323,30 @@ impl Laid {
             stretch_content(scene, drawn, anchor, 1.0 + stretch.abs(), inner_clip);
         }
         if scrolls {
-            // Content passing under a header or a bottom bar (an end of the
-            // view short of the screen's edge, even where an embedded layout
-            // ends there) fades out into what is behind it, as much as there
-            // is left to scroll that way.
+            // Content passing under what covers the view's ends fades out
+            // into what is behind it, as much as there is left to scroll
+            // that way: at the top, under a header above the view (its top
+            // short of the screen's) or a sticky node pinned there, starting
+            // below that node; at the bottom always, over a bottom bar or
+            // the phone's own gesture bar.
             let max = (self.content_height(e) - h).max(0.0);
             let shown = intersect(rect, inner_clip);
-            let (top, bottom) = self.content_edges(scene.height);
-            let top_meets = shown[1] > top + 0.5;
-            let bottom_meets = shown[1] + shown[3] < bottom - 0.5;
-            let above = if top_meets { oy } else { 0.0 };
-            let below = if bottom_meets { max - oy } else { 0.0 };
-            edge_fades(scene, shown, kid_at.backdrop, above, below);
+            let pinned_bottom = own_pins
+                .iter()
+                .filter_map(|p| {
+                    let pl = self.tree.layout(self.elems[p.elem].node).ok()?;
+                    Some((p.origin.1 + pl.location.y + pl.size.height, p.shift))
+                })
+                .max_by(|a, b| a.0.total_cmp(&b.0));
+            let screen_top = self.content_top();
+            let (from, above) = match pinned_bottom {
+                Some((bottom, shift)) => (bottom, shift),
+                None if shown[1] > screen_top + 0.5 => (shown[1], oy),
+                None => (shown[1], 0.0),
+            };
+            let under = [shown[0], from, shown[2], shown[1] + shown[3] - from];
+            edge_fades(scene, under, kid_at.backdrop, above, 0.0);
+            edge_fades(scene, shown, kid_at.backdrop, 0.0, max - oy);
         }
         // Sticky nodes pinned in this view go over its content.
         for p in own_pins {
