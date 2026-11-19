@@ -205,7 +205,7 @@ home); a revoked share keeps drawing where it was adopted.";
 
 // ---------- tools ----------
 
-fn tool(name: &str, description: &str, properties: Value, required: &[&str]) -> Value {
+pub(crate) fn tool(name: &str, description: &str, properties: Value, required: &[&str]) -> Value {
     json!({
         "name": name,
         "description": description,
@@ -241,6 +241,7 @@ fn tools() -> Vec<Value> {
     out.extend(crate::construct::share::tool_specs());
     out.extend(crate::preview::tools());
     out.extend(crate::mcp_servers::tools());
+    out.extend(crate::devices::tool_specs());
     out
 }
 
@@ -473,6 +474,10 @@ async fn call_tool(pod: &Pod, headers: &HeaderMap, params: &Value) -> Value {
     }
     // Calendar feeds (decision `ical-feeds`).
     if let Some(r) = crate::ical::tool(pod, headers, name, &args).await {
+        return tool_result(r);
+    }
+    // Devices and their builds (decision `device-versions`).
+    if let Some(r) = crate::devices::tool(pod, name, &args).await {
         return tool_result(r);
     }
     // Sharing between the server's pods (decision `sharing`).

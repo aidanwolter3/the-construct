@@ -378,6 +378,47 @@ pub const STEPS: &[Step] = &[
          ALTER TABLE notifications ADD COLUMN subject TEXT;
          CREATE INDEX notifications_subject ON notifications (subject);",
     ),
+    // Decision `device-versions`: the devices that reach the pod (one row
+    // per device id, with the build it runs), which build each ran each day,
+    // the server builds this pod has run (to count how far behind a device
+    // is), and agents' watches for a device to update.
+    Step::sql(
+        "device_versions",
+        "CREATE TABLE client_devices (
+             id          TEXT PRIMARY KEY NOT NULL,
+             platform    TEXT NOT NULL,
+             name        TEXT NOT NULL DEFAULT '',
+             nickname    TEXT,
+             build       TEXT NOT NULL DEFAULT '',
+             features    TEXT NOT NULL DEFAULT '',
+             first_seen  INTEGER NOT NULL,
+             last_seen   INTEGER NOT NULL,
+             build_since INTEGER NOT NULL
+         ) WITHOUT ROWID;
+         CREATE TABLE client_days (
+             day    TEXT NOT NULL,
+             device TEXT NOT NULL,
+             build  TEXT NOT NULL,
+             pings  INTEGER NOT NULL,
+             PRIMARY KEY (day, device)
+         ) WITHOUT ROWID;
+         CREATE TABLE server_builds (
+             build      TEXT PRIMARY KEY NOT NULL,
+             first_seen INTEGER NOT NULL
+         ) WITHOUT ROWID;
+         CREATE TABLE device_watches (
+             id         TEXT PRIMARY KEY NOT NULL,
+             device     TEXT,
+             platform   TEXT,
+             until_do   TEXT NOT NULL,
+             then_do    TEXT NOT NULL,
+             note       TEXT,
+             created_at INTEGER NOT NULL,
+             expires_at INTEGER NOT NULL,
+             fired_at   INTEGER,
+             outcome    TEXT
+         ) WITHOUT ROWID;",
+    ),
 ];
 
 /// Whether the old layout system's tables are still there (dropped by

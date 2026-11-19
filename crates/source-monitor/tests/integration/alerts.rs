@@ -18,7 +18,7 @@ use serde_json::{Value, json};
 use source_monitor::{ALERT_CHANNEL, ENABLED_SETTING, MonitorAdapter, MonitorConfig};
 use tower::ServiceExt;
 
-fn pod() -> Pod {
+pub(crate) fn pod() -> Pod {
     // With the home blueprint, so the pod has a home whose feeds every
     // layout reports.
     let pod: Pod = Arc::new(AppState::in_memory(vec![
@@ -32,7 +32,7 @@ fn pod() -> Pod {
     pod
 }
 
-async fn call(
+pub(crate) async fn call(
     pod: &Pod,
     method: &str,
     path: &str,
@@ -64,7 +64,7 @@ async fn call(
 }
 
 /// A layout made over MCP; its id.
-async fn create(pod: &Pod, args: Value) -> String {
+pub(crate) async fn create(pod: &Pod, args: Value) -> String {
     let (status, body) = call(
         pod,
         "POST",
@@ -121,7 +121,7 @@ async fn warning_channels(pod: &Pod) -> Vec<Value> {
         .collect()
 }
 
-async fn notifications(pod: &Pod) -> Vec<Value> {
+pub(crate) async fn notifications(pod: &Pod) -> Vec<Value> {
     let (status, body) = call(pod, "GET", "/v1/notifications", "phone", None).await;
     assert_eq!(status, StatusCode::OK, "{body}");
     body["notifications"].as_array().unwrap().clone()

@@ -50,6 +50,8 @@ assert-text Recipe: Lentil soup; shot deeper; back; shot back; screen phone; cli
 scenario text-styles text_styles \
   "assert-text Move often · this week; assert-text Still to do; assert-no-text All done for the week; \
 assert-text Nothing archived yet; assert-no-text Inbox clear; shot light; mode dark; shot dark"
+scenario device-versions device_versions \
+  "shot all; click Web; click 16; assert-text Mon Nov 16; shot web-16; mode dark; shot dark"
 scenario tiles-home tiles_home \
   "shot top; scroll-to Photos; assert-text Read more; shot tiles"
 scenario screen-sizes screen_sizes \

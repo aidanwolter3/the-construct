@@ -50,6 +50,7 @@ pub mod auth;
 pub mod catalog;
 pub mod construct;
 pub mod events;
+pub mod identity;
 /// The mutation-expression evaluator, shared with the Rust renderer.
 pub use protocol::expr;
 pub mod notify;
@@ -3851,7 +3852,8 @@ fn fetch_data(url: &str, token: Option<&str>, device: &str) -> Result<DataBundle
     let mut req = client
         .get(url)
         .header(protocol::FEATURES_HEADER, protocol::features_header())
-        .header(protocol::DEVICE_HEADER, device);
+        .header(protocol::DEVICE_HEADER, device)
+        .headers(identity::headers());
     if let Some(t) = token {
         req = req.bearer_auth(t);
     }
@@ -3867,7 +3869,7 @@ fn fetch_data(url: &str, token: Option<&str>, device: &str) -> Result<DataBundle
 /// HTTP client for the sign-in calls to the pod (they carry the device
 /// header like every other pod call).
 fn auth_client(device: &str) -> Result<reqwest::blocking::Client, String> {
-    let mut headers = reqwest::header::HeaderMap::new();
+    let mut headers = identity::headers();
     if let Ok(v) = reqwest::header::HeaderValue::from_str(device) {
         headers.insert(protocol::DEVICE_HEADER, v);
     }
@@ -4299,7 +4301,9 @@ fn post_json(
         .header(reqwest::header::CONTENT_TYPE, "application/json")
         .body(body.to_string());
     if let Some(d) = device {
-        req = req.header(protocol::DEVICE_HEADER, d);
+        req = req
+            .header(protocol::DEVICE_HEADER, d)
+            .headers(identity::headers());
     }
     if let Some(t) = token {
         req = req.bearer_auth(t);

@@ -41,6 +41,9 @@ fn usage(msg: &str) -> ! {
 }
 
 fn main() {
+    // A live run is the simulator, never one of the user's devices.
+    construct_render::identity::set_platform("sim");
+    construct_render::identity::set_device_name("Simulator");
     let args: Vec<String> = std::env::args().skip(1).collect();
     if args.iter().any(|a| a == "-h" || a == "--help") {
         println!("{USAGE}");

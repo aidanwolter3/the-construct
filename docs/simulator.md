@@ -36,7 +36,9 @@ bundle with `--fixture`. `theme_home_bundle.json`, `theme_groceries_bundle.json`
 hand-written pages drawn only with theme tokens (a home, a shopping list, a log), for checking both modes.
 `text_styles_bundle.json` (workspace `text_styles`, the `text-styles` scenario) is a hand-written page of text
 weights, capitals and line limits, and conditionals with `not` and `count`. `screen_sizes` (`screen_sizes_bundle.json`)
-is a hand-written recipes page using the size vocabulary (decision `screen-sizes`), for `screen tablet` and `screen desktop`. Every bundle's layout is what a pod serves this build: a workspace as the `core://Page` it
+is a hand-written recipes page using the size vocabulary (decision `screen-sizes`), for `screen tablet` and `screen desktop`. `device_versions` (`device_versions_bundle.json`, the `device-versions` scenario) is a Server health page with made-up
+devices as the `monitor` source's `devices` feed serves them: a `core://Bars` chart of devices per day by build, kind
+chips and a tap that picks a day (decision `device-versions`). Every bundle's layout is what a pod serves this build: a workspace as the `core://Page` it
 expands to. `UPDATE_FIXTURES=1 cargo test -p server --test integration fixtures::` writes the Pixelfed ones and the
 blueprints from the pod (and the hand-written ones from their sources in `crates/server/tests/data/simulator/`; the
 test fails when one is stale); edit the source and rerun it.

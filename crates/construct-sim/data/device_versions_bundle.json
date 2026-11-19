@@ -1,0 +1,1257 @@
+{
+ "version": "1.0.0",
+ "workspace": {
+  "type": "core://Page",
+  "id": "device_versions",
+  "title": "Server health",
+  "root": {
+   "type": "core://Box",
+   "fill": true,
+   "background": "${local://theme#page}",
+   "content": {
+    "type": "core://Scroll",
+    "content": {
+     "type": "core://Column",
+     "spacing_dp": 12,
+     "padding_h_dp": 16,
+     "padding_v_dp": 16,
+     "children": [
+      {
+       "type": "core://Text",
+       "style": "Display",
+       "value_expr": "Server health",
+       "weight": "SemiBold"
+      },
+      {
+       "type": "core://Column",
+       "children": [
+        {
+         "type": "core://Row",
+         "children": [
+          {
+           "type": "core://Text",
+           "style": "Label",
+           "value_expr": "Devices"
+          },
+          {
+           "type": "core://Spacer"
+          },
+          {
+           "type": "core://Box",
+           "content_color": "${local://theme#muted_text}",
+           "content": {
+            "type": "core://Text",
+            "style": "Caption",
+            "value_expr": "${monitor://device_summary/pod#count_text}"
+           }
+          }
+         ],
+         "align": "Center"
+        },
+        {
+         "type": "core://Box",
+         "content_color": "${local://theme#muted_text}",
+         "content": {
+          "type": "core://Text",
+          "style": "Caption",
+          "value_expr": "${monitor://device_summary/pod#status_text}"
+         }
+        },
+        {
+         "type": "core://ChoiceChips",
+         "field": "device_kind",
+         "options": [
+          {
+           "value": "",
+           "label": "All"
+          },
+          {
+           "value": "android",
+           "label": "Phone"
+          },
+          {
+           "value": "macos",
+           "label": "Mac"
+          },
+          {
+           "value": "web",
+           "label": "Web"
+          }
+         ]
+        },
+        {
+         "type": "core://Box",
+         "background": "${local://theme#card}",
+         "border_color": "${local://theme#card_border}",
+         "corner_dp": 16,
+         "padding_h_dp": 14,
+         "padding_v_dp": 14,
+         "content": {
+          "type": "core://Column",
+          "children": [
+           {
+            "type": "core://Row",
+            "children": [
+             {
+              "type": "core://Text",
+              "style": "Label",
+              "value_expr": "Devices per day"
+             },
+             {
+              "type": "core://Spacer"
+             },
+             {
+              "type": "core://Box",
+              "content_color": "${local://theme#muted_text}",
+              "content": {
+               "type": "core://Text",
+               "style": "Caption",
+               "value_expr": "last 14 days"
+              }
+             }
+            ],
+            "align": "Center"
+           },
+           {
+            "type": "core://Bars",
+            "query_key": "monitor:device_days",
+            "bar": "bar",
+            "label": "$item.bar_label",
+            "color": "$item.color",
+            "hatched": "hatched",
+            "where": {
+             "field": "kind",
+             "equals": "$form.device_kind"
+            },
+            "field": "device_day",
+            "scale_min": 5,
+            "height_dp": 140
+           },
+           {
+            "type": "core://List",
+            "query_key": "monitor:builds",
+            "columns": 2,
+            "spacing_dp": 4,
+            "item_template": {
+             "type": "core://Row",
+             "children": [
+              {
+               "type": "core://Box",
+               "background": "$item.color",
+               "corner_dp": 3,
+               "width_dp": 10,
+               "height_dp": 10,
+               "content": {
+                "type": "core://Spacer"
+               }
+              },
+              {
+               "type": "core://Box",
+               "content_color": "${local://theme#muted_text}",
+               "content": {
+                "type": "core://Text",
+                "style": "Caption",
+                "value_expr": "$item.legend"
+               }
+              }
+             ],
+             "spacing_dp": 6,
+             "align": "Center"
+            }
+           },
+           {
+            "type": "core://Column",
+            "children": [
+             {
+              "type": "core://Divider"
+             },
+             {
+              "type": "core://Conditional",
+              "value": "$form.device_day",
+              "content": {
+               "type": "core://List",
+               "query_key": "monitor:device_days",
+               "where": [
+                {
+                 "field": "bar",
+                 "equals": "$form.device_day"
+                },
+                {
+                 "field": "kind",
+                 "equals": "$form.device_kind"
+                }
+               ],
+               "spacing_dp": 6,
+               "item_template": {
+                "type": "core://Row",
+                "children": [
+                 {
+                  "type": "core://Box",
+                  "background": "$item.color",
+                  "corner_dp": 3,
+                  "width_dp": 10,
+                  "height_dp": 10,
+                  "content": {
+                   "type": "core://Spacer"
+                  }
+                 },
+                 {
+                  "type": "core://Text",
+                  "style": "Body",
+                  "value_expr": "$item.device"
+                 },
+                 {
+                  "type": "core://Spacer"
+                 },
+                 {
+                  "type": "core://Box",
+                  "content_color": "${local://theme#muted_text}",
+                  "content": {
+                   "type": "core://Text",
+                   "style": "Caption",
+                   "value_expr": "$item.detail"
+                  }
+                 }
+                ],
+                "spacing_dp": 8,
+                "align": "Center"
+               },
+               "group_by": {
+                "field": "bar",
+                "header": {
+                 "type": "core://Text",
+                 "style": "Label",
+                 "value_expr": "$item.day_text"
+                }
+               }
+              }
+             },
+             {
+              "type": "core://Conditional",
+              "value": "$form.device_day",
+              "not": true,
+              "content": {
+               "type": "core://Column",
+               "children": [
+                {
+                 "type": "core://Text",
+                 "style": "Label",
+                 "value_expr": "Now: every device at its latest build"
+                },
+                {
+                 "type": "core://List",
+                 "query_key": "monitor:device_days",
+                 "where": [
+                  {
+                   "field": "bar",
+                   "equals": "${monitor://device_summary/pod#today}"
+                  },
+                  {
+                   "field": "kind",
+                   "equals": "$form.device_kind"
+                  }
+                 ],
+                 "spacing_dp": 6,
+                 "item_template": {
+                  "type": "core://Row",
+                  "children": [
+                   {
+                    "type": "core://Box",
+                    "background": "$item.color",
+                    "corner_dp": 3,
+                    "width_dp": 10,
+                    "height_dp": 10,
+                    "content": {
+                     "type": "core://Spacer"
+                    }
+                   },
+                   {
+                    "type": "core://Text",
+                    "style": "Body",
+                    "value_expr": "$item.device"
+                   },
+                   {
+                    "type": "core://Spacer"
+                   },
+                   {
+                    "type": "core://Box",
+                    "content_color": "${local://theme#muted_text}",
+                    "content": {
+                     "type": "core://Text",
+                     "style": "Caption",
+                     "value_expr": "$item.detail"
+                    }
+                   }
+                  ],
+                  "spacing_dp": 8,
+                  "align": "Center"
+                 }
+                }
+               ],
+               "spacing_dp": 6
+              }
+             }
+            ],
+            "spacing_dp": 10
+           }
+          ],
+          "spacing_dp": 12
+         }
+        },
+        {
+         "type": "core://Box",
+         "corner_dp": 16,
+         "border_color": "${local://theme#card_border}",
+         "content": {
+          "type": "core://List",
+          "query_key": "monitor:devices",
+          "where": {
+           "field": "kind",
+           "equals": "$form.device_kind"
+          },
+          "spacing_dp": 1,
+          "item_template": {
+           "type": "core://Box",
+           "background": "${local://theme#card}",
+           "padding_h_dp": 14,
+           "padding_v_dp": 12,
+           "content": {
+            "type": "core://Row",
+            "children": [
+             {
+              "type": "core://Column",
+              "children": [
+               {
+                "type": "core://Text",
+                "style": "Body",
+                "value_expr": "$item.name",
+                "weight": "SemiBold"
+               },
+               {
+                "type": "core://Box",
+                "content_color": "${local://theme#muted_text}",
+                "content": {
+                 "type": "core://Text",
+                 "style": "Caption",
+                 "value_expr": "$item.subtitle"
+                }
+               }
+              ],
+              "spacing_dp": 2
+             },
+             {
+              "type": "core://Spacer"
+             },
+             {
+              "type": "core://Box",
+              "background": "$item.relation_bg",
+              "content_color": "$item.relation_color",
+              "corner_dp": 10,
+              "padding_h_dp": 9,
+              "padding_v_dp": 3,
+              "content": {
+               "type": "core://Text",
+               "style": "Caption",
+               "value_expr": "$item.relation_text",
+               "weight": "SemiBold"
+              }
+             }
+            ],
+            "spacing_dp": 10,
+            "align": "Center"
+           }
+          }
+         }
+        }
+       ],
+       "spacing_dp": 10
+      }
+     ]
+    }
+   }
+  }
+ },
+ "entities": {
+  "monitor://device_days/2026-11-06/chromemac001": {
+   "bar": "2026-11-06",
+   "bar_label": "6",
+   "day_text": "Fri Nov 6",
+   "device": "Chrome on macOS",
+   "device_id": "chromemac001",
+   "kind": "web",
+   "build_label": "Nov 3 · 4a7e210",
+   "color": "#A69BDC",
+   "hatched": false,
+   "note": "",
+   "detail": "Nov 3 · 4a7e210"
+  },
+  "monitor://device_days/2026-11-06/firefoxwork1": {
+   "bar": "2026-11-06",
+   "bar_label": "6",
+   "day_text": "Fri Nov 6",
+   "device": "Firefox on Linux",
+   "device_id": "firefoxwork1",
+   "kind": "web",
+   "build_label": "Nov 3 · 4a7e210",
+   "color": "#A69BDC",
+   "hatched": false,
+   "note": "",
+   "detail": "Nov 3 · 4a7e210"
+  },
+  "monitor://device_days/2026-11-06/pixel9demo01": {
+   "bar": "2026-11-06",
+   "bar_label": "6",
+   "day_text": "Fri Nov 6",
+   "device": "Pixel 9",
+   "device_id": "pixel9demo01",
+   "kind": "android",
+   "build_label": "Nov 3 · 4a7e210",
+   "color": "#A69BDC",
+   "hatched": false,
+   "note": "",
+   "detail": "Nov 3 · 4a7e210"
+  },
+  "monitor://device_days/2026-11-06/macbookair01": {
+   "bar": "2026-11-06",
+   "bar_label": "6",
+   "day_text": "Fri Nov 6",
+   "device": "Studio MacBook",
+   "device_id": "macbookair01",
+   "kind": "macos",
+   "build_label": "Nov 3 · 4a7e210",
+   "color": "#A69BDC",
+   "hatched": false,
+   "note": "",
+   "detail": "Nov 3 · 4a7e210"
+  },
+  "monitor://device_days/2026-11-07/chromemac001": {
+   "bar": "2026-11-07",
+   "bar_label": "7",
+   "day_text": "Sat Nov 7",
+   "device": "Chrome on macOS",
+   "device_id": "chromemac001",
+   "kind": "web",
+   "build_label": "Nov 3 · 4a7e210",
+   "color": "#A69BDC",
+   "hatched": false,
+   "note": "",
+   "detail": "Nov 3 · 4a7e210"
+  },
+  "monitor://device_days/2026-11-07/pixel9demo01": {
+   "bar": "2026-11-07",
+   "bar_label": "7",
+   "day_text": "Sat Nov 7",
+   "device": "Pixel 9",
+   "device_id": "pixel9demo01",
+   "kind": "android",
+   "build_label": "Nov 3 · 4a7e210",
+   "color": "#A69BDC",
+   "hatched": false,
+   "note": "",
+   "detail": "Nov 3 · 4a7e210"
+  },
+  "monitor://device_days/2026-11-08/chromemac001": {
+   "bar": "2026-11-08",
+   "bar_label": "8",
+   "day_text": "Sun Nov 8",
+   "device": "Chrome on macOS",
+   "device_id": "chromemac001",
+   "kind": "web",
+   "build_label": "Nov 3 · 4a7e210",
+   "color": "#A69BDC",
+   "hatched": false,
+   "note": "",
+   "detail": "Nov 3 · 4a7e210"
+  },
+  "monitor://device_days/2026-11-08/edgedesk001": {
+   "bar": "2026-11-08",
+   "bar_label": "8",
+   "day_text": "Sun Nov 8",
+   "device": "Edge on Windows",
+   "device_id": "edgedesk001",
+   "kind": "web",
+   "build_label": "Nov 3 · 4a7e210",
+   "color": "#A69BDC",
+   "hatched": false,
+   "note": "",
+   "detail": "Nov 3 · 4a7e210"
+  },
+  "monitor://device_days/2026-11-08/pixel9demo01": {
+   "bar": "2026-11-08",
+   "bar_label": "8",
+   "day_text": "Sun Nov 8",
+   "device": "Pixel 9",
+   "device_id": "pixel9demo01",
+   "kind": "android",
+   "build_label": "Nov 3 · 4a7e210",
+   "color": "#A69BDC",
+   "hatched": false,
+   "note": "",
+   "detail": "Nov 3 · 4a7e210"
+  },
+  "monitor://device_days/2026-11-09/chromemac001": {
+   "bar": "2026-11-09",
+   "bar_label": "9",
+   "day_text": "Mon Nov 9",
+   "device": "Chrome on macOS",
+   "device_id": "chromemac001",
+   "kind": "web",
+   "build_label": "Nov 3 · 4a7e210",
+   "color": "#A69BDC",
+   "hatched": false,
+   "note": "",
+   "detail": "Nov 3 · 4a7e210"
+  },
+  "monitor://device_days/2026-11-09/edgedesk001": {
+   "bar": "2026-11-09",
+   "bar_label": "9",
+   "day_text": "Mon Nov 9",
+   "device": "Edge on Windows",
+   "device_id": "edgedesk001",
+   "kind": "web",
+   "build_label": "Nov 3 · 4a7e210",
+   "color": "#A69BDC",
+   "hatched": false,
+   "note": "",
+   "detail": "Nov 3 · 4a7e210"
+  },
+  "monitor://device_days/2026-11-09/firefoxwork1": {
+   "bar": "2026-11-09",
+   "bar_label": "9",
+   "day_text": "Mon Nov 9",
+   "device": "Firefox on Linux",
+   "device_id": "firefoxwork1",
+   "kind": "web",
+   "build_label": "Nov 3 · 4a7e210",
+   "color": "#A69BDC",
+   "hatched": false,
+   "note": "",
+   "detail": "Nov 3 · 4a7e210"
+  },
+  "monitor://device_days/2026-11-09/pixel9demo01": {
+   "bar": "2026-11-09",
+   "bar_label": "9",
+   "day_text": "Mon Nov 9",
+   "device": "Pixel 9",
+   "device_id": "pixel9demo01",
+   "kind": "android",
+   "build_label": "Nov 3 · 4a7e210",
+   "color": "#A69BDC",
+   "hatched": false,
+   "note": "",
+   "detail": "Nov 3 · 4a7e210"
+  },
+  "monitor://device_days/2026-11-09/macbookair01": {
+   "bar": "2026-11-09",
+   "bar_label": "9",
+   "day_text": "Mon Nov 9",
+   "device": "Studio MacBook",
+   "device_id": "macbookair01",
+   "kind": "macos",
+   "build_label": "Nov 3 · 4a7e210",
+   "color": "#A69BDC",
+   "hatched": false,
+   "note": "",
+   "detail": "Nov 3 · 4a7e210"
+  },
+  "monitor://device_days/2026-11-10/chromemac001": {
+   "bar": "2026-11-10",
+   "bar_label": "10",
+   "day_text": "Tue Nov 10",
+   "device": "Chrome on macOS",
+   "device_id": "chromemac001",
+   "kind": "web",
+   "build_label": "Nov 3 · 4a7e210",
+   "color": "#A69BDC",
+   "hatched": false,
+   "note": "",
+   "detail": "Nov 3 · 4a7e210"
+  },
+  "monitor://device_days/2026-11-10/firefoxwork1": {
+   "bar": "2026-11-10",
+   "bar_label": "10",
+   "day_text": "Tue Nov 10",
+   "device": "Firefox on Linux",
+   "device_id": "firefoxwork1",
+   "kind": "web",
+   "build_label": "Nov 3 · 4a7e210",
+   "color": "#A69BDC",
+   "hatched": false,
+   "note": "",
+   "detail": "Nov 3 · 4a7e210"
+  },
+  "monitor://device_days/2026-11-10/pixel9demo01": {
+   "bar": "2026-11-10",
+   "bar_label": "10",
+   "day_text": "Tue Nov 10",
+   "device": "Pixel 9",
+   "device_id": "pixel9demo01",
+   "kind": "android",
+   "build_label": "Nov 3 · 4a7e210",
+   "color": "#A69BDC",
+   "hatched": false,
+   "note": "",
+   "detail": "Nov 3 · 4a7e210"
+  },
+  "monitor://device_days/2026-11-10/macbookair01": {
+   "bar": "2026-11-10",
+   "bar_label": "10",
+   "day_text": "Tue Nov 10",
+   "device": "Studio MacBook",
+   "device_id": "macbookair01",
+   "kind": "macos",
+   "build_label": "Nov 3 · 4a7e210",
+   "color": "#A69BDC",
+   "hatched": false,
+   "note": "",
+   "detail": "Nov 3 · 4a7e210"
+  },
+  "monitor://device_days/2026-11-11/firefoxwork1": {
+   "bar": "2026-11-11",
+   "bar_label": "11",
+   "day_text": "Wed Nov 11",
+   "device": "Firefox on Linux",
+   "device_id": "firefoxwork1",
+   "kind": "web",
+   "build_label": "Nov 3 · 4a7e210",
+   "color": "#A69BDC",
+   "hatched": false,
+   "note": "",
+   "detail": "Nov 3 · 4a7e210"
+  },
+  "monitor://device_days/2026-11-11/pixel9demo01": {
+   "bar": "2026-11-11",
+   "bar_label": "11",
+   "day_text": "Wed Nov 11",
+   "device": "Pixel 9",
+   "device_id": "pixel9demo01",
+   "kind": "android",
+   "build_label": "Nov 3 · 4a7e210",
+   "color": "#A69BDC",
+   "hatched": false,
+   "note": "",
+   "detail": "Nov 3 · 4a7e210"
+  },
+  "monitor://device_days/2026-11-11/macbookair01": {
+   "bar": "2026-11-11",
+   "bar_label": "11",
+   "day_text": "Wed Nov 11",
+   "device": "Studio MacBook",
+   "device_id": "macbookair01",
+   "kind": "macos",
+   "build_label": "Nov 3 · 4a7e210",
+   "color": "#A69BDC",
+   "hatched": false,
+   "note": "",
+   "detail": "Nov 3 · 4a7e210"
+  },
+  "monitor://device_days/2026-11-11/chromemac001": {
+   "bar": "2026-11-11",
+   "bar_label": "11",
+   "day_text": "Wed Nov 11",
+   "device": "Chrome on macOS",
+   "device_id": "chromemac001",
+   "kind": "web",
+   "build_label": "Nov 11 · e81c5d4",
+   "color": "#8A7DCF",
+   "hatched": false,
+   "note": "",
+   "detail": "Nov 11 · e81c5d4"
+  },
+  "monitor://device_days/2026-11-12/firefoxwork1": {
+   "bar": "2026-11-12",
+   "bar_label": "12",
+   "day_text": "Thu Nov 12",
+   "device": "Firefox on Linux",
+   "device_id": "firefoxwork1",
+   "kind": "web",
+   "build_label": "Nov 3 · 4a7e210",
+   "color": "#A69BDC",
+   "hatched": false,
+   "note": "",
+   "detail": "Nov 3 · 4a7e210"
+  },
+  "monitor://device_days/2026-11-12/pixel9demo01": {
+   "bar": "2026-11-12",
+   "bar_label": "12",
+   "day_text": "Thu Nov 12",
+   "device": "Pixel 9",
+   "device_id": "pixel9demo01",
+   "kind": "android",
+   "build_label": "Nov 3 · 4a7e210",
+   "color": "#A69BDC",
+   "hatched": false,
+   "note": "",
+   "detail": "Nov 3 · 4a7e210"
+  },
+  "monitor://device_days/2026-11-12/macbookair01": {
+   "bar": "2026-11-12",
+   "bar_label": "12",
+   "day_text": "Thu Nov 12",
+   "device": "Studio MacBook",
+   "device_id": "macbookair01",
+   "kind": "macos",
+   "build_label": "Nov 3 · 4a7e210",
+   "color": "#A69BDC",
+   "hatched": false,
+   "note": "",
+   "detail": "Nov 3 · 4a7e210"
+  },
+  "monitor://device_days/2026-11-12/chromemac001": {
+   "bar": "2026-11-12",
+   "bar_label": "12",
+   "day_text": "Thu Nov 12",
+   "device": "Chrome on macOS",
+   "device_id": "chromemac001",
+   "kind": "web",
+   "build_label": "Nov 11 · e81c5d4",
+   "color": "#8A7DCF",
+   "hatched": false,
+   "note": "",
+   "detail": "Nov 11 · e81c5d4"
+  },
+  "monitor://device_days/2026-11-13/pixel9demo01": {
+   "bar": "2026-11-13",
+   "bar_label": "13",
+   "day_text": "Fri Nov 13",
+   "device": "Pixel 9",
+   "device_id": "pixel9demo01",
+   "kind": "android",
+   "build_label": "Nov 3 · 4a7e210",
+   "color": "#A69BDC",
+   "hatched": false,
+   "note": "",
+   "detail": "Nov 3 · 4a7e210"
+  },
+  "monitor://device_days/2026-11-13/macbookair01": {
+   "bar": "2026-11-13",
+   "bar_label": "13",
+   "day_text": "Fri Nov 13",
+   "device": "Studio MacBook",
+   "device_id": "macbookair01",
+   "kind": "macos",
+   "build_label": "Nov 3 · 4a7e210",
+   "color": "#A69BDC",
+   "hatched": false,
+   "note": "",
+   "detail": "Nov 3 · 4a7e210"
+  },
+  "monitor://device_days/2026-11-13/chromemac001": {
+   "bar": "2026-11-13",
+   "bar_label": "13",
+   "day_text": "Fri Nov 13",
+   "device": "Chrome on macOS",
+   "device_id": "chromemac001",
+   "kind": "web",
+   "build_label": "Nov 11 · e81c5d4",
+   "color": "#8A7DCF",
+   "hatched": false,
+   "note": "",
+   "detail": "Nov 11 · e81c5d4"
+  },
+  "monitor://device_days/2026-11-13/firefoxwork1": {
+   "bar": "2026-11-13",
+   "bar_label": "13",
+   "day_text": "Fri Nov 13",
+   "device": "Firefox on Linux",
+   "device_id": "firefoxwork1",
+   "kind": "web",
+   "build_label": "Nov 11 · e81c5d4",
+   "color": "#8A7DCF",
+   "hatched": false,
+   "note": "",
+   "detail": "Nov 11 · e81c5d4"
+  },
+  "monitor://device_days/2026-11-14/pixel9demo01": {
+   "bar": "2026-11-14",
+   "bar_label": "14",
+   "day_text": "Sat Nov 14",
+   "device": "Pixel 9",
+   "device_id": "pixel9demo01",
+   "kind": "android",
+   "build_label": "Nov 3 · 4a7e210",
+   "color": "#A69BDC",
+   "hatched": false,
+   "note": "",
+   "detail": "Nov 3 · 4a7e210"
+  },
+  "monitor://device_days/2026-11-14/chromemac001": {
+   "bar": "2026-11-14",
+   "bar_label": "14",
+   "day_text": "Sat Nov 14",
+   "device": "Chrome on macOS",
+   "device_id": "chromemac001",
+   "kind": "web",
+   "build_label": "Nov 14 · 9be03a1",
+   "color": "#6A5CBE",
+   "hatched": false,
+   "note": "",
+   "detail": "Nov 14 · 9be03a1"
+  },
+  "monitor://device_days/2026-11-15/pixel9demo01": {
+   "bar": "2026-11-15",
+   "bar_label": "15",
+   "day_text": "Sun Nov 15",
+   "device": "Pixel 9",
+   "device_id": "pixel9demo01",
+   "kind": "android",
+   "build_label": "Nov 3 · 4a7e210",
+   "color": "#A69BDC",
+   "hatched": false,
+   "note": "",
+   "detail": "Nov 3 · 4a7e210"
+  },
+  "monitor://device_days/2026-11-15/chromemac001": {
+   "bar": "2026-11-15",
+   "bar_label": "15",
+   "day_text": "Sun Nov 15",
+   "device": "Chrome on macOS",
+   "device_id": "chromemac001",
+   "kind": "web",
+   "build_label": "Nov 14 · 9be03a1",
+   "color": "#6A5CBE",
+   "hatched": false,
+   "note": "",
+   "detail": "Nov 14 · 9be03a1"
+  },
+  "monitor://device_days/2026-11-15/edgedesk001": {
+   "bar": "2026-11-15",
+   "bar_label": "15",
+   "day_text": "Sun Nov 15",
+   "device": "Edge on Windows",
+   "device_id": "edgedesk001",
+   "kind": "web",
+   "build_label": "Nov 14 · 9be03a1",
+   "color": "#6A5CBE",
+   "hatched": false,
+   "note": "",
+   "detail": "Nov 14 · 9be03a1"
+  },
+  "monitor://device_days/2026-11-16/firefoxwork1": {
+   "bar": "2026-11-16",
+   "bar_label": "16",
+   "day_text": "Mon Nov 16",
+   "device": "Firefox on Linux",
+   "device_id": "firefoxwork1",
+   "kind": "web",
+   "build_label": "Nov 11 · e81c5d4",
+   "color": "#8A7DCF",
+   "hatched": false,
+   "note": "",
+   "detail": "Nov 11 · e81c5d4"
+  },
+  "monitor://device_days/2026-11-16/chromemac001": {
+   "bar": "2026-11-16",
+   "bar_label": "16",
+   "day_text": "Mon Nov 16",
+   "device": "Chrome on macOS",
+   "device_id": "chromemac001",
+   "kind": "web",
+   "build_label": "Nov 14 · 9be03a1",
+   "color": "#6A5CBE",
+   "hatched": false,
+   "note": "",
+   "detail": "Nov 14 · 9be03a1"
+  },
+  "monitor://device_days/2026-11-16/edgedesk001": {
+   "bar": "2026-11-16",
+   "bar_label": "16",
+   "day_text": "Mon Nov 16",
+   "device": "Edge on Windows",
+   "device_id": "edgedesk001",
+   "kind": "web",
+   "build_label": "Nov 14 · 9be03a1",
+   "color": "#6A5CBE",
+   "hatched": false,
+   "note": "",
+   "detail": "Nov 14 · 9be03a1"
+  },
+  "monitor://device_days/2026-11-16/pixel9demo01": {
+   "bar": "2026-11-16",
+   "bar_label": "16",
+   "day_text": "Mon Nov 16",
+   "device": "Pixel 9",
+   "device_id": "pixel9demo01",
+   "kind": "android",
+   "build_label": "Nov 14 · 9be03a1",
+   "color": "#6A5CBE",
+   "hatched": false,
+   "note": "",
+   "detail": "Nov 14 · 9be03a1"
+  },
+  "monitor://device_days/2026-11-16/macbookair01": {
+   "bar": "2026-11-16",
+   "bar_label": "16",
+   "day_text": "Mon Nov 16",
+   "device": "Studio MacBook",
+   "device_id": "macbookair01",
+   "kind": "macos",
+   "build_label": "Nov 14 · 9be03a1",
+   "color": "#6A5CBE",
+   "hatched": false,
+   "note": "",
+   "detail": "Nov 14 · 9be03a1"
+  },
+  "monitor://device_days/2026-11-17/chromemac001": {
+   "bar": "2026-11-17",
+   "bar_label": "17",
+   "day_text": "Tue Nov 17",
+   "device": "Chrome on macOS",
+   "device_id": "chromemac001",
+   "kind": "web",
+   "build_label": "Nov 14 · 9be03a1",
+   "color": "#6A5CBE",
+   "hatched": false,
+   "note": "",
+   "detail": "Nov 14 · 9be03a1"
+  },
+  "monitor://device_days/2026-11-17/firefoxwork1": {
+   "bar": "2026-11-17",
+   "bar_label": "17",
+   "day_text": "Tue Nov 17",
+   "device": "Firefox on Linux",
+   "device_id": "firefoxwork1",
+   "kind": "web",
+   "build_label": "Nov 14 · 9be03a1",
+   "color": "#6A5CBE",
+   "hatched": false,
+   "note": "",
+   "detail": "Nov 14 · 9be03a1"
+  },
+  "monitor://device_days/2026-11-17/pixel9demo01": {
+   "bar": "2026-11-17",
+   "bar_label": "17",
+   "day_text": "Tue Nov 17",
+   "device": "Pixel 9",
+   "device_id": "pixel9demo01",
+   "kind": "android",
+   "build_label": "Nov 14 · 9be03a1",
+   "color": "#6A5CBE",
+   "hatched": false,
+   "note": "",
+   "detail": "Nov 14 · 9be03a1"
+  },
+  "monitor://device_days/2026-11-17/macbookair01": {
+   "bar": "2026-11-17",
+   "bar_label": "17",
+   "day_text": "Tue Nov 17",
+   "device": "Studio MacBook",
+   "device_id": "macbookair01",
+   "kind": "macos",
+   "build_label": "Nov 14 · 9be03a1",
+   "color": "#6A5CBE",
+   "hatched": false,
+   "note": "",
+   "detail": "Nov 14 · 9be03a1"
+  },
+  "monitor://device_days/2026-11-18/firefoxwork1": {
+   "bar": "2026-11-18",
+   "bar_label": "18",
+   "day_text": "Wed Nov 18",
+   "device": "Firefox on Linux",
+   "device_id": "firefoxwork1",
+   "kind": "web",
+   "build_label": "Nov 14 · 9be03a1",
+   "color": "#6A5CBE",
+   "hatched": false,
+   "note": "",
+   "detail": "Nov 14 · 9be03a1"
+  },
+  "monitor://device_days/2026-11-18/pixel9demo01": {
+   "bar": "2026-11-18",
+   "bar_label": "18",
+   "day_text": "Wed Nov 18",
+   "device": "Pixel 9",
+   "device_id": "pixel9demo01",
+   "kind": "android",
+   "build_label": "Nov 14 · 9be03a1",
+   "color": "#6A5CBE",
+   "hatched": false,
+   "note": "",
+   "detail": "Nov 14 · 9be03a1"
+  },
+  "monitor://device_days/2026-11-18/macbookair01": {
+   "bar": "2026-11-18",
+   "bar_label": "18",
+   "day_text": "Wed Nov 18",
+   "device": "Studio MacBook",
+   "device_id": "macbookair01",
+   "kind": "macos",
+   "build_label": "Nov 14 · 9be03a1",
+   "color": "#6A5CBE",
+   "hatched": false,
+   "note": "",
+   "detail": "Nov 14 · 9be03a1"
+  },
+  "monitor://device_days/2026-11-18/chromemac001": {
+   "bar": "2026-11-18",
+   "bar_label": "18",
+   "day_text": "Wed Nov 18",
+   "device": "Chrome on macOS",
+   "device_id": "chromemac001",
+   "kind": "web",
+   "build_label": "Nov 18 · c41d9e2",
+   "color": "#4537A6",
+   "hatched": false,
+   "note": "",
+   "detail": "Nov 18 · c41d9e2"
+  },
+  "monitor://device_days/2026-11-19/edgedesk001": {
+   "bar": "2026-11-19",
+   "bar_label": "Now",
+   "day_text": "Now",
+   "device": "Edge on Windows",
+   "device_id": "edgedesk001",
+   "kind": "web",
+   "build_label": "Nov 14 · 9be03a1",
+   "color": "#6A5CBE",
+   "hatched": true,
+   "note": "seen 3 days ago",
+   "detail": "Nov 14 · 9be03a1 · seen 3 days ago"
+  },
+  "monitor://device_days/2026-11-19/firefoxwork1": {
+   "bar": "2026-11-19",
+   "bar_label": "Now",
+   "day_text": "Now",
+   "device": "Firefox on Linux",
+   "device_id": "firefoxwork1",
+   "kind": "web",
+   "build_label": "Nov 14 · 9be03a1",
+   "color": "#6A5CBE",
+   "hatched": true,
+   "note": "seen 1 day ago",
+   "detail": "Nov 14 · 9be03a1 · seen 1 day ago"
+  },
+  "monitor://device_days/2026-11-19/pixel9demo01": {
+   "bar": "2026-11-19",
+   "bar_label": "Now",
+   "day_text": "Now",
+   "device": "Pixel 9",
+   "device_id": "pixel9demo01",
+   "kind": "android",
+   "build_label": "Nov 14 · 9be03a1",
+   "color": "#6A5CBE",
+   "hatched": false,
+   "note": "",
+   "detail": "Nov 14 · 9be03a1"
+  },
+  "monitor://device_days/2026-11-19/chromemac001": {
+   "bar": "2026-11-19",
+   "bar_label": "Now",
+   "day_text": "Now",
+   "device": "Chrome on macOS",
+   "device_id": "chromemac001",
+   "kind": "web",
+   "build_label": "Nov 18 · c41d9e2",
+   "color": "#4537A6",
+   "hatched": false,
+   "note": "",
+   "detail": "Nov 18 · c41d9e2"
+  },
+  "monitor://device_days/2026-11-19/macbookair01": {
+   "bar": "2026-11-19",
+   "bar_label": "Now",
+   "day_text": "Now",
+   "device": "Studio MacBook",
+   "device_id": "macbookair01",
+   "kind": "macos",
+   "build_label": "Nov 19 · f02b77e local",
+   "color": "#1F8A8A",
+   "hatched": false,
+   "note": "",
+   "detail": "Nov 19 · f02b77e local"
+  },
+  "monitor://builds/0": {
+   "build": "0.5.1+20261103100000.4a7e210",
+   "label": "Nov 3 · 4a7e210",
+   "note": "",
+   "legend": "Nov 3 · 4a7e210",
+   "color": "#A69BDC"
+  },
+  "monitor://builds/1": {
+   "build": "0.6.0+20261111100000.e81c5d4",
+   "label": "Nov 11 · e81c5d4",
+   "note": "",
+   "legend": "Nov 11 · e81c5d4",
+   "color": "#8A7DCF"
+  },
+  "monitor://builds/2": {
+   "build": "0.6.0+20261114100000.9be03a1",
+   "label": "Nov 14 · 9be03a1",
+   "note": "",
+   "legend": "Nov 14 · 9be03a1",
+   "color": "#6A5CBE"
+  },
+  "monitor://builds/3": {
+   "build": "0.6.0+20261118100000.c41d9e2",
+   "label": "Nov 18 · c41d9e2",
+   "note": "server",
+   "legend": "Nov 18 · c41d9e2 · server",
+   "color": "#4537A6"
+  },
+  "monitor://builds/4": {
+   "build": "0.6.0+20261119080000.f02b77e",
+   "label": "Nov 19 · f02b77e local",
+   "note": "ahead",
+   "legend": "Nov 19 · f02b77e local · ahead",
+   "color": "#1F8A8A"
+  },
+  "monitor://devices/pixel9demo01": {
+   "id": "pixel9demo01",
+   "name": "Pixel 9",
+   "kind": "android",
+   "kind_text": "Android",
+   "build": "0.6.0+20261114100000.9be03a1",
+   "build_label": "Nov 14 · 9be03a1",
+   "color": "#6A5CBE",
+   "relation": "behind",
+   "relation_text": "1 behind",
+   "relation_color": "#9A5B12",
+   "relation_bg": "#FBEBD3",
+   "seen_text": "seen 2 min ago",
+   "subtitle": "Android · Nov 14 · 9be03a1 · seen 2 min ago"
+  },
+  "monitor://devices/macbookair01": {
+   "id": "macbookair01",
+   "name": "Studio MacBook",
+   "kind": "macos",
+   "kind_text": "Mac app",
+   "build": "0.6.0+20261119080000.f02b77e",
+   "build_label": "Nov 19 · f02b77e local",
+   "color": "#1F8A8A",
+   "relation": "ahead",
+   "relation_text": "Ahead of server",
+   "relation_color": "#136B6B",
+   "relation_bg": "#D8EFEE",
+   "seen_text": "seen 1 h ago",
+   "subtitle": "Mac app · Nov 19 · f02b77e local · seen 1 h ago"
+  },
+  "monitor://devices/chromemac001": {
+   "id": "chromemac001",
+   "name": "Chrome on macOS",
+   "kind": "web",
+   "kind_text": "Browser",
+   "build": "0.6.0+20261118100000.c41d9e2",
+   "build_label": "Nov 18 · c41d9e2",
+   "color": "#4537A6",
+   "relation": "latest",
+   "relation_text": "Latest",
+   "relation_color": "#2E7A4C",
+   "relation_bg": "#E2F1E6",
+   "seen_text": "seen 5 min ago",
+   "subtitle": "Browser · Nov 18 · c41d9e2 · seen 5 min ago"
+  },
+  "monitor://devices/firefoxwork1": {
+   "id": "firefoxwork1",
+   "name": "Firefox on Linux",
+   "kind": "web",
+   "kind_text": "Browser",
+   "build": "0.6.0+20261114100000.9be03a1",
+   "build_label": "Nov 14 · 9be03a1",
+   "color": "#6A5CBE",
+   "relation": "behind",
+   "relation_text": "1 behind",
+   "relation_color": "#9A5B12",
+   "relation_bg": "#FBEBD3",
+   "seen_text": "seen 1 day ago",
+   "subtitle": "Browser · Nov 14 · 9be03a1 · seen 1 day ago"
+  },
+  "monitor://devices/edgedesk001": {
+   "id": "edgedesk001",
+   "name": "Edge on Windows",
+   "kind": "web",
+   "kind_text": "Browser",
+   "build": "0.6.0+20261114100000.9be03a1",
+   "build_label": "Nov 14 · 9be03a1",
+   "color": "#6A5CBE",
+   "relation": "behind",
+   "relation_text": "1 behind",
+   "relation_color": "#9A5B12",
+   "relation_bg": "#FBEBD3",
+   "seen_text": "seen 3 days ago",
+   "subtitle": "Browser · Nov 14 · 9be03a1 · seen 3 days ago"
+  },
+  "monitor://device_summary/pod": {
+   "today": "2026-11-19",
+   "server_build": "0.6.0+20261118100000.c41d9e2",
+   "server_build_label": "Nov 18 · c41d9e2",
+   "count_text": "5 devices",
+   "status_text": "1 on the server's build · 1 ahead · 3 behind",
+   "empty": false
+  }
+ },
+ "queries": {
+  "monitor:device_days": [
+   "monitor://device_days/2026-11-06/chromemac001",
+   "monitor://device_days/2026-11-06/firefoxwork1",
+   "monitor://device_days/2026-11-06/pixel9demo01",
+   "monitor://device_days/2026-11-06/macbookair01",
+   "monitor://device_days/2026-11-07/chromemac001",
+   "monitor://device_days/2026-11-07/pixel9demo01",
+   "monitor://device_days/2026-11-08/chromemac001",
+   "monitor://device_days/2026-11-08/edgedesk001",
+   "monitor://device_days/2026-11-08/pixel9demo01",
+   "monitor://device_days/2026-11-09/chromemac001",
+   "monitor://device_days/2026-11-09/edgedesk001",
+   "monitor://device_days/2026-11-09/firefoxwork1",
+   "monitor://device_days/2026-11-09/pixel9demo01",
+   "monitor://device_days/2026-11-09/macbookair01",
+   "monitor://device_days/2026-11-10/chromemac001",
+   "monitor://device_days/2026-11-10/firefoxwork1",
+   "monitor://device_days/2026-11-10/pixel9demo01",
+   "monitor://device_days/2026-11-10/macbookair01",
+   "monitor://device_days/2026-11-11/firefoxwork1",
+   "monitor://device_days/2026-11-11/pixel9demo01",
+   "monitor://device_days/2026-11-11/macbookair01",
+   "monitor://device_days/2026-11-11/chromemac001",
+   "monitor://device_days/2026-11-12/firefoxwork1",
+   "monitor://device_days/2026-11-12/pixel9demo01",
+   "monitor://device_days/2026-11-12/macbookair01",
+   "monitor://device_days/2026-11-12/chromemac001",
+   "monitor://device_days/2026-11-13/pixel9demo01",
+   "monitor://device_days/2026-11-13/macbookair01",
+   "monitor://device_days/2026-11-13/chromemac001",
+   "monitor://device_days/2026-11-13/firefoxwork1",
+   "monitor://device_days/2026-11-14/pixel9demo01",
+   "monitor://device_days/2026-11-14/chromemac001",
+   "monitor://device_days/2026-11-15/pixel9demo01",
+   "monitor://device_days/2026-11-15/chromemac001",
+   "monitor://device_days/2026-11-15/edgedesk001",
+   "monitor://device_days/2026-11-16/firefoxwork1",
+   "monitor://device_days/2026-11-16/chromemac001",
+   "monitor://device_days/2026-11-16/edgedesk001",
+   "monitor://device_days/2026-11-16/pixel9demo01",
+   "monitor://device_days/2026-11-16/macbookair01",
+   "monitor://device_days/2026-11-17/chromemac001",
+   "monitor://device_days/2026-11-17/firefoxwork1",
+   "monitor://device_days/2026-11-17/pixel9demo01",
+   "monitor://device_days/2026-11-17/macbookair01",
+   "monitor://device_days/2026-11-18/firefoxwork1",
+   "monitor://device_days/2026-11-18/pixel9demo01",
+   "monitor://device_days/2026-11-18/macbookair01",
+   "monitor://device_days/2026-11-18/chromemac001",
+   "monitor://device_days/2026-11-19/edgedesk001",
+   "monitor://device_days/2026-11-19/firefoxwork1",
+   "monitor://device_days/2026-11-19/pixel9demo01",
+   "monitor://device_days/2026-11-19/chromemac001",
+   "monitor://device_days/2026-11-19/macbookair01"
+  ],
+  "monitor:builds": [
+   "monitor://builds/0",
+   "monitor://builds/1",
+   "monitor://builds/2",
+   "monitor://builds/3",
+   "monitor://builds/4"
+  ],
+  "monitor:devices": [
+   "monitor://devices/pixel9demo01",
+   "monitor://devices/macbookair01",
+   "monitor://devices/chromemac001",
+   "monitor://devices/firefoxwork1",
+   "monitor://devices/edgedesk001"
+  ],
+  "monitor:device_summary": [
+   "monitor://device_summary/pod"
+  ]
+ }
+}

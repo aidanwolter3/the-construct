@@ -26,6 +26,8 @@
 # classes). Output: build/android-native/construct-render.apk.
 set -euo pipefail
 cd "$(dirname "$0")/.."
+# The build id the client reports to the pod (decision `device-versions`).
+export CONSTRUCT_BUILD=${CONSTRUCT_BUILD:-$(scripts/build_id.sh 2>/dev/null || true)}
 
 RELEASE=false
 case "${1:-}" in

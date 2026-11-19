@@ -36,6 +36,9 @@ RUN cargo chef cook --release --locked -p server --recipe-path recipe.json
 COPY Cargo.toml Cargo.lock ./
 COPY crates ./crates
 COPY fake-pixelfed ./fake-pixelfed
+# The build id the server and its web client report (decision `device-versions`): CI passes
+# `--build-arg CONSTRUCT_BUILD=$(scripts/build_id.sh)` (the image has no .git); without it they say `+dev`.
+ARG CONSTRUCT_BUILD=
 RUN cargo build --release --locked -p server \
     && cp target/release/server /server
 
@@ -52,6 +55,7 @@ COPY crates ./crates
 COPY fake-pixelfed ./fake-pixelfed
 COPY assets/icon ./assets/icon
 COPY scripts/web_build.sh ./scripts/web_build.sh
+ARG CONSTRUCT_BUILD=
 RUN scripts/web_build.sh /web
 
 FROM ${RUNTIME_IMAGE}

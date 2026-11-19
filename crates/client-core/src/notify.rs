@@ -271,7 +271,8 @@ fn call(
         .map_err(|e| CallError::Offline(format!("client build: {e}")))?;
     let mut req = client
         .request(method.clone(), url)
-        .header(DEVICE_HEADER, device);
+        .header(DEVICE_HEADER, device)
+        .headers(crate::identity::headers());
     if let Some(t) = token {
         req = req.bearer_auth(t);
     }

@@ -503,6 +503,39 @@ fn check_values(node: &UiNode) -> Result<(), String> {
             check_dp("padding_v_dp", *padding_v_dp, MAX_PADDING_DP)
         }
         UiNode::Spacer { size_dp: Some(s) } => check_dp("spacer size_dp", *s, MAX_SIZE_DP),
+        UiNode::Bars {
+            query_key,
+            bar,
+            color,
+            where_,
+            height_dp,
+            field,
+            on_click,
+            ..
+        } => {
+            if field.is_some() && on_click.is_some() {
+                return Err(
+                    "bars take a field (a tap picks the bar) or an on_click, not both".into(),
+                );
+            }
+            if field.as_ref().is_some_and(|f| f.trim().is_empty()) {
+                return Err("bars field names a form field".into());
+            }
+            if bar.trim().is_empty() {
+                return Err("bars need a bar field (the field that names each item's bar)".into());
+            }
+            check_color(color).map_err(|_| {
+                format!("bars colour '{color}' must be #RRGGBB or a binding such as $item.color")
+            })?;
+            if let Some(h) = height_dp {
+                check_dp("bars height_dp", *h, MAX_SIZE_DP)?;
+            }
+            check_where(
+                "bars",
+                query_key,
+                where_.as_ref().map_or(&[][..], |w| w.conditions()),
+            )
+        }
         UiNode::Progress { size_dp: Some(s) } => check_dp("progress size_dp", *s, MAX_SIZE_DP),
         UiNode::Text {
             value_expr,
@@ -1706,6 +1739,18 @@ mod tests {
     #[test]
     fn progress_size_is_bounded() {
         let p = |v: Value| node(v);
+        let bars = json!({"type": "core://Bars", "query_key": "monitor:device_days",
+            "bar": "bar", "color": "$item.color", "field": "day"});
+        assert_eq!(check_values(&p(bars.clone())), Ok(()));
+        let mut both = bars.clone();
+        both["on_click"] = json!({"intent": "action.navigation.back"});
+        assert!(check_values(&p(both)).is_err());
+        let mut no_bar = bars.clone();
+        no_bar["bar"] = json!("");
+        assert!(check_values(&p(no_bar)).is_err());
+        let mut tall = bars;
+        tall["height_dp"] = json!(9999);
+        assert!(check_values(&p(tall)).is_err());
         assert_eq!(check_values(&p(json!({"type": "core://Progress"}))), Ok(()));
         let sized = json!({"type": "core://Progress", "size_dp": 24});
         assert_eq!(check_values(&p(sized)), Ok(()));

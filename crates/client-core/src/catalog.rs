@@ -123,7 +123,8 @@ impl Inner {
         let mut req = client
             .request(method.clone(), &url)
             .header(protocol::FEATURES_HEADER, protocol::features_header())
-            .header(protocol::DEVICE_HEADER, &self.device_id);
+            .header(protocol::DEVICE_HEADER, &self.device_id)
+            .headers(crate::identity::headers());
         // A pod host (D46) needs the pod token to know whose apps these are.
         if let Some(t) = self.session_token() {
             req = req.bearer_auth(t);

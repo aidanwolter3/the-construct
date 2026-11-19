@@ -16,7 +16,8 @@ use std::collections::BTreeMap;
 use crate::intent::{ActionIntent, Animation, Edge};
 
 /// Node types this build knows (an other type is [`UiNode::Unknown`]).
-pub const NODE_TYPES: [&str; 31] = [
+pub const NODE_TYPES: [&str; 32] = [
+    "core://Bars",
     "core://Workspace",
     "core://Page",
     "core://Scroll",
@@ -556,6 +557,40 @@ pub enum UiNode {
         size_dp: Option<u16>,
     },
 
+    // Feature `bars` (crates/protocol/features/bars.md)
+    /// A bar chart of a query's items (decision `device-versions`): items
+    /// with the same `bar` field value make one bar, in the order their
+    /// first item comes, each item a segment stacked from the bottom, as tall
+    /// as its `value` field (default 1) and coloured `color` (a binding such
+    /// as `"$item.color"` to `#RRGGBB`). A `hatched` field that is true draws
+    /// the segment as a dashed outline. `label` (bound to the bar's first
+    /// item) is written under the bar. The axis goes up to the tallest bar,
+    /// at least `scale_min`. `where` filters items as a `core://List`'s
+    /// does; `selected` (a binding) names the bar drawn highlighted; a tap
+    /// on a bar runs `on_click` with `$item` its first item.
+    #[serde(rename = "core://Bars")]
+    Bars {
+        query_key: String,
+        bar: String,
+        #[serde(default, skip_serializing_if = "String::is_empty")]
+        label: String,
+        color: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        value: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        hatched: Option<String>,
+        #[serde(rename = "where", default, skip_serializing_if = "Option::is_none")]
+        where_: Option<WhereClause>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        height_dp: Option<u16>,
+        #[serde(default, skip_serializing_if = "is_zero")]
+        scale_min: u16,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        field: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        on_click: Option<ActionIntent>,
+    },
+
     // Feature `dock` (crates/protocol/features/dock.md)
     /// The app's main navigation: a bar of tabs along the bottom (a rail
     /// down the side on wide windows) and, above it, the selected tab's
@@ -836,6 +871,7 @@ impl UiNode {
             | UiNode::ChoiceChips { .. }
             | UiNode::MediaPicker { .. }
             | UiNode::Progress { .. }
+            | UiNode::Bars { .. }
             | UiNode::Unknown(_) => Vec::new(),
         }
     }
@@ -848,6 +884,7 @@ impl UiNode {
             | UiNode::Tappable { on_click, .. }
             | UiNode::Switch { on_click, .. } => vec![on_click],
             UiNode::TextField { on_submit, .. } => on_submit.iter().collect(),
+            UiNode::Bars { on_click, .. } => on_click.iter().collect(),
             UiNode::Gesture { .. } => self.gesture_handlers().into_iter().flatten().collect(),
             UiNode::SwipeCard {
                 on_swipe_left,

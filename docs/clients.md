@@ -139,6 +139,13 @@ the next reload picks up, a phone-sized window and logging out.
 
 ## Releases
 
+Every client reports which build it runs (decision `device-versions`): `x-construct-build: <platform> <build id>`
+beside its device id, and a name for the device (`x-construct-device-name`: the phone's model, the Mac's name,
+`Chrome on macOS`). The build id, `<version>+<commit time>.<short hash>`, is the same one the server reports, made by
+`scripts/build_id.sh` (the build scripts and the release workflow set `CONSTRUCT_BUILD` from it), so the pod can tell
+a device on the server's build from one behind it or ahead of it. The web client keeps its device id in
+`localStorage`, so each browser is one device.
+
 `.github/workflows/release.yml` builds the release APK (`scripts/android_native.sh --release`: not debuggable) and the
 Mac app's `.dmg` on every tag `v<version>` and publishes them as a GitHub release (a manual run of the workflow
 uploads them as its artifacts). The version code is the workflow's run number, so each release installs over the

@@ -8,6 +8,8 @@
 #   scripts/web_build.sh [out] [--dev]
 set -euo pipefail
 cd "$(dirname "$0")/.."
+# The build id the client reports to the pod (decision `device-versions`).
+export CONSTRUCT_BUILD=${CONSTRUCT_BUILD:-$(scripts/build_id.sh 2>/dev/null || true)}
 out=${1:-target/web}
 profile=web-release
 [ "${2:-}" = "--dev" ] && profile=dev
