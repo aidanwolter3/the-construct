@@ -143,6 +143,17 @@ pub trait Source: Any + Send + Sync {
         Ok(())
     }
 
+    /// Whether feed `feed` of this source still names something, read in
+    /// the core's transaction `conn` when the pod opens: home stops binding
+    /// a feed that doesn't (e.g. a deleted collection), since a layout
+    /// write is checked against home's feeds and the tools only add to
+    /// them. Answer `true` when unsure (a database error). Default: every
+    /// feed the source declares exists.
+    fn has_feed(&self, conn: &rusqlite::Connection, feed: &str) -> bool {
+        let _ = (conn, feed);
+        true
+    }
+
     /// What this adapter offers layouts as a data source (decision
     /// `custom-apps-and-data-sources`): its feeds, screen data paths,
     /// actions and entities. The source's id is [`Self::name`]. Called once
