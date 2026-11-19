@@ -7,6 +7,7 @@
 //! layouts before sending them.
 
 pub mod ast;
+pub mod build;
 pub mod bundle;
 pub mod expr;
 pub mod features;
@@ -20,6 +21,10 @@ pub use ast::{
     ListFilter, ListFocus, ListWhere, MAX_ICON_PATH, MAX_TEXT_LINES, NODE_TYPES, Orientation,
     PageScreen, QueryCount, Screen, SlotSpec, TextCount, TextFormat, TextStyle, TextWeight, Tone,
     UiNode, WhereClause, icon_path,
+};
+pub use build::{
+    BUILD_HEADER, BuildId, DEVICE_NAME_HEADER, PLATFORMS, build, build_header, parse_build_header,
+    platform,
 };
 pub use bundle::{DataBundle, EntityRecord, WorkspaceSpec};
 pub use features::{

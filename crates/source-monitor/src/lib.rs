@@ -22,6 +22,8 @@
 
 use std::time::Duration;
 
+pub mod devices;
+
 use pod_core::metrics::{self, Gauge, Series};
 use pod_core::store::Store;
 use pod_core::{
@@ -52,14 +54,29 @@ pub const MANIFEST: SourceManifest = SourceManifest {
     title: "Server monitoring",
     sign_in: None,
     entity_schemes: &[NAME],
-    feeds: &[FeedSpec {
-        name: OVERVIEW_FEED,
-        query_keys: &[SUMMARY_QUERY, CHECKS_QUERY, METRICS_QUERY],
-        doc: "The server's health at a glance: an overall status, checks that are ok or \
-              warn (sign-in failures, new Claude connections, model use, errors, disk) and \
-              every counter with its last hour and last day. Only in pods the operator \
-              turned monitoring on for; elsewhere the feed answers 403 monitoring_off.",
-    }],
+    feeds: &[
+        FeedSpec {
+            name: OVERVIEW_FEED,
+            query_keys: &[SUMMARY_QUERY, CHECKS_QUERY, METRICS_QUERY],
+            doc: "The server's health at a glance: an overall status, checks that are ok or \
+                  warn (sign-in failures, new Claude connections, model use, errors, disk) and \
+                  every counter with its last hour and last day. Only in pods the operator \
+                  turned monitoring on for; elsewhere the feed answers 403 monitoring_off.",
+        },
+        FeedSpec {
+            name: devices::DEVICES_FEED,
+            query_keys: &[
+                devices::DEVICE_SUMMARY_QUERY,
+                devices::DEVICES_QUERY,
+                devices::DEVICE_DAYS_QUERY,
+                devices::BUILDS_QUERY,
+            ],
+            doc: "The user's devices (phone, desktop app, each browser) and the build each \
+                  runs against the server's (latest, behind, ahead), and devices per day by \
+                  build for the last 14 days (a core://Bars chart, today's bar every device \
+                  at its latest build). The pod's own data: no operator switch.",
+        },
+    ],
     data_paths: &[],
     actions: &[],
     entities: &[
@@ -109,6 +126,85 @@ pub const MANIFEST: SourceManifest = SourceManifest {
                 ),
                 ("last_hour", "counters only"),
                 ("last_day", "counters only"),
+            ],
+        },
+        EntityDoc {
+            uri: "monitor://device_summary/pod",
+            doc: "The devices at a glance (monitor:device_summary).",
+            fields: &[
+                ("today", "today's bar key (YYYY-MM-DD, the pod's time zone)"),
+                ("server_build", "the server's build id"),
+                ("server_build_label", "e.g. Nov 18 · c41d9e2"),
+                ("count_text", "e.g. 5 devices"),
+                (
+                    "status_text",
+                    "e.g. 1 on the server's build · 1 ahead · 3 behind",
+                ),
+                ("empty", "true before any device reached the pod"),
+            ],
+        },
+        EntityDoc {
+            uri: "monitor://devices/{id}",
+            doc: "One device (monitor:devices), the most recently seen first.",
+            fields: &[
+                (
+                    "name",
+                    "the user's name for it, else its own (Pixel 9, Chrome on Windows)",
+                ),
+                (
+                    "kind",
+                    "android, ios, macos, windows, linux, web or unknown",
+                ),
+                ("kind_text", "e.g. Android, Mac app, Browser"),
+                ("build", "its build id"),
+                ("build_label", "e.g. Nov 18 · c41d9e2, or Version unknown"),
+                ("color", "its build's colour in the chart, #RRGGBB"),
+                ("relation", "latest, behind, ahead or unknown"),
+                (
+                    "relation_text",
+                    "Latest, 1 behind, Ahead of server, Version unknown",
+                ),
+                ("relation_color", "the badge's text colour, #RRGGBB"),
+                ("relation_bg", "the badge's background, #RRGGBB"),
+                ("seen_text", "e.g. seen 2 min ago"),
+                (
+                    "subtitle",
+                    "e.g. Android · Nov 18 · c41d9e2 · seen 2 min ago",
+                ),
+            ],
+        },
+        EntityDoc {
+            uri: "monitor://device_days/{day}/{id}",
+            doc: "One device on one day of the last 14 (monitor:device_days), for core://Bars with bar: \"bar\" and color: \"$item.color\": today's bar holds every device at its latest build, hatched when not seen today.",
+            fields: &[
+                ("bar", "the day, YYYY-MM-DD"),
+                ("bar_label", "the day of the month, or Now"),
+                ("day_text", "e.g. Thu Nov 19, or Now"),
+                ("device", "the device's name"),
+                ("device_id", "its id"),
+                (
+                    "kind",
+                    "its kind (filter the chart with where kind equals ...)",
+                ),
+                ("build_label", "the build it ran that day"),
+                ("color", "that build's colour, #RRGGBB"),
+                ("hatched", "true on today's bar for a device not seen today"),
+                ("note", "e.g. seen 3 days ago, on today's bar"),
+                (
+                    "detail",
+                    "the build and the note, e.g. Nov 14 · 9be03a1 · seen 3 days ago",
+                ),
+            ],
+        },
+        EntityDoc {
+            uri: "monitor://builds/{n}",
+            doc: "The builds the chart shows, oldest first (monitor:builds), for its legend.",
+            fields: &[
+                ("build", "the build id"),
+                ("label", "e.g. Nov 18 · c41d9e2"),
+                ("note", "server, ahead or empty"),
+                ("legend", "the label with its note"),
+                ("color", "its colour, #RRGGBB"),
             ],
         },
     ],
@@ -203,6 +299,9 @@ impl Source for MonitorAdapter {
         _req: &'a RequestCtx,
     ) -> BoxFuture<'a, Hydration> {
         Box::pin(async move {
+            if feed == devices::DEVICES_FEED {
+                return devices_feed(pod).await;
+            }
             if feed != OVERVIEW_FEED {
                 return pod_core::unknown_feed(NAME, feed);
             }
@@ -243,13 +342,22 @@ impl Source for MonitorAdapter {
         store: &Store,
         catalog: &Catalog,
     ) -> Vec<NotificationChannel> {
-        match monitored_app(store, catalog) {
+        let mut out: Vec<NotificationChannel> = match monitored_app(store, catalog) {
             Ok(app) => app.iter().map(|app| channel(app)).collect(),
             Err(e) => {
                 tracing::error!(error = %e, "monitoring alerts: apps could not be read");
                 Vec::new()
             }
+        };
+        match pod_core::layouts::feed_owners(store, catalog, NAME) {
+            Ok(mut owners) => {
+                if let Some(app) = owners.remove(devices::DEVICES_FEED) {
+                    out.push(device_channel(&app));
+                }
+            }
+            Err(e) => tracing::error!(error = %e, "device updates: apps could not be read"),
         }
+        out
     }
 
     fn poll_interval(&self) -> Option<Duration> {
@@ -321,6 +429,40 @@ fn channel(app: &str) -> NotificationChannel {
             .into(),
         default_enabled: true,
         importance: Importance::High,
+    }
+}
+
+/// The channel agents' device watches notify on (decision `device-versions`).
+fn device_channel(app: &str) -> NotificationChannel {
+    NotificationChannel {
+        layout: app.to_owned(),
+        id: pod_core::devices::DEVICE_CHANNEL.into(),
+        title: "Device updates".into(),
+        description: "When a device an agent is waiting on updates (watch_device)".into(),
+        default_enabled: true,
+        importance: Importance::Default,
+    }
+}
+
+/// The `devices` feed: the pod's own rows, for any pod.
+async fn devices_feed(pod: &Pod) -> Hydration {
+    let now = pod_core::util::now_secs();
+    let server = protocol::build();
+    let read = pod
+        .blocking(move |s| {
+            pod_core::devices::note_server_build(s, server, now)?;
+            let all = pod_core::devices::devices(s, server)?;
+            let keys = (0..devices::CHART_DAYS)
+                .rev()
+                .map(|ago| pod_core::devices::day_before(s, now, ago))
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            let days = pod_core::devices::days(s, keys.first().map_or("", String::as_str))?;
+            Ok(devices::bundle(&all, &days, &keys, server, now))
+        })
+        .await;
+    match read {
+        Ok(b) => Hydration::Data(b),
+        Err(e) => Hydration::Error(axum::response::IntoResponse::into_response(e)),
     }
 }
 
@@ -608,7 +750,7 @@ fn duration_text(secs: i64) -> String {
     }
 }
 
-fn record(v: Value) -> EntityRecord {
+pub(crate) fn record(v: Value) -> EntityRecord {
     match v {
         Value::Object(m) => EntityRecord(m),
         _ => EntityRecord::new(),

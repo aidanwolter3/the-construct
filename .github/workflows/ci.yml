@@ -232,10 +232,12 @@ jobs:
         if: steps.secrets.outputs.pod == 'true'
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN_POD }}
-        # The ISO week: Chromium's apt layer is rebuilt once a week (decision `browser-sandbox`).
+        # The ISO week: Chromium's apt layer is rebuilt once a week (decision `browser-sandbox`). The build id:
+        # the one the server and its web client report (decision `device-versions`).
         run: >-
           flyctl deploy . --config deploy/fly/pod.toml --dockerfile deploy/pod.Dockerfile --remote-only --ha=false
           --build-arg CHROMIUM_REFRESH="$(date -u +%G-W%V)"
+          --build-arg CONSTRUCT_BUILD="$(scripts/build_id.sh)"
       - name: Smoke test
         if: steps.secrets.outputs.pod == 'true'
         run: |

@@ -239,7 +239,8 @@ pub(crate) fn events_thread(
                 .header(protocol::FEATURES_HEADER, protocol::features_header())
                 // Marks this device live: the pod sends it no Web Push
                 // while the stream is open (D52).
-                .header(protocol::DEVICE_HEADER, &device);
+                .header(protocol::DEVICE_HEADER, &device)
+                .headers(crate::identity::headers());
             if let Some(t) = &token {
                 req = req.bearer_auth(t);
             }

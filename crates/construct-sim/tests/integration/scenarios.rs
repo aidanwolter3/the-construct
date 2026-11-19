@@ -237,6 +237,29 @@ fn text_styles_and_query_conditionals() {
     assert_eq!(notes.rect[3], 2.0 * notes.line_height);
 }
 
+/// A `core://Bars` chart (feature `bars`, decision `device-versions`):
+/// devices per day stacked by build, filtered by kind, and a tap on a bar
+/// picks its day.
+#[test]
+fn a_bar_chart_filters_and_picks_a_day() {
+    let (mut runner, results) = run(
+        "device_versions",
+        "assert-text Now: every device at its latest build; assert-text Studio MacBook; shot all; \
+         click Web; assert-no-text Studio MacBook; click 16; assert-text Mon Nov 16; \
+         assert-no-text Now: every device at its latest build; shot web-16",
+        &out_dir("device-versions"),
+    );
+    assert_ok(&results);
+    let scene = runner.session.scene().unwrap();
+    let drawn: Vec<&str> = scene.texts().map(|t| t.text.as_str()).collect();
+    // Three web devices on the 16th, one row each.
+    assert!(
+        drawn.iter().filter(|t| t.starts_with("Nov 1")).count() >= 3,
+        "{drawn:?}"
+    );
+    assert!(drawn.contains(&"Now"), "{drawn:?}");
+}
+
 #[test]
 fn a_home_embeds_a_whole_layout_and_centres_its_tiles() {
     let (mut runner, results) = run(

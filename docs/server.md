@@ -208,6 +208,12 @@ Counts live in memory and restart from zero.
   adapter looks at the checks every 5 minutes (while the pod has a registered device), and a check that turns to
   warning sends one notification ("Server: <check>"); it notifies again only after it has been back to ok (decision
   [`server-monitoring-alerts`](decisions/server-monitoring-alerts.md)).
+- **Devices** (decision [`device-versions`](decisions/device-versions.md)): every pod records the devices that reach
+  it (one per app install or browser, from `x-construct-device`), the build each runs (`x-construct-build`) and the
+  build each ran each day. The `monitor` source's `devices` feed shows them in any pod (no operator switch): how
+  each device's build stands against the server's (latest, behind, ahead) and devices per day by build for a
+  `core://Bars` chart. Over MCP, `list_devices`, `rename_device` and `watch_device` (run a source action or send a
+  "Device updates" notification once a device draws a feature or runs a newer build).
 - **Prometheus:** with `CONSTRUCT_METRICS_ADDR`, `GET /metrics` on that address serves the same counters as
   `construct_*` metrics.
 
@@ -264,8 +270,11 @@ hand, from the repository root:
 
 ```bash
 flyctl deploy . --config deploy/fly/pod.toml --dockerfile deploy/pod.Dockerfile --remote-only \
-  --build-arg CHROMIUM_REFRESH="$(date -u +%G-W%V)"
+  --build-arg CHROMIUM_REFRESH="$(date -u +%G-W%V)" --build-arg CONSTRUCT_BUILD="$(scripts/build_id.sh)"
 ```
+
+`CONSTRUCT_BUILD` is the build id the server and its web client report (decision `device-versions`; the image has
+no `.git` to make it from). Without it they report `<version>+dev`, which can't be ordered against the apps'.
 
 Whether staging's browser runs sandboxed shows in its log after the first render since the deploy (a fetch filler
 or `collections_preview` with `render`): `fly logs -a the-construct-pod | grep "browser sandbox"`. Whether its user

@@ -37,6 +37,9 @@ pub mod gpu;
 #[cfg(feature = "window")]
 pub mod window;
 
+/// What the device says about itself to the pod (decision `device-versions`).
+#[cfg(feature = "remote")]
+pub use client_core::identity;
 #[cfg(feature = "remote")]
 pub mod engine;
 #[cfg(all(feature = "remote", feature = "window"))]

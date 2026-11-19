@@ -639,6 +639,7 @@ fn fills_width(n: &UiNode) -> bool {
         UiNode::Column { .. }
         | UiNode::Row { .. }
         | UiNode::List { .. }
+        | UiNode::Bars { .. }
         | UiNode::Divider {}
         | UiNode::TextField { .. }
         | UiNode::Scroll { .. }
@@ -2477,6 +2478,35 @@ impl<'i> Build<'_, 'i> {
                 let dots = self.push(ds, dots, Paint::None, Some(sem), false);
                 self.push(outer, vec![frame, dots], Paint::None, None, false)
             }
+            UiNode::Bars {
+                query_key,
+                bar,
+                label,
+                color,
+                value,
+                hatched,
+                where_,
+                height_dp,
+                scale_min,
+                field,
+                on_click,
+            } => self.bars(
+                n,
+                b,
+                BarsSpec {
+                    query_key,
+                    bar,
+                    label,
+                    color,
+                    value: value.as_deref(),
+                    hatched: hatched.as_deref(),
+                    conds: where_.as_ref().map_or(&[][..], |w| w.conditions()),
+                    height: height_dp.unwrap_or(BARS_HEIGHT_DP) as f32,
+                    scale_min: *scale_min,
+                    field: field.as_deref(),
+                    on_click: on_click.as_ref(),
+                },
+            ),
             UiNode::Progress { size_dp } => {
                 let s = size_dp.map_or(16.0, f32::from);
                 let i = self.push(
@@ -3019,6 +3049,226 @@ impl<'i> Build<'_, 'i> {
             .count();
         self.changes_at = earliest(self.changes_at, next);
         Some(n)
+    }
+}
+
+/// A `core://Bars` node's fields, as [`Build::bars`] reads them.
+struct BarsSpec<'n> {
+    query_key: &'n str,
+    bar: &'n str,
+    label: &'n str,
+    color: &'n str,
+    value: Option<&'n str>,
+    hatched: Option<&'n str>,
+    conds: &'n [protocol::ListWhere],
+    height: f32,
+    scale_min: u16,
+    field: Option<&'n str>,
+    on_click: Option<&'n ActionIntent>,
+}
+
+/// A `core://Bars` chart's height without `height_dp`.
+const BARS_HEIGHT_DP: u16 = 140;
+/// The most bars a chart draws (the first ones).
+const MAX_BARS: usize = 120;
+
+impl<'i> Build<'_, 'i> {
+    /// A `core://Bars` chart (feature `bars`): the axis's numbers on
+    /// the left, then one column per bar, its segments stacked from the
+    /// bottom over its label; a tap on a column runs `on_click` with
+    /// `$item` the bar's first item.
+    fn bars<'c>(&mut self, n: &UiNode, b: &B<'c>, spec: BarsSpec) -> usize {
+        let ctx = b.ctx;
+        let theme = self.theme.clone();
+        let Some(all) = ctx.query(spec.query_key) else {
+            return self.push(Style::default(), Vec::new(), Paint::None, None, false);
+        };
+        let wants = Where::of(spec.conds, &ctx);
+        let (now, zone) = (self.now, self.zone.clone());
+        let mut next = None;
+        // Bars in the order their first item comes: (key, items).
+        let mut bars: Vec<(String, Vec<&String>)> = Vec::new();
+        for uri in all {
+            let Some(e) = ctx.entity(uri) else { continue };
+            if !wants
+                .iter()
+                .all(|w| w.matches(e, now, zone.as_ref(), &mut next))
+            {
+                continue;
+            }
+            let key = e.get(spec.bar).map(render).unwrap_or_default();
+            if let Some(i) = bars.iter().position(|(k, _)| *k == key) {
+                bars[i].1.push(uri);
+            } else if bars.len() < MAX_BARS {
+                bars.push((key, vec![uri]));
+            }
+        }
+        self.changes_at = earliest(self.changes_at, next);
+        let size_of = |e: &protocol::EntityRecord| -> f32 {
+            spec.value
+                .map_or(1.0, |f| match e.get(f) {
+                    Some(Value::Number(n)) => n.as_f64().unwrap_or(0.0) as f32,
+                    Some(Value::String(s)) => s.trim().parse().unwrap_or(0.0),
+                    _ => 0.0,
+                })
+                .max(0.0)
+        };
+        let totals: Vec<f32> = bars
+            .iter()
+            .map(|(_, items)| {
+                items
+                    .iter()
+                    .filter_map(|u| ctx.entity(u))
+                    .map(size_of)
+                    .sum()
+            })
+            .collect();
+        let top = totals
+            .iter()
+            .fold(f32::from(spec.scale_min).max(1.0), |m, t| m.max(*t))
+            .ceil();
+        // The picked bar: the form value, else the last bar.
+        let chosen = spec.field.map(|f| {
+            ctx.form
+                .get(f)
+                .filter(|v| !v.is_empty())
+                .cloned()
+                .or_else(|| bars.last().map(|(k, _)| k.clone()))
+                .unwrap_or_default()
+        });
+        let caption = type_for(TextStyle::Caption);
+        // The axis: its top and 0, beside the plot, over a label's height.
+        let axis_text = |this: &mut Self, t: String| {
+            let style = Style {
+                flex_shrink: 0.0,
+                ..Default::default()
+            };
+            this.text_leaf(style, t, caption, theme.muted_text, None)
+        };
+        let hi = axis_text(self, format!("{top}"));
+        let lo = axis_text(self, "0".into());
+        let mut plot_axis = column(0, pad(0, 0), AlignItems::FLEX_END);
+        plot_axis.justify_content = JustifyContent::SPACE_BETWEEN;
+        plot_axis.size.height = length(spec.height);
+        let plot_axis = self.push(plot_axis, vec![hi, lo], Paint::None, None, false);
+        let mut axis = column(4, pad(0, 0), AlignItems::FLEX_END);
+        axis.flex_shrink = 0.0;
+        let gap_label = self.text_leaf(
+            Style::default(),
+            " ".into(),
+            caption,
+            theme.muted_text,
+            None,
+        );
+        let axis = self.push(axis, vec![plot_axis, gap_label], Paint::None, None, false);
+
+        let mut columns = Vec::new();
+        for (i, (key, items)) in bars.iter().enumerate() {
+            let first = items[0];
+            let item = ctx.entity(first).expect("filtered");
+            let item_ctx = ctx.with_item(first, item);
+            // Segments, bottom first: a column that ends at the bottom.
+            let mut segs = Vec::new();
+            for uri in items.iter() {
+                let Some(e) = ctx.entity(uri) else { continue };
+                let v = size_of(e);
+                if v <= 0.0 {
+                    continue;
+                }
+                let ectx = ctx.with_item(uri, e);
+                let c = ectx.color(&ectx.text(spec.color)).unwrap_or(theme.outline);
+                let striped = spec.hatched.is_some_and(|f| {
+                    matches!(e.get(f), Some(Value::Bool(true)))
+                        || e.get(f)
+                            .is_some_and(|v| matches!(render(v).as_str(), "true" | "1"))
+                });
+                let h = (v / top * spec.height - 2.0).max(2.0);
+                let style = Style {
+                    size: Size {
+                        width: percent(1.0),
+                        height: length(h),
+                    },
+                    max_size: Size {
+                        width: length(22.0),
+                        height: auto(),
+                    },
+                    flex_shrink: 0.0,
+                    ..Default::default()
+                };
+                let paint = Paint::Quad {
+                    bg: if striped { Rgba::TRANSPARENT } else { c },
+                    border: striped.then_some(c),
+                    dashed: striped,
+                    radius: 3.0,
+                };
+                segs.push(self.push(style, Vec::new(), paint, None, false));
+            }
+            // The first item at the bottom: drawn top to bottom.
+            segs.reverse();
+            let mut plot = column(2, pad(0, 0), AlignItems::CENTER);
+            plot.justify_content = JustifyContent::FLEX_END;
+            plot.size.height = length(spec.height);
+            plot.size.width = percent(1.0);
+            let plot = self.push(plot, segs, Paint::None, None, false);
+            let text = item_ctx.text(spec.label);
+            // A label keeps its words whole: at least as wide as it is on
+            // one line (a narrow column would break "Now" in two).
+            let one_line = self.text.measure(&text, caption, None, 1.0).width;
+            let label = self.text_leaf(
+                Style {
+                    min_size: Size {
+                        width: length(one_line.ceil() + 1.0),
+                        height: auto(),
+                    },
+                    ..Default::default()
+                },
+                if text.is_empty() {
+                    " ".into()
+                } else {
+                    text.clone()
+                },
+                caption,
+                theme.muted_text,
+                None,
+            );
+            let mut style = column(4, pad(0, 0), AlignItems::CENTER);
+            // Equal columns, each at least as wide as its label's word.
+            style.flex_grow = 1.0;
+            style.flex_basis = length(0.0);
+            let on = chosen.as_deref() == Some(key.as_str());
+            let paint = if on {
+                Paint::Quad {
+                    bg: theme.surface_variant,
+                    border: None,
+                    dashed: false,
+                    radius: 6.0,
+                }
+            } else {
+                Paint::None
+            };
+            let tap = match (spec.field, spec.on_click) {
+                (Some(f), _) => Some(Tap::SetForm {
+                    field: f.to_owned(),
+                    value: key.clone(),
+                }),
+                (None, Some(i)) => Some(Tap::Intent {
+                    intent: bind_intent(i, &item_ctx),
+                }),
+                (None, None) => None,
+            };
+            let mut sem = self.sem(b, n, Some(text), tap);
+            sem.id = format!("{}/bar{i}", b.path);
+            sem.selected = on;
+            columns.push(self.push(style, vec![plot, label], paint, Some(sem), false));
+        }
+        let mut plots = row(4, pad(0, 0), AlignItems::FLEX_START);
+        plots.flex_grow = 1.0;
+        plots.min_size.width = length(0.0);
+        let plots = self.push(plots, columns, Paint::None, None, false);
+        let mut style = row(8, pad(0, 0), AlignItems::FLEX_START);
+        style.align_self = Some(AlignSelf::STRETCH);
+        let sem = self.sem(b, n, None, None);
+        self.push(style, vec![axis, plots], Paint::None, Some(sem), false)
     }
 }
 

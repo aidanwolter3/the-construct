@@ -231,7 +231,8 @@ impl Inner {
     ) -> Result<reqwest::blocking::Response, FetchError> {
         let mut req = req
             .header(protocol::FEATURES_HEADER, protocol::features_header())
-            .header(protocol::DEVICE_HEADER, &self.device_id);
+            .header(protocol::DEVICE_HEADER, &self.device_id)
+            .headers(crate::identity::headers());
         if let Some(t) = token {
             req = req.bearer_auth(t);
         }

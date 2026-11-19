@@ -45,6 +45,49 @@ fn window() -> web_sys::Window {
     web_sys::window().expect("a window")
 }
 
+/// The `localStorage` key of this browser's device id.
+const DEVICE_KEY: &str = "construct.device";
+
+thread_local! {
+    static DEVICE: std::cell::RefCell<Option<String>> = const { std::cell::RefCell::new(None) };
+}
+
+/// This browser's device id (decision `device-versions`): made once and kept
+/// in `localStorage`, so each browser is one device; a private window that
+/// forgets it is a new one.
+fn device_id() -> String {
+    if let Some(id) = DEVICE.with(|d| d.borrow().clone()) {
+        return id;
+    }
+    let storage = window().local_storage().ok().flatten();
+    let stored = storage
+        .as_ref()
+        .and_then(|s| s.get_item(DEVICE_KEY).ok().flatten())
+        .filter(|id| {
+            (8..=64).contains(&id.len())
+                && id
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+        });
+    let id = stored.unwrap_or_else(|| {
+        let id = random(24).unwrap_or_else(|| "web-device-unknown".into());
+        if let Some(s) = &storage {
+            let _ = s.set_item(DEVICE_KEY, &id);
+        }
+        id
+    });
+    DEVICE.with(|d| *d.borrow_mut() = Some(id.clone()));
+    id
+}
+
+/// The headers that say which device this is and which build it runs.
+fn identify(h: &web_sys::Headers) {
+    let _ = h.set(protocol::DEVICE_HEADER, &device_id());
+    let _ = h.set(protocol::BUILD_HEADER, &protocol::build_header());
+    let ua = window().navigator().user_agent().unwrap_or_default();
+    let _ = h.set(protocol::DEVICE_NAME_HEADER, &crate::browser_name(&ua));
+}
+
 fn log(msg: &str) {
     web_sys::console::log_1(&msg.into());
 }
@@ -60,6 +103,7 @@ async fn request(method: &str, path: &str, body: Option<&Value>) -> Result<(u16,
     let h = req.headers();
     let _ = h.set(protocol::FEATURES_HEADER, &features_header());
     let _ = h.set("x-construct-client", "web");
+    identify(&h);
     if body.is_some() {
         let _ = h.set("content-type", "application/json");
     }
@@ -417,6 +461,7 @@ impl WebLoader {
             .headers()
             .set(protocol::FEATURES_HEADER, &features_header());
         let _ = req.headers().set("x-construct-client", "web");
+        identify(&req.headers());
         let resp: Response = JsFuture::from(window().fetch_with_request(&req))
             .await
             .map_err(|e| format!("{e:?}"))?

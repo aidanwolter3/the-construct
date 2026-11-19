@@ -14,6 +14,7 @@
 pub mod adapter;
 pub mod components;
 pub mod construct;
+pub mod devices;
 pub mod disk;
 pub mod ical;
 pub mod jacks;
@@ -632,6 +633,10 @@ pub fn app(state: Pod) -> Router {
     }
     router
         .route_layer(middleware::from_fn_with_state(state.clone(), fault_layer))
+        .route_layer(middleware::from_fn_with_state(
+            state.clone(),
+            devices::note_layer,
+        ))
         .with_state(state)
 }
 

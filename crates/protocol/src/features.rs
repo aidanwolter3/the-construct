@@ -347,6 +347,18 @@ fn node_features(node: &UiNode, out: &mut BTreeSet<&'static str>) {
         UiNode::MediaPicker { .. } => add(feature::MEDIA_PICKER),
         UiNode::Sticky { .. } => add(feature::STICKY),
         UiNode::Progress { .. } => add(feature::PROGRESS),
+        UiNode::Bars { where_, .. } => {
+            add(feature::BARS);
+            // A bar chart filters as a list does: the same features.
+            if let Some(w) = where_ {
+                if matches!(w, WhereClause::All(_)) {
+                    add(feature::LIST_WHERE_ALL);
+                }
+                if w.conditions().iter().any(ListWhere::uses_age) {
+                    add(feature::LIST_WHERE_AGE);
+                }
+            }
+        }
         UiNode::Dock { .. } => add(feature::DOCK),
         UiNode::AppFrame { .. } => add(feature::APP_FRAME),
         UiNode::Switch { .. } => add(feature::SWITCH),
@@ -811,6 +823,8 @@ mod tests {
                 "core://MediaPicker" => json!({"type": t, "field": "f", "max_items": 4}),
                 "core://Sticky" => json!({"type": t, "content": {"type": "core://Divider"}}),
                 "core://Progress" => json!({"type": t}),
+                "core://Bars" => json!({"type": t, "query_key": "q", "bar": "day",
+                    "color": "$item.color"}),
                 "core://Dock" => json!({"type": t, "field": "tab", "after": [
                     {"value": "a", "label": "A", "content": {"type": "core://Divider"}}]}),
                 "core://AppFrame" => json!({"type": t, "app": "home"}),

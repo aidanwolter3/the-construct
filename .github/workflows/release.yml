@@ -44,7 +44,11 @@ jobs:
     outputs:
       name: ${{ steps.v.outputs.name }}
       code: ${{ steps.v.outputs.code }}
+      build: ${{ steps.v.outputs.build }}
     steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - id: v
         env:
           REF_TYPE: ${{ github.ref_type }}
@@ -55,6 +59,8 @@ jobs:
           [[ $name =~ ^[0-9A-Za-z.+-]+$ ]] || { echo "bad version '$name'"; exit 1; }
           echo "name=$name" >> "$GITHUB_OUTPUT"
           echo "code=$RUN" >> "$GITHUB_OUTPUT"
+          # The build id the apps report to the pod (decision `device-versions`).
+          echo "build=$(CONSTRUCT_VERSION_NAME=$name scripts/build_id.sh)" >> "$GITHUB_OUTPUT"
 
   android:
     name: Android release APK
@@ -102,6 +108,7 @@ jobs:
         env:
           CONSTRUCT_VERSION_NAME: ${{ needs.version.outputs.name }}
           CONSTRUCT_VERSION_CODE: ${{ needs.version.outputs.code }}
+          CONSTRUCT_BUILD: ${{ needs.version.outputs.build }}
           CONSTRUCT_ANDROID_KEYSTORE_PASSWORD: ${{ github.event_name != 'pull_request' && secrets.ANDROID_KEYSTORE_PASSWORD || '' }}
           CONSTRUCT_ANDROID_KEY_ALIAS: ${{ github.event_name != 'pull_request' && secrets.ANDROID_KEY_ALIAS || '' }}
           CONSTRUCT_ANDROID_KEY_PASSWORD: ${{ github.event_name != 'pull_request' && secrets.ANDROID_KEY_PASSWORD || '' }}
@@ -132,6 +139,7 @@ jobs:
         env:
           CONSTRUCT_VERSION_NAME: ${{ needs.version.outputs.name }}
           CONSTRUCT_VERSION_CODE: ${{ needs.version.outputs.code }}
+          CONSTRUCT_BUILD: ${{ needs.version.outputs.build }}
         run: |
           scripts/macos_app.sh
           mkdir -p dist && cp build/macos/The-Construct.dmg "dist/The-Construct-$CONSTRUCT_VERSION_NAME.dmg"
