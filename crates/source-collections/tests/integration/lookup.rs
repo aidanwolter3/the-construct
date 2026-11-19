@@ -24,12 +24,36 @@ const SECTIONS: [&str; 5] = ["Unsorted", "Produce", "Pantry", "Dairy", "Other"];
 const PROMPT: &str = "Which grocery store section is this item in?";
 
 /// Answers from a fixed table and records every text it was asked about.
-#[derive(Debug, Default)]
+/// A gated fake holds its answers until [`Fake::release`], so a test can
+/// see a row before the model's answer lands.
+#[derive(Debug)]
 struct Fake {
     asked: Mutex<Vec<String>>,
+    open: tokio::sync::watch::Sender<bool>,
+}
+
+impl Default for Fake {
+    fn default() -> Self {
+        Self {
+            asked: Mutex::default(),
+            open: tokio::sync::watch::Sender::new(true),
+        }
+    }
 }
 
 impl Fake {
+    /// A fake that answers nothing until released.
+    fn gated() -> Self {
+        let fake = Self::default();
+        fake.open.send_replace(false);
+        fake
+    }
+
+    /// Lets held and later answers through.
+    fn release(&self) {
+        self.open.send_replace(true);
+    }
+
     fn asked(&self) -> Vec<String> {
         self.asked.lock().unwrap().clone()
     }
@@ -41,6 +65,8 @@ impl FieldModel for Fake {
             assert_eq!(q.prompt, PROMPT);
             let text = q.inputs[0].1.clone();
             self.asked.lock().unwrap().push(text.clone());
+            // Infallible: the sender lives in `self`.
+            let _ = self.open.subscribe().wait_for(|open| *open).await;
             let t = text.to_lowercase();
             Some(
                 if t.contains("cucumber") || t.contains("kale") {
@@ -231,7 +257,8 @@ async fn wait_section(pod: &Pod, name: &str, want: &str) {
 
 #[tokio::test]
 async fn rules_answer_first_the_model_fills_in_and_its_answers_become_rules() {
-    let fake = Arc::new(Fake::default());
+    // Gated, so the default can be seen before the model's answer lands.
+    let fake = Arc::new(Fake::gated());
     let pod = pod(fake.clone());
     define_rules(
         &pod,
@@ -269,6 +296,7 @@ async fn rules_answer_first_the_model_fills_in_and_its_answers_become_rules() {
         "Unsorted",
         "the default meanwhile"
     );
+    fake.release();
     wait_section(&pod, "Buttermilk", "Dairy").await;
     add(&pod, "groceries", json!({"name": "Basmati  RICE"})).await;
     wait_section(&pod, "Basmati  RICE", "Pantry").await;
