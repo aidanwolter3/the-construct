@@ -40,10 +40,14 @@ pub enum ParamType {
     Uri,
     /// A binding (`$item.x`, `${uri#f}`, `$form.x`) or text.
     Binding,
+    /// Any JSON value but null, put in whole where the template's string is
+    /// only `$arg.<name>`: an intent, a `count` query, a list of `where`
+    /// conditions (decision `component-json-params`).
+    Json,
 }
 
 impl ParamType {
-    pub const NAMES: [&'static str; 5] = ["text", "number", "bool", "uri", "binding"];
+    pub const NAMES: [&'static str; 6] = ["text", "number", "bool", "uri", "binding", "json"];
 
     fn parse(s: &str) -> Option<Self> {
         Some(match s {
@@ -52,6 +56,7 @@ impl ParamType {
             "bool" => Self::Bool,
             "uri" => Self::Uri,
             "binding" => Self::Binding,
+            "json" => Self::Json,
             _ => return None,
         })
     }
@@ -62,6 +67,7 @@ impl ParamType {
             (Self::Number, Value::Number(_)) | (Self::Bool, Value::Bool(_)) => true,
             (Self::Text | Self::Binding, Value::String(_)) => true,
             (Self::Uri, Value::String(s)) => s.contains("://") || s.starts_with('$'),
+            (Self::Json, v) => !v.is_null(),
             _ => false,
         }
     }
