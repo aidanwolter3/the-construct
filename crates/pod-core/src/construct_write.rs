@@ -1022,8 +1022,10 @@ fn grown_feeds(
 }
 
 /// Drop home's feeds of sources this build doesn't have (decision
-/// `remove-recipes-source`): a removed source's feed would otherwise stay
-/// in home's `bind` for good, since the tools only grow it. Answers the
+/// `remove-recipes-source`), and feeds their source no longer has
+/// ([`crate::adapter::Source::has_feed`]: a deleted collection, issue
+/// #358): such a feed would otherwise stay in home's `bind` for good,
+/// since the tools only grow it, and refuse every layout write. Answers the
 /// feeds dropped. Blocking; run when the pod opens, on a switched pod.
 pub fn drop_unknown_feeds(
     store: &crate::store::Store,
@@ -1035,7 +1037,7 @@ pub fn drop_unknown_feeds(
             let feeds = home_feeds(tx);
             let (keep, gone): (Vec<_>, Vec<_>) = feeds
                 .into_iter()
-                .partition(|(s, _)| catalog.source(s).is_some());
+                .partition(|(s, f)| catalog.source(s).is_some_and(|(a, _)| a.has_feed(tx, f)));
             if gone.is_empty() {
                 return Ok(gone);
             }
@@ -1048,7 +1050,7 @@ pub fn drop_unknown_feeds(
             let mut el = (*el).clone();
             el["bind"]["feeds"] = json!(keep);
             let note = format!(
-                "Home no longer binds {} (no such source)",
+                "Home no longer binds {} (no such source or feed)",
                 gone.iter()
                     .map(|(s, f)| format!("{s}/{f}"))
                     .collect::<Vec<_>>()
@@ -1739,12 +1741,20 @@ pub fn draft_plumbing(pod: &Pod, node: &Value) -> Result<Value, Value> {
     })
 }
 
-/// Set home's feeds to `feeds` (a source dropping one it no longer has, such
-/// as a deleted collection), as a write of the construct.
-pub async fn set_home_feeds_to(pod: &Pod, feeds: Vec<(String, String)>) -> Result<Value, Value> {
-    run_write(pod, &json!({}), move |p, c, _| {
-        let moved = set_home_feeds(p, c, &feeds)?;
-        Ok((json!({ "ok": true }), moved))
+/// Stop home binding `feed` (a source dropping one it no longer has, such
+/// as a deleted collection), as a write of the construct. Home's feeds are
+/// read in the write's transaction, so writes at once each drop their own
+/// feed (issue #358). Answers whether home bound it.
+pub async fn drop_home_feed(pod: &Pod, feed: (String, String)) -> Result<bool, Value> {
+    let r = run_write(pod, &json!({}), move |p, c, _| {
+        let feeds = home_feeds(c);
+        if !feeds.contains(&feed) {
+            return Ok((json!(false), Vec::new()));
+        }
+        let rest: Vec<_> = feeds.into_iter().filter(|f| *f != feed).collect();
+        let moved = set_home_feeds(p, c, &rest)?;
+        Ok((json!(true), moved))
     })
-    .await
+    .await?;
+    Ok(r == json!(true))
 }
