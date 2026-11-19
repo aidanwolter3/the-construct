@@ -795,6 +795,61 @@ async fn event_sites_fill_one_collection_and_alerts_notify_once() {
         listed(&screen, &format!("collection:events:filler:{}", ids[0]))[0]["alerts_text"],
         "Watching for Brass Lanterns"
     );
+    // The feed lists every alert with its filler, as the site screen does.
+    let alerts = listed(&b, "collection:events:alerts");
+    assert_eq!(alerts.len(), 2, "{b}");
+    assert_eq!(alerts[0]["name"], "Brass Lanterns");
+    assert_eq!(alerts[0]["filler_id"], json!(ids[0]));
+    assert_eq!(alerts[1]["filler_id"], json!(ids[1]));
+    let on_screen = listed(
+        &screen,
+        &format!("collection:events:filler:{}:alerts", ids[0]),
+    );
+    assert_eq!(alerts[0]["summary"], on_screen[0]["summary"]);
+    assert!(
+        alerts[0]["summary"].as_str().unwrap().contains("class"),
+        "{}",
+        alerts[0]["summary"]
+    );
+    assert!(
+        alerts[0]["uri"]
+            .as_str()
+            .unwrap()
+            .starts_with("collections://events/alerts/")
+    );
+    // The layout check knows each entity's fields.
+    let keys = |e: &Value| {
+        let mut k: Vec<String> = e.as_object().unwrap().keys().cloned().collect();
+        k.sort();
+        k
+    };
+    let sorted = |f: &[&str]| {
+        let mut k: Vec<String> = f.iter().map(|s| (*s).to_owned()).collect();
+        k.sort();
+        k
+    };
+    assert_eq!(
+        keys(&alerts[0]),
+        sorted(source_collections::db::ALERT_FIELDS)
+    );
+    assert_eq!(
+        keys(&listed(&screen, &format!("collection:events:filler:{}", ids[0]))[0]),
+        sorted(source_collections::db::FILLER_FIELDS)
+    );
+    // A site screen reads its filler's own fields.
+    let shows = ok(
+        &pod,
+        "validate_layout",
+        json!({"feeds": [["collections", "events"]], "layout": {"type": "core://Workspace", "id": "x",
+            "title": "Site", "slots": [{"slot_id": "s", "provider_uri": "core://custom", "content": {
+                "type": "core://Text", "style": "Body",
+                "value_expr": "${collections://events/fillers/$route.id#alerts_text}"}}]}}),
+    )
+    .await;
+    assert!(
+        shows["errors"].as_array().is_none_or(|e| e.is_empty()),
+        "{shows}"
+    );
     // Notifications need an app showing the collection.
     let app = ok(
         &pod,

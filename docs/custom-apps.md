@@ -440,8 +440,9 @@ A collection can keep itself current from the web (decision
 
 | A layout uses | |
 |---|---|
-| feed `["collections", "<c>"]` | Also `collection:<c>:fillers` (each filler's title, URL, state, health and alerts; `refreshing` while a fill of it runs, `can_check` false once an agent filled its `fills_per_day` times today) and `collection:<c>:alerted`. A fill's start and end reload the data holding its filler (scoped `event: data`). |
-| `GET /v1/collections/<c>/fillers/<f>` | A filler, its rows and its alerts. |
+| feed `["collections", "<c>"]` | Also `collection:<c>:fillers` (each filler's title, URL, state, health and alerts; `refreshing` while a fill of it runs, `can_check` false once an agent filled its `fills_per_day` times today) and `collection:<c>:alerted`; always `collection:<c>:alerts`, every alert (`name`, `summary` as the site screen shows it, `filler_id`, empty for an alert on every row; an alert watches at most one filler), so one site's are `where: [{field: "filler_id", equals: "$route.id"}]` and a public link carries them and follows their edits. A fill's start and end reload the data holding its filler (scoped `event: data`). |
+| `GET /v1/collections/<c>/fillers/<f>` | A filler, its rows and its alerts (a data path: a public link can't load it, so a shared site screen reads the feed's keys). |
+| `${collections://<c>/fillers/<f>#<field>}`, `${collections://<c>/alerts/<a>#<field>}` | A filler's or an alert's own fields (`alerts_text`, `summary`, …), checked against those, not the collection's. |
 | `POST /v1/collections/<c>/refresh {filler?}` | Fill now (in the background; the filler's `refreshing` shows it). One agent filler whose fills for today are spent: 429 `checked_today`, and nothing is recorded as a failure. |
 
 MCP tools: `collections_preview` (try a recipe without storing anything), `collections_status`,

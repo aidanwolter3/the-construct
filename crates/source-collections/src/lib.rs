@@ -33,7 +33,8 @@
 //!
 //! With fillers, the feed also fills `collection:<c>:fillers` (each filler's
 //! title, URL and health); with alerts, `collection:<c>:alerted` (the rows
-//! an alert matches).
+//! an alert matches); and always `collection:<c>:alerts`, every alert
+//! (name, summary, `filler_id`), so a public link can show them.
 //!
 //! Rows are entities `collections://<c>/<id>` with every field by name,
 //! plus `id`, `deleted` (always `false` when served: a layout's list hides
@@ -159,9 +160,10 @@ pub const MANIFEST: SourceManifest = SourceManifest {
             "collection:{collection}",
             "collection:{collection}:fillers",
             "collection:{collection}:alerted",
+            "collection:{collection}:alerts",
             "collection:{collection}:view:{view}",
         ],
-        doc: "The rows of one collection, in its order (list the collection's name as the feed: [\"collections\", \"todos\"]); each of its views (define_collection views, apply_change set_view) as collection:<name>:view:<view>, the rows it keeps in its order.",
+        doc: "The rows of one collection, in its order (list the collection's name as the feed: [\"collections\", \"todos\"]); each of its views (define_collection views, apply_change set_view) as collection:<name>:view:<view>, the rows it keeps in its order; its fillers as collection:<name>:fillers and its alerts as collection:<name>:alerts (each alert's name, summary and filler_id: one site's with where: [{field: \"filler_id\", equals: \"$route.id\"}]; a public link carries them).",
     }],
     data_paths: &[
         PathSpec {
@@ -170,6 +172,7 @@ pub const MANIFEST: SourceManifest = SourceManifest {
                 "collection:{collection}",
                 "collection:{collection}:fillers",
                 "collection:{collection}:alerted",
+                "collection:{collection}:alerts",
                 "collection:{collection}:view:{view}",
             ],
             doc: "The rows of one collection (for a screen's data), with its views.",
@@ -223,7 +226,7 @@ pub const MANIFEST: SourceManifest = SourceManifest {
     ],
     entities: &[EntityDoc {
         uri: "collections://{collection}/{id}",
-        doc: "A row of a collection: every field by name (see describe_collection), and the system fields; a ref field holds the id of the row it points at (read through it with ${collections://<target>/$item.<ref>#<field>}); a quantity field also as <name>_text (1 1/2 cups); a datetime field also as <name>_date (YYYY-MM-DD), <name>_time (7:30 PM) and <name>_text (Fri Nov 6 · 7:30 PM); with fillers filler_id and filler_title; with alerts alert_matched and alert_names. A filler is collections://{collection}/fillers/{id} (title, kind, url, state, detail, failing, alerts_text; refreshing: a fill of it is running, and clients are told when one starts and ends; can_check: false once an agent filled its fills_per_day times today, when POST /v1/collections/{collection}/refresh {filler} answers 429 checked_today), an alert collections://{collection}/alerts/{id} (name, summary).",
+        doc: "A row of a collection: every field by name (see describe_collection), and the system fields; a ref field holds the id of the row it points at (read through it with ${collections://<target>/$item.<ref>#<field>}); a quantity field also as <name>_text (1 1/2 cups); a datetime field also as <name>_date (YYYY-MM-DD), <name>_time (7:30 PM) and <name>_text (Fri Nov 6 · 7:30 PM); with fillers filler_id and filler_title; with alerts alert_matched and alert_names. A filler is collections://{collection}/fillers/{id} (title, kind, url, state, detail, failing, alerts_text; refreshing: a fill of it is running, and clients are told when one starts and ends; can_check: false once an agent filled its fills_per_day times today, when POST /v1/collections/{collection}/refresh {filler} answers 429 checked_today), an alert collections://{collection}/alerts/{id} (name, summary, filler_id), listed under collection:{collection}:alerts.",
         fields: &[
             (
                 "id",
