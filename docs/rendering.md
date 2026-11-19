@@ -62,7 +62,8 @@ regular, medium, semibold and bold (400 to 700, for `core://Text` `weight`; each
 variable font, made with fontTools' `varLib.instancer`, so no weight is synthesised), and three fallbacks: `DejaVuSans-Symbols.ttf`, DejaVu Sans cut to punctuation, arrows, shapes, symbols,
 dingbats and number forms (fractions such as ⅓ and ⅝, which Instrument Sans lacks); `DejaVuSans-Bold-Fractions.ttf`,
 the bold cut of just the fractions, superscripts and subscripts, so bold text keeps bold fractions; and
-`NotoEmoji-Regular.ttf`, monochrome Noto Emoji cut to what DejaVu lacks (⏰, 📅). cosmic-text falls back to a loaded
+`NotoEmoji-Regular.ttf`, monochrome Noto Emoji cut to what DejaVu lacks (⏰, 📅); and `DejaVuSansMono.ttf`, the
+monospace face of Markdown code (loaded after the faces are named, as its name holds "Sans"). cosmic-text falls back to a loaded
 font with the glyph, DejaVu Sans of the matching weight first, so ♥, ✓, ★ and ⅓ come from DejaVu. To change a cut,
 subset the font with fontTools' `pyftsubset` and keep its license next to it.
 
@@ -74,6 +75,20 @@ fits that many (found by bisection); screen readers get the whole text.
 its first glyph to its last, 0.3 em above the baseline. `text::strike_lines` works the lines out from the shaped
 buffer in whole device pixels; the CPU renderer fills them and the GPU renderer draws each as a solid custom glyph
 (id `u16::MAX`, past the image ids) of the text's own area, so both draw the same pixels.
+
+`markdown` (decision `text-markdown`) is read by `markdown::parse`, a small reader of what agents write (ATX and
+setext headings, paragraphs, nested bulleted, numbered and task lists, quotes, fenced code, GitHub tables, rules;
+bold, italic, code, strikethrough, links, autolinks and bare addresses inside them; HTML stays text; a single line
+break stays a line break). The layout builds its blocks from the renderer's own boxes: a column of texts, a list's
+rows with a drawn dot (a ring when nested), a number or a task box beside each item, a quote's accent bar, a code
+block's `muted_surface` card, a table's bordered rows of equal cells with a tinted header, a rule. Inline styles are
+`text::RichSpan`s carried with the text (`Leaf::Text`, `Paint::Text`, `scene::TextRun::spans`) and shaped in the
+same buffer (`TextEngine::buffer_rich`, cosmic-text's rich text): bold at 700, italic slanted (the faces have no
+italic cut), code in `DejaVuSansMono.ttf` (DejaVu Sans Mono cut to Latin, punctuation, arrows and box drawing) at
+0.86 of the size, links in the theme's `accent` (a glyph's own colour, which both renderers use), strikethrough by
+`text::strike_lines` over the struck glyphs only. The measure and shape caches key on the spans. With `max_lines`
+the blocks are flattened (`markdown::flatten`) into one styled text. The semantic text is the flattened text,
+without markup.
 
 ## Semantic ids
 

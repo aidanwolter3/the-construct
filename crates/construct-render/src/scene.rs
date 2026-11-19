@@ -98,6 +98,9 @@ pub struct TextRun {
     /// `strike`).
     #[serde(skip_serializing_if = "is_false")]
     pub strike: bool,
+    /// Styled ranges of `text` (a `core://Text` `markdown`'s bold, code…).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub spans: Vec<crate::text::RichSpan>,
     #[serde(skip)]
     pub color: Rgba,
     pub rect: [f32; 4],

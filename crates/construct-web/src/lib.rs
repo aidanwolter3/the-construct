@@ -45,6 +45,43 @@ pub fn browser_name(ua: &str) -> String {
     format!("{browser} on {os}")
 }
 
+/// What a tap or long press at `at` did, for the browser's console (a
+/// click that seems to do nothing says why): the node it hit and each
+/// effect's [`summary`](construct_render::interact::Effect::summary), or
+/// that nothing tappable was there. A field's text is never shown.
+pub fn tap_log(
+    what: &str,
+    at: (f32, f32),
+    out: Option<&construct_render::interact::Outcome>,
+) -> String {
+    let (x, y) = (at.0.round(), at.1.round());
+    let Some(out) = out else {
+        return format!("{what} at {x},{y}: nothing there to tap");
+    };
+    let node = match &out.node {
+        Some(n) => {
+            let label = n
+                .text_content
+                .as_deref()
+                .filter(|_| !n.node_type.contains("TextField"))
+                .map(|t| {
+                    let t: String = t.chars().take(60).collect();
+                    format!(" \"{t}\"")
+                })
+                .unwrap_or_default();
+            format!(" on {} {}{label}", n.node_type, n.id)
+        }
+        None => String::new(),
+    };
+    let effects: Vec<String> = out.effects.iter().map(|e| e.summary()).collect();
+    let did = match effects.as_slice() {
+        [] => "nothing".to_owned(),
+        [only] if only == "nothing" => "nothing (it has no action)".to_owned(),
+        _ => effects.join(", "),
+    };
+    format!("{what} at {x},{y}{node}: {did}")
+}
+
 /// `from`'s entities and queries over `into`'s.
 pub fn merge(into: &mut DataBundle, from: DataBundle) {
     into.entities.extend(from.entities);
@@ -81,5 +118,92 @@ mod tests {
         let linux_ff = "Mozilla/5.0 (X11; Linux x86_64; rv:133.0) Gecko/20100101 Firefox/133.0";
         assert_eq!(super::browser_name(linux_ff), "Firefox on Linux");
         assert_eq!(super::browser_name("curl/8"), "Browser");
+    }
+
+    fn node(id: &str, node_type: &str, text: &str) -> construct_render::SemanticNode {
+        serde_json::from_value(serde_json::json!({
+            "id": id, "node_type": node_type, "bounds": [0.0, 0.0, 10.0, 10.0],
+            "text_content": text, "interactive": true,
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn a_click_that_does_nothing_says_why() {
+        use construct_render::{Effect, Outcome};
+        assert_eq!(
+            super::tap_log("tap", (10.4, 20.6), None),
+            "tap at 10,21: nothing there to tap"
+        );
+        let no_action = Outcome {
+            node: Some(node("root/0", "core://Text", "Hello")),
+            effects: vec![Effect::Nothing],
+        };
+        assert_eq!(
+            super::tap_log("tap", (1.0, 2.0), Some(&no_action)),
+            "tap at 1,2 on core://Text root/0 \"Hello\": nothing (it has no action)"
+        );
+        // A row whose screen no layout shown has: the route is named.
+        let unmatched = Outcome {
+            node: Some(node("row/i0", "core://Tappable", "Open Fix it")),
+            effects: vec![Effect::NotSent {
+                intent: serde_json::json!({
+                    "intent": "action.navigation.open",
+                    "target_uri": "collections://tasks/r1",
+                    "presentation": "Push",
+                }),
+            }],
+        };
+        assert_eq!(
+            super::tap_log("tap", (5.0, 5.0), Some(&unmatched)),
+            "tap at 5,5 on core://Tappable row/i0 \"Open Fix it\": not_sent \
+             action.navigation.open target_uri=collections://tasks/r1 (no screen here matches it)"
+        );
+        let opened = Outcome {
+            node: Some(node("row/i0", "core://Tappable", "Open Fix it")),
+            effects: vec![
+                Effect::OpenedScreen {
+                    screen: "task".into(),
+                },
+                Effect::LoadFailed {
+                    what: "/v1/collections/tasks/row?id=r1".into(),
+                    error: "HTTP 403 sign_in_required".into(),
+                },
+            ],
+        };
+        assert_eq!(
+            super::tap_log("tap", (5.0, 5.0), Some(&opened)),
+            "tap at 5,5 on core://Tappable row/i0 \"Open Fix it\": opened_screen task, \
+             load_failed /v1/collections/tasks/row?id=r1: HTTP 403 sign_in_required"
+        );
+    }
+
+    #[test]
+    fn a_click_log_never_shows_what_was_typed() {
+        use construct_render::{Effect, Outcome};
+        let typed = Outcome {
+            node: Some(node("f", "core://TextField", "cpod_secret")),
+            effects: vec![
+                Effect::FormSet {
+                    field: "code".into(),
+                    value: "cpod_secret".into(),
+                },
+                Effect::SignedIn {
+                    token: "tok_secret".into(),
+                    code: "cpod_secret".into(),
+                },
+                Effect::Copy {
+                    text: "cpod_secret".into(),
+                },
+                Effect::NotSent {
+                    intent: serde_json::json!({
+                        "intent": "action.auth.session", "payload": { "code": "cpod_secret" },
+                    }),
+                },
+            ],
+        };
+        let line = super::tap_log("tap", (0.0, 0.0), Some(&typed));
+        assert!(!line.contains("secret"), "{line}");
+        assert!(line.contains("form_set code"), "{line}");
     }
 }

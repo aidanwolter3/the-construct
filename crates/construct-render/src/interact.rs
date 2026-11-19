@@ -158,6 +158,44 @@ impl Effect {
             Effect::Nothing => "nothing",
         }
     }
+
+    /// The effect for a log, with what says where it went (a layout, a
+    /// screen, a path, a field's name) but, as [`Effect::name`], never a
+    /// value that can be what was typed or a token: no form value, copied
+    /// text, link, session or intent payload.
+    pub fn summary(&self) -> String {
+        let name = self.name();
+        match self {
+            Effect::FormSet { field, .. }
+            | Effect::Focused { field }
+            | Effect::Paste { field }
+            | Effect::PickMedia { field, .. } => format!("{name} {field}"),
+            Effect::LocalSet { entity_uri, .. } => format!("{name} {entity_uri}"),
+            Effect::Opened { layout } => format!("{name} {layout}"),
+            Effect::OpenedScreen { screen } => format!("{name} {screen}"),
+            Effect::Device { command } => format!("{name} {command}"),
+            Effect::LoadFailed { what, error } => format!("{name} {what}: {error}"),
+            Effect::Sent { path } => format!("{name} {path}"),
+            Effect::NotSent { intent } => {
+                let mut s = format!("{name} {}", intent["intent"].as_str().unwrap_or("?"));
+                for k in ["layout", "target_uri", "path", "endpoint"] {
+                    if let Some(v) = intent[k].as_str() {
+                        s.push_str(&format!(" {k}={v}"));
+                    }
+                }
+                // `action.navigation.open` with only a `target_uri` is not
+                // sent when no screen of the layouts shown matches it.
+                if intent["intent"] == "action.navigation.open"
+                    && intent["layout"].is_null()
+                    && intent["target_uri"].is_string()
+                {
+                    s.push_str(" (no screen here matches it)");
+                }
+                s
+            }
+            _ => name.to_owned(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -3179,6 +3217,7 @@ impl Session {
                 tracking: 0.0,
                 max_lines: 0,
                 strike: false,
+                spans: Vec::new(),
                 color: theme.on_background,
                 rect: [ix + pad, y + (h - th) / 2.0, *tw, *th],
                 clip: all,
