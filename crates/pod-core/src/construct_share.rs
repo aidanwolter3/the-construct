@@ -55,6 +55,7 @@ const RESERVED_HANDLES: &[&str] = &[
     "web",
     "oauth",
     "healthz",
+    "ical",
     "api",
     "static",
     "assets",
@@ -2116,7 +2117,7 @@ mod tests {
         assert!(!valid_handle("2x"));
         assert!(!valid_handle("core"));
         // A short path is `/<handle>/<slug>`: never a path the host routes.
-        for h in ["v1", "web", "oauth", "healthz"] {
+        for h in ["v1", "web", "oauth", "healthz", "ical"] {
             assert!(!valid_handle(h), "{h}");
         }
         assert!(!valid_handle("x-"));

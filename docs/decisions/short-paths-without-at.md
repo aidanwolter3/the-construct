@@ -13,7 +13,7 @@ answers 405 instead of reaching the pod.
 Decision: the short path is `/<handle>/<slug>` (with `…/view`, `…/image`). It has no route: the host's fallback asks
 `pod_host::web::short_path` before it forwards a request, and that answers only `GET`/`HEAD` of a path whose first
 segment is a valid handle and second a valid slug. Every first segment the host or a pod routes is a reserved handle
-(`v1`, `web`, `oauth`, `healthz`, and a few kept free for later), so a short path and a route never meet. A new
+(`v1`, `web`, `oauth`, `healthz`, `ical`, and a few kept free for later), so a short path and a route never meet. A new
 top-level route must add its first segment to `RESERVED_HANDLES`.
 
 - `short_url` (from `share_publicly` and `list_public_links`) answers the new form.
