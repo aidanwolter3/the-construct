@@ -1,6 +1,6 @@
 //! The screen a caller without a pod token sees (D46).
 
-use protocol::{ActionIntent, Orientation, TextStyle, UiNode};
+use protocol::{ActionIntent, ButtonSize, ButtonStyle, Orientation, TextStyle, UiNode};
 use serde_json::{Value, json};
 
 /// The form field holding the typed pod code.
@@ -41,6 +41,8 @@ pub fn open_your_pod(temporary_hours: Option<u64>) -> Value {
                 path: OPEN_PATH.into(),
                 payload: json!({ "token": format!("$form.{TOKEN_FIELD}") }),
             },
+            style: ButtonStyle::Primary,
+            size: ButtonSize::Regular,
         },
     ];
     if let Some(hours) = temporary_hours {
@@ -65,6 +67,8 @@ pub fn open_your_pod(temporary_hours: Option<u64>) -> Value {
                     path: TEMPORARY_PATH.into(),
                     payload: json!({}),
                 },
+                style: ButtonStyle::Secondary,
+                size: ButtonSize::Regular,
             },
         ]);
     }

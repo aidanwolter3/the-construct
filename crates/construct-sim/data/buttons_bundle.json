@@ -1,0 +1,151 @@
+{
+  "version": "1.0.0",
+  "workspace": {
+    "type": "core://Page",
+    "id": "buttons",
+    "title": "Run: tidy the garden shed",
+    "root": {
+      "type": "core://Box",
+      "fill": true,
+      "background": "${local://theme#page}",
+      "content": {
+        "type": "core://Scroll",
+        "content": {
+          "type": "core://Column",
+          "spacing_dp": 12,
+          "padding_h_dp": 16,
+          "padding_v_dp": 16,
+          "children": [
+            {
+              "type": "core://Text",
+              "value_expr": "Tidy the garden shed",
+              "style": "Title"
+            },
+            {
+              "type": "core://Text",
+              "value_expr": "Sorting the pots and labelling the seed tins.",
+              "style": "Body"
+            },
+            {
+              "type": "core://Row",
+              "spacing_dp": 8,
+              "children": [
+                {
+                  "type": "core://Button",
+                  "label": "Open in Claude",
+                  "on_click": {
+                    "intent": "action.navigation.back"
+                  }
+                },
+                {
+                  "type": "core://Button",
+                  "label": "Stop",
+                  "on_click": {
+                    "intent": "action.navigation.back"
+                  },
+                  "style": "Secondary"
+                }
+              ]
+            },
+            {
+              "type": "core://Text",
+              "value_expr": "Every style, regular",
+              "style": "Label"
+            },
+            {
+              "type": "core://Row",
+              "spacing_dp": 8,
+              "children": [
+                {
+                  "type": "core://Button",
+                  "label": "Primary",
+                  "on_click": {
+                    "intent": "action.navigation.back"
+                  }
+                },
+                {
+                  "type": "core://Button",
+                  "label": "Secondary",
+                  "on_click": {
+                    "intent": "action.navigation.back"
+                  },
+                  "style": "Secondary"
+                }
+              ]
+            },
+            {
+              "type": "core://Row",
+              "spacing_dp": 8,
+              "children": [
+                {
+                  "type": "core://Button",
+                  "label": "Tonal",
+                  "on_click": {
+                    "intent": "action.navigation.back"
+                  },
+                  "style": "Tonal"
+                },
+                {
+                  "type": "core://Button",
+                  "label": "Text",
+                  "on_click": {
+                    "intent": "action.navigation.back"
+                  },
+                  "style": "Text"
+                }
+              ]
+            },
+            {
+              "type": "core://Text",
+              "value_expr": "Small",
+              "style": "Label"
+            },
+            {
+              "type": "core://Row",
+              "spacing_dp": 8,
+              "children": [
+                {
+                  "type": "core://Button",
+                  "label": "Add",
+                  "on_click": {
+                    "intent": "action.navigation.back"
+                  },
+                  "size": "Small"
+                },
+                {
+                  "type": "core://Button",
+                  "label": "Skip",
+                  "on_click": {
+                    "intent": "action.navigation.back"
+                  },
+                  "size": "Small",
+                  "style": "Secondary"
+                },
+                {
+                  "type": "core://Button",
+                  "label": "Later",
+                  "on_click": {
+                    "intent": "action.navigation.back"
+                  },
+                  "size": "Small",
+                  "style": "Tonal"
+                },
+                {
+                  "type": "core://Button",
+                  "label": "Undo",
+                  "on_click": {
+                    "intent": "action.navigation.back"
+                  },
+                  "size": "Small",
+                  "style": "Text"
+                }
+              ]
+            }
+          ]
+        }
+      }
+    }
+  },
+  "entities": {},
+  "queries": {}
+}

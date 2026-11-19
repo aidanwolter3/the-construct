@@ -167,6 +167,8 @@ fn full_workspace() -> UiNode {
                         UiNode::Button {
                             label: "Back".into(),
                             on_click: ActionIntent::NavigateBack,
+                            style: Default::default(),
+                            size: Default::default(),
                         },
                     ],
                 },
@@ -386,6 +388,7 @@ fn counter_fixture_parses_and_reserializes_identically() {
             UiNode::Button {
                 label,
                 on_click: ActionIntent::OptimisticMutate { entity_uri, .. },
+                ..
             } => {
                 assert_eq!(entity_uri, "core://counters/home");
                 label.as_str()

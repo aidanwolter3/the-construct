@@ -378,6 +378,54 @@ pub fn fixed_colours(doc: &Value) -> Vec<String> {
     out
 }
 
+/// Advice, not errors: every `core://Tappable` whose content is a
+/// hand-made button face (a filled or outlined, rounded `core://Box` around
+/// a `core://Text`), which comes out a different size from the buttons
+/// beside it. `core://Button`'s `style` and `size` draw every kind of
+/// button at one height (decision `one-button-node`). Each is
+/// `"<JSON pointer>: <advice>"`.
+pub fn button_faces(doc: &Value) -> Vec<String> {
+    fn is_face(tappable: &Value) -> bool {
+        let b = &tappable["content"];
+        let painted = ["background", "border_color"]
+            .iter()
+            .any(|k| b[k].as_str().is_some_and(|c| !c.is_empty()));
+        b["type"] == "core://Box"
+            && painted
+            && b["corner_dp"].as_u64().is_some_and(|c| c > 0)
+            && b["content"]["type"] == "core://Text"
+            && b["width_dp"].is_null()
+            && b["height_dp"].as_u64().is_none_or(|h| h <= 56)
+    }
+    fn walk(v: &Value, at: &str, out: &mut Vec<String>) {
+        match v {
+            Value::Object(m) => {
+                if m.get("type").and_then(Value::as_str) == Some("core://Tappable") && is_face(v) {
+                    out.push(format!(
+                        "{}: a core://Tappable over a filled or outlined Box is a hand-made \
+                         button face and won't match the buttons beside it; use core://Button \
+                         with style (Primary, Secondary, Tonal or Text) and size (Regular or \
+                         Small) instead",
+                        if at.is_empty() { "/" } else { at }
+                    ));
+                }
+                for (k, v) in m {
+                    walk(v, &format!("{at}/{}", escape_pointer(k)), out);
+                }
+            }
+            Value::Array(a) => {
+                for (i, v) in a.iter().enumerate() {
+                    walk(v, &format!("{at}/{i}"), out);
+                }
+            }
+            _ => {}
+        }
+    }
+    let mut out = Vec::new();
+    walk(doc, "", &mut out);
+    out
+}
+
 /// Numeric fields the renderers cannot draw sensibly (a non-finite `f32`
 /// would even serialize as `null` and make the stored layout unreadable), and
 /// names clients must know (icons, tints).
@@ -1795,6 +1843,36 @@ mod tests {
         assert_eq!(w.len(), 2, "{w:?}");
         assert!(w[0].starts_with("/background: #ffffff") && w[0].ends_with("theme#card}"));
         assert!(w[1].starts_with("/content/args/background: #123456"));
+    }
+
+    #[test]
+    fn hand_made_button_faces_are_pointed_out() {
+        let face = |b: Value| {
+            json!({"type": "core://Row", "children": [{"type": "core://Tappable",
+                "on_click": {"intent": "action.navigation.back"},
+                "content": b}]})
+        };
+        let text = json!({"type": "core://Text", "value_expr": "Stop", "style": "Label"});
+        let outlined = face(json!({"type": "core://Box", "corner_dp": 18,
+            "border_color": "${local://theme#card_border}", "padding_h_dp": 16,
+            "padding_v_dp": 8, "content": text}));
+        let w = button_faces(&outlined);
+        assert_eq!(w.len(), 1, "{w:?}");
+        assert!(w[0].starts_with("/children/0: ") && w[0].contains("core://Button"));
+        // A card or a tile is not a button: no text straight inside, or a
+        // fixed width, or no paint at all.
+        let card = face(json!({"type": "core://Box", "corner_dp": 12,
+            "background": "${local://theme#card}",
+            "content": {"type": "core://Column", "children": [text]}}));
+        let tile = face(
+            json!({"type": "core://Box", "corner_dp": 12, "width_dp": 80,
+            "background": "${local://theme#card}", "content": text}),
+        );
+        let link = face(json!({"type": "core://Box", "padding_h_dp": 4,
+            "content_color": "${local://theme#accent}", "content": text}));
+        for ok in [card, tile, link] {
+            assert_eq!(button_faces(&ok), Vec::<String>::new());
+        }
     }
 
     #[test]

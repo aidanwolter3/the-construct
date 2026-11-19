@@ -2,6 +2,7 @@
 
 mod accessibility;
 mod bench;
+mod button_styles;
 mod common;
 #[cfg(feature = "remote")]
 mod construct_stub;

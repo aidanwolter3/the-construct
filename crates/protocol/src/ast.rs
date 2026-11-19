@@ -219,10 +219,19 @@ pub enum UiNode {
         #[serde(default, skip_serializing_if = "is_false")]
         markdown: bool,
     },
+    /// A button running `on_click` (any intent). `style` and `size`
+    /// (feature `button_style`, decision `one-button-node`) pick one of the
+    /// renderer's fixed faces: every style of a size has the same height,
+    /// padding and corner, so buttons side by side match. A client without
+    /// the feature ignores both and draws a regular primary button.
     #[serde(rename = "core://Button")]
     Button {
         label: String,
         on_click: ActionIntent,
+        #[serde(default, skip_serializing_if = "ButtonStyle::is_primary")]
+        style: ButtonStyle,
+        #[serde(default, skip_serializing_if = "ButtonSize::is_regular")]
+        size: ButtonSize,
     },
 
     /// A list of the entities of `queries[query_key]`, each rendered with
@@ -1237,6 +1246,42 @@ pub enum Align {
 
 fn is_start(a: &Align) -> bool {
     *a == Align::Start
+}
+
+/// A `core://Button`'s face (feature `button_style`).
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ButtonStyle {
+    /// Filled with the accent: the screen's main action.
+    #[default]
+    Primary,
+    /// Outlined on the card colour, in the text colour: an action beside
+    /// the main one (Cancel, Stop, Open in ...).
+    Secondary,
+    /// Filled with the accent's tint, in the accent: a quieter action.
+    Tonal,
+    /// Accent text with no fill: the least weight.
+    Text,
+}
+
+impl ButtonStyle {
+    fn is_primary(&self) -> bool {
+        *self == ButtonStyle::Primary
+    }
+}
+
+/// A `core://Button`'s size (feature `button_style`): `Regular` is 40 dp
+/// tall, `Small` 32 dp, whatever the style.
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ButtonSize {
+    #[default]
+    Regular,
+    Small,
+}
+
+impl ButtonSize {
+    fn is_regular(&self) -> bool {
+        *self == ButtonSize::Regular
+    }
 }
 
 /// How `core://Box` draws its outline (feature `box_border_style`).

@@ -4,8 +4,8 @@
 //! frame drawn here reads like the app's.
 
 use protocol::{
-    ActionIntent, Align, BorderStyle, DataBundle, EmbedPresentation, EntityRecord, ImageShape,
-    Justify, Orientation, TextStyle, Tone, UiNode,
+    ActionIntent, Align, BorderStyle, ButtonSize, ButtonStyle, DataBundle, EmbedPresentation,
+    EntityRecord, ImageShape, Justify, Orientation, TextStyle, Tone, UiNode,
 };
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -629,6 +629,12 @@ fn md_shrinks() -> Style {
         ..Default::default()
     }
 }
+
+/// A regular `core://Button`: padding across and down, and its height
+/// (decision `one-button-node`). Its corner is half the height.
+const BUTTON_REGULAR: (u16, u16, f32) = (24, 10, 40.0);
+/// A small `core://Button`.
+const BUTTON_SMALL: (u16, u16, f32) = (16, 6, 32.0);
 
 fn pad(h: u16, v: u16) -> Rect<LengthPercentage> {
     Rect {
@@ -1795,30 +1801,47 @@ impl<'i> Build<'_, 'i> {
                 }
                 self.text_leaf(Style::default(), text, ty, color, Some(sem))
             }
-            UiNode::Button { label, on_click } => {
+            UiNode::Button {
+                label,
+                on_click,
+                style: face,
+                size,
+            } => {
+                // One face per style and size (decision `one-button-node`):
+                // a layout picks a style, never a height or a corner.
+                let (bg, fg, border) = match face {
+                    ButtonStyle::Primary => (theme.primary, theme.on_primary, None),
+                    ButtonStyle::Secondary => (theme.surface, self.fg(b), Some(theme.outline)),
+                    ButtonStyle::Tonal => (
+                        theme
+                            .token("accent_surface")
+                            .unwrap_or(theme.surface_variant),
+                        theme.primary,
+                        None,
+                    ),
+                    ButtonStyle::Text => (Rgba::TRANSPARENT, theme.primary, None),
+                };
+                let (h, v, height) = match size {
+                    ButtonSize::Regular => BUTTON_REGULAR,
+                    ButtonSize::Small => BUTTON_SMALL,
+                };
                 let label = ctx.text(label);
-                let l = self.text_leaf(
-                    Style::default(),
-                    label.clone(),
-                    LABEL_LARGE,
-                    theme.on_primary,
-                    None,
-                );
+                let l = self.text_leaf(Style::default(), label.clone(), LABEL_LARGE, fg, None);
                 let tap = Tap::Intent {
                     intent: bind_intent(on_click, &ctx),
                 };
-                let mut style = row(0, pad(24, 10), AlignItems::CENTER);
+                let mut style = row(0, pad(h, v), AlignItems::CENTER);
                 style.justify_content = JustifyContent::CENTER;
-                style.min_size.height = length(40.0);
+                style.min_size.height = length(height);
                 let sem = self.sem(b, n, Some(label), Some(tap));
                 self.push(
                     style,
                     vec![l],
                     Paint::Quad {
-                        bg: theme.primary,
-                        border: None,
+                        bg,
+                        border,
                         dashed: false,
-                        radius: 20.0,
+                        radius: height / 2.0,
                     },
                     Some(sem),
                     false,

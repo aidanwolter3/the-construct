@@ -166,7 +166,8 @@ Layouts only go forward: a link back to a layout that leads here is action.navig
 (pop_to_root for home). A core://Layout can also show a layout in part of the screen, or as a Sheet, Panel or \
 Overlay (from any edge) while a condition holds; core://Gesture runs an intent on a tap, long press or swipe, and \
 core://SwipeCard is a card that follows the finger and runs an intent when swiped off (a core://List with stack: \
-true is a deck of them). Home owns every feed: feeds you name when creating a layout are added to home's, and \
+true is a deck of them). Every button is a core://Button (style Primary, Secondary, Tonal or Text; size \
+Regular or Small), never a core://Tappable over a Box, so buttons side by side match. Home owns every feed: feeds you name when creating a layout are added to home's, and \
 every layout may bind any of home's feeds; a core://Layout or action.navigation.open binds a layout's inputs \
 ($in.<name>) with \"bind\" (only home binds the pod's data). The inbox and Settings are the blueprints inbox and \
 settings (\"ref\": \"@core/inbox\" with presentation Sheet, \"@core/settings\" with Panel); describe_vocabulary \
@@ -489,7 +490,10 @@ async fn call_tool(pod: &Pod, headers: &HeaderMap, params: &Value) -> Value {
     if let Some(r) = crate::construct::write::mcp(pod, name, &args).await {
         let r = match name {
             "create_layout" | "update_layout" | "validate_layout" => {
-                r.map(|v| with_colour_advice(v, &args["layout"]))
+                r.map(|v| with_advice(v, &args["layout"]))
+            }
+            "define_component" | "update_component" => {
+                r.map(|v| with_advice(v, &args["component"]["template"]))
             }
             _ => r,
         };
@@ -605,10 +609,12 @@ async fn list_data_sources(pod: &Pod) -> Result<Value, Value> {
     }))
 }
 
-/// A layout write's answer with `warnings`: the fixed colours it uses,
-/// which stay the same in dark mode (none: the answer as it is).
-fn with_colour_advice(mut answer: Value, layout: &Value) -> Value {
-    let warnings = crate::validate::fixed_colours(layout);
+/// A layout or component write's answer with `warnings`: the fixed
+/// colours it uses, which stay the same in dark mode, and its hand-made
+/// button faces (none: the answer as it is).
+fn with_advice(mut answer: Value, layout: &Value) -> Value {
+    let mut warnings = crate::validate::fixed_colours(layout);
+    warnings.extend(crate::validate::button_faces(layout));
     if !warnings.is_empty() {
         answer["warnings"] = json!(warnings);
     }
