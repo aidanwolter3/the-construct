@@ -4486,9 +4486,11 @@ impl Session {
     }
 
     /// A tapped screen open (`action.navigation.open` of a `target_uri`, no
-    /// layout) inside panel k of a host: that panel's layout and the
-    /// address, when one of its screens has the route. `None` elsewhere (the
-    /// top entry's screens take it, as before).
+    /// layout) inside panel k of a host, or inside a layout embedded inline
+    /// (`core://Layout`, as home's pane beside its list on a wide window
+    /// draws the row picked): that layout and the address, when one of its
+    /// screens has the route; the innermost such layout first. `None`
+    /// elsewhere (the top entry's screens take it, as before).
     fn panel_screen(&self, node: &SemanticNode, intent: &Value) -> Option<(String, String)> {
         if intent["intent"] != "action.navigation.open"
             || intent["layout"].as_str().is_some_and(|l| !l.is_empty())
@@ -4496,16 +4498,35 @@ impl Session {
             return None;
         }
         let uri = intent["target_uri"].as_str().filter(|t| !t.is_empty())?;
-        let (host, slot) = self.panel_slot_of(node)?;
-        let e = &self.stack[self.top_index()];
-        let layout = &e.panels.get(&host)?.get(slot.checked_sub(1)?)?.layout;
-        let UiNode::Page { screens, .. } = self.layouts.get(layout)? else {
-            return None;
+        let has_route = |layout: &str| match self.layouts.get(layout) {
+            Some(UiNode::Page { screens, .. }) => {
+                screens.iter().any(|s| match_route(&s.route, uri).is_some())
+            }
+            _ => false,
         };
-        screens
-            .iter()
-            .any(|s| match_route(&s.route, uri).is_some())
-            .then(|| (layout.clone(), uri.to_owned()))
+        if let Some((host, slot)) = self.panel_slot_of(node) {
+            let e = &self.stack[self.top_index()];
+            if let Some(p) = slot
+                .checked_sub(1)
+                .and_then(|k| e.panels.get(&host)?.get(k))
+                && has_route(&p.layout)
+            {
+                return Some((p.layout.clone(), uri.to_owned()));
+            }
+        }
+        // The layouts embedded around the node, innermost first: each
+        // embed's own node is `layout:<id>` among the semantics.
+        let sems = &self.scene.as_ref()?.semantics;
+        let mut at = Some(node);
+        while let Some(n) = at {
+            if let Some(layout) = n.id.strip_prefix("layout:")
+                && has_route(layout)
+            {
+                return Some((layout.to_owned(), uri.to_owned()));
+            }
+            at = n.parent.and_then(|i| sems.get(i));
+        }
+        None
     }
 
     /// A push or Back tapped inside a panel host: the push opens a panel

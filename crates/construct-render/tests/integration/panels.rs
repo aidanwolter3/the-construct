@@ -188,6 +188,50 @@ fn a_screen_tapped_in_a_panel_opens_from_the_panels_layout() {
 }
 
 #[test]
+fn a_screen_tapped_in_an_inline_layout_opens_from_that_layout() {
+    // Home's pane beside its list on a wide window (the host's own layout,
+    // not a pushed panel), and the same embed on a phone: the feed's posts
+    // open its own screen, which home doesn't have.
+    for viewport in [
+        WIDE,
+        Viewport {
+            width: 390.0,
+            height: 844.0,
+            scale: 1.0,
+        },
+    ] {
+        let mut s = session(viewport);
+        s.layouts.insert(
+            "list".into(),
+            node(json!({ "type": "core://Page", "id": "list", "title": "Feed",
+                "root": { "type": "core://Column", "children": [
+                    { "type": "core://Tappable", "tag": "post", "id": "card:feed://posts/7",
+                      "on_click": { "intent": "action.navigation.open", "presentation": "Push",
+                                    "target_uri": "feed://posts/7" },
+                      "content": { "type": "core://Text", "style": "Body", "value_expr": "A post" } } ] },
+                "screens": [
+                    { "id": "post", "route": "feed://posts/{id}", "title": "Post",
+                      "root": { "type": "core://Text", "style": "Body",
+                                "value_expr": "Post $route.id" } } ] })),
+        );
+        assert!(shows(&mut s, "A post").is_some());
+        let out = s.tap(&Target::Id("post".into())).unwrap();
+        assert_eq!(
+            out.effects,
+            vec![Effect::OpenedScreen {
+                screen: "post".into()
+            }],
+            "{}",
+            viewport.width
+        );
+        assert!(shows(&mut s, "Post 7").is_some());
+        s.dispatch(&json!({ "intent": "action.navigation.back" }))
+            .unwrap();
+        assert!(shows(&mut s, "A post").is_some());
+    }
+}
+
+#[test]
 fn on_a_phone_a_panel_host_pushes_as_before() {
     for width in [390.0, 700.0] {
         let mut s = session(Viewport {
