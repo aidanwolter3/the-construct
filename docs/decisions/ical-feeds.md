@@ -46,8 +46,9 @@ Only where the host serves public links (`CONSTRUCT_PUBLIC_WEB=1` with `CONSTRUC
   `created_at`, `SEQUENCE` the seconds between them (it only grows). The calendar says `X-WR-CALNAME`,
   `REFRESH-INTERVAL` and `X-PUBLISHED-TTL` of `PT1H` (Proton may ignore them). Lines end in CRLF and fold at 75
   octets, never inside a character; TEXT escapes `\`, `;`, `,` and newlines.
-- **Window and size**: events that ended in the last 30 days and everything ahead, the earliest 3000; at most 10
-  sources per feed.
+- **Window and size**: events that ended in the last 30 days and everything ahead, the earliest 3000, and only as
+  many of those as fit in 2 MiB of text (the host keeps it outside every pod's storage quota, as a public link's
+  copy); the review and the count say how many go out. At most 10 sources per feed.
 - **Review**: `set_calendar_feed` without `confirm` answers the distinct titles, locations and descriptions every
   event would carry, the event count, the pod's zone and the next ten events, and publishes nothing. `confirm` must
   repeat the review id, a hash of the definition and the rendered text: anything that changed asks again. Changing
