@@ -342,7 +342,7 @@ impl CpuRenderer {
         engine: &mut TextEngine,
     ) {
         let ty = t.ty();
-        let buffer = engine.buffer(&t.text, ty, Some(t.rect[2] + 0.5), s);
+        let buffer = engine.buffer_rich(&t.text, &t.spans, ty, Some(t.rect[2] + 0.5), s);
         let ox = (t.rect[0] * s).round();
         let oy = (t.rect[1] * s).round();
         let [cx, cy, cw, ch] = t.clip.map(|v| v * s);
@@ -352,10 +352,14 @@ impl CpuRenderer {
         // so CPU and GPU frames agree to the pixel.
         for run in buffer.layout_runs() {
             for g in run.glyphs {
-                glyphs.push((g.physical((ox, oy), 1.0), run.line_y.round() as i32));
+                glyphs.push((
+                    g.physical((ox, oy), 1.0),
+                    run.line_y.round() as i32,
+                    g.color_opt,
+                ));
             }
         }
-        if t.strike {
+        if crate::text::has_strike(ty, &t.spans) {
             // A solid line in the text's colour through each line.
             let a = color[3];
             let src = [color[0] * a, color[1] * a, color[2] * a, a];
@@ -372,7 +376,17 @@ impl CpuRenderer {
                 }
             }
         }
-        for (g, line_y) in glyphs {
+        for (g, line_y, own) in glyphs {
+            // A styled span's own colour (a link's), else the text's.
+            let color = own.map_or(color, |c| {
+                let [r, gr, b, a] = c.as_rgba();
+                [
+                    r as f32 / 255.0,
+                    gr as f32 / 255.0,
+                    b as f32 / 255.0,
+                    a as f32 / 255.0 * color[3],
+                ]
+            });
             let Some(img) = self
                 .swash
                 .get_image(engine.font_system(), g.cache_key)

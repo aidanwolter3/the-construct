@@ -98,6 +98,9 @@ is plugged and to which URL; `unplug_jack agent_runner` signs out, like `POST /v
   the run reads Reviewed. The answer's record goes into the mirror at once. A run that doesn't need review is 409
   `not_needing_review`. (Before CAP v3 this was a pod-only mark in `agents_reviewed`; that table is gone.)
 - **Untrusted text:** everything the runner sends is plain display text, cleaned of control characters and capped.
+  The agent's own prose (`summary`, `outcome_summary`, `needs_you_text`, `follow_up`, `last_summary`) keeps its line
+  breaks and is drawn as Markdown by the Agents layout (`core://Text` `markdown`, decision `text-markdown`); its links
+  are styled, never tappable, so only the checked links below open anything. Timeline lines stay plain.
   The links kept are `pr_url` (the outcome's and the claim's), only as `https://github.com/<owner>/<repo>/pull/<n>`;
   `deploy_url`, only as `https://github.com/<owner>/<repo>/actions/runs/<n>` (optionally `/job/<n>` or
   `/attempts/<n>`); and `claude_url`, only as `https://claude.ai/code/` and a path of plain segments; without a

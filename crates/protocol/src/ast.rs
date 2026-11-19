@@ -209,6 +209,15 @@ pub enum UiNode {
         /// colour: a bought item on a shopping list.
         #[serde(default, skip_serializing_if = "is_false")]
         strike: bool,
+        /// Reads the bound text as Markdown (feature `text_markdown`,
+        /// decision `text-markdown`): headings, paragraphs, lists (with
+        /// task boxes), quotes, code blocks, tables and rules, with bold,
+        /// italic, inline code, strikethrough and links inside them, drawn
+        /// in the text's style and colour. With `max_lines`, only its
+        /// inline styles are kept, on as many lines. A client without it
+        /// draws the Markdown as written.
+        #[serde(default, skip_serializing_if = "is_false")]
+        markdown: bool,
     },
     #[serde(rename = "core://Button")]
     Button {
