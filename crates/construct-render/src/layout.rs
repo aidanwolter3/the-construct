@@ -3406,6 +3406,46 @@ fn stretch_content(
     }
 }
 
+/// How far content fades in from a scrolling view's ends, in points.
+const EDGE_FADE: f32 = 24.0;
+/// Strips per fade: a gradient of quads, so every renderer draws it as it is.
+const EDGE_FADE_STEPS: usize = 24;
+
+/// Fades a scrolling view's top and bottom (`view`, its visible box) into
+/// `backdrop`: content scrolled `above` points past its top fades there, and
+/// `below` points still to come fades at its bottom. Each fade grows in over
+/// its first `EDGE_FADE` points of scrolling, so it shows only when there is
+/// content beyond that end.
+fn edge_fades(scene: &mut Scene, view: [f32; 4], backdrop: Rgba, above: f32, below: f32) {
+    let [x, y, w, h] = view;
+    let len = EDGE_FADE.min(h / 4.0);
+    if w <= 0.0 || len <= 0.0 {
+        return;
+    }
+    let step = len / EDGE_FADE_STEPS as f32;
+    for (scrolled, top) in [(above, true), (below, false)] {
+        let strength = (scrolled / EDGE_FADE).clamp(0.0, 1.0);
+        if strength <= 0.0 {
+            continue;
+        }
+        for k in 0..EDGE_FADE_STEPS {
+            // Opaque at the edge, easing out to nothing.
+            let t = 1.0 - (k as f32 + 0.5) / EDGE_FADE_STEPS as f32;
+            let a = strength * t * t * (3.0 - 2.0 * t);
+            let sy = if top {
+                y + k as f32 * step
+            } else {
+                y + h - (k as f32 + 1.0) * step
+            };
+            let mut c = backdrop;
+            c.0[3] *= a;
+            let mut q = QuadInstance::fill([x, sy, w, step], c, 0.0);
+            q.clip = view;
+            scene.draws.push(Draw::Quad(q));
+        }
+    }
+}
+
 fn intersect(a: [f32; 4], b: [f32; 4]) -> [f32; 4] {
     let x0 = a[0].max(b[0]);
     let y0 = a[1].max(b[1]);
@@ -3894,6 +3934,13 @@ impl Laid {
             // Pulled past an end: the content stretches from that end.
             let anchor = if stretch < 0.0 { y } else { y + h };
             stretch_content(scene, drawn, anchor, 1.0 + stretch.abs(), inner_clip);
+        }
+        if scrolls {
+            // Content passing under the view's ends fades out into what is
+            // behind it, as much as there is left to scroll that way.
+            let max = (self.content_height(e) - h).max(0.0);
+            let shown = intersect(rect, inner_clip);
+            edge_fades(scene, shown, kid_at.backdrop, oy, max - oy);
         }
         // Sticky nodes pinned in this view go over its content.
         for p in own_pins {
