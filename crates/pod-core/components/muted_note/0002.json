@@ -1,0 +1,78 @@
+{
+  "note": "An optional count: given one, the note is the whole empty state, shown only while that list is empty",
+  "component": {
+    "doc": "A quiet line of muted text, inset 4 dp to line up with a card's rounded edge: what a section says while its list is empty (give count the list's query, {query_key, where?}, and the note shows only while that list has no rows), or a hint under a heading. Secondary text by default; for a heading above a card use core:section_label.",
+    "params": [
+      {
+        "name": "text",
+        "type": "text",
+        "doc": "The text (bindings allowed).",
+        "required": true
+      },
+      {
+        "name": "style",
+        "type": "text",
+        "doc": "A core://Text style (Caption for a smaller hint).",
+        "default": "Secondary"
+      },
+      {
+        "name": "count",
+        "type": "json",
+        "doc": "A list's count query, {query_key, where?}, as a core://Conditional's count: the note shows only while it is 0. Left out, the note always shows."
+      }
+    ],
+    "template": {
+      "type": "core://IfArg",
+      "arg": "count",
+      "then": {
+        "type": "core://Conditional",
+        "count": "$arg.count",
+        "not": true,
+        "content": {
+          "type": "core://Box",
+          "content_color": "${local://theme#muted_text}",
+          "padding_h_dp": 4,
+          "content": {
+            "type": "core://Text",
+            "value_expr": "$arg.text",
+            "style": "$arg.style"
+          }
+        }
+      },
+      "else": {
+        "type": "core://Box",
+        "content_color": "${local://theme#muted_text}",
+        "padding_h_dp": 4,
+        "content": {
+          "type": "core://Text",
+          "value_expr": "$arg.text",
+          "style": "$arg.style"
+        }
+      }
+    },
+    "examples": [
+      {
+        "args": {
+          "text": "Nothing here yet.",
+          "count": {
+            "query_key": "collection:tasks",
+            "where": [
+              {
+                "field": "done",
+                "equals": "false"
+              }
+            ]
+          }
+        },
+        "note": "an empty section: shown only while the open tasks list is empty"
+      },
+      {
+        "args": {
+          "text": "Last hour · last day · since the server started",
+          "style": "Caption"
+        },
+        "note": "a small hint under a section's heading"
+      }
+    ]
+  }
+}
