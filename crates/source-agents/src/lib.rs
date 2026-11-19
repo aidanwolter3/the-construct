@@ -1254,7 +1254,7 @@ async fn reopen_route(State(pod): State<Pod>, headers: HeaderMap, body: Bytes) -
         Err(r) => return r,
     };
     let message = match field(&body, "message", 20_000) {
-        Ok(m) => m,
+        Ok(m) => follow_up_prompt(&m),
         Err(r) => return r,
     };
     // The row, or a run of it (a run's screen knows only the run).
@@ -1295,6 +1295,18 @@ async fn reopen_route(State(pod): State<Pod>, headers: HeaderMap, body: Bytes) -
             detail,
         ),
     }
+}
+
+/// What closes every Reopen message. A resumed conversation gets only the
+/// developer's words, and an agent that answers them and stops without
+/// reporting leaves its run needing you (then parked) though its work is done.
+pub const FOLLOW_UP_REMINDER: &str = "When you have finished, report again as the task asks \
+(`foreman report`), so this run ends. Don't stop with only a reply unless you need the developer.";
+
+/// A Reopen message as the new run gets it: the developer's words, then
+/// [`FOLLOW_UP_REMINDER`].
+pub fn follow_up_prompt(message: &str) -> String {
+    format!("{}\n\n{FOLLOW_UP_REMINDER}", message.trim_end())
 }
 
 /// What Continue tells the run that carries on a timed-out one.

@@ -82,7 +82,9 @@ is plugged and to which URL; `unplug_jack agent_runner` signs out, like `POST /v
 - **Actions:** `/v1/agents/sessions/stop {run_id}` (`session_id` is read the same way, for older layouts),
   `/v1/agents/sandboxes/wake {workspace, minutes?}`, `/v1/agents/sandboxes/repair {workspace}` (asks first),
   `/v1/agents/tasks/start {workspace, title, prompt, task_id?, model?, max_runtime_min?}`, `/v1/agents/tasks/reopen`
-  (`{id, message}` for a linked task's row; `{run_id, message}` for any ended run, a task's or a schedule's),
+  (`{id, message}` for a linked task's row; `{run_id, message}` for any ended run, a task's or a schedule's; the
+  message is sent with a closing line asking the agent to report again when it has finished, since a resumed
+  conversation that only replies and stops leaves its run needing you, then parked, with its work done),
   `/v1/agents/sessions/continue {run_id}`, `/v1/agents/sessions/review {run_id}`, and the schedule actions below.
   They need a valid pod session; runner refusals come back as 400, 404 or 409 `runner_refused`, and 502 otherwise
   (never 401, which would sign the device out).
