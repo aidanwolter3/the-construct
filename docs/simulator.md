@@ -40,7 +40,7 @@ the `agent-report` scenario) is a hand-written page of made-up agent runs whose 
 `markdown`): two-line previews, a question and a whole report with every block the reader knows. `screen_sizes` (`screen_sizes_bundle.json`)
 is a hand-written recipes page using the size vocabulary (decision `screen-sizes`), for `screen tablet` and `screen desktop`. `device_versions` (`device_versions_bundle.json`, the `device-versions` scenario) is a Server health page with made-up
 devices as the `monitor` source's `devices` feed serves them: a `core://Bars` chart of devices per day by build, kind
-chips and a tap that picks a day (decision `device-versions`). Every bundle's layout is what a pod serves this build: a workspace as the `core://Page` it
+chips and a tap that picks a day (decision `device-versions`). `list_trailing` (`list_trailing_bundle.json`, the `list-trailing` scenario) is a hand-written grid of made-up workout sessions ending with a dashed add tile (feature `list_trailing`), and an empty grid that still draws one. Every bundle's layout is what a pod serves this build: a workspace as the `core://Page` it
 expands to. `UPDATE_FIXTURES=1 cargo test -p server --test integration fixtures::` writes the Pixelfed ones and the
 blueprints from the pod (and the hand-written ones from their sources in `crates/server/tests/data/simulator/`; the
 test fails when one is stale); edit the source and rerun it.

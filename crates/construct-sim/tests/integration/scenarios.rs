@@ -427,3 +427,25 @@ fn one_layout_fits_a_phone_a_tablet_and_a_desktop() {
     assert!((left - right).abs() < 0.5, "centred: {left} {right}");
     assert!((left - (120.0 + 16.0)).abs() < 0.5, "{left}");
 }
+
+/// Feature `list_trailing`: a grid of sessions ends with an add tile, right
+/// after the last session in its row; an empty grid still draws it.
+#[test]
+fn a_grid_ends_with_its_trailing_add_tile() {
+    let (mut runner, results) = run(
+        "list_trailing",
+        "assert-text No extras yet",
+        &out_dir("list-trailing"),
+    );
+    assert_ok(&results);
+    let scene = runner.session.scene().unwrap();
+    let at = |tag: &str| scene.find_node(tag).unwrap().bounds;
+    // Five sessions in four columns: the add tile is the second cell of the
+    // second row, as wide as a session.
+    let (tue, fri, add) = (at("session:2"), at("session:5"), at("add:week"));
+    assert!((add[1] - fri[1]).abs() < 0.5, "{add:?} {fri:?}");
+    assert!((add[0] - tue[0]).abs() < 0.5, "{add:?} {tue:?}");
+    assert!((add[2] - tue[2]).abs() < 0.5, "{add:?} {tue:?}");
+    let extra = at("add:extras");
+    assert!((extra[0] - at("session:1")[0]).abs() < 0.5, "{extra:?}");
+}
