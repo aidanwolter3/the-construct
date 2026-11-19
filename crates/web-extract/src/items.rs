@@ -15,6 +15,11 @@
 //! A path may end in filters (`description | link`, `description | text`:
 //! [`crate::path`]). Links (`href`, `src`, and `url`/`link` values) are made
 //! absolute against the page's URL.
+//!
+//! With any extractor, a map value starting with `=` is a constant: every
+//! row gets the text after it (`{going: "=true"}`), coerced to the field's
+//! type like any other value. A row whose other fields all came out empty
+//! is still dropped, so a constant never makes a row on its own.
 
 use serde_json::{Map, Value, json};
 
@@ -114,6 +119,8 @@ impl Spec {
 
 /// Check `spec` and the map values `map` (`(key, path or selector)`).
 pub fn check(spec: &Spec, map: &[(String, String)]) -> Result<(), String> {
+    let (_, map) = split_constants(map);
+    let map = map.as_slice();
     match spec.kind {
         Kind::Selectors => {
             if spec.items.trim().is_empty() {
@@ -167,6 +174,44 @@ pub fn check(spec: &Spec, map: &[(String, String)]) -> Result<(), String> {
 /// Read the rows of `body` (fetched from `base`): one map per item, its
 /// keys those of `map` that have a value.
 pub fn extract(
+    spec: &Spec,
+    body: &str,
+    base: &str,
+    map: &[(String, String)],
+) -> Result<Vec<Map<String, Value>>, String> {
+    let (constants, map) = split_constants(map);
+    let mut rows = read(spec, body, base, &map)?;
+    for row in &mut rows {
+        for (k, v) in &constants {
+            row.insert(k.clone(), json!(v));
+        }
+    }
+    Ok(rows)
+}
+
+/// The text of a constant map value (`=<text>`), or `None` for a path.
+pub fn constant(v: &str) -> Option<&str> {
+    v.trim_start().strip_prefix('=').map(str::trim)
+}
+
+/// Map entries: key and path (or a constant's text).
+type Pairs = Vec<(String, String)>;
+
+/// A map's constants (`=<text>`: key and text) and its other entries.
+fn split_constants(map: &[(String, String)]) -> (Pairs, Pairs) {
+    let mut constants = Vec::new();
+    let mut rest = Vec::new();
+    for (k, v) in map {
+        match constant(v) {
+            Some(c) => constants.push((k.clone(), c.to_owned())),
+            None => rest.push((k.clone(), v.clone())),
+        }
+    }
+    (constants, rest)
+}
+
+/// [`extract`] without constants.
+fn read(
     spec: &Spec,
     body: &str,
     base: &str,
@@ -672,6 +717,30 @@ mod tests {
             .iter()
             .map(|(k, v)| ((*k).to_owned(), (*v).to_owned()))
             .collect()
+    }
+
+    #[test]
+    fn constants_fill_every_row() {
+        let body = r#"{"events":[{"uid":"a","title":"Dinner"},{"uid":"b"},{"x":1}]}"#;
+        let m = map(&[
+            ("source_id", "uid"),
+            ("title", "title"),
+            ("going", " = true "),
+        ]);
+        assert!(check(&spec(Kind::Json, "events"), &m).is_ok());
+        let rows = extract(&spec(Kind::Json, "events"), body, "", &m).unwrap();
+        // The third item has no mapped value, so its constant alone makes no row.
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0]["going"], json!("true"));
+        assert_eq!(rows[1]["going"], json!("true"));
+        assert_eq!(rows[1]["source_id"], json!("b"));
+        let page = r#"<ul><li><a href="/e/1">One</a></li></ul>"#;
+        let m = map(&[("title", "a"), ("going", "=yes")]);
+        assert!(check(&spec(Kind::Selectors, "li"), &m).is_ok());
+        let rows = extract(&spec(Kind::Selectors, "li"), page, "https://s.example/", &m).unwrap();
+        assert_eq!(rows[0]["going"], json!("yes"));
+        assert_eq!(constant("=true"), Some("true"));
+        assert_eq!(constant("title"), None);
     }
 
     #[test]
