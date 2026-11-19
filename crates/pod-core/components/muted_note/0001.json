@@ -1,0 +1,45 @@
+{
+  "note": "First version: the quiet line of muted text that empty sections and hints repeat",
+  "component": {
+    "doc": "A quiet line of muted text, inset 4 dp to line up with a card's rounded edge: what a section says while its list is empty (wrap it in a core://Conditional on the list's count with not: true), or a hint under a heading. Secondary text by default; for a heading above a card use core:section_label.",
+    "params": [
+      {
+        "name": "text",
+        "type": "text",
+        "doc": "The text (bindings allowed).",
+        "required": true
+      },
+      {
+        "name": "style",
+        "type": "text",
+        "doc": "A core://Text style (Caption for a smaller hint).",
+        "default": "Secondary"
+      }
+    ],
+    "template": {
+      "type": "core://Box",
+      "content_color": "${local://theme#muted_text}",
+      "padding_h_dp": 4,
+      "content": {
+        "type": "core://Text",
+        "value_expr": "$arg.text",
+        "style": "$arg.style"
+      }
+    },
+    "examples": [
+      {
+        "args": {
+          "text": "Nothing here yet."
+        },
+        "note": "what an empty section says, inside a core://Conditional on its list's count with not: true"
+      },
+      {
+        "args": {
+          "text": "Last hour · last day · since the server started",
+          "style": "Caption"
+        },
+        "note": "a small hint under a section's heading"
+      }
+    ]
+  }
+}
