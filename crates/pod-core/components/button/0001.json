@@ -1,0 +1,70 @@
+{
+  "note": "First version: core://Button with its style and size (decision one-button-node)",
+  "component": {
+    "doc": "A button: one of the renderer's fixed faces, so buttons side by side match. style is Primary (filled with the accent: the screen's main action), Secondary (outlined: an action beside the main one), Tonal (the accent's tint) or Text (accent text alone); size is Regular (40 dp tall) or Small (32 dp). on_click is any intent (action.sequence, action.confirm, action.mutation.optimistic, ...). Use it, or core://Button itself, for every button: never a core://Tappable over a Box.",
+    "params": [
+      {
+        "name": "label",
+        "type": "text",
+        "doc": "The button's text (bindings allowed).",
+        "required": true
+      },
+      {
+        "name": "on_click",
+        "type": "json",
+        "doc": "The intent it runs.",
+        "required": true
+      },
+      {
+        "name": "style",
+        "type": "text",
+        "doc": "Primary, Secondary, Tonal or Text.",
+        "default": "Primary"
+      },
+      {
+        "name": "size",
+        "type": "text",
+        "doc": "Regular (40 dp) or Small (32 dp).",
+        "default": "Regular"
+      }
+    ],
+    "template": {
+      "type": "core://Button",
+      "label": "$arg.label",
+      "on_click": "$arg.on_click",
+      "style": "$arg.style",
+      "size": "$arg.size"
+    },
+    "examples": [
+      {
+        "args": {
+          "label": "Stop",
+          "style": "Secondary",
+          "on_click": {
+            "intent": "action.confirm",
+            "title": "Stop this run?",
+            "message": "The agent stops where it is.",
+            "confirm_label": "Stop",
+            "then": {
+              "intent": "action.navigation.back"
+            }
+          }
+        },
+        "note": "an action beside the main one, asking first"
+      },
+      {
+        "args": {
+          "label": "Add",
+          "size": "Small",
+          "style": "Tonal",
+          "on_click": {
+            "intent": "action.navigation.open",
+            "target_uri": "collections://events",
+            "presentation": "Push"
+          }
+        },
+        "note": "a small, quiet button in a row"
+      }
+    ]
+  }
+}

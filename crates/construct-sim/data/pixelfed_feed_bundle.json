@@ -410,6 +410,7 @@
                                     "rollback_value": true,
                                     "value_expr": "false"
                                   },
+                                  "style": "Secondary",
                                   "type": "core://Button"
                                 }
                               ],

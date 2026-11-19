@@ -139,6 +139,7 @@
                           },
                           "title": "Sign out of $item.title?"
                         },
+                        "style": "Secondary",
                         "type": "core://Button"
                       }
                     ],
@@ -329,6 +330,7 @@
                         },
                         "title": "Leave this pod?"
                       },
+                      "style": "Secondary",
                       "type": "core://Button"
                     }
                   ],
@@ -1030,6 +1032,7 @@
                           },
                           "title": "Unplug ${jacks://$route.id#title}?"
                         },
+                        "style": "Secondary",
                         "type": "core://Button"
                       }
                     ],

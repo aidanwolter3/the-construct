@@ -215,7 +215,12 @@ fn node_features(node: &UiNode, out: &mut BTreeSet<&'static str>) {
             // TEXT_STRIKE, TEXT_MARKDOWN) need nothing: a client without
             // them ignores the fields and draws the text in its style.
         }
-        UiNode::Button { .. } => add(feature::BUTTON),
+        UiNode::Button { .. } => {
+            add(feature::BUTTON);
+            // `style` and `size` (feature::BUTTON_STYLE) need nothing: a
+            // client without them ignores the fields and draws a regular
+            // primary button.
+        }
         UiNode::List {
             filter,
             group_by,

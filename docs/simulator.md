@@ -35,7 +35,7 @@ the default workspace), `events` (`events_bundle.json`) and `c-kitchen2dm` (`cus
 bundle with `--fixture`. `theme_home_bundle.json`, `theme_groceries_bundle.json` and `theme_log_bundle.json` are
 hand-written pages drawn only with theme tokens (a home, a shopping list, a log), for checking both modes.
 `text_styles_bundle.json` (workspace `text_styles`, the `text-styles` scenario) is a hand-written page of text
-weights, capitals and line limits, and conditionals with `not` and `count`. `agent_report` (`agent_report_bundle.json`,
+weights, capitals and line limits, and conditionals with `not` and `count`. `buttons_bundle.json` (workspace `buttons`, the `buttons` scenario) is a hand-written run screen with every `core://Button` style and size side by side (decision `one-button-node`). `agent_report` (`agent_report_bundle.json`,
 the `agent-report` scenario) is a hand-written page of made-up agent runs whose texts are Markdown (`core://Text`
 `markdown`): two-line previews, a question and a whole report with every block the reader knows. `screen_sizes` (`screen_sizes_bundle.json`)
 is a hand-written recipes page using the size vocabulary (decision `screen-sizes`), for `screen tablet` and `screen desktop`. `device_versions` (`device_versions_bundle.json`, the `device-versions` scenario) is a Server health page with made-up
