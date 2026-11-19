@@ -350,6 +350,7 @@ The server components:
 | `core:pill` | `text`, `background`, `color`, `style`, `corner` | A small tinted tag (a date, a status, a count); `corner` defaults to 8. |
 | `core:dot` | `color`, `size`, `corner` | A small coloured dot. |
 | `core:section_label` | `text` | A quiet section heading above a grouped card: Label text in `muted_text`, inset 4 dp. |
+| `core:muted_note` | `text`, `style` | A quiet line of muted text inset 4 dp (Secondary by default): what an empty section says (inside a `core://Conditional` on its list's `count` with `not: true`), or a hint under a heading. |
 | `core:grouped_card` | `corner`; children | Rows grouped in one rounded card (`card` colour, `card_border` edge, `corner` defaults to 18); the rows bring their own dividers. |
 | `core:tinted_icon` | `icon`, `tint`, `tint_bg`, `size` | An icon centred in a tinted circle (`accent` on `accent_surface`, 34 dp by default). Until the app has issue #325's renderer fix, an icon-only Badge, and so this icon, sits 2 dp left of centre. |
 | `core:date_block` | `weekday`, `day` | A compact date: the short weekday (Caption, muted) over the day of the month (Title), centred in 36 dp. |
