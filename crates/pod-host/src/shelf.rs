@@ -8,6 +8,7 @@ use std::sync::Arc;
 use pod_core::construct::share::{
     CalendarCopy, NewVersion, PublicCopy, Publication, Shelf, ShelfError, VISIBILITY_LINK, new_link,
 };
+use pod_core::public_copy::{MAX_LIVE, MAX_REVOKED};
 use pod_core::util::now_secs;
 use rusqlite::{Connection, OptionalExtension, params};
 use serde_json::Value;
@@ -359,12 +360,13 @@ impl Shelf for HostShelf {
     }
 
     fn put_public(&self, c: PublicCopy) -> Result<PublicCopy, ShelfError> {
-        let conn = self.store.conn();
+        let mut conn = self.store.conn();
+        let tx = conn.transaction().map_err(err)?;
         let now = now_secs();
         let rows = serde_json::to_string(&c.rows).unwrap_or_default();
         let copy = c.copy.to_string();
         if let Some(slug) = &c.slug {
-            let taken: bool = conn
+            let taken: bool = tx
                 .query_row(
                     "SELECT EXISTS (SELECT 1 FROM public_copies WHERE owner_pod = ?1 AND slug = ?2
                          AND revoked_at IS NULL AND link != ?3)",
@@ -376,7 +378,28 @@ impl Shelf for HostShelf {
                 return Err(ShelfError::SlugTaken);
             }
         }
-        conn.execute(
+        // A new link only while the pod keeps fewer than MAX_LIVE, counted
+        // in this transaction so two shares at once can't both pass.
+        let exists: bool = tx
+            .query_row(
+                "SELECT EXISTS (SELECT 1 FROM public_copies WHERE link = ?1)",
+                [&c.link],
+                |r| r.get(0),
+            )
+            .map_err(err)?;
+        if !exists {
+            let live: i64 = tx
+                .query_row(
+                    "SELECT COUNT(*) FROM public_copies WHERE owner_pod = ?1 AND revoked_at IS NULL",
+                    [&c.owner_pod],
+                    |r| r.get(0),
+                )
+                .map_err(err)?;
+            if live >= MAX_LIVE as i64 {
+                return Err(ShelfError::TooManyLinks);
+            }
+        }
+        tx.execute(
             "INSERT INTO public_copies (link, owner_pod, layout, rows, title, copy, created_at, updated_at, slug)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?7, ?8)
              ON CONFLICT(link) DO UPDATE SET title = ?5, copy = ?6, updated_at = ?7, rows = ?4, slug = ?8
@@ -384,12 +407,15 @@ impl Shelf for HostShelf {
             params![c.link, c.owner_pod, c.layout, rows, c.title, copy, now, c.slug],
         )
         .map_err(err)?;
-        conn.query_row(
-            &format!("SELECT {PUBLIC_COLUMNS} FROM public_copies WHERE link = ?1"),
-            [&c.link],
-            public_row,
-        )
-        .map_err(err)
+        let stored = tx
+            .query_row(
+                &format!("SELECT {PUBLIC_COLUMNS} FROM public_copies WHERE link = ?1"),
+                [&c.link],
+                public_row,
+            )
+            .map_err(err)?;
+        tx.commit().map_err(err)?;
+        Ok(stored)
     }
 
     fn public_of_pod(&self, pod: &str) -> Result<Vec<PublicCopy>, ShelfError> {
@@ -438,15 +464,26 @@ impl Shelf for HostShelf {
     }
 
     fn revoke_public(&self, pod: &str, link: &str) -> Result<bool, ShelfError> {
-        let n = self
-            .store
-            .conn()
+        let mut conn = self.store.conn();
+        let tx = conn.transaction().map_err(err)?;
+        let n = tx
             .execute(
                 "UPDATE public_copies SET revoked_at = ?3, updated_at = ?3, copy = 'null'
                  WHERE link = ?1 AND owner_pod = ?2 AND revoked_at IS NULL",
                 params![link, pod, now_secs()],
             )
             .map_err(err)?;
+        // The owner's list keeps the newest MAX_REVOKED revoked links; older
+        // rows go, so sharing and unsharing doesn't grow host.db.
+        tx.execute(
+            "DELETE FROM public_copies WHERE owner_pod = ?1 AND revoked_at IS NOT NULL
+               AND link NOT IN (SELECT link FROM public_copies
+                   WHERE owner_pod = ?1 AND revoked_at IS NOT NULL
+                   ORDER BY revoked_at DESC, rowid DESC LIMIT ?2)",
+            params![pod, MAX_REVOKED as i64],
+        )
+        .map_err(err)?;
+        tx.commit().map_err(err)?;
         Ok(n > 0)
     }
 
@@ -635,6 +672,67 @@ mod tests {
             .unwrap();
         forget_pod(&store.conn(), "a").unwrap();
         assert!(shelf.public_of_pod("a").unwrap().is_empty());
+    }
+
+    /// Issue #391: the live cap holds in the shelf's own transaction, even
+    /// for shares at once, and a pod keeps only its newest revoked rows.
+    #[test]
+    fn public_links_are_capped_live_and_revoked() {
+        let (shelf, _store) = shelf();
+        let shelf = Arc::new(shelf.with_public_links(true));
+        let copy = |n: usize| PublicCopy {
+            link: format!("pub-{n:032}"),
+            owner_pod: "a".into(),
+            layout: "c-recipes".into(),
+            rows: vec![],
+            title: "Recipes".into(),
+            copy: json!({ "title": "Recipes" }),
+            slug: None,
+            created_at: 0,
+            updated_at: 0,
+            revoked_at: None,
+        };
+        // Many shares at once: exactly MAX_LIVE get in.
+        let handles: Vec<_> = (0..MAX_LIVE + 10)
+            .map(|n| {
+                let shelf = shelf.clone();
+                let c = copy(n);
+                std::thread::spawn(move || shelf.put_public(c))
+            })
+            .collect();
+        let results: Vec<_> = handles.into_iter().map(|h| h.join().unwrap()).collect();
+        assert_eq!(results.iter().filter(|r| r.is_ok()).count(), MAX_LIVE);
+        assert!(
+            results
+                .iter()
+                .filter_map(|r| r.as_ref().err())
+                .all(|e| *e == ShelfError::TooManyLinks)
+        );
+        let live: Vec<_> = shelf.public_of_pod("a").unwrap();
+        assert_eq!(live.len(), MAX_LIVE);
+        // A live link still takes its next copy at the cap; another pod has its own cap.
+        shelf.put_public(live[0].clone()).unwrap();
+        shelf
+            .put_public(PublicCopy {
+                owner_pod: "b".into(),
+                ..copy(1000)
+            })
+            .unwrap();
+        // Share and unshare over and over: the revoked rows stay at MAX_REVOKED.
+        for c in &live {
+            assert!(shelf.revoke_public("a", &c.link).unwrap());
+        }
+        for n in 2000..2000 + MAX_REVOKED + 5 {
+            let c = shelf.put_public(copy(n)).unwrap();
+            assert!(shelf.revoke_public("a", &c.link).unwrap());
+        }
+        let listed = shelf.public_of_pod("a").unwrap();
+        assert_eq!(listed.len(), MAX_REVOKED);
+        assert!(listed.iter().all(|c| c.revoked_at.is_some()));
+        // The newest are the ones kept.
+        let last = format!("pub-{:032}", 2000 + MAX_REVOKED + 4);
+        assert!(listed.iter().any(|c| c.link == last));
+        assert_eq!(shelf.public_of_pod("b").unwrap().len(), 1);
     }
 
     /// Decision `ical-feeds`: a feed's text is kept per token, updated in

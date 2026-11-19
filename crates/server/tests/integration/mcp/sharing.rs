@@ -4,7 +4,8 @@
 //! second pod can't read the first's objects by hash, adopts the
 //! publication bound to its own collection with a field mapping, draws it
 //! with its own data, follows a new version, and keeps drawing it after
-//! the owner revokes it.
+//! the owner revokes it. URLs that would send the adopter's data elsewhere
+//! wait for the adopter's consent.
 
 use reqwest::StatusCode;
 use serde_json::{Value, json};
@@ -358,6 +359,137 @@ async fn a_second_pod_adopts_a_published_layout_and_keeps_it_after_a_revoke() {
     let (s, mine) = data(adopted["bind"].clone()).await;
     assert_eq!(s, StatusCode::OK, "{mine}");
     assert!(mine.to_string().contains("Fix the gate"), "{mine}");
+}
+
+/// A list of chores with each row's picture from `url`.
+fn pictured(url: &str) -> Value {
+    json!({"type": "core://List", "query_key": "collection:chores", "item_template":
+        {"type": "core://Row", "children": [
+            {"type": "core://Image", "url": url, "size_dp": 24},
+            {"type": "core://Text", "style": "Body", "value_expr": "$item.title"}]}})
+}
+
+/// An adopted publication whose URLs would send the adopter's rows to
+/// another server is refused until the adopter accepts each URL, and a
+/// new version bringing another waits for it too (decision
+/// `adopt-shows-urls`).
+#[tokio::test]
+async fn urls_that_send_the_adopters_data_wait_for_consent() {
+    let env = env().await;
+    let (ann, ben) = (env.pod("ann").await, env.pod("ben").await);
+    let (a, b) = (env.connect(&ann).await, env.connect(&ben).await);
+    for (pod, row) in [(&a, "Water the ferns"), (&b, "Fix the gate")] {
+        ok(
+            &env,
+            pod,
+            "define_collection",
+            json!({"name": "chores", "fields": [{"name": "title", "type": "text"}]}),
+        )
+        .await;
+        ok(
+            &env,
+            pod,
+            "add_row",
+            json!({"collection": "chores", "values": {"title": row}}),
+        )
+        .await;
+    }
+    ok(&env, &a, "set_handle", json!({"handle": "ann"})).await;
+    let first = "https://a.example/p.png?d=$item.title";
+    let list = ok(
+        &env,
+        &a,
+        "create_layout",
+        json!({"title": "Chores", "feeds": [["collections", "chores"]],
+            "layout": {"type": "core://Page", "title": "Chores", "root": pictured(first)}}),
+    )
+    .await["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let link = publish(&env, &a, &list).await["link"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let bindings = json!({"chores": {"collection": "chores"}});
+
+    // The review shows the URL; adopting without accepting it is refused.
+    let e = refused(
+        &env,
+        &b,
+        "adopt",
+        json!({"link": link, "bindings": bindings, "dry_run": true}),
+    )
+    .await;
+    // (As published: the field it reads is an input the adopter maps.)
+    assert_eq!(e["error"], "sends_data", "{e}");
+    let urls = e["data_urls"].clone();
+    assert_eq!(urls.as_array().map(Vec::len), Some(1), "{e}");
+    assert!(
+        urls[0]
+            .as_str()
+            .unwrap()
+            .starts_with("https://a.example/p.png?d=$item.")
+    );
+    assert!(e["flags"].to_string().contains("a.example"), "{e}");
+    let e = refused(
+        &env,
+        &b,
+        "adopt",
+        json!({"link": link, "bindings": bindings}),
+    )
+    .await;
+    assert_eq!(e["error"], "sends_data", "{e}");
+    assert!(
+        ok(&env, &b, "list_adoptions", json!({})).await["adoptions"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+    let adopted = ok(
+        &env,
+        &b,
+        "adopt",
+        json!({"link": link, "bindings": bindings, "accept_data_urls": urls}),
+    )
+    .await;
+    assert_eq!(adopted["version"], 1, "{adopted}");
+    assert!(
+        adopted["flags"].to_string().contains("a.example"),
+        "{adopted}"
+    );
+
+    // Version 2 adds another such URL: following it waits for consent.
+    let second = "https://b.example/q.png?d=$item.title";
+    ok(
+        &env,
+        &a,
+        "update_layout",
+        json!({"app": list, "layout": {"type": "core://Page", "title": "Chores",
+            "root": {"type": "core://Column", "children": [pictured(first), pictured(second)]}}}),
+    )
+    .await;
+    assert_eq!(publish(&env, &a, &list).await["version"], 2);
+    let e = refused(&env, &b, "update_adoption", json!({"name": "@ann/chores"})).await;
+    assert_eq!(e["error"], "sends_data", "{e}");
+    let urls = e["data_urls"].clone();
+    assert_eq!(
+        urls.as_array().map(Vec::len),
+        Some(1),
+        "the first was accepted: {e}"
+    );
+    assert!(
+        urls[0].as_str().unwrap().starts_with("https://b.example/"),
+        "{e}"
+    );
+    let up = ok(
+        &env,
+        &b,
+        "update_adoption",
+        json!({"name": "@ann/chores", "accept_data_urls": urls}),
+    )
+    .await;
+    assert_eq!(up["version"], 2, "{up}");
 }
 
 /// Publishes layout `id` (the review, then confirm) -> the answer, or the

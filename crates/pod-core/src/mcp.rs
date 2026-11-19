@@ -200,7 +200,7 @@ change the switch and config ones (a search key is given once and never shown ba
 through their own sign-in. A feature whose jack is unplugged says so: tell the user which jack it needs rather \
 than working around it. The user can share with other users of this server: publish \
 answers a review first (show it: elements, inputs, and flagged text and URLs) and shares only with confirm; \
-adopt binds a share link to the user's own data (propose, confirm with the user, then put its \"use\" in \
+adopt binds a share link to the user's own data (propose, show the user its flags and confirm, then put its \"use\" in \
 home); a revoked share keeps drawing where it was adopted.";
 
 // ---------- tools ----------

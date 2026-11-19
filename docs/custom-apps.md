@@ -127,7 +127,11 @@ share screen.
 - `describe_publication {link}` shows what a link holds; `adopt {link, bindings}` copies it into the pod bound to
   the user's own collections (`{"chores": {"collection": "tasks", "fields": {"title": "name"}}}`, or `{"new":
   "chores"}` for an empty one from the suggested schema) and answers the reference to put in home. Without
-  bindings it proposes them.
+  bindings it proposes them. Every answer lists the publication's `flags` (each literal text and URL it carries)
+  for the user to see. A URL that would put the user's own data into a request to another server when it draws
+  (an image URL with `$item.…` or `$in.…`, flagged `reads_data`) is refused (`sends_data`) unless the user agrees
+  and Claude passes it in `accept_data_urls`; `update_adoption` asks the same for a new version that adds one
+  (decision [`adopt-shows-urls`](decisions/adopt-shows-urls.md)).
 - `list_adoptions` and `update_adoption` follow new versions while they fit the bindings; `list_publications` and
   `revoke_publication` manage the pod's own. A revoked publication keeps drawing where it was adopted.
 
@@ -179,7 +183,8 @@ A pod keeps up to five feeds; each lists up to ten sources:
   goes into the feed: no other field of a row leaves the pod.
 - `set_calendar_feed {name, title?, sources}` answers a review (every title, location and description a
   subscriber would read, and the next ten events) and publishes nothing; with `confirm: <review_id>` the feed goes
-  out and answers its `url`, `/ical/cal-….ics`. Events from 30 days ago on are included, and the feed is rendered
+  out and answers its `url`, `/ical/cal-….ics`. Events from 30 days ago on are included (the earliest 3000 that fit
+  in 2 MiB of text), and the feed is rendered
   again whenever its rows change. An edited row keeps its event's UID, so the calendar updates it in place.
 - `list_calendar_feeds` lists them with their URLs; `rotate_calendar_feed {name}` gives one a new URL (the old one
   stops at once; subscribe again); `revoke_calendar_feed {name}` stops one.
@@ -400,7 +405,7 @@ A collection can keep itself current from the web (decision
   the turns before it back), and the second-to-last request tells the model to save the rows it has.
 - **Research per row** (decision [`research-per-row`](decisions/research-per-row.md)): an `agent` with `for_each:
   {collection, link, where?, from?, context?}` researches each row of another collection on its own (a shopping
-  list's items), one model call each, counted toward `fills_per_day` and the pod's limit as it is made (a fill that times out still counts its calls), at most 10 a fill. The
+  list's items), one model call each, counted toward `fills_per_day` and the pod's limit as it is made (a fill that times out still counts its calls), at most 10 a fill. A fill reserves its share of the pod's limit before its first call (and gives back what it didn't use when it ends), so fillers running at once never research more rows in a day than the limit. The
   request is the prompt, the row's fields (`from`, default every field but true/false ones and refs) and the
   `context` rows (`[{collection, where?, fields?, limit?}]`: the owner's preferences); its rows here are that
   row's answer (`replace` among them only, by `key`), linked back through `link`, a ref field the pod sets. A row

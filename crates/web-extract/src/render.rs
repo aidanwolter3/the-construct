@@ -24,6 +24,9 @@
 //!   decision `browser-sandbox`): the server's first render tries the
 //!   sandbox; if the browser can't start or draw a page with it, that render
 //!   and the ones after it run without it, with a warning in the log.
+//! - **Off Fly's private network** ([`block_private_network`], decision
+//!   `browser-private-network`): at startup a root server keeps the
+//!   browser's user off `fdaa::/16` with an nftables rule, or warns.
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -386,6 +389,95 @@ async fn probe(cdp: &Cdp) -> Result<(), FetchError> {
 /// The uid and gid the browser runs as when the server is root (Debian's
 /// `nobody` and `nogroup`).
 const BROWSER_ID: u32 = 65534;
+
+/// Fly's private network (6PN): other apps' machines, the server's own
+/// metrics port and Fly's internal DNS, all on `fdaa::/16`.
+const PRIVATE_NETWORK: &str = "fdaa::/16";
+/// The `nft` binary the image carries (`deploy/pod.Dockerfile`).
+pub const NFT: &str = "/usr/sbin/nft";
+/// How long `nft` may take before the server gives up on it and serves.
+const NFT_WAIT: Duration = Duration::from_secs(10);
+
+/// The nftables ruleset that keeps [`BROWSER_ID`] off [`PRIVATE_NETWORK`]
+/// (decision `browser-private-network`): one table of its own, replaced
+/// whole each time (`add` then `delete` makes the delete safe on a fresh
+/// machine), refusing the browser's connections there at once rather than
+/// letting them hang. Every other user, and the browser's loopback
+/// connection to its proxy, is untouched.
+pub fn private_network_rules() -> String {
+    format!(
+        "add table inet construct_browser\n\
+         delete table inet construct_browser\n\
+         table inet construct_browser {{\n\
+         \tchain output {{\n\
+         \t\ttype filter hook output priority 0; policy accept;\n\
+         \t\tmeta skuid {BROWSER_ID} ip6 daddr {PRIVATE_NETWORK} reject with icmpx admin-prohibited\n\
+         \t}}\n\
+         }}\n"
+    )
+}
+
+/// Keep the browser off Fly's private network, once at startup (decision
+/// `browser-private-network`): the browser only needs loopback (its proxy),
+/// but a page that escapes the renderer would otherwise reach other
+/// machines on `fdaa::/16`. Only when the server is root, so the browser
+/// runs as [`BROWSER_ID`]; elsewhere there is no separate user to fence.
+/// Never fails the server: without `nft` or netfilter it logs a
+/// `browser private network: open` warning and the server serves as before.
+pub async fn block_private_network() {
+    // SAFETY: geteuid has no preconditions and can't fail.
+    if unsafe { libc::geteuid() } != 0 {
+        tracing::info!(
+            target: "browser",
+            "browser private network block: off (the server isn't root, so the browser runs as the server's user)"
+        );
+        return;
+    }
+    match apply_rules(Path::new(NFT), &private_network_rules()).await {
+        Ok(()) => tracing::info!(
+            target: "browser",
+            "browser private network block: on (uid {BROWSER_ID} can't connect to {PRIVATE_NETWORK})"
+        ),
+        Err(why) => tracing::warn!(
+            target: "browser",
+            "browser private network block: off; nftables did not take the rule ({why}), so the browser could reach {PRIVATE_NETWORK} if a page escaped it"
+        ),
+    }
+}
+
+/// Load `rules` with `nft -f -`; `Err` says why it didn't (no binary, no
+/// netfilter, a rejected rule, too slow).
+async fn apply_rules(nft: &Path, rules: &str) -> Result<(), String> {
+    use tokio::io::AsyncWriteExt;
+    let mut child = Command::new(nft)
+        .args(["-f", "-"])
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::piped())
+        .kill_on_drop(true)
+        .spawn()
+        .map_err(|e| format!("{} could not run: {e}", nft.display()))?;
+    let mut stdin = child.stdin.take().expect("piped stdin");
+    let run = async {
+        stdin.write_all(rules.as_bytes()).await?;
+        drop(stdin);
+        child.wait_with_output().await
+    };
+    let out = tokio::time::timeout(NFT_WAIT, run)
+        .await
+        .map_err(|_| format!("{} took over {}s", nft.display(), NFT_WAIT.as_secs()))?
+        .map_err(|e| format!("{}: {e}", nft.display()))?;
+    if out.status.success() {
+        return Ok(());
+    }
+    let err = String::from_utf8_lossy(&out.stderr);
+    let err = err.trim();
+    Err(if err.is_empty() {
+        format!("{} exited with {}", nft.display(), out.status)
+    } else {
+        err.lines().take(3).collect::<Vec<_>>().join("; ")
+    })
+}
 
 /// The browser's process, before its flags: none of the server's
 /// environment (its keys and secrets), and, when the server is root, the
@@ -1038,6 +1130,51 @@ mod proxy {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn without_nft_the_block_is_an_error_not_a_panic() {
+        let err = apply_rules(Path::new("/nonexistent/nft"), &private_network_rules())
+            .await
+            .unwrap_err();
+        assert!(err.contains("/nonexistent/nft could not run"), "{err}");
+    }
+
+    #[test]
+    fn the_block_names_the_browsers_user_and_fly_private_network() {
+        let rules = private_network_rules();
+        assert!(
+            rules.contains("meta skuid 65534 ip6 daddr fdaa::/16 reject"),
+            "{rules}"
+        );
+        assert!(rules.starts_with("add table inet construct_browser\n"));
+    }
+
+    /// Where `nft` is installed and may check rules, the ruleset parses.
+    #[test]
+    fn nft_accepts_the_block() {
+        use std::io::Write;
+        let Ok(mut child) = std::process::Command::new(NFT)
+            .args(["-c", "-f", "-"])
+            .stdin(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+        else {
+            return;
+        };
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(private_network_rules().as_bytes())
+            .unwrap();
+        let out = child.wait_with_output().unwrap();
+        let err = String::from_utf8_lossy(&out.stderr);
+        // Not root, or no netfilter here: nothing to check against.
+        if err.contains("Operation not permitted") || err.contains("Protocol not supported") {
+            return;
+        }
+        assert!(out.status.success(), "{err}");
+    }
 
     #[test]
     fn the_user_agent_is_desktop_chrome_of_the_browsers_version() {

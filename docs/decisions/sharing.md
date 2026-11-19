@@ -87,6 +87,9 @@ the adopter's own reference.**
 - **Modes**: `follow` (default), `pin` (this version only) or `fork` (a layout of the adopter's own, `c-…`,
   without updates). The adopter's pod records follows and pins in `adoptions(name, link, publication, version,
   mode, bind, …)`, created on first use.
+- Every `adopt` and `update_adoption` answer lists the publication's flags (literal text and URLs), and a URL that
+  would send the adopter's data to another server waits for the adopter's consent (decision
+  [`adopt-shows-urls`](adopt-shows-urls.md)).
 - **Following** advances when the adopter's agent asks: `list_adoptions` shows each adoption's version, the newest
   and whether it was revoked; `update_adoption` moves the name when the new version's interface still fits the
   saved bindings, and otherwise answers what to bind ("version 5 reads `chores__quantity`": a new field, or a
