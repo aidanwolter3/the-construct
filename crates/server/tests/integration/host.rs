@@ -1713,6 +1713,199 @@ mod web {
         assert_eq!(after.status(), StatusCode::NOT_FOUND);
     }
 
+    /// A public link of a collection's sites carries each site's alerts
+    /// (`collection:<c>:alerts`, filtered by `filler_id`), and follows
+    /// alert edits as it follows rows.
+    #[tokio::test]
+    async fn a_public_link_carries_each_sites_alerts_and_follows_their_edits() {
+        let files = tempfile::tempdir().unwrap();
+        std::fs::write(
+            files.path().join("index.html"),
+            "<title>The Construct</title>",
+        )
+        .unwrap();
+        let env = env_with(HostConfig {
+            web: Some(WebConfig {
+                dir: files.path().to_owned(),
+            }),
+            public_web: true,
+            ..HostConfig::default()
+        })
+        .await;
+        env.create("town").await;
+        let key = mcp_key(&env, "town").await;
+        let filler = |url: &str, title: &str| {
+            json!({ "kind": "fetch", "url": url, "extract": "json", "items": "data",
+                "map": { "title": "title" }, "title": title })
+        };
+        let def = tool(
+            &env,
+            &key,
+            "define_collection",
+            json!({ "name": "gigs",
+            "fields": [{ "name": "title", "type": "text", "optional": true }],
+            "fillers": [filler("https://hall.example/feed.json", "Town hall"),
+                        filler("https://club.example/feed.json", "Chess club")] }),
+        )
+        .await;
+        assert!(def.get("error").is_none(), "{def}");
+        let d = tool(
+            &env,
+            &key,
+            "describe_collection",
+            json!({ "collection": "gigs" }),
+        )
+        .await;
+        let ids: Vec<String> = d["definition"]["fillers"]
+            .as_array()
+            .unwrap_or_else(|| panic!("{d}"))
+            .iter()
+            .map(|f| f["id"].as_str().unwrap().to_owned())
+            .collect();
+        let added = tool(
+            &env,
+            &key,
+            "apply_change",
+            json!({ "collection": "gigs", "changes": [
+            { "op": "add_alert", "name": "Budget", "any": ["budget cuts"],
+              "none": ["class", "workshop"], "filler": ids[0] },
+            { "op": "add_alert", "name": "Openings", "any": ["open night"], "filler": ids[1] }] }),
+        )
+        .await;
+        assert!(added.get("error").is_none(), "{added}");
+        let site = tool(
+            &env,
+            &key,
+            "create_layout",
+            json!({ "title": "Site",
+            "feeds": [["collections", "gigs"]],
+            "layout": { "type": "core://Page", "id": "site", "title": "Site", "root":
+              { "type": "core://Column", "children": [
+                { "type": "core://Text", "style": "Title",
+                  "value_expr": "${collections://gigs/fillers/$route.id#title}" },
+                { "type": "core://Text", "style": "Body",
+                  "value_expr": "${collections://gigs/fillers/$route.id#alerts_text}" },
+                { "type": "core://List", "query_key": "collection:gigs:alerts",
+                  "where": [{ "field": "filler_id", "equals": "$route.id" }],
+                  "item_template": { "type": "core://Text", "style": "Body",
+                    "value_expr": "$item.name: $item.summary" } } ] } } }),
+        )
+        .await;
+        let site = site["id"]
+            .as_str()
+            .unwrap_or_else(|| panic!("{site}"))
+            .to_owned();
+        let sites = tool(&env, &key, "create_layout", json!({ "title": "Sites",
+            "feeds": [["collections", "gigs"]],
+            "layout": { "type": "core://Page", "id": "sites", "title": "Sites", "root":
+              { "type": "core://List", "query_key": "collection:gigs:fillers", "item_template":
+                { "type": "core://Tappable", "content": { "type": "core://Text", "style": "Body", "value_expr": "$item.title" },
+                  "on_click": { "intent": "action.navigation.open", "ref": site,
+                    "params": { "id": "$item.id" }, "presentation": "Push" } } } } })).await;
+        let sites = sites["id"]
+            .as_str()
+            .unwrap_or_else(|| panic!("{sites}"))
+            .to_owned();
+        tool(
+            &env,
+            &key,
+            "update_layout",
+            json!({ "id": "home", "layout": { "type": "core://Page",
+            "id": "home", "title": "Home", "root": { "type": "core://Layout", "ref": sites } } }),
+        )
+        .await;
+
+        let review = tool(&env, &key, "share_publicly", json!({ "layout": sites })).await;
+        let shared = tool(
+            &env,
+            &key,
+            "share_publicly",
+            json!({ "layout": sites, "confirm": review["review_id"] }),
+        )
+        .await;
+        let link = shared["link"]
+            .as_str()
+            .unwrap_or_else(|| panic!("{shared}"))
+            .to_owned();
+        let view = || async {
+            let v: Value = client()
+                .get(env.url(&format!("/s/{link}/view")))
+                .send()
+                .await
+                .unwrap()
+                .json()
+                .await
+                .unwrap();
+            v
+        };
+        let first = view().await;
+        assert_eq!(
+            first["data"]["queries"]["collection:gigs:alerts"]
+                .as_array()
+                .map(Vec::len),
+            Some(2),
+            "both sites' alerts go: {first}"
+        );
+        let text = first.to_string();
+        assert!(
+            text.contains("budget cuts")
+                && text.contains("workshop")
+                && text.contains("open night"),
+            "{text}"
+        );
+        assert!(
+            text.contains(&ids[0]),
+            "the filler_id goes for the where: {text}"
+        );
+
+        // An edited alert reaches the page without a review, as rows do.
+        let edited = tool(&env, &key, "apply_change", json!({ "collection": "gigs", "changes": [
+            { "op": "update_alert", "alert": first_alert(&first, "Budget"), "any": ["hiring freeze"] }] })).await;
+        assert!(edited.get("error").is_none(), "{edited}");
+        let mut seen = String::new();
+        for _ in 0..100 {
+            seen = view().await.to_string();
+            if seen.contains("hiring freeze") {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+        assert!(
+            seen.contains("hiring freeze") && !seen.contains("budget cuts"),
+            "{seen}"
+        );
+        // A removed one goes from the page.
+        let removed = tool(
+            &env,
+            &key,
+            "apply_change",
+            json!({ "collection": "gigs", "changes": [
+            { "op": "remove_alert", "alert": first_alert(&first, "Openings") }] }),
+        )
+        .await;
+        assert!(removed.get("error").is_none(), "{removed}");
+        for _ in 0..100 {
+            seen = view().await.to_string();
+            if !seen.contains("open night") {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+        assert!(!seen.contains("open night"), "{seen}");
+        assert!(seen.contains("hiring freeze"), "{seen}");
+    }
+
+    /// The id of the alert named `name` in a public copy's view.
+    fn first_alert(view: &Value, name: &str) -> String {
+        view["data"]["entities"]
+            .as_object()
+            .unwrap()
+            .iter()
+            .find(|(uri, e)| uri.starts_with("collections://gigs/alerts/") && e["name"] == name)
+            .map(|(uri, _)| uri.rsplit('/').next().unwrap().to_owned())
+            .unwrap_or_else(|| panic!("no alert {name}: {view}"))
+    }
+
     /// Decision `public-links-share-the-closure`: a list whose rows push
     /// their recipe screen is shared whole; each recipe carries only its
     /// rows; a screen reading `$route.id` shares with `params`; a short
