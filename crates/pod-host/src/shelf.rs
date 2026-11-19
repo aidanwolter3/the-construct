@@ -152,7 +152,7 @@ impl Shelf for HostShelf {
             return Err(ShelfError::HandleTaken);
         }
         if current.is_some() {
-            // Publications and short paths (`/@<handle>/<slug>`) carry it.
+            // Publications and short paths (`/<handle>/<slug>`) carry it.
             let live: bool = conn
                 .query_row(
                     "SELECT EXISTS (SELECT 1 FROM publications WHERE owner_pod = ?1 AND revoked_at IS NULL)

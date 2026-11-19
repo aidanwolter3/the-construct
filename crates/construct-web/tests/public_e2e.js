@@ -121,9 +121,9 @@ async function tool(name, args) {
   const mealsReview = await tool('share_publicly', { layout: meals.id, slug: 'meals' });
   check(mealsReview.anyone_with_the_link_reads.layouts.length === 2, 'the review lists the list and the recipe it opens');
   const mealsLink = await tool('share_publicly', { layout: meals.id, slug: 'meals', confirm: mealsReview.review_id });
-  check(mealsLink.short_url && mealsLink.short_url.endsWith('/@webcook/meals'), 'shared at ' + mealsLink.short_url);
+  check(mealsLink.short_url && mealsLink.short_url.endsWith('/webcook/meals'), 'shared at ' + mealsLink.short_url);
 
-  await page.goto(base + '/@webcook/meals');
+  await page.goto(base + '/webcook/meals');
   await page.waitForSelector('body.ready', { timeout: 60000 });
   await page.waitForTimeout(800);
   check(!green(await pixel(page, 195, 600)), 'the short path opens the list');
@@ -168,7 +168,7 @@ async function tool(name, args) {
       return open(...a);
     };
   });
-  await shop.goto(base + '/@webcook/links');
+  await shop.goto(base + '/webcook/links');
   await shop.waitForSelector('body.ready', { timeout: 60000 });
   await shop.waitForTimeout(800);
   const popup = shop.waitForEvent('popup', { timeout: 5000 }).catch(() => null);
@@ -190,6 +190,7 @@ async function tool(name, args) {
   const phone = await browser.newContext({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true });
   const tapper = await phone.newPage();
   tapper.on('pageerror', (e) => errors.push(e.message));
+  // The first form of a short path (with `@`) still opens: it redirects to /webcook/search.
   await tapper.goto(base + '/@webcook/search');
   await tapper.waitForSelector('body.ready', { timeout: 60000 });
   await tapper.waitForTimeout(800);

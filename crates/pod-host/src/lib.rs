@@ -1329,6 +1329,10 @@ fn set_prefix(headers: &mut HeaderMap, pod_id: &str) {
 /// Every request that is not the host's: to the bearer's pod (or the open
 /// pod), else the answer for a caller without a pod.
 async fn dispatch(State(host): State<Arc<Host>>, mut req: Request) -> Response {
+    // A public link's short path (`/<handle>/<slug>`) is the host's own.
+    if let Some(r) = web::short_path(&host, req.method(), req.uri(), req.headers()).await {
+        return r;
+    }
     // Headers only the host (or the pod itself) may set.
     req.headers_mut().remove(pod_core::CREDENTIAL_HEADER);
     req.headers_mut().remove(pod_core::session::INTERNAL_HEADER);

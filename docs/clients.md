@@ -124,7 +124,7 @@ the next reload picks up, a phone-sized window and logging out.
   loop would stop it and freeze the page).
 - **On staging**: `https://the-construct-pod.fly.dev/web` takes an admin pod's code, or a temporary pod's
   (`POST /v1/pods/temporary`); the image builds the client into `/web` (`deploy/pod.Dockerfile`).
-- **Public links**: with `CONSTRUCT_PUBLIC_WEB=1` too (staging has it), `/s/<link>` (or a chosen `/@<handle>/<slug>`)
+- **Public links**: with `CONSTRUCT_PUBLIC_WEB=1` too (staging has it), `/s/<link>` (or a chosen `/<handle>/<slug>`)
   draws a pod's public copy for anyone, read-only: no code, no cookie, nothing that writes (decisions
   [`public-web-links`](decisions/public-web-links.md),
   [`public-links-share-the-closure`](decisions/public-links-share-the-closure.md)). A row that opens a layout the

@@ -38,7 +38,9 @@ pub const VISIBILITY_PUBLIC: &str = "public";
 pub const LINK_PREFIX: &str = "share-";
 /// History author of a name moved by an adoption.
 pub const AUTHOR_ADOPT: &str = "adopt";
-/// Handles nobody may take.
+/// Handles nobody may take: names of the construct, and every first segment
+/// of a path the host or a pod routes, since a public link's short path is
+/// `/<handle>/<slug>` (`pod_host::web::short_path`).
 const RESERVED_HANDLES: &[&str] = &[
     "core",
     "me",
@@ -48,6 +50,15 @@ const RESERVED_HANDLES: &[&str] = &[
     "system",
     "shared",
     "public",
+    "v1",
+    "v2",
+    "web",
+    "oauth",
+    "healthz",
+    "ical",
+    "api",
+    "static",
+    "assets",
 ];
 /// The most elements one publication may carry.
 const MAX_ELEMENTS: usize = 500;
@@ -242,7 +253,7 @@ pub trait Shelf: Send + Sync {
     fn public_by_link(&self, _link: &str) -> Result<Option<PublicCopy>, ShelfError> {
         Ok(None)
     }
-    /// A live public copy by its short path, `/@<handle>/<slug>`.
+    /// A live public copy by its short path, `/<handle>/<slug>`.
     fn public_by_slug(&self, _handle: &str, _slug: &str) -> Result<Option<PublicCopy>, ShelfError> {
         Ok(None)
     }
@@ -2105,6 +2116,10 @@ mod tests {
         assert!(!valid_handle("Aidan"));
         assert!(!valid_handle("2x"));
         assert!(!valid_handle("core"));
+        // A short path is `/<handle>/<slug>`: never a path the host routes.
+        for h in ["v1", "web", "oauth", "healthz", "ical"] {
+            assert!(!valid_handle(h), "{h}");
+        }
         assert!(!valid_handle("x-"));
         assert!(valid_slug("dinner-party"));
         assert!(!valid_slug("-x"));

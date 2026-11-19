@@ -1,5 +1,7 @@
 # Public links share what a layout reaches, with route params and only the rows that show, and keep working
 
+Short paths superseded by [short-paths-without-at](short-paths-without-at.md).
+
 Date: 2026-11-17. Related: [public-web-links](public-web-links.md), [sharing](sharing.md),
 [web-client](web-client.md), [web-on-staging](web-on-staging.md). Issue #363.
 
