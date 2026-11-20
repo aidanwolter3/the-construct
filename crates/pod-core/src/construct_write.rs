@@ -39,6 +39,12 @@ impl<'a> ConnObjects<'a> {
 }
 
 impl Objects for ConnObjects<'_> {
+    /// A reference without a hash follows its name to what it points at
+    /// now.
+    fn resolve(&self, name: &str) -> Option<String> {
+        cstore::name(self.conn, name).ok().flatten()
+    }
+
     fn object(&self, id: &str) -> Option<Arc<Value>> {
         if let Some(v) = self.extra.borrow().get(id) {
             return Some(v.clone());

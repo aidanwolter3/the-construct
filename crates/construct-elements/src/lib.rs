@@ -12,6 +12,7 @@ pub mod template;
 
 pub use canonical::{canonical, is_object_id, object_id};
 pub use materialize::{
-    Keyed, Materialized, Objects, instance_id, keyed, materialize, materialize_with, reach,
+    Keyed, MANIFEST_KIND, Materialized, Objects, instance_id, keyed, manifest_names, materialize,
+    materialize_with, reach, stripped, target,
 };
 pub use refs::{EdgeRef, Ref};

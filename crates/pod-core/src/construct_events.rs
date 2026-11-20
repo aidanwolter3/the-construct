@@ -41,10 +41,14 @@ use crate::session::Caller;
 use crate::{Pod, json_error};
 
 /// Home's root for `client` and the generation, if the pod has a home.
-async fn current_root(pod: &Pod, client: &protocol::ClientCaps) -> Option<(String, i64)> {
+async fn current_root(
+    pod: &Pod,
+    client: &protocol::ClientCaps,
+    manifest: bool,
+) -> Option<(String, i64)> {
     let (p, c) = (pod.clone(), client.clone());
     tokio::task::spawn_blocking(move || {
-        let root = super::seal::root_for(&p, &c)?;
+        let root = super::seal::root_as(&p, &c, manifest)?;
         let g = p.store().with_conn(super::store::generation)?;
         Ok::<_, rusqlite::Error>(root.map(|r| (r, g)))
     })
@@ -104,12 +108,15 @@ pub async fn events(State(pod): State<Pod>, headers: HeaderMap) -> Response {
     let rx = pod.subscribe_construct();
     let data_rx = pod.subscribe_data();
     let sources = home_sources(&pod).await;
-    let first = current_root(&pod, &client).await;
+    // The root as this client asked for it: a manifest, or home sealed.
+    let manifest = super::seal::wants_manifest(&headers);
+    let first = current_root(&pod, &client, manifest).await;
     tracing::info!(root = ?first.as_ref().map(|(r, _)| r), ?client, "construct events subscriber connected");
     struct S {
         first: Option<Event>,
         sent: Option<String>,
         client: protocol::ClientCaps,
+        manifest: bool,
         rx: broadcast::Receiver<i64>,
         notify_rx: Option<broadcast::Receiver<NotifyEvent>>,
         _live: Option<crate::notify::LiveDevice>,
@@ -133,6 +140,7 @@ pub async fn events(State(pod): State<Pod>, headers: HeaderMap) -> Response {
             first: first.as_ref().map(|(r, g)| construct_event(r, *g)),
             sent: first.map(|(r, _)| r),
             client,
+            manifest,
             rx,
             notify_rx,
             _live: live,
@@ -185,7 +193,7 @@ pub async fn events(State(pod): State<Pod>, headers: HeaderMap) -> Response {
                     // root when it changed for this client.
                     Got::Construct(_) => {
                         s.sources = home_sources(&s.pod).await;
-                        if let Some((root, g)) = current_root(&s.pod, &s.client).await
+                        if let Some((root, g)) = current_root(&s.pod, &s.client, s.manifest).await
                             && s.sent.as_deref() != Some(root.as_str())
                         {
                             let e = construct_event(&root, g);

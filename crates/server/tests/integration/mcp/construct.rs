@@ -291,6 +291,163 @@ async fn reseals_are_one_history_entry_and_a_write_says_what_it_costs() {
     }
 }
 
+/// A client's view of a manifest: its objects, and names resolved through
+/// the manifest.
+struct ByManifest {
+    objects: std::collections::BTreeMap<String, std::sync::Arc<Value>>,
+    names: std::collections::BTreeMap<String, String>,
+}
+
+impl construct_elements::Objects for ByManifest {
+    fn object(&self, id: &str) -> Option<std::sync::Arc<Value>> {
+        self.objects.get(id).cloned()
+    }
+    fn resolve(&self, name: &str) -> Option<String> {
+        self.names.get(name).cloned()
+    }
+}
+
+/// The construct's root as a manifest (decision `element-roles-and-reuse`):
+/// a client that asks for it is told one map of names to elements, the
+/// elements hold references by name alone, and an edit costs the edited
+/// element and a new manifest instead of every element above it.
+#[tokio::test]
+async fn a_manifest_root_makes_an_edit_cost_one_element() {
+    let env = env().await;
+    let pod_code = env.pod("mine").await;
+    let access = env.connect(&pod_code).await;
+    let (a, b, c) = build(&env, &access).await;
+
+    let as_manifest = |path: String, body: Option<Value>| {
+        let (env, pod_code) = (&env, pod_code.clone());
+        async move {
+            let c = client();
+            let req = match body {
+                Some(b) => c.post(format!("{}{path}", env.url)).json(&b),
+                None => c.get(format!("{}{path}", env.url)),
+            };
+            req.bearer_auth(&pod_code)
+                .header(protocol::FEATURES_HEADER, protocol::features_header())
+                .header(protocol::ROOT_HEADER, protocol::ROOT_MANIFEST)
+                .send()
+                .await
+                .unwrap()
+                .json::<Value>()
+                .await
+                .unwrap()
+        }
+    };
+    let fetch = |have: Vec<String>, root: String| {
+        let as_manifest = &as_manifest;
+        async move {
+            let got = as_manifest(
+                "/v1/objects".into(),
+                Some(json!({"have": have, "want": [root]})),
+            )
+            .await;
+            got["objects"]
+                .as_object()
+                .unwrap()
+                .iter()
+                .map(|(k, v)| (k.clone(), std::sync::Arc::new(v.clone())))
+                .collect::<std::collections::BTreeMap<_, _>>()
+        }
+    };
+
+    // The root is a manifest naming home, the layouts, the pod's component
+    // and the core ones they use.
+    let root = as_manifest("/v1/construct".into(), None).await["root"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let objects = fetch(Vec::new(), root.clone()).await;
+    let (home, names) = construct_elements::manifest_names(&objects[&root]).expect("a manifest");
+    assert_eq!(home, "home");
+    for want in [
+        "home",
+        a.as_str(),
+        b.as_str(),
+        "@me/tile",
+        "@core/header_bar",
+    ] {
+        assert!(names.contains_key(want), "{want}: {names:?}");
+    }
+    // Every name's element came with it, holds no hash for a reference
+    // that follows its name, and carries no examples.
+    for (name, id) in &names {
+        let el = objects
+            .get(id)
+            .unwrap_or_else(|| panic!("{name} was not sent"));
+        assert!(el.get("examples").is_none(), "{name}");
+        construct_elements::refs::visit(&el["node"], &mut |r, _| {
+            assert!(
+                r.pin || r.el.is_none(),
+                "{name} holds a hash for {}",
+                r.name
+            );
+        });
+    }
+    // It draws what a sealed root draws.
+    let view = ByManifest {
+        objects: objects.clone(),
+        names: names.clone(),
+    };
+    let drawn = construct_elements::materialize(&view, &names[&a]).unwrap();
+    assert!(drawn.missing.is_empty(), "{:?}", drawn.missing);
+    assert_eq!(drawn.node, env.drawn(&a, &pod_code).await["workspace"]);
+    assert!(drawn.node.to_string().contains("Recipes"));
+    assert_eq!(drawn.edges[0].el.as_deref(), Some(names[&b].as_str()));
+
+    // One component edit. A sealed client is sent the component and every
+    // layout above it (four objects, the test before this one); this
+    // client, which has everything it had, is sent the component and the
+    // new manifest.
+    let (err, d) = env
+        .tool(
+            &access,
+            "update_component",
+            json!({"name": "tile", "component": tile("› ")}),
+        )
+        .await;
+    assert!(!err, "{d}");
+    let now = as_manifest("/v1/construct".into(), None).await["root"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert_ne!(now, root);
+    let delta = fetch(objects.keys().cloned().collect(), now.clone()).await;
+    assert_eq!(delta.len(), 2, "{:?}", delta.keys().collect::<Vec<_>>());
+    let (_, after) = construct_elements::manifest_names(&delta[&now]).unwrap();
+    assert_ne!(after["@me/tile"], names["@me/tile"]);
+    for same in ["home", a.as_str(), b.as_str()] {
+        assert_eq!(after[same], names[same], "{same} did not change");
+    }
+    let mut all = objects.clone();
+    all.extend(delta);
+    let view = ByManifest {
+        objects: all,
+        names: after.clone(),
+    };
+    let drawn = construct_elements::materialize(&view, &after[&a]).unwrap();
+    assert!(
+        drawn.node.to_string().contains("› Recipes"),
+        "{}",
+        drawn.node
+    );
+
+    // Its data is read by the element the manifest names.
+    let data = as_manifest(format!("/v1/construct/data/{}", after[&c]), None).await;
+    assert!(data["queries"]["collection:dishes"].is_array(), "{data}");
+
+    // A layout opened by name comes as a manifest of its own.
+    let named = as_manifest(format!("/v1/construct/names/{b}"), None).await;
+    let own = fetch(Vec::new(), named["el"].as_str().unwrap().to_owned()).await;
+    let (own_home, own_names) =
+        construct_elements::manifest_names(&own[named["el"].as_str().unwrap()]).unwrap();
+    assert_eq!(own_home, b);
+    assert!(own_names.contains_key("@me/tile") && !own_names.contains_key("home"));
+}
+
 /// Template directives and named slots (feature `component_templates`,
 /// decision `element-roles-and-reuse`): a component repeats over a list
 /// argument, a use fills named slots, and a client without the feature is

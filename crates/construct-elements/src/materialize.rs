@@ -27,6 +27,55 @@ pub const MAX_DEPTH: usize = 12;
 pub trait Objects {
     /// The object with this id, if it is here.
     fn object(&self, id: &str) -> Option<Arc<Value>>;
+
+    /// The element `name` points at, for a reference that follows a name
+    /// without holding its hash: a construct's manifest on a device
+    /// (feature `construct_manifest`), the name's current element on the
+    /// pod. `None` where there are only objects.
+    fn resolve(&self, _name: &str) -> Option<String> {
+        None
+    }
+}
+
+/// The element a reference points at: the hash it holds, else what its
+/// name resolves to ([`Objects::resolve`]).
+pub fn target(objects: &dyn Objects, r: &Ref) -> Option<String> {
+    r.el.clone().or_else(|| objects.resolve(&r.name))
+}
+
+/// The kind of object a construct's manifest is.
+pub const MANIFEST_KIND: &str = "manifest";
+
+/// The names of manifest `v` (`{"kind": "manifest", "home", "names"}`) and
+/// the name of its home; `None` when `v` is not one.
+pub fn manifest_names(v: &Value) -> Option<(String, BTreeMap<String, String>)> {
+    if v["kind"] != MANIFEST_KIND {
+        return None;
+    }
+    let names = v["names"]
+        .as_object()?
+        .iter()
+        .filter_map(|(k, h)| Some((k.clone(), h.as_str()?.to_owned())))
+        .collect();
+    Some((v["home"].as_str()?.to_owned(), names))
+}
+
+/// Element `v` as a client with a manifest is sent it: every reference that
+/// follows its name without the hash it was sealed with, and no examples
+/// (a device expands a component, it doesn't try it). What is left changes
+/// only when the element itself is edited, so its hash stays while the
+/// things it references move.
+pub fn stripped(v: &Value) -> Value {
+    let mut out = v.clone();
+    if let Some(o) = out.as_object_mut() {
+        o.remove("examples");
+    }
+    crate::refs::map(&mut out["node"], &mut |r: &mut Ref, _| {
+        if !r.pin {
+            r.el = None;
+        }
+    });
+    out
 }
 
 impl Objects for BTreeMap<String, Arc<Value>> {
@@ -418,7 +467,7 @@ impl Mat<'_> {
             self.edges.push(EdgeRef {
                 key: r.key().to_owned(),
                 name: r.name.clone(),
-                el: r.el.clone(),
+                el: target(self.objects, &r),
                 site,
                 bind,
             });
@@ -463,7 +512,7 @@ impl Mat<'_> {
         let Some(r) = Ref::parse(&o["ref"]) else {
             return Ok(Out::One(placeholder()));
         };
-        let Some(id) = r.el.clone() else {
+        let Some(id) = target(self.objects, &r) else {
             return Ok(Out::One(placeholder()));
         };
         let Some(el) = self.objects.object(&id) else {

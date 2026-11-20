@@ -15,6 +15,19 @@ use serde::{Deserialize, Serialize};
 /// channel choices and skip Web Push for a device that has the stream open.
 pub const DEVICE_HEADER: &str = "x-construct-device";
 
+/// Request header by which a client asks for the construct's root as a
+/// manifest (decision `element-roles-and-reuse`): with the value
+/// [`ROOT_MANIFEST`], `GET /v1/construct`, the `construct` event and
+/// `GET /v1/construct/names/{name}` answer the hash of an object `{"kind":
+/// "manifest", "home", "names": {name: hash}}` naming every element reached,
+/// and the elements fetched from it hold references that follow a name
+/// without its hash. Without it, the root is home sealed as before. It is
+/// not a layout feature: it changes how a construct is fetched, not what
+/// is drawn.
+pub const ROOT_HEADER: &str = "x-construct-root";
+/// [`ROOT_HEADER`]'s value.
+pub const ROOT_MANIFEST: &str = "manifest";
+
 /// SSE event name of a new notification ([`NotificationEvent`]).
 pub const NOTIFICATION_EVENT: &str = "notification";
 /// SSE event name sent when notifications were marked read ([`ReadEvent`]).

@@ -775,15 +775,22 @@ pub(crate) async fn get_element_data(
         Ok(c) => c,
         Err(e) => return e.into_response(),
     };
+    let manifest = construct::seal::wants_manifest(&headers);
     let req = RequestCtx {
         client: layouts::client_caps(&headers),
         headers,
         session: caller.clone().into_session(),
     };
     let (p, lookup) = (state.clone(), id.clone());
+    let client = req.client.clone();
     // A use site's bindings (`?bind=`): the data its bound tree reads too.
     let inputs = construct::http::inputs_param(q.get("bind").map(String::as_str));
     let owned = tokio::task::spawn_blocking(move || {
+        // The elements a manifest names are made when it is: have them
+        // here, should a write have cleared them since this client asked.
+        if manifest {
+            let _ = construct::seal::manifest_for(&p, &client);
+        }
         construct::http::bound_element_feeds(&p, &lookup, &inputs)
     })
     .await

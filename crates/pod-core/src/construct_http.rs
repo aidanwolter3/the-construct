@@ -57,9 +57,10 @@ async fn get_construct(State(pod): State<Pod>, headers: HeaderMap) -> Response {
         return r;
     }
     let client = crate::layouts::client_caps(&headers);
+    let manifest = super::seal::wants_manifest(&headers);
     let p = pod.clone();
     let r = tokio::task::spawn_blocking(move || {
-        let root = super::seal::root_for(&p, &client)?;
+        let root = super::seal::root_as(&p, &client, manifest)?;
         let g = p.store().with_conn(cstore::generation)?;
         Ok::<_, rusqlite::Error>((root, g))
     })
@@ -90,6 +91,7 @@ async fn get_name(
         return r;
     }
     let client = crate::layouts::client_caps(&headers);
+    let manifest = super::seal::wants_manifest(&headers);
     let p = pod.clone();
     let found = tokio::task::spawn_blocking(move || {
         let names = if super::is_layout_name(&name) {
@@ -100,9 +102,15 @@ async fn get_name(
             Vec::new()
         };
         for n in names {
-            let el = p
-                .store()
-                .with_conn(|c| super::seal::seal_name(c, &n, &client, &mut Default::default()))?;
+            // For a client on manifests: a manifest of what this name
+            // reaches, with the name as its home.
+            let el = p.store().with_conn(|c| {
+                if manifest {
+                    super::seal::manifest_of(c, &n, &client)
+                } else {
+                    super::seal::seal_name(c, &n, &client, &mut Default::default())
+                }
+            })?;
             if let Some(el) = el {
                 return Ok::<_, rusqlite::Error>(Some((name, el)));
             }
@@ -159,6 +167,9 @@ async fn post_objects(State(pod): State<Pod>, headers: HeaderMap, body: Bytes) -
             let Some(v) = construct_elements::Objects::object(&objects, &id) else {
                 continue;
             };
+            if let Some((_, names)) = construct_elements::manifest_names(&v) {
+                queue.extend(names.into_values().filter(|h| !seen.contains(h)));
+            }
             construct_elements::refs::visit(&v["node"], &mut |r, _| {
                 if let Some(e) = &r.el
                     && !seen.contains(e)
