@@ -198,6 +198,8 @@ fn full_workspace() -> UiNode {
                             stack: false,
                             min_column_dp: 0,
                             trailing: None,
+                            merge_query_keys: Vec::new(),
+                            sort_by: None,
                         },
                         UiNode::List {
                             query_key: "timeline:pinned".into(),
@@ -246,6 +248,8 @@ fn full_workspace() -> UiNode {
                             stack: false,
                             min_column_dp: 0,
                             trailing: None,
+                            merge_query_keys: Vec::new(),
+                            sort_by: None,
                         },
                     ],
                 },
