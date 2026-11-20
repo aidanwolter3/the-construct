@@ -19,7 +19,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use construct_elements::refs::{EdgeRef, Site};
-use construct_elements::{Objects, instance_id, materialize_with};
+use construct_elements::{Objects, instance_id, manifest_names, materialize_with};
 use protocol::{DataBundle, WorkspaceSpec};
 use serde_json::{Map, Value, json};
 
@@ -43,6 +43,12 @@ pub struct Construct {
     /// Layouts the root doesn't reach, opened by name (a notification's):
     /// key → element.
     pub extra: BTreeMap<String, String>,
+    /// The names of the root's manifest, when the root is one (decision
+    /// `element-roles-and-reuse`): what a reference that follows a name
+    /// resolves to. Empty for a root that is home sealed.
+    pub names: BTreeMap<String, String>,
+    /// The names of the manifests of layouts opened by name.
+    pub extra_names: BTreeMap<String, String>,
     /// Whether the objects kept in the engine's store were read.
     pub loaded: bool,
     /// Each key's own edges.
@@ -60,11 +66,23 @@ pub struct Construct {
     pub redraw: Option<(Vec<String>, Vec<String>)>,
 }
 
-struct Have<'a>(&'a HashMap<String, Arc<Value>>);
+/// The device's objects, and the names its manifests resolve.
+struct Have<'a> {
+    objects: &'a HashMap<String, Arc<Value>>,
+    names: &'a BTreeMap<String, String>,
+    extra_names: &'a BTreeMap<String, String>,
+}
 
 impl Objects for Have<'_> {
     fn object(&self, id: &str) -> Option<Arc<Value>> {
-        self.0.get(id).cloned()
+        self.objects.get(id).cloned()
+    }
+
+    fn resolve(&self, name: &str) -> Option<String> {
+        self.names
+            .get(name)
+            .or_else(|| self.extra_names.get(name))
+            .cloned()
     }
 }
 
@@ -84,6 +102,33 @@ impl Construct {
         let mut missing = BTreeSet::new();
         let Some(root) = self.root.clone() else {
             return missing;
+        };
+        // A root that is a manifest names home and everything it reaches;
+        // one that is home itself holds every hash in its references.
+        let root = match self.objects.get(&root).map(|v| manifest_names(v)) {
+            None => {
+                missing.insert(root);
+                return missing;
+            }
+            Some(Some((home, names))) => {
+                let id = names.get(&home).cloned();
+                // An element's own hash no longer says what it draws: what
+                // it references moves with the names. So what was expanded
+                // under other names is expanded again.
+                if names != self.names {
+                    self.nodes.clear();
+                    self.edges_by_id.clear();
+                }
+                self.names = names;
+                match id {
+                    Some(id) => id,
+                    None => return missing,
+                }
+            }
+            Some(None) => {
+                self.names.clear();
+                root
+            }
         };
         let mut keys = BTreeMap::new();
         let mut inputs = BTreeMap::new();
@@ -109,9 +154,27 @@ impl Construct {
             }
             edges.insert(key, own);
         }
+        // Layouts opened by name: each one's manifest adds its names.
+        let mut extra_names = BTreeMap::new();
+        for id in self.extra.values() {
+            match self.objects.get(id).map(|v| manifest_names(v)) {
+                None => {
+                    missing.insert(id.clone());
+                }
+                Some(Some((_, names))) => extra_names.extend(names),
+                Some(None) => {}
+            }
+        }
+        if extra_names != self.extra_names {
+            self.nodes.clear();
+            self.edges_by_id.clear();
+        }
+        self.extra_names = extra_names;
         for (key, id) in self.extra.clone() {
-            if !keys.contains_key(&key) {
-                missing.extend(self.materialized(&id, &Map::new()).1);
+            if !keys.contains_key(&key)
+                && let Some(el) = self.element_of(&id)
+            {
+                missing.extend(self.materialized(&el, &Map::new()).1);
             }
         }
         self.keys = keys;
@@ -133,7 +196,12 @@ impl Construct {
         {
             return (e.clone(), BTreeSet::new());
         }
-        match materialize_with(&Have(&self.objects), id, bound) {
+        let have = Have {
+            objects: &self.objects,
+            names: &self.names,
+            extra_names: &self.extra_names,
+        };
+        match materialize_with(&have, id, bound) {
             Ok(m) => {
                 if m.missing.is_empty() {
                     self.nodes.insert(inst.clone(), m.node);
@@ -147,8 +215,22 @@ impl Construct {
 
     /// Layout `key`'s element, its inputs and its materialized tree, whether
     /// the root reaches it or it was opened by name.
+    /// The element `id` stands for: a manifest's home, else `id` itself
+    /// (`None`: a manifest that isn't here yet, or names no home).
+    fn element_of(&self, id: &str) -> Option<String> {
+        match self.objects.get(id).map(|v| manifest_names(v)) {
+            Some(Some((home, names))) => names.get(&home).cloned(),
+            Some(None) => Some(id.to_owned()),
+            None => None,
+        }
+    }
+
     pub fn layout(&self, key: &str) -> Option<(String, Map<String, Value>, Value)> {
-        let el = self.keys.get(key).or_else(|| self.extra.get(key))?;
+        let el = match self.keys.get(key) {
+            Some(el) => el.clone(),
+            None => self.element_of(self.extra.get(key)?)?,
+        };
+        let el = &el;
         let bound = if self.keys.contains_key(key) {
             self.inputs.get(key).cloned().unwrap_or_default()
         } else {
@@ -165,7 +247,8 @@ impl Construct {
             .iter()
             .chain(self.extra.iter())
             .filter_map(|(k, el)| {
-                let title = self.objects.get(el)?["title"].as_str()?.trim();
+                let el = self.element_of(el)?;
+                let title = self.objects.get(&el)?["title"].as_str()?.trim();
                 (!title.is_empty()).then(|| (k.clone(), title.to_owned()))
             })
             .collect()
@@ -178,7 +261,17 @@ impl Construct {
             .iter()
             .map(|(k, el)| {
                 let bound = self.inputs.get(k).cloned().unwrap_or_default();
-                (k.clone(), instance_id(el, &bound))
+                let inst = instance_id(el, &bound);
+                // With a manifest, a layout changes when a component it
+                // uses does, though its own element is the same: compare
+                // what it expands to.
+                let drawn = self.nodes.get(&inst).map(|n| {
+                    use std::hash::{Hash, Hasher};
+                    let mut h = std::collections::hash_map::DefaultHasher::new();
+                    n.to_string().hash(&mut h);
+                    h.finish()
+                });
+                (k.clone(), format!("{inst}#{drawn:?}"))
             })
             .collect()
     }
@@ -199,9 +292,20 @@ impl Construct {
                 continue;
             }
             if let Some(v) = self.objects.get(&id) {
+                // A manifest keeps every element it names; an element, what
+                // its references point at (by hash, or through the names).
+                if let Some((_, names)) = manifest_names(v) {
+                    queue.extend(names.into_values());
+                }
                 construct_elements::refs::visit(&v["node"], &mut |r, _| {
-                    if let Some(e) = &r.el {
-                        queue.push_back(e.clone());
+                    let to = r.el.clone().or_else(|| {
+                        self.names
+                            .get(&r.name)
+                            .or_else(|| self.extra_names.get(&r.name))
+                            .cloned()
+                    });
+                    if let Some(e) = to {
+                        queue.push_back(e);
                     }
                 });
             }
@@ -231,6 +335,8 @@ impl Inner {
     ) -> Result<reqwest::blocking::Response, FetchError> {
         let mut req = req
             .header(protocol::FEATURES_HEADER, protocol::features_header())
+            // The root as a manifest: an edit then moves one element.
+            .header(protocol::ROOT_HEADER, protocol::ROOT_MANIFEST)
             .header(protocol::DEVICE_HEADER, &self.device_id)
             .headers(crate::identity::headers());
         if let Some(t) = token {

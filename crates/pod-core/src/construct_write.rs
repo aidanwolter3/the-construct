@@ -808,21 +808,36 @@ pub async fn mcp(pod: &Pod, name: &str, args: &Value) -> Option<Result<Value, Va
 
 type Tool = fn(&Pod, &Connection, &Value) -> Result<Value, Value>;
 
-/// `{objects, bytes}`: the elements a write moved (the one written and every
-/// one re-sealed above it) and their size together.
+/// What a write makes a device fetch: `{objects, bytes}` for a client on a
+/// manifest (the elements written and the new manifest: an element sealed
+/// again because something it references moved is the same element to it),
+/// and `sealed: {objects, bytes}` for a client sent home sealed (every
+/// element that moved, written or sealed again, whole).
 fn refetch(pod: &Pod, moved: &[(String, i64)]) -> Value {
     let names: BTreeSet<&str> = moved.iter().map(|(n, _)| n.as_str()).collect();
-    let bytes: i64 = pod
+    let (sealed, written, bytes) = pod
         .store()
         .with_conn(|c| {
-            let mut sum = 0;
+            let (mut sealed, mut written, mut bytes) = (0, 0, 0);
             for n in &names {
-                sum += cstore::name_bytes(c, n)?;
+                let size = cstore::name_bytes(c, n)?;
+                sealed += size;
+                if !cstore::newest_is_reseal(c, n)? {
+                    written += 1;
+                    bytes += size;
+                }
             }
-            Ok::<_, rusqlite::Error>(sum)
+            Ok::<_, rusqlite::Error>((sealed, written, bytes))
         })
+        .unwrap_or((0, 0, 0));
+    // The manifest this build's clients are sent now.
+    let manifest = super::seal::manifest_for(pod, &protocol::ClientCaps::this_build())
+        .ok()
+        .flatten()
+        .and_then(|id| pod.store().with_conn(|c| cstore::object_bytes(c, &id)).ok())
         .unwrap_or(0);
-    json!({ "objects": names.len(), "bytes": bytes })
+    json!({ "objects": written + 1, "bytes": bytes + manifest,
+        "sealed": { "objects": names.len(), "bytes": sealed } })
 }
 
 async fn run(pod: &Pod, args: &Value, f: Tool) -> Result<Value, Value> {

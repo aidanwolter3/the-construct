@@ -238,9 +238,17 @@ async fn reseals_are_one_history_entry_and_a_write_says_what_it_costs() {
         assert!(!err, "{d}");
         last = d;
     }
-    // The tile, and B, A and home above it.
-    assert_eq!(last["refetch"]["objects"], 4, "{last}");
-    assert!(last["refetch"]["bytes"].as_i64().unwrap() > 500, "{last}");
+    // A client on a manifest fetches the tile and the new manifest; one
+    // sent home sealed, the tile and B, A and home above it.
+    assert_eq!(last["refetch"]["objects"], 2, "{last}");
+    assert_eq!(last["refetch"]["sealed"]["objects"], 4, "{last}");
+    // A component is not advised to use itself.
+    assert!(last.get("warnings").is_none(), "{last}");
+    assert!(
+        last["refetch"]["sealed"]["bytes"].as_i64().unwrap()
+            > last["refetch"]["bytes"].as_i64().unwrap(),
+        "{last}"
+    );
 
     let (_, home) = env.tool(&access, "get_layout", json!({"id": "home"})).await;
     assert_eq!(home["version"], v + 1, "one entry for the three re-seals");
@@ -273,7 +281,7 @@ async fn reseals_are_one_history_entry_and_a_write_says_what_it_costs() {
         .await;
     assert!(!err, "{d}");
     assert_eq!(d["version"], v + 2, "{d}");
-    assert_eq!(d["refetch"]["objects"], 1, "{d}");
+    assert_eq!(d["refetch"]["objects"], 2, "home and the manifest: {d}");
     let (err, d) = env
         .tool(
             &access,

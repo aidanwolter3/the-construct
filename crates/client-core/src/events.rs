@@ -237,6 +237,7 @@ pub(crate) fn events_thread(
                 .get(&url)
                 .header(reqwest::header::ACCEPT, "text/event-stream")
                 .header(protocol::FEATURES_HEADER, protocol::features_header())
+                .header(protocol::ROOT_HEADER, protocol::ROOT_MANIFEST)
                 // Marks this device live: the pod sends it no Web Push
                 // while the stream is open (D52).
                 .header(protocol::DEVICE_HEADER, &device)

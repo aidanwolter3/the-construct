@@ -616,9 +616,15 @@ async fn call_tool(pod: &Pod, headers: &HeaderMap, params: &Value) -> Value {
                 Ok(with_advice(pod, v, args["layout"].clone(), None).await)
             }
             ("define_component" | "update_component", Ok(v)) => {
-                let writing = args["name"]
-                    .as_str()
-                    .and_then(|n| crate::construct::component_name(n).or(Some(n.to_owned())));
+                // The component being written, by its name in the pod
+                // (`tile`, `pod:tile` and `@me/tile` are one).
+                let writing = args["name"].as_str().map(|n| {
+                    if n.starts_with('@') {
+                        n.to_owned()
+                    } else {
+                        format!("@me/{}", n.strip_prefix("pod:").unwrap_or(n))
+                    }
+                });
                 Ok(with_advice(pod, v, args["component"]["template"].clone(), writing).await)
             }
             (_, r) => r,

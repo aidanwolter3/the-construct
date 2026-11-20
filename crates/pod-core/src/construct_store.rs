@@ -249,6 +249,31 @@ fn trim_history(conn: &Connection, name: &str) -> rusqlite::Result<()> {
     Ok(())
 }
 
+/// The size in bytes of object `id` (0: not here).
+pub fn object_bytes(conn: &Connection, id: &str) -> rusqlite::Result<i64> {
+    Ok(conn
+        .query_row("SELECT size FROM objects WHERE hash = ?1", [id], |r| {
+            r.get(0)
+        })
+        .optional()?
+        .unwrap_or(0))
+}
+
+/// Whether `name`'s newest history entry is a re-seal: the pod wrote it
+/// because something the element references moved, not because it was
+/// edited.
+pub fn newest_is_reseal(conn: &Connection, name: &str) -> rusqlite::Result<bool> {
+    let newest: Option<(String, Option<String>)> = conn
+        .query_row(
+            "SELECT author, note FROM name_history WHERE name = ?1 ORDER BY seq DESC LIMIT 1",
+            [name],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .optional()?;
+    Ok(matches!(newest, Some((a, Some(n)))
+        if a == crate::layouts::AUTHOR_POD && n.starts_with(RESEAL_NOTE)))
+}
+
 /// The size in bytes of the element `name` points at now (0: none).
 pub fn name_bytes(conn: &Connection, name: &str) -> rusqlite::Result<i64> {
     Ok(conn

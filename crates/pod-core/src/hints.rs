@@ -217,7 +217,7 @@ pub fn refetch(answer: &Value) -> Option<String> {
     let objects = answer["refetch"]["objects"].as_i64().unwrap_or(1);
     (bytes > REFETCH_BYTES).then(|| {
         format!(
-            "this write makes every device fetch {} KB again ({objects} element{}): an element is fetched whole whenever it or anything it references changes, so keep the ones near home small (embeds, links and component uses; list_layouts gives each layout's bytes)",
+            "this write makes every device fetch {} KB again ({objects} object{}): an element is fetched whole whenever it changes, so keep large screens in layouts of their own and repeated pieces in components (list_layouts gives each layout's bytes)",
             bytes / 1024,
             if objects == 1 { "" } else { "s" },
         )
