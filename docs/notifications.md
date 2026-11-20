@@ -105,10 +105,17 @@ in a row. Limits per pod: 20 devices, 60 deliveries a minute. The routes are in 
   caches the newest 200 notifications (for builds whose inbox reads `local:notifications`), the channels and the
   unread counts, so the badge works offline; marking read is optimistic and queued. A listener fires only for live
   arrivals, so one notification never alerts twice. Sign-out unregisters the device and clears the cache.
-- **Layouts:** the `inbox` blueprint (file 0006) binds `collection:notifications`: the notifications whose channel
-  is on and whose event still matches its alert, grouped by day, and below them, in a section that starts closed (`@core/collapsible`), those read more than
-  a day ago (`where` `older_than`, feature `list_where_age`). Tapping one marks its row read and presents its layout
-  and target (`open_notification` with the row's URI). Builds before `list_where_age` get file 0004 (device data).
+- **Layouts:** the `inbox` blueprint (file 0007, a `core://Page` built from the core components: decision
+  [`element-roles-and-reuse`](decisions/element-roles-and-reuse.md)) binds `collection:notifications` and shows the
+  notifications whose channel is on and whose event still matches its alert in three groups, each a card of rows
+  (`@core/grouped_list`): **New** (unread, with the unread count), **Earlier** (read within the last day) and, in a
+  section that starts closed (`@core/collapsible`), **Older** (read more than a day ago: `where` `older_than`,
+  feature `list_where_age`). A row has a bell (`@core/tinted_icon`, in the accent while unread and muted once read:
+  channels carry no icon of their own yet), its channel, day and time, the title, the body on at most two lines, and
+  a dot while unread. Tapping one marks its row read and presents its layout and target (`open_notification` with
+  the row's URI). "Mark all read" is in the header while something is unread, and "Manage channels" under the
+  groups opens Settings as a panel. Builds that can't draw it get file 0006 (the same lists grouped by day), and
+  builds before `list_where_age` file 0004 (device data).
   The `settings` blueprint lists the channels with switches (for the whole pod). Any layout can open them, bind the
   collections for its own view of notifications, or bind `${local://inbox#unread}` for a badge.
 - **Android:** asks for `POST_NOTIFICATIONS` once; layouts can ask again with the

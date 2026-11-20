@@ -27,7 +27,7 @@ pub use source_pixelfed::{DEFAULT_PIXELFED_URL, PixelfedAdapter, PixelfedConfig}
 /// home app starts from it, decision `blueprints-and-home`); and
 /// Collections (no apps of its own: data custom apps declare; fillers
 /// configured from `CONSTRUCT_INFER_*` and `CONSTRUCT_FILL_*`), and the
-/// server monitoring source (no apps; decision `server-monitoring`), and the
+/// server monitoring source with its `server_health` blueprint (decision `server-monitoring`), and the
 /// agent runner source with its `agents` blueprint (decision
 /// `agents-data-source`).
 pub fn adapters(pixelfed: PixelfedConfig) -> Vec<Arc<dyn Source>> {

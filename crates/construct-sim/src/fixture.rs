@@ -53,6 +53,8 @@ pub fn default_bundle(workspace: &str) -> Option<&'static str> {
         "tab_shell" => "tab_shell_bundle.json",
         "agent_report" => "agent_report_bundle.json",
         "device_versions" => "device_versions_bundle.json",
+        "server_health" => "server_health_bundle.json",
+        "server_health_off" => "server_health_off_bundle.json",
         "list_trailing" => "list_trailing_bundle.json",
         // A home on the construct, before its first `construct` step
         // (decision `content-addressed-construct`).

@@ -1,0 +1,6 @@
+{
+  "server_health": {
+    "category": "layout",
+    "use_when": "The user wants to see the server's health: its status and checks, their devices and the build each runs, every counter."
+  }
+}

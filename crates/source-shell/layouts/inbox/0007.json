@@ -1,0 +1,609 @@
+{
+  "note": "Built from the core components as a core://Page: New (with its count), Earlier and Older in grouped cards, an icon on each row, Manage channels (decision element-roles-and-reuse)",
+  "layout": {
+    "type": "core://Page",
+    "id": "inbox",
+    "title": "Notifications",
+    "root": {
+      "type": "core://Use",
+      "component": "core:screen_scaffold",
+      "args": {
+        "title": "Notifications",
+        "spacing": 0
+      },
+      "children": [
+        {
+          "type": "core://Conditional",
+          "count": {
+            "query_key": "collection:notifications",
+            "where": [
+              {
+                "field": "channel_enabled",
+                "equals": "true"
+              },
+              {
+                "field": "subject_alert_matched",
+                "equals": "true"
+              },
+              {
+                "field": "read",
+                "equals": "false"
+              }
+            ]
+          },
+          "content": {
+            "type": "core://Use",
+            "component": "core:titled_section",
+            "args": {
+              "text": "New · ${local://inbox#unread}",
+              "space_above": 4
+            },
+            "children": [
+              {
+                "type": "core://Use",
+                "component": "core:grouped_list",
+                "children": [
+                  {
+                    "type": "core://List",
+                    "query_key": "collection:notifications",
+                    "spacing_dp": 1,
+                    "where": [
+                      {
+                        "field": "channel_enabled",
+                        "equals": "true"
+                      },
+                      {
+                        "field": "subject_alert_matched",
+                        "equals": "true"
+                      },
+                      {
+                        "field": "read",
+                        "equals": "false"
+                      }
+                    ],
+                    "item_template": {
+                      "type": "core://Tappable",
+                      "content_description": "$item.title",
+                      "on_click": {
+                        "intent": "action.sequence",
+                        "steps": [
+                          {
+                            "intent": "action.mutation.optimistic",
+                            "entity_uri": "$item.uri",
+                            "field": "read",
+                            "value_expr": "true",
+                            "rollback_value": false,
+                            "endpoint": "/v1/collections/notifications/update",
+                            "payload": {
+                              "id": "$item.id",
+                              "read": "$value"
+                            }
+                          },
+                          {
+                            "intent": "action.device",
+                            "command": "open_notification",
+                            "id": "$item.uri"
+                          }
+                        ]
+                      },
+                      "content": {
+                        "type": "core://Box",
+                        "background": "${local://theme#card}",
+                        "content": {
+                          "type": "core://Row",
+                          "align": "Start",
+                          "spacing_dp": 12,
+                          "padding_h_dp": 11,
+                          "padding_v_dp": 12,
+                          "children": [
+                            {
+                              "type": "core://Conditional",
+                              "value": "$item.read",
+                              "equals": "false",
+                              "content": {
+                                "type": "core://Use",
+                                "component": "core:tinted_icon",
+                                "args": {
+                                  "icon": "notifications",
+                                  "tone": "accent"
+                                }
+                              }
+                            },
+                            {
+                              "type": "core://Conditional",
+                              "value": "$item.read",
+                              "equals": "false",
+                              "not": true,
+                              "content": {
+                                "type": "core://Use",
+                                "component": "core:tinted_icon",
+                                "args": {
+                                  "icon": "notifications",
+                                  "tone": "muted"
+                                }
+                              }
+                            },
+                            {
+                              "type": "core://Column",
+                              "spacing_dp": 2,
+                              "children": [
+                                {
+                                  "type": "core://Use",
+                                  "component": "core:muted_text",
+                                  "args": {
+                                    "text": "$item.channel_title · $item.at_day, $item.at_time",
+                                    "style": "Caption"
+                                  }
+                                },
+                                {
+                                  "type": "core://Text",
+                                  "style": "Label",
+                                  "value_expr": "$item.title"
+                                },
+                                {
+                                  "type": "core://Conditional",
+                                  "value": "$item.body",
+                                  "content": {
+                                    "type": "core://Use",
+                                    "component": "core:muted_text",
+                                    "args": {
+                                      "text": "$item.body",
+                                      "max_lines": 2
+                                    }
+                                  }
+                                }
+                              ]
+                            },
+                            {
+                              "type": "core://Spacer"
+                            },
+                            {
+                              "type": "core://Conditional",
+                              "value": "$item.read",
+                              "equals": "false",
+                              "content": {
+                                "type": "core://Use",
+                                "component": "core:dot",
+                                "args": {
+                                  "color": "${local://theme#unread}"
+                                }
+                              }
+                            }
+                          ]
+                        }
+                      }
+                    }
+                  }
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "type": "core://Conditional",
+          "count": {
+            "query_key": "collection:notifications",
+            "where": [
+              {
+                "field": "channel_enabled",
+                "equals": "true"
+              },
+              {
+                "field": "subject_alert_matched",
+                "equals": "true"
+              },
+              {
+                "field": "read",
+                "equals": "true"
+              },
+              {
+                "field": "read_at",
+                "older_than": "1d",
+                "not": true
+              }
+            ]
+          },
+          "content": {
+            "type": "core://Use",
+            "component": "core:titled_section",
+            "args": {
+              "text": "Earlier",
+              "space_above": 14
+            },
+            "children": [
+              {
+                "type": "core://Use",
+                "component": "core:grouped_list",
+                "children": [
+                  {
+                    "type": "core://List",
+                    "query_key": "collection:notifications",
+                    "spacing_dp": 1,
+                    "where": [
+                      {
+                        "field": "channel_enabled",
+                        "equals": "true"
+                      },
+                      {
+                        "field": "subject_alert_matched",
+                        "equals": "true"
+                      },
+                      {
+                        "field": "read",
+                        "equals": "true"
+                      },
+                      {
+                        "field": "read_at",
+                        "older_than": "1d",
+                        "not": true
+                      }
+                    ],
+                    "item_template": {
+                      "type": "core://Tappable",
+                      "content_description": "$item.title",
+                      "on_click": {
+                        "intent": "action.sequence",
+                        "steps": [
+                          {
+                            "intent": "action.mutation.optimistic",
+                            "entity_uri": "$item.uri",
+                            "field": "read",
+                            "value_expr": "true",
+                            "rollback_value": false,
+                            "endpoint": "/v1/collections/notifications/update",
+                            "payload": {
+                              "id": "$item.id",
+                              "read": "$value"
+                            }
+                          },
+                          {
+                            "intent": "action.device",
+                            "command": "open_notification",
+                            "id": "$item.uri"
+                          }
+                        ]
+                      },
+                      "content": {
+                        "type": "core://Box",
+                        "background": "${local://theme#card}",
+                        "content": {
+                          "type": "core://Row",
+                          "align": "Start",
+                          "spacing_dp": 12,
+                          "padding_h_dp": 11,
+                          "padding_v_dp": 12,
+                          "children": [
+                            {
+                              "type": "core://Conditional",
+                              "value": "$item.read",
+                              "equals": "false",
+                              "content": {
+                                "type": "core://Use",
+                                "component": "core:tinted_icon",
+                                "args": {
+                                  "icon": "notifications",
+                                  "tone": "accent"
+                                }
+                              }
+                            },
+                            {
+                              "type": "core://Conditional",
+                              "value": "$item.read",
+                              "equals": "false",
+                              "not": true,
+                              "content": {
+                                "type": "core://Use",
+                                "component": "core:tinted_icon",
+                                "args": {
+                                  "icon": "notifications",
+                                  "tone": "muted"
+                                }
+                              }
+                            },
+                            {
+                              "type": "core://Column",
+                              "spacing_dp": 2,
+                              "children": [
+                                {
+                                  "type": "core://Use",
+                                  "component": "core:muted_text",
+                                  "args": {
+                                    "text": "$item.channel_title · $item.at_day, $item.at_time",
+                                    "style": "Caption"
+                                  }
+                                },
+                                {
+                                  "type": "core://Text",
+                                  "style": "Label",
+                                  "value_expr": "$item.title"
+                                },
+                                {
+                                  "type": "core://Conditional",
+                                  "value": "$item.body",
+                                  "content": {
+                                    "type": "core://Use",
+                                    "component": "core:muted_text",
+                                    "args": {
+                                      "text": "$item.body",
+                                      "max_lines": 2
+                                    }
+                                  }
+                                }
+                              ]
+                            },
+                            {
+                              "type": "core://Spacer"
+                            },
+                            {
+                              "type": "core://Conditional",
+                              "value": "$item.read",
+                              "equals": "false",
+                              "content": {
+                                "type": "core://Use",
+                                "component": "core:dot",
+                                "args": {
+                                  "color": "${local://theme#unread}"
+                                }
+                              }
+                            }
+                          ]
+                        }
+                      }
+                    }
+                  }
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "type": "core://Use",
+          "component": "core:muted_note",
+          "args": {
+            "text": "You're all caught up.",
+            "count": {
+              "query_key": "collection:notifications",
+              "where": [
+                {
+                  "field": "channel_enabled",
+                  "equals": "true"
+                },
+                {
+                  "field": "subject_alert_matched",
+                  "equals": "true"
+                },
+                {
+                  "field": "read_at",
+                  "older_than": "1d",
+                  "not": true
+                }
+              ]
+            }
+          }
+        },
+        {
+          "type": "core://Spacer",
+          "size_dp": 14
+        },
+        {
+          "type": "core://Use",
+          "component": "core:collapsible",
+          "args": {
+            "key": "inbox_older",
+            "title": "Older · read more than a day ago"
+          },
+          "children": [
+            {
+              "type": "core://Use",
+              "component": "core:counted_list",
+              "args": {
+                "count": {
+                  "query_key": "collection:notifications",
+                  "where": [
+                    {
+                      "field": "channel_enabled",
+                      "equals": "true"
+                    },
+                    {
+                      "field": "subject_alert_matched",
+                      "equals": "true"
+                    },
+                    {
+                      "field": "read_at",
+                      "older_than": "1d"
+                    }
+                  ]
+                },
+                "empty": "Nothing older."
+              },
+              "children": [
+                {
+                  "type": "core://List",
+                  "query_key": "collection:notifications",
+                  "spacing_dp": 1,
+                  "where": [
+                    {
+                      "field": "channel_enabled",
+                      "equals": "true"
+                    },
+                    {
+                      "field": "subject_alert_matched",
+                      "equals": "true"
+                    },
+                    {
+                      "field": "read_at",
+                      "older_than": "1d"
+                    }
+                  ],
+                  "item_template": {
+                    "type": "core://Tappable",
+                    "content_description": "$item.title",
+                    "on_click": {
+                      "intent": "action.sequence",
+                      "steps": [
+                        {
+                          "intent": "action.mutation.optimistic",
+                          "entity_uri": "$item.uri",
+                          "field": "read",
+                          "value_expr": "true",
+                          "rollback_value": false,
+                          "endpoint": "/v1/collections/notifications/update",
+                          "payload": {
+                            "id": "$item.id",
+                            "read": "$value"
+                          }
+                        },
+                        {
+                          "intent": "action.device",
+                          "command": "open_notification",
+                          "id": "$item.uri"
+                        }
+                      ]
+                    },
+                    "content": {
+                      "type": "core://Box",
+                      "background": "${local://theme#card}",
+                      "content": {
+                        "type": "core://Row",
+                        "align": "Start",
+                        "spacing_dp": 12,
+                        "padding_h_dp": 11,
+                        "padding_v_dp": 12,
+                        "children": [
+                          {
+                            "type": "core://Conditional",
+                            "value": "$item.read",
+                            "equals": "false",
+                            "content": {
+                              "type": "core://Use",
+                              "component": "core:tinted_icon",
+                              "args": {
+                                "icon": "notifications",
+                                "tone": "accent"
+                              }
+                            }
+                          },
+                          {
+                            "type": "core://Conditional",
+                            "value": "$item.read",
+                            "equals": "false",
+                            "not": true,
+                            "content": {
+                              "type": "core://Use",
+                              "component": "core:tinted_icon",
+                              "args": {
+                                "icon": "notifications",
+                                "tone": "muted"
+                              }
+                            }
+                          },
+                          {
+                            "type": "core://Column",
+                            "spacing_dp": 2,
+                            "children": [
+                              {
+                                "type": "core://Use",
+                                "component": "core:muted_text",
+                                "args": {
+                                  "text": "$item.channel_title · $item.at_day, $item.at_time",
+                                  "style": "Caption"
+                                }
+                              },
+                              {
+                                "type": "core://Text",
+                                "style": "Label",
+                                "value_expr": "$item.title"
+                              },
+                              {
+                                "type": "core://Conditional",
+                                "value": "$item.body",
+                                "content": {
+                                  "type": "core://Use",
+                                  "component": "core:muted_text",
+                                  "args": {
+                                    "text": "$item.body",
+                                    "max_lines": 2
+                                  }
+                                }
+                              }
+                            ]
+                          },
+                          {
+                            "type": "core://Spacer"
+                          },
+                          {
+                            "type": "core://Conditional",
+                            "value": "$item.read",
+                            "equals": "false",
+                            "content": {
+                              "type": "core://Use",
+                              "component": "core:dot",
+                              "args": {
+                                "color": "${local://theme#unread}"
+                              }
+                            }
+                          }
+                        ]
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "core://Spacer",
+          "size_dp": 14
+        },
+        {
+          "type": "core://Row",
+          "align": "Center",
+          "spacing_dp": 4,
+          "children": [
+            {
+              "type": "core://Use",
+              "component": "core:muted_note",
+              "args": {
+                "text": "Switched-off channels don't show here."
+              }
+            },
+            {
+              "type": "core://Use",
+              "component": "core:text_link",
+              "args": {
+                "label": "Manage channels",
+                "description": "Manage channels in Settings",
+                "on_click": {
+                  "intent": "action.navigation.open",
+                  "layout": "settings",
+                  "presentation": "Panel"
+                }
+              }
+            }
+          ]
+        }
+      ],
+      "slots": {
+        "actions": [
+          {
+            "type": "core://Conditional",
+            "value": "${local://inbox#unread}",
+            "equals": "0",
+            "not": true,
+            "content": {
+              "type": "core://Button",
+              "label": "Mark all read",
+              "style": "Text",
+              "size": "Small",
+              "on_click": {
+                "intent": "action.device",
+                "command": "mark_all_read"
+              }
+            }
+          }
+        ]
+      }
+    }
+  }
+}

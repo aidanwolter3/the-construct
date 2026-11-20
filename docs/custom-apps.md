@@ -483,10 +483,18 @@ capped: tool names of at most 128 characters (longer ones are skipped), descript
 
 The **Events** app (app id `events`, `crates/source-events`) shows every upcoming event of the websites the user
 watches and notifies when one matches ("a show with Brass Lanterns at Improv Millbrook"). Its data is the system collection
-`events` (`source_id`, `title`, `start`, `end`, `venue`, `description`, `url`, `tickets_url`, `seen`): each website is a
-fetch filler, and each rule an alert on that filler. Claude adds and changes them with the Collections tools; the
-MCP instructions include the recipe. The app shows matches, sites with their health and alerts, a site's events, and
-an event with ticket and page links. The fields of `events` can't be renamed or removed.
+`events` (`source_id`, `title`, `start`, `end`, `venue`, `description`, `url`, `tickets_url`, `seen`, `going`): each
+website is a fetch filler, and each rule an alert on that filler. Claude adds and changes them with the Collections
+tools; the MCP instructions include the recipe. The app shows matches, sites with their health and alerts, a site's
+events, and an event with ticket and page links. The fields of `events` can't be renamed or removed.
+
+`seen` and `going` are the user's own toggles, which no filler writes. Opening an event from a list marks it seen
+(until then its row is tagged "New"); "I'm going" on an event's screen sets `going` (the row is tagged "Going", and a
+[calendar feed](#calendar-feeds) can list those events), and "Going ✓" takes it back. Matches and a site's events
+leave out an event once it started more than six hours ago. A pod made before `going` shipped gets the field when it
+next opens (`source_events::events::ensure`), unless its `events` already has a field of that name; rows read false
+until set. The layout is a `core://Page` built from the core components (`screen_scaffold`, `counted_list`,
+`item_row`, `titled_section`, `pill`, `card`), so a pod can show it by reference (`@core/events`) rather than a copy.
 
 The app replaced an earlier Watcher with its own tables (decisions [`watcher`](decisions/watcher.md),
 [`watcher-rules-per-site`](decisions/watcher-rules-per-site.md)); its app id was `watcher` until decision
@@ -499,3 +507,12 @@ Try it locally: `CONSTRUCT_FILL_PRIVATE_HOSTS=1 cargo run -p server`, serve an `
 The **Agents** source and blueprint (`agents`, `crates/source-agents`) show Claude Code sessions an external agent runner
 runs, with stop, wake, start and schedule actions, notifications, and an opt-in Tasks collection (MCP tool
 `agents_link_tasks`): see [agents.md](agents.md).
+
+## Server health
+
+The **Server monitoring** source (`monitor`, `crates/source-monitor`) ships the blueprint `server_health`: the
+server's status, its checks and every counter (feed `overview`, only in pods the operator turned monitoring on for)
+and the user's devices with the build each runs (feed `devices`, every pod). Nobody has to hand-write that screen:
+make a layout whose root is `{"type": "core://Use", "ref": "@core/server_health"}` with feeds
+`[["monitor","overview"],["monitor","devices"]]`, or open it by reference from a row or a button. Where monitoring is
+off it says so and shows the devices alone. See [server.md](server.md#monitoring).

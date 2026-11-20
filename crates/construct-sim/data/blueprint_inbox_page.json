@@ -1,427 +1,944 @@
 {
   "id": "inbox",
   "root": {
-    "children": [
-      {
-        "content": {
-          "children": [
-            {
-              "content": {
-                "content_description": "Back",
-                "icon": "arrow_back",
-                "on_click": {
-                  "intent": "action.navigation.back"
+    "background": "${local://theme#page}",
+    "content": {
+      "children": [
+        {
+          "content": {
+            "align": "Center",
+            "children": [
+              {
+                "content": {
+                  "content_description": "Back",
+                  "icon": "arrow_back",
+                  "on_click": {
+                    "intent": "action.navigation.back"
+                  },
+                  "tag": "back",
+                  "type": "core://IconButton"
                 },
-                "tag": "layout-back",
-                "type": "core://IconButton"
+                "type": "core://Conditional",
+                "value": "${local://nav#can_go_back}"
               },
-              "type": "core://Conditional",
-              "value": "${local://nav#pushed}"
-            },
-            {
-              "children": [
-                {
-                  "style": "Headline",
-                  "type": "core://Text",
-                  "value_expr": "Notifications"
-                }
-              ],
-              "padding_h_dp": 16,
-              "padding_v_dp": 12,
-              "type": "core://Column"
-            }
-          ],
-          "type": "core://Row"
-        },
-        "equals": "false",
-        "type": "core://Conditional",
-        "value": "${local://nav#inline}"
-      },
-      {
-        "content": {
-          "children": [
-            {
-              "children": [
-                {
-                  "style": "Secondary",
-                  "type": "core://Text",
-                  "value_expr": "${local://inbox#label}"
+              {
+                "style": "Headline",
+                "type": "core://Text",
+                "value_expr": "Notifications",
+                "weight": "SemiBold"
+              },
+              {
+                "content": {
+                  "size_dp": 18,
+                  "type": "core://Progress"
                 },
-                {
-                  "type": "core://Spacer"
-                },
-                {
+                "type": "core://Conditional",
+                "value": "${local://screen#loading}"
+              },
+              {
+                "type": "core://Spacer"
+              },
+              {
+                "content": {
                   "label": "Mark all read",
                   "on_click": {
                     "command": "mark_all_read",
                     "intent": "action.device"
                   },
+                  "size": "Small",
+                  "style": "Text",
                   "type": "core://Button"
-                }
-              ],
-              "padding_h_dp": 16,
-              "padding_v_dp": 4,
-              "spacing_dp": 8,
-              "type": "core://Row"
-            },
-            {
-              "empty_text": "You're all caught up.",
-              "group_by": {
-                "field": "at_date",
-                "header": {
-                  "children": [
-                    {
-                      "style": "Label",
-                      "type": "core://Text",
-                      "value_expr": "$item.at_day"
-                    }
-                  ],
-                  "padding_h_dp": 16,
-                  "padding_v_dp": 8,
-                  "type": "core://Column"
-                }
+                },
+                "equals": "0",
+                "not": true,
+                "type": "core://Conditional",
+                "value": "${local://inbox#unread}"
               },
-              "item_template": {
+              {
+                "content": {
+                  "size_dp": 0,
+                  "type": "core://Spacer"
+                },
+                "height_dp": 48,
+                "type": "core://Box",
+                "width_dp": 1
+              }
+            ],
+            "padding_v_dp": 4,
+            "spacing_dp": 4,
+            "type": "core://Row"
+          },
+          "padding_h_dp": 20,
+          "padding_v_dp": 4,
+          "type": "core://Box"
+        },
+        {
+          "content": {
+            "children": [
+              {
                 "content": {
                   "children": [
                     {
-                      "children": [
-                        {
-                          "style": "Secondary",
-                          "type": "core://Text",
-                          "value_expr": "$item.channel_title · $item.at_time"
-                        },
-                        {
-                          "style": "Body",
-                          "type": "core://Text",
-                          "value_expr": "$item.title"
-                        },
-                        {
-                          "content": {
-                            "style": "Secondary",
-                            "type": "core://Text",
-                            "value_expr": "$item.body"
-                          },
-                          "type": "core://Conditional",
-                          "value": "$item.body"
-                        }
-                      ],
-                      "orientation": "Vertical",
-                      "padding_dp": 0,
-                      "type": "core://Container"
-                    },
-                    {
+                      "size_dp": 4,
                       "type": "core://Spacer"
                     },
                     {
                       "content": {
-                        "background": "${local://theme#unread}",
-                        "content": {
-                          "type": "core://Spacer"
-                        },
-                        "corner_dp": 4,
-                        "height_dp": 8,
-                        "type": "core://Box",
-                        "width_dp": 8
+                        "style": "Label",
+                        "type": "core://Text",
+                        "value_expr": "New · ${local://inbox#unread}"
                       },
-                      "equals": "false",
-                      "type": "core://Conditional",
-                      "value": "$item.read"
-                    }
-                  ],
-                  "padding_h_dp": 16,
-                  "padding_v_dp": 8,
-                  "spacing_dp": 12,
-                  "type": "core://Row"
-                },
-                "content_description": "$item.title",
-                "on_click": {
-                  "intent": "action.sequence",
-                  "steps": [
-                    {
-                      "endpoint": "/v1/collections/notifications/update",
-                      "entity_uri": "$item.uri",
-                      "field": "read",
-                      "intent": "action.mutation.optimistic",
-                      "payload": {
-                        "id": "$item.id",
-                        "read": "$value"
-                      },
-                      "rollback_value": false,
-                      "value_expr": "true"
+                      "content_color": "${local://theme#muted_text}",
+                      "padding_h_dp": 4,
+                      "type": "core://Box"
                     },
                     {
-                      "command": "open_notification",
-                      "id": "$item.uri",
-                      "intent": "action.device"
-                    }
-                  ]
-                },
-                "type": "core://Tappable"
-              },
-              "query_key": "collection:notifications",
-              "type": "core://List",
-              "where": [
-                {
-                  "equals": "true",
-                  "field": "channel_enabled"
-                },
-                {
-                  "equals": "true",
-                  "field": "subject_alert_matched"
-                },
-                {
-                  "equals": "",
-                  "field": "read_at",
-                  "not": true,
-                  "older_than": "1d"
-                }
-              ]
-            },
-            {
-              "children": [
-                {
-                  "content": {
-                    "content": {
-                      "children": [
-                        {
-                          "style": "Label",
-                          "type": "core://Text",
-                          "value_expr": "Read more than a day ago"
-                        },
-                        {
-                          "type": "core://Spacer"
-                        },
-                        {
-                          "style": "Secondary",
-                          "type": "core://Text",
-                          "value_expr": "Show"
-                        }
-                      ],
-                      "padding_h_dp": 16,
-                      "padding_v_dp": 8,
-                      "type": "core://Row"
+                      "size_dp": 8,
+                      "type": "core://Spacer"
                     },
-                    "content_description": "Read more than a day ago",
-                    "on_click": {
-                      "entity_uri": "local://collapsible/inbox_older",
-                      "field": "open",
-                      "intent": "action.local.set",
-                      "value_expr": "true"
-                    },
-                    "type": "core://Tappable"
-                  },
-                  "equals": "",
-                  "type": "core://Conditional",
-                  "value": "${local://collapsible/inbox_older#open}"
-                },
-                {
-                  "content": {
-                    "content": {
-                      "children": [
-                        {
-                          "style": "Label",
-                          "type": "core://Text",
-                          "value_expr": "Read more than a day ago"
-                        },
-                        {
-                          "type": "core://Spacer"
-                        },
-                        {
-                          "style": "Secondary",
-                          "type": "core://Text",
-                          "value_expr": "Show"
-                        }
-                      ],
-                      "padding_h_dp": 16,
-                      "padding_v_dp": 8,
-                      "type": "core://Row"
-                    },
-                    "content_description": "Read more than a day ago",
-                    "on_click": {
-                      "entity_uri": "local://collapsible/inbox_older",
-                      "field": "open",
-                      "intent": "action.local.set",
-                      "value_expr": "true"
-                    },
-                    "type": "core://Tappable"
-                  },
-                  "equals": "false",
-                  "type": "core://Conditional",
-                  "value": "${local://collapsible/inbox_older#open}"
-                },
-                {
-                  "content": {
-                    "children": [
-                      {
+                    {
+                      "background": "${local://theme#card}",
+                      "border_color": "${local://theme#card_border}",
+                      "content": {
+                        "background": "${local://theme#card_border}",
                         "content": {
                           "children": [
                             {
-                              "style": "Label",
-                              "type": "core://Text",
-                              "value_expr": "Read more than a day ago"
-                            },
-                            {
-                              "type": "core://Spacer"
-                            },
-                            {
-                              "style": "Secondary",
-                              "type": "core://Text",
-                              "value_expr": "Hide"
+                              "item_template": {
+                                "content": {
+                                  "background": "${local://theme#card}",
+                                  "content": {
+                                    "align": "Start",
+                                    "children": [
+                                      {
+                                        "content": {
+                                          "align": "Center",
+                                          "background": "${local://theme#accent_surface}",
+                                          "content": {
+                                            "icon": "notifications",
+                                            "text": "",
+                                            "type": "core://Badge"
+                                          },
+                                          "content_color": "${local://theme#accent}",
+                                          "corner_dp": 512,
+                                          "height_dp": 34,
+                                          "type": "core://Box",
+                                          "width_dp": 34
+                                        },
+                                        "equals": "false",
+                                        "type": "core://Conditional",
+                                        "value": "$item.read"
+                                      },
+                                      {
+                                        "content": {
+                                          "align": "Center",
+                                          "background": "${local://theme#muted_surface}",
+                                          "content": {
+                                            "icon": "notifications",
+                                            "text": "",
+                                            "type": "core://Badge"
+                                          },
+                                          "content_color": "${local://theme#muted_text}",
+                                          "corner_dp": 512,
+                                          "height_dp": 34,
+                                          "type": "core://Box",
+                                          "width_dp": 34
+                                        },
+                                        "equals": "false",
+                                        "not": true,
+                                        "type": "core://Conditional",
+                                        "value": "$item.read"
+                                      },
+                                      {
+                                        "children": [
+                                          {
+                                            "content": {
+                                              "style": "Caption",
+                                              "type": "core://Text",
+                                              "value_expr": "$item.channel_title · $item.at_day, $item.at_time"
+                                            },
+                                            "content_color": "${local://theme#muted_text}",
+                                            "type": "core://Box"
+                                          },
+                                          {
+                                            "style": "Label",
+                                            "type": "core://Text",
+                                            "value_expr": "$item.title"
+                                          },
+                                          {
+                                            "content": {
+                                              "content": {
+                                                "max_lines": 2,
+                                                "style": "Secondary",
+                                                "type": "core://Text",
+                                                "value_expr": "$item.body"
+                                              },
+                                              "content_color": "${local://theme#muted_text}",
+                                              "type": "core://Box"
+                                            },
+                                            "type": "core://Conditional",
+                                            "value": "$item.body"
+                                          }
+                                        ],
+                                        "spacing_dp": 2,
+                                        "type": "core://Column"
+                                      },
+                                      {
+                                        "type": "core://Spacer"
+                                      },
+                                      {
+                                        "content": {
+                                          "background": "${local://theme#unread}",
+                                          "content": {
+                                            "type": "core://Spacer"
+                                          },
+                                          "corner_dp": 4,
+                                          "height_dp": 8,
+                                          "type": "core://Box",
+                                          "width_dp": 8
+                                        },
+                                        "equals": "false",
+                                        "type": "core://Conditional",
+                                        "value": "$item.read"
+                                      }
+                                    ],
+                                    "padding_h_dp": 11,
+                                    "padding_v_dp": 12,
+                                    "spacing_dp": 12,
+                                    "type": "core://Row"
+                                  },
+                                  "type": "core://Box"
+                                },
+                                "content_description": "$item.title",
+                                "on_click": {
+                                  "intent": "action.sequence",
+                                  "steps": [
+                                    {
+                                      "endpoint": "/v1/collections/notifications/update",
+                                      "entity_uri": "$item.uri",
+                                      "field": "read",
+                                      "intent": "action.mutation.optimistic",
+                                      "payload": {
+                                        "id": "$item.id",
+                                        "read": "$value"
+                                      },
+                                      "rollback_value": false,
+                                      "value_expr": "true"
+                                    },
+                                    {
+                                      "command": "open_notification",
+                                      "id": "$item.uri",
+                                      "intent": "action.device"
+                                    }
+                                  ]
+                                },
+                                "type": "core://Tappable"
+                              },
+                              "query_key": "collection:notifications",
+                              "spacing_dp": 1,
+                              "type": "core://List",
+                              "where": [
+                                {
+                                  "equals": "true",
+                                  "field": "channel_enabled"
+                                },
+                                {
+                                  "equals": "true",
+                                  "field": "subject_alert_matched"
+                                },
+                                {
+                                  "equals": "false",
+                                  "field": "read"
+                                }
+                              ]
                             }
                           ],
-                          "padding_h_dp": 16,
-                          "padding_v_dp": 8,
-                          "type": "core://Row"
+                          "type": "core://Column"
                         },
-                        "content_description": "Read more than a day ago",
-                        "on_click": {
-                          "entity_uri": "local://collapsible/inbox_older",
-                          "field": "open",
-                          "intent": "action.local.set",
-                          "value_expr": "false"
-                        },
-                        "type": "core://Tappable"
+                        "type": "core://Box"
                       },
-                      {
-                        "empty_text": "Nothing older.",
-                        "group_by": {
-                          "field": "at_date",
-                          "header": {
+                      "corner_dp": 18,
+                      "padding_h_dp": 5,
+                      "padding_v_dp": 6,
+                      "type": "core://Box"
+                    }
+                  ],
+                  "type": "core://Column"
+                },
+                "count": {
+                  "query_key": "collection:notifications",
+                  "where": [
+                    {
+                      "equals": "true",
+                      "field": "channel_enabled"
+                    },
+                    {
+                      "equals": "true",
+                      "field": "subject_alert_matched"
+                    },
+                    {
+                      "equals": "false",
+                      "field": "read"
+                    }
+                  ]
+                },
+                "type": "core://Conditional",
+                "value": ""
+              },
+              {
+                "content": {
+                  "children": [
+                    {
+                      "size_dp": 14,
+                      "type": "core://Spacer"
+                    },
+                    {
+                      "content": {
+                        "style": "Label",
+                        "type": "core://Text",
+                        "value_expr": "Earlier"
+                      },
+                      "content_color": "${local://theme#muted_text}",
+                      "padding_h_dp": 4,
+                      "type": "core://Box"
+                    },
+                    {
+                      "size_dp": 8,
+                      "type": "core://Spacer"
+                    },
+                    {
+                      "background": "${local://theme#card}",
+                      "border_color": "${local://theme#card_border}",
+                      "content": {
+                        "background": "${local://theme#card_border}",
+                        "content": {
+                          "children": [
+                            {
+                              "item_template": {
+                                "content": {
+                                  "background": "${local://theme#card}",
+                                  "content": {
+                                    "align": "Start",
+                                    "children": [
+                                      {
+                                        "content": {
+                                          "align": "Center",
+                                          "background": "${local://theme#accent_surface}",
+                                          "content": {
+                                            "icon": "notifications",
+                                            "text": "",
+                                            "type": "core://Badge"
+                                          },
+                                          "content_color": "${local://theme#accent}",
+                                          "corner_dp": 512,
+                                          "height_dp": 34,
+                                          "type": "core://Box",
+                                          "width_dp": 34
+                                        },
+                                        "equals": "false",
+                                        "type": "core://Conditional",
+                                        "value": "$item.read"
+                                      },
+                                      {
+                                        "content": {
+                                          "align": "Center",
+                                          "background": "${local://theme#muted_surface}",
+                                          "content": {
+                                            "icon": "notifications",
+                                            "text": "",
+                                            "type": "core://Badge"
+                                          },
+                                          "content_color": "${local://theme#muted_text}",
+                                          "corner_dp": 512,
+                                          "height_dp": 34,
+                                          "type": "core://Box",
+                                          "width_dp": 34
+                                        },
+                                        "equals": "false",
+                                        "not": true,
+                                        "type": "core://Conditional",
+                                        "value": "$item.read"
+                                      },
+                                      {
+                                        "children": [
+                                          {
+                                            "content": {
+                                              "style": "Caption",
+                                              "type": "core://Text",
+                                              "value_expr": "$item.channel_title · $item.at_day, $item.at_time"
+                                            },
+                                            "content_color": "${local://theme#muted_text}",
+                                            "type": "core://Box"
+                                          },
+                                          {
+                                            "style": "Label",
+                                            "type": "core://Text",
+                                            "value_expr": "$item.title"
+                                          },
+                                          {
+                                            "content": {
+                                              "content": {
+                                                "max_lines": 2,
+                                                "style": "Secondary",
+                                                "type": "core://Text",
+                                                "value_expr": "$item.body"
+                                              },
+                                              "content_color": "${local://theme#muted_text}",
+                                              "type": "core://Box"
+                                            },
+                                            "type": "core://Conditional",
+                                            "value": "$item.body"
+                                          }
+                                        ],
+                                        "spacing_dp": 2,
+                                        "type": "core://Column"
+                                      },
+                                      {
+                                        "type": "core://Spacer"
+                                      },
+                                      {
+                                        "content": {
+                                          "background": "${local://theme#unread}",
+                                          "content": {
+                                            "type": "core://Spacer"
+                                          },
+                                          "corner_dp": 4,
+                                          "height_dp": 8,
+                                          "type": "core://Box",
+                                          "width_dp": 8
+                                        },
+                                        "equals": "false",
+                                        "type": "core://Conditional",
+                                        "value": "$item.read"
+                                      }
+                                    ],
+                                    "padding_h_dp": 11,
+                                    "padding_v_dp": 12,
+                                    "spacing_dp": 12,
+                                    "type": "core://Row"
+                                  },
+                                  "type": "core://Box"
+                                },
+                                "content_description": "$item.title",
+                                "on_click": {
+                                  "intent": "action.sequence",
+                                  "steps": [
+                                    {
+                                      "endpoint": "/v1/collections/notifications/update",
+                                      "entity_uri": "$item.uri",
+                                      "field": "read",
+                                      "intent": "action.mutation.optimistic",
+                                      "payload": {
+                                        "id": "$item.id",
+                                        "read": "$value"
+                                      },
+                                      "rollback_value": false,
+                                      "value_expr": "true"
+                                    },
+                                    {
+                                      "command": "open_notification",
+                                      "id": "$item.uri",
+                                      "intent": "action.device"
+                                    }
+                                  ]
+                                },
+                                "type": "core://Tappable"
+                              },
+                              "query_key": "collection:notifications",
+                              "spacing_dp": 1,
+                              "type": "core://List",
+                              "where": [
+                                {
+                                  "equals": "true",
+                                  "field": "channel_enabled"
+                                },
+                                {
+                                  "equals": "true",
+                                  "field": "subject_alert_matched"
+                                },
+                                {
+                                  "equals": "true",
+                                  "field": "read"
+                                },
+                                {
+                                  "equals": "",
+                                  "field": "read_at",
+                                  "not": true,
+                                  "older_than": "1d"
+                                }
+                              ]
+                            }
+                          ],
+                          "type": "core://Column"
+                        },
+                        "type": "core://Box"
+                      },
+                      "corner_dp": 18,
+                      "padding_h_dp": 5,
+                      "padding_v_dp": 6,
+                      "type": "core://Box"
+                    }
+                  ],
+                  "type": "core://Column"
+                },
+                "count": {
+                  "query_key": "collection:notifications",
+                  "where": [
+                    {
+                      "equals": "true",
+                      "field": "channel_enabled"
+                    },
+                    {
+                      "equals": "true",
+                      "field": "subject_alert_matched"
+                    },
+                    {
+                      "equals": "true",
+                      "field": "read"
+                    },
+                    {
+                      "equals": "",
+                      "field": "read_at",
+                      "not": true,
+                      "older_than": "1d"
+                    }
+                  ]
+                },
+                "type": "core://Conditional",
+                "value": ""
+              },
+              {
+                "content": {
+                  "content": {
+                    "style": "Secondary",
+                    "type": "core://Text",
+                    "value_expr": "You're all caught up."
+                  },
+                  "content_color": "${local://theme#muted_text}",
+                  "padding_h_dp": 4,
+                  "type": "core://Box"
+                },
+                "count": {
+                  "query_key": "collection:notifications",
+                  "where": [
+                    {
+                      "equals": "true",
+                      "field": "channel_enabled"
+                    },
+                    {
+                      "equals": "true",
+                      "field": "subject_alert_matched"
+                    },
+                    {
+                      "equals": "",
+                      "field": "read_at",
+                      "not": true,
+                      "older_than": "1d"
+                    }
+                  ]
+                },
+                "not": true,
+                "type": "core://Conditional",
+                "value": ""
+              },
+              {
+                "size_dp": 14,
+                "type": "core://Spacer"
+              },
+              {
+                "children": [
+                  {
+                    "content": {
+                      "content": {
+                        "children": [
+                          {
+                            "style": "Label",
+                            "type": "core://Text",
+                            "value_expr": "Older · read more than a day ago"
+                          },
+                          {
+                            "type": "core://Spacer"
+                          },
+                          {
+                            "style": "Secondary",
+                            "type": "core://Text",
+                            "value_expr": "Show"
+                          }
+                        ],
+                        "padding_h_dp": 16,
+                        "padding_v_dp": 8,
+                        "type": "core://Row"
+                      },
+                      "content_description": "Older · read more than a day ago",
+                      "on_click": {
+                        "entity_uri": "local://collapsible/inbox_older",
+                        "field": "open",
+                        "intent": "action.local.set",
+                        "value_expr": "true"
+                      },
+                      "type": "core://Tappable"
+                    },
+                    "equals": "",
+                    "type": "core://Conditional",
+                    "value": "${local://collapsible/inbox_older#open}"
+                  },
+                  {
+                    "content": {
+                      "content": {
+                        "children": [
+                          {
+                            "style": "Label",
+                            "type": "core://Text",
+                            "value_expr": "Older · read more than a day ago"
+                          },
+                          {
+                            "type": "core://Spacer"
+                          },
+                          {
+                            "style": "Secondary",
+                            "type": "core://Text",
+                            "value_expr": "Show"
+                          }
+                        ],
+                        "padding_h_dp": 16,
+                        "padding_v_dp": 8,
+                        "type": "core://Row"
+                      },
+                      "content_description": "Older · read more than a day ago",
+                      "on_click": {
+                        "entity_uri": "local://collapsible/inbox_older",
+                        "field": "open",
+                        "intent": "action.local.set",
+                        "value_expr": "true"
+                      },
+                      "type": "core://Tappable"
+                    },
+                    "equals": "false",
+                    "type": "core://Conditional",
+                    "value": "${local://collapsible/inbox_older#open}"
+                  },
+                  {
+                    "content": {
+                      "children": [
+                        {
+                          "content": {
                             "children": [
                               {
                                 "style": "Label",
                                 "type": "core://Text",
-                                "value_expr": "$item.at_day"
-                              }
-                            ],
-                            "padding_h_dp": 16,
-                            "padding_v_dp": 8,
-                            "type": "core://Column"
-                          }
-                        },
-                        "item_template": {
-                          "content": {
-                            "children": [
-                              {
-                                "children": [
-                                  {
-                                    "style": "Secondary",
-                                    "type": "core://Text",
-                                    "value_expr": "$item.channel_title · $item.at_time"
-                                  },
-                                  {
-                                    "style": "Body",
-                                    "type": "core://Text",
-                                    "value_expr": "$item.title"
-                                  },
-                                  {
-                                    "content": {
-                                      "style": "Secondary",
-                                      "type": "core://Text",
-                                      "value_expr": "$item.body"
-                                    },
-                                    "type": "core://Conditional",
-                                    "value": "$item.body"
-                                  }
-                                ],
-                                "orientation": "Vertical",
-                                "padding_dp": 0,
-                                "type": "core://Container"
+                                "value_expr": "Older · read more than a day ago"
                               },
                               {
                                 "type": "core://Spacer"
                               },
                               {
-                                "content": {
-                                  "background": "${local://theme#unread}",
-                                  "content": {
-                                    "type": "core://Spacer"
-                                  },
-                                  "corner_dp": 4,
-                                  "height_dp": 8,
-                                  "type": "core://Box",
-                                  "width_dp": 8
-                                },
-                                "equals": "false",
-                                "type": "core://Conditional",
-                                "value": "$item.read"
+                                "style": "Secondary",
+                                "type": "core://Text",
+                                "value_expr": "Hide"
                               }
                             ],
                             "padding_h_dp": 16,
                             "padding_v_dp": 8,
-                            "spacing_dp": 12,
                             "type": "core://Row"
                           },
-                          "content_description": "$item.title",
+                          "content_description": "Older · read more than a day ago",
                           "on_click": {
-                            "intent": "action.sequence",
-                            "steps": [
-                              {
-                                "endpoint": "/v1/collections/notifications/update",
-                                "entity_uri": "$item.uri",
-                                "field": "read",
-                                "intent": "action.mutation.optimistic",
-                                "payload": {
-                                  "id": "$item.id",
-                                  "read": "$value"
-                                },
-                                "rollback_value": false,
-                                "value_expr": "true"
-                              },
-                              {
-                                "command": "open_notification",
-                                "id": "$item.uri",
-                                "intent": "action.device"
-                              }
-                            ]
+                            "entity_uri": "local://collapsible/inbox_older",
+                            "field": "open",
+                            "intent": "action.local.set",
+                            "value_expr": "false"
                           },
                           "type": "core://Tappable"
                         },
-                        "query_key": "collection:notifications",
-                        "type": "core://List",
-                        "where": [
-                          {
-                            "equals": "true",
-                            "field": "channel_enabled"
+                        {
+                          "content": {
+                            "background": "${local://theme#card}",
+                            "border_color": "${local://theme#card_border}",
+                            "content": {
+                              "background": "${local://theme#card_border}",
+                              "content": {
+                                "children": [
+                                  {
+                                    "item_template": {
+                                      "content": {
+                                        "background": "${local://theme#card}",
+                                        "content": {
+                                          "align": "Start",
+                                          "children": [
+                                            {
+                                              "content": {
+                                                "align": "Center",
+                                                "background": "${local://theme#accent_surface}",
+                                                "content": {
+                                                  "icon": "notifications",
+                                                  "text": "",
+                                                  "type": "core://Badge"
+                                                },
+                                                "content_color": "${local://theme#accent}",
+                                                "corner_dp": 512,
+                                                "height_dp": 34,
+                                                "type": "core://Box",
+                                                "width_dp": 34
+                                              },
+                                              "equals": "false",
+                                              "type": "core://Conditional",
+                                              "value": "$item.read"
+                                            },
+                                            {
+                                              "content": {
+                                                "align": "Center",
+                                                "background": "${local://theme#muted_surface}",
+                                                "content": {
+                                                  "icon": "notifications",
+                                                  "text": "",
+                                                  "type": "core://Badge"
+                                                },
+                                                "content_color": "${local://theme#muted_text}",
+                                                "corner_dp": 512,
+                                                "height_dp": 34,
+                                                "type": "core://Box",
+                                                "width_dp": 34
+                                              },
+                                              "equals": "false",
+                                              "not": true,
+                                              "type": "core://Conditional",
+                                              "value": "$item.read"
+                                            },
+                                            {
+                                              "children": [
+                                                {
+                                                  "content": {
+                                                    "style": "Caption",
+                                                    "type": "core://Text",
+                                                    "value_expr": "$item.channel_title · $item.at_day, $item.at_time"
+                                                  },
+                                                  "content_color": "${local://theme#muted_text}",
+                                                  "type": "core://Box"
+                                                },
+                                                {
+                                                  "style": "Label",
+                                                  "type": "core://Text",
+                                                  "value_expr": "$item.title"
+                                                },
+                                                {
+                                                  "content": {
+                                                    "content": {
+                                                      "max_lines": 2,
+                                                      "style": "Secondary",
+                                                      "type": "core://Text",
+                                                      "value_expr": "$item.body"
+                                                    },
+                                                    "content_color": "${local://theme#muted_text}",
+                                                    "type": "core://Box"
+                                                  },
+                                                  "type": "core://Conditional",
+                                                  "value": "$item.body"
+                                                }
+                                              ],
+                                              "spacing_dp": 2,
+                                              "type": "core://Column"
+                                            },
+                                            {
+                                              "type": "core://Spacer"
+                                            },
+                                            {
+                                              "content": {
+                                                "background": "${local://theme#unread}",
+                                                "content": {
+                                                  "type": "core://Spacer"
+                                                },
+                                                "corner_dp": 4,
+                                                "height_dp": 8,
+                                                "type": "core://Box",
+                                                "width_dp": 8
+                                              },
+                                              "equals": "false",
+                                              "type": "core://Conditional",
+                                              "value": "$item.read"
+                                            }
+                                          ],
+                                          "padding_h_dp": 11,
+                                          "padding_v_dp": 12,
+                                          "spacing_dp": 12,
+                                          "type": "core://Row"
+                                        },
+                                        "type": "core://Box"
+                                      },
+                                      "content_description": "$item.title",
+                                      "on_click": {
+                                        "intent": "action.sequence",
+                                        "steps": [
+                                          {
+                                            "endpoint": "/v1/collections/notifications/update",
+                                            "entity_uri": "$item.uri",
+                                            "field": "read",
+                                            "intent": "action.mutation.optimistic",
+                                            "payload": {
+                                              "id": "$item.id",
+                                              "read": "$value"
+                                            },
+                                            "rollback_value": false,
+                                            "value_expr": "true"
+                                          },
+                                          {
+                                            "command": "open_notification",
+                                            "id": "$item.uri",
+                                            "intent": "action.device"
+                                          }
+                                        ]
+                                      },
+                                      "type": "core://Tappable"
+                                    },
+                                    "query_key": "collection:notifications",
+                                    "spacing_dp": 1,
+                                    "type": "core://List",
+                                    "where": [
+                                      {
+                                        "equals": "true",
+                                        "field": "channel_enabled"
+                                      },
+                                      {
+                                        "equals": "true",
+                                        "field": "subject_alert_matched"
+                                      },
+                                      {
+                                        "equals": "",
+                                        "field": "read_at",
+                                        "older_than": "1d"
+                                      }
+                                    ]
+                                  }
+                                ],
+                                "type": "core://Column"
+                              },
+                              "type": "core://Box"
+                            },
+                            "corner_dp": 18,
+                            "padding_h_dp": 5,
+                            "padding_v_dp": 6,
+                            "type": "core://Box"
                           },
-                          {
-                            "equals": "true",
-                            "field": "subject_alert_matched"
+                          "count": {
+                            "query_key": "collection:notifications",
+                            "where": [
+                              {
+                                "equals": "true",
+                                "field": "channel_enabled"
+                              },
+                              {
+                                "equals": "true",
+                                "field": "subject_alert_matched"
+                              },
+                              {
+                                "equals": "",
+                                "field": "read_at",
+                                "older_than": "1d"
+                              }
+                            ]
                           },
-                          {
-                            "equals": "",
-                            "field": "read_at",
-                            "older_than": "1d"
-                          }
-                        ]
-                      }
-                    ],
-                    "type": "core://Column"
-                  },
-                  "equals": "true",
-                  "type": "core://Conditional",
-                  "value": "${local://collapsible/inbox_older#open}"
-                }
-              ],
-              "type": "core://Column"
-            },
-            {
-              "content": {
-                "size_dp": 16,
+                          "type": "core://Conditional",
+                          "value": ""
+                        },
+                        {
+                          "content": {
+                            "content": {
+                              "style": "Secondary",
+                              "type": "core://Text",
+                              "value_expr": "Nothing older."
+                            },
+                            "content_color": "${local://theme#muted_text}",
+                            "padding_h_dp": 4,
+                            "type": "core://Box"
+                          },
+                          "count": {
+                            "query_key": "collection:notifications",
+                            "where": [
+                              {
+                                "equals": "true",
+                                "field": "channel_enabled"
+                              },
+                              {
+                                "equals": "true",
+                                "field": "subject_alert_matched"
+                              },
+                              {
+                                "equals": "",
+                                "field": "read_at",
+                                "older_than": "1d"
+                              }
+                            ]
+                          },
+                          "not": true,
+                          "type": "core://Conditional",
+                          "value": ""
+                        }
+                      ],
+                      "type": "core://Column"
+                    },
+                    "equals": "true",
+                    "type": "core://Conditional",
+                    "value": "${local://collapsible/inbox_older#open}"
+                  }
+                ],
+                "type": "core://Column"
+              },
+              {
+                "size_dp": 14,
                 "type": "core://Spacer"
               },
-              "equals": "false",
-              "type": "core://Conditional",
-              "value": "${local://nav#inline}"
-            }
-          ],
-          "type": "core://Column"
-        },
-        "type": "core://Scroll"
-      }
-    ],
-    "type": "core://Column"
+              {
+                "align": "Center",
+                "children": [
+                  {
+                    "content": {
+                      "style": "Secondary",
+                      "type": "core://Text",
+                      "value_expr": "Switched-off channels don't show here."
+                    },
+                    "content_color": "${local://theme#muted_text}",
+                    "padding_h_dp": 4,
+                    "type": "core://Box"
+                  },
+                  {
+                    "content": {
+                      "content": {
+                        "style": "Label",
+                        "type": "core://Text",
+                        "value_expr": "Manage channels"
+                      },
+                      "content_color": "${local://theme#accent}",
+                      "padding_h_dp": 4,
+                      "padding_v_dp": 8,
+                      "type": "core://Box"
+                    },
+                    "content_description": "Manage channels in Settings",
+                    "on_click": {
+                      "intent": "action.navigation.open",
+                      "layout": "settings",
+                      "presentation": "Panel"
+                    },
+                    "type": "core://Tappable"
+                  }
+                ],
+                "spacing_dp": 4,
+                "type": "core://Row"
+              },
+              {
+                "size_dp": 16,
+                "type": "core://Spacer"
+              }
+            ],
+            "padding_h_dp": 20,
+            "padding_v_dp": 8,
+            "type": "core://Column"
+          },
+          "type": "core://Scroll"
+        }
+      ],
+      "type": "core://Column"
+    },
+    "fill": true,
+    "type": "core://Box"
   },
   "title": "Notifications",
   "type": "core://Page"

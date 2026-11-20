@@ -1,628 +1,1121 @@
 {
   "entities": {
-    "collections://events/fillers/s2kummuwpmo": {
-      "alert_count": 1,
-      "alerts_text": "Watching for Brass Lanterns",
-      "detail": "4 items · filled just now",
-      "failing": false,
-      "id": "s2kummuwpmo",
-      "kind": "fetch",
-      "state": "ok",
-      "title": "Improv Club",
-      "uri": "collections://events/fillers/s2kummuwpmo",
-      "url": "https://improvclub.example/cal.ics"
+    "collections://events/alerts/a4kuzf75v64": {
+      "filler_id": "spor5e4ku76",
+      "id": "a4kuzf75v64",
+      "name": "Brass Lanterns",
+      "summary": "\"Brass Lanterns\" · not \"class\"",
+      "uri": "collections://events/alerts/a4kuzf75v64"
     },
-    "collections://events/fillers/srs6oxi5xve": {
+    "collections://events/fillers/s3nxebzbjjp": {
       "alert_count": 0,
       "alerts_text": "No alerts yet",
+      "can_check": true,
       "detail": "the site answered 404 Not Found (1 failed fills in a row)",
       "failing": true,
-      "id": "srs6oxi5xve",
+      "id": "s3nxebzbjjp",
       "kind": "fetch",
+      "refreshing": false,
       "state": "failing",
       "title": "Laugh Loft",
-      "uri": "collections://events/fillers/srs6oxi5xve",
+      "uri": "collections://events/fillers/s3nxebzbjjp",
       "url": "https://improvclub.example/missing.ics"
     },
-    "collections://events/r7lvuszkjc5": {
+    "collections://events/fillers/spor5e4ku76": {
+      "alert_count": 1,
+      "alerts_text": "Watching for Brass Lanterns",
+      "can_check": true,
+      "detail": "4 items · filled just now",
+      "failing": false,
+      "id": "spor5e4ku76",
+      "kind": "fetch",
+      "refreshing": false,
+      "state": "ok",
+      "title": "Improv Club",
+      "uri": "collections://events/fillers/spor5e4ku76",
+      "url": "https://improvclub.example/cal.ics"
+    },
+    "collections://events/r2gkdcoxghp": {
       "alert_matched": false,
       "alert_names": "",
-      "created_at": "2026-11-07T22:51:19Z",
+      "created_at": "2026-11-20T18:37:16Z",
       "deleted": false,
       "description": "Taught by Brass Lanterns",
       "end": null,
       "end_date": "",
+      "end_day": "",
       "end_text": "",
       "end_time": "",
-      "filler_id": "s2kummuwpmo",
+      "filler_id": "spor5e4ku76",
       "filler_title": "Improv Club",
-      "id": "r7lvuszkjc5",
+      "going": false,
+      "id": "r2gkdcoxghp",
       "seen": false,
       "source_id": "cl1",
       "start": "2099-11-07T10:00-07:00",
       "start_date": "2099-11-07",
+      "start_day": "Sat Nov 7",
       "start_text": "Sat Nov 7 · 10 AM",
       "start_time": "10 AM",
       "tickets_url": null,
       "title": "Intro to Improv (class)",
-      "updated_at": "2026-11-07T22:51:19Z",
+      "updated_at": "2026-11-20T18:37:16Z",
       "url": null,
       "venue": "The Back Room"
     },
-    "collections://events/rdqxwgffrgv": {
+    "collections://events/r7exmgmla56": {
       "alert_matched": true,
       "alert_names": "Brass Lanterns",
-      "created_at": "2026-11-07T22:51:19Z",
-      "deleted": false,
-      "description": "An hour of Brass Lanterns",
-      "end": null,
-      "end_date": "",
-      "end_text": "",
-      "end_time": "",
-      "filler_id": "s2kummuwpmo",
-      "filler_title": "Improv Club",
-      "id": "rdqxwgffrgv",
-      "seen": true,
-      "source_id": "bc2",
-      "start": "2099-11-13T20:00-07:00",
-      "start_date": "2099-11-13",
-      "start_text": "Fri Nov 13 · 8 PM",
-      "start_time": "8 PM",
-      "tickets_url": null,
-      "title": "Brass Lanterns: Live!",
-      "updated_at": "2026-11-07T22:51:21Z",
-      "url": null,
-      "venue": "The Back Room"
-    },
-    "collections://events/rjtibsvvqss": {
-      "alert_matched": true,
-      "alert_names": "Brass Lanterns",
-      "created_at": "2026-11-07T22:51:19Z",
+      "created_at": "2026-11-20T18:37:16Z",
       "deleted": false,
       "description": "Lineup: Brass Lanterns, Teacup Riot, Open Tab",
       "end": null,
       "end_date": "",
+      "end_day": "",
       "end_text": "",
       "end_time": "",
-      "filler_id": "s2kummuwpmo",
+      "filler_id": "spor5e4ku76",
       "filler_title": "Improv Club",
-      "id": "rjtibsvvqss",
+      "going": false,
+      "id": "r7exmgmla56",
       "seen": false,
       "source_id": "bc1",
       "start": "2099-11-06T19:30-07:00",
       "start_date": "2099-11-06",
+      "start_day": "Fri Nov 6",
       "start_text": "Fri Nov 6 · 7:30 PM",
       "start_time": "7:30 PM",
       "tickets_url": null,
       "title": "Friday Night Improv",
-      "updated_at": "2026-11-07T22:51:19Z",
+      "updated_at": "2026-11-20T18:37:16Z",
       "url": null,
       "venue": "The Back Room"
     },
-    "collections://events/rm2h4743dyr": {
+    "collections://events/rrgdqik24ga": {
       "alert_matched": false,
       "alert_names": "",
-      "created_at": "2026-11-07T22:51:19Z",
+      "created_at": "2026-11-20T18:37:16Z",
       "deleted": false,
       "description": "Open jam",
       "end": null,
       "end_date": "",
+      "end_day": "",
       "end_text": "",
       "end_time": "",
-      "filler_id": "s2kummuwpmo",
+      "filler_id": "spor5e4ku76",
       "filler_title": "Improv Club",
-      "id": "rm2h4743dyr",
+      "going": false,
+      "id": "rrgdqik24ga",
       "seen": false,
       "source_id": "jm1",
       "start": "2099-11-07T19:00-07:00",
       "start_date": "2099-11-07",
+      "start_day": "Sat Nov 7",
       "start_text": "Sat Nov 7 · 7 PM",
       "start_time": "7 PM",
       "tickets_url": null,
       "title": "Saturday Jam",
-      "updated_at": "2026-11-07T22:51:19Z",
+      "updated_at": "2026-11-20T18:37:16Z",
       "url": null,
       "venue": "The Back Room"
+    },
+    "collections://events/rz6gcayjint": {
+      "alert_matched": true,
+      "alert_names": "Brass Lanterns",
+      "created_at": "2026-11-20T18:37:16Z",
+      "deleted": false,
+      "description": "An hour of Brass Lanterns",
+      "end": null,
+      "end_date": "",
+      "end_day": "",
+      "end_text": "",
+      "end_time": "",
+      "filler_id": "spor5e4ku76",
+      "filler_title": "Improv Club",
+      "going": false,
+      "id": "rz6gcayjint",
+      "seen": true,
+      "source_id": "bc2",
+      "start": "2099-11-13T20:00-07:00",
+      "start_date": "2099-11-13",
+      "start_day": "Fri Nov 13",
+      "start_text": "Fri Nov 13 · 8 PM",
+      "start_time": "8 PM",
+      "tickets_url": null,
+      "title": "Brass Lanterns: Live!",
+      "updated_at": "2026-11-20T18:37:18Z",
+      "url": null,
+      "venue": "The Back Room"
+    },
+    "core://sources/collections": {
+      "id": "collections",
+      "signed_in": true,
+      "title": "Collections"
+    },
+    "core://theme": {
+      "accent": "#4A2C82",
+      "accent_dark": "#D9C8FF",
+      "accent_surface": "#EFE9FA",
+      "accent_surface_dark": "#2E2645",
+      "card": "#FFFFFF",
+      "card_border": "#E4E4EA",
+      "card_border_dark": "#3A3A42",
+      "card_dark": "#242428",
+      "chart_1": "#2A78D6",
+      "chart_1_dark": "#3987E5",
+      "chart_2": "#D95926",
+      "chart_2_dark": "#D95926",
+      "chart_3": "#199E70",
+      "chart_3_dark": "#199E70",
+      "chart_4": "#C98500",
+      "chart_4_dark": "#C98500",
+      "chart_5": "#D55181",
+      "chart_5_dark": "#D55181",
+      "chart_6": "#008300",
+      "chart_6_dark": "#0CA30C",
+      "chart_7": "#7A6BE0",
+      "chart_7_dark": "#9085E9",
+      "chart_8": "#E34948",
+      "chart_8_dark": "#E66767",
+      "chart_other": "#9AA0A6",
+      "chart_other_dark": "#80858D",
+      "error": "#B3261E",
+      "error_dark": "#F2B8B5",
+      "error_surface": "#FCE8E6",
+      "error_surface_dark": "#3D2321",
+      "highlight": "#FFF3CF",
+      "highlight_dark": "#3B3320",
+      "like": "#ED4956",
+      "like_dark": "#FF6B7A",
+      "muted_surface": "#EEF0F4",
+      "muted_surface_dark": "#2A2C31",
+      "muted_text": "#6B6B76",
+      "muted_text_dark": "#A3A3AD",
+      "page": "#F7F5F0",
+      "page_dark": "#1A1A1C",
+      "success": "#137333",
+      "success_dark": "#81C995",
+      "success_surface": "#E6F4EA",
+      "success_surface_dark": "#1E3325",
+      "unread": "#1E66D0",
+      "unread_dark": "#7AB0FF"
     }
   },
   "queries": {
     "collection:events": [
-      "collections://events/rjtibsvvqss",
-      "collections://events/r7lvuszkjc5",
-      "collections://events/rm2h4743dyr",
-      "collections://events/rdqxwgffrgv"
+      "collections://events/r7exmgmla56",
+      "collections://events/r2gkdcoxghp",
+      "collections://events/rrgdqik24ga",
+      "collections://events/rz6gcayjint"
     ],
     "collection:events:alerted": [
-      "collections://events/rjtibsvvqss",
-      "collections://events/rdqxwgffrgv"
+      "collections://events/r7exmgmla56",
+      "collections://events/rz6gcayjint"
+    ],
+    "collection:events:alerts": [
+      "collections://events/alerts/a4kuzf75v64"
     ],
     "collection:events:fillers": [
-      "collections://events/fillers/s2kummuwpmo",
-      "collections://events/fillers/srs6oxi5xve"
+      "collections://events/fillers/spor5e4ku76",
+      "collections://events/fillers/s3nxebzbjjp"
     ]
   },
   "version": "1.0.0",
   "workspace": {
-    "id": "events",
+    "id": "c-tnqvt33x3a",
     "root": {
-      "children": [
-        {
-          "content": {
-            "children": [
-              {
-                "content": {
-                  "content_description": "Back",
-                  "icon": "arrow_back",
-                  "on_click": {
-                    "intent": "action.navigation.back"
-                  },
-                  "tag": "layout-back",
-                  "type": "core://IconButton"
-                },
-                "type": "core://Conditional",
-                "value": "${local://nav#pushed}"
-              },
-              {
-                "children": [
-                  {
-                    "style": "Headline",
-                    "type": "core://Text",
-                    "value_expr": "Events"
-                  }
-                ],
-                "padding_h_dp": 16,
-                "padding_v_dp": 12,
-                "type": "core://Column"
-              }
-            ],
-            "type": "core://Row"
-          },
-          "equals": "false",
-          "type": "core://Conditional",
-          "value": "${local://nav#inline}"
-        },
-        {
-          "content": {
-            "children": [
-              {
-                "children": [
-                  {
-                    "content": {
-                      "children": [
-                        {
-                          "field": "view",
-                          "options": [
-                            {
-                              "label": "Matches",
-                              "value": ""
-                            },
-                            {
-                              "label": "Sites",
-                              "value": "sites"
-                            }
-                          ],
-                          "padding_h_dp": 16,
-                          "remember": true,
-                          "type": "core://ChoiceChips"
-                        }
-                      ],
-                      "padding_v_dp": 8,
-                      "type": "core://Column"
-                    },
-                    "type": "core://Sticky"
-                  },
-                  {
-                    "content": {
-                      "empty_text": "No matching events yet. Ask Claude to watch a website or change its alerts.",
-                      "item_template": {
-                        "content": {
-                          "background": "${local://theme#card}",
-                          "border_color": "${local://theme#card_border}",
-                          "content": {
-                            "children": [
-                              {
-                                "align": "Center",
-                                "children": [
-                                  {
-                                    "background": "${local://theme#accent_surface}",
-                                    "content": {
-                                      "style": "Caption",
-                                      "type": "core://Text",
-                                      "value_expr": "$item.start_text"
-                                    },
-                                    "content_color": "${local://theme#accent}",
-                                    "corner_dp": 8,
-                                    "padding_h_dp": 8,
-                                    "padding_v_dp": 3,
-                                    "type": "core://Box"
-                                  },
-                                  {
-                                    "type": "core://Spacer"
-                                  },
-                                  {
-                                    "content": {
-                                      "text": "New",
-                                      "tone": "Neutral",
-                                      "type": "core://Chip"
-                                    },
-                                    "equals": "false",
-                                    "type": "core://Conditional",
-                                    "value": "$item.seen"
-                                  }
-                                ],
-                                "spacing_dp": 8,
-                                "type": "core://Row"
-                              },
-                              {
-                                "style": "Label",
-                                "type": "core://Text",
-                                "value_expr": "$item.title"
-                              },
-                              {
-                                "content": {
-                                  "style": "Secondary",
-                                  "type": "core://Text",
-                                  "value_expr": "$item.venue"
-                                },
-                                "type": "core://Conditional",
-                                "value": "$item.venue"
-                              },
-                              {
-                                "content": {
-                                  "style": "Caption",
-                                  "type": "core://Text",
-                                  "value_expr": "$item.filler_title · $item.alert_names"
-                                },
-                                "type": "core://Conditional",
-                                "value": "$item.alert_names"
-                              }
-                            ],
-                            "spacing_dp": 6,
-                            "type": "core://Column"
-                          },
-                          "corner_dp": 14,
-                          "padding_h_dp": 14,
-                          "padding_v_dp": 12,
-                          "type": "core://Box"
-                        },
-                        "content_description": "Open $item.title",
-                        "on_click": {
-                          "intent": "action.navigation.open",
-                          "presentation": "Push",
-                          "target_uri": "collections://events/$item.id"
-                        },
-                        "type": "core://Tappable"
-                      },
-                      "padding_h_dp": 16,
-                      "query_key": "collection:events:alerted",
-                      "spacing_dp": 10,
-                      "type": "core://List"
-                    },
-                    "equals": "",
-                    "type": "core://Conditional",
-                    "value": "$form.view"
-                  },
-                  {
-                    "content": {
-                      "children": [
-                        {
-                          "empty_text": "No websites yet. Ask Claude to watch a website or change its alerts.",
-                          "item_template": {
-                            "content": {
-                              "background": "${local://theme#card}",
-                              "border_color": "${local://theme#card_border}",
-                              "content": {
-                                "children": [
-                                  {
-                                    "style": "Label",
-                                    "type": "core://Text",
-                                    "value_expr": "$item.title"
-                                  },
-                                  {
-                                    "style": "Body",
-                                    "type": "core://Text",
-                                    "value_expr": "$item.alerts_text"
-                                  },
-                                  {
-                                    "style": "Secondary",
-                                    "type": "core://Text",
-                                    "value_expr": "$item.detail"
-                                  },
-                                  {
-                                    "content": {
-                                      "align": "Center",
-                                      "children": [
-                                        {
-                                          "icon": "warning",
-                                          "text": "Needs attention",
-                                          "tone": "Warning",
-                                          "type": "core://Chip"
-                                        }
-                                      ],
-                                      "type": "core://Row"
-                                    },
-                                    "equals": "true",
-                                    "type": "core://Conditional",
-                                    "value": "$item.failing"
-                                  }
-                                ],
-                                "spacing_dp": 4,
-                                "type": "core://Column"
-                              },
-                              "corner_dp": 14,
-                              "padding_h_dp": 14,
-                              "padding_v_dp": 12,
-                              "type": "core://Box"
-                            },
-                            "content_description": "Open $item.title",
-                            "on_click": {
-                              "intent": "action.navigation.open",
-                              "presentation": "Push",
-                              "target_uri": "collections://events/fillers/$item.id"
-                            },
-                            "type": "core://Tappable"
-                          },
-                          "padding_h_dp": 16,
-                          "query_key": "collection:events:fillers",
-                          "spacing_dp": 10,
-                          "type": "core://List"
-                        },
-                        {
-                          "children": [
-                            {
-                              "style": "Secondary",
-                              "type": "core://Text",
-                              "value_expr": "Ask Claude to watch a website or change its alerts."
-                            }
-                          ],
-                          "padding_h_dp": 16,
-                          "padding_v_dp": 4,
-                          "type": "core://Column"
-                        }
-                      ],
-                      "spacing_dp": 6,
-                      "type": "core://Column"
-                    },
-                    "equals": "sites",
-                    "type": "core://Conditional",
-                    "value": "$form.view"
-                  }
-                ],
-                "spacing_dp": 4,
-                "type": "core://Column"
-              },
-              {
-                "content": {
-                  "size_dp": 16,
-                  "type": "core://Spacer"
-                },
-                "equals": "false",
-                "type": "core://Conditional",
-                "value": "${local://nav#inline}"
-              }
-            ],
-            "type": "core://Column"
-          },
-          "type": "core://Scroll"
-        }
-      ],
-      "type": "core://Column"
-    },
-    "screens": [
-      {
-        "data": "/v1/collections/events/row?id=$route.id",
-        "id": "event",
-        "root": {
-          "children": [
-            {
+      "background": "${local://theme#page}",
+      "content": {
+        "children": [
+          {
+            "content": {
+              "align": "Center",
               "children": [
                 {
-                  "content_description": "Back",
-                  "icon": "arrow_back",
-                  "on_click": {
-                    "intent": "action.navigation.back"
+                  "content": {
+                    "content_description": "Back",
+                    "icon": "arrow_back",
+                    "on_click": {
+                      "intent": "action.navigation.back"
+                    },
+                    "tag": "back",
+                    "type": "core://IconButton"
                   },
-                  "tag": "screen-back",
-                  "type": "core://IconButton"
+                  "type": "core://Conditional",
+                  "value": "${local://nav#can_go_back}"
                 },
                 {
-                  "style": "Title",
+                  "style": "Headline",
                   "type": "core://Text",
-                  "value_expr": "${collections://events/$route.id#filler_title}"
+                  "value_expr": "Events",
+                  "weight": "SemiBold"
                 },
                 {
                   "content": {
-                    "size_dp": 16,
+                    "size_dp": 18,
                     "type": "core://Progress"
                   },
                   "type": "core://Conditional",
                   "value": "${local://screen#loading}"
                 },
                 {
-                  "size_dp": 12,
                   "type": "core://Spacer"
+                },
+                {
+                  "content": {
+                    "size_dp": 0,
+                    "type": "core://Spacer"
+                  },
+                  "height_dp": 48,
+                  "type": "core://Box",
+                  "width_dp": 1
                 }
               ],
               "padding_v_dp": 4,
+              "spacing_dp": 4,
               "type": "core://Row"
             },
-            {
-              "type": "core://Divider"
-            },
-            {
-              "content": {
-                "children": [
-                  {
+            "padding_h_dp": 20,
+            "padding_v_dp": 4,
+            "type": "core://Box"
+          },
+          {
+            "content": {
+              "children": [
+                {
+                  "content": {
+                    "background": "${local://theme#page}",
                     "content": {
-                      "style": "Caption",
-                      "type": "core://Text",
-                      "value_expr": "${local://screen#error}"
+                      "field": "view",
+                      "options": [
+                        {
+                          "label": "Matches",
+                          "value": ""
+                        },
+                        {
+                          "label": "Sites",
+                          "value": "sites"
+                        }
+                      ],
+                      "remember": true,
+                      "type": "core://ChoiceChips"
                     },
-                    "content_color": "${local://theme#error}",
+                    "padding_v_dp": 6,
                     "type": "core://Box"
                   },
-                  {
-                    "type": "core://Spacer"
+                  "type": "core://Sticky"
+                },
+                {
+                  "size_dp": 8,
+                  "type": "core://Spacer"
+                },
+                {
+                  "content": {
+                    "children": [
+                      {
+                        "content": {
+                          "background": "${local://theme#card}",
+                          "border_color": "${local://theme#card_border}",
+                          "content": {
+                            "background": "${local://theme#card_border}",
+                            "content": {
+                              "children": [
+                                {
+                                  "item_template": {
+                                    "content": {
+                                      "children": [
+                                        {
+                                          "content": {
+                                            "background": "${local://theme#card}",
+                                            "content": {
+                                              "align": "Center",
+                                              "children": [
+                                                {
+                                                  "children": [
+                                                    {
+                                                      "style": "Label",
+                                                      "type": "core://Text",
+                                                      "value_expr": "$item.title"
+                                                    },
+                                                    {
+                                                      "content": {
+                                                        "content": {
+                                                          "max_lines": 2,
+                                                          "style": "Secondary",
+                                                          "type": "core://Text",
+                                                          "value_expr": "$item.start_text · $item.venue · $item.filler_title"
+                                                        },
+                                                        "content_color": "${local://theme#muted_text}",
+                                                        "type": "core://Box"
+                                                      },
+                                                      "type": "core://Conditional",
+                                                      "value": "$item.start_text · $item.venue · $item.filler_title"
+                                                    }
+                                                  ],
+                                                  "spacing_dp": 2,
+                                                  "type": "core://Column"
+                                                },
+                                                {
+                                                  "type": "core://Spacer"
+                                                },
+                                                {
+                                                  "align": "Center",
+                                                  "children": [
+                                                    {
+                                                      "content": {
+                                                        "background": "${local://theme#accent_surface}",
+                                                        "content": {
+                                                          "style": "Caption",
+                                                          "type": "core://Text",
+                                                          "value_expr": "New"
+                                                        },
+                                                        "content_color": "${local://theme#accent}",
+                                                        "corner_dp": 8,
+                                                        "padding_h_dp": 8,
+                                                        "padding_v_dp": 3,
+                                                        "type": "core://Box"
+                                                      },
+                                                      "equals": "false",
+                                                      "type": "core://Conditional",
+                                                      "value": "$item.seen"
+                                                    },
+                                                    {
+                                                      "content": {
+                                                        "background": "${local://theme#success_surface}",
+                                                        "content": {
+                                                          "style": "Caption",
+                                                          "type": "core://Text",
+                                                          "value_expr": "Going"
+                                                        },
+                                                        "content_color": "${local://theme#success}",
+                                                        "corner_dp": 8,
+                                                        "padding_h_dp": 8,
+                                                        "padding_v_dp": 3,
+                                                        "type": "core://Box"
+                                                      },
+                                                      "type": "core://Conditional",
+                                                      "value": "$item.going"
+                                                    }
+                                                  ],
+                                                  "spacing_dp": 6,
+                                                  "type": "core://Row"
+                                                },
+                                                {
+                                                  "content": {
+                                                    "style": "Title",
+                                                    "type": "core://Text",
+                                                    "value_expr": "›"
+                                                  },
+                                                  "content_color": "${local://theme#muted_text}",
+                                                  "type": "core://Box"
+                                                }
+                                              ],
+                                              "padding_h_dp": 11,
+                                              "padding_v_dp": 12,
+                                              "spacing_dp": 12,
+                                              "type": "core://Row"
+                                            },
+                                            "type": "core://Box"
+                                          },
+                                          "type": "core://Conditional",
+                                          "value": "$item.venue"
+                                        },
+                                        {
+                                          "content": {
+                                            "background": "${local://theme#card}",
+                                            "content": {
+                                              "align": "Center",
+                                              "children": [
+                                                {
+                                                  "children": [
+                                                    {
+                                                      "style": "Label",
+                                                      "type": "core://Text",
+                                                      "value_expr": "$item.title"
+                                                    },
+                                                    {
+                                                      "content": {
+                                                        "content": {
+                                                          "max_lines": 2,
+                                                          "style": "Secondary",
+                                                          "type": "core://Text",
+                                                          "value_expr": "$item.start_text · $item.filler_title"
+                                                        },
+                                                        "content_color": "${local://theme#muted_text}",
+                                                        "type": "core://Box"
+                                                      },
+                                                      "type": "core://Conditional",
+                                                      "value": "$item.start_text · $item.filler_title"
+                                                    }
+                                                  ],
+                                                  "spacing_dp": 2,
+                                                  "type": "core://Column"
+                                                },
+                                                {
+                                                  "type": "core://Spacer"
+                                                },
+                                                {
+                                                  "align": "Center",
+                                                  "children": [
+                                                    {
+                                                      "content": {
+                                                        "background": "${local://theme#accent_surface}",
+                                                        "content": {
+                                                          "style": "Caption",
+                                                          "type": "core://Text",
+                                                          "value_expr": "New"
+                                                        },
+                                                        "content_color": "${local://theme#accent}",
+                                                        "corner_dp": 8,
+                                                        "padding_h_dp": 8,
+                                                        "padding_v_dp": 3,
+                                                        "type": "core://Box"
+                                                      },
+                                                      "equals": "false",
+                                                      "type": "core://Conditional",
+                                                      "value": "$item.seen"
+                                                    },
+                                                    {
+                                                      "content": {
+                                                        "background": "${local://theme#success_surface}",
+                                                        "content": {
+                                                          "style": "Caption",
+                                                          "type": "core://Text",
+                                                          "value_expr": "Going"
+                                                        },
+                                                        "content_color": "${local://theme#success}",
+                                                        "corner_dp": 8,
+                                                        "padding_h_dp": 8,
+                                                        "padding_v_dp": 3,
+                                                        "type": "core://Box"
+                                                      },
+                                                      "type": "core://Conditional",
+                                                      "value": "$item.going"
+                                                    }
+                                                  ],
+                                                  "spacing_dp": 6,
+                                                  "type": "core://Row"
+                                                },
+                                                {
+                                                  "content": {
+                                                    "style": "Title",
+                                                    "type": "core://Text",
+                                                    "value_expr": "›"
+                                                  },
+                                                  "content_color": "${local://theme#muted_text}",
+                                                  "type": "core://Box"
+                                                }
+                                              ],
+                                              "padding_h_dp": 11,
+                                              "padding_v_dp": 12,
+                                              "spacing_dp": 12,
+                                              "type": "core://Row"
+                                            },
+                                            "type": "core://Box"
+                                          },
+                                          "not": true,
+                                          "type": "core://Conditional",
+                                          "value": "$item.venue"
+                                        }
+                                      ],
+                                      "type": "core://Column"
+                                    },
+                                    "content_description": "Open $item.title",
+                                    "on_click": {
+                                      "intent": "action.sequence",
+                                      "steps": [
+                                        {
+                                          "endpoint": "/v1/collections/events/update",
+                                          "entity_uri": "$item.uri",
+                                          "field": "seen",
+                                          "intent": "action.mutation.optimistic",
+                                          "payload": {
+                                            "id": "$item.id",
+                                            "seen": "$value"
+                                          },
+                                          "rollback_value": false,
+                                          "value_expr": "true"
+                                        },
+                                        {
+                                          "intent": "action.navigation.open",
+                                          "presentation": "Push",
+                                          "target_uri": "collections://events/$item.id"
+                                        }
+                                      ]
+                                    },
+                                    "type": "core://Tappable"
+                                  },
+                                  "query_key": "collection:events:alerted",
+                                  "spacing_dp": 1,
+                                  "type": "core://List",
+                                  "where": [
+                                    {
+                                      "equals": "",
+                                      "field": "start",
+                                      "not": true,
+                                      "older_than": "6h"
+                                    }
+                                  ]
+                                }
+                              ],
+                              "type": "core://Column"
+                            },
+                            "type": "core://Box"
+                          },
+                          "corner_dp": 18,
+                          "padding_h_dp": 5,
+                          "padding_v_dp": 6,
+                          "type": "core://Box"
+                        },
+                        "count": {
+                          "query_key": "collection:events:alerted",
+                          "where": [
+                            {
+                              "equals": "",
+                              "field": "start",
+                              "not": true,
+                              "older_than": "6h"
+                            }
+                          ]
+                        },
+                        "type": "core://Conditional",
+                        "value": ""
+                      },
+                      {
+                        "content": {
+                          "content": {
+                            "style": "Secondary",
+                            "type": "core://Text",
+                            "value_expr": "No matching events yet. Ask Claude to watch a website or change its alerts."
+                          },
+                          "content_color": "${local://theme#muted_text}",
+                          "padding_h_dp": 4,
+                          "type": "core://Box"
+                        },
+                        "count": {
+                          "query_key": "collection:events:alerted",
+                          "where": [
+                            {
+                              "equals": "",
+                              "field": "start",
+                              "not": true,
+                              "older_than": "6h"
+                            }
+                          ]
+                        },
+                        "not": true,
+                        "type": "core://Conditional",
+                        "value": ""
+                      }
+                    ],
+                    "type": "core://Column"
                   },
-                  {
-                    "label": "Try again",
-                    "on_click": {
-                      "intent": "action.data.load",
-                      "path": "/v1/collections/events/row?id=$route.id"
-                    },
-                    "type": "core://Button"
-                  }
-                ],
-                "padding_h_dp": 16,
-                "padding_v_dp": 4,
-                "spacing_dp": 8,
-                "type": "core://Row"
-              },
-              "type": "core://Conditional",
-              "value": "${local://screen#error}"
+                  "equals": "",
+                  "type": "core://Conditional",
+                  "value": "$form.view"
+                },
+                {
+                  "content": {
+                    "children": [
+                      {
+                        "content": {
+                          "background": "${local://theme#card}",
+                          "border_color": "${local://theme#card_border}",
+                          "content": {
+                            "background": "${local://theme#card_border}",
+                            "content": {
+                              "children": [
+                                {
+                                  "item_template": {
+                                    "content": {
+                                      "background": "${local://theme#card}",
+                                      "content": {
+                                        "align": "Center",
+                                        "children": [
+                                          {
+                                            "children": [
+                                              {
+                                                "content": {
+                                                  "align": "Center",
+                                                  "background": "${local://theme#error_surface}",
+                                                  "content": {
+                                                    "icon": "warning",
+                                                    "text": "",
+                                                    "type": "core://Badge"
+                                                  },
+                                                  "content_color": "${local://theme#error}",
+                                                  "corner_dp": 512,
+                                                  "height_dp": 34,
+                                                  "type": "core://Box",
+                                                  "width_dp": 34
+                                                },
+                                                "equals": "true",
+                                                "type": "core://Conditional",
+                                                "value": "$item.failing"
+                                              },
+                                              {
+                                                "content": {
+                                                  "align": "Center",
+                                                  "background": "${local://theme#accent_surface}",
+                                                  "content": {
+                                                    "icon": "notifications",
+                                                    "text": "",
+                                                    "type": "core://Badge"
+                                                  },
+                                                  "content_color": "${local://theme#accent}",
+                                                  "corner_dp": 512,
+                                                  "height_dp": 34,
+                                                  "type": "core://Box",
+                                                  "width_dp": 34
+                                                },
+                                                "equals": "true",
+                                                "not": true,
+                                                "type": "core://Conditional",
+                                                "value": "$item.failing"
+                                              }
+                                            ],
+                                            "type": "core://Column"
+                                          },
+                                          {
+                                            "children": [
+                                              {
+                                                "style": "Label",
+                                                "type": "core://Text",
+                                                "value_expr": "$item.title"
+                                              },
+                                              {
+                                                "content": {
+                                                  "content": {
+                                                    "max_lines": 3,
+                                                    "style": "Secondary",
+                                                    "type": "core://Text",
+                                                    "value_expr": "$item.alerts_text · $item.detail"
+                                                  },
+                                                  "content_color": "${local://theme#muted_text}",
+                                                  "type": "core://Box"
+                                                },
+                                                "type": "core://Conditional",
+                                                "value": "$item.alerts_text · $item.detail"
+                                              }
+                                            ],
+                                            "spacing_dp": 2,
+                                            "type": "core://Column"
+                                          },
+                                          {
+                                            "type": "core://Spacer"
+                                          },
+                                          {
+                                            "content": {
+                                              "style": "Title",
+                                              "type": "core://Text",
+                                              "value_expr": "›"
+                                            },
+                                            "content_color": "${local://theme#muted_text}",
+                                            "type": "core://Box"
+                                          }
+                                        ],
+                                        "padding_h_dp": 11,
+                                        "padding_v_dp": 12,
+                                        "spacing_dp": 12,
+                                        "type": "core://Row"
+                                      },
+                                      "type": "core://Box"
+                                    },
+                                    "content_description": "Open $item.title",
+                                    "on_click": {
+                                      "intent": "action.navigation.open",
+                                      "presentation": "Push",
+                                      "target_uri": "collections://events/fillers/$item.id"
+                                    },
+                                    "type": "core://Tappable"
+                                  },
+                                  "query_key": "collection:events:fillers",
+                                  "spacing_dp": 1,
+                                  "type": "core://List"
+                                }
+                              ],
+                              "type": "core://Column"
+                            },
+                            "type": "core://Box"
+                          },
+                          "corner_dp": 18,
+                          "padding_h_dp": 5,
+                          "padding_v_dp": 6,
+                          "type": "core://Box"
+                        },
+                        "count": {
+                          "query_key": "collection:events:fillers"
+                        },
+                        "type": "core://Conditional",
+                        "value": ""
+                      },
+                      {
+                        "content": {
+                          "content": {
+                            "style": "Secondary",
+                            "type": "core://Text",
+                            "value_expr": "No websites yet."
+                          },
+                          "content_color": "${local://theme#muted_text}",
+                          "padding_h_dp": 4,
+                          "type": "core://Box"
+                        },
+                        "count": {
+                          "query_key": "collection:events:fillers"
+                        },
+                        "not": true,
+                        "type": "core://Conditional",
+                        "value": ""
+                      },
+                      {
+                        "content": {
+                          "style": "Secondary",
+                          "type": "core://Text",
+                          "value_expr": "Ask Claude to watch a website or change its alerts."
+                        },
+                        "content_color": "${local://theme#muted_text}",
+                        "padding_h_dp": 4,
+                        "type": "core://Box"
+                      }
+                    ],
+                    "spacing_dp": 10,
+                    "type": "core://Column"
+                  },
+                  "equals": "sites",
+                  "type": "core://Conditional",
+                  "value": "$form.view"
+                },
+                {
+                  "size_dp": 16,
+                  "type": "core://Spacer"
+                }
+              ],
+              "padding_h_dp": 20,
+              "padding_v_dp": 8,
+              "type": "core://Column"
             },
-            {
-              "content": {
-                "item_template": {
+            "type": "core://Scroll"
+          }
+        ],
+        "type": "core://Column"
+      },
+      "fill": true,
+      "type": "core://Box"
+    },
+    "screens": [
+      {
+        "data": "/v1/collections/events/row?id=$route.id",
+        "id": "event",
+        "root": {
+          "background": "${local://theme#page}",
+          "content": {
+            "children": [
+              {
+                "content": {
+                  "align": "Center",
                   "children": [
                     {
-                      "background": "${local://theme#accent_surface}",
                       "content": {
-                        "children": [
-                          {
-                            "style": "Label",
-                            "type": "core://Text",
-                            "value_expr": "$item.start_text"
-                          },
-                          {
-                            "style": "Headline",
-                            "type": "core://Text",
-                            "value_expr": "$item.title"
-                          },
-                          {
-                            "content": {
-                              "style": "Body",
-                              "type": "core://Text",
-                              "value_expr": "$item.venue"
-                            },
-                            "type": "core://Conditional",
-                            "value": "$item.venue"
-                          }
-                        ],
-                        "spacing_dp": 6,
-                        "type": "core://Column"
+                        "content_description": "Back",
+                        "icon": "arrow_back",
+                        "on_click": {
+                          "intent": "action.navigation.back"
+                        },
+                        "tag": "back",
+                        "type": "core://IconButton"
                       },
-                      "content_color": "${local://theme#accent}",
-                      "corner_dp": 16,
-                      "padding_h_dp": 16,
-                      "padding_v_dp": 16,
+                      "type": "core://Conditional",
+                      "value": "${local://nav#can_go_back}"
+                    },
+                    {
+                      "style": "Headline",
+                      "type": "core://Text",
+                      "value_expr": "${collections://events/$route.id#filler_title}",
+                      "weight": "SemiBold"
+                    },
+                    {
+                      "content": {
+                        "size_dp": 18,
+                        "type": "core://Progress"
+                      },
+                      "type": "core://Conditional",
+                      "value": "${local://screen#loading}"
+                    },
+                    {
+                      "type": "core://Spacer"
+                    },
+                    {
+                      "content": {
+                        "size_dp": 0,
+                        "type": "core://Spacer"
+                      },
+                      "height_dp": 48,
+                      "type": "core://Box",
+                      "width_dp": 1
+                    }
+                  ],
+                  "padding_v_dp": 4,
+                  "spacing_dp": 4,
+                  "type": "core://Row"
+                },
+                "padding_h_dp": 20,
+                "padding_v_dp": 4,
+                "type": "core://Box"
+              },
+              {
+                "content": {
+                  "align": "Center",
+                  "children": [
+                    {
+                      "content": {
+                        "style": "Caption",
+                        "type": "core://Text",
+                        "value_expr": "${local://screen#error}"
+                      },
+                      "content_color": "${local://theme#error}",
                       "type": "core://Box"
                     },
                     {
-                      "content": {
-                        "align": "Center",
+                      "type": "core://Spacer"
+                    },
+                    {
+                      "label": "Try again",
+                      "on_click": {
+                        "intent": "action.data.load",
+                        "path": "/v1/collections/events/row?id=$route.id"
+                      },
+                      "size": "Small",
+                      "style": "Text",
+                      "type": "core://Button"
+                    }
+                  ],
+                  "padding_h_dp": 20,
+                  "padding_v_dp": 4,
+                  "spacing_dp": 8,
+                  "type": "core://Row"
+                },
+                "type": "core://Conditional",
+                "value": "${local://screen#error}"
+              },
+              {
+                "content": {
+                  "children": [
+                    {
+                      "item_template": {
                         "children": [
                           {
-                            "text": "$item.alert_names",
-                            "tone": "Neutral",
-                            "type": "core://Chip"
+                            "background": "${local://theme#card}",
+                            "border_color": "${local://theme#card_border}",
+                            "content": {
+                              "children": [
+                                {
+                                  "align": "Center",
+                                  "children": [
+                                    {
+                                      "background": "${local://theme#accent_surface}",
+                                      "content": {
+                                        "style": "Caption",
+                                        "type": "core://Text",
+                                        "value_expr": "$item.start_text"
+                                      },
+                                      "content_color": "${local://theme#accent}",
+                                      "corner_dp": 8,
+                                      "padding_h_dp": 8,
+                                      "padding_v_dp": 3,
+                                      "type": "core://Box"
+                                    },
+                                    {
+                                      "type": "core://Spacer"
+                                    },
+                                    {
+                                      "content": {
+                                        "background": "${local://theme#success_surface}",
+                                        "content": {
+                                          "style": "Caption",
+                                          "type": "core://Text",
+                                          "value_expr": "Going"
+                                        },
+                                        "content_color": "${local://theme#success}",
+                                        "corner_dp": 8,
+                                        "padding_h_dp": 8,
+                                        "padding_v_dp": 3,
+                                        "type": "core://Box"
+                                      },
+                                      "type": "core://Conditional",
+                                      "value": "$item.going"
+                                    }
+                                  ],
+                                  "spacing_dp": 6,
+                                  "type": "core://Row"
+                                },
+                                {
+                                  "style": "Headline",
+                                  "type": "core://Text",
+                                  "value_expr": "$item.title",
+                                  "weight": "SemiBold"
+                                },
+                                {
+                                  "content": {
+                                    "content": {
+                                      "style": "Body",
+                                      "type": "core://Text",
+                                      "value_expr": "$item.venue"
+                                    },
+                                    "content_color": "${local://theme#muted_text}",
+                                    "type": "core://Box"
+                                  },
+                                  "type": "core://Conditional",
+                                  "value": "$item.venue"
+                                },
+                                {
+                                  "content": {
+                                    "content": {
+                                      "style": "Caption",
+                                      "type": "core://Text",
+                                      "value_expr": "Matches $item.alert_names"
+                                    },
+                                    "content_color": "${local://theme#muted_text}",
+                                    "type": "core://Box"
+                                  },
+                                  "type": "core://Conditional",
+                                  "value": "$item.alert_names"
+                                }
+                              ],
+                              "spacing_dp": 6,
+                              "type": "core://Column"
+                            },
+                            "corner_dp": 18,
+                            "padding_h_dp": 16,
+                            "padding_v_dp": 14,
+                            "type": "core://Box"
                           },
                           {
-                            "type": "core://Spacer"
+                            "align": "Center",
+                            "children": [
+                              {
+                                "content": {
+                                  "label": "I'm going",
+                                  "on_click": {
+                                    "also": [
+                                      {
+                                        "field": "seen",
+                                        "value_expr": "true"
+                                      }
+                                    ],
+                                    "endpoint": "/v1/collections/events/update",
+                                    "entity_uri": "$item.uri",
+                                    "field": "going",
+                                    "intent": "action.mutation.optimistic",
+                                    "payload": {
+                                      "going": "$value",
+                                      "id": "$item.id",
+                                      "seen": true
+                                    },
+                                    "rollback_value": false,
+                                    "value_expr": "true"
+                                  },
+                                  "type": "core://Button"
+                                },
+                                "not": true,
+                                "type": "core://Conditional",
+                                "value": "$item.going"
+                              },
+                              {
+                                "content": {
+                                  "label": "Going ✓",
+                                  "on_click": {
+                                    "endpoint": "/v1/collections/events/update",
+                                    "entity_uri": "$item.uri",
+                                    "field": "going",
+                                    "intent": "action.mutation.optimistic",
+                                    "payload": {
+                                      "going": "$value",
+                                      "id": "$item.id"
+                                    },
+                                    "rollback_value": true,
+                                    "value_expr": "false"
+                                  },
+                                  "style": "Tonal",
+                                  "type": "core://Button"
+                                },
+                                "type": "core://Conditional",
+                                "value": "$item.going"
+                              },
+                              {
+                                "content": {
+                                  "label": "Get tickets",
+                                  "on_click": {
+                                    "intent": "action.link.open",
+                                    "url": "$item.tickets_url"
+                                  },
+                                  "style": "Secondary",
+                                  "type": "core://Button"
+                                },
+                                "type": "core://Conditional",
+                                "value": "$item.tickets_url"
+                              },
+                              {
+                                "content": {
+                                  "label": "Event page",
+                                  "on_click": {
+                                    "intent": "action.link.open",
+                                    "url": "$item.url"
+                                  },
+                                  "style": "Secondary",
+                                  "type": "core://Button"
+                                },
+                                "type": "core://Conditional",
+                                "value": "$item.url"
+                              }
+                            ],
+                            "spacing_dp": 8,
+                            "type": "core://Row"
                           },
                           {
                             "content": {
-                              "label": "Mark as seen",
-                              "on_click": {
-                                "endpoint": "/v1/collections/events/update",
-                                "entity_uri": "$item.uri",
-                                "field": "seen",
-                                "intent": "action.mutation.optimistic",
-                                "payload": {
-                                  "id": "$item.id",
-                                  "seen": "$value"
+                              "children": [
+                                {
+                                  "style": "Label",
+                                  "type": "core://Text",
+                                  "value_expr": "About"
                                 },
-                                "rollback_value": false,
-                                "value_expr": "true"
-                              },
-                              "type": "core://Button"
+                                {
+                                  "style": "Body",
+                                  "type": "core://Text",
+                                  "value_expr": "$item.description"
+                                }
+                              ],
+                              "padding_h_dp": 4,
+                              "spacing_dp": 6,
+                              "type": "core://Column"
                             },
-                            "equals": "false",
                             "type": "core://Conditional",
-                            "value": "$item.seen"
+                            "value": "$item.description"
                           }
                         ],
-                        "spacing_dp": 8,
-                        "type": "core://Row"
-                      },
-                      "type": "core://Conditional",
-                      "value": "$item.alert_names"
-                    },
-                    {
-                      "align": "Center",
-                      "children": [
-                        {
-                          "content": {
-                            "label": "Get tickets",
-                            "on_click": {
-                              "intent": "action.link.open",
-                              "url": "$item.tickets_url"
-                            },
-                            "type": "core://Button"
-                          },
-                          "type": "core://Conditional",
-                          "value": "$item.tickets_url"
-                        },
-                        {
-                          "content": {
-                            "label": "Event page",
-                            "on_click": {
-                              "intent": "action.link.open",
-                              "url": "$item.url"
-                            },
-                            "type": "core://Button"
-                          },
-                          "type": "core://Conditional",
-                          "value": "$item.url"
-                        }
-                      ],
-                      "spacing_dp": 8,
-                      "type": "core://Row"
-                    },
-                    {
-                      "content": {
-                        "children": [
-                          {
-                            "style": "Label",
-                            "type": "core://Text",
-                            "value_expr": "About"
-                          },
-                          {
-                            "style": "Body",
-                            "type": "core://Text",
-                            "value_expr": "$item.description"
-                          }
-                        ],
-                        "spacing_dp": 6,
+                        "spacing_dp": 14,
                         "type": "core://Column"
                       },
-                      "type": "core://Conditional",
-                      "value": "$item.description"
+                      "query_key": "collection:events:row:$route.id",
+                      "type": "core://List"
+                    },
+                    {
+                      "size_dp": 16,
+                      "type": "core://Spacer"
                     }
                   ],
-                  "padding_v_dp": 16,
-                  "spacing_dp": 16,
+                  "padding_h_dp": 20,
+                  "padding_v_dp": 8,
+                  "spacing_dp": 14,
                   "type": "core://Column"
                 },
-                "padding_h_dp": 16,
-                "query_key": "collection:events:row:$route.id",
-                "type": "core://List"
-              },
-              "follow_end": true,
-              "type": "core://Scroll"
-            }
-          ],
-          "type": "core://Column"
+                "type": "core://Scroll"
+              }
+            ],
+            "type": "core://Column"
+          },
+          "fill": true,
+          "type": "core://Box"
         },
         "route": "collections://events/{id}",
         "title": "${collections://events/$route.id#filler_title}"
@@ -631,383 +1124,686 @@
         "data": "/v1/collections/events/fillers/$route.id",
         "id": "target",
         "root": {
-          "children": [
-            {
-              "children": [
-                {
-                  "content_description": "Back",
-                  "icon": "arrow_back",
-                  "on_click": {
-                    "intent": "action.navigation.back"
-                  },
-                  "tag": "screen-back",
-                  "type": "core://IconButton"
-                },
-                {
-                  "style": "Title",
-                  "type": "core://Text",
-                  "value_expr": "${collections://events/fillers/$route.id#title}"
-                },
-                {
-                  "content": {
-                    "size_dp": 16,
-                    "type": "core://Progress"
-                  },
-                  "type": "core://Conditional",
-                  "value": "${local://screen#loading}"
-                },
-                {
-                  "size_dp": 12,
-                  "type": "core://Spacer"
-                }
-              ],
-              "padding_v_dp": 4,
-              "type": "core://Row"
-            },
-            {
-              "type": "core://Divider"
-            },
-            {
-              "content": {
-                "children": [
-                  {
-                    "content": {
-                      "style": "Caption",
+          "background": "${local://theme#page}",
+          "content": {
+            "children": [
+              {
+                "content": {
+                  "align": "Center",
+                  "children": [
+                    {
+                      "content": {
+                        "content_description": "Back",
+                        "icon": "arrow_back",
+                        "on_click": {
+                          "intent": "action.navigation.back"
+                        },
+                        "tag": "back",
+                        "type": "core://IconButton"
+                      },
+                      "type": "core://Conditional",
+                      "value": "${local://nav#can_go_back}"
+                    },
+                    {
+                      "style": "Headline",
                       "type": "core://Text",
-                      "value_expr": "${local://screen#error}"
+                      "value_expr": "${collections://events/fillers/$route.id#title}",
+                      "weight": "SemiBold"
                     },
-                    "content_color": "${local://theme#error}",
-                    "type": "core://Box"
-                  },
-                  {
-                    "type": "core://Spacer"
-                  },
-                  {
-                    "label": "Try again",
-                    "on_click": {
-                      "intent": "action.data.load",
-                      "path": "/v1/collections/events/fillers/$route.id"
+                    {
+                      "content": {
+                        "size_dp": 18,
+                        "type": "core://Progress"
+                      },
+                      "type": "core://Conditional",
+                      "value": "${local://screen#loading}"
                     },
-                    "type": "core://Button"
-                  }
-                ],
-                "padding_h_dp": 16,
+                    {
+                      "type": "core://Spacer"
+                    },
+                    {
+                      "content": {
+                        "size_dp": 0,
+                        "type": "core://Spacer"
+                      },
+                      "height_dp": 48,
+                      "type": "core://Box",
+                      "width_dp": 1
+                    }
+                  ],
+                  "padding_v_dp": 4,
+                  "spacing_dp": 4,
+                  "type": "core://Row"
+                },
+                "padding_h_dp": 20,
                 "padding_v_dp": 4,
-                "spacing_dp": 8,
-                "type": "core://Row"
+                "type": "core://Box"
               },
-              "type": "core://Conditional",
-              "value": "${local://screen#error}"
-            },
-            {
-              "content": {
-                "children": [
-                  {
-                    "item_template": {
-                      "children": [
-                        {
-                          "background": "${local://theme#card}",
-                          "border_color": "${local://theme#card_border}",
-                          "content": {
+              {
+                "content": {
+                  "align": "Center",
+                  "children": [
+                    {
+                      "content": {
+                        "style": "Caption",
+                        "type": "core://Text",
+                        "value_expr": "${local://screen#error}"
+                      },
+                      "content_color": "${local://theme#error}",
+                      "type": "core://Box"
+                    },
+                    {
+                      "type": "core://Spacer"
+                    },
+                    {
+                      "label": "Try again",
+                      "on_click": {
+                        "intent": "action.data.load",
+                        "path": "/v1/collections/events/fillers/$route.id"
+                      },
+                      "size": "Small",
+                      "style": "Text",
+                      "type": "core://Button"
+                    }
+                  ],
+                  "padding_h_dp": 20,
+                  "padding_v_dp": 4,
+                  "spacing_dp": 8,
+                  "type": "core://Row"
+                },
+                "type": "core://Conditional",
+                "value": "${local://screen#error}"
+              },
+              {
+                "content": {
+                  "children": [
+                    {
+                      "item_template": {
+                        "children": [
+                          {
+                            "background": "${local://theme#card}",
+                            "border_color": "${local://theme#card_border}",
+                            "content": {
+                              "children": [
+                                {
+                                  "style": "Body",
+                                  "type": "core://Text",
+                                  "value_expr": "$item.detail"
+                                },
+                                {
+                                  "content": {
+                                    "children": [
+                                      {
+                                        "background": "${local://theme#error_surface}",
+                                        "content": {
+                                          "style": "Caption",
+                                          "type": "core://Text",
+                                          "value_expr": "Needs attention"
+                                        },
+                                        "content_color": "${local://theme#error}",
+                                        "corner_dp": 8,
+                                        "padding_h_dp": 8,
+                                        "padding_v_dp": 3,
+                                        "type": "core://Box"
+                                      }
+                                    ],
+                                    "type": "core://Row"
+                                  },
+                                  "equals": "true",
+                                  "type": "core://Conditional",
+                                  "value": "$item.failing"
+                                },
+                                {
+                                  "content": {
+                                    "style": "Caption",
+                                    "type": "core://Text",
+                                    "value_expr": "$item.alerts_text"
+                                  },
+                                  "content_color": "${local://theme#muted_text}",
+                                  "type": "core://Box"
+                                }
+                              ],
+                              "spacing_dp": 6,
+                              "type": "core://Column"
+                            },
+                            "corner_dp": 18,
+                            "padding_h_dp": 16,
+                            "padding_v_dp": 14,
+                            "type": "core://Box"
+                          },
+                          {
+                            "align": "Center",
                             "children": [
                               {
-                                "style": "Body",
-                                "type": "core://Text",
-                                "value_expr": "$item.detail"
+                                "content": {
+                                  "content": {
+                                    "label": "Check now",
+                                    "on_click": {
+                                      "endpoint": "/v1/collections/events/refresh",
+                                      "entity_uri": "$item.uri",
+                                      "field": "refreshing",
+                                      "intent": "action.mutation.optimistic",
+                                      "payload": {
+                                        "filler": "$item.id"
+                                      },
+                                      "rollback_value": false,
+                                      "value_expr": "true"
+                                    },
+                                    "type": "core://Button"
+                                  },
+                                  "equals": "false",
+                                  "not": true,
+                                  "type": "core://Conditional",
+                                  "value": "$item.can_check"
+                                },
+                                "not": true,
+                                "type": "core://Conditional",
+                                "value": "$item.refreshing"
                               },
                               {
                                 "content": {
-                                  "align": "Center",
-                                  "children": [
-                                    {
-                                      "icon": "warning",
-                                      "text": "Needs attention",
-                                      "tone": "Warning",
-                                      "type": "core://Chip"
-                                    }
-                                  ],
-                                  "type": "core://Row"
+                                  "content": {
+                                    "style": "Secondary",
+                                    "type": "core://Text",
+                                    "value_expr": "Checking…"
+                                  },
+                                  "content_color": "${local://theme#muted_text}",
+                                  "type": "core://Box"
                                 },
-                                "equals": "true",
                                 "type": "core://Conditional",
-                                "value": "$item.failing"
+                                "value": "$item.refreshing"
                               },
                               {
-                                "style": "Secondary",
-                                "type": "core://Text",
-                                "value_expr": "$item.url"
+                                "content": {
+                                  "content": {
+                                    "content": {
+                                      "style": "Secondary",
+                                      "type": "core://Text",
+                                      "value_expr": "Checked today: the next check is tomorrow"
+                                    },
+                                    "content_color": "${local://theme#muted_text}",
+                                    "type": "core://Box"
+                                  },
+                                  "equals": "false",
+                                  "type": "core://Conditional",
+                                  "value": "$item.can_check"
+                                },
+                                "not": true,
+                                "type": "core://Conditional",
+                                "value": "$item.refreshing"
                               },
                               {
-                                "style": "Caption",
-                                "type": "core://Text",
-                                "value_expr": "$item.alerts_text"
+                                "type": "core://Spacer"
+                              },
+                              {
+                                "content": {
+                                  "label": "Open site",
+                                  "on_click": {
+                                    "intent": "action.link.open",
+                                    "url": "$item.url"
+                                  },
+                                  "style": "Text",
+                                  "type": "core://Button"
+                                },
+                                "type": "core://Conditional",
+                                "value": "$item.url"
                               }
                             ],
-                            "spacing_dp": 6,
-                            "type": "core://Column"
+                            "spacing_dp": 8,
+                            "type": "core://Row"
+                          }
+                        ],
+                        "spacing_dp": 10,
+                        "type": "core://Column"
+                      },
+                      "query_key": "collection:events:filler:$route.id",
+                      "type": "core://List"
+                    },
+                    {
+                      "children": [
+                        {
+                          "size_dp": 14,
+                          "type": "core://Spacer"
+                        },
+                        {
+                          "content": {
+                            "style": "Label",
+                            "type": "core://Text",
+                            "value_expr": "Alerts"
                           },
-                          "corner_dp": 14,
-                          "padding_h_dp": 14,
-                          "padding_v_dp": 12,
+                          "content_color": "${local://theme#muted_text}",
+                          "padding_h_dp": 4,
                           "type": "core://Box"
                         },
                         {
-                          "align": "Center",
-                          "children": [
-                            {
-                              "label": "Check now",
-                              "on_click": {
-                                "endpoint": "/v1/collections/events/refresh",
-                                "entity_uri": "$item.uri",
-                                "field": "refreshing",
-                                "intent": "action.mutation.optimistic",
-                                "payload": {
-                                  "filler": "$item.id"
-                                },
-                                "rollback_value": false,
-                                "value_expr": "true"
+                          "size_dp": 8,
+                          "type": "core://Spacer"
+                        },
+                        {
+                          "content": {
+                            "background": "${local://theme#card}",
+                            "border_color": "${local://theme#card_border}",
+                            "content": {
+                              "background": "${local://theme#card_border}",
+                              "content": {
+                                "children": [
+                                  {
+                                    "item_template": {
+                                      "background": "${local://theme#card}",
+                                      "content": {
+                                        "align": "Center",
+                                        "children": [
+                                          {
+                                            "children": [
+                                              {
+                                                "style": "Label",
+                                                "type": "core://Text",
+                                                "value_expr": "$item.name"
+                                              },
+                                              {
+                                                "content": {
+                                                  "content": {
+                                                    "max_lines": 2,
+                                                    "style": "Secondary",
+                                                    "type": "core://Text",
+                                                    "value_expr": "$item.summary"
+                                                  },
+                                                  "content_color": "${local://theme#muted_text}",
+                                                  "type": "core://Box"
+                                                },
+                                                "type": "core://Conditional",
+                                                "value": "$item.summary"
+                                              }
+                                            ],
+                                            "spacing_dp": 2,
+                                            "type": "core://Column"
+                                          },
+                                          {
+                                            "type": "core://Spacer"
+                                          }
+                                        ],
+                                        "padding_h_dp": 11,
+                                        "padding_v_dp": 12,
+                                        "spacing_dp": 12,
+                                        "type": "core://Row"
+                                      },
+                                      "type": "core://Box"
+                                    },
+                                    "query_key": "collection:events:filler:$route.id:alerts",
+                                    "spacing_dp": 1,
+                                    "type": "core://List"
+                                  }
+                                ],
+                                "type": "core://Column"
                               },
-                              "type": "core://Button"
-                            }
-                          ],
-                          "type": "core://Row"
+                              "type": "core://Box"
+                            },
+                            "corner_dp": 18,
+                            "padding_h_dp": 5,
+                            "padding_v_dp": 6,
+                            "type": "core://Box"
+                          },
+                          "count": {
+                            "query_key": "collection:events:filler:$route.id:alerts"
+                          },
+                          "type": "core://Conditional",
+                          "value": ""
+                        },
+                        {
+                          "content": {
+                            "content": {
+                              "style": "Secondary",
+                              "type": "core://Text",
+                              "value_expr": "No alerts yet: nothing on this site notifies you."
+                            },
+                            "content_color": "${local://theme#muted_text}",
+                            "padding_h_dp": 4,
+                            "type": "core://Box"
+                          },
+                          "count": {
+                            "query_key": "collection:events:filler:$route.id:alerts"
+                          },
+                          "not": true,
+                          "type": "core://Conditional",
+                          "value": ""
                         }
                       ],
-                      "padding_v_dp": 12,
-                      "spacing_dp": 10,
                       "type": "core://Column"
                     },
-                    "padding_h_dp": 16,
-                    "query_key": "collection:events:filler:$route.id",
-                    "spacing_dp": 10,
-                    "type": "core://List"
-                  },
-                  {
-                    "children": [
-                      {
-                        "style": "Title",
-                        "type": "core://Text",
-                        "value_expr": "Alerts"
-                      }
-                    ],
-                    "padding_h_dp": 16,
-                    "padding_v_dp": 4,
-                    "type": "core://Column"
-                  },
-                  {
-                    "empty_text": "No alerts yet: nothing on this site notifies you.",
-                    "item_template": {
-                      "background": "${local://theme#card}",
-                      "border_color": "${local://theme#card_border}",
-                      "content": {
-                        "children": [
-                          {
+                    {
+                      "children": [
+                        {
+                          "size_dp": 14,
+                          "type": "core://Spacer"
+                        },
+                        {
+                          "content": {
                             "style": "Label",
                             "type": "core://Text",
-                            "value_expr": "$item.name"
+                            "value_expr": "Events"
                           },
-                          {
-                            "style": "Secondary",
-                            "type": "core://Text",
-                            "value_expr": "$item.summary"
-                          }
-                        ],
-                        "spacing_dp": 2,
-                        "type": "core://Column"
-                      },
-                      "corner_dp": 14,
-                      "padding_h_dp": 14,
-                      "padding_v_dp": 12,
-                      "type": "core://Box"
-                    },
-                    "padding_h_dp": 16,
-                    "query_key": "collection:events:filler:$route.id:alerts",
-                    "spacing_dp": 10,
-                    "type": "core://List"
-                  },
-                  {
-                    "children": [
-                      {
-                        "style": "Title",
-                        "type": "core://Text",
-                        "value_expr": "Events"
-                      },
-                      {
-                        "style": "Secondary",
-                        "type": "core://Text",
-                        "value_expr": "Matches are highlighted."
-                      }
-                    ],
-                    "padding_h_dp": 16,
-                    "padding_v_dp": 4,
-                    "spacing_dp": 2,
-                    "type": "core://Column"
-                  },
-                  {
-                    "empty_text": "No upcoming events found on this page.",
-                    "item_template": {
-                      "content": {
-                        "children": [
-                          {
+                          "content_color": "${local://theme#muted_text}",
+                          "padding_h_dp": 4,
+                          "type": "core://Box"
+                        },
+                        {
+                          "size_dp": 8,
+                          "type": "core://Spacer"
+                        },
+                        {
+                          "content": {
+                            "background": "${local://theme#card}",
+                            "border_color": "${local://theme#card_border}",
                             "content": {
-                              "background": "${local://theme#accent_surface}",
-                              "border_color": "${local://theme#card_border}",
+                              "background": "${local://theme#card_border}",
                               "content": {
                                 "children": [
                                   {
-                                    "align": "Center",
-                                    "children": [
-                                      {
-                                        "background": "${local://theme#accent_surface}",
-                                        "content": {
-                                          "style": "Caption",
-                                          "type": "core://Text",
-                                          "value_expr": "$item.start_text"
-                                        },
-                                        "content_color": "${local://theme#accent}",
-                                        "corner_dp": 8,
-                                        "padding_h_dp": 8,
-                                        "padding_v_dp": 3,
-                                        "type": "core://Box"
+                                    "item_template": {
+                                      "content": {
+                                        "children": [
+                                          {
+                                            "content": {
+                                              "background": "${local://theme#card}",
+                                              "content": {
+                                                "align": "Center",
+                                                "children": [
+                                                  {
+                                                    "children": [
+                                                      {
+                                                        "style": "Label",
+                                                        "type": "core://Text",
+                                                        "value_expr": "$item.title"
+                                                      },
+                                                      {
+                                                        "content": {
+                                                          "content": {
+                                                            "max_lines": 2,
+                                                            "style": "Secondary",
+                                                            "type": "core://Text",
+                                                            "value_expr": "$item.start_text · $item.venue"
+                                                          },
+                                                          "content_color": "${local://theme#muted_text}",
+                                                          "type": "core://Box"
+                                                        },
+                                                        "type": "core://Conditional",
+                                                        "value": "$item.start_text · $item.venue"
+                                                      }
+                                                    ],
+                                                    "spacing_dp": 2,
+                                                    "type": "core://Column"
+                                                  },
+                                                  {
+                                                    "type": "core://Spacer"
+                                                  },
+                                                  {
+                                                    "align": "Center",
+                                                    "children": [
+                                                      {
+                                                        "content": {
+                                                          "background": "${local://theme#accent_surface}",
+                                                          "content": {
+                                                            "style": "Caption",
+                                                            "type": "core://Text",
+                                                            "value_expr": "Match"
+                                                          },
+                                                          "content_color": "${local://theme#accent}",
+                                                          "corner_dp": 8,
+                                                          "padding_h_dp": 8,
+                                                          "padding_v_dp": 3,
+                                                          "type": "core://Box"
+                                                        },
+                                                        "equals": "true",
+                                                        "type": "core://Conditional",
+                                                        "value": "$item.alert_matched"
+                                                      },
+                                                      {
+                                                        "content": {
+                                                          "background": "${local://theme#success_surface}",
+                                                          "content": {
+                                                            "style": "Caption",
+                                                            "type": "core://Text",
+                                                            "value_expr": "Going"
+                                                          },
+                                                          "content_color": "${local://theme#success}",
+                                                          "corner_dp": 8,
+                                                          "padding_h_dp": 8,
+                                                          "padding_v_dp": 3,
+                                                          "type": "core://Box"
+                                                        },
+                                                        "type": "core://Conditional",
+                                                        "value": "$item.going"
+                                                      }
+                                                    ],
+                                                    "spacing_dp": 6,
+                                                    "type": "core://Row"
+                                                  },
+                                                  {
+                                                    "content": {
+                                                      "style": "Title",
+                                                      "type": "core://Text",
+                                                      "value_expr": "›"
+                                                    },
+                                                    "content_color": "${local://theme#muted_text}",
+                                                    "type": "core://Box"
+                                                  }
+                                                ],
+                                                "padding_h_dp": 11,
+                                                "padding_v_dp": 12,
+                                                "spacing_dp": 12,
+                                                "type": "core://Row"
+                                              },
+                                              "type": "core://Box"
+                                            },
+                                            "type": "core://Conditional",
+                                            "value": "$item.venue"
+                                          },
+                                          {
+                                            "content": {
+                                              "background": "${local://theme#card}",
+                                              "content": {
+                                                "align": "Center",
+                                                "children": [
+                                                  {
+                                                    "children": [
+                                                      {
+                                                        "style": "Label",
+                                                        "type": "core://Text",
+                                                        "value_expr": "$item.title"
+                                                      },
+                                                      {
+                                                        "content": {
+                                                          "content": {
+                                                            "max_lines": 2,
+                                                            "style": "Secondary",
+                                                            "type": "core://Text",
+                                                            "value_expr": "$item.start_text"
+                                                          },
+                                                          "content_color": "${local://theme#muted_text}",
+                                                          "type": "core://Box"
+                                                        },
+                                                        "type": "core://Conditional",
+                                                        "value": "$item.start_text"
+                                                      }
+                                                    ],
+                                                    "spacing_dp": 2,
+                                                    "type": "core://Column"
+                                                  },
+                                                  {
+                                                    "type": "core://Spacer"
+                                                  },
+                                                  {
+                                                    "align": "Center",
+                                                    "children": [
+                                                      {
+                                                        "content": {
+                                                          "background": "${local://theme#accent_surface}",
+                                                          "content": {
+                                                            "style": "Caption",
+                                                            "type": "core://Text",
+                                                            "value_expr": "Match"
+                                                          },
+                                                          "content_color": "${local://theme#accent}",
+                                                          "corner_dp": 8,
+                                                          "padding_h_dp": 8,
+                                                          "padding_v_dp": 3,
+                                                          "type": "core://Box"
+                                                        },
+                                                        "equals": "true",
+                                                        "type": "core://Conditional",
+                                                        "value": "$item.alert_matched"
+                                                      },
+                                                      {
+                                                        "content": {
+                                                          "background": "${local://theme#success_surface}",
+                                                          "content": {
+                                                            "style": "Caption",
+                                                            "type": "core://Text",
+                                                            "value_expr": "Going"
+                                                          },
+                                                          "content_color": "${local://theme#success}",
+                                                          "corner_dp": 8,
+                                                          "padding_h_dp": 8,
+                                                          "padding_v_dp": 3,
+                                                          "type": "core://Box"
+                                                        },
+                                                        "type": "core://Conditional",
+                                                        "value": "$item.going"
+                                                      }
+                                                    ],
+                                                    "spacing_dp": 6,
+                                                    "type": "core://Row"
+                                                  },
+                                                  {
+                                                    "content": {
+                                                      "style": "Title",
+                                                      "type": "core://Text",
+                                                      "value_expr": "›"
+                                                    },
+                                                    "content_color": "${local://theme#muted_text}",
+                                                    "type": "core://Box"
+                                                  }
+                                                ],
+                                                "padding_h_dp": 11,
+                                                "padding_v_dp": 12,
+                                                "spacing_dp": 12,
+                                                "type": "core://Row"
+                                              },
+                                              "type": "core://Box"
+                                            },
+                                            "not": true,
+                                            "type": "core://Conditional",
+                                            "value": "$item.venue"
+                                          }
+                                        ],
+                                        "type": "core://Column"
                                       },
-                                      {
-                                        "type": "core://Spacer"
+                                      "content_description": "Open $item.title",
+                                      "on_click": {
+                                        "intent": "action.sequence",
+                                        "steps": [
+                                          {
+                                            "endpoint": "/v1/collections/events/update",
+                                            "entity_uri": "$item.uri",
+                                            "field": "seen",
+                                            "intent": "action.mutation.optimistic",
+                                            "payload": {
+                                              "id": "$item.id",
+                                              "seen": "$value"
+                                            },
+                                            "rollback_value": false,
+                                            "value_expr": "true"
+                                          },
+                                          {
+                                            "intent": "action.navigation.open",
+                                            "presentation": "Push",
+                                            "target_uri": "collections://events/$item.id"
+                                          }
+                                        ]
                                       },
+                                      "type": "core://Tappable"
+                                    },
+                                    "query_key": "collection:events:filler:$route.id:rows",
+                                    "spacing_dp": 1,
+                                    "type": "core://List",
+                                    "where": [
                                       {
-                                        "text": "Match",
-                                        "tone": "Neutral",
-                                        "type": "core://Chip"
+                                        "equals": "",
+                                        "field": "start",
+                                        "not": true,
+                                        "older_than": "6h"
                                       }
-                                    ],
-                                    "spacing_dp": 8,
-                                    "type": "core://Row"
-                                  },
-                                  {
-                                    "style": "Label",
-                                    "type": "core://Text",
-                                    "value_expr": "$item.title"
-                                  },
-                                  {
-                                    "content": {
-                                      "style": "Secondary",
-                                      "type": "core://Text",
-                                      "value_expr": "$item.venue"
-                                    },
-                                    "type": "core://Conditional",
-                                    "value": "$item.venue"
-                                  },
-                                  {
-                                    "content": {
-                                      "style": "Caption",
-                                      "type": "core://Text",
-                                      "value_expr": "$item.alert_names"
-                                    },
-                                    "type": "core://Conditional",
-                                    "value": "$item.alert_names"
+                                    ]
                                   }
                                 ],
-                                "spacing_dp": 6,
                                 "type": "core://Column"
                               },
-                              "corner_dp": 14,
-                              "padding_h_dp": 14,
-                              "padding_v_dp": 12,
                               "type": "core://Box"
                             },
-                            "equals": "true",
-                            "type": "core://Conditional",
-                            "value": "$item.alert_matched"
+                            "corner_dp": 18,
+                            "padding_h_dp": 5,
+                            "padding_v_dp": 6,
+                            "type": "core://Box"
                           },
-                          {
+                          "count": {
+                            "query_key": "collection:events:filler:$route.id:rows",
+                            "where": [
+                              {
+                                "equals": "",
+                                "field": "start",
+                                "not": true,
+                                "older_than": "6h"
+                              }
+                            ]
+                          },
+                          "type": "core://Conditional",
+                          "value": ""
+                        },
+                        {
+                          "content": {
                             "content": {
-                              "background": "${local://theme#card}",
-                              "border_color": "${local://theme#card_border}",
-                              "content": {
-                                "children": [
-                                  {
-                                    "align": "Center",
-                                    "children": [
-                                      {
-                                        "background": "${local://theme#accent_surface}",
-                                        "content": {
-                                          "style": "Caption",
-                                          "type": "core://Text",
-                                          "value_expr": "$item.start_text"
-                                        },
-                                        "content_color": "${local://theme#accent}",
-                                        "corner_dp": 8,
-                                        "padding_h_dp": 8,
-                                        "padding_v_dp": 3,
-                                        "type": "core://Box"
-                                      },
-                                      {
-                                        "type": "core://Spacer"
-                                      }
-                                    ],
-                                    "spacing_dp": 8,
-                                    "type": "core://Row"
-                                  },
-                                  {
-                                    "style": "Label",
-                                    "type": "core://Text",
-                                    "value_expr": "$item.title"
-                                  },
-                                  {
-                                    "content": {
-                                      "style": "Secondary",
-                                      "type": "core://Text",
-                                      "value_expr": "$item.venue"
-                                    },
-                                    "type": "core://Conditional",
-                                    "value": "$item.venue"
-                                  },
-                                  {
-                                    "content": {
-                                      "style": "Caption",
-                                      "type": "core://Text",
-                                      "value_expr": "$item.alert_names"
-                                    },
-                                    "type": "core://Conditional",
-                                    "value": "$item.alert_names"
-                                  }
-                                ],
-                                "spacing_dp": 6,
-                                "type": "core://Column"
-                              },
-                              "corner_dp": 14,
-                              "padding_h_dp": 14,
-                              "padding_v_dp": 12,
-                              "type": "core://Box"
+                              "style": "Secondary",
+                              "type": "core://Text",
+                              "value_expr": "No upcoming events found on this page."
                             },
-                            "equals": "false",
-                            "type": "core://Conditional",
-                            "value": "$item.alert_matched"
-                          }
-                        ],
-                        "type": "core://Column"
-                      },
-                      "content_description": "Open $item.title",
-                      "on_click": {
-                        "intent": "action.navigation.open",
-                        "presentation": "Push",
-                        "target_uri": "collections://events/$item.id"
-                      },
-                      "type": "core://Tappable"
+                            "content_color": "${local://theme#muted_text}",
+                            "padding_h_dp": 4,
+                            "type": "core://Box"
+                          },
+                          "count": {
+                            "query_key": "collection:events:filler:$route.id:rows",
+                            "where": [
+                              {
+                                "equals": "",
+                                "field": "start",
+                                "not": true,
+                                "older_than": "6h"
+                              }
+                            ]
+                          },
+                          "not": true,
+                          "type": "core://Conditional",
+                          "value": ""
+                        }
+                      ],
+                      "type": "core://Column"
                     },
-                    "padding_h_dp": 16,
-                    "query_key": "collection:events:filler:$route.id:rows",
-                    "spacing_dp": 10,
-                    "type": "core://List"
-                  }
-                ],
-                "spacing_dp": 8,
-                "type": "core://Column"
-              },
-              "follow_end": true,
-              "type": "core://Scroll"
-            }
-          ],
-          "type": "core://Column"
+                    {
+                      "size_dp": 16,
+                      "type": "core://Spacer"
+                    }
+                  ],
+                  "padding_h_dp": 20,
+                  "padding_v_dp": 8,
+                  "type": "core://Column"
+                },
+                "type": "core://Scroll"
+              }
+            ],
+            "type": "core://Column"
+          },
+          "fill": true,
+          "type": "core://Box"
         },
         "route": "collections://events/fillers/{id}",
         "title": "${collections://events/fillers/$route.id#title}"

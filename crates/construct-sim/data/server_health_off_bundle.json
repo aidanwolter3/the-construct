@@ -1,0 +1,2155 @@
+{
+  "entities": {
+    "core://sources/monitor": {
+      "error": "error 403",
+      "id": "monitor",
+      "signed_in": true,
+      "title": "Server monitoring"
+    },
+    "monitor://builds/0": {
+      "build": "0.5.1+20261103100000.4a7e210",
+      "color": "#C98500",
+      "label": "Nov 3 · 4a7e210",
+      "legend": "Nov 3 · 4a7e210",
+      "note": "",
+      "series": "4"
+    },
+    "monitor://builds/1": {
+      "build": "0.6.0+20261111100000.e81c5d4",
+      "color": "#199E70",
+      "label": "Nov 11 · e81c5d4",
+      "legend": "Nov 11 · e81c5d4",
+      "note": "",
+      "series": "3"
+    },
+    "monitor://builds/2": {
+      "build": "0.6.0+20261114100000.9be03a1",
+      "color": "#D95926",
+      "label": "Nov 14 · 9be03a1",
+      "legend": "Nov 14 · 9be03a1",
+      "note": "",
+      "series": "2"
+    },
+    "monitor://builds/3": {
+      "build": "0.6.0+20261118100000.c41d9e2",
+      "color": "#2A78D6",
+      "label": "Nov 18 · c41d9e2",
+      "legend": "Nov 18 · c41d9e2 · server",
+      "note": "server",
+      "series": "1"
+    },
+    "monitor://builds/4": {
+      "build": "0.6.0+20261119080000.f02b77e",
+      "color": "#E34948",
+      "label": "Nov 19 · f02b77e local",
+      "legend": "Nov 19 · f02b77e local · ahead",
+      "note": "ahead",
+      "series": "8"
+    },
+    "monitor://device_days/2026-11-06/chromemac001": {
+      "bar": "2026-11-06",
+      "bar_label": "6",
+      "build": "0.5.1+20261103100000.4a7e210",
+      "build_label": "Nov 3 · 4a7e210",
+      "color": "#C98500",
+      "day_text": "Fri Nov 6",
+      "detail": "Nov 3 · 4a7e210",
+      "device": "Chrome on macOS",
+      "device_id": "chromemac001",
+      "hatched": false,
+      "kind": "web",
+      "note": "",
+      "series": "4"
+    },
+    "monitor://device_days/2026-11-06/firefoxwork1": {
+      "bar": "2026-11-06",
+      "bar_label": "6",
+      "build": "0.5.1+20261103100000.4a7e210",
+      "build_label": "Nov 3 · 4a7e210",
+      "color": "#C98500",
+      "day_text": "Fri Nov 6",
+      "detail": "Nov 3 · 4a7e210",
+      "device": "Firefox on Linux",
+      "device_id": "firefoxwork1",
+      "hatched": false,
+      "kind": "web",
+      "note": "",
+      "series": "4"
+    },
+    "monitor://device_days/2026-11-06/macbookair01": {
+      "bar": "2026-11-06",
+      "bar_label": "6",
+      "build": "0.5.1+20261103100000.4a7e210",
+      "build_label": "Nov 3 · 4a7e210",
+      "color": "#C98500",
+      "day_text": "Fri Nov 6",
+      "detail": "Nov 3 · 4a7e210",
+      "device": "Studio MacBook",
+      "device_id": "macbookair01",
+      "hatched": false,
+      "kind": "macos",
+      "note": "",
+      "series": "4"
+    },
+    "monitor://device_days/2026-11-06/pixel9demo01": {
+      "bar": "2026-11-06",
+      "bar_label": "6",
+      "build": "0.5.1+20261103100000.4a7e210",
+      "build_label": "Nov 3 · 4a7e210",
+      "color": "#C98500",
+      "day_text": "Fri Nov 6",
+      "detail": "Nov 3 · 4a7e210",
+      "device": "Pixel 9",
+      "device_id": "pixel9demo01",
+      "hatched": false,
+      "kind": "android",
+      "note": "",
+      "series": "4"
+    },
+    "monitor://device_days/2026-11-07/chromemac001": {
+      "bar": "2026-11-07",
+      "bar_label": "7",
+      "build": "0.5.1+20261103100000.4a7e210",
+      "build_label": "Nov 3 · 4a7e210",
+      "color": "#C98500",
+      "day_text": "Sat Nov 7",
+      "detail": "Nov 3 · 4a7e210",
+      "device": "Chrome on macOS",
+      "device_id": "chromemac001",
+      "hatched": false,
+      "kind": "web",
+      "note": "",
+      "series": "4"
+    },
+    "monitor://device_days/2026-11-07/pixel9demo01": {
+      "bar": "2026-11-07",
+      "bar_label": "7",
+      "build": "0.5.1+20261103100000.4a7e210",
+      "build_label": "Nov 3 · 4a7e210",
+      "color": "#C98500",
+      "day_text": "Sat Nov 7",
+      "detail": "Nov 3 · 4a7e210",
+      "device": "Pixel 9",
+      "device_id": "pixel9demo01",
+      "hatched": false,
+      "kind": "android",
+      "note": "",
+      "series": "4"
+    },
+    "monitor://device_days/2026-11-08/chromemac001": {
+      "bar": "2026-11-08",
+      "bar_label": "8",
+      "build": "0.5.1+20261103100000.4a7e210",
+      "build_label": "Nov 3 · 4a7e210",
+      "color": "#C98500",
+      "day_text": "Sun Nov 8",
+      "detail": "Nov 3 · 4a7e210",
+      "device": "Chrome on macOS",
+      "device_id": "chromemac001",
+      "hatched": false,
+      "kind": "web",
+      "note": "",
+      "series": "4"
+    },
+    "monitor://device_days/2026-11-08/edgedesk001": {
+      "bar": "2026-11-08",
+      "bar_label": "8",
+      "build": "0.5.1+20261103100000.4a7e210",
+      "build_label": "Nov 3 · 4a7e210",
+      "color": "#C98500",
+      "day_text": "Sun Nov 8",
+      "detail": "Nov 3 · 4a7e210",
+      "device": "Edge on Windows",
+      "device_id": "edgedesk001",
+      "hatched": false,
+      "kind": "web",
+      "note": "",
+      "series": "4"
+    },
+    "monitor://device_days/2026-11-08/pixel9demo01": {
+      "bar": "2026-11-08",
+      "bar_label": "8",
+      "build": "0.5.1+20261103100000.4a7e210",
+      "build_label": "Nov 3 · 4a7e210",
+      "color": "#C98500",
+      "day_text": "Sun Nov 8",
+      "detail": "Nov 3 · 4a7e210",
+      "device": "Pixel 9",
+      "device_id": "pixel9demo01",
+      "hatched": false,
+      "kind": "android",
+      "note": "",
+      "series": "4"
+    },
+    "monitor://device_days/2026-11-09/chromemac001": {
+      "bar": "2026-11-09",
+      "bar_label": "9",
+      "build": "0.5.1+20261103100000.4a7e210",
+      "build_label": "Nov 3 · 4a7e210",
+      "color": "#C98500",
+      "day_text": "Mon Nov 9",
+      "detail": "Nov 3 · 4a7e210",
+      "device": "Chrome on macOS",
+      "device_id": "chromemac001",
+      "hatched": false,
+      "kind": "web",
+      "note": "",
+      "series": "4"
+    },
+    "monitor://device_days/2026-11-09/edgedesk001": {
+      "bar": "2026-11-09",
+      "bar_label": "9",
+      "build": "0.5.1+20261103100000.4a7e210",
+      "build_label": "Nov 3 · 4a7e210",
+      "color": "#C98500",
+      "day_text": "Mon Nov 9",
+      "detail": "Nov 3 · 4a7e210",
+      "device": "Edge on Windows",
+      "device_id": "edgedesk001",
+      "hatched": false,
+      "kind": "web",
+      "note": "",
+      "series": "4"
+    },
+    "monitor://device_days/2026-11-09/firefoxwork1": {
+      "bar": "2026-11-09",
+      "bar_label": "9",
+      "build": "0.5.1+20261103100000.4a7e210",
+      "build_label": "Nov 3 · 4a7e210",
+      "color": "#C98500",
+      "day_text": "Mon Nov 9",
+      "detail": "Nov 3 · 4a7e210",
+      "device": "Firefox on Linux",
+      "device_id": "firefoxwork1",
+      "hatched": false,
+      "kind": "web",
+      "note": "",
+      "series": "4"
+    },
+    "monitor://device_days/2026-11-09/macbookair01": {
+      "bar": "2026-11-09",
+      "bar_label": "9",
+      "build": "0.5.1+20261103100000.4a7e210",
+      "build_label": "Nov 3 · 4a7e210",
+      "color": "#C98500",
+      "day_text": "Mon Nov 9",
+      "detail": "Nov 3 · 4a7e210",
+      "device": "Studio MacBook",
+      "device_id": "macbookair01",
+      "hatched": false,
+      "kind": "macos",
+      "note": "",
+      "series": "4"
+    },
+    "monitor://device_days/2026-11-09/pixel9demo01": {
+      "bar": "2026-11-09",
+      "bar_label": "9",
+      "build": "0.5.1+20261103100000.4a7e210",
+      "build_label": "Nov 3 · 4a7e210",
+      "color": "#C98500",
+      "day_text": "Mon Nov 9",
+      "detail": "Nov 3 · 4a7e210",
+      "device": "Pixel 9",
+      "device_id": "pixel9demo01",
+      "hatched": false,
+      "kind": "android",
+      "note": "",
+      "series": "4"
+    },
+    "monitor://device_days/2026-11-10/chromemac001": {
+      "bar": "2026-11-10",
+      "bar_label": "10",
+      "build": "0.5.1+20261103100000.4a7e210",
+      "build_label": "Nov 3 · 4a7e210",
+      "color": "#C98500",
+      "day_text": "Tue Nov 10",
+      "detail": "Nov 3 · 4a7e210",
+      "device": "Chrome on macOS",
+      "device_id": "chromemac001",
+      "hatched": false,
+      "kind": "web",
+      "note": "",
+      "series": "4"
+    },
+    "monitor://device_days/2026-11-10/firefoxwork1": {
+      "bar": "2026-11-10",
+      "bar_label": "10",
+      "build": "0.5.1+20261103100000.4a7e210",
+      "build_label": "Nov 3 · 4a7e210",
+      "color": "#C98500",
+      "day_text": "Tue Nov 10",
+      "detail": "Nov 3 · 4a7e210",
+      "device": "Firefox on Linux",
+      "device_id": "firefoxwork1",
+      "hatched": false,
+      "kind": "web",
+      "note": "",
+      "series": "4"
+    },
+    "monitor://device_days/2026-11-10/macbookair01": {
+      "bar": "2026-11-10",
+      "bar_label": "10",
+      "build": "0.5.1+20261103100000.4a7e210",
+      "build_label": "Nov 3 · 4a7e210",
+      "color": "#C98500",
+      "day_text": "Tue Nov 10",
+      "detail": "Nov 3 · 4a7e210",
+      "device": "Studio MacBook",
+      "device_id": "macbookair01",
+      "hatched": false,
+      "kind": "macos",
+      "note": "",
+      "series": "4"
+    },
+    "monitor://device_days/2026-11-10/pixel9demo01": {
+      "bar": "2026-11-10",
+      "bar_label": "10",
+      "build": "0.5.1+20261103100000.4a7e210",
+      "build_label": "Nov 3 · 4a7e210",
+      "color": "#C98500",
+      "day_text": "Tue Nov 10",
+      "detail": "Nov 3 · 4a7e210",
+      "device": "Pixel 9",
+      "device_id": "pixel9demo01",
+      "hatched": false,
+      "kind": "android",
+      "note": "",
+      "series": "4"
+    },
+    "monitor://device_days/2026-11-11/chromemac001": {
+      "bar": "2026-11-11",
+      "bar_label": "11",
+      "build": "0.6.0+20261111100000.e81c5d4",
+      "build_label": "Nov 11 · e81c5d4",
+      "color": "#199E70",
+      "day_text": "Wed Nov 11",
+      "detail": "Nov 11 · e81c5d4",
+      "device": "Chrome on macOS",
+      "device_id": "chromemac001",
+      "hatched": false,
+      "kind": "web",
+      "note": "",
+      "series": "3"
+    },
+    "monitor://device_days/2026-11-11/firefoxwork1": {
+      "bar": "2026-11-11",
+      "bar_label": "11",
+      "build": "0.5.1+20261103100000.4a7e210",
+      "build_label": "Nov 3 · 4a7e210",
+      "color": "#C98500",
+      "day_text": "Wed Nov 11",
+      "detail": "Nov 3 · 4a7e210",
+      "device": "Firefox on Linux",
+      "device_id": "firefoxwork1",
+      "hatched": false,
+      "kind": "web",
+      "note": "",
+      "series": "4"
+    },
+    "monitor://device_days/2026-11-11/macbookair01": {
+      "bar": "2026-11-11",
+      "bar_label": "11",
+      "build": "0.5.1+20261103100000.4a7e210",
+      "build_label": "Nov 3 · 4a7e210",
+      "color": "#C98500",
+      "day_text": "Wed Nov 11",
+      "detail": "Nov 3 · 4a7e210",
+      "device": "Studio MacBook",
+      "device_id": "macbookair01",
+      "hatched": false,
+      "kind": "macos",
+      "note": "",
+      "series": "4"
+    },
+    "monitor://device_days/2026-11-11/pixel9demo01": {
+      "bar": "2026-11-11",
+      "bar_label": "11",
+      "build": "0.5.1+20261103100000.4a7e210",
+      "build_label": "Nov 3 · 4a7e210",
+      "color": "#C98500",
+      "day_text": "Wed Nov 11",
+      "detail": "Nov 3 · 4a7e210",
+      "device": "Pixel 9",
+      "device_id": "pixel9demo01",
+      "hatched": false,
+      "kind": "android",
+      "note": "",
+      "series": "4"
+    },
+    "monitor://device_days/2026-11-12/chromemac001": {
+      "bar": "2026-11-12",
+      "bar_label": "12",
+      "build": "0.6.0+20261111100000.e81c5d4",
+      "build_label": "Nov 11 · e81c5d4",
+      "color": "#199E70",
+      "day_text": "Thu Nov 12",
+      "detail": "Nov 11 · e81c5d4",
+      "device": "Chrome on macOS",
+      "device_id": "chromemac001",
+      "hatched": false,
+      "kind": "web",
+      "note": "",
+      "series": "3"
+    },
+    "monitor://device_days/2026-11-12/firefoxwork1": {
+      "bar": "2026-11-12",
+      "bar_label": "12",
+      "build": "0.5.1+20261103100000.4a7e210",
+      "build_label": "Nov 3 · 4a7e210",
+      "color": "#C98500",
+      "day_text": "Thu Nov 12",
+      "detail": "Nov 3 · 4a7e210",
+      "device": "Firefox on Linux",
+      "device_id": "firefoxwork1",
+      "hatched": false,
+      "kind": "web",
+      "note": "",
+      "series": "4"
+    },
+    "monitor://device_days/2026-11-12/macbookair01": {
+      "bar": "2026-11-12",
+      "bar_label": "12",
+      "build": "0.5.1+20261103100000.4a7e210",
+      "build_label": "Nov 3 · 4a7e210",
+      "color": "#C98500",
+      "day_text": "Thu Nov 12",
+      "detail": "Nov 3 · 4a7e210",
+      "device": "Studio MacBook",
+      "device_id": "macbookair01",
+      "hatched": false,
+      "kind": "macos",
+      "note": "",
+      "series": "4"
+    },
+    "monitor://device_days/2026-11-12/pixel9demo01": {
+      "bar": "2026-11-12",
+      "bar_label": "12",
+      "build": "0.5.1+20261103100000.4a7e210",
+      "build_label": "Nov 3 · 4a7e210",
+      "color": "#C98500",
+      "day_text": "Thu Nov 12",
+      "detail": "Nov 3 · 4a7e210",
+      "device": "Pixel 9",
+      "device_id": "pixel9demo01",
+      "hatched": false,
+      "kind": "android",
+      "note": "",
+      "series": "4"
+    },
+    "monitor://device_days/2026-11-13/chromemac001": {
+      "bar": "2026-11-13",
+      "bar_label": "13",
+      "build": "0.6.0+20261111100000.e81c5d4",
+      "build_label": "Nov 11 · e81c5d4",
+      "color": "#199E70",
+      "day_text": "Fri Nov 13",
+      "detail": "Nov 11 · e81c5d4",
+      "device": "Chrome on macOS",
+      "device_id": "chromemac001",
+      "hatched": false,
+      "kind": "web",
+      "note": "",
+      "series": "3"
+    },
+    "monitor://device_days/2026-11-13/firefoxwork1": {
+      "bar": "2026-11-13",
+      "bar_label": "13",
+      "build": "0.6.0+20261111100000.e81c5d4",
+      "build_label": "Nov 11 · e81c5d4",
+      "color": "#199E70",
+      "day_text": "Fri Nov 13",
+      "detail": "Nov 11 · e81c5d4",
+      "device": "Firefox on Linux",
+      "device_id": "firefoxwork1",
+      "hatched": false,
+      "kind": "web",
+      "note": "",
+      "series": "3"
+    },
+    "monitor://device_days/2026-11-13/macbookair01": {
+      "bar": "2026-11-13",
+      "bar_label": "13",
+      "build": "0.5.1+20261103100000.4a7e210",
+      "build_label": "Nov 3 · 4a7e210",
+      "color": "#C98500",
+      "day_text": "Fri Nov 13",
+      "detail": "Nov 3 · 4a7e210",
+      "device": "Studio MacBook",
+      "device_id": "macbookair01",
+      "hatched": false,
+      "kind": "macos",
+      "note": "",
+      "series": "4"
+    },
+    "monitor://device_days/2026-11-13/pixel9demo01": {
+      "bar": "2026-11-13",
+      "bar_label": "13",
+      "build": "0.5.1+20261103100000.4a7e210",
+      "build_label": "Nov 3 · 4a7e210",
+      "color": "#C98500",
+      "day_text": "Fri Nov 13",
+      "detail": "Nov 3 · 4a7e210",
+      "device": "Pixel 9",
+      "device_id": "pixel9demo01",
+      "hatched": false,
+      "kind": "android",
+      "note": "",
+      "series": "4"
+    },
+    "monitor://device_days/2026-11-14/chromemac001": {
+      "bar": "2026-11-14",
+      "bar_label": "14",
+      "build": "0.6.0+20261114100000.9be03a1",
+      "build_label": "Nov 14 · 9be03a1",
+      "color": "#D95926",
+      "day_text": "Sat Nov 14",
+      "detail": "Nov 14 · 9be03a1",
+      "device": "Chrome on macOS",
+      "device_id": "chromemac001",
+      "hatched": false,
+      "kind": "web",
+      "note": "",
+      "series": "2"
+    },
+    "monitor://device_days/2026-11-14/pixel9demo01": {
+      "bar": "2026-11-14",
+      "bar_label": "14",
+      "build": "0.5.1+20261103100000.4a7e210",
+      "build_label": "Nov 3 · 4a7e210",
+      "color": "#C98500",
+      "day_text": "Sat Nov 14",
+      "detail": "Nov 3 · 4a7e210",
+      "device": "Pixel 9",
+      "device_id": "pixel9demo01",
+      "hatched": false,
+      "kind": "android",
+      "note": "",
+      "series": "4"
+    },
+    "monitor://device_days/2026-11-15/chromemac001": {
+      "bar": "2026-11-15",
+      "bar_label": "15",
+      "build": "0.6.0+20261114100000.9be03a1",
+      "build_label": "Nov 14 · 9be03a1",
+      "color": "#D95926",
+      "day_text": "Sun Nov 15",
+      "detail": "Nov 14 · 9be03a1",
+      "device": "Chrome on macOS",
+      "device_id": "chromemac001",
+      "hatched": false,
+      "kind": "web",
+      "note": "",
+      "series": "2"
+    },
+    "monitor://device_days/2026-11-15/edgedesk001": {
+      "bar": "2026-11-15",
+      "bar_label": "15",
+      "build": "0.6.0+20261114100000.9be03a1",
+      "build_label": "Nov 14 · 9be03a1",
+      "color": "#D95926",
+      "day_text": "Sun Nov 15",
+      "detail": "Nov 14 · 9be03a1",
+      "device": "Edge on Windows",
+      "device_id": "edgedesk001",
+      "hatched": false,
+      "kind": "web",
+      "note": "",
+      "series": "2"
+    },
+    "monitor://device_days/2026-11-15/pixel9demo01": {
+      "bar": "2026-11-15",
+      "bar_label": "15",
+      "build": "0.5.1+20261103100000.4a7e210",
+      "build_label": "Nov 3 · 4a7e210",
+      "color": "#C98500",
+      "day_text": "Sun Nov 15",
+      "detail": "Nov 3 · 4a7e210",
+      "device": "Pixel 9",
+      "device_id": "pixel9demo01",
+      "hatched": false,
+      "kind": "android",
+      "note": "",
+      "series": "4"
+    },
+    "monitor://device_days/2026-11-16/chromemac001": {
+      "bar": "2026-11-16",
+      "bar_label": "16",
+      "build": "0.6.0+20261114100000.9be03a1",
+      "build_label": "Nov 14 · 9be03a1",
+      "color": "#D95926",
+      "day_text": "Mon Nov 16",
+      "detail": "Nov 14 · 9be03a1",
+      "device": "Chrome on macOS",
+      "device_id": "chromemac001",
+      "hatched": false,
+      "kind": "web",
+      "note": "",
+      "series": "2"
+    },
+    "monitor://device_days/2026-11-16/edgedesk001": {
+      "bar": "2026-11-16",
+      "bar_label": "16",
+      "build": "0.6.0+20261114100000.9be03a1",
+      "build_label": "Nov 14 · 9be03a1",
+      "color": "#D95926",
+      "day_text": "Mon Nov 16",
+      "detail": "Nov 14 · 9be03a1",
+      "device": "Edge on Windows",
+      "device_id": "edgedesk001",
+      "hatched": false,
+      "kind": "web",
+      "note": "",
+      "series": "2"
+    },
+    "monitor://device_days/2026-11-16/firefoxwork1": {
+      "bar": "2026-11-16",
+      "bar_label": "16",
+      "build": "0.6.0+20261111100000.e81c5d4",
+      "build_label": "Nov 11 · e81c5d4",
+      "color": "#199E70",
+      "day_text": "Mon Nov 16",
+      "detail": "Nov 11 · e81c5d4",
+      "device": "Firefox on Linux",
+      "device_id": "firefoxwork1",
+      "hatched": false,
+      "kind": "web",
+      "note": "",
+      "series": "3"
+    },
+    "monitor://device_days/2026-11-16/macbookair01": {
+      "bar": "2026-11-16",
+      "bar_label": "16",
+      "build": "0.6.0+20261114100000.9be03a1",
+      "build_label": "Nov 14 · 9be03a1",
+      "color": "#D95926",
+      "day_text": "Mon Nov 16",
+      "detail": "Nov 14 · 9be03a1",
+      "device": "Studio MacBook",
+      "device_id": "macbookair01",
+      "hatched": false,
+      "kind": "macos",
+      "note": "",
+      "series": "2"
+    },
+    "monitor://device_days/2026-11-16/pixel9demo01": {
+      "bar": "2026-11-16",
+      "bar_label": "16",
+      "build": "0.6.0+20261114100000.9be03a1",
+      "build_label": "Nov 14 · 9be03a1",
+      "color": "#D95926",
+      "day_text": "Mon Nov 16",
+      "detail": "Nov 14 · 9be03a1",
+      "device": "Pixel 9",
+      "device_id": "pixel9demo01",
+      "hatched": false,
+      "kind": "android",
+      "note": "",
+      "series": "2"
+    },
+    "monitor://device_days/2026-11-17/chromemac001": {
+      "bar": "2026-11-17",
+      "bar_label": "17",
+      "build": "0.6.0+20261114100000.9be03a1",
+      "build_label": "Nov 14 · 9be03a1",
+      "color": "#D95926",
+      "day_text": "Tue Nov 17",
+      "detail": "Nov 14 · 9be03a1",
+      "device": "Chrome on macOS",
+      "device_id": "chromemac001",
+      "hatched": false,
+      "kind": "web",
+      "note": "",
+      "series": "2"
+    },
+    "monitor://device_days/2026-11-17/firefoxwork1": {
+      "bar": "2026-11-17",
+      "bar_label": "17",
+      "build": "0.6.0+20261114100000.9be03a1",
+      "build_label": "Nov 14 · 9be03a1",
+      "color": "#D95926",
+      "day_text": "Tue Nov 17",
+      "detail": "Nov 14 · 9be03a1",
+      "device": "Firefox on Linux",
+      "device_id": "firefoxwork1",
+      "hatched": false,
+      "kind": "web",
+      "note": "",
+      "series": "2"
+    },
+    "monitor://device_days/2026-11-17/macbookair01": {
+      "bar": "2026-11-17",
+      "bar_label": "17",
+      "build": "0.6.0+20261114100000.9be03a1",
+      "build_label": "Nov 14 · 9be03a1",
+      "color": "#D95926",
+      "day_text": "Tue Nov 17",
+      "detail": "Nov 14 · 9be03a1",
+      "device": "Studio MacBook",
+      "device_id": "macbookair01",
+      "hatched": false,
+      "kind": "macos",
+      "note": "",
+      "series": "2"
+    },
+    "monitor://device_days/2026-11-17/pixel9demo01": {
+      "bar": "2026-11-17",
+      "bar_label": "17",
+      "build": "0.6.0+20261114100000.9be03a1",
+      "build_label": "Nov 14 · 9be03a1",
+      "color": "#D95926",
+      "day_text": "Tue Nov 17",
+      "detail": "Nov 14 · 9be03a1",
+      "device": "Pixel 9",
+      "device_id": "pixel9demo01",
+      "hatched": false,
+      "kind": "android",
+      "note": "",
+      "series": "2"
+    },
+    "monitor://device_days/2026-11-18/chromemac001": {
+      "bar": "2026-11-18",
+      "bar_label": "18",
+      "build": "0.6.0+20261118100000.c41d9e2",
+      "build_label": "Nov 18 · c41d9e2",
+      "color": "#2A78D6",
+      "day_text": "Wed Nov 18",
+      "detail": "Nov 18 · c41d9e2",
+      "device": "Chrome on macOS",
+      "device_id": "chromemac001",
+      "hatched": false,
+      "kind": "web",
+      "note": "",
+      "series": "1"
+    },
+    "monitor://device_days/2026-11-18/firefoxwork1": {
+      "bar": "2026-11-18",
+      "bar_label": "18",
+      "build": "0.6.0+20261114100000.9be03a1",
+      "build_label": "Nov 14 · 9be03a1",
+      "color": "#D95926",
+      "day_text": "Wed Nov 18",
+      "detail": "Nov 14 · 9be03a1",
+      "device": "Firefox on Linux",
+      "device_id": "firefoxwork1",
+      "hatched": false,
+      "kind": "web",
+      "note": "",
+      "series": "2"
+    },
+    "monitor://device_days/2026-11-18/macbookair01": {
+      "bar": "2026-11-18",
+      "bar_label": "18",
+      "build": "0.6.0+20261114100000.9be03a1",
+      "build_label": "Nov 14 · 9be03a1",
+      "color": "#D95926",
+      "day_text": "Wed Nov 18",
+      "detail": "Nov 14 · 9be03a1",
+      "device": "Studio MacBook",
+      "device_id": "macbookair01",
+      "hatched": false,
+      "kind": "macos",
+      "note": "",
+      "series": "2"
+    },
+    "monitor://device_days/2026-11-18/pixel9demo01": {
+      "bar": "2026-11-18",
+      "bar_label": "18",
+      "build": "0.6.0+20261114100000.9be03a1",
+      "build_label": "Nov 14 · 9be03a1",
+      "color": "#D95926",
+      "day_text": "Wed Nov 18",
+      "detail": "Nov 14 · 9be03a1",
+      "device": "Pixel 9",
+      "device_id": "pixel9demo01",
+      "hatched": false,
+      "kind": "android",
+      "note": "",
+      "series": "2"
+    },
+    "monitor://device_days/2026-11-19/chromemac001": {
+      "bar": "2026-11-19",
+      "bar_label": "Now",
+      "build": "0.6.0+20261118100000.c41d9e2",
+      "build_label": "Nov 18 · c41d9e2",
+      "color": "#2A78D6",
+      "day_text": "Now",
+      "detail": "Nov 18 · c41d9e2",
+      "device": "Chrome on macOS",
+      "device_id": "chromemac001",
+      "hatched": false,
+      "kind": "web",
+      "note": "",
+      "series": "1"
+    },
+    "monitor://device_days/2026-11-19/edgedesk001": {
+      "bar": "2026-11-19",
+      "bar_label": "Now",
+      "build": "0.6.0+20261114100000.9be03a1",
+      "build_label": "Nov 14 · 9be03a1",
+      "color": "#D95926",
+      "day_text": "Now",
+      "detail": "Nov 14 · 9be03a1 · seen 3 days ago",
+      "device": "Edge on Windows",
+      "device_id": "edgedesk001",
+      "hatched": true,
+      "kind": "web",
+      "note": "seen 3 days ago",
+      "series": "2"
+    },
+    "monitor://device_days/2026-11-19/firefoxwork1": {
+      "bar": "2026-11-19",
+      "bar_label": "Now",
+      "build": "0.6.0+20261114100000.9be03a1",
+      "build_label": "Nov 14 · 9be03a1",
+      "color": "#D95926",
+      "day_text": "Now",
+      "detail": "Nov 14 · 9be03a1 · seen 1 day ago",
+      "device": "Firefox on Linux",
+      "device_id": "firefoxwork1",
+      "hatched": true,
+      "kind": "web",
+      "note": "seen 1 day ago",
+      "series": "2"
+    },
+    "monitor://device_days/2026-11-19/macbookair01": {
+      "bar": "2026-11-19",
+      "bar_label": "Now",
+      "build": "0.6.0+20261119080000.f02b77e",
+      "build_label": "Nov 19 · f02b77e local",
+      "color": "#E34948",
+      "day_text": "Now",
+      "detail": "Nov 19 · f02b77e local",
+      "device": "Studio MacBook",
+      "device_id": "macbookair01",
+      "hatched": false,
+      "kind": "macos",
+      "note": "",
+      "series": "8"
+    },
+    "monitor://device_days/2026-11-19/pixel9demo01": {
+      "bar": "2026-11-19",
+      "bar_label": "Now",
+      "build": "0.6.0+20261114100000.9be03a1",
+      "build_label": "Nov 14 · 9be03a1",
+      "color": "#D95926",
+      "day_text": "Now",
+      "detail": "Nov 14 · 9be03a1",
+      "device": "Pixel 9",
+      "device_id": "pixel9demo01",
+      "hatched": false,
+      "kind": "android",
+      "note": "",
+      "series": "2"
+    },
+    "monitor://device_summary/pod": {
+      "count_text": "5 devices",
+      "empty": false,
+      "server_build": "0.6.0+20261118100000.c41d9e2",
+      "server_build_label": "Nov 18 · c41d9e2",
+      "status_text": "1 on the server's build · 1 ahead · 3 behind",
+      "today": "2026-11-19"
+    },
+    "monitor://devices/chromemac001": {
+      "build": "0.6.0+20261118100000.c41d9e2",
+      "build_label": "Nov 18 · c41d9e2",
+      "color": "#2A78D6",
+      "id": "chromemac001",
+      "kind": "web",
+      "kind_text": "Browser",
+      "name": "Chrome on macOS",
+      "relation": "latest",
+      "relation_bg": "#E2F1E6",
+      "relation_color": "#2E7A4C",
+      "relation_text": "Latest",
+      "seen_text": "seen 5 min ago",
+      "series": "1",
+      "subtitle": "Browser · Nov 18 · c41d9e2 · seen 5 min ago"
+    },
+    "monitor://devices/edgedesk001": {
+      "build": "0.6.0+20261114100000.9be03a1",
+      "build_label": "Nov 14 · 9be03a1",
+      "color": "#D95926",
+      "id": "edgedesk001",
+      "kind": "web",
+      "kind_text": "Browser",
+      "name": "Edge on Windows",
+      "relation": "behind",
+      "relation_bg": "#FBEBD3",
+      "relation_color": "#9A5B12",
+      "relation_text": "1 behind",
+      "seen_text": "seen 3 days ago",
+      "series": "2",
+      "subtitle": "Browser · Nov 14 · 9be03a1 · seen 3 days ago"
+    },
+    "monitor://devices/firefoxwork1": {
+      "build": "0.6.0+20261114100000.9be03a1",
+      "build_label": "Nov 14 · 9be03a1",
+      "color": "#D95926",
+      "id": "firefoxwork1",
+      "kind": "web",
+      "kind_text": "Browser",
+      "name": "Firefox on Linux",
+      "relation": "behind",
+      "relation_bg": "#FBEBD3",
+      "relation_color": "#9A5B12",
+      "relation_text": "1 behind",
+      "seen_text": "seen 1 day ago",
+      "series": "2",
+      "subtitle": "Browser · Nov 14 · 9be03a1 · seen 1 day ago"
+    },
+    "monitor://devices/macbookair01": {
+      "build": "0.6.0+20261119080000.f02b77e",
+      "build_label": "Nov 19 · f02b77e local",
+      "color": "#E34948",
+      "id": "macbookair01",
+      "kind": "macos",
+      "kind_text": "Mac app",
+      "name": "Studio MacBook",
+      "relation": "ahead",
+      "relation_bg": "#D8EFEE",
+      "relation_color": "#136B6B",
+      "relation_text": "Ahead of server",
+      "seen_text": "seen 1 h ago",
+      "series": "8",
+      "subtitle": "Mac app · Nov 19 · f02b77e local · seen 1 h ago"
+    },
+    "monitor://devices/pixel9demo01": {
+      "build": "0.6.0+20261114100000.9be03a1",
+      "build_label": "Nov 14 · 9be03a1",
+      "color": "#D95926",
+      "id": "pixel9demo01",
+      "kind": "android",
+      "kind_text": "Android",
+      "name": "Pixel 9",
+      "relation": "behind",
+      "relation_bg": "#FBEBD3",
+      "relation_color": "#9A5B12",
+      "relation_text": "1 behind",
+      "seen_text": "seen 2 min ago",
+      "series": "2",
+      "subtitle": "Android · Nov 14 · 9be03a1 · seen 2 min ago"
+    }
+  },
+  "queries": {
+    "monitor:builds": [
+      "monitor://builds/0",
+      "monitor://builds/1",
+      "monitor://builds/2",
+      "monitor://builds/3",
+      "monitor://builds/4"
+    ],
+    "monitor:device_days": [
+      "monitor://device_days/2026-11-06/chromemac001",
+      "monitor://device_days/2026-11-06/firefoxwork1",
+      "monitor://device_days/2026-11-06/pixel9demo01",
+      "monitor://device_days/2026-11-06/macbookair01",
+      "monitor://device_days/2026-11-07/chromemac001",
+      "monitor://device_days/2026-11-07/pixel9demo01",
+      "monitor://device_days/2026-11-08/chromemac001",
+      "monitor://device_days/2026-11-08/edgedesk001",
+      "monitor://device_days/2026-11-08/pixel9demo01",
+      "monitor://device_days/2026-11-09/chromemac001",
+      "monitor://device_days/2026-11-09/edgedesk001",
+      "monitor://device_days/2026-11-09/firefoxwork1",
+      "monitor://device_days/2026-11-09/pixel9demo01",
+      "monitor://device_days/2026-11-09/macbookair01",
+      "monitor://device_days/2026-11-10/chromemac001",
+      "monitor://device_days/2026-11-10/firefoxwork1",
+      "monitor://device_days/2026-11-10/pixel9demo01",
+      "monitor://device_days/2026-11-10/macbookair01",
+      "monitor://device_days/2026-11-11/firefoxwork1",
+      "monitor://device_days/2026-11-11/pixel9demo01",
+      "monitor://device_days/2026-11-11/macbookair01",
+      "monitor://device_days/2026-11-11/chromemac001",
+      "monitor://device_days/2026-11-12/firefoxwork1",
+      "monitor://device_days/2026-11-12/pixel9demo01",
+      "monitor://device_days/2026-11-12/macbookair01",
+      "monitor://device_days/2026-11-12/chromemac001",
+      "monitor://device_days/2026-11-13/pixel9demo01",
+      "monitor://device_days/2026-11-13/macbookair01",
+      "monitor://device_days/2026-11-13/chromemac001",
+      "monitor://device_days/2026-11-13/firefoxwork1",
+      "monitor://device_days/2026-11-14/pixel9demo01",
+      "monitor://device_days/2026-11-14/chromemac001",
+      "monitor://device_days/2026-11-15/pixel9demo01",
+      "monitor://device_days/2026-11-15/chromemac001",
+      "monitor://device_days/2026-11-15/edgedesk001",
+      "monitor://device_days/2026-11-16/firefoxwork1",
+      "monitor://device_days/2026-11-16/chromemac001",
+      "monitor://device_days/2026-11-16/edgedesk001",
+      "monitor://device_days/2026-11-16/pixel9demo01",
+      "monitor://device_days/2026-11-16/macbookair01",
+      "monitor://device_days/2026-11-17/chromemac001",
+      "monitor://device_days/2026-11-17/firefoxwork1",
+      "monitor://device_days/2026-11-17/pixel9demo01",
+      "monitor://device_days/2026-11-17/macbookair01",
+      "monitor://device_days/2026-11-18/firefoxwork1",
+      "monitor://device_days/2026-11-18/pixel9demo01",
+      "monitor://device_days/2026-11-18/macbookair01",
+      "monitor://device_days/2026-11-18/chromemac001",
+      "monitor://device_days/2026-11-19/pixel9demo01",
+      "monitor://device_days/2026-11-19/edgedesk001",
+      "monitor://device_days/2026-11-19/firefoxwork1",
+      "monitor://device_days/2026-11-19/chromemac001",
+      "monitor://device_days/2026-11-19/macbookair01"
+    ],
+    "monitor:device_summary": [
+      "monitor://device_summary/pod"
+    ],
+    "monitor:devices": [
+      "monitor://devices/pixel9demo01",
+      "monitor://devices/macbookair01",
+      "monitor://devices/chromemac001",
+      "monitor://devices/firefoxwork1",
+      "monitor://devices/edgedesk001"
+    ]
+  },
+  "version": "1.0.0",
+  "workspace": {
+    "id": "server_health",
+    "root": {
+      "background": "${local://theme#page}",
+      "content": {
+        "children": [
+          {
+            "content": {
+              "align": "Center",
+              "children": [
+                {
+                  "content": {
+                    "content_description": "Back",
+                    "icon": "arrow_back",
+                    "on_click": {
+                      "intent": "action.navigation.back"
+                    },
+                    "tag": "back",
+                    "type": "core://IconButton"
+                  },
+                  "type": "core://Conditional",
+                  "value": "${local://nav#can_go_back}"
+                },
+                {
+                  "style": "Headline",
+                  "type": "core://Text",
+                  "value_expr": "Server health",
+                  "weight": "SemiBold"
+                },
+                {
+                  "content": {
+                    "size_dp": 18,
+                    "type": "core://Progress"
+                  },
+                  "type": "core://Conditional",
+                  "value": "${local://screen#loading}"
+                },
+                {
+                  "type": "core://Spacer"
+                },
+                {
+                  "content": {
+                    "size_dp": 0,
+                    "type": "core://Spacer"
+                  },
+                  "height_dp": 48,
+                  "type": "core://Box",
+                  "width_dp": 1
+                }
+              ],
+              "padding_v_dp": 4,
+              "spacing_dp": 4,
+              "type": "core://Row"
+            },
+            "padding_h_dp": 20,
+            "padding_v_dp": 4,
+            "type": "core://Box"
+          },
+          {
+            "content": {
+              "children": [
+                {
+                  "content": {
+                    "background": "${local://theme#success_surface}",
+                    "content": {
+                      "children": [
+                        {
+                          "align": "Center",
+                          "children": [
+                            {
+                              "align": "Center",
+                              "background": "${local://theme#success}",
+                              "content": {
+                                "icon": "check",
+                                "text": "",
+                                "type": "core://Badge"
+                              },
+                              "content_color": "${local://theme#card}",
+                              "corner_dp": 512,
+                              "height_dp": 40,
+                              "type": "core://Box",
+                              "width_dp": 40
+                            },
+                            {
+                              "children": [
+                                {
+                                  "style": "Title",
+                                  "type": "core://Text",
+                                  "value_expr": "${monitor://summary/server#headline}",
+                                  "weight": "SemiBold"
+                                },
+                                {
+                                  "content": {
+                                    "style": "Secondary",
+                                    "type": "core://Text",
+                                    "value_expr": "Server up ${monitor://summary/server#uptime_text}"
+                                  },
+                                  "content_color": "${local://theme#muted_text}",
+                                  "type": "core://Box"
+                                },
+                                {
+                                  "content": {
+                                    "content": {
+                                      "style": "Caption",
+                                      "type": "core://Text",
+                                      "value_expr": "${monitor://summary/server#window_note}"
+                                    },
+                                    "content_color": "${local://theme#muted_text}",
+                                    "type": "core://Box"
+                                  },
+                                  "type": "core://Conditional",
+                                  "value": "${monitor://summary/server#window_note}"
+                                }
+                              ],
+                              "spacing_dp": 2,
+                              "type": "core://Column"
+                            }
+                          ],
+                          "spacing_dp": 14,
+                          "type": "core://Row"
+                        }
+                      ],
+                      "type": "core://Column"
+                    },
+                    "content_color": "${local://theme#success}",
+                    "corner_dp": 16,
+                    "padding_h_dp": 14,
+                    "padding_v_dp": 14,
+                    "type": "core://Box"
+                  },
+                  "equals": "true",
+                  "type": "core://Conditional",
+                  "value": "${monitor://summary/server#ok}"
+                },
+                {
+                  "content": {
+                    "content": {
+                      "background": "${local://theme#error_surface}",
+                      "content": {
+                        "children": [
+                          {
+                            "align": "Center",
+                            "children": [
+                              {
+                                "align": "Center",
+                                "background": "${local://theme#error}",
+                                "content": {
+                                  "icon": "warning",
+                                  "text": "",
+                                  "type": "core://Badge"
+                                },
+                                "content_color": "${local://theme#card}",
+                                "corner_dp": 512,
+                                "height_dp": 40,
+                                "type": "core://Box",
+                                "width_dp": 40
+                              },
+                              {
+                                "children": [
+                                  {
+                                    "style": "Title",
+                                    "type": "core://Text",
+                                    "value_expr": "${monitor://summary/server#headline}",
+                                    "weight": "SemiBold"
+                                  },
+                                  {
+                                    "content": {
+                                      "style": "Secondary",
+                                      "type": "core://Text",
+                                      "value_expr": "Server up ${monitor://summary/server#uptime_text}"
+                                    },
+                                    "content_color": "${local://theme#muted_text}",
+                                    "type": "core://Box"
+                                  },
+                                  {
+                                    "content": {
+                                      "content": {
+                                        "style": "Caption",
+                                        "type": "core://Text",
+                                        "value_expr": "${monitor://summary/server#window_note}"
+                                      },
+                                      "content_color": "${local://theme#muted_text}",
+                                      "type": "core://Box"
+                                    },
+                                    "type": "core://Conditional",
+                                    "value": "${monitor://summary/server#window_note}"
+                                  }
+                                ],
+                                "spacing_dp": 2,
+                                "type": "core://Column"
+                              }
+                            ],
+                            "spacing_dp": 14,
+                            "type": "core://Row"
+                          }
+                        ],
+                        "type": "core://Column"
+                      },
+                      "content_color": "${local://theme#error}",
+                      "corner_dp": 16,
+                      "padding_h_dp": 14,
+                      "padding_v_dp": 14,
+                      "type": "core://Box"
+                    },
+                    "equals": "true",
+                    "not": true,
+                    "type": "core://Conditional",
+                    "value": "${monitor://summary/server#ok}"
+                  },
+                  "count": {
+                    "query_key": "monitor:summary"
+                  },
+                  "type": "core://Conditional",
+                  "value": ""
+                },
+                {
+                  "content": {
+                    "background": "${local://theme#muted_surface}",
+                    "content": {
+                      "children": [
+                        {
+                          "content": {
+                            "content": {
+                              "style": "Label",
+                              "type": "core://Text",
+                              "value_expr": "Server monitoring is off for this pod"
+                            },
+                            "content_color": "${local://theme#muted_text}",
+                            "type": "core://Box"
+                          },
+                          "type": "core://Conditional",
+                          "value": "Server monitoring is off for this pod"
+                        },
+                        {
+                          "content": {
+                            "style": "Body",
+                            "type": "core://Text",
+                            "value_expr": "Your devices are below. The server's checks and counters show once its operator turns monitoring on for this pod (server pods monitoring <pod> on)."
+                          },
+                          "type": "core://Conditional",
+                          "value": "Your devices are below. The server's checks and counters show once its operator turns monitoring on for this pod (server pods monitoring <pod> on)."
+                        }
+                      ],
+                      "spacing_dp": 4,
+                      "type": "core://Column"
+                    },
+                    "corner_dp": 14,
+                    "padding_h_dp": 14,
+                    "padding_v_dp": 12,
+                    "type": "core://Box"
+                  },
+                  "equals": "error 403",
+                  "type": "core://Conditional",
+                  "value": "${core://sources/monitor#error}"
+                },
+                {
+                  "content": {
+                    "content": {
+                      "background": "${local://theme#error_surface}",
+                      "content": {
+                        "children": [
+                          {
+                            "content": {
+                              "content": {
+                                "style": "Label",
+                                "type": "core://Text",
+                                "value_expr": "The server's health couldn't be loaded"
+                              },
+                              "content_color": "${local://theme#error}",
+                              "type": "core://Box"
+                            },
+                            "type": "core://Conditional",
+                            "value": "The server's health couldn't be loaded"
+                          },
+                          {
+                            "content": {
+                              "style": "Body",
+                              "type": "core://Text",
+                              "value_expr": "The pod answered ${core://sources/monitor#error}. Your devices may be missing below."
+                            },
+                            "type": "core://Conditional",
+                            "value": "The pod answered ${core://sources/monitor#error}. Your devices may be missing below."
+                          }
+                        ],
+                        "spacing_dp": 4,
+                        "type": "core://Column"
+                      },
+                      "corner_dp": 14,
+                      "padding_h_dp": 14,
+                      "padding_v_dp": 12,
+                      "type": "core://Box"
+                    },
+                    "equals": "error 403",
+                    "not": true,
+                    "type": "core://Conditional",
+                    "value": "${core://sources/monitor#error}"
+                  },
+                  "type": "core://Conditional",
+                  "value": "${core://sources/monitor#error}"
+                },
+                {
+                  "content": {
+                    "children": [
+                      {
+                        "size_dp": 14,
+                        "type": "core://Spacer"
+                      },
+                      {
+                        "content": {
+                          "style": "Label",
+                          "type": "core://Text",
+                          "value_expr": "Checks"
+                        },
+                        "content_color": "${local://theme#muted_text}",
+                        "padding_h_dp": 4,
+                        "type": "core://Box"
+                      },
+                      {
+                        "size_dp": 8,
+                        "type": "core://Spacer"
+                      },
+                      {
+                        "content": {
+                          "background": "${local://theme#card}",
+                          "border_color": "${local://theme#card_border}",
+                          "content": {
+                            "background": "${local://theme#card_border}",
+                            "content": {
+                              "children": [
+                                {
+                                  "item_template": {
+                                    "background": "${local://theme#card}",
+                                    "content": {
+                                      "align": "Center",
+                                      "children": [
+                                        {
+                                          "content": {
+                                            "children": [
+                                              {
+                                                "content": {
+                                                  "align": "Center",
+                                                  "background": "${local://theme#success_surface}",
+                                                  "content": {
+                                                    "icon": "check",
+                                                    "text": "",
+                                                    "type": "core://Badge"
+                                                  },
+                                                  "content_color": "${local://theme#success}",
+                                                  "corner_dp": 512,
+                                                  "height_dp": 34,
+                                                  "type": "core://Box",
+                                                  "width_dp": 34
+                                                },
+                                                "equals": "true",
+                                                "type": "core://Conditional",
+                                                "value": "$item.ok"
+                                              },
+                                              {
+                                                "content": {
+                                                  "align": "Center",
+                                                  "background": "${local://theme#error_surface}",
+                                                  "content": {
+                                                    "icon": "warning",
+                                                    "text": "",
+                                                    "type": "core://Badge"
+                                                  },
+                                                  "content_color": "${local://theme#error}",
+                                                  "corner_dp": 512,
+                                                  "height_dp": 34,
+                                                  "type": "core://Box",
+                                                  "width_dp": 34
+                                                },
+                                                "equals": "true",
+                                                "not": true,
+                                                "type": "core://Conditional",
+                                                "value": "$item.ok"
+                                              }
+                                            ],
+                                            "type": "core://Column"
+                                          },
+                                          "type": "core://Box",
+                                          "width_dp": 34
+                                        },
+                                        {
+                                          "children": [
+                                            {
+                                              "style": "Label",
+                                              "type": "core://Text",
+                                              "value_expr": "$item.title"
+                                            },
+                                            {
+                                              "content": {
+                                                "content": {
+                                                  "max_lines": 6,
+                                                  "style": "Secondary",
+                                                  "type": "core://Text",
+                                                  "value_expr": "$item.detail"
+                                                },
+                                                "content_color": "${local://theme#muted_text}",
+                                                "type": "core://Box"
+                                              },
+                                              "type": "core://Conditional",
+                                              "value": "$item.detail"
+                                            }
+                                          ],
+                                          "spacing_dp": 2,
+                                          "type": "core://Column"
+                                        },
+                                        {
+                                          "type": "core://Spacer"
+                                        }
+                                      ],
+                                      "padding_h_dp": 11,
+                                      "padding_v_dp": 12,
+                                      "spacing_dp": 12,
+                                      "type": "core://Row"
+                                    },
+                                    "type": "core://Box"
+                                  },
+                                  "query_key": "monitor:checks",
+                                  "spacing_dp": 1,
+                                  "type": "core://List"
+                                }
+                              ],
+                              "type": "core://Column"
+                            },
+                            "type": "core://Box"
+                          },
+                          "corner_dp": 18,
+                          "padding_h_dp": 5,
+                          "padding_v_dp": 6,
+                          "type": "core://Box"
+                        },
+                        "count": {
+                          "query_key": "monitor:checks"
+                        },
+                        "type": "core://Conditional",
+                        "value": ""
+                      },
+                      {
+                        "content": {
+                          "content": {
+                            "style": "Secondary",
+                            "type": "core://Text",
+                            "value_expr": "No checks yet"
+                          },
+                          "content_color": "${local://theme#muted_text}",
+                          "padding_h_dp": 4,
+                          "type": "core://Box"
+                        },
+                        "count": {
+                          "query_key": "monitor:checks"
+                        },
+                        "not": true,
+                        "type": "core://Conditional",
+                        "value": ""
+                      }
+                    ],
+                    "type": "core://Column"
+                  },
+                  "count": {
+                    "query_key": "monitor:summary"
+                  },
+                  "type": "core://Conditional",
+                  "value": ""
+                },
+                {
+                  "children": [
+                    {
+                      "size_dp": 14,
+                      "type": "core://Spacer"
+                    },
+                    {
+                      "content": {
+                        "style": "Label",
+                        "type": "core://Text",
+                        "value_expr": "Devices"
+                      },
+                      "content_color": "${local://theme#muted_text}",
+                      "padding_h_dp": 4,
+                      "type": "core://Box"
+                    },
+                    {
+                      "size_dp": 8,
+                      "type": "core://Spacer"
+                    },
+                    {
+                      "children": [
+                        {
+                          "children": [
+                            {
+                              "content": {
+                                "content": {
+                                  "style": "Caption",
+                                  "type": "core://Text",
+                                  "value_expr": "${monitor://device_summary/pod#count_text}"
+                                },
+                                "content_color": "${local://theme#muted_text}",
+                                "padding_h_dp": 4,
+                                "type": "core://Box"
+                              },
+                              "type": "core://Conditional",
+                              "value": "${monitor://device_summary/pod#count_text}"
+                            },
+                            {
+                              "content": {
+                                "content": {
+                                  "style": "Caption",
+                                  "type": "core://Text",
+                                  "value_expr": "${monitor://device_summary/pod#status_text}"
+                                },
+                                "content_color": "${local://theme#muted_text}",
+                                "padding_h_dp": 4,
+                                "type": "core://Box"
+                              },
+                              "type": "core://Conditional",
+                              "value": "${monitor://device_summary/pod#status_text}"
+                            }
+                          ],
+                          "spacing_dp": 2,
+                          "type": "core://Column"
+                        },
+                        {
+                          "field": "device_kind",
+                          "options": [
+                            {
+                              "label": "All",
+                              "value": ""
+                            },
+                            {
+                              "label": "Phone",
+                              "value": "android"
+                            },
+                            {
+                              "label": "Mac",
+                              "value": "macos"
+                            },
+                            {
+                              "label": "Web",
+                              "value": "web"
+                            }
+                          ],
+                          "type": "core://ChoiceChips"
+                        },
+                        {
+                          "background": "${local://theme#card}",
+                          "border_color": "${local://theme#card_border}",
+                          "content": {
+                            "children": [
+                              {
+                                "align": "Center",
+                                "children": [
+                                  {
+                                    "style": "Label",
+                                    "type": "core://Text",
+                                    "value_expr": "Devices per day"
+                                  },
+                                  {
+                                    "type": "core://Spacer"
+                                  },
+                                  {
+                                    "content": {
+                                      "style": "Caption",
+                                      "type": "core://Text",
+                                      "value_expr": "last 14 days"
+                                    },
+                                    "content_color": "${local://theme#muted_text}",
+                                    "type": "core://Box"
+                                  }
+                                ],
+                                "type": "core://Row"
+                              },
+                              {
+                                "bar": "bar",
+                                "color": "${local://theme#chart_$item.series}",
+                                "field": "device_day",
+                                "hatched": "hatched",
+                                "height_dp": 140,
+                                "label": "$item.bar_label",
+                                "merge": "build",
+                                "query_key": "monitor:device_days",
+                                "scale_min": 5,
+                                "type": "core://Bars",
+                                "where": {
+                                  "equals": "$form.device_kind",
+                                  "field": "kind"
+                                }
+                              },
+                              {
+                                "columns": 2,
+                                "item_template": {
+                                  "align": "Center",
+                                  "children": [
+                                    {
+                                      "background": "${local://theme#chart_$item.series}",
+                                      "content": {
+                                        "type": "core://Spacer"
+                                      },
+                                      "corner_dp": 3,
+                                      "height_dp": 10,
+                                      "type": "core://Box",
+                                      "width_dp": 10
+                                    },
+                                    {
+                                      "content": {
+                                        "style": "Caption",
+                                        "type": "core://Text",
+                                        "value_expr": "$item.legend"
+                                      },
+                                      "content_color": "${local://theme#muted_text}",
+                                      "type": "core://Box"
+                                    }
+                                  ],
+                                  "spacing_dp": 6,
+                                  "type": "core://Row"
+                                },
+                                "query_key": "monitor:builds",
+                                "spacing_dp": 4,
+                                "type": "core://List"
+                              },
+                              {
+                                "type": "core://Divider"
+                              },
+                              {
+                                "content": {
+                                  "group_by": {
+                                    "field": "bar",
+                                    "header": {
+                                      "style": "Label",
+                                      "type": "core://Text",
+                                      "value_expr": "$item.day_text"
+                                    }
+                                  },
+                                  "item_template": {
+                                    "align": "Center",
+                                    "children": [
+                                      {
+                                        "background": "${local://theme#chart_$item.series}",
+                                        "content": {
+                                          "type": "core://Spacer"
+                                        },
+                                        "corner_dp": 3,
+                                        "height_dp": 10,
+                                        "type": "core://Box",
+                                        "width_dp": 10
+                                      },
+                                      {
+                                        "style": "Body",
+                                        "type": "core://Text",
+                                        "value_expr": "$item.device"
+                                      },
+                                      {
+                                        "type": "core://Spacer"
+                                      },
+                                      {
+                                        "content": {
+                                          "style": "Caption",
+                                          "type": "core://Text",
+                                          "value_expr": "$item.detail"
+                                        },
+                                        "content_color": "${local://theme#muted_text}",
+                                        "type": "core://Box"
+                                      }
+                                    ],
+                                    "spacing_dp": 8,
+                                    "type": "core://Row"
+                                  },
+                                  "query_key": "monitor:device_days",
+                                  "spacing_dp": 6,
+                                  "type": "core://List",
+                                  "where": [
+                                    {
+                                      "equals": "$form.device_day",
+                                      "field": "bar"
+                                    },
+                                    {
+                                      "equals": "$form.device_kind",
+                                      "field": "kind"
+                                    }
+                                  ]
+                                },
+                                "type": "core://Conditional",
+                                "value": "$form.device_day"
+                              },
+                              {
+                                "content": {
+                                  "children": [
+                                    {
+                                      "style": "Label",
+                                      "type": "core://Text",
+                                      "value_expr": "Now: every device at its latest build"
+                                    },
+                                    {
+                                      "item_template": {
+                                        "align": "Center",
+                                        "children": [
+                                          {
+                                            "background": "${local://theme#chart_$item.series}",
+                                            "content": {
+                                              "type": "core://Spacer"
+                                            },
+                                            "corner_dp": 3,
+                                            "height_dp": 10,
+                                            "type": "core://Box",
+                                            "width_dp": 10
+                                          },
+                                          {
+                                            "style": "Body",
+                                            "type": "core://Text",
+                                            "value_expr": "$item.device"
+                                          },
+                                          {
+                                            "type": "core://Spacer"
+                                          },
+                                          {
+                                            "content": {
+                                              "style": "Caption",
+                                              "type": "core://Text",
+                                              "value_expr": "$item.detail"
+                                            },
+                                            "content_color": "${local://theme#muted_text}",
+                                            "type": "core://Box"
+                                          }
+                                        ],
+                                        "spacing_dp": 8,
+                                        "type": "core://Row"
+                                      },
+                                      "query_key": "monitor:device_days",
+                                      "spacing_dp": 6,
+                                      "type": "core://List",
+                                      "where": [
+                                        {
+                                          "equals": "${monitor://device_summary/pod#today}",
+                                          "field": "bar"
+                                        },
+                                        {
+                                          "equals": "$form.device_kind",
+                                          "field": "kind"
+                                        }
+                                      ]
+                                    }
+                                  ],
+                                  "spacing_dp": 6,
+                                  "type": "core://Column"
+                                },
+                                "not": true,
+                                "type": "core://Conditional",
+                                "value": "$form.device_day"
+                              }
+                            ],
+                            "spacing_dp": 12,
+                            "type": "core://Column"
+                          },
+                          "corner_dp": 18,
+                          "padding_h_dp": 14,
+                          "padding_v_dp": 14,
+                          "type": "core://Box"
+                        },
+                        {
+                          "content": {
+                            "background": "${local://theme#card}",
+                            "border_color": "${local://theme#card_border}",
+                            "content": {
+                              "background": "${local://theme#card_border}",
+                              "content": {
+                                "children": [
+                                  {
+                                    "item_template": {
+                                      "background": "${local://theme#card}",
+                                      "content": {
+                                        "align": "Center",
+                                        "children": [
+                                          {
+                                            "background": "${local://theme#chart_$item.series}",
+                                            "content": {
+                                              "type": "core://Spacer"
+                                            },
+                                            "corner_dp": 3,
+                                            "height_dp": 10,
+                                            "type": "core://Box",
+                                            "width_dp": 10
+                                          },
+                                          {
+                                            "children": [
+                                              {
+                                                "style": "Label",
+                                                "type": "core://Text",
+                                                "value_expr": "$item.name"
+                                              },
+                                              {
+                                                "content": {
+                                                  "content": {
+                                                    "max_lines": 2,
+                                                    "style": "Secondary",
+                                                    "type": "core://Text",
+                                                    "value_expr": "$item.kind_text · $item.seen_text"
+                                                  },
+                                                  "content_color": "${local://theme#muted_text}",
+                                                  "type": "core://Box"
+                                                },
+                                                "type": "core://Conditional",
+                                                "value": "$item.kind_text · $item.seen_text"
+                                              }
+                                            ],
+                                            "spacing_dp": 2,
+                                            "type": "core://Column"
+                                          },
+                                          {
+                                            "type": "core://Spacer"
+                                          },
+                                          {
+                                            "children": [
+                                              {
+                                                "content": {
+                                                  "background": "${local://theme#success_surface}",
+                                                  "content": {
+                                                    "style": "Caption",
+                                                    "type": "core://Text",
+                                                    "value_expr": "$item.relation_text"
+                                                  },
+                                                  "content_color": "${local://theme#success}",
+                                                  "corner_dp": 8,
+                                                  "padding_h_dp": 8,
+                                                  "padding_v_dp": 3,
+                                                  "type": "core://Box"
+                                                },
+                                                "equals": "latest",
+                                                "type": "core://Conditional",
+                                                "value": "$item.relation"
+                                              },
+                                              {
+                                                "content": {
+                                                  "background": "${local://theme#error_surface}",
+                                                  "content": {
+                                                    "style": "Caption",
+                                                    "type": "core://Text",
+                                                    "value_expr": "$item.relation_text"
+                                                  },
+                                                  "content_color": "${local://theme#error}",
+                                                  "corner_dp": 8,
+                                                  "padding_h_dp": 8,
+                                                  "padding_v_dp": 3,
+                                                  "type": "core://Box"
+                                                },
+                                                "equals": "behind",
+                                                "type": "core://Conditional",
+                                                "value": "$item.relation"
+                                              },
+                                              {
+                                                "content": {
+                                                  "background": "${local://theme#accent_surface}",
+                                                  "content": {
+                                                    "style": "Caption",
+                                                    "type": "core://Text",
+                                                    "value_expr": "$item.relation_text"
+                                                  },
+                                                  "content_color": "${local://theme#accent}",
+                                                  "corner_dp": 8,
+                                                  "padding_h_dp": 8,
+                                                  "padding_v_dp": 3,
+                                                  "type": "core://Box"
+                                                },
+                                                "equals": "ahead",
+                                                "type": "core://Conditional",
+                                                "value": "$item.relation"
+                                              },
+                                              {
+                                                "content": {
+                                                  "background": "${local://theme#muted_surface}",
+                                                  "content": {
+                                                    "style": "Caption",
+                                                    "type": "core://Text",
+                                                    "value_expr": "$item.relation_text"
+                                                  },
+                                                  "content_color": "${local://theme#muted_text}",
+                                                  "corner_dp": 8,
+                                                  "padding_h_dp": 8,
+                                                  "padding_v_dp": 3,
+                                                  "type": "core://Box"
+                                                },
+                                                "equals": "unknown",
+                                                "type": "core://Conditional",
+                                                "value": "$item.relation"
+                                              }
+                                            ],
+                                            "type": "core://Column"
+                                          }
+                                        ],
+                                        "padding_h_dp": 11,
+                                        "padding_v_dp": 12,
+                                        "spacing_dp": 12,
+                                        "type": "core://Row"
+                                      },
+                                      "type": "core://Box"
+                                    },
+                                    "query_key": "monitor:devices",
+                                    "spacing_dp": 1,
+                                    "type": "core://List",
+                                    "where": {
+                                      "equals": "$form.device_kind",
+                                      "field": "kind"
+                                    }
+                                  }
+                                ],
+                                "type": "core://Column"
+                              },
+                              "type": "core://Box"
+                            },
+                            "corner_dp": 18,
+                            "padding_h_dp": 5,
+                            "padding_v_dp": 6,
+                            "type": "core://Box"
+                          },
+                          "count": {
+                            "query_key": "monitor:devices",
+                            "where": [
+                              {
+                                "equals": "$form.device_kind",
+                                "field": "kind"
+                              }
+                            ]
+                          },
+                          "type": "core://Conditional",
+                          "value": ""
+                        },
+                        {
+                          "content": {
+                            "content": {
+                              "style": "Secondary",
+                              "type": "core://Text",
+                              "value_expr": "No devices here yet"
+                            },
+                            "content_color": "${local://theme#muted_text}",
+                            "padding_h_dp": 4,
+                            "type": "core://Box"
+                          },
+                          "count": {
+                            "query_key": "monitor:devices",
+                            "where": [
+                              {
+                                "equals": "$form.device_kind",
+                                "field": "kind"
+                              }
+                            ]
+                          },
+                          "not": true,
+                          "type": "core://Conditional",
+                          "value": ""
+                        }
+                      ],
+                      "spacing_dp": 10,
+                      "type": "core://Column"
+                    }
+                  ],
+                  "type": "core://Column"
+                },
+                {
+                  "content": {
+                    "children": [
+                      {
+                        "size_dp": 14,
+                        "type": "core://Spacer"
+                      },
+                      {
+                        "content": {
+                          "style": "Label",
+                          "type": "core://Text",
+                          "value_expr": "All counters"
+                        },
+                        "content_color": "${local://theme#muted_text}",
+                        "padding_h_dp": 4,
+                        "type": "core://Box"
+                      },
+                      {
+                        "size_dp": 8,
+                        "type": "core://Spacer"
+                      },
+                      {
+                        "children": [
+                          {
+                            "content": {
+                              "style": "Caption",
+                              "type": "core://Text",
+                              "value_expr": "Last hour · last day · since the server started"
+                            },
+                            "content_color": "${local://theme#muted_text}",
+                            "padding_h_dp": 4,
+                            "type": "core://Box"
+                          },
+                          {
+                            "content": {
+                              "background": "${local://theme#card}",
+                              "border_color": "${local://theme#card_border}",
+                              "content": {
+                                "background": "${local://theme#card_border}",
+                                "content": {
+                                  "children": [
+                                    {
+                                      "item_template": {
+                                        "background": "${local://theme#card}",
+                                        "content": {
+                                          "align": "Center",
+                                          "children": [
+                                            {
+                                              "children": [
+                                                {
+                                                  "style": "Label",
+                                                  "type": "core://Text",
+                                                  "value_expr": "$item.title"
+                                                },
+                                                {
+                                                  "content": {
+                                                    "content": {
+                                                      "max_lines": 2,
+                                                      "style": "Secondary",
+                                                      "type": "core://Text",
+                                                      "value_expr": ""
+                                                    },
+                                                    "content_color": "${local://theme#muted_text}",
+                                                    "type": "core://Box"
+                                                  },
+                                                  "type": "core://Conditional",
+                                                  "value": ""
+                                                }
+                                              ],
+                                              "spacing_dp": 2,
+                                              "type": "core://Column"
+                                            },
+                                            {
+                                              "type": "core://Spacer"
+                                            },
+                                            {
+                                              "children": [
+                                                {
+                                                  "content": {
+                                                    "content": {
+                                                      "style": "Secondary",
+                                                      "type": "core://Text",
+                                                      "value_expr": "$item.last_hour · $item.last_day · $item.total"
+                                                    },
+                                                    "content_color": "${local://theme#muted_text}",
+                                                    "type": "core://Box"
+                                                  },
+                                                  "equals": "counter",
+                                                  "type": "core://Conditional",
+                                                  "value": "$item.kind"
+                                                },
+                                                {
+                                                  "content": {
+                                                    "content": {
+                                                      "style": "Secondary",
+                                                      "type": "core://Text",
+                                                      "value_expr": "$item.total now"
+                                                    },
+                                                    "content_color": "${local://theme#muted_text}",
+                                                    "type": "core://Box"
+                                                  },
+                                                  "equals": "gauge",
+                                                  "type": "core://Conditional",
+                                                  "value": "$item.kind"
+                                                }
+                                              ],
+                                              "type": "core://Column"
+                                            }
+                                          ],
+                                          "padding_h_dp": 11,
+                                          "padding_v_dp": 12,
+                                          "spacing_dp": 12,
+                                          "type": "core://Row"
+                                        },
+                                        "type": "core://Box"
+                                      },
+                                      "query_key": "monitor:metrics",
+                                      "spacing_dp": 1,
+                                      "type": "core://List"
+                                    }
+                                  ],
+                                  "type": "core://Column"
+                                },
+                                "type": "core://Box"
+                              },
+                              "corner_dp": 18,
+                              "padding_h_dp": 5,
+                              "padding_v_dp": 6,
+                              "type": "core://Box"
+                            },
+                            "count": {
+                              "query_key": "monitor:metrics"
+                            },
+                            "type": "core://Conditional",
+                            "value": ""
+                          },
+                          {
+                            "content": {
+                              "content": {
+                                "style": "Secondary",
+                                "type": "core://Text",
+                                "value_expr": "No counters yet"
+                              },
+                              "content_color": "${local://theme#muted_text}",
+                              "padding_h_dp": 4,
+                              "type": "core://Box"
+                            },
+                            "count": {
+                              "query_key": "monitor:metrics"
+                            },
+                            "not": true,
+                            "type": "core://Conditional",
+                            "value": ""
+                          }
+                        ],
+                        "spacing_dp": 8,
+                        "type": "core://Column"
+                      }
+                    ],
+                    "type": "core://Column"
+                  },
+                  "count": {
+                    "query_key": "monitor:summary"
+                  },
+                  "type": "core://Conditional",
+                  "value": ""
+                },
+                {
+                  "size_dp": 24,
+                  "type": "core://Spacer"
+                },
+                {
+                  "size_dp": 16,
+                  "type": "core://Spacer"
+                }
+              ],
+              "padding_h_dp": 20,
+              "padding_v_dp": 8,
+              "type": "core://Column"
+            },
+            "type": "core://Scroll"
+          }
+        ],
+        "type": "core://Column"
+      },
+      "fill": true,
+      "type": "core://Box"
+    },
+    "title": "Server health",
+    "type": "core://Page"
+  }
+}

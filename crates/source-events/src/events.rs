@@ -28,6 +28,7 @@ pub fn definition() -> Definition {
         json!({"name": "url", "type": "text", "optional": true}),
         json!({"name": "tickets_url", "type": "text", "optional": true}),
         json!({"name": "seen", "type": "bool", "default": false}),
+        going_spec(),
     ];
     let fields: Vec<model::Field> = specs
         .iter()
@@ -51,6 +52,26 @@ pub fn definition() -> Definition {
     }
 }
 
+/// The user's own "I'm going" on an event: a toggle no filler writes.
+const GOING: &str = "going";
+
+fn going_spec() -> serde_json::Value {
+    json!({"name": GOING, "type": "bool", "default": false})
+}
+
+/// Add `going` to a pod's `events` from before the field shipped, unless it
+/// has (or removed) a field of that name; its rows read false until set.
+fn add_going(def: &mut Definition) -> bool {
+    if def.field(GOING).is_some() || def.is_removed_name(GOING) {
+        return false;
+    }
+    let id = format!("f{}", def.next_field);
+    def.fields
+        .push(model::parse_field(&going_spec(), id, 4_000).expect("a valid field"));
+    def.next_field += 1;
+    true
+}
+
 /// What makes `events` the Events app's: its app and notification channel.
 fn system() -> System {
     System {
@@ -61,8 +82,8 @@ fn system() -> System {
     }
 }
 
-/// Create the `events` collection unless the pod has one, and record it
-/// under the app's current id and channel.
+/// Create the `events` collection unless the pod has one, record it under
+/// the app's current id and channel, and add the fields it gained since.
 pub fn ensure(tx: &Transaction<'_>, now: i64) -> rusqlite::Result<()> {
     let Some((_, mut def)) = db::latest_def(tx, COLLECTION)? else {
         db::append_def(
@@ -79,6 +100,7 @@ pub fn ensure(tx: &Transaction<'_>, now: i64) -> rusqlite::Result<()> {
         .system
         .as_ref()
         .map(|s| (s.app.as_str(), s.channel.as_str()));
+    let mut notes = Vec::new();
     if current != Some((want.app.as_str(), want.channel.as_str())) {
         let old = def.system.take();
         def.system = Some(System {
@@ -88,10 +110,16 @@ pub fn ensure(tx: &Transaction<'_>, now: i64) -> rusqlite::Result<()> {
             alert_body: old.map_or(want.alert_body.clone(), |s| s.alert_body),
             ..want
         });
+        notes.push("The Events app's new id");
+    }
+    if add_going(&mut def) {
+        notes.push("The Events app's going field");
+    }
+    if !notes.is_empty() {
         db::append_def(
             tx,
             &def,
-            "The Events app's new id",
+            &notes.join("; "),
             pod_core::layouts::AUTHOR_POD,
             now,
         )?;
@@ -112,5 +140,19 @@ mod tests {
     #[test]
     fn the_definition_is_valid() {
         model::check_definition(&definition(), 40).unwrap();
+    }
+
+    /// A pod made before `going` shipped gets it when it opens, once, and
+    /// keeps a field of that name it already has.
+    #[test]
+    fn an_older_pod_gains_going() {
+        let mut def = definition();
+        def.fields.pop();
+        def.next_field -= 1;
+        assert!(def.field(GOING).is_none());
+        assert!(add_going(&mut def));
+        assert_eq!(def, definition());
+        assert!(!add_going(&mut def));
+        model::check_definition(&def, 40).unwrap();
     }
 }

@@ -203,7 +203,13 @@ Counts live in memory and restart from zero.
 
 - **In a pod:** the **Server monitoring** data source (`monitor`, feed `overview`) serves a summary, plain-language
   checks and every counter. The data is server-wide, so a pod reads it only after
-  `server pods monitoring <name> on`. Ask Claude to build an app on it.
+  `server pods monitoring <name> on`. The built-in layout **Server health** (blueprint `server_health`,
+  `crates/source-monitor/layouts/server_health/`) shows it: the status, the checks, the devices (below) and every
+  counter. Use it whole, `{"type": "core://Use", "ref": "@core/server_health"}` as a layout's root with feeds
+  `[["monitor","overview"],["monitor","devices"]]`, or open it by reference (`action.navigation.open` with
+  `"ref": "@core/server_health"`); no agent has to write the screen. In a pod without monitoring it says that
+  monitoring is off for this pod and shows the devices alone (it reads `${core://sources/monitor#error}`, `error 403`
+  there).
 - **Alerts:** in such a pod, the layout that shows the source gets a "Server warnings" notification channel
   (decision [`notification-owner`](decisions/notification-owner.md)). The
   adapter looks at the checks every 5 minutes (while the pod has a registered device), and a check that turns to

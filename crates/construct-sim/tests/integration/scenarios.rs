@@ -45,13 +45,23 @@ fn a_write_offline_is_undone() {
 
 #[test]
 fn layouts_open_over_home_and_back_pops_them() {
-    let (_, results) = run(
-        "pixelfed",
-        "open-layout events; assert-text Events; back; open-settings; assert-text Settings; back; \
-         open-inbox; assert-text @bob commented on your post; back; assert-text Alice Lumen",
-        &out_dir("layouts"),
-    );
-    assert_ok(&results);
+    // Layouts built from components nest boxes in boxes: more stack than a
+    // test thread's 2 MB.
+    std::thread::Builder::new()
+        .stack_size(16 * 1024 * 1024)
+        .spawn(|| {
+            let (_, results) = run(
+                "pixelfed",
+                "open-layout events; assert-text Events; back; open-settings; \
+                 assert-text Settings; back; open-inbox; \
+                 assert-text @bob commented on your post; back; assert-text Alice Lumen",
+                &out_dir("layouts"),
+            );
+            assert_ok(&results);
+        })
+        .unwrap()
+        .join()
+        .unwrap();
 }
 
 #[test]
@@ -68,32 +78,51 @@ fn a_post_screen_scrolls_to_its_comments_and_takes_typing() {
 
 #[test]
 fn a_notification_arrives_and_opens_its_thread() {
-    let (_, results) = run(
-        "pixelfed",
-        "notify pixelfed likes Bob liked your post; open-inbox; assert-text Bob liked your post; \
-         click @bob commented on your post; scroll-to Number 3 for me",
-        &out_dir("notify"),
-    );
-    assert_ok(&results);
+    // The inbox is built from components, boxes in boxes (file 0007): opening
+    // a thread from it takes more stack than a test thread's 2 MB.
+    std::thread::Builder::new()
+        .stack_size(16 * 1024 * 1024)
+        .spawn(|| {
+            let (_, results) = run(
+                "pixelfed",
+                "notify pixelfed likes Bob liked your post; open-inbox; \
+                 assert-text Bob liked your post; assert-text New · 4; \
+                 click @bob commented on your post; scroll-to Number 3 for me",
+                &out_dir("notify"),
+            );
+            assert_ok(&results);
+        })
+        .unwrap()
+        .join()
+        .unwrap();
 }
 
 /// `@core/collapsible` (the inbox's older notifications) opens and closes
 /// again: Hide sets `open` to "false", which shows the closed header (#336).
 #[test]
 fn the_inbox_older_section_opens_and_closes() {
-    let (runner, results) = run(
-        "pixelfed",
-        "open-inbox; assert-text Show; assert-no-text Hide; click Show; assert-text Hide; \
+    // The inbox is built from components, boxes in boxes: more stack than a
+    // test thread's 2 MB.
+    std::thread::Builder::new()
+        .stack_size(16 * 1024 * 1024)
+        .spawn(|| {
+            let (runner, results) = run(
+                "pixelfed",
+                "open-inbox; assert-text Show; assert-no-text Hide; click Show; assert-text Hide; \
          click Hide; assert-text Show; assert-no-text Hide; click Show; assert-text Hide",
-        &out_dir("collapsible"),
-    );
-    assert_ok(&results);
-    let section = &runner.session.data.entities["local://collapsible/inbox_older"];
-    assert_eq!(
-        section.get("open").and_then(|v| v.as_bool()),
-        Some(true),
-        "{section:?}"
-    );
+                &out_dir("collapsible"),
+            );
+            assert_ok(&results);
+            let section = &runner.session.data.entities["local://collapsible/inbox_older"];
+            assert_eq!(
+                section.get("open").and_then(|v| v.as_bool()),
+                Some(true),
+                "{section:?}"
+            );
+        })
+        .unwrap()
+        .join()
+        .unwrap();
 }
 
 #[test]
@@ -152,31 +181,40 @@ fn picked_photos_show_and_post() {
 
 #[test]
 fn dark_mode_draws_the_dark_palette() {
-    let out = out_dir("dark");
-    let (mut runner, results) = run(
+    // The inbox is built from components, boxes in boxes: more stack than a
+    // test thread's 2 MB.
+    std::thread::Builder::new()
+        .stack_size(16 * 1024 * 1024)
+        .spawn(|| {
+            let out = out_dir("dark");
+            let (mut runner, results) = run(
         "pixelfed",
         "mode dark; shot feed; open-inbox; assert-text @bob commented on your post; shot inbox; \
          mode light; shot light",
         &out,
     );
-    assert_ok(&results);
-    let page = |runner: &mut construct_sim::run::Runner| {
-        runner.session.scene().map(|s| s.background).unwrap()
-    };
-    // Light again: Material's background, as the Compose app draws.
-    assert_eq!(
-        page(&mut runner),
-        construct_render::style::Rgba::rgb(0xFE, 0xFB, 0xFF).0
-    );
-    runner.session.set_dark(true);
-    // Dark: the theme's page token.
-    assert_eq!(
-        page(&mut runner),
-        construct_render::style::Rgba::hex("#1A1A1C").unwrap().0
-    );
-    for f in ["02-feed.png", "05-inbox.png", "07-light.png"] {
-        assert!(out.join(f).is_file(), "{f}");
-    }
+            assert_ok(&results);
+            let page = |runner: &mut construct_sim::run::Runner| {
+                runner.session.scene().map(|s| s.background).unwrap()
+            };
+            // Light again: Material's background, as the Compose app draws.
+            assert_eq!(
+                page(&mut runner),
+                construct_render::style::Rgba::rgb(0xFE, 0xFB, 0xFF).0
+            );
+            runner.session.set_dark(true);
+            // Dark: the theme's page token.
+            assert_eq!(
+                page(&mut runner),
+                construct_render::style::Rgba::hex("#1A1A1C").unwrap().0
+            );
+            for f in ["02-feed.png", "05-inbox.png", "07-light.png"] {
+                assert!(out.join(f).is_file(), "{f}");
+            }
+        })
+        .unwrap()
+        .join()
+        .unwrap();
 }
 
 #[test]
@@ -258,6 +296,42 @@ fn a_bar_chart_filters_and_picks_a_day() {
         "{drawn:?}"
     );
     assert!(drawn.contains(&"Now"), "{drawn:?}");
+}
+
+/// The `monitor` source's blueprint `server_health`: the status, the checks,
+/// the devices chart and list and the counters from core components; where
+/// monitoring is off (the source's 403) it says so and still shows the devices.
+#[test]
+fn server_health_shows_checks_and_devices_and_says_when_monitoring_is_off() {
+    // Components nest boxes in boxes: more stack than a test thread's 2 MB.
+    std::thread::Builder::new()
+        .stack_size(16 * 1024 * 1024)
+        .spawn(|| {
+            let (_, results) = run(
+                "server_health",
+                "assert-text 1 check needs a look; assert-text Server up 6 h; assert-text Checks; \
+                 assert-text Wrong pod codes and unknown tokens; assert-text Disk space; \
+                 assert-no-text Server monitoring is off for this pod; shot light; \
+                 scroll-to Studio MacBook; scroll-to Ahead of server; \
+                 click Web; assert-no-text Studio MacBook; shot devices; \
+                 scroll-to All counters; scroll-to pods (temporary); assert-text 7 now; \
+                 mode dark; shot dark",
+                &out_dir("server-health"),
+            );
+            assert_ok(&results);
+            let (_, results) = run(
+                "server_health_off",
+                "assert-text Server monitoring is off for this pod; assert-no-text Checks; \
+                 assert-no-text All clear; assert-no-text needs a look; assert-no-text All counters; \
+                 assert-text Devices per day; assert-text 5 devices; shot light; \
+                 scroll-to Studio MacBook; scroll-to Ahead of server; mode dark; shot dark",
+                &out_dir("server-health-off"),
+            );
+            assert_ok(&results);
+        })
+        .unwrap()
+        .join()
+        .unwrap();
 }
 
 #[test]

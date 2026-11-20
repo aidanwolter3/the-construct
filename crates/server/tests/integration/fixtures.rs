@@ -303,3 +303,55 @@ fn simulator_bundles() {
         check_or_write(name, &(serde_json::to_string_pretty(&v).unwrap() + "\n"));
     }
 }
+
+/// The simulator's `server_health` pages: the `monitor` source's blueprint
+/// as this build's clients draw it, over made-up data
+/// (`tests/data/simulator/server_health_data.json`): with both feeds, and
+/// (`server_health_off`) as a pod without monitoring gets it, the devices
+/// and the source's 403.
+#[test]
+fn server_health_bundles() {
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/data/simulator/server_health_data.json");
+    let data: Value = serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+    let page = newest(server::monitor::APP_ID);
+    assert_eq!(page["type"], "core://Page");
+    assert!(!page.to_string().contains("core://Use"), "{page}");
+    for (name, feeds, error) in [
+        (
+            "server_health_bundle.json",
+            &["overview", "devices"][..],
+            None,
+        ),
+        (
+            "server_health_off_bundle.json",
+            &["devices"][..],
+            Some("error 403"),
+        ),
+    ] {
+        let mut entities = serde_json::Map::new();
+        let mut queries = serde_json::Map::new();
+        for feed in feeds {
+            entities.extend(data[feed]["entities"].as_object().unwrap().clone());
+            queries.extend(data[feed]["queries"].as_object().unwrap().clone());
+        }
+        // What the pod adds for the source (`pod_core::compose`).
+        let mut source = serde_json::json!({
+            "id": "monitor", "title": "Server monitoring", "signed_in": true,
+        });
+        if let Some(error) = error {
+            source["error"] = error.into();
+        }
+        entities.insert("core://sources/monitor".into(), source);
+        let bundle = serde_json::json!({
+            "version": "1.0.0",
+            "workspace": page,
+            "entities": entities,
+            "queries": queries,
+        });
+        check_or_write(
+            name,
+            &(serde_json::to_string_pretty(&bundle).unwrap() + "\n"),
+        );
+    }
+}

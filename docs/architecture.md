@@ -78,8 +78,8 @@ every client opens, which embeds (`core://Layout`) and presents (`action.navigat
 pod has only `home`, a reference to the `shell` blueprint; the user's agent adds layouts that reference or copy
 blueprints. Home owns every feed; each layout binds any of them, and loads only the ones it binds.
 
-Two more sources have no blueprint of their own: **Collections** (`source-collections`), typed data that custom apps
-declare, and **Server monitoring** (`source-monitor`). The **Agents** source (`source-agents`) follows an external
+Two more sources: **Collections** (`source-collections`), typed data that custom apps
+declare, and **Server monitoring** (`source-monitor`), with its **Server health** blueprint (`server_health`). The **Agents** source (`source-agents`) follows an external
 agent runner ([agents.md](agents.md)). Users build their own layouts on top of all of these; see
 [custom-apps.md](custom-apps.md).
 

@@ -2,7 +2,7 @@
 
 Server-driven UI: a Rust pod serves app layouts (JSON `UiNode` trees) and entities; desktop, Android and a headless
 simulator draw them with one Rust renderer (`construct-render`) over one Rust engine (decision `rust-clients`). Built-in layouts are blueprints, not listed:
-Pixelfed (`pixelfed`), Events (`events`), Agents (`agents`), the blank home (`shell`), Settings
+Pixelfed (`pixelfed`), Events (`events`), Agents (`agents`), Server health (`server_health`), the blank home (`shell`), Settings
 (`settings`) and the inbox (`inbox`). There are no apps at runtime: a pod's layouts are the user's own (from blueprints or Collections),
 starting with `home`, which clients open first and which embeds and presents the others on one engine
 (decision `layouts-not-apps`).
