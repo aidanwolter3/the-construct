@@ -899,7 +899,8 @@ fn every_shipped_components_examples_expand_to_valid_layouts() {
             let use_ = json!({"kind": "element", "node": {"type": "core://Use",
                 "ref": {"name": name, "el": el, "pin": true},
                 "args": ex.get("args").cloned().unwrap_or(json!({})),
-                "children": ex.get("children").cloned().unwrap_or(json!([]))}});
+                "children": ex.get("children").cloned().unwrap_or(json!([])),
+                "slots": ex.get("slots").cloned().unwrap_or(json!({}))}});
             let mut objects = core.objects.clone();
             let id = construct_elements::object_id(&use_);
             objects.insert(id.clone(), std::sync::Arc::new(use_));

@@ -62,8 +62,13 @@
                "value": "${$arg.state#tab}",
                "equals": "$arg.tab_key",
                "content": {
-                "type": "core://Children",
-                "slot": "$arg.tab_key"
+                "type": "core://Column",
+                "children": [
+                 {
+                  "type": "core://Children",
+                  "slot": "$arg.tab_key"
+                 }
+                ]
                }
               },
               {
@@ -75,8 +80,13 @@
                 "value": "${$arg.state#tab}",
                 "not": true,
                 "content": {
-                 "type": "core://Children",
-                 "slot": "$arg.tab_key"
+                 "type": "core://Column",
+                 "children": [
+                  {
+                   "type": "core://Children",
+                   "slot": "$arg.tab_key"
+                  }
+                 ]
                 }
                }
               }
@@ -523,8 +533,13 @@
                "value": "${$arg.state#tab}",
                "equals": "$arg.tab_key",
                "content": {
-                "type": "core://Children",
-                "slot": "$arg.tab_key"
+                "type": "core://Column",
+                "children": [
+                 {
+                  "type": "core://Children",
+                  "slot": "$arg.tab_key"
+                 }
+                ]
                }
               },
               {
@@ -536,8 +551,13 @@
                 "value": "${$arg.state#tab}",
                 "not": true,
                 "content": {
-                 "type": "core://Children",
-                 "slot": "$arg.tab_key"
+                 "type": "core://Column",
+                 "children": [
+                  {
+                   "type": "core://Children",
+                   "slot": "$arg.tab_key"
+                  }
+                 ]
                 }
                }
               }
@@ -642,6 +662,33 @@
      ]
     },
     "note": "a second shell with its own state and a title above the rail"
+   },
+   {
+    "args": {
+     "first": "a",
+     "tabs": [
+      {
+       "key": "a",
+       "title": "One",
+       "icon": "check"
+      },
+      {
+       "key": "b",
+       "title": "Two",
+       "icon": "add"
+      }
+     ]
+    },
+    "slots": {
+     "a": [
+      {
+       "type": "core://Text",
+       "style": "Body",
+       "value_expr": "Only the first tab has a body yet"
+      }
+     ]
+    },
+    "note": "a tab whose slot isn't filled yet draws nothing"
    }
   ]
  }
