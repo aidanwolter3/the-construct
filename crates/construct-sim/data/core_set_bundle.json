@@ -658,7 +658,7 @@
                                             "content": {
                                               "style": "Label",
                                               "type": "core://Text",
-                                              "value_expr": "Shed"
+                                              "value_expr": "Tool rack"
                                             },
                                             "content_color": "${local://theme#muted_text}",
                                             "type": "core://Box"

@@ -206,7 +206,7 @@
                               "type": "core://Use",
                               "component": "core:item_row",
                               "args": {
-                                "title": "Shed",
+                                "title": "Tool rack",
                                 "title_color": "${local://theme#muted_text}"
                               }
                             }

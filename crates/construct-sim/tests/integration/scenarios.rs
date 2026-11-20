@@ -456,18 +456,29 @@ fn a_grid_ends_with_its_trailing_add_tile() {
 /// choose, callouts in a tone.
 #[test]
 fn a_page_of_core_components_ticks_and_chooses() {
-    let (mut runner, results) = run(
-        "core_set",
-        "assert-text Garden week; assert-text Nothing archived yet.; assert-no-text Nothing to do.; \
-         shot light; click Stake the tomatoes; click Morning; shot ticked; mode dark; shot dark",
-        &out_dir("core-set"),
-    );
-    assert_ok(&results);
-    let scene = runner.session.scene().unwrap();
-    // A row with only a trailing value starts where a plain row does.
-    let x = |text: &str| scene.texts().find(|t| t.text == text).unwrap().rect[0];
-    assert_eq!(x("Compost"), x("Shed"));
-    // A leading child moves the title in; the trailing one sits at the end.
-    assert!(x("Herb bed") > x("Shed"));
-    assert!(x("Turned Sunday") > x("Compost") + 100.0);
+    // Components nest boxes in boxes; an unoptimized build's frames don't
+    // fit a test thread's 2 MB that deep, so the test brings its own stack.
+    std::thread::Builder::new()
+        .stack_size(16 * 1024 * 1024)
+        .spawn(|| {
+            let (mut runner, results) = run(
+                "core_set",
+                "assert-text Garden week; assert-text Nothing archived yet.; \
+                 assert-no-text Nothing to do.; shot light; click Stake the tomatoes; \
+                 click Morning; shot ticked; mode dark; shot dark",
+                &out_dir("core-set"),
+            );
+            assert_ok(&results);
+            let scene = runner.session.scene().unwrap();
+            // A row with only a trailing value starts where a plain row does.
+            let x = |text: &str| scene.texts().find(|t| t.text == text).unwrap().rect[0];
+            assert_eq!(x("Compost"), x("Tool rack"));
+            // A leading child moves the title in; the trailing one sits at
+            // the end.
+            assert!(x("Herb bed") > x("Tool rack"));
+            assert!(x("Turned Sunday") > x("Compost") + 100.0);
+        })
+        .unwrap()
+        .join()
+        .unwrap();
 }
