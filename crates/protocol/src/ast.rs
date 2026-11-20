@@ -575,10 +575,22 @@ pub enum UiNode {
     /// across (default 16), drawn in a quiet theme colour. It has no
     /// children and no intents; show it while a status field says so with a
     /// `core://Conditional` around it.
+    ///
+    /// With `value` (feature `progress_value`, decision
+    /// `determinate-progress`) it is a determinate bar instead: as wide as
+    /// it is given, `size_dp` tall (default 6), filled `value / max` (max
+    /// default 1, clamped to 0..1) in `color` (default the theme's primary)
+    /// over a quiet track. `value` and `max` are numbers or bindings.
     #[serde(rename = "core://Progress")]
     Progress {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         size_dp: Option<u16>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        value: Option<serde_json::Value>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        max: Option<serde_json::Value>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        color: Option<String>,
     },
 
     // Feature `bars` (crates/protocol/features/bars.md)

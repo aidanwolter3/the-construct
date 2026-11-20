@@ -686,6 +686,7 @@ fn fills_width(n: &UiNode) -> bool {
         | UiNode::Page { .. }
         | UiNode::Dock { .. } => true,
         UiNode::Image { size_dp, .. } => size_dp.is_none(),
+        UiNode::Progress { value, .. } => value.is_some(),
         // Markdown's blocks (a code card, a table) span the width.
         UiNode::Text {
             markdown: true,
@@ -2931,7 +2932,71 @@ impl<'i> Build<'_, 'i> {
                     merge: merge.as_deref(),
                 },
             ),
-            UiNode::Progress { size_dp } => {
+            UiNode::Progress {
+                size_dp,
+                value: Some(value),
+                max,
+                color,
+            } => {
+                // A determinate bar (feature `progress_value`): the track as
+                // wide as it is given, the fill value / max of it.
+                let num = |v: &serde_json::Value| match v {
+                    serde_json::Value::Number(n) => n.as_f64(),
+                    serde_json::Value::String(s) => ctx.text(s).trim().parse::<f64>().ok(),
+                    _ => None,
+                };
+                let max = max.as_ref().and_then(num).unwrap_or(1.0);
+                let frac = match num(value) {
+                    Some(v) if max > 0.0 && v.is_finite() => (v / max).clamp(0.0, 1.0) as f32,
+                    _ => 0.0,
+                };
+                let h = size_dp.map_or(6.0, f32::from);
+                let fill_color = color
+                    .as_deref()
+                    .and_then(|c| ctx.color(c))
+                    .unwrap_or(theme.primary);
+                let fill = self.push(
+                    Style {
+                        size: Size {
+                            width: percent(frac),
+                            height: percent(1.0),
+                        },
+                        ..Default::default()
+                    },
+                    Vec::new(),
+                    Paint::Quad {
+                        bg: fill_color,
+                        border: None,
+                        dashed: false,
+                        radius: h / 2.0,
+                    },
+                    None,
+                    false,
+                );
+                let i = self.push(
+                    Style {
+                        size: Size {
+                            width: percent(1.0),
+                            height: length(h),
+                        },
+                        flex_shrink: 0.0,
+                        ..Default::default()
+                    },
+                    vec![fill],
+                    Paint::Quad {
+                        bg: theme.surface_variant,
+                        border: None,
+                        dashed: false,
+                        radius: h / 2.0,
+                    },
+                    None,
+                    true,
+                );
+                self.elems[i].sem =
+                    Some(self.sem(b, n, Some(format!("{}%", (frac * 100.0).round())), None));
+                i
+            }
+            UiNode::Progress { size_dp, .. } => {
                 let s = size_dp.map_or(16.0, f32::from);
                 let i = self.push(
                     fixed(s, s),

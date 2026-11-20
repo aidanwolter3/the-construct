@@ -590,7 +590,9 @@ fn check_values(node: &UiNode) -> Result<(), String> {
                 where_.as_ref().map_or(&[][..], |w| w.conditions()),
             )
         }
-        UiNode::Progress { size_dp: Some(s) } => check_dp("progress size_dp", *s, MAX_SIZE_DP),
+        UiNode::Progress {
+            size_dp: Some(s), ..
+        } => check_dp("progress size_dp", *s, MAX_SIZE_DP),
         UiNode::Text {
             value_expr,
             count,
