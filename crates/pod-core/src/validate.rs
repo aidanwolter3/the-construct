@@ -559,8 +559,14 @@ fn check_values(node: &UiNode) -> Result<(), String> {
             height_dp,
             field,
             on_click,
+            merge,
             ..
         } => {
+            if merge.as_ref().is_some_and(|m| m.trim().is_empty()) {
+                return Err(
+                    "bars merge names the field whose equal values draw as one segment".into(),
+                );
+            }
             if field.is_some() && on_click.is_some() {
                 return Err(
                     "bars take a field (a tap picks the bar) or an on_click, not both".into(),

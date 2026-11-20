@@ -356,8 +356,11 @@ fn node_features(node: &UiNode, out: &mut BTreeSet<&'static str>) {
         UiNode::MediaPicker { .. } => add(feature::MEDIA_PICKER),
         UiNode::Sticky { .. } => add(feature::STICKY),
         UiNode::Progress { .. } => add(feature::PROGRESS),
-        UiNode::Bars { where_, .. } => {
+        UiNode::Bars { where_, merge, .. } => {
             add(feature::BARS);
+            if merge.is_some() {
+                add(feature::BARS_MERGE);
+            }
             // A bar chart filters as a list does: the same features.
             if let Some(w) = where_ {
                 if matches!(w, WhereClause::All(_)) {
