@@ -783,6 +783,7 @@ pub async fn mcp(pod: &Pod, name: &str, args: &Value) -> Option<Result<Value, Va
         "rename_layout" => Some(run_write(pod, args, rename_layout).await),
         "delete_layout" => Some(run_write(pod, args, delete_layout).await),
         "list_components" => Some(run(pod, args, list_components).await),
+        "find_elements" => Some(run(pod, args, find_elements).await),
         "list_parts" => Some(run(pod, args, list_parts).await),
         "get_component" => Some(run(pod, args, get_component).await),
         "define_component" => {
@@ -1661,6 +1662,130 @@ fn list_components(_pod: &Pod, conn: &Connection, _: &Value) -> Result<Value, Va
     }
     Ok(json!({ "components": out,
         "use": "{\"type\": \"core://Use\", \"ref\": \"<name>\", \"args\": {...}, \"children\": [...]}" }))
+}
+
+/// MCP `find_elements {query?, role?, scope?, category?, limit?}`: what
+/// already exists to build with, by what it is for (decision
+/// `element-roles-and-reuse`). Every layout and component a layout may
+/// reference: the pod's own, the core ones that ship with the server, and
+/// adopted ones. Each row is small (name, role, scope, category, the line
+/// that says when to use it, its parameters by name), so an agent reads the
+/// few that fit a query instead of every component's whole definition.
+fn find_elements(pod: &Pod, conn: &Connection, args: &Value) -> Result<Value, Value> {
+    let want = |k: &str| args[k].as_str().filter(|v| !v.is_empty());
+    let (role, scope, category) = (want("role"), want("scope"), want("category"));
+    let words: Vec<String> = want("query")
+        .unwrap_or("")
+        .to_lowercase()
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|w| w.len() >= 2)
+        .map(str::to_owned)
+        .collect();
+    let limit = args["limit"].as_u64().map_or(12, |n| n.clamp(1, 60)) as usize;
+    let mut rows: Vec<(i64, Value)> = Vec::new();
+    for (n, h) in cstore::names(conn).map_err(store_err)? {
+        let Some((el, _)) = cstore::object(conn, &h).map_err(store_err)? else {
+            continue;
+        };
+        let (el_scope, bare) = if let Some(b) = n.strip_prefix(super::CORE_PREFIX) {
+            ("core", b)
+        } else if let Some(b) = n.strip_prefix("@me/") {
+            ("own", b)
+        } else if super::is_layout_name(&n) {
+            ("own", n.as_str())
+        } else {
+            ("adopted", n.as_str())
+        };
+        // A part of a core layout is listed by list_parts.
+        if el_scope == "core" && bare.contains('/') {
+            continue;
+        }
+        if el_scope == "core"
+            && pod
+                .catalog()
+                .blueprint(bare)
+                .is_some_and(|b| b.dev && !pod.show_dev_apps())
+        {
+            continue;
+        }
+        let is_component = el.get("params").is_some() || el.get("doc").is_some();
+        let el_role = if is_component { "component" } else { "layout" };
+        let note = (el_scope == "core")
+            .then(|| pod.catalog().element_note(bare))
+            .flatten();
+        let doc = el["doc"].as_str().unwrap_or("");
+        let title = el["title"].as_str().unwrap_or("");
+        let use_when = match note {
+            Some(n) => n.use_when.clone(),
+            // Its doc's first sentence, or a layout's title.
+            None if is_component => doc.split(". ").next().unwrap_or("").to_owned(),
+            None => title.to_owned(),
+        };
+        let el_category = note
+            .map(|n| n.category.as_str())
+            .or((!is_component).then_some("layout"));
+        if role.is_some_and(|r| r != el_role)
+            || scope.is_some_and(|s| s != el_scope)
+            || category.is_some_and(|c| Some(c) != el_category)
+        {
+            continue;
+        }
+        let params: Vec<Value> = el["params"]
+            .as_array()
+            .map(|ps| {
+                ps.iter()
+                    .map(|p| {
+                        let mut o = json!({ "name": p["name"], "type": p["type"] });
+                        if p["required"] == json!(true) {
+                            o["required"] = json!(true);
+                        }
+                        o
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        let score = if words.is_empty() {
+            1
+        } else {
+            let hits = |text: &str, weight: i64| -> i64 {
+                let text = text.to_lowercase();
+                words.iter().filter(|w| text.contains(w.as_str())).count() as i64 * weight
+            };
+            let param_names: Vec<&str> = params.iter().filter_map(|p| p["name"].as_str()).collect();
+            hits(bare, 4)
+                + hits(title, 3)
+                + hits(&use_when, 2)
+                + hits(doc, 1)
+                + hits(&param_names.join(" "), 1)
+        };
+        if score == 0 {
+            continue;
+        }
+        let mut row =
+            json!({ "name": n, "role": el_role, "scope": el_scope, "use_when": use_when });
+        if let Some(c) = el_category {
+            row["category"] = json!(c);
+        }
+        if is_component {
+            row["params"] = json!(params);
+            if el["children"] == json!(true) {
+                row["children"] = json!(true);
+            }
+        } else if !title.is_empty() {
+            row["title"] = json!(title);
+        }
+        rows.push((score, row));
+    }
+    rows.sort_by(|a, b| {
+        b.0.cmp(&a.0)
+            .then_with(|| a.1["category"].as_str().cmp(&b.1["category"].as_str()))
+            .then_with(|| a.1["name"].as_str().cmp(&b.1["name"].as_str()))
+    });
+    let total = rows.len();
+    let elements: Vec<Value> = rows.into_iter().take(limit).map(|(_, r)| r).collect();
+    Ok(json!({ "elements": elements, "total": total,
+        "categories": crate::adapter::ELEMENT_CATEGORIES,
+        "use": "A component: {\"type\": \"core://Use\", \"ref\": \"<name>\", \"args\": {...}, \"children\": [...]}; get_component shows its template and examples. A layout: embed it with core://Layout or open it with action.navigation.open, \"ref\": \"<name>\"; a core layout is also a layout's whole root with core://Use." }))
 }
 
 /// MCP `list_parts {layout?}`: the parts of blueprints a layout can use

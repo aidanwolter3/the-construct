@@ -563,6 +563,10 @@ queued start runs (rows a filler wrote can't), and each row's status follows its
 live in the pod: agents_schedules lists, creates, edits, deletes, pauses, resumes and runs them.";
 
 impl Source for AgentsAdapter {
+    fn element_catalog(&self) -> &'static str {
+        include_str!("../catalog.json")
+    }
+
     fn name(&self) -> &'static str {
         NAME
     }
@@ -812,6 +816,10 @@ impl Source for AgentsAdapter {
                     "required": ["op"]},
             }),
         ]
+    }
+
+    fn mcp_summary(&self) -> Option<&'static str> {
+        Some("agent runs and schedules")
     }
 
     fn mcp_instructions(&self) -> Option<&'static str> {

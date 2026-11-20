@@ -417,8 +417,23 @@ pub trait Source: Any + Send + Sync {
         Vec::new()
     }
 
-    /// One more paragraph for the MCP `instructions` (how to use
-    /// [`Self::mcp_tools`]). Default: none.
+    /// What `find_elements` says about the layouts and components this
+    /// source ships: the text of its `catalog.json`, `{"<name>": {"category",
+    /// "use_when"}}` (decision `element-roles-and-reuse`). It sits beside the
+    /// files rather than in them: they are append-only, and a new component
+    /// file moves every pod's layouts. Default: none.
+    fn element_catalog(&self) -> &'static str {
+        "{}"
+    }
+
+    /// A few words for the MCP instructions' list of guide topics, beside
+    /// this source's name (what [`Self::mcp_instructions`] is about).
+    fn mcp_summary(&self) -> Option<&'static str> {
+        None
+    }
+
+    /// This source's topic of the MCP `guide`, named after the source: how
+    /// to use [`Self::mcp_tools`]. Default: none.
     fn mcp_instructions(&self) -> Option<&'static str> {
         None
     }
@@ -551,6 +566,64 @@ pub struct Catalog {
     sign_ins: Vec<(SignInProvider, usize)>,
     /// Every server component file: the core's, then each adapter's.
     components: Vec<crate::components::ComponentSource>,
+    /// What `find_elements` says about each core component and layout, by
+    /// its bare name ([`Source::element_catalog`]).
+    notes: std::collections::BTreeMap<String, ElementNote>,
+}
+
+/// What a catalog file says about one element: where it belongs and when
+/// to reach for it.
+#[derive(Clone, Debug, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ElementNote {
+    /// `primitive`, `row`, `container`, `scaffold`, `pattern` or `layout`.
+    pub category: String,
+    /// One line: the situation it is for.
+    pub use_when: String,
+}
+
+/// The categories a catalog file may name.
+pub const ELEMENT_CATEGORIES: &[&str] = &[
+    "primitive",
+    "row",
+    "container",
+    "scaffold",
+    "pattern",
+    "layout",
+];
+
+/// The core's own catalog (`crates/pod-core/components/catalog.json`).
+const CORE_ELEMENT_CATALOG: &str = include_str!("../components/catalog.json");
+
+fn read_element_catalog(
+    whose: &str,
+    text: &str,
+    known: &dyn Fn(&str) -> bool,
+    into: &mut std::collections::BTreeMap<String, ElementNote>,
+) -> Result<(), String> {
+    let map: std::collections::BTreeMap<String, ElementNote> =
+        serde_json::from_str(text).map_err(|e| format!("{whose}'s catalog.json: {e}"))?;
+    for (name, note) in map {
+        // A server built with some of a crate's sources (a test's, say)
+        // doesn't ship every name its catalog file holds; a test with every
+        // source checks no file names something nobody ships.
+        if !known(&name) {
+            continue;
+        }
+        if !ELEMENT_CATEGORIES.contains(&note.category.as_str()) {
+            return Err(format!(
+                "{whose}'s catalog.json: '{name}' has category '{}', not one of {ELEMENT_CATEGORIES:?}",
+                note.category
+            ));
+        }
+        if note.use_when.trim().is_empty() || note.use_when.chars().count() > 200 {
+            return Err(format!(
+                "{whose}'s catalog.json: '{name}' needs a use_when of at most 200 characters"
+            ));
+        }
+        into.insert(name, note);
+    }
+    Ok(())
 }
 
 impl Catalog {
@@ -684,6 +757,15 @@ impl Catalog {
                 ));
             }
         }
+        // A catalog describes what the server ships: a component (the core's
+        // or any source's) or a blueprint.
+        let mut notes = std::collections::BTreeMap::new();
+        let shipped =
+            |n: &str| components.iter().any(|c| c.name == n) || apps.iter().any(|(b, _)| b.id == n);
+        read_element_catalog("the core", CORE_ELEMENT_CATALOG, &shipped, &mut notes)?;
+        for a in &adapters {
+            read_element_catalog(a.name(), a.element_catalog(), &shipped, &mut notes)?;
+        }
         Ok(Self {
             adapters,
             manifests,
@@ -691,6 +773,7 @@ impl Catalog {
             files,
             sign_ins,
             components,
+            notes,
         })
     }
 
@@ -707,6 +790,17 @@ impl Catalog {
 
     pub fn adapters(&self) -> &[Arc<dyn Source>] {
         &self.adapters
+    }
+
+    /// What the catalog files say about the core element `name` (bare:
+    /// `card`, `pixelfed`).
+    pub fn element_note(&self, name: &str) -> Option<&ElementNote> {
+        self.notes.get(name)
+    }
+
+    /// Every server component's name (the core's and each source's), once.
+    pub fn component_names(&self) -> std::collections::BTreeSet<&'static str> {
+        self.components.iter().map(|c| c.name).collect()
     }
 
     /// Every blueprint, in adapter order.

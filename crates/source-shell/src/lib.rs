@@ -41,8 +41,11 @@ pub fn adapter() -> Arc<dyn Source> {
         entities: Default::default(),
         queries: Default::default(),
     };
-    Arc::new(StaticAdapter::new(NAME, SHELL, FILES, &empty))
+    Arc::new(StaticAdapter::new(NAME, SHELL, FILES, &empty).with_catalog(CATALOG))
 }
+
+/// What `find_elements` says about this crate's layouts.
+const CATALOG: &str = include_str!("../catalog.json");
 
 /// The Settings blueprint's id.
 pub const SETTINGS: &str = "settings";
@@ -147,11 +150,12 @@ pub const SETTINGS_MANIFEST: SourceManifest = SourceManifest {
 pub fn settings_adapter() -> Arc<dyn Source> {
     Arc::new(
         StaticAdapter::new(SETTINGS, SETTINGS_APP, SETTINGS_FILES, &empty())
-            .with_manifest(SETTINGS_MANIFEST),
+            .with_manifest(SETTINGS_MANIFEST)
+            .with_catalog(CATALOG),
     )
 }
 
 /// The inbox blueprint's adapter.
 pub fn inbox_adapter() -> Arc<dyn Source> {
-    Arc::new(StaticAdapter::new(INBOX, INBOX_APP, INBOX_FILES, &empty()))
+    Arc::new(StaticAdapter::new(INBOX, INBOX_APP, INBOX_FILES, &empty()).with_catalog(CATALOG))
 }

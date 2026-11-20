@@ -16,6 +16,7 @@ pub mod components;
 pub mod construct;
 pub mod devices;
 pub mod disk;
+pub mod hints;
 pub mod ical;
 pub mod jacks;
 pub mod layouts;

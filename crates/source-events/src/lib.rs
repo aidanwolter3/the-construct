@@ -96,6 +96,10 @@ add_alert, filler: <the site's id>, any: [phrases], none?: [phrases], days?, wit
 its own alerts. The events fields can't be renamed or removed.";
 
 impl Source for EventsAdapter {
+    fn element_catalog(&self) -> &'static str {
+        include_str!("../catalog.json")
+    }
+
     fn name(&self) -> &'static str {
         NAME
     }
@@ -141,6 +145,10 @@ impl Source for EventsAdapter {
             default_enabled: true,
             importance: Importance::default(),
         }]
+    }
+
+    fn mcp_summary(&self) -> Option<&'static str> {
+        Some("websites watched for events")
     }
 
     fn mcp_instructions(&self) -> Option<&'static str> {

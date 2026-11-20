@@ -30,9 +30,17 @@ pub struct StaticAdapter {
     files: &'static [LayoutSource],
     data: DataBundle,
     router: fn() -> Router<Pod>,
+    catalog: &'static str,
 }
 
 impl StaticAdapter {
+    /// What `find_elements` says about its layout: the text of the crate's
+    /// `catalog.json` ([`Source::element_catalog`]).
+    pub fn with_catalog(mut self, catalog: &'static str) -> Self {
+        self.catalog = catalog;
+        self
+    }
+
     /// `name`: the adapter name ([`Source::name`]). `data`: the entities
     /// and queries every workspace fetch returns (its `workspace` and
     /// `version` are ignored: the layout comes from `files`).
@@ -55,6 +63,7 @@ impl StaticAdapter {
                 queries: data.queries.clone(),
             },
             router: Router::new,
+            catalog: "{}",
         }
     }
 
@@ -81,6 +90,10 @@ impl Source for StaticAdapter {
 
     fn blueprints(&self) -> Vec<BlueprintInfo> {
         vec![self.app]
+    }
+
+    fn element_catalog(&self) -> &'static str {
+        self.catalog
     }
 
     fn layout_files(&self) -> &'static [LayoutSource] {

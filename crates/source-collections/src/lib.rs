@@ -636,6 +636,10 @@ impl Source for CollectionsAdapter {
         mcp::tools()
     }
 
+    fn mcp_summary(&self) -> Option<&'static str> {
+        Some("data a layout keeps: lists, logs, any rows, with fillers and reminders")
+    }
+
     fn mcp_instructions(&self) -> Option<&'static str> {
         Some(mcp::INSTRUCTIONS)
     }

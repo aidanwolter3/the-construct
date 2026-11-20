@@ -1,0 +1,6 @@
+{
+  "agents": {
+    "category": "layout",
+    "use_when": "The user runs agents on a runner: runs, sandboxes, schedules and their logs."
+  }
+}

@@ -128,6 +128,7 @@ server pods notify-test <name>                 # a test notification to the inbo
 server pods mcp <name> [label]                 # a credential for Claude Code that reaches only /v1/mcp
 server pods revoke-mcp <name>                  # disconnect every Claude credential of the pod
 server pods monitoring <name> on|off           # let this pod's apps read server-wide monitoring data
+server pods gaps [name]                        # what agents said was missing while building (MCP note_gap)
 server pods adopt <name> <path/to/server.db>   # turn a pre-pods single-user database into a pod
 server pods remove-adopted [dir]               # delete the originals adopt left behind
 server backup <dir>                            # a consistent copy of host.db and every pod's database

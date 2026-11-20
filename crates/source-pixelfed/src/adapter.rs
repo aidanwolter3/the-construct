@@ -239,6 +239,10 @@ impl PixelfedAdapter {
 }
 
 impl Source for PixelfedAdapter {
+    fn element_catalog(&self) -> &'static str {
+        include_str!("../catalog.json")
+    }
+
     fn name(&self) -> &'static str {
         NAME
     }

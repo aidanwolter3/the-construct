@@ -1,0 +1,14 @@
+{
+  "inbox": {
+    "category": "layout",
+    "use_when": "The notifications inbox. Open it as a Sheet or an Overlay from the top."
+  },
+  "settings": {
+    "category": "layout",
+    "use_when": "Settings: this device, sign-ins, notifications, jacks. Open it as a Panel; use its parts to add rows of the pod's own."
+  },
+  "shell": {
+    "category": "layout",
+    "use_when": "A new pod's home: a blank page with Notifications and Settings. Replace it with the user's own home."
+  }
+}

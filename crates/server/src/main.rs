@@ -284,6 +284,26 @@ fn pods(args: &[&str]) -> Result<(), String> {
                 println!("Pod '{name}' can no longer read the server's monitoring data.");
             }
         }
+        ["gaps", rest @ ..] => {
+            let name = match rest {
+                [] => None,
+                [n] => Some(*n),
+                _ => return Err("usage: server pods gaps [name]".into()),
+            };
+            let all = host.gaps(name)?;
+            if all.iter().all(|(_, g)| g.is_empty()) {
+                println!("No agent has noted anything missing.");
+            }
+            for (pod, gaps) in all {
+                for g in gaps {
+                    println!(
+                        "{pod}\t{}\t{}",
+                        g["at"].as_i64().unwrap_or(0),
+                        g["what"].as_str().unwrap_or("")
+                    );
+                }
+            }
+        }
         ["revoke-mcp", name] => {
             let n = host.revoke_mcp(name)?;
             println!("Revoked {n} MCP credential(s) of pod '{name}'; Claude is disconnected.");
