@@ -45,6 +45,11 @@ impl Objects for ConnObjects<'_> {
         cstore::name(self.conn, name).ok().flatten()
     }
 
+    /// The pod's own theme scale.
+    fn scale(&self, name: &str) -> Option<Value> {
+        crate::porcelain::scale_on(self.conn).get(name).cloned()
+    }
+
     fn object(&self, id: &str) -> Option<Arc<Value>> {
         if let Some(v) = self.extra.borrow().get(id) {
             return Some(v.clone());
@@ -1909,6 +1914,18 @@ pub fn draft_plumbing(pod: &Pod, node: &Value) -> Result<Value, Value> {
             .map(|m| m.node)
             .map_err(|e| refuse("invalid_layout", e.to_string()))
     })
+}
+
+/// The theme scale changed: a new construct for every client, so each
+/// expands its components again (the manifest carries the scale; a sealed
+/// root is asked for again by its generation).
+pub async fn scale_changed(pod: &Pod) {
+    let p = pod.clone();
+    let _ = tokio::task::spawn_blocking(move || {
+        let _ = p.store().with_conn(cstore::bump_generation);
+        publish(&p, &[(crate::HOME_APP.to_owned(), 0)]);
+    })
+    .await;
 }
 
 /// Have home bind `feed` too (a kit's collection, decision

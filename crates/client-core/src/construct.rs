@@ -49,6 +49,9 @@ pub struct Construct {
     pub names: BTreeMap<String, String>,
     /// The names of the manifests of layouts opened by name.
     pub extra_names: BTreeMap<String, String>,
+    /// The theme scale the root's manifest carries (`$theme.<name>` in a
+    /// component, feature `theme_scale`).
+    pub scale: Map<String, Value>,
     /// Whether the objects kept in the engine's store were read.
     pub loaded: bool,
     /// Each key's own edges.
@@ -71,6 +74,7 @@ struct Have<'a> {
     objects: &'a HashMap<String, Arc<Value>>,
     names: &'a BTreeMap<String, String>,
     extra_names: &'a BTreeMap<String, String>,
+    scale: &'a Map<String, Value>,
 }
 
 impl Objects for Have<'_> {
@@ -83,6 +87,10 @@ impl Objects for Have<'_> {
             .get(name)
             .or_else(|| self.extra_names.get(name))
             .cloned()
+    }
+
+    fn scale(&self, name: &str) -> Option<Value> {
+        self.scale.get(name).cloned()
     }
 }
 
@@ -105,6 +113,16 @@ impl Construct {
         };
         // A root that is a manifest names home and everything it reaches;
         // one that is home itself holds every hash in its references.
+        let scale = self
+            .objects
+            .get(&root)
+            .and_then(|v| v["scale"].as_object().cloned())
+            .unwrap_or_default();
+        if scale != self.scale {
+            self.nodes.clear();
+            self.edges_by_id.clear();
+            self.scale = scale;
+        }
         let root = match self.objects.get(&root).map(|v| manifest_names(v)) {
             None => {
                 missing.insert(root);
@@ -200,6 +218,7 @@ impl Construct {
             objects: &self.objects,
             names: &self.names,
             extra_names: &self.extra_names,
+            scale: &self.scale,
         };
         match materialize_with(&have, id, bound) {
             Ok(m) => {

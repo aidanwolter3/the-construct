@@ -1,7 +1,7 @@
 {
  "note": "Paddings as parameters (decision element-roles-and-reuse); the defaults draw what 0003 drew",
  "component": {
-  "doc": "A bordered, rounded card holding its children in a column (events, sites, alerts). Wrap it in core://Tappable to open something. padding_h and padding_v set its paddings (14 and 12).",
+  "doc": "A bordered, rounded card holding its children in a column (events, sites, alerts). Wrap it in core://Tappable to open something. padding_h and padding_v set its paddings (14 and 12). Its corners follow the theme's scale (corner_m, set_theme) unless corner is given.",
   "params": [
    {
     "name": "spacing",
@@ -24,8 +24,8 @@
    {
     "name": "corner",
     "type": "number",
-    "doc": "Corner radius.",
-    "default": 14
+    "doc": "Corner radius in dp; 0 for the theme's corner_m (14 unless the pod set it).",
+    "default": 0
    },
    {
     "name": "padding_h",
@@ -45,7 +45,12 @@
    "type": "core://Box",
    "background": "$arg.background",
    "border_color": "$arg.border",
-   "corner_dp": "$arg.corner",
+   "corner_dp": {
+    "type": "core://IfArg",
+    "arg": "corner",
+    "then": "$arg.corner",
+    "else": "$theme.corner_m"
+   },
    "padding_h_dp": "$arg.padding_h",
    "padding_v_dp": "$arg.padding_v",
    "content": {

@@ -1,7 +1,7 @@
 {
  "note": "A titled panel in a tone (decision element-roles-and-reuse)",
  "component": {
-  "doc": "A panel that says one thing in a tone: a tinted, rounded box with a heading in the tone's colour, a text under it, then its children. A tip, a warning, pros and cons, why something matters, one section of a detail screen. title and text are left out while empty.",
+  "doc": "A panel that says one thing in a tone: a tinted, rounded box with a heading in the tone's colour, a text under it, then its children. A tip, a warning, pros and cons, why something matters, one section of a detail screen. title and text are left out while empty. Its corners follow the theme's scale (corner_m, set_theme) unless corner is given.",
   "params": [
    {
     "name": "title",
@@ -36,8 +36,8 @@
    {
     "name": "corner",
     "type": "number",
-    "default": 14,
-    "doc": "Corner radius in dp."
+    "default": 0,
+    "doc": "Corner radius in dp; 0 for the theme's corner_m (14 unless the pod set it)."
    }
   ],
   "children": true,
@@ -68,7 +68,12 @@
      }
     }
    },
-   "corner_dp": "$arg.corner",
+   "corner_dp": {
+    "type": "core://IfArg",
+    "arg": "corner",
+    "then": "$arg.corner",
+    "else": "$theme.corner_m"
+   },
    "padding_h_dp": 14,
    "padding_v_dp": 12,
    "content": {

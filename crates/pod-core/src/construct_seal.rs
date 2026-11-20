@@ -38,6 +38,14 @@ impl Objects for StoreObjects<'_> {
             .flatten()
     }
 
+    /// The pod's own theme scale.
+    fn scale(&self, name: &str) -> Option<Value> {
+        self.store
+            .with_conn(crate::porcelain::scale_on)
+            .get(name)
+            .cloned()
+    }
+
     fn object(&self, id: &str) -> Option<Arc<Value>> {
         if let Some(v) = self
             .state
@@ -282,11 +290,18 @@ pub fn manifest_of(
             }
         }
     }
-    let manifest = serde_json::json!({
+    let mut manifest = serde_json::json!({
         "kind": construct_elements::MANIFEST_KIND,
         "home": home,
         "names": names,
     });
+    // The theme scale the pod set, for `$theme.<name>` in the components
+    // the device expands (feature `theme_scale`). Part of the manifest, so
+    // a new scale is a new root and devices expand again.
+    let scale = crate::porcelain::scale_on(conn);
+    if !scale.is_empty() {
+        manifest["scale"] = Value::Object(scale);
+    }
     let id = object_id(&manifest);
     cstore::put_object(conn, &id, &manifest, "")?;
     Ok(Some(id))

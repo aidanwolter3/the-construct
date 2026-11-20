@@ -1,13 +1,13 @@
 {
  "note": "Rows in one card with hairlines only between them, from a pod's own layouts (decision element-roles-and-reuse)",
  "component": {
-  "doc": "Rows in one rounded card with hairlines only between them (never after the last): a list, a menu, a settings group. Its child is usually one core://List with spacing_dp 1, or rows in a core://Column with spacing_dp 1; each row draws on the card colour (core:item_row does), and the 1 dp gaps show card_border as the separators. For rows that bring their own core://Divider use core:grouped_card.",
+  "doc": "Rows in one rounded card with hairlines only between them (never after the last): a list, a menu, a settings group. Its child is usually one core://List with spacing_dp 1, or rows in a core://Column with spacing_dp 1; each row draws on the card colour (core:item_row does), and the 1 dp gaps show card_border as the separators. For rows that bring their own core://Divider use core:grouped_card. Its corners follow the theme's scale (corner_l, set_theme) unless corner is given.",
   "params": [
    {
     "name": "corner",
     "type": "number",
-    "default": 18,
-    "doc": "Corner radius in dp."
+    "default": 0,
+    "doc": "Corner radius in dp; 0 for the theme's corner_l (18 unless the pod set it)."
    }
   ],
   "children": true,
@@ -15,7 +15,12 @@
    "type": "core://Box",
    "background": "${local://theme#card}",
    "border_color": "${local://theme#card_border}",
-   "corner_dp": "$arg.corner",
+   "corner_dp": {
+    "type": "core://IfArg",
+    "arg": "corner",
+    "then": "$arg.corner",
+    "else": "$theme.corner_l"
+   },
    "padding_h_dp": 5,
    "padding_v_dp": 6,
    "content": {

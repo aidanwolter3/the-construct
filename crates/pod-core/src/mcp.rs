@@ -531,7 +531,8 @@ fn base_tools() -> Vec<Value> {
         tool(
             "set_theme",
             "The pod's theme colours, each with a light and a dark value; layouts bind them as ${local://theme#<token>} and the app picks the value for the device's mode. Besides the built-in tokens, a pod may name up to 40 of its own (e.g. a colour per category, a toolbar's fill): any new name [a-z][a-z0-9_]{0,31}, not ending in _dark; give it a light and a dark value (one alone is used for both). Without theme: answers the current theme and its tokens.",
-            json!({ "theme": { "type": "object", "description": "{token: {light?: #RRGGBB, dark?: #RRGGBB}}, or flat: {token: #RRGGBB (light), token_dark: #RRGGBB}. A built-in token left unset follows its default for each mode; {token: null} puts a built-in back to its defaults or removes a token of the pod's own." } }),
+            json!({ "theme": { "type": "object", "description": "{token: {light?: #RRGGBB, dark?: #RRGGBB}}, or flat: {token: #RRGGBB (light), token_dark: #RRGGBB}. A built-in token left unset follows its default for each mode; {token: null} puts a built-in back to its defaults or removes a token of the pod's own." },
+                "scale": { "type": "object", "description": "The sizes core components draw with, so a pod restyles them without copying them: {corner_s, corner_m, corner_l, pad_s, pad_m, pad_l: 0 to 64 dp; title_weight: Regular, Medium, SemiBold or Bold}. Tags use corner_s, cards and callouts corner_m, grouped lists corner_l, page titles title_weight. {name: null} puts one back to its default. The answer lists the whole scale." } }),
             &[],
         ),
     ]
@@ -658,6 +659,16 @@ async fn call_tool(pod: &Pod, headers: &HeaderMap, params: &Value) -> Value {
 
 async fn set_theme(pod: &Pod, args: &Value) -> Result<Value, Value> {
     let changes = args["theme"].clone();
+    // The scale: sizes and a weight core components read when expanded
+    // (decision `element-roles-and-reuse`). A change is a new construct
+    // for devices, so they expand again.
+    if let Some(scale) = args.get("scale").filter(|s| !s.is_null()).cloned() {
+        crate::blocking(pod, move |s| Ok(crate::porcelain::set_scale(s, &scale)))
+            .await
+            .map_err(store_err)?
+            .map_err(|e| json!({ "error": "invalid_theme", "detail": e }))?;
+        crate::construct::write::scale_changed(pod).await;
+    }
     let r = crate::blocking(pod, move |s| {
         Ok(if changes.is_null() {
             crate::porcelain::theme(s).map_err(|e| e.to_string())
@@ -681,8 +692,13 @@ async fn set_theme(pod: &Pod, args: &Value) -> Result<Value, Value> {
             {
                 tokens.insert(own, json!("the pod's own token"));
             }
-            Ok(json!({ "ok": true, "theme": t, "tokens": tokens,
-            "use": "bind ${local://theme#<token>} where a colour goes (core://Box background, border_color, content_color; core://IconButton active_tint; core://List focus colours) instead of a fixed #RRGGBB, so the layout follows the device's light or dark mode: page for a page's background, card for cards and rows on it, card_border for their borders, muted_text for secondary text. Devices pick a change up the next time they load the layout." }))
+            let scale = crate::blocking(pod, |s| Ok(crate::porcelain::scale(s)))
+                .await
+                .map_err(store_err)?;
+            Ok(
+                json!({ "ok": true, "theme": t, "tokens": tokens, "scale": scale,
+            "use": "bind ${local://theme#<token>} where a colour goes (core://Box background, border_color, content_color; core://IconButton active_tint; core://List focus colours) instead of a fixed #RRGGBB, so the layout follows the device's light or dark mode: page for a page's background, card for cards and rows on it, card_border for their borders, muted_text for secondary text. Devices pick a change up the next time they load the layout." }),
+            )
         }
         Err(e) => Err(json!({ "error": "invalid_theme", "detail": e })),
     }

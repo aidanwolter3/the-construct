@@ -18,8 +18,8 @@
    {
     "name": "corner",
     "type": "number",
-    "default": 18,
-    "doc": "The card's corner radius in dp."
+    "default": 0,
+    "doc": "The card's corner radius in dp; 0 for the theme's corner_l."
    }
   ],
   "children": true,

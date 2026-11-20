@@ -1,7 +1,7 @@
 {
  "note": "A tone in place of two colours (decision element-roles-and-reuse)",
  "component": {
-  "doc": "A small tinted tag with text (a date, a status, a count). tone picks the theme's pair in one word (accent, success, error, muted).",
+  "doc": "A small tinted tag with text (a date, a status, a count). tone picks the theme's pair in one word (accent, success, error, muted). Its corners follow the theme's scale (corner_s, set_theme) unless corner is given.",
   "params": [
    {
     "name": "text",
@@ -36,8 +36,8 @@
    {
     "name": "corner",
     "type": "number",
-    "doc": "Corner radius.",
-    "default": 8
+    "doc": "Corner radius in dp; 0 for the theme's corner_s (8 unless the pod set it).",
+    "default": 0
    }
   ],
   "template": {
@@ -92,7 +92,12 @@
      }
     }
    },
-   "corner_dp": "$arg.corner",
+   "corner_dp": {
+    "type": "core://IfArg",
+    "arg": "corner",
+    "then": "$arg.corner",
+    "else": "$theme.corner_s"
+   },
    "padding_h_dp": 8,
    "padding_v_dp": 3,
    "content": {

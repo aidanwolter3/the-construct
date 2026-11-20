@@ -1,7 +1,7 @@
 {
  "note": "The usual page: header, scrolling content, pinned footer, by named slots (decision element-roles-and-reuse)",
  "component": {
-  "doc": "A whole page or screen, the way most are built: on the page colour, a header pinned at the top (Back while the page can go back, the title, a spinner while its data loads, and the nodes in slot actions on the right), then its children in a padded column that scrolls, then, pinned under it, the nodes in slot footer (a count and the page's main button; core:footer_bar draws the bar). With data, a failed load says so above the content with Try again. The root of a core://Page or of one of its screens. Slots are passed on the use: \"slots\": {\"actions\": [...], \"footer\": [...]}.",
+  "doc": "A whole page or screen, the way most are built: on the page colour, a header pinned at the top (Back while the page can go back, the title, a spinner while its data loads, and the nodes in slot actions on the right), then its children in a padded column that scrolls, then, pinned under it, the nodes in slot footer (a count and the page's main button; core:footer_bar draws the bar). With data, a failed load says so above the content with Try again. The root of a core://Page or of one of its screens. Slots are passed on the use: \"slots\": {\"actions\": [...], \"footer\": [...]}. The title's weight is the theme's title_weight.",
   "params": [
    {
     "name": "title",
@@ -52,7 +52,7 @@
        "args": {
         "title": "$arg.title",
         "style": "Headline",
-        "weight": "SemiBold",
+        "weight": "$theme.title_weight",
         "height": 48,
         "padding_h": 0,
         "loading": true

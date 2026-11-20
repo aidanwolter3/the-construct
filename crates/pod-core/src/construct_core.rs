@@ -125,6 +125,10 @@ pub fn derive(
     if construct_elements::def::uses_templates(&el["node"]) {
         features.push(protocol::feature::COMPONENT_TEMPLATES);
     }
+    // And for a template that reads the theme scale.
+    if construct_elements::uses_scale(&el["node"]) {
+        features.push(protocol::feature::THEME_SCALE);
+    }
     features.sort_unstable();
     features.dedup();
     let features = features.join(",");

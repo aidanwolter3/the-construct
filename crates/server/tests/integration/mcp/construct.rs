@@ -456,6 +456,108 @@ async fn a_manifest_root_makes_an_edit_cost_one_element() {
     assert!(own_names.contains_key("@me/tile") && !own_names.contains_key("home"));
 }
 
+/// The theme scale (feature `theme_scale`, decision
+/// `element-roles-and-reuse`): a pod sets the sizes core components draw
+/// with, the pod's own expansions use them, and the manifest carries them
+/// to devices as a new root.
+#[tokio::test]
+async fn the_theme_scale_restyles_core_components_without_copying_them() {
+    let env = env().await;
+    let pod_code = env.pod("mine").await;
+    let access = env.connect(&pod_code).await;
+    build(&env, &access).await;
+
+    let card = json!({"node": {"type": "core://Use", "ref": "@core/card", "children": [
+        {"type": "core://Use", "ref": "@core/pill", "args": {"text": "New"}}]}});
+    let corners = |x: &Value| {
+        (
+            x["expanded"]["corner_dp"].clone(),
+            x["expanded"]["content"]["children"][0]["corner_dp"].clone(),
+        )
+    };
+    // The defaults are what the components drew before there was a scale.
+    let (_, x) = env.tool(&access, "expand", card.clone()).await;
+    assert_eq!(corners(&x), (json!(14), json!(8)), "{x}");
+
+    let root_of = || {
+        let (env, pod_code) = (&env, pod_code.clone());
+        async move {
+            client()
+                .get(format!("{}/v1/construct", env.url))
+                .bearer_auth(&pod_code)
+                .header(protocol::FEATURES_HEADER, protocol::features_header())
+                .header(protocol::ROOT_HEADER, protocol::ROOT_MANIFEST)
+                .send()
+                .await
+                .unwrap()
+                .json::<Value>()
+                .await
+                .unwrap()["root"]
+                .as_str()
+                .unwrap()
+                .to_owned()
+        }
+    };
+    let before = root_of().await;
+
+    let (err, t) = env
+        .tool(
+            &access,
+            "set_theme",
+            json!({"scale": {"corner_m": 4, "corner_s": 2, "title_weight": "Bold"}}),
+        )
+        .await;
+    assert!(!err, "{t}");
+    assert_eq!(t["scale"]["corner_m"], 4, "{t}");
+    assert_eq!(
+        t["scale"]["corner_l"], 18,
+        "the rest keep their defaults: {t}"
+    );
+    let (_, x) = env.tool(&access, "expand", card.clone()).await;
+    assert_eq!(corners(&x), (json!(4), json!(2)), "{x}");
+    // A corner given on the use still wins.
+    let (_, own) = env
+        .tool(
+            &access,
+            "expand",
+            json!({"node": {"type": "core://Use", "ref": "@core/card", "args": {"corner": 20}}}),
+        )
+        .await;
+    assert_eq!(own["expanded"]["corner_dp"], 20, "{own}");
+
+    // A device is told: the manifest carries the scale, so its hash moved.
+    let after = root_of().await;
+    assert_ne!(after, before);
+    let (_, got) = post(
+        &env,
+        "/v1/objects",
+        &pod_code,
+        json!({"have": [], "want": [after]}),
+    )
+    .await;
+    assert_eq!(
+        got["objects"][&after]["scale"],
+        json!({"corner_m": 4, "corner_s": 2, "title_weight": "Bold"}),
+        "{got}"
+    );
+
+    // What isn't a scale value is refused, and null puts a default back.
+    for bad in [
+        json!({"corner_m": 200}),
+        json!({"corner_x": 4}),
+        json!({"title_weight": "Heavy"}),
+    ] {
+        let (err, no) = env.tool(&access, "set_theme", json!({"scale": bad})).await;
+        assert!(err, "{no}");
+        assert_eq!(no["error"], "invalid_theme", "{no}");
+    }
+    let (err, t) = env
+        .tool(&access, "set_theme", json!({"scale": {"corner_m": null}}))
+        .await;
+    assert!(!err, "{t}");
+    assert_eq!(t["scale"]["corner_m"], 14, "{t}");
+}
+
 /// Template directives and named slots (feature `component_templates`,
 /// decision `element-roles-and-reuse`): a component repeats over a list
 /// argument, a use fills named slots, and a client without the feature is

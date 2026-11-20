@@ -35,6 +35,60 @@ pub trait Objects {
     fn resolve(&self, _name: &str) -> Option<String> {
         None
     }
+
+    /// A value of the pod's theme scale (`$theme.<name>` in a template,
+    /// feature `theme_scale`), where one is set: the construct's manifest
+    /// carries it to a device, the pod reads its own. `None`: the default
+    /// ([`scale_default`]).
+    fn scale(&self, _name: &str) -> Option<Value> {
+        None
+    }
+}
+
+/// The theme scale's names and their defaults: what core components drew
+/// before a pod could set them.
+pub const SCALE: &[(&str, &str)] = &[
+    ("corner_s", "8"),
+    ("corner_m", "14"),
+    ("corner_l", "18"),
+    ("pad_s", "8"),
+    ("pad_m", "12"),
+    ("pad_l", "16"),
+    ("title_weight", "\"SemiBold\""),
+];
+
+/// The default of scale value `name` (`None`: not a scale name).
+pub fn scale_default(name: &str) -> Option<Value> {
+    SCALE
+        .iter()
+        .find(|(n, _)| *n == name)
+        .and_then(|(_, v)| serde_json::from_str(v).ok())
+}
+
+/// `v` with every string that is only `$theme.<name>` replaced by that
+/// value of the scale.
+fn themed(objects: &dyn Objects, v: &mut Value) {
+    match v {
+        Value::String(s) if s.starts_with("$theme.") => {
+            let name = &s["$theme.".len()..];
+            if let Some(x) = objects.scale(name).or_else(|| scale_default(name)) {
+                *v = x;
+            }
+        }
+        Value::Array(a) => a.iter_mut().for_each(|c| themed(objects, c)),
+        Value::Object(o) => o.values_mut().for_each(|c| themed(objects, c)),
+        _ => {}
+    }
+}
+
+/// Whether `v` (an element's `node`) reads the theme scale.
+pub fn uses_scale(v: &Value) -> bool {
+    match v {
+        Value::String(s) => s.starts_with("$theme."),
+        Value::Array(a) => a.iter().any(uses_scale),
+        Value::Object(o) => o.values().any(uses_scale),
+        _ => false,
+    }
 }
 
 /// The element a reference points at: the hash it holds, else what its
@@ -411,6 +465,15 @@ impl Mat<'_> {
                 Value::Array(out)
             }
             Value::String(s) => match scope {
+                // A value of the theme scale, with its own type (a number
+                // where a size goes).
+                Some(_) if s.starts_with("$theme.") => {
+                    let name = &s["$theme.".len()..];
+                    self.objects
+                        .scale(name)
+                        .or_else(|| scale_default(name))
+                        .unwrap_or_else(|| v.clone())
+                }
                 Some(sc) => subst_in(s, &sc.args, &mut self.work, true)?,
                 None => v.clone(),
             },
@@ -502,6 +565,8 @@ impl Mat<'_> {
                 for (k, x) in r.iter_mut() {
                     if k != "children" && k != "slots" {
                         *x = subst_value_in(x, &sc.args, &mut self.work, true)?;
+                        // A template may pass a value of the theme scale on.
+                        themed(self.objects, x);
                     }
                 }
                 resolved = r;
