@@ -591,7 +591,9 @@ pub enum UiNode {
     /// item) is written under the bar. The axis goes up to the tallest bar,
     /// at least `scale_min`. `where` filters items as a `core://List`'s
     /// does; `selected` (a binding) names the bar drawn highlighted; a tap
-    /// on a bar runs `on_click` with `$item` its first item.
+    /// on a bar runs `on_click` with `$item` its first item. With `merge`
+    /// (feature `bars_merge`), neighbouring segments whose items have the
+    /// same value of that field (and the same hatching) draw as one.
     #[serde(rename = "core://Bars")]
     Bars {
         query_key: String,
@@ -613,6 +615,8 @@ pub enum UiNode {
         field: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         on_click: Option<ActionIntent>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        merge: Option<String>,
     },
 
     // Feature `dock` (crates/protocol/features/dock.md)

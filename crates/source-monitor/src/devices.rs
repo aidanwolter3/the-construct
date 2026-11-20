@@ -20,20 +20,24 @@ pub const BUILDS_QUERY: &str = "monitor:builds";
 /// Days the chart shows, today included.
 pub const CHART_DAYS: i64 = 14;
 
-/// The server's build: the first colour of the chart palette.
-const SERVER_COLOR: &str = "#2A78D6";
-/// Builds behind the server's, newest first, each a clearly different hue
-/// (orange, aqua, yellow, magenta, green, violet). In this order every pair
-/// of neighbours stays apart for colour-blind eyes too, and each colour
-/// reads on both the light and the dark card, so one value serves both
-/// modes.
-const BEHIND: [&str; 6] = [
-    "#D95926", "#199E70", "#C98500", "#D55181", "#008300", "#7A6BE0",
-];
-/// Builds newer than the server's (they sit on top of its segment).
-const AHEAD: &str = "#E34948";
-/// Builds older than [`BEHIND`] holds, and one with no time.
-const UNKNOWN: &str = "#9AA0A6";
+/// Builds behind the server's that get a series of their own (2 to 7);
+/// older ones are `other`.
+const BEHIND: usize = 6;
+/// The series of builds newer than the server's: red, on top of its blue.
+const AHEAD: &str = "8";
+/// The series of a build older than [`BEHIND`] holds, or with no time.
+const OTHER: &str = "other";
+
+/// A series' light colour, the theme's `chart_<series>` (decision
+/// `chart-colours`): the `color` field, for layouts that bind it rather
+/// than `${local://theme#chart_$item.series}`.
+pub fn series_color(series: &str) -> &'static str {
+    let token = format!("chart_{series}");
+    pod_core::porcelain::THEME_TOKENS
+        .iter()
+        .find(|t| t.0 == token)
+        .map_or("#9AA0A6", |t| t.1)
+}
 
 /// `(text, background)` of a relation's badge.
 fn relation_colors(r: Relation) -> (&'static str, &'static str) {
@@ -45,11 +49,12 @@ fn relation_colors(r: Relation) -> (&'static str, &'static str) {
     }
 }
 
-/// Each build's colour: the server's blue, the builds behind it a
-/// different hue each (the newest behind first, so the builds most devices
-/// run get the strongest colours), the ones past it red, and older builds
-/// and one with no time grey.
-pub fn build_colors(builds: &[&str], server: &str) -> HashMap<String, &'static str> {
+/// Each build's chart series (decision `chart-colours`): `1` the
+/// server's, `2` to `7` the builds behind it, newest first (so the builds
+/// most devices run get the strongest colours), `8` the ones past it, and
+/// `other` older builds and one with no time.
+pub fn build_series(builds: &[&str], server: &str) -> HashMap<String, &'static str> {
+    const BEHIND_SERIES: [&str; BEHIND] = ["2", "3", "4", "5", "6", "7"];
     let s = BuildId::parse(server);
     let mut known: Vec<(BuildId, &str)> = builds
         .iter()
@@ -62,18 +67,18 @@ pub fn build_colors(builds: &[&str], server: &str) -> HashMap<String, &'static s
     let mut out = HashMap::new();
     let mut behind = 0;
     for (id, b) in known.iter().rev() {
-        let color = match id.order(&s) {
-            _ if *b == server => SERVER_COLOR,
+        let series = match id.order(&s) {
+            _ if *b == server => "1",
             Some(std::cmp::Ordering::Greater) => AHEAD,
             _ => {
                 behind += 1;
-                BEHIND.get(behind - 1).copied().unwrap_or(UNKNOWN)
+                BEHIND_SERIES.get(behind - 1).copied().unwrap_or(OTHER)
             }
         };
-        out.insert((*b).to_owned(), color);
+        out.insert((*b).to_owned(), series);
     }
     for b in builds {
-        out.entry((*b).to_owned()).or_insert(UNKNOWN);
+        out.entry((*b).to_owned()).or_insert(OTHER);
     }
     out
 }
@@ -204,18 +209,25 @@ pub fn bundle(
     }
     let mut builds: Vec<&str> = items.iter().map(|i| i.2.as_str()).collect();
     builds.push(server);
-    let colors = build_colors(&builds, server);
+    let series = build_series(&builds, server);
+    let series_of = |b: &str| series.get(b).copied().unwrap_or(OTHER);
     let order = |build: &str| BuildId::parse(build).stamp.unwrap_or(0);
-    // Within a day: older builds at the bottom (first).
+    // Within a day: older builds at the bottom (first), each build's
+    // devices together, the ones seen that day before the rest, so a chart
+    // that merges by build draws one block of each.
     items.sort_by(|a, b| {
         (
             day_keys.iter().position(|k| *k == a.0),
             order(&a.2),
+            &a.2,
+            !a.3,
             &a.1.name,
         )
             .cmp(&(
                 day_keys.iter().position(|k| *k == b.0),
                 order(&b.2),
+                &b.2,
+                !b.3,
                 &b.1.name,
             ))
     });
@@ -234,8 +246,10 @@ pub fn bundle(
                 "device": dev.name,
                 "device_id": dev.id,
                 "kind": dev.platform,
+                "build": build,
                 "build_label": build_label(build),
-                "color": colors.get(build.as_str()).copied().unwrap_or(UNKNOWN),
+                "series": series_of(build),
+                "color": series_color(series_of(build)),
                 "hatched": !seen,
                 "note": if *seen { String::new() } else {
                     format!("seen {}", seen_text(now - dev.last_seen))
@@ -275,7 +289,8 @@ pub fn bundle(
                 "label": label,
                 "note": note,
                 "legend": if note.is_empty() { label.clone() } else { format!("{label} · {note}") },
-                "color": colors.get(*build).copied().unwrap_or(UNKNOWN),
+                "series": series_of(build),
+                "color": series_color(series_of(build)),
             })),
         );
         uris.push(uri);
@@ -303,7 +318,8 @@ pub fn bundle(
                 "kind_text": platform_text(&d.platform),
                 "build": d.build,
                 "build_label": build_label(&d.build),
-                "color": colors.get(d.build.as_str()).copied().unwrap_or(UNKNOWN),
+                "series": series_of(&d.build),
+                "color": series_color(series_of(&d.build)),
                 "relation": d.relation.id(),
                 "relation_text": d.relation.text(),
                 "relation_color": fg,
@@ -370,24 +386,29 @@ mod tests {
     }
 
     #[test]
-    fn each_build_gets_its_own_hue_the_servers_blue() {
+    fn each_build_gets_its_own_series_the_servers_first() {
         let older: Vec<String> = (10..18)
             .map(|d| format!("0.6.0+202611{d}090000.aaaa0{d}"))
             .collect();
         let mut builds: Vec<&str> = older.iter().map(String::as_str).collect();
         builds.extend([SERVER, "0.6.0+20261119100000.f02b77e", ""]);
-        let c = build_colors(&builds, SERVER);
-        assert_eq!(c[SERVER], SERVER_COLOR);
-        assert_eq!(c["0.6.0+20261119100000.f02b77e"], AHEAD);
-        // Newest behind first: the 17th orange, the 16th aqua, ...
-        assert_eq!(c[older[7].as_str()], BEHIND[0]);
-        assert_eq!(c[older[6].as_str()], BEHIND[1]);
-        assert_eq!(c[older[2].as_str()], BEHIND[5]);
-        // Past the six hues: grey, like a build with no time.
-        assert_eq!(c[older[1].as_str()], UNKNOWN);
-        assert_eq!(c[""], UNKNOWN);
-        let shown: std::collections::HashSet<&str> =
-            older[2..].iter().map(|b| c[b.as_str()]).collect();
+        let c = build_series(&builds, SERVER);
+        assert_eq!(c[SERVER], "1");
+        assert_eq!(c["0.6.0+20261119100000.f02b77e"], "8");
+        // Newest behind first: the 17th 2, the 16th 3, ...
+        assert_eq!(c[older[7].as_str()], "2");
+        assert_eq!(c[older[6].as_str()], "3");
+        assert_eq!(c[older[2].as_str()], "7");
+        // Past the six: other, like a build with no time.
+        assert_eq!(c[older[1].as_str()], "other");
+        assert_eq!(c[""], "other");
+        // The colour field is the theme's light chart colour.
+        assert_eq!(series_color("1"), "#2A78D6");
+        assert_eq!(series_color("other"), "#9AA0A6");
+        let shown: std::collections::HashSet<&str> = older[2..]
+            .iter()
+            .map(|b| series_color(c[b.as_str()]))
+            .collect();
         assert_eq!(shown.len(), 6, "six builds, six colours");
     }
 

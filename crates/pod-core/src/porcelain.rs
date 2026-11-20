@@ -183,6 +183,62 @@ pub const THEME_TOKENS: &[(&str, &str, &str, &str)] = &[
         "#3B3320",
         "a focused or found item's tint",
     ),
+    // Chart series, in an order whose neighbours stay apart for colour-blind
+    // eyes, light and dark (decision `chart-colours`).
+    (
+        "chart_1",
+        "#2A78D6",
+        "#3987E5",
+        "a chart's first series (blue)",
+    ),
+    (
+        "chart_2",
+        "#D95926",
+        "#D95926",
+        "a chart's second series (orange)",
+    ),
+    (
+        "chart_3",
+        "#199E70",
+        "#199E70",
+        "a chart's third series (aqua)",
+    ),
+    (
+        "chart_4",
+        "#C98500",
+        "#C98500",
+        "a chart's fourth series (yellow)",
+    ),
+    (
+        "chart_5",
+        "#D55181",
+        "#D55181",
+        "a chart's fifth series (magenta)",
+    ),
+    (
+        "chart_6",
+        "#008300",
+        "#0CA30C",
+        "a chart's sixth series (green)",
+    ),
+    (
+        "chart_7",
+        "#7A6BE0",
+        "#9085E9",
+        "a chart's seventh series (violet)",
+    ),
+    (
+        "chart_8",
+        "#E34948",
+        "#E66767",
+        "a chart's eighth series (red)",
+    ),
+    (
+        "chart_other",
+        "#9AA0A6",
+        "#80858D",
+        "a chart's other series (grey): the rest past eight, or unknown",
+    ),
 ];
 
 fn is_hex(c: &str) -> bool {

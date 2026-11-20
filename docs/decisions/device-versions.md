@@ -1,5 +1,8 @@
 # Device versions: one build id, devices recorded per pod, watches that wake agents
 
+Superseded in part by [chart-colours](chart-colours.md) (how builds are coloured) and
+[replaced-devices-are-one](replaced-devices-are-one.md) (a device a new one replaced).
+
 Date: 2026-11-19. Related: [server-monitoring](server-monitoring.md), [named-vocabulary](named-vocabulary.md),
 [notification-owner](notification-owner.md), [agents-runs](agents-runs.md), [web-client](web-client.md).
 
@@ -29,12 +32,8 @@ Decision:
   time zone; devices unseen for 60 days and days older than 90 are dropped.
 - **The `monitor` source's `devices` feed** shows them (the rows are the pod's own, so unlike `overview` it needs no
   operator switch): the devices with how their build stands, and each device's build per day for 14 days, today's
-  bar every device at its latest build (hatched when not seen today). Each build has a clearly different hue (a
-  shaded ramp of one hue proved too hard to tell apart): the server's blue, the six newest behind it orange, aqua,
-  yellow, magenta, green and violet (newest first, an order whose neighbours stay apart for colour-blind eyes and
-  that reads on the light and the dark card alike), newer ones red, older ones and unknown grey. A device that a new
-  one of the same kind and name replaced (first seen after it was last seen: a browser whose stored id was lost, an
-  app installed again) is folded into the new one, its days counted as the new one's, so one browser is one row.
+  bar every device at its latest build (hatched when not seen today), each build coloured lighter the older it is,
+  the server's darkest, newer ones teal.
 - **A new plumbing node, `core://Bars`** (feature `bars`), draws it: items grouped into bars by a field, each a
   segment as tall as its value and coloured by a binding, filtered like a list, and a tap that sets a form value as
   choice chips do. No existing node could size a shape from data. It is drawn from the renderer's own boxes and
@@ -47,7 +46,6 @@ Decision:
   "Device updates" channel of the layout that shows the `devices` feed.
 
 Limits: an old app shows as "Version unknown" (it sends its device id but no build) until it is updated; its row
-updates in place then. A browser's private window or cleared storage is a new device (the feed shows the two as
-one when the old one stopped before the new one started; the records and `list_devices` keep both). Device names are hints
+updates in place then. A browser's private window or cleared storage is a new device. Device names are hints
 the device sends; the user's own name (`rename_device`) wins. "Behind by N" counts only server builds this pod was
 opened under. Not done: renaming a device from the app (the MCP tool only).
