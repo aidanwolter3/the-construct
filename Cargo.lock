@@ -4121,6 +4121,7 @@ dependencies = [
  "sha2 0.10.9",
  "source-agents",
  "source-collections",
+ "source-dates",
  "source-events",
  "source-monitor",
  "source-pixelfed",
@@ -4393,6 +4394,16 @@ dependencies = [
  "tower",
  "tracing",
  "web-extract",
+]
+
+[[package]]
+name = "source-dates"
+version = "0.1.0"
+dependencies = [
+ "pod-core",
+ "protocol",
+ "serde_json",
+ "tokio",
 ]
 
 [[package]]

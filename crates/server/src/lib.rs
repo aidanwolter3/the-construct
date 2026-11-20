@@ -50,6 +50,7 @@ pub fn adapters(pixelfed: PixelfedConfig) -> Vec<Arc<dyn Source>> {
             source_monitor::MonitorConfig::from_env(),
         )),
         source_agents::adapter(),
+        source_dates::adapter(),
     ]
 }
 

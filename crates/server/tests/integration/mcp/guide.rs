@@ -312,3 +312,47 @@ async fn a_write_points_at_what_could_be_reused() {
     let (err, g) = env.tool(&access, "note_gap", json!({"what": "  "})).await;
     assert!(err, "{g}");
 }
+
+/// The `dates` source: a layout lists the days around today with no
+/// collection of dates (decision `element-roles-and-reuse`).
+#[tokio::test]
+async fn a_layout_lists_days_from_the_dates_feed() {
+    let env = env().await;
+    let pod_code = env.pod("mine").await;
+    let access = env.connect(&pod_code).await;
+
+    let (_, sources) = env.tool(&access, "list_data_sources", json!({})).await;
+    let dates = sources["sources"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|s| s["id"] == "dates")
+        .unwrap_or_else(|| panic!("{sources}"));
+    assert_eq!(dates["feeds"][0]["name"], "days", "{dates}");
+
+    let (err, made) = env
+        .tool(
+            &access,
+            "create_layout",
+            json!({"title": "Week", "feeds": [["dates", "days"]],
+                "layout": {"type": "core://Page", "title": "Week", "root":
+                    {"type": "core://List", "query_key": "dates:next_7", "item_template":
+                        {"type": "core://Use", "ref": "@core/item_row",
+                            "args": {"title": "$item.label", "meta": "$item.weekday_long"}}}}}),
+        )
+        .await;
+    assert!(!err, "{made}");
+    let drawn = env.drawn(made["id"].as_str().unwrap(), &pod_code).await;
+    let week = drawn["queries"]["dates:next_7"].as_array().unwrap();
+    assert_eq!(week.len(), 7, "{drawn}");
+    let first = &drawn["entities"][week[0].as_str().unwrap()];
+    assert_eq!(first["label"], "Today", "{first}");
+    assert_eq!(first["offset"], 0, "{first}");
+    assert_eq!(
+        drawn["queries"]["dates:this_week"]
+            .as_array()
+            .unwrap()
+            .len(),
+        7
+    );
+}
