@@ -153,6 +153,10 @@ pub enum ActionIntent {
         value_expr: String,
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         also: Vec<FieldUpdate>,
+        /// Feature `local_keep`: on a `local://` entity, the device keeps
+        /// the fields across starts of the app.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        keep: bool,
     },
 
     /// Feature `open_link`: open `url` (an `http(s)://` address, usually a

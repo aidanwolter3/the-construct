@@ -275,6 +275,10 @@ fn simulator_bundles() {
             "core_set_bundle.json",
         ),
         (
+            "crates/server/tests/data/simulator/tab_shell_bundle.json",
+            "tab_shell_bundle.json",
+        ),
+        (
             "crates/protocol/tests/data/counter_home_bundle.json",
             "counter_home_bundle.json",
         ),

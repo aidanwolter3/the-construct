@@ -135,6 +135,10 @@
     "category": "primitive",
     "use_when": "A number with a label under it: a count tile, one cell of a row of figures."
   },
+  "tab_shell": {
+    "category": "scaffold",
+    "use_when": "The root of home once there are a few layouts: tabs as a dock on a phone and a rail on a wide window, each tab one embedded layout."
+  },
   "text_link": {
     "category": "primitive",
     "use_when": "A quiet action in words: Clear beside a list, Edit in a header."

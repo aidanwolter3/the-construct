@@ -489,7 +489,12 @@ fn intent_features(intent: &ActionIntent, out: &mut BTreeSet<&'static str>) {
         }
         ActionIntent::Sequence { .. } => add(feature::ACTION_SEQUENCE),
         ActionIntent::Confirm { .. } => add(feature::ACTION_CONFIRM),
-        ActionIntent::LocalSet { .. } => add(feature::LOCAL_SET),
+        ActionIntent::LocalSet { keep, .. } => {
+            add(feature::LOCAL_SET);
+            if *keep {
+                add(feature::LOCAL_KEEP);
+            }
+        }
         ActionIntent::OpenLink { .. } => add(feature::OPEN_LINK),
         ActionIntent::Device { command, .. } => {
             add(feature::DEVICE_ACTION);

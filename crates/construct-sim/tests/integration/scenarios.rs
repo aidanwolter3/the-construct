@@ -482,3 +482,32 @@ fn a_page_of_core_components_ticks_and_chooses() {
         .join()
         .unwrap();
 }
+
+/// `core:tab_shell` (decision `element-roles-and-reuse`): one list of tabs
+/// is a dock on a phone and a rail on a wide window; the first tab shows
+/// before any is chosen, and a tap opens another.
+#[test]
+fn tabs_are_a_dock_on_a_phone_and_a_rail_on_a_wide_window() {
+    std::thread::Builder::new()
+        .stack_size(16 * 1024 * 1024)
+        .spawn(|| {
+            let (mut runner, results) = run(
+                "tab_shell",
+                "assert-text Water the seedlings; assert-no-text Allotment; shot today; \
+                 click Garden; assert-text Tomato bed; assert-no-text Call the nursery; \
+                 shot garden; screen desktop; assert-text Allotment; assert-text Tomato bed; \
+                 shot wide",
+                &out_dir("tab-shell"),
+            );
+            assert_ok(&results);
+            // On the wide window the tabs are down the side, above one another.
+            let scene = runner.session.scene().unwrap();
+            let at = |text: &str| scene.texts().find(|t| t.text == text).unwrap().rect;
+            assert_eq!(at("Today")[0], at("More")[0]);
+            assert!(at("Today")[1] < at("More")[1]);
+            assert!(at("Garden beds")[0] > at("Today")[0] + 150.0);
+        })
+        .unwrap()
+        .join()
+        .unwrap();
+}

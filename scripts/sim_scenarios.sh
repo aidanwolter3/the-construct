@@ -53,6 +53,9 @@ assert-text Nothing archived yet; assert-no-text Inbox clear; shot light; mode d
 scenario core-set core_set \
   "assert-text Garden week; assert-text Nothing archived yet.; assert-no-text Nothing to do.; shot light; \
 click Stake the tomatoes; click Morning; shot ticked; mode dark; shot dark"
+scenario tab-shell tab_shell \
+  "assert-text Water the seedlings; shot today; click Garden; assert-text Tomato bed; \
+assert-no-text Call the nursery; shot garden; screen desktop; assert-text Allotment; shot wide"
 scenario buttons buttons \
   "assert-text Open in Claude; assert-text Stop; shot light; mode dark; shot dark"
 scenario agent-report agent_report \

@@ -2776,6 +2776,9 @@ impl Inner {
                 field,
                 value_expr,
                 also,
+                // Kept `local://` fields are the session's to store
+                // (feature `local_keep`).
+                keep: _,
             } => self.local_set(started, entity_uri, field, value_expr, also),
             ActionIntent::OptimisticMutate {
                 entity_uri,

@@ -322,7 +322,12 @@ impl Mat<'_> {
                         let arg = v["arg"].as_str().unwrap_or("");
                         let value = sc.args.get(arg).cloned().unwrap_or(Value::Null);
                         match v.get("equals") {
-                            Some(e) => as_text(&value) == as_text(e),
+                            // What it equals may itself be an argument (an
+                            // Each's entry against another parameter).
+                            Some(e) => {
+                                let e = subst_value_in(e, &sc.args, &mut self.work, true)?;
+                                as_text(&value) == as_text(&e)
+                            }
                             None => truthy(&value),
                         }
                     };

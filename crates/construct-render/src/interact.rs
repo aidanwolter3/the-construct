@@ -591,6 +591,15 @@ pub trait Loader: Send {
     /// engine), so its next [`Loader::changes`] carry the new values instead
     /// of putting the old ones back.
     fn local_set(&self, _intent: &Value) {}
+    /// Keeps a field of a `local://` entity across starts of the app
+    /// (`action.local.set` with `keep`, feature `local_keep`), where the
+    /// loader has somewhere to keep it (the engine's store).
+    fn keep_local(&self, _entity_uri: &str, _field: &str, _value: &Value) {}
+    /// The fields kept so far, `(entity uri, field, value)`: the session
+    /// puts them back before its first frame.
+    fn kept_locals(&self) -> Vec<(String, String, Value)> {
+        Vec::new()
+    }
     /// Starts a sign-in to an upstream or signs out of it, where the loader
     /// runs the engine's sign-in (`crate::signin`): `action.auth.login`, or
     /// `action.device` `sign_in`, `sign_out` and `set_server`. True when
@@ -774,6 +783,8 @@ pub struct Session {
     pub insets: [f32; 4],
     /// Writes the pod has answered, waiting to be applied (by [`Session::poll`]).
     answered: Arc<Mutex<Vec<Answer>>>,
+    /// Whether the kept `local://` fields were put back ([`Loader::kept_locals`]).
+    kept_restored: bool,
     /// Writes sent and not answered yet.
     pub pending: usize,
     /// The last write the pod refused, and why.
@@ -975,6 +986,7 @@ impl Session {
             images: crate::images::ImageStore::new(),
             insets: [0.0; 4],
             answered: Arc::new(Mutex::new(Vec::new())),
+            kept_restored: false,
             pending: 0,
             last_error: None,
             notice: None,
@@ -2150,6 +2162,7 @@ impl Session {
     /// picked photo, the user's own choice, applies at once, like the
     /// user's taps and local writes, which never wait for a poll.
     pub fn poll(&mut self) -> bool {
+        self.restore_kept();
         let news = self.loader.as_ref().and_then(|l| l.changes());
         if let Some(g) = self.loader.as_ref().and_then(|l| l.edges()) {
             self.held_edges = Some(g);
@@ -2699,7 +2712,29 @@ impl Session {
     /// scroll only places the laid-out frames again). Draws the top
     /// full-screen layout, and over it any sheets, panels and overlays with
     /// their scrim; only the top one's nodes can be tapped.
+    /// Put back the `local://` fields the device kept (feature
+    /// `local_keep`), once, as soon as there is a loader to ask: before the
+    /// first frame, so the app opens on the tab it was left on.
+    fn restore_kept(&mut self) {
+        if self.kept_restored {
+            return;
+        }
+        let Some(loader) = self.loader.as_ref() else {
+            return;
+        };
+        self.kept_restored = true;
+        let kept = loader.kept_locals();
+        if kept.is_empty() {
+            return;
+        }
+        for (uri, field, value) in kept {
+            self.data.entities.entry(uri).or_default().set(field, value);
+        }
+        self.invalidate();
+    }
+
     pub fn scene(&mut self) -> Result<&Scene, RenderError> {
+        self.restore_kept();
         let polling = Instant::now();
         self.poll();
         let tidying = Instant::now();
@@ -3699,11 +3734,16 @@ impl Session {
                     entity.set(&f, v.clone());
                     fields.insert(f, v);
                 }
-                // The device's own data (`local://`) is the session's alone.
-                if !uri.starts_with("local://")
-                    && let Some(loader) = self.loader.as_ref()
-                {
-                    loader.local_set(intent);
+                // The device's own data (`local://`) is the session's alone;
+                // with `keep` the loader stores it for the next start.
+                if let Some(loader) = self.loader.as_ref() {
+                    if !uri.starts_with("local://") {
+                        loader.local_set(intent);
+                    } else if intent["keep"] == true {
+                        for (f, v) in &fields {
+                            loader.keep_local(&uri, f, v);
+                        }
+                    }
                 }
                 out.push(Effect::LocalSet {
                     entity_uri: uri,
