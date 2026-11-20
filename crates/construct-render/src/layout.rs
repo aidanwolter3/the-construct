@@ -3820,6 +3820,44 @@ fn stretch_content(
     }
 }
 
+/// A scrolling view's thumb: its width, its gap from the view's right edge
+/// and ends, its shortest length (points), and how much of the page's text
+/// colour it is drawn in.
+const THUMB_WIDTH: f32 = 3.0;
+const THUMB_INSET: f32 = 2.0;
+const THUMB_MIN: f32 = 24.0;
+const THUMB_ALPHA: f32 = 0.28;
+
+/// The scroll indicator of a view whose content is taller than it: a thin
+/// rounded bar along its right edge (`view`, its visible box), as long as
+/// the share of the content showing (`height` of `content`, at least
+/// `THUMB_MIN`), and as far down the track as the view is scrolled
+/// (`offset`). Nothing when the content fits.
+fn scroll_thumb(
+    scene: &mut Scene,
+    view: [f32; 4],
+    height: f32,
+    content: f32,
+    offset: f32,
+    ink: Rgba,
+) {
+    let max = content - height;
+    let track = view[3] - 2.0 * THUMB_INSET;
+    if max < 0.5 || track < THUMB_MIN || view[2] < THUMB_WIDTH + THUMB_INSET {
+        return;
+    }
+    let len = (track * height / content).clamp(THUMB_MIN, track);
+    let top = view[1] + THUMB_INSET + (track - len) * (offset / max).clamp(0.0, 1.0);
+    let x = view[0] + view[2] - THUMB_INSET - THUMB_WIDTH;
+    let mut q = QuadInstance::fill(
+        [x, top, THUMB_WIDTH, len],
+        ink.with_alpha(THUMB_ALPHA),
+        THUMB_WIDTH / 2.0,
+    );
+    q.clip = view;
+    scene.draws.push(Draw::Quad(q));
+}
+
 /// How far content fades in from a scrolling view's ends, in points.
 const EDGE_FADE: f32 = 24.0;
 /// Strips per fade: a gradient of quads, so every renderer draws it as it is.
@@ -4422,6 +4460,18 @@ impl Laid {
                 pressed,
                 &mut none,
                 scene,
+            );
+        }
+        if scrolls && visible {
+            // Over everything in the view, sticky nodes included.
+            let content = self.content_height(e);
+            scroll_thumb(
+                scene,
+                intersect(rect, inner_clip),
+                h,
+                content,
+                oy,
+                self.theme.on_background,
             );
         }
         if visible && let Some((_, threshold)) = &e.card {

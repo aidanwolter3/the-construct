@@ -23,6 +23,7 @@ mod media;
 mod panels;
 mod reuse;
 mod screen_sizes;
+mod scroll_thumb;
 mod swipe_cards;
 mod system_bars;
 mod text_styles;
