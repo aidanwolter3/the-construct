@@ -11,9 +11,15 @@
 //! - `*` multiplies numbers; `<`, `<=`, `>` and `>=` compare two numbers,
 //!   or two texts in order (so `YYYY-MM-DD` dates compare as dates), and
 //!   answer `true` or `false` (decision `research-per-row`);
-//! - parentheses group, and ternaries may nest.
+//! - parentheses group, and ternaries may nest;
+//! - `money(x)` writes a number as a price: `$98`, `$28.50`, `$1,299.95`
+//!   (whole amounts without cents, others with two; empty for an empty
+//!   value), decision `expr-money`.
 //!
-//! No calls, no loops, no access to anything but the row: an expression is
+//! A number joined to text is written as people write it: `98`, never
+//! `98.0`.
+//!
+//! No other calls, no loops, no access to anything but the row: an expression is
 //! at most [`MAX_EXPR_CHARS`] long and nests at most [`MAX_DEPTH`] deep,
 //! so evaluating one is cheap and always ends.
 
@@ -36,6 +42,8 @@ pub enum Expr {
     /// A comparison: `<`, `<=`, `>` or `>=`.
     Cmp(Cmp, Box<Expr>, Box<Expr>),
     Cond(Box<Expr>, Box<Expr>, Box<Expr>),
+    /// `money(x)`: a number as a price.
+    Money(Box<Expr>),
 }
 
 /// A comparison's operator.
@@ -72,6 +80,7 @@ impl Cmp {
 enum Tok {
     Lit(Value),
     Field(String),
+    Money,
     Bang,
     Plus,
     Minus,
@@ -141,6 +150,7 @@ fn lex(s: &str) -> Result<Vec<Tok>, String> {
                     "true" => out.push(Tok::Lit(json!(true))),
                     "false" => out.push(Tok::Lit(json!(false))),
                     "null" => out.push(Tok::Lit(Value::Null)),
+                    "money" if b.get(i) == Some(&b'(') => out.push(Tok::Money),
                     "entity" if b.get(i) == Some(&b'.') => {
                         i += 1;
                         let name = ident(s, &mut i);
@@ -293,6 +303,17 @@ impl Parser {
                 }
                 Ok(e)
             }
+            Some(Tok::Money) => {
+                self.at += 1;
+                if !self.eat(&Tok::Open) {
+                    return Err("money needs ( ): money(entity.price)".into());
+                }
+                let e = self.expr()?;
+                if !self.eat(&Tok::Close) {
+                    return Err("money( is missing its )".into());
+                }
+                Ok(Expr::Money(Box::new(e)))
+            }
             Some(t) => Err(format!("unexpected {}", tok_text(&t))),
             None => Err("the expression ends too soon".into()),
         }
@@ -303,6 +324,7 @@ fn tok_text(t: &Tok) -> String {
     match t {
         Tok::Lit(v) => v.to_string(),
         Tok::Field(f) => format!("entity.{f}"),
+        Tok::Money => "money".into(),
         Tok::Bang => "!".into(),
         Tok::Plus => "+".into(),
         Tok::Minus => "-".into(),
@@ -355,7 +377,7 @@ impl Expr {
         match self {
             Expr::Lit(_) => {}
             Expr::Field(n) => f(n),
-            Expr::Not(a) => a.walk(f),
+            Expr::Not(a) | Expr::Money(a) => a.walk(f),
             Expr::Add(a, b) | Expr::Sub(a, b) | Expr::Mul(a, b) | Expr::Cmp(_, a, b) => {
                 a.walk(f);
                 b.walk(f);
@@ -376,6 +398,7 @@ impl Expr {
             Expr::Lit(v) => Expr::Lit(v.clone()),
             Expr::Field(n) => Expr::Field(f(n)?),
             Expr::Not(a) => Expr::Not(bx(a)?),
+            Expr::Money(a) => Expr::Money(bx(a)?),
             Expr::Add(a, b) => Expr::Add(bx(a)?, bx(b)?),
             Expr::Sub(a, b) => Expr::Sub(bx(a)?, bx(b)?),
             Expr::Mul(a, b) => Expr::Mul(bx(a)?, bx(b)?),
@@ -392,7 +415,7 @@ impl Expr {
             Expr::Mul(..) => 3,
             Expr::Not(_) => 4,
             Expr::Lit(Value::Number(n)) if n.as_f64().is_some_and(|x| x < 0.0) => 4,
-            Expr::Lit(_) | Expr::Field(_) => 5,
+            Expr::Lit(_) | Expr::Field(_) | Expr::Money(_) => 5,
         }
     }
 
@@ -412,6 +435,7 @@ impl std::fmt::Display for Expr {
             Expr::Lit(v) => write!(f, "{v}"),
             Expr::Field(n) => write!(f, "entity.{n}"),
             Expr::Not(a) => write!(f, "!{}", a.child(4)),
+            Expr::Money(a) => write!(f, "money({a})"),
             Expr::Add(a, b) => write!(f, "{} + {}", a.child(2), b.child(3)),
             Expr::Sub(a, b) => write!(f, "{} - {}", a.child(2), b.child(3)),
             Expr::Mul(a, b) => write!(f, "{} * {}", a.child(3), b.child(4)),
@@ -437,10 +461,40 @@ fn text(v: &Value) -> Result<String, String> {
     match v {
         Value::Null => Ok(String::new()),
         Value::String(s) => Ok(s.clone()),
-        Value::Number(n) => Ok(n.to_string()),
+        Value::Number(n) => Ok(match n.as_f64() {
+            Some(f) if f.fract() == 0.0 && f.abs() < 9.0e15 => (f as i64).to_string(),
+            _ => n.to_string(),
+        }),
         Value::Bool(b) => Ok(b.to_string()),
         _ => Err("only text, numbers and true/false join as text".into()),
     }
+}
+
+/// `x` as a price: `$98`, `$28.50`, `-$4.20`, `$1,299.95`.
+fn money(v: &Value) -> Result<Value, String> {
+    if v.is_null() || v.as_str().is_some_and(|s| s.trim().is_empty()) {
+        return Ok(json!(""));
+    }
+    let x = num(v)?;
+    if !x.is_finite() {
+        return Err("not a price".into());
+    }
+    let cents = (x.abs() * 100.0).round() as u64;
+    let (whole, frac) = (cents / 100, cents % 100);
+    let digits = whole.to_string();
+    let mut grouped = String::new();
+    for (i, c) in digits.chars().enumerate() {
+        if i > 0 && (digits.len() - i) % 3 == 0 {
+            grouped.push(',');
+        }
+        grouped.push(c);
+    }
+    let sign = if x < 0.0 && cents > 0 { "-" } else { "" };
+    Ok(json!(if frac == 0 {
+        format!("{sign}${grouped}")
+    } else {
+        format!("{sign}${grouped}.{frac:02}")
+    }))
 }
 
 fn num(v: &Value) -> Result<f64, String> {
@@ -470,6 +524,7 @@ pub fn eval(e: &Expr, get: &dyn Fn(&str) -> Value) -> Result<Value, String> {
         Expr::Lit(v) => Ok(v.clone()),
         Expr::Field(n) => Ok(get(n)),
         Expr::Not(a) => Ok(json!(!truthy(&eval(a, get)?))),
+        Expr::Money(a) => money(&eval(a, get)?),
         Expr::Add(a, b) => {
             let (a, b) = (eval(a, get)?, eval(b, get)?);
             if a.is_string() || b.is_string() {
@@ -586,6 +641,54 @@ mod tests {
             Ok(json!(50))
         );
         assert!(run("entity.s * 2", json!({"s": "x"})).is_err());
+    }
+
+    #[test]
+    fn prices_and_whole_numbers_read_as_people_write_them() {
+        assert_eq!(
+            run("\"$\" + entity.p", json!({"p": 98.0})),
+            Ok(json!("$98"))
+        );
+        assert_eq!(
+            run("\"$\" + entity.p", json!({"p": 28.5})),
+            Ok(json!("$28.5"))
+        );
+        for (p, want) in [
+            (json!(98.0), "$98"),
+            (json!(28.5), "$28.50"),
+            (json!(60.97), "$60.97"),
+            (json!(1299.95), "$1,299.95"),
+            (json!(1234567), "$1,234,567"),
+            (json!(0.004), "$0"),
+            (json!(-4.2), "-$4.20"),
+            (json!(19.999), "$20"),
+        ] {
+            assert_eq!(
+                run("money(entity.p)", json!({ "p": p })),
+                Ok(json!(want)),
+                "{p}"
+            );
+        }
+        assert_eq!(run("money(entity.p)", json!({})), Ok(json!("")));
+        assert_eq!(
+            run(
+                "entity.now ? money(entity.now) : entity.note",
+                json!({"note": "~$5"})
+            ),
+            Ok(json!("~$5"))
+        );
+        assert!(run("money(entity.p)", json!({"p": "cheap"})).is_err());
+        for bad in [
+            "money",
+            "money entity.p",
+            "money(entity.p",
+            "moneys(entity.p)",
+        ] {
+            assert!(parse(bad).is_err(), "{bad:?}");
+        }
+        let e = parse("money(entity.a + 1) + \" each\"").unwrap();
+        assert_eq!(parse(&e.to_string()).unwrap(), e);
+        assert_eq!(e.fields(), vec!["a".to_owned()]);
     }
 
     #[test]
