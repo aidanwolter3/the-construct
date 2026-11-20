@@ -356,3 +356,114 @@ async fn a_layout_lists_days_from_the_dates_feed() {
         7
     );
 }
+
+/// A kit (decision `element-roles-and-reuse`): `use_kit` makes the
+/// collection, home binds its feed, and the kit's core layout draws it by
+/// reference with its inputs bound; a second collection gets its own.
+#[tokio::test]
+async fn a_kit_is_a_core_layout_over_a_collection_it_makes() {
+    let env = env().await;
+    let pod_code = env.pod("mine").await;
+    let access = env.connect(&pod_code).await;
+
+    // Kits are found like everything else, and listed by the tool.
+    let (_, found) = env
+        .tool(
+            &access,
+            "find_elements",
+            json!({"query": "things to tick off"}),
+        )
+        .await;
+    assert_eq!(names(&found)[0], "@core/checklist", "{found}");
+    let (_, kits) = env.tool(&access, "use_kit", json!({})).await;
+    assert_eq!(kits["kits"][0]["kit"], "checklist", "{kits}");
+
+    let (err, used) = env
+        .tool(
+            &access,
+            "use_kit",
+            json!({"kit": "checklist", "collection": "packing", "title": "Packing list"}),
+        )
+        .await;
+    assert!(!err, "{used}");
+    assert_eq!(used["created"], true, "{used}");
+    assert_eq!(used["embed"]["bind"]["collection"], "packing", "{used}");
+    let (_, cols) = env.tool(&access, "list_collections", json!({})).await;
+    assert!(cols.to_string().contains("\"packing\""), "{cols}");
+
+    // Home shows it: the embed as the kit answered it.
+    let (err, h) = env
+        .tool(
+            &access,
+            "update_layout",
+            json!({"app": "home", "layout": {"type": "core://Page", "title": "Home",
+                "root": used["embed"]}}),
+        )
+        .await;
+    assert!(!err, "{h}");
+    let (err, row) = env
+        .tool(
+            &access,
+            "add_row",
+            json!({"collection": "packing", "values": {"title": "Passport"}}),
+        )
+        .await;
+    assert!(!err, "{row}");
+
+    // Home as a device draws it: the kit's layout with its inputs filled
+    // in (the title, the collection's rows).
+    let (err, _, text) = super::preview_call(
+        &env,
+        &access,
+        "render_layout_preview",
+        json!({"id": "home"}),
+    )
+    .await;
+    assert!(!err, "{text}");
+    let details = super::preview_details(&text);
+    let drawn: Vec<&str> = details["nodes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|n| n["text"].as_str())
+        .collect();
+    for want in ["Packing list", "Passport", "To do"] {
+        assert!(
+            drawn.iter().any(|t| t.contains(want)),
+            "{want}: {drawn:?}\n{text}"
+        );
+    }
+    assert!(!text.contains("$in."), "{text}");
+
+    // Using it again over the same collection makes nothing new; a
+    // collection without the kit's fields is refused with what is missing.
+    let (err, again) = env
+        .tool(
+            &access,
+            "use_kit",
+            json!({"kit": "checklist", "collection": "packing"}),
+        )
+        .await;
+    assert!(!err, "{again}");
+    assert_eq!(again["created"], false, "{again}");
+    let (err, d) = env
+        .tool(
+            &access,
+            "define_collection",
+            json!({"name": "books", "fields": [{"name": "title", "type": "text"}]}),
+        )
+        .await;
+    assert!(!err, "{d}");
+    let (err, no) = env
+        .tool(
+            &access,
+            "use_kit",
+            json!({"kit": "checklist", "collection": "books"}),
+        )
+        .await;
+    assert!(err, "{no}");
+    assert_eq!(no["error"], "collection_mismatch", "{no}");
+    assert_eq!(no["missing"], json!(["done", "notes"]), "{no}");
+    let (err, no) = env.tool(&access, "use_kit", json!({"kit": "nope"})).await;
+    assert!(err && no["error"] == "unknown_kit", "{no}");
+}

@@ -237,31 +237,45 @@ pub fn serve_layout(
     client: &protocol::ClientCaps,
 ) -> rusqlite::Result<Option<Served>> {
     let store = pod.store();
-    let Some(name) = store.with_conn(|c| super::seal::name_of_key(c, id))? else {
-        return Ok(None);
-    };
-    let Some(el) =
-        store.with_conn(|c| super::seal::seal_name(c, &name, client, &mut Default::default()))?
-    else {
-        return Ok(None);
-    };
-    // A layout that reads inputs draws what the first use site reaching it
-    // from home binds, as the engine draws it.
     let objects = super::seal::objects(pod);
-    let reads = construct_elements::Objects::object(&objects, &el)
-        .is_some_and(|v| !construct_elements::template::inputs_of(&v).is_empty());
-    let root = if reads {
-        super::seal::root_for(pod, client)?
-    } else {
-        None
+    let (el, inputs) = match store.with_conn(|c| super::seal::name_of_key(c, id))? {
+        Some(name) => {
+            let Some(el) = store
+                .with_conn(|c| super::seal::seal_name(c, &name, client, &mut Default::default()))?
+            else {
+                return Ok(None);
+            };
+            // A layout that reads inputs draws what the first use site
+            // reaching it from home binds, as the engine draws it.
+            let reads = construct_elements::Objects::object(&objects, &el)
+                .is_some_and(|v| !construct_elements::template::inputs_of(&v).is_empty());
+            let root = if reads {
+                super::seal::root_for(pod, client)?
+            } else {
+                None
+            };
+            let inputs = root
+                .and_then(|root| {
+                    construct_elements::keyed(&objects, crate::HOME_APP, &root)
+                        .remove(id)
+                        .map(|k| k.inputs)
+                })
+                .unwrap_or_default();
+            (el, inputs)
+        }
+        // Not a name: an edge's own key (`as`), which home reaches with its
+        // binding, e.g. a kit's layout over one collection
+        // (`checklist-packing`).
+        None => {
+            let Some(root) = super::seal::root_for(pod, client)? else {
+                return Ok(None);
+            };
+            match construct_elements::keyed(&objects, crate::HOME_APP, &root).remove(id) {
+                Some(k) => (k.el, k.inputs),
+                None => return Ok(None),
+            }
+        }
     };
-    let inputs = root
-        .and_then(|root| {
-            construct_elements::keyed(&objects, crate::HOME_APP, &root)
-                .remove(id)
-                .map(|k| k.inputs)
-        })
-        .unwrap_or_default();
     let m = if inputs.is_empty() {
         super::seal::materialize(pod, &el)
     } else {

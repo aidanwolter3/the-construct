@@ -62,6 +62,7 @@ pub mod follow;
 pub mod images;
 pub mod import;
 pub mod inbox;
+pub mod kits;
 pub mod lookup;
 mod mcp;
 pub mod model;
@@ -402,11 +403,15 @@ impl Source for CollectionsAdapter {
     }
 
     fn blueprints(&self) -> Vec<BlueprintInfo> {
-        Vec::new()
+        kits::KITS.iter().map(|k| k.layout).collect()
     }
 
     fn layout_files(&self) -> &'static [LayoutSource] {
-        &[]
+        kits::layout_files()
+    }
+
+    fn element_catalog(&self) -> &'static str {
+        include_str!("../catalog.json")
     }
 
     fn router(&self) -> Router<Pod> {

@@ -1890,6 +1890,32 @@ pub fn draft_plumbing(pod: &Pod, node: &Value) -> Result<Value, Value> {
     })
 }
 
+/// Have home bind `feed` too (a kit's collection, decision
+/// `element-roles-and-reuse`), as a write of the construct. Answers whether
+/// it was added (false: home bound it already).
+pub async fn add_home_feed(pod: &Pod, feed: (String, String)) -> Result<bool, Value> {
+    let r = run_write(pod, &json!({}), move |p, c, _| {
+        let mut feeds = home_feeds(c);
+        if feeds.contains(&feed) {
+            return Ok((json!(false), Vec::new()));
+        }
+        if feeds.len() >= crate::layouts::MAX_HOME_FEEDS {
+            return Err(refuse(
+                "too_many_feeds",
+                format!(
+                    "home binds at most {} feeds",
+                    crate::layouts::MAX_HOME_FEEDS
+                ),
+            ));
+        }
+        feeds.push(feed);
+        let moved = set_home_feeds(p, c, &feeds)?;
+        Ok((json!(true), moved))
+    })
+    .await?;
+    Ok(r == json!(true))
+}
+
 /// Stop home binding `feed` (a source dropping one it no longer has, such
 /// as a deleted collection), as a write of the construct. Home's feeds are
 /// read in the write's transaction, so writes at once each drop their own

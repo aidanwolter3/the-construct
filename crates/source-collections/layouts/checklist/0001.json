@@ -1,0 +1,188 @@
+{
+ "note": "The checklist kit's layout: a collection of things to tick off, named by its inputs (decision element-roles-and-reuse)",
+ "layout": {
+  "type": "core://Page",
+  "id": "checklist",
+  "title": "Checklist",
+  "root": {
+   "type": "core://Use",
+   "component": "core:screen_scaffold",
+   "args": {
+    "title": "$in.title",
+    "spacing": 0
+   },
+   "children": [
+    {
+     "type": "core://TextField",
+     "field": "title",
+     "placeholder": "Add an item",
+     "on_submit": {
+      "intent": "action.mutation.create",
+      "query_key": "collection:$in.collection",
+      "entity_uri": "collections://$in.collection/pending-$nonce",
+      "entity": {
+       "id": "pending-$nonce",
+       "deleted": false,
+       "done": false,
+       "title": "$form.title"
+      },
+      "endpoint": "/v1/collections/$in.collection/create",
+      "payload": {
+       "title": "$form.title",
+       "client_id": "$nonce"
+      },
+      "refresh_workspace": true
+     }
+    },
+    {
+     "type": "core://Use",
+     "component": "core:titled_section",
+     "args": {
+      "text": "To do"
+     },
+     "children": [
+      {
+       "type": "core://Use",
+       "component": "core:counted_list",
+       "args": {
+        "count": {
+         "query_key": "collection:$in.collection",
+         "where": [
+          {
+           "field": "deleted",
+           "equals": "false"
+          },
+          {
+           "field": "done",
+           "equals": "false"
+          }
+         ]
+        },
+        "empty": "Nothing to do."
+       },
+       "children": [
+        {
+         "type": "core://List",
+         "query_key": "collection:$in.collection",
+         "where": [
+          {
+           "field": "deleted",
+           "equals": "false"
+          },
+          {
+           "field": "done",
+           "equals": "false"
+          }
+         ],
+         "spacing_dp": 1,
+         "item_template": {
+          "type": "core://Gesture",
+          "content_description": "Swipe left to delete",
+          "on_swipe_left": {
+           "intent": "action.confirm",
+           "title": "Delete this item?",
+           "confirm_label": "Delete",
+           "then": {
+            "intent": "action.mutation.optimistic",
+            "entity_uri": "$item.uri",
+            "field": "deleted",
+            "value_expr": "true",
+            "endpoint": "/v1/collections/$in.collection/delete",
+            "payload": {
+             "id": "$item.id"
+            }
+           }
+          },
+          "content": {
+           "type": "core://Use",
+           "component": "core:checkable_row",
+           "args": {
+            "title": "$item.title",
+            "meta": "$item.notes",
+            "endpoint": "/v1/collections/$in.collection/update"
+           }
+          }
+         }
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "type": "core://Conditional",
+     "count": {
+      "query_key": "collection:$in.collection",
+      "where": [
+       {
+        "field": "deleted",
+        "equals": "false"
+       },
+       {
+        "field": "done",
+        "equals": "true"
+       }
+      ]
+     },
+     "content": {
+      "type": "core://Use",
+      "component": "core:titled_section",
+      "args": {
+       "text": "Done"
+      },
+      "children": [
+       {
+        "type": "core://Use",
+        "component": "core:grouped_list",
+        "children": [
+         {
+          "type": "core://List",
+          "query_key": "collection:$in.collection",
+          "where": [
+           {
+            "field": "deleted",
+            "equals": "false"
+           },
+           {
+            "field": "done",
+            "equals": "true"
+           }
+          ],
+          "spacing_dp": 1,
+          "item_template": {
+           "type": "core://Gesture",
+           "content_description": "Swipe left to delete",
+           "on_swipe_left": {
+            "intent": "action.confirm",
+            "title": "Delete this item?",
+            "confirm_label": "Delete",
+            "then": {
+             "intent": "action.mutation.optimistic",
+             "entity_uri": "$item.uri",
+             "field": "deleted",
+             "value_expr": "true",
+             "endpoint": "/v1/collections/$in.collection/delete",
+             "payload": {
+              "id": "$item.id"
+             }
+            }
+           },
+           "content": {
+            "type": "core://Use",
+            "component": "core:checkable_row",
+            "args": {
+             "title": "$item.title",
+             "meta": "$item.notes",
+             "endpoint": "/v1/collections/$in.collection/update"
+            }
+           }
+          }
+         }
+        ]
+       }
+      ]
+     }
+    }
+   ]
+  }
+ }
+}

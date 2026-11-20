@@ -984,7 +984,7 @@ pub(crate) async fn render_layout_preview(pod: &Pod, headers: &HeaderMap, args: 
     let reader = Reader::new(pod, headers, tokio::runtime::Handle::current());
     let pod = pod.clone();
     let args = args.clone();
-    tokio::task::spawn_blocking(move || {
+    on_render_thread(move || {
         // The device data, as a client builds it, for what these layouts bind.
         let mut needs = serde_json::to_string(&root).unwrap_or_default();
         for l in layouts.values() {
@@ -1054,7 +1054,29 @@ pub(crate) async fn render_layout_preview(pod: &Pod, headers: &HeaderMap, args: 
         answer(&preview_id, &mut p, opened.as_ref(), ms_load)
     })
     .await
-    .unwrap_or_else(|e| error(json!({ "error": "render_failed", "detail": e.to_string() })))
+    .unwrap_or_else(|e| error(json!({ "error": "render_failed", "detail": e })))
+}
+
+/// A drawing's stack. Laying out and drawing a layout recurses once per
+/// node and components nest boxes in boxes, so a deep page needs more than
+/// a runtime worker's 2 MB, most of all in an unoptimized build; a stack
+/// overflow would end the whole server, not one preview.
+const RENDER_STACK: usize = 64 * 1024 * 1024;
+
+/// Run `f` (blocking: it loads and draws) on a thread of its own with
+/// [`RENDER_STACK`], and wait for it without holding a runtime worker.
+async fn on_render_thread<T: Send + 'static>(
+    f: impl FnOnce() -> T + Send + 'static,
+) -> Result<T, String> {
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    std::thread::Builder::new()
+        .name("preview".into())
+        .stack_size(RENDER_STACK)
+        .spawn(move || {
+            let _ = tx.send(f());
+        })
+        .map_err(|e| e.to_string())?;
+    rx.await.map_err(|_| "the drawing stopped".to_owned())
 }
 
 /// The routes of a page's screens.
@@ -1080,7 +1102,7 @@ pub(crate) async fn dispatch_virtual_interaction(pod: &Pod, args: &Value) -> Val
             "detail": "previews last for a few renders; call render_layout_preview again" }));
     };
     let args = args.clone();
-    tokio::task::spawn_blocking(move || {
+    on_render_thread(move || {
         let mut p = shared.lock().unwrap_or_else(|p| p.into_inner());
         if let Some(m) = nodes_mode {
             p.options.nodes = m;
@@ -1118,7 +1140,7 @@ pub(crate) async fn dispatch_virtual_interaction(pod: &Pod, args: &Value) -> Val
         }
     })
     .await
-    .unwrap_or_else(|e| error(json!({ "error": "render_failed", "detail": e.to_string() })))
+    .unwrap_or_else(|e| error(json!({ "error": "render_failed", "detail": e })))
 }
 
 #[cfg(test)]
