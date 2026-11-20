@@ -1,0 +1,141 @@
+{
+ "note": "One choice among several, written to a field or kept on the device (decision element-roles-and-reuse)",
+ "component": {
+  "doc": "One choice among several, as a chip: filled while it is the chosen one, outlined otherwise; a tap chooses it. Put one per option in a core://Row or a grid. chosen is what it compares (a binding: $item.<field> for a row's field, ${local://<draft>#<field>} for a value being picked); on_click is what choosing does (action.mutation.optimistic to write a row's field, action.local.set for a draft). For a filter that only this screen reads, core://ChoiceChips does it with no intent.",
+  "params": [
+   {
+    "name": "label",
+    "type": "text",
+    "required": true,
+    "doc": "What the chip says."
+   },
+   {
+    "name": "value",
+    "type": "text",
+    "required": true,
+    "doc": "The value this chip stands for."
+   },
+   {
+    "name": "chosen",
+    "type": "binding",
+    "required": true,
+    "doc": "The value chosen now, as a binding."
+   },
+   {
+    "name": "on_click",
+    "type": "json",
+    "required": true,
+    "doc": "The intent that chooses this value."
+   },
+   {
+    "name": "tint",
+    "type": "text",
+    "default": "${local://theme#accent}",
+    "doc": "The chosen chip's fill."
+   },
+   {
+    "name": "on_tint",
+    "type": "text",
+    "default": "${local://theme#card}",
+    "doc": "The chosen chip's text colour."
+   },
+   {
+    "name": "description",
+    "type": "text",
+    "default": "",
+    "doc": "What a screen reader says; empty for the label."
+   }
+  ],
+  "template": {
+   "type": "core://Tappable",
+   "content_description": {
+    "type": "core://IfArg",
+    "arg": "description",
+    "then": "$arg.description",
+    "else": "$arg.label"
+   },
+   "on_click": "$arg.on_click",
+   "content": {
+    "type": "core://Column",
+    "children": [
+     {
+      "type": "core://Conditional",
+      "value": "$arg.chosen",
+      "equals": "$arg.value",
+      "content": {
+       "type": "core://Box",
+       "background": "$arg.tint",
+       "content_color": "$arg.on_tint",
+       "border_color": "$arg.tint",
+       "corner_dp": 14,
+       "padding_h_dp": 12,
+       "padding_v_dp": 7,
+       "align": "Center",
+       "content": {
+        "type": "core://Text",
+        "value_expr": "$arg.label",
+        "style": "Label"
+       }
+      }
+     },
+     {
+      "type": "core://Conditional",
+      "value": "$arg.chosen",
+      "equals": "$arg.value",
+      "not": true,
+      "content": {
+       "type": "core://Box",
+       "border_color": "${local://theme#card_border}",
+       "corner_dp": 14,
+       "padding_h_dp": 12,
+       "padding_v_dp": 7,
+       "align": "Center",
+       "content": {
+        "type": "core://Text",
+        "value_expr": "$arg.label",
+        "style": "Label"
+       }
+      }
+     }
+    ]
+   }
+  },
+  "examples": [
+   {
+    "args": {
+     "label": "Swim",
+     "value": "Swim",
+     "chosen": "$item.kind",
+     "on_click": {
+      "intent": "action.mutation.optimistic",
+      "entity_uri": "$item.uri",
+      "field": "kind",
+      "value_expr": "\"Swim\"",
+      "rollback_value": "",
+      "endpoint": "/v1/collections/workouts/update",
+      "payload": {
+       "id": "$item.id",
+       "kind": "Swim"
+      }
+     }
+    },
+    "note": "sets a row's field"
+   },
+   {
+    "args": {
+     "label": "7:00",
+     "value": "07:00",
+     "chosen": "${local://draft#time}",
+     "on_click": {
+      "intent": "action.local.set",
+      "entity_uri": "local://draft",
+      "field": "time",
+      "value_expr": "\"07:00\""
+     },
+     "description": "Start at 7:00"
+    },
+    "note": "picks a value into a draft kept on the device"
+   }
+  ]
+ }
+}

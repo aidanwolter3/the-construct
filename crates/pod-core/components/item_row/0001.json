@@ -1,0 +1,215 @@
+{
+ "note": "A row with a leading and a trailing child, from a pod's own layouts (decision element-roles-and-reuse)",
+ "component": {
+  "doc": "A row of a list or a menu with room at both ends: its first child leads (core:tinted_icon, a checkbox, a picture, a core://Progress), then a title with one muted line under it while meta is set, then, with trailing, its second child at the end (core:pill, a button, a count) and a › with chevron. It draws on the card colour, so it sits in core:grouped_list as it is. Wrap it in core://Tappable to open something. With no children it is a plain title row; for a trailing child alone set leading false and trailing true, and the one child goes at the end.",
+  "params": [
+   {
+    "name": "title",
+    "type": "text",
+    "required": true,
+    "doc": "The row's title (bindings allowed)."
+   },
+   {
+    "name": "meta",
+    "type": "text",
+    "default": "",
+    "doc": "One muted line under the title; left out while empty."
+   },
+   {
+    "name": "meta_lines",
+    "type": "number",
+    "default": 2,
+    "doc": "The most lines the muted line takes."
+   },
+   {
+    "name": "title_color",
+    "type": "text",
+    "default": "",
+    "doc": "The title's colour (a theme binding: muted_text for a finished row); empty for the page's text colour."
+   },
+   {
+    "name": "leading",
+    "type": "bool",
+    "default": true,
+    "doc": "The first child leads the row. False: no leading child, and with trailing the first child goes at the end."
+   },
+   {
+    "name": "trailing",
+    "type": "bool",
+    "default": false,
+    "doc": "The second child goes at the end, before the ›."
+   },
+   {
+    "name": "chevron",
+    "type": "bool",
+    "default": false,
+    "doc": "A › at the end, for a row that opens something."
+   },
+   {
+    "name": "background",
+    "type": "text",
+    "default": "${local://theme#card}",
+    "doc": "What it draws on (a highlight for a selected row)."
+   }
+  ],
+  "children": true,
+  "template": {
+   "type": "core://Box",
+   "background": "$arg.background",
+   "content": {
+    "type": "core://Row",
+    "align": "Center",
+    "spacing_dp": 12,
+    "padding_h_dp": 11,
+    "padding_v_dp": 12,
+    "children": [
+     {
+      "type": "core://IfArg",
+      "arg": "leading",
+      "then": {
+       "type": "core://Children",
+       "at": 0
+      }
+     },
+     {
+      "type": "core://Column",
+      "spacing_dp": 2,
+      "children": [
+       {
+        "type": "core://IfArg",
+        "arg": "title_color",
+        "then": {
+         "type": "core://Box",
+         "content_color": "$arg.title_color",
+         "content": {
+          "type": "core://Text",
+          "value_expr": "$arg.title",
+          "style": "Label"
+         }
+        },
+        "else": {
+         "type": "core://Text",
+         "value_expr": "$arg.title",
+         "style": "Label"
+        }
+       },
+       {
+        "type": "core://Conditional",
+        "value": "$arg.meta",
+        "content": {
+         "type": "core://Box",
+         "content_color": "${local://theme#muted_text}",
+         "content": {
+          "type": "core://Text",
+          "value_expr": "$arg.meta",
+          "style": "Secondary",
+          "max_lines": "$arg.meta_lines"
+         }
+        }
+       }
+      ]
+     },
+     {
+      "type": "core://Spacer"
+     },
+     {
+      "type": "core://IfArg",
+      "arg": "trailing",
+      "then": {
+       "type": "core://IfArg",
+       "arg": "leading",
+       "then": {
+        "type": "core://Children",
+        "at": 1
+       },
+       "else": {
+        "type": "core://Children",
+        "at": 0
+       }
+      }
+     },
+     {
+      "type": "core://IfArg",
+      "arg": "chevron",
+      "then": {
+       "type": "core://Box",
+       "content_color": "${local://theme#muted_text}",
+       "content": {
+        "type": "core://Text",
+        "value_expr": "›",
+        "style": "Title"
+       }
+      }
+     }
+    ]
+   }
+  },
+  "examples": [
+   {
+    "args": {
+     "title": "Weekend in Porto",
+     "meta": "Mar 3–5",
+     "chevron": true
+    },
+    "children": [
+     {
+      "type": "core://Use",
+      "component": "core:tinted_icon",
+      "args": {
+       "icon": "bookmark"
+      }
+     }
+    ],
+    "note": "a leading icon and a ›"
+   },
+   {
+    "args": {
+     "title": "$item.title",
+     "meta": "$item.venue",
+     "trailing": true
+    },
+    "children": [
+     {
+      "type": "core://Use",
+      "component": "core:date_block",
+      "args": {
+       "weekday": "$item.weekday",
+       "day": "$item.day"
+      }
+     },
+     {
+      "type": "core://Use",
+      "component": "core:pill",
+      "args": {
+       "text": "New"
+      }
+     }
+    ],
+    "note": "a date leads, a tag trails"
+   },
+   {
+    "args": {
+     "title": "Version",
+     "leading": false,
+     "trailing": true
+    },
+    "children": [
+     {
+      "type": "core://Use",
+      "component": "core:muted_text",
+      "args": {
+       "text": "1.4"
+      }
+     }
+    ],
+    "note": "only a trailing value"
+   },
+   {
+    "args": {
+     "title": "Plain"
+    },
+    "note": "a title alone"
+   }
+  ]
+ }
+}

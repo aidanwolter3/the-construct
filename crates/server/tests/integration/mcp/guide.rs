@@ -108,8 +108,13 @@ async fn find_elements_answers_what_exists_by_what_it_is_for() {
         .tool(&access, "find_elements", json!({"query": "empty list"}))
         .await;
     assert!(!err, "{f}");
-    assert_eq!(names(&f)[0], "@core/muted_note", "{f}");
-    let first = &f["elements"][0];
+    // The list-or-empty-note pattern first, then the note itself.
+    assert_eq!(
+        names(&f)[..2],
+        ["@core/counted_list", "@core/muted_note"],
+        "{f}"
+    );
+    let first = &f["elements"][1];
     assert_eq!(first["role"], "component");
     assert_eq!(first["scope"], "core");
     assert_eq!(first["category"], "pattern");

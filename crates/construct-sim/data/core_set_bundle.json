@@ -1,0 +1,1041 @@
+{
+  "entities": {
+    "demo://plan/water": {
+      "when": "evening"
+    },
+    "demo://todos/1": {
+      "bed": "Tomatoes",
+      "done": false,
+      "id": "1",
+      "title": "Stake the tomatoes",
+      "uri": "demo://todos/1",
+      "where": "Before the wind picks up"
+    },
+    "demo://todos/2": {
+      "bed": "Cold frame",
+      "done": false,
+      "id": "2",
+      "title": "Sow the winter lettuce",
+      "uri": "demo://todos/2",
+      "where": ""
+    },
+    "demo://todos/3": {
+      "bed": "Shed",
+      "done": true,
+      "id": "3",
+      "title": "Sharpen the secateurs",
+      "uri": "demo://todos/3",
+      "where": "On the bench"
+    }
+  },
+  "queries": {
+    "archived": [],
+    "todos": [
+      "demo://todos/1",
+      "demo://todos/2",
+      "demo://todos/3"
+    ]
+  },
+  "version": "1.0.0",
+  "workspace": {
+    "id": "core_set",
+    "root": {
+      "background": "${local://theme#page}",
+      "content": {
+        "children": [
+          {
+            "content": {
+              "align": "Center",
+              "children": [
+                {
+                  "content": {
+                    "content_description": "Back",
+                    "icon": "arrow_back",
+                    "on_click": {
+                      "intent": "action.navigation.back"
+                    },
+                    "tag": "back",
+                    "type": "core://IconButton"
+                  },
+                  "type": "core://Conditional",
+                  "value": "${local://nav#can_go_back}"
+                },
+                {
+                  "style": "Headline",
+                  "type": "core://Text",
+                  "value_expr": "Garden week",
+                  "weight": "SemiBold"
+                },
+                {
+                  "type": "core://Spacer"
+                },
+                {
+                  "content": {
+                    "size_dp": 0,
+                    "type": "core://Spacer"
+                  },
+                  "height_dp": 48,
+                  "type": "core://Box",
+                  "width_dp": 1
+                }
+              ],
+              "padding_h_dp": 0,
+              "padding_v_dp": 4,
+              "spacing_dp": 4,
+              "type": "core://Row"
+            },
+            "padding_h_dp": 20,
+            "padding_v_dp": 4,
+            "type": "core://Box"
+          },
+          {
+            "content": {
+              "children": [
+                {
+                  "background": "${local://theme#error_surface}",
+                  "content": {
+                    "children": [
+                      {
+                        "content": {
+                          "content": {
+                            "style": "Label",
+                            "type": "core://Text",
+                            "value_expr": "Frost tonight"
+                          },
+                          "content_color": "${local://theme#error}",
+                          "type": "core://Box"
+                        },
+                        "type": "core://Conditional",
+                        "value": "Frost tonight"
+                      },
+                      {
+                        "content": {
+                          "style": "Body",
+                          "type": "core://Text",
+                          "value_expr": "Cover the seedlings before dusk."
+                        },
+                        "type": "core://Conditional",
+                        "value": "Cover the seedlings before dusk."
+                      }
+                    ],
+                    "spacing_dp": 4,
+                    "type": "core://Column"
+                  },
+                  "corner_dp": 14,
+                  "padding_h_dp": 14,
+                  "padding_v_dp": 12,
+                  "type": "core://Box"
+                },
+                {
+                  "children": [
+                    {
+                      "size_dp": 14,
+                      "type": "core://Spacer"
+                    },
+                    {
+                      "content": {
+                        "style": "Label",
+                        "type": "core://Text",
+                        "value_expr": "To do"
+                      },
+                      "content_color": "${local://theme#muted_text}",
+                      "padding_h_dp": 4,
+                      "type": "core://Box"
+                    },
+                    {
+                      "size_dp": 8,
+                      "type": "core://Spacer"
+                    },
+                    {
+                      "content": {
+                        "background": "${local://theme#card}",
+                        "border_color": "${local://theme#card_border}",
+                        "content": {
+                          "background": "${local://theme#card_border}",
+                          "content": {
+                            "children": [
+                              {
+                                "item_template": {
+                                  "content": {
+                                    "background": "${local://theme#card}",
+                                    "content": {
+                                      "align": "Center",
+                                      "children": [
+                                        {
+                                          "content": {
+                                            "align": "Center",
+                                            "background": "${local://theme#accent}",
+                                            "content": {
+                                              "icon": "check",
+                                              "text": "",
+                                              "type": "core://Badge"
+                                            },
+                                            "content_color": "${local://theme#card}",
+                                            "corner_dp": 512,
+                                            "height_dp": 22,
+                                            "type": "core://Box",
+                                            "width_dp": 22
+                                          },
+                                          "type": "core://Conditional",
+                                          "value": "$item.done"
+                                        },
+                                        {
+                                          "content": {
+                                            "border_color": "${local://theme#muted_text}",
+                                            "content": {
+                                              "size_dp": 0,
+                                              "type": "core://Spacer"
+                                            },
+                                            "corner_dp": 512,
+                                            "height_dp": 22,
+                                            "type": "core://Box",
+                                            "width_dp": 22
+                                          },
+                                          "not": true,
+                                          "type": "core://Conditional",
+                                          "value": "$item.done"
+                                        },
+                                        {
+                                          "children": [
+                                            {
+                                              "content": {
+                                                "content": {
+                                                  "strike": true,
+                                                  "style": "Label",
+                                                  "type": "core://Text",
+                                                  "value_expr": "$item.title"
+                                                },
+                                                "content_color": "${local://theme#muted_text}",
+                                                "type": "core://Box"
+                                              },
+                                              "type": "core://Conditional",
+                                              "value": "$item.done"
+                                            },
+                                            {
+                                              "content": {
+                                                "style": "Label",
+                                                "type": "core://Text",
+                                                "value_expr": "$item.title"
+                                              },
+                                              "not": true,
+                                              "type": "core://Conditional",
+                                              "value": "$item.done"
+                                            },
+                                            {
+                                              "content": {
+                                                "content": {
+                                                  "style": "Secondary",
+                                                  "type": "core://Text",
+                                                  "value_expr": "$item.where"
+                                                },
+                                                "content_color": "${local://theme#muted_text}",
+                                                "type": "core://Box"
+                                              },
+                                              "type": "core://Conditional",
+                                              "value": "$item.where"
+                                            }
+                                          ],
+                                          "spacing_dp": 2,
+                                          "type": "core://Column"
+                                        },
+                                        {
+                                          "type": "core://Spacer"
+                                        },
+                                        {
+                                          "background": "${local://theme#muted_surface}",
+                                          "content": {
+                                            "style": "Caption",
+                                            "type": "core://Text",
+                                            "value_expr": "$item.bed"
+                                          },
+                                          "content_color": "${local://theme#muted_text}",
+                                          "corner_dp": 8,
+                                          "padding_h_dp": 8,
+                                          "padding_v_dp": 3,
+                                          "type": "core://Box"
+                                        }
+                                      ],
+                                      "padding_h_dp": 11,
+                                      "padding_v_dp": 12,
+                                      "spacing_dp": 12,
+                                      "type": "core://Row"
+                                    },
+                                    "type": "core://Box"
+                                  },
+                                  "content_description": "Tick or untick",
+                                  "on_click": {
+                                    "endpoint": "/v1/collections/todos/update",
+                                    "entity_uri": "$item.uri",
+                                    "field": "done",
+                                    "intent": "action.mutation.optimistic",
+                                    "payload": {
+                                      "done": "$value",
+                                      "id": "$item.id"
+                                    },
+                                    "rollback_value": false,
+                                    "value_expr": "!entity.done"
+                                  },
+                                  "type": "core://Tappable"
+                                },
+                                "query_key": "todos",
+                                "spacing_dp": 1,
+                                "type": "core://List"
+                              }
+                            ],
+                            "type": "core://Column"
+                          },
+                          "type": "core://Box"
+                        },
+                        "corner_dp": 18,
+                        "padding_h_dp": 5,
+                        "padding_v_dp": 6,
+                        "type": "core://Box"
+                      },
+                      "count": {
+                        "query_key": "todos"
+                      },
+                      "type": "core://Conditional"
+                    },
+                    {
+                      "content": {
+                        "content": {
+                          "style": "Secondary",
+                          "type": "core://Text",
+                          "value_expr": "Nothing to do."
+                        },
+                        "content_color": "${local://theme#muted_text}",
+                        "padding_h_dp": 4,
+                        "type": "core://Box"
+                      },
+                      "count": {
+                        "query_key": "todos"
+                      },
+                      "not": true,
+                      "type": "core://Conditional"
+                    }
+                  ],
+                  "spacing_dp": 0,
+                  "type": "core://Column"
+                },
+                {
+                  "children": [
+                    {
+                      "size_dp": 14,
+                      "type": "core://Spacer"
+                    },
+                    {
+                      "content": {
+                        "style": "Label",
+                        "type": "core://Text",
+                        "value_expr": "Archived"
+                      },
+                      "content_color": "${local://theme#muted_text}",
+                      "padding_h_dp": 4,
+                      "type": "core://Box"
+                    },
+                    {
+                      "size_dp": 8,
+                      "type": "core://Spacer"
+                    },
+                    {
+                      "content": {
+                        "background": "${local://theme#card}",
+                        "border_color": "${local://theme#card_border}",
+                        "content": {
+                          "background": "${local://theme#card_border}",
+                          "content": {
+                            "children": [
+                              {
+                                "item_template": {
+                                  "background": "${local://theme#card}",
+                                  "content": {
+                                    "align": "Center",
+                                    "children": [
+                                      {
+                                        "children": [
+                                          {
+                                            "style": "Label",
+                                            "type": "core://Text",
+                                            "value_expr": "$item.title"
+                                          },
+                                          {
+                                            "content": {
+                                              "content": {
+                                                "max_lines": 2,
+                                                "style": "Secondary",
+                                                "type": "core://Text",
+                                                "value_expr": ""
+                                              },
+                                              "content_color": "${local://theme#muted_text}",
+                                              "type": "core://Box"
+                                            },
+                                            "type": "core://Conditional",
+                                            "value": ""
+                                          }
+                                        ],
+                                        "spacing_dp": 2,
+                                        "type": "core://Column"
+                                      },
+                                      {
+                                        "type": "core://Spacer"
+                                      }
+                                    ],
+                                    "padding_h_dp": 11,
+                                    "padding_v_dp": 12,
+                                    "spacing_dp": 12,
+                                    "type": "core://Row"
+                                  },
+                                  "type": "core://Box"
+                                },
+                                "query_key": "archived",
+                                "spacing_dp": 1,
+                                "type": "core://List"
+                              }
+                            ],
+                            "type": "core://Column"
+                          },
+                          "type": "core://Box"
+                        },
+                        "corner_dp": 18,
+                        "padding_h_dp": 5,
+                        "padding_v_dp": 6,
+                        "type": "core://Box"
+                      },
+                      "count": {
+                        "query_key": "archived"
+                      },
+                      "type": "core://Conditional"
+                    },
+                    {
+                      "content": {
+                        "content": {
+                          "style": "Secondary",
+                          "type": "core://Text",
+                          "value_expr": "Nothing archived yet."
+                        },
+                        "content_color": "${local://theme#muted_text}",
+                        "padding_h_dp": 4,
+                        "type": "core://Box"
+                      },
+                      "count": {
+                        "query_key": "archived"
+                      },
+                      "not": true,
+                      "type": "core://Conditional"
+                    }
+                  ],
+                  "spacing_dp": 0,
+                  "type": "core://Column"
+                },
+                {
+                  "children": [
+                    {
+                      "size_dp": 14,
+                      "type": "core://Spacer"
+                    },
+                    {
+                      "content": {
+                        "style": "Label",
+                        "type": "core://Text",
+                        "value_expr": "Beds"
+                      },
+                      "content_color": "${local://theme#muted_text}",
+                      "padding_h_dp": 4,
+                      "type": "core://Box"
+                    },
+                    {
+                      "size_dp": 8,
+                      "type": "core://Spacer"
+                    },
+                    {
+                      "background": "${local://theme#card}",
+                      "border_color": "${local://theme#card_border}",
+                      "content": {
+                        "background": "${local://theme#card_border}",
+                        "content": {
+                          "children": [
+                            {
+                              "children": [
+                                {
+                                  "background": "${local://theme#card}",
+                                  "content": {
+                                    "align": "Center",
+                                    "children": [
+                                      {
+                                        "align": "Center",
+                                        "background": "${local://theme#success_surface}",
+                                        "content": {
+                                          "icon": "bookmark",
+                                          "text": "",
+                                          "type": "core://Badge"
+                                        },
+                                        "content_color": "${local://theme#success}",
+                                        "corner_dp": 512,
+                                        "height_dp": 34,
+                                        "type": "core://Box",
+                                        "width_dp": 34
+                                      },
+                                      {
+                                        "children": [
+                                          {
+                                            "style": "Label",
+                                            "type": "core://Text",
+                                            "value_expr": "Herb bed"
+                                          },
+                                          {
+                                            "content": {
+                                              "content": {
+                                                "max_lines": 2,
+                                                "style": "Secondary",
+                                                "type": "core://Text",
+                                                "value_expr": "Basil, thyme and two kinds of mint"
+                                              },
+                                              "content_color": "${local://theme#muted_text}",
+                                              "type": "core://Box"
+                                            },
+                                            "type": "core://Conditional",
+                                            "value": "Basil, thyme and two kinds of mint"
+                                          }
+                                        ],
+                                        "spacing_dp": 2,
+                                        "type": "core://Column"
+                                      },
+                                      {
+                                        "type": "core://Spacer"
+                                      },
+                                      {
+                                        "content": {
+                                          "style": "Title",
+                                          "type": "core://Text",
+                                          "value_expr": "›"
+                                        },
+                                        "content_color": "${local://theme#muted_text}",
+                                        "type": "core://Box"
+                                      }
+                                    ],
+                                    "padding_h_dp": 11,
+                                    "padding_v_dp": 12,
+                                    "spacing_dp": 12,
+                                    "type": "core://Row"
+                                  },
+                                  "type": "core://Box"
+                                },
+                                {
+                                  "background": "${local://theme#card}",
+                                  "content": {
+                                    "align": "Center",
+                                    "children": [
+                                      {
+                                        "align": "Center",
+                                        "background": "${local://theme#error_surface}",
+                                        "content": {
+                                          "icon": "notifications",
+                                          "text": "",
+                                          "type": "core://Badge"
+                                        },
+                                        "content_color": "${local://theme#error}",
+                                        "corner_dp": 512,
+                                        "height_dp": 34,
+                                        "type": "core://Box",
+                                        "width_dp": 34
+                                      },
+                                      {
+                                        "children": [
+                                          {
+                                            "style": "Label",
+                                            "type": "core://Text",
+                                            "value_expr": "Tomato bed"
+                                          },
+                                          {
+                                            "content": {
+                                              "content": {
+                                                "max_lines": 2,
+                                                "style": "Secondary",
+                                                "type": "core://Text",
+                                                "value_expr": "Needs staking"
+                                              },
+                                              "content_color": "${local://theme#muted_text}",
+                                              "type": "core://Box"
+                                            },
+                                            "type": "core://Conditional",
+                                            "value": "Needs staking"
+                                          }
+                                        ],
+                                        "spacing_dp": 2,
+                                        "type": "core://Column"
+                                      },
+                                      {
+                                        "type": "core://Spacer"
+                                      },
+                                      {
+                                        "background": "${local://theme#error_surface}",
+                                        "content": {
+                                          "style": "Caption",
+                                          "type": "core://Text",
+                                          "value_expr": "Late"
+                                        },
+                                        "content_color": "${local://theme#error}",
+                                        "corner_dp": 8,
+                                        "padding_h_dp": 8,
+                                        "padding_v_dp": 3,
+                                        "type": "core://Box"
+                                      },
+                                      {
+                                        "content": {
+                                          "style": "Title",
+                                          "type": "core://Text",
+                                          "value_expr": "›"
+                                        },
+                                        "content_color": "${local://theme#muted_text}",
+                                        "type": "core://Box"
+                                      }
+                                    ],
+                                    "padding_h_dp": 11,
+                                    "padding_v_dp": 12,
+                                    "spacing_dp": 12,
+                                    "type": "core://Row"
+                                  },
+                                  "type": "core://Box"
+                                },
+                                {
+                                  "background": "${local://theme#card}",
+                                  "content": {
+                                    "align": "Center",
+                                    "children": [
+                                      {
+                                        "children": [
+                                          {
+                                            "style": "Label",
+                                            "type": "core://Text",
+                                            "value_expr": "Compost"
+                                          },
+                                          {
+                                            "content": {
+                                              "content": {
+                                                "max_lines": 2,
+                                                "style": "Secondary",
+                                                "type": "core://Text",
+                                                "value_expr": ""
+                                              },
+                                              "content_color": "${local://theme#muted_text}",
+                                              "type": "core://Box"
+                                            },
+                                            "type": "core://Conditional",
+                                            "value": ""
+                                          }
+                                        ],
+                                        "spacing_dp": 2,
+                                        "type": "core://Column"
+                                      },
+                                      {
+                                        "type": "core://Spacer"
+                                      },
+                                      {
+                                        "content": {
+                                          "style": "Secondary",
+                                          "type": "core://Text",
+                                          "value_expr": "Turned Sunday"
+                                        },
+                                        "content_color": "${local://theme#muted_text}",
+                                        "type": "core://Box"
+                                      }
+                                    ],
+                                    "padding_h_dp": 11,
+                                    "padding_v_dp": 12,
+                                    "spacing_dp": 12,
+                                    "type": "core://Row"
+                                  },
+                                  "type": "core://Box"
+                                },
+                                {
+                                  "background": "${local://theme#card}",
+                                  "content": {
+                                    "align": "Center",
+                                    "children": [
+                                      {
+                                        "children": [
+                                          {
+                                            "content": {
+                                              "style": "Label",
+                                              "type": "core://Text",
+                                              "value_expr": "Shed"
+                                            },
+                                            "content_color": "${local://theme#muted_text}",
+                                            "type": "core://Box"
+                                          },
+                                          {
+                                            "content": {
+                                              "content": {
+                                                "max_lines": 2,
+                                                "style": "Secondary",
+                                                "type": "core://Text",
+                                                "value_expr": ""
+                                              },
+                                              "content_color": "${local://theme#muted_text}",
+                                              "type": "core://Box"
+                                            },
+                                            "type": "core://Conditional",
+                                            "value": ""
+                                          }
+                                        ],
+                                        "spacing_dp": 2,
+                                        "type": "core://Column"
+                                      },
+                                      {
+                                        "type": "core://Spacer"
+                                      }
+                                    ],
+                                    "padding_h_dp": 11,
+                                    "padding_v_dp": 12,
+                                    "spacing_dp": 12,
+                                    "type": "core://Row"
+                                  },
+                                  "type": "core://Box"
+                                }
+                              ],
+                              "spacing_dp": 1,
+                              "type": "core://Column"
+                            }
+                          ],
+                          "type": "core://Column"
+                        },
+                        "type": "core://Box"
+                      },
+                      "corner_dp": 18,
+                      "padding_h_dp": 5,
+                      "padding_v_dp": 6,
+                      "type": "core://Box"
+                    }
+                  ],
+                  "spacing_dp": 0,
+                  "type": "core://Column"
+                },
+                {
+                  "children": [
+                    {
+                      "size_dp": 14,
+                      "type": "core://Spacer"
+                    },
+                    {
+                      "content": {
+                        "style": "Label",
+                        "type": "core://Text",
+                        "value_expr": "Water in the"
+                      },
+                      "content_color": "${local://theme#muted_text}",
+                      "padding_h_dp": 4,
+                      "type": "core://Box"
+                    },
+                    {
+                      "size_dp": 8,
+                      "type": "core://Spacer"
+                    },
+                    {
+                      "children": [
+                        {
+                          "content": {
+                            "children": [
+                              {
+                                "content": {
+                                  "align": "Center",
+                                  "background": "${local://theme#accent}",
+                                  "border_color": "${local://theme#accent}",
+                                  "content": {
+                                    "style": "Label",
+                                    "type": "core://Text",
+                                    "value_expr": "Morning"
+                                  },
+                                  "content_color": "${local://theme#card}",
+                                  "corner_dp": 14,
+                                  "padding_h_dp": 12,
+                                  "padding_v_dp": 7,
+                                  "type": "core://Box"
+                                },
+                                "equals": "morning",
+                                "type": "core://Conditional",
+                                "value": "${demo://plan/water#when}"
+                              },
+                              {
+                                "content": {
+                                  "align": "Center",
+                                  "border_color": "${local://theme#card_border}",
+                                  "content": {
+                                    "style": "Label",
+                                    "type": "core://Text",
+                                    "value_expr": "Morning"
+                                  },
+                                  "corner_dp": 14,
+                                  "padding_h_dp": 12,
+                                  "padding_v_dp": 7,
+                                  "type": "core://Box"
+                                },
+                                "equals": "morning",
+                                "not": true,
+                                "type": "core://Conditional",
+                                "value": "${demo://plan/water#when}"
+                              }
+                            ],
+                            "type": "core://Column"
+                          },
+                          "content_description": "Morning",
+                          "on_click": {
+                            "entity_uri": "demo://plan/water",
+                            "field": "when",
+                            "intent": "action.local.set",
+                            "value_expr": "\"morning\""
+                          },
+                          "type": "core://Tappable"
+                        },
+                        {
+                          "content": {
+                            "children": [
+                              {
+                                "content": {
+                                  "align": "Center",
+                                  "background": "${local://theme#accent}",
+                                  "border_color": "${local://theme#accent}",
+                                  "content": {
+                                    "style": "Label",
+                                    "type": "core://Text",
+                                    "value_expr": "Evening"
+                                  },
+                                  "content_color": "${local://theme#card}",
+                                  "corner_dp": 14,
+                                  "padding_h_dp": 12,
+                                  "padding_v_dp": 7,
+                                  "type": "core://Box"
+                                },
+                                "equals": "evening",
+                                "type": "core://Conditional",
+                                "value": "${demo://plan/water#when}"
+                              },
+                              {
+                                "content": {
+                                  "align": "Center",
+                                  "border_color": "${local://theme#card_border}",
+                                  "content": {
+                                    "style": "Label",
+                                    "type": "core://Text",
+                                    "value_expr": "Evening"
+                                  },
+                                  "corner_dp": 14,
+                                  "padding_h_dp": 12,
+                                  "padding_v_dp": 7,
+                                  "type": "core://Box"
+                                },
+                                "equals": "evening",
+                                "not": true,
+                                "type": "core://Conditional",
+                                "value": "${demo://plan/water#when}"
+                              }
+                            ],
+                            "type": "core://Column"
+                          },
+                          "content_description": "Evening",
+                          "on_click": {
+                            "entity_uri": "demo://plan/water",
+                            "field": "when",
+                            "intent": "action.local.set",
+                            "value_expr": "\"evening\""
+                          },
+                          "type": "core://Tappable"
+                        },
+                        {
+                          "content": {
+                            "children": [
+                              {
+                                "content": {
+                                  "align": "Center",
+                                  "background": "${local://theme#accent}",
+                                  "border_color": "${local://theme#accent}",
+                                  "content": {
+                                    "style": "Label",
+                                    "type": "core://Text",
+                                    "value_expr": "Skip"
+                                  },
+                                  "content_color": "${local://theme#card}",
+                                  "corner_dp": 14,
+                                  "padding_h_dp": 12,
+                                  "padding_v_dp": 7,
+                                  "type": "core://Box"
+                                },
+                                "equals": "skip",
+                                "type": "core://Conditional",
+                                "value": "${demo://plan/water#when}"
+                              },
+                              {
+                                "content": {
+                                  "align": "Center",
+                                  "border_color": "${local://theme#card_border}",
+                                  "content": {
+                                    "style": "Label",
+                                    "type": "core://Text",
+                                    "value_expr": "Skip"
+                                  },
+                                  "corner_dp": 14,
+                                  "padding_h_dp": 12,
+                                  "padding_v_dp": 7,
+                                  "type": "core://Box"
+                                },
+                                "equals": "skip",
+                                "not": true,
+                                "type": "core://Conditional",
+                                "value": "${demo://plan/water#when}"
+                              }
+                            ],
+                            "type": "core://Column"
+                          },
+                          "content_description": "Skip",
+                          "on_click": {
+                            "entity_uri": "demo://plan/water",
+                            "field": "when",
+                            "intent": "action.local.set",
+                            "value_expr": "\"skip\""
+                          },
+                          "type": "core://Tappable"
+                        }
+                      ],
+                      "spacing_dp": 8,
+                      "type": "core://Row"
+                    }
+                  ],
+                  "spacing_dp": 0,
+                  "type": "core://Column"
+                },
+                {
+                  "size_dp": 14,
+                  "type": "core://Spacer"
+                },
+                {
+                  "background": "${local://theme#success_surface}",
+                  "content": {
+                    "children": [
+                      {
+                        "content": {
+                          "content": {
+                            "style": "Label",
+                            "type": "core://Text",
+                            "value_expr": "Tip"
+                          },
+                          "content_color": "${local://theme#success}",
+                          "type": "core://Box"
+                        },
+                        "type": "core://Conditional",
+                        "value": "Tip"
+                      },
+                      {
+                        "content": {
+                          "style": "Body",
+                          "type": "core://Text",
+                          "value_expr": "Water at the roots, not the leaves."
+                        },
+                        "type": "core://Conditional",
+                        "value": "Water at the roots, not the leaves."
+                      }
+                    ],
+                    "spacing_dp": 4,
+                    "type": "core://Column"
+                  },
+                  "corner_dp": 14,
+                  "padding_h_dp": 14,
+                  "padding_v_dp": 12,
+                  "type": "core://Box"
+                },
+                {
+                  "size_dp": 10,
+                  "type": "core://Spacer"
+                },
+                {
+                  "background": "${local://theme#muted_surface}",
+                  "content": {
+                    "children": [
+                      {
+                        "content": {
+                          "content": {
+                            "style": "Label",
+                            "type": "core://Text",
+                            "value_expr": "From the almanac"
+                          },
+                          "content_color": "${local://theme#muted_text}",
+                          "type": "core://Box"
+                        },
+                        "type": "core://Conditional",
+                        "value": "From the almanac"
+                      },
+                      {
+                        "content": {
+                          "style": "Body",
+                          "type": "core://Text",
+                          "value_expr": ""
+                        },
+                        "type": "core://Conditional",
+                        "value": ""
+                      },
+                      {
+                        "style": "Secondary",
+                        "type": "core://Text",
+                        "value_expr": "Plant garlic before the first hard frost."
+                      }
+                    ],
+                    "spacing_dp": 4,
+                    "type": "core://Column"
+                  },
+                  "corner_dp": 14,
+                  "padding_h_dp": 14,
+                  "padding_v_dp": 12,
+                  "type": "core://Box"
+                },
+                {
+                  "size_dp": 10,
+                  "type": "core://Spacer"
+                },
+                {
+                  "background": "${local://theme#card}",
+                  "border_color": "${local://theme#card_border}",
+                  "content": {
+                    "children": [
+                      {
+                        "style": "Label",
+                        "type": "core://Text",
+                        "value_expr": "Seed order"
+                      },
+                      {
+                        "content": {
+                          "style": "Secondary",
+                          "type": "core://Text",
+                          "value_expr": "Arrives Thursday"
+                        },
+                        "content_color": "${local://theme#muted_text}",
+                        "type": "core://Box"
+                      }
+                    ],
+                    "spacing_dp": 4,
+                    "type": "core://Column"
+                  },
+                  "corner_dp": 18,
+                  "padding_h_dp": 16,
+                  "padding_v_dp": 14,
+                  "type": "core://Box"
+                },
+                {
+                  "size_dp": 24,
+                  "type": "core://Spacer"
+                }
+              ],
+              "padding_h_dp": 20,
+              "padding_v_dp": 8,
+              "spacing_dp": 0,
+              "type": "core://Column"
+            },
+            "type": "core://Scroll"
+          }
+        ],
+        "type": "core://Column"
+      },
+      "fill": true,
+      "type": "core://Box"
+    },
+    "title": "Garden week",
+    "type": "core://Page"
+  }
+}

@@ -49,6 +49,7 @@ pub fn default_bundle(workspace: &str) -> Option<&'static str> {
         "screen_sizes" => "screen_sizes_bundle.json",
         "text_styles" => "text_styles_bundle.json",
         "buttons" => "buttons_bundle.json",
+        "core_set" => "core_set_bundle.json",
         "agent_report" => "agent_report_bundle.json",
         "device_versions" => "device_versions_bundle.json",
         "list_trailing" => "list_trailing_bundle.json",

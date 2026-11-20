@@ -1,0 +1,162 @@
+{
+ "note": "A titled panel in a tone (decision element-roles-and-reuse)",
+ "component": {
+  "doc": "A panel that says one thing in a tone: a tinted, rounded box with a heading in the tone's colour, a text under it, then its children. A tip, a warning, pros and cons, why something matters, one section of a detail screen. title and text are left out while empty.",
+  "params": [
+   {
+    "name": "title",
+    "type": "text",
+    "default": "",
+    "doc": "The heading (bindings allowed)."
+   },
+   {
+    "name": "text",
+    "type": "text",
+    "default": "",
+    "doc": "The body (bindings allowed); Markdown when markdown is set."
+   },
+   {
+    "name": "tone",
+    "type": "text",
+    "default": "accent",
+    "doc": "accent, success, error or muted: the theme's pair for it. Empty: background and color."
+   },
+   {
+    "name": "background",
+    "type": "text",
+    "default": "${local://theme#accent_surface}",
+    "doc": "The panel's colour while tone is empty."
+   },
+   {
+    "name": "color",
+    "type": "text",
+    "default": "${local://theme#accent}",
+    "doc": "The heading's colour while tone is empty."
+   },
+   {
+    "name": "corner",
+    "type": "number",
+    "default": 14,
+    "doc": "Corner radius in dp."
+   }
+  ],
+  "children": true,
+  "template": {
+   "type": "core://Box",
+   "background": {
+    "type": "core://IfArg",
+    "arg": "tone",
+    "equals": "success",
+    "then": "${local://theme#success_surface}",
+    "else": {
+     "type": "core://IfArg",
+     "arg": "tone",
+     "equals": "error",
+     "then": "${local://theme#error_surface}",
+     "else": {
+      "type": "core://IfArg",
+      "arg": "tone",
+      "equals": "muted",
+      "then": "${local://theme#muted_surface}",
+      "else": {
+       "type": "core://IfArg",
+       "arg": "tone",
+       "equals": "accent",
+       "then": "${local://theme#accent_surface}",
+       "else": "$arg.background"
+      }
+     }
+    }
+   },
+   "corner_dp": "$arg.corner",
+   "padding_h_dp": 14,
+   "padding_v_dp": 12,
+   "content": {
+    "type": "core://Column",
+    "spacing_dp": 4,
+    "children": [
+     {
+      "type": "core://Conditional",
+      "value": "$arg.title",
+      "content": {
+       "type": "core://Box",
+       "content_color": {
+        "type": "core://IfArg",
+        "arg": "tone",
+        "equals": "success",
+        "then": "${local://theme#success}",
+        "else": {
+         "type": "core://IfArg",
+         "arg": "tone",
+         "equals": "error",
+         "then": "${local://theme#error}",
+         "else": {
+          "type": "core://IfArg",
+          "arg": "tone",
+          "equals": "muted",
+          "then": "${local://theme#muted_text}",
+          "else": {
+           "type": "core://IfArg",
+           "arg": "tone",
+           "equals": "accent",
+           "then": "${local://theme#accent}",
+           "else": "$arg.color"
+          }
+         }
+        }
+       },
+       "content": {
+        "type": "core://Text",
+        "value_expr": "$arg.title",
+        "style": "Label"
+       }
+      }
+     },
+     {
+      "type": "core://Conditional",
+      "value": "$arg.text",
+      "content": {
+       "type": "core://Text",
+       "value_expr": "$arg.text",
+       "style": "Body"
+      }
+     },
+     {
+      "type": "core://Children"
+     }
+    ]
+   }
+  },
+  "examples": [
+   {
+    "args": {
+     "title": "Why it matters",
+     "text": "$item.why_it_matters"
+    },
+    "note": "a section of an item's screen"
+   },
+   {
+    "args": {
+     "title": "Cons",
+     "text": "$item.cons",
+     "tone": "error"
+    },
+    "note": "what speaks against an option"
+   },
+   {
+    "args": {
+     "title": "Before you go",
+     "tone": "muted"
+    },
+    "children": [
+     {
+      "type": "core://Text",
+      "style": "Secondary",
+      "value_expr": "Bring the tickets."
+     }
+    ],
+    "note": "a quiet note with its own content"
+   }
+  ]
+ }
+}

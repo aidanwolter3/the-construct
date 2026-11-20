@@ -271,6 +271,10 @@ fn simulator_bundles() {
             "row_long_text_bundle.json",
         ),
         (
+            "crates/server/tests/data/simulator/core_set_bundle.json",
+            "core_set_bundle.json",
+        ),
+        (
             "crates/protocol/tests/data/counter_home_bundle.json",
             "counter_home_bundle.json",
         ),
@@ -281,8 +285,16 @@ fn simulator_bundles() {
     ] {
         let text = std::fs::read_to_string(root.join(source)).unwrap();
         let mut v: Value = serde_json::from_str(&text).unwrap();
-        let layout: UiNode = serde_json::from_value(v["workspace"].clone()).unwrap();
-        v["workspace"] = plumbing(&layout);
+        // A page written with components is expanded as it stands; a
+        // workspace goes through the typed layout first.
+        v["workspace"] = if v["workspace"]["type"] == "core://Page" {
+            let page = pod_core::construct::core::plumbing(&core(), &v["workspace"]).unwrap();
+            assert!(!page.to_string().contains("core://Use"), "{page}");
+            page
+        } else {
+            let layout: UiNode = serde_json::from_value(v["workspace"].clone()).unwrap();
+            plumbing(&layout)
+        };
         assert_eq!(v["workspace"]["type"], "core://Page", "{source}");
         check_or_write(name, &(serde_json::to_string_pretty(&v).unwrap() + "\n"));
     }

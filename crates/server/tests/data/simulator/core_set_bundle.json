@@ -1,0 +1,387 @@
+{
+  "version": "1.0.0",
+  "workspace": {
+    "type": "core://Page",
+    "id": "core_set",
+    "title": "Garden week",
+    "root": {
+      "type": "core://Box",
+      "fill": true,
+      "background": "${local://theme#page}",
+      "content": {
+        "type": "core://Column",
+        "children": [
+          {
+            "type": "core://Box",
+            "padding_h_dp": 20,
+            "padding_v_dp": 4,
+            "content": {
+              "type": "core://Use",
+              "component": "core:page_header",
+              "args": {
+                "title": "Garden week",
+                "style": "Headline",
+                "weight": "SemiBold",
+                "height": 48,
+                "padding_h": 0
+              }
+            }
+          },
+          {
+            "type": "core://Scroll",
+            "content": {
+              "type": "core://Column",
+              "spacing_dp": 0,
+              "padding_h_dp": 20,
+              "padding_v_dp": 8,
+              "children": [
+                {
+                  "type": "core://Use",
+                  "component": "core:callout",
+                  "args": {
+                    "title": "Frost tonight",
+                    "text": "Cover the seedlings before dusk.",
+                    "tone": "error"
+                  }
+                },
+                {
+                  "type": "core://Use",
+                  "component": "core:titled_section",
+                  "args": {
+                    "text": "To do"
+                  },
+                  "children": [
+                    {
+                      "type": "core://Use",
+                      "component": "core:counted_list",
+                      "args": {
+                        "count": {
+                          "query_key": "todos"
+                        },
+                        "empty": "Nothing to do."
+                      },
+                      "children": [
+                        {
+                          "type": "core://List",
+                          "query_key": "todos",
+                          "spacing_dp": 1,
+                          "item_template": {
+                            "type": "core://Use",
+                            "component": "core:checkable_row",
+                            "args": {
+                              "title": "$item.title",
+                              "endpoint": "/v1/collections/todos/update",
+                              "meta": "$item.where"
+                            },
+                            "children": [
+                              {
+                                "type": "core://Use",
+                                "component": "core:pill",
+                                "args": {
+                                  "text": "$item.bed",
+                                  "tone": "muted"
+                                }
+                              }
+                            ]
+                          }
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "type": "core://Use",
+                  "component": "core:titled_section",
+                  "args": {
+                    "text": "Archived"
+                  },
+                  "children": [
+                    {
+                      "type": "core://Use",
+                      "component": "core:counted_list",
+                      "args": {
+                        "count": {
+                          "query_key": "archived"
+                        },
+                        "empty": "Nothing archived yet."
+                      },
+                      "children": [
+                        {
+                          "type": "core://List",
+                          "query_key": "archived",
+                          "spacing_dp": 1,
+                          "item_template": {
+                            "type": "core://Use",
+                            "component": "core:item_row",
+                            "args": {
+                              "title": "$item.title"
+                            }
+                          }
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "type": "core://Use",
+                  "component": "core:titled_section",
+                  "args": {
+                    "text": "Beds"
+                  },
+                  "children": [
+                    {
+                      "type": "core://Use",
+                      "component": "core:grouped_list",
+                      "children": [
+                        {
+                          "type": "core://Column",
+                          "spacing_dp": 1,
+                          "children": [
+                            {
+                              "type": "core://Use",
+                              "component": "core:item_row",
+                              "args": {
+                                "title": "Herb bed",
+                                "meta": "Basil, thyme and two kinds of mint",
+                                "chevron": true
+                              },
+                              "children": [
+                                {
+                                  "type": "core://Use",
+                                  "component": "core:tinted_icon",
+                                  "args": {
+                                    "icon": "bookmark",
+                                    "tone": "success"
+                                  }
+                                }
+                              ]
+                            },
+                            {
+                              "type": "core://Use",
+                              "component": "core:item_row",
+                              "args": {
+                                "title": "Tomato bed",
+                                "meta": "Needs staking",
+                                "trailing": true,
+                                "chevron": true
+                              },
+                              "children": [
+                                {
+                                  "type": "core://Use",
+                                  "component": "core:tinted_icon",
+                                  "args": {
+                                    "icon": "notifications",
+                                    "tone": "error"
+                                  }
+                                },
+                                {
+                                  "type": "core://Use",
+                                  "component": "core:pill",
+                                  "args": {
+                                    "text": "Late",
+                                    "tone": "error"
+                                  }
+                                }
+                              ]
+                            },
+                            {
+                              "type": "core://Use",
+                              "component": "core:item_row",
+                              "args": {
+                                "title": "Compost",
+                                "leading": false,
+                                "trailing": true
+                              },
+                              "children": [
+                                {
+                                  "type": "core://Use",
+                                  "component": "core:muted_text",
+                                  "args": {
+                                    "text": "Turned Sunday"
+                                  }
+                                }
+                              ]
+                            },
+                            {
+                              "type": "core://Use",
+                              "component": "core:item_row",
+                              "args": {
+                                "title": "Shed",
+                                "title_color": "${local://theme#muted_text}"
+                              }
+                            }
+                          ]
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "type": "core://Use",
+                  "component": "core:titled_section",
+                  "args": {
+                    "text": "Water in the"
+                  },
+                  "children": [
+                    {
+                      "type": "core://Row",
+                      "spacing_dp": 8,
+                      "children": [
+                        {
+                          "type": "core://Use",
+                          "component": "core:choice_chip",
+                          "args": {
+                            "label": "Morning",
+                            "value": "morning",
+                            "chosen": "${demo://plan/water#when}",
+                            "on_click": {
+                              "intent": "action.local.set",
+                              "entity_uri": "demo://plan/water",
+                              "field": "when",
+                              "value_expr": "\"morning\""
+                            }
+                          }
+                        },
+                        {
+                          "type": "core://Use",
+                          "component": "core:choice_chip",
+                          "args": {
+                            "label": "Evening",
+                            "value": "evening",
+                            "chosen": "${demo://plan/water#when}",
+                            "on_click": {
+                              "intent": "action.local.set",
+                              "entity_uri": "demo://plan/water",
+                              "field": "when",
+                              "value_expr": "\"evening\""
+                            }
+                          }
+                        },
+                        {
+                          "type": "core://Use",
+                          "component": "core:choice_chip",
+                          "args": {
+                            "label": "Skip",
+                            "value": "skip",
+                            "chosen": "${demo://plan/water#when}",
+                            "on_click": {
+                              "intent": "action.local.set",
+                              "entity_uri": "demo://plan/water",
+                              "field": "when",
+                              "value_expr": "\"skip\""
+                            }
+                          }
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "type": "core://Spacer",
+                  "size_dp": 14
+                },
+                {
+                  "type": "core://Use",
+                  "component": "core:callout",
+                  "args": {
+                    "title": "Tip",
+                    "text": "Water at the roots, not the leaves.",
+                    "tone": "success"
+                  }
+                },
+                {
+                  "type": "core://Spacer",
+                  "size_dp": 10
+                },
+                {
+                  "type": "core://Use",
+                  "component": "core:callout",
+                  "args": {
+                    "title": "From the almanac",
+                    "tone": "muted"
+                  },
+                  "children": [
+                    {
+                      "type": "core://Text",
+                      "value_expr": "Plant garlic before the first hard frost.",
+                      "style": "Secondary"
+                    }
+                  ]
+                },
+                {
+                  "type": "core://Spacer",
+                  "size_dp": 10
+                },
+                {
+                  "type": "core://Use",
+                  "component": "core:card",
+                  "args": {
+                    "spacing": 4,
+                    "corner": 18,
+                    "padding_h": 16,
+                    "padding_v": 14
+                  },
+                  "children": [
+                    {
+                      "type": "core://Text",
+                      "value_expr": "Seed order",
+                      "style": "Label"
+                    },
+                    {
+                      "type": "core://Use",
+                      "component": "core:muted_text",
+                      "args": {
+                        "text": "Arrives Thursday"
+                      }
+                    }
+                  ]
+                },
+                {
+                  "type": "core://Spacer",
+                  "size_dp": 24
+                }
+              ]
+            }
+          }
+        ]
+      }
+    }
+  },
+  "entities": {
+    "demo://todos/1": {
+      "id": "1",
+      "uri": "demo://todos/1",
+      "title": "Stake the tomatoes",
+      "where": "Before the wind picks up",
+      "bed": "Tomatoes",
+      "done": false
+    },
+    "demo://todos/2": {
+      "id": "2",
+      "uri": "demo://todos/2",
+      "title": "Sow the winter lettuce",
+      "where": "",
+      "bed": "Cold frame",
+      "done": false
+    },
+    "demo://todos/3": {
+      "id": "3",
+      "uri": "demo://todos/3",
+      "title": "Sharpen the secateurs",
+      "where": "On the bench",
+      "bed": "Shed",
+      "done": true
+    },
+    "demo://plan/water": {
+      "when": "evening"
+    }
+  },
+  "queries": {
+    "todos": [
+      "demo://todos/1",
+      "demo://todos/2",
+      "demo://todos/3"
+    ],
+    "archived": []
+  }
+}

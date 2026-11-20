@@ -1,0 +1,86 @@
+{
+ "note": "Rows in one card with hairlines only between them, from a pod's own layouts (decision element-roles-and-reuse)",
+ "component": {
+  "doc": "Rows in one rounded card with hairlines only between them (never after the last): a list, a menu, a settings group. Its child is usually one core://List with spacing_dp 1, or rows in a core://Column with spacing_dp 1; each row draws on the card colour (core:item_row does), and the 1 dp gaps show card_border as the separators. For rows that bring their own core://Divider use core:grouped_card.",
+  "params": [
+   {
+    "name": "corner",
+    "type": "number",
+    "default": 18,
+    "doc": "Corner radius in dp."
+   }
+  ],
+  "children": true,
+  "template": {
+   "type": "core://Box",
+   "background": "${local://theme#card}",
+   "border_color": "${local://theme#card_border}",
+   "corner_dp": "$arg.corner",
+   "padding_h_dp": 5,
+   "padding_v_dp": 6,
+   "content": {
+    "type": "core://Box",
+    "background": "${local://theme#card_border}",
+    "content": {
+     "type": "core://Column",
+     "children": [
+      {
+       "type": "core://Children"
+      }
+     ]
+    }
+   }
+  },
+  "examples": [
+   {
+    "args": {},
+    "children": [
+     {
+      "type": "core://List",
+      "query_key": "collection:todos",
+      "spacing_dp": 1,
+      "item_template": {
+       "type": "core://Use",
+       "component": "core:item_row",
+       "args": {
+        "title": "$item.title"
+       }
+      }
+     }
+    ],
+    "note": "a list of to-dos"
+   },
+   {
+    "args": {
+     "corner": 14
+    },
+    "children": [
+     {
+      "type": "core://Column",
+      "spacing_dp": 1,
+      "children": [
+       {
+        "type": "core://Use",
+        "component": "core:item_row",
+        "args": {
+         "title": "Notifications",
+         "chevron": true
+        }
+       },
+       {
+        "type": "core://Use",
+        "component": "core:item_row",
+        "args": {
+         "title": "Time zone",
+         "meta": "Lisbon",
+         "chevron": true
+        }
+       }
+      ]
+     }
+    ],
+    "note": "a menu of two rows"
+   }
+  ]
+ }
+}

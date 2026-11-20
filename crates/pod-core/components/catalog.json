@@ -11,17 +11,33 @@
     "category": "primitive",
     "use_when": "Any button. Use it or core://Button; never a Tappable over a Box."
   },
+  "callout": {
+    "category": "container",
+    "use_when": "A panel that says one thing in a tone: a tip, a warning, pros or cons, one section of a detail screen."
+  },
   "card": {
     "category": "container",
     "use_when": "One thing in a bordered card: an event, a site, an alert. For several rows in one card use @core/grouped_card."
+  },
+  "checkable_row": {
+    "category": "row",
+    "use_when": "A row that ticks a yes/no field of its item at a tap: a to-do, a grocery item, a lesson done."
   },
   "chevron_card": {
     "category": "container",
     "use_when": "A card that opens something, with a › at its end: a banner or a link to another screen."
   },
+  "choice_chip": {
+    "category": "pattern",
+    "use_when": "One choice among several that a tap writes to a row's field or keeps as a draft: a kind, a time slot, a day."
+  },
   "collapsible": {
     "category": "container",
     "use_when": "A section the user opens and closes (Older, Advanced)."
+  },
+  "counted_list": {
+    "category": "pattern",
+    "use_when": "A list that shows its rows in a card, or one quiet line while it is empty, from a single count query."
   },
   "date_block": {
     "category": "primitive",
@@ -47,6 +63,10 @@
     "category": "container",
     "use_when": "Several rows in one rounded card, as a settings group or a short list; the rows bring their dividers."
   },
+  "grouped_list": {
+    "category": "container",
+    "use_when": "Rows in one rounded card with hairlines between them: a list, a menu, a settings group. The usual home of rows."
+  },
   "header_bar": {
     "category": "scaffold",
     "use_when": "A root page's header: a title on the left, icon buttons on the right, no Back."
@@ -54,6 +74,10 @@
   "icon_row": {
     "category": "row",
     "use_when": "A row that leads with an icon: a title, one muted line, optional trailing text and a ›. The usual row of a menu or a list."
+  },
+  "item_row": {
+    "category": "row",
+    "use_when": "Any row with something at either end: a leading icon, checkbox or picture, a title and a muted line, a trailing tag or value, a ›."
   },
   "labeled_text": {
     "category": "row",
@@ -118,6 +142,10 @@
   "title_meta": {
     "category": "row",
     "use_when": "A bold title over one muted line: a name and its details."
+  },
+  "titled_section": {
+    "category": "container",
+    "use_when": "A section of a page: a quiet heading with the space around it, over a card or a list."
   },
   "toggle_action": {
     "category": "pattern",
