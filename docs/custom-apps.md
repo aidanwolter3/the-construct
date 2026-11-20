@@ -118,8 +118,9 @@ After a change to the tools, the Claude connector needs "Refresh tools list" in 
   pod's own layouts and components, the core ones and adopted ones, each with its role, scope, category, a line
   saying when to use it, and its parameters. It answers from the `catalog.json` beside what ships.
 - Every layout and component write answers `warnings`: a hand-written piece that a component draws (with the
-  use to write instead), a piece written out three or more times, a row id written into a binding, fixed
-  colours, hand-made buttons, and what the write makes devices fetch when that is a lot (`refetch`).
+  use to write instead), a piece written out three or more times, a row id written into a binding, page text
+  that shows a `$route` value (drawn as written when the layout is opened without it), fixed colours, hand-made
+  buttons, and what the write makes devices fetch when that is a lot (`refetch`).
 - `note_gap {what}` records what was missing when nothing fitted; `server pods gaps` reads it.
 - `use_kit {kit, collection?, title?}` starts from a kit: a core layout over a collection of a known shape. It
   makes the collection (or checks one of that name has the kit's fields), has home bind its feed, and answers

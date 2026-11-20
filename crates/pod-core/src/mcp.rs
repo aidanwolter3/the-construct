@@ -771,6 +771,7 @@ async fn with_advice(
 ) -> Value {
     let mut warnings = crate::validate::fixed_colours(&layout);
     warnings.extend(crate::validate::button_faces(&layout));
+    warnings.extend(crate::hints::route_text(&layout));
     let p = pod.clone();
     let reuse =
         tokio::task::spawn_blocking(move || crate::hints::reuse(&p, &layout, writing.as_deref()))
