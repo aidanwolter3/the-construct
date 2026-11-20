@@ -115,6 +115,10 @@
     "category": "scaffold",
     "use_when": "A screen with the app's old chrome: Back, title, spinner, error with Try again, scrolling content and a footer."
   },
+  "screen_scaffold": {
+    "category": "scaffold",
+    "use_when": "The usual root of a page or a screen: a header with Back, title and actions, scrolling content, and an optional bar pinned underneath."
+  },
   "scroll_page": {
     "category": "scaffold",
     "use_when": "A whole page: header with Back, a divider, then the children scrolling. The usual root of a page or a screen."

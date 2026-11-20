@@ -1478,7 +1478,8 @@ fn check_examples(conn: &Connection, el: &Value) -> Result<(), Value> {
         let use_ = json!({ "kind": "element", "node": { "type": "core://Use",
             "ref": { "name": "@me/x", "el": id, "pin": true },
             "args": ex.get("args").cloned().unwrap_or(json!({})),
-            "children": ex.get("children").cloned().unwrap_or(json!([])) } });
+            "children": ex.get("children").cloned().unwrap_or(json!([])),
+            "slots": ex.get("slots").cloned().unwrap_or(json!({})) } });
         let uid = object_id(&use_);
         objects
             .extra

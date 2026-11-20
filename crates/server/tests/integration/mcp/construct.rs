@@ -291,6 +291,119 @@ async fn reseals_are_one_history_entry_and_a_write_says_what_it_costs() {
     }
 }
 
+/// Template directives and named slots (feature `component_templates`,
+/// decision `element-roles-and-reuse`): a component repeats over a list
+/// argument, a use fills named slots, and a client without the feature is
+/// sealed the newest entry of the name it can read.
+#[tokio::test]
+async fn a_component_repeats_and_takes_slots_and_old_clients_get_the_entry_they_read() {
+    let env = env().await;
+    let pod_code = env.pod("mine").await;
+    let access = env.connect(&pod_code).await;
+
+    // First a component any client reads, then the same name with an Each.
+    let plain = json!({"doc": "Steps of a recipe.",
+        "params": [{"name": "steps", "type": "json", "required": true, "doc": "The steps."}],
+        "template": {"type": "core://Text", "style": "Body", "value_expr": "Steps"},
+        "examples": [{"args": {"steps": ["Chop", "Fry"]}, "note": "two steps"}]});
+    let (err, d) = env
+        .tool(
+            &access,
+            "define_component",
+            json!({"name": "steps", "component": plain}),
+        )
+        .await;
+    assert!(!err, "{d}");
+    let (_, v1) = env
+        .tool(&access, "get_component", json!({"name": "@me/steps"}))
+        .await;
+    let v1 = v1["element"].as_str().unwrap().to_owned();
+    let mut each = plain.clone();
+    each["template"] = json!({"type": "core://Column", "children": [
+        {"type": "core://Each", "arg": "steps", "as": "step", "template":
+            {"type": "core://Text", "style": "Body", "value_expr": "$arg.step_index. $arg.step"}}]});
+    let (err, d) = env
+        .tool(
+            &access,
+            "update_component",
+            json!({"name": "steps", "component": each}),
+        )
+        .await;
+    assert!(!err, "{d}");
+    let (_, v2) = env
+        .tool(&access, "get_component", json!({"name": "@me/steps"}))
+        .await;
+    let v2 = v2["element"].as_str().unwrap().to_owned();
+    assert_ne!(v1, v2);
+
+    // A page on the core scaffold, its footer and header action in slots.
+    let (err, made) = env
+        .tool(&access, "create_layout", json!({"title": "Pancakes",
+            "layout": {"type": "core://Page", "title": "Pancakes", "root":
+                {"type": "core://Use", "ref": "@core/screen_scaffold", "args": {"title": "Pancakes"},
+                    "children": [{"type": "core://Use", "ref": "@me/steps", "args": {"steps": ["Whisk", "Rest", "Fry"]}}],
+                    "slots": {
+                        "actions": [{"type": "core://IconButton", "icon": "add", "content_description": "Add a step",
+                            "on_click": {"intent": "action.navigation.back"}}],
+                        "footer": [{"type": "core://Text", "style": "Caption", "value_expr": "Serves four"}]}}}}))
+        .await;
+    assert!(!err, "{made}");
+    let id = made["id"].as_str().unwrap().to_owned();
+    let drawn = env.drawn(&id, &pod_code).await["workspace"].to_string();
+    for want in [
+        "0. Whisk",
+        "2. Fry",
+        "Add a step",
+        "Serves four",
+        "Pancakes",
+    ] {
+        assert!(drawn.contains(want), "{want}: {drawn}");
+    }
+    for gone in ["core://Each", "core://Children", "core://Use", "\"slots\""] {
+        assert!(!drawn.contains(gone), "{gone}: {drawn}");
+    }
+
+    // What each kind of client is sent for the layout: this build the
+    // component with the Each, a build without the feature the entry before.
+    let objects_for = |features: String| {
+        let (env, id, pod_code) = (&env, id.clone(), pod_code.clone());
+        async move {
+            let c = client();
+            let el: Value = c
+                .get(format!("{}/v1/construct/names/{id}", env.url))
+                .bearer_auth(&pod_code)
+                .header(protocol::FEATURES_HEADER, &features)
+                .send()
+                .await
+                .unwrap()
+                .json()
+                .await
+                .unwrap();
+            let got: Value = c
+                .post(format!("{}/v1/objects", env.url))
+                .bearer_auth(&pod_code)
+                .header(protocol::FEATURES_HEADER, &features)
+                .json(&json!({"have": [], "want": [el["el"]]}))
+                .send()
+                .await
+                .unwrap()
+                .json()
+                .await
+                .unwrap();
+            reachable(got["objects"].as_object().unwrap())
+        }
+    };
+    let now = objects_for(protocol::features_header()).await;
+    assert!(now.contains(&v2) && !now.contains(&v1), "{now:?}");
+    let without: Vec<&str> = protocol::FEATURES
+        .iter()
+        .copied()
+        .filter(|f| *f != protocol::feature::COMPONENT_TEMPLATES)
+        .collect();
+    let old = objects_for(without.join(",")).await;
+    assert!(old.contains(&v1) && !old.contains(&v2), "{old:?}");
+}
+
 /// Bindings between layouts (issue #301): one layout reads its list from an
 /// input, home embeds it twice bound to two collections, and each embed
 /// draws its own; an unbound use and a binding outside home are refused,

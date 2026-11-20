@@ -1,0 +1,231 @@
+{
+ "note": "The usual page: header, scrolling content, pinned footer, by named slots (decision element-roles-and-reuse)",
+ "component": {
+  "doc": "A whole page or screen, the way most are built: on the page colour, a header pinned at the top (Back while the page can go back, the title, a spinner while its data loads, and the nodes in slot actions on the right), then its children in a padded column that scrolls, then, pinned under it, the nodes in slot footer (a count and the page's main button; core:footer_bar draws the bar). With data, a failed load says so above the content with Try again. The root of a core://Page or of one of its screens. Slots are passed on the use: \"slots\": {\"actions\": [...], \"footer\": [...]}.",
+  "params": [
+   {
+    "name": "title",
+    "type": "text",
+    "required": true,
+    "doc": "The page's title (bindings allowed)."
+   },
+   {
+    "name": "spacing",
+    "type": "number",
+    "default": 14,
+    "doc": "Space between the children in dp."
+   },
+   {
+    "name": "padding_h",
+    "type": "number",
+    "default": 20,
+    "doc": "Side padding of the header and the content in dp."
+   },
+   {
+    "name": "data",
+    "type": "text",
+    "default": "",
+    "doc": "A screen's data path, for Try again after a failed load (the screen's own data loads it)."
+   },
+   {
+    "name": "follow_end",
+    "type": "bool",
+    "default": false,
+    "doc": "Follow the content to its end after an action in the footer (a chat, a comment box)."
+   }
+  ],
+  "children": true,
+  "template": {
+   "type": "core://Box",
+   "fill": true,
+   "background": "${local://theme#page}",
+   "content": {
+    "type": "core://Column",
+    "children": [
+     {
+      "type": "core://Box",
+      "padding_h_dp": "$arg.padding_h",
+      "padding_v_dp": 4,
+      "content": {
+       "type": "core://Use",
+       "component": "core:page_header",
+       "args": {
+        "title": "$arg.title",
+        "style": "Headline",
+        "weight": "SemiBold",
+        "height": 48,
+        "padding_h": 0,
+        "loading": true
+       },
+       "children": [
+        {
+         "type": "core://Children",
+         "slot": "actions"
+        }
+       ]
+      }
+     },
+     {
+      "type": "core://IfArg",
+      "arg": "data",
+      "then": {
+       "type": "core://Conditional",
+       "value": "${local://screen#error}",
+       "content": {
+        "type": "core://Row",
+        "align": "Center",
+        "padding_h_dp": "$arg.padding_h",
+        "padding_v_dp": 4,
+        "spacing_dp": 8,
+        "children": [
+         {
+          "type": "core://Box",
+          "content_color": "${local://theme#error}",
+          "content": {
+           "type": "core://Text",
+           "value_expr": "${local://screen#error}",
+           "style": "Caption"
+          }
+         },
+         {
+          "type": "core://Spacer"
+         },
+         {
+          "type": "core://Button",
+          "label": "Try again",
+          "style": "Text",
+          "size": "Small",
+          "on_click": {
+           "intent": "action.data.load",
+           "path": "$arg.data"
+          }
+         }
+        ]
+       }
+      }
+     },
+     {
+      "type": "core://Scroll",
+      "follow_end": {
+       "type": "core://IfArg",
+       "arg": "follow_end",
+       "then": true
+      },
+      "content": {
+       "type": "core://Column",
+       "spacing_dp": "$arg.spacing",
+       "padding_h_dp": "$arg.padding_h",
+       "padding_v_dp": 8,
+       "children": [
+        {
+         "type": "core://Children"
+        },
+        {
+         "type": "core://Spacer",
+         "size_dp": 16
+        }
+       ]
+      }
+     },
+     {
+      "type": "core://IfArg",
+      "slot": "footer",
+      "then": {
+       "type": "core://Children",
+       "slot": "footer"
+      }
+     }
+    ]
+   }
+  },
+  "examples": [
+   {
+    "args": {
+     "title": "Reading list"
+    },
+    "children": [
+     {
+      "type": "core://Use",
+      "component": "core:titled_section",
+      "args": {
+       "text": "This month"
+      },
+      "children": [
+       {
+        "type": "core://Text",
+        "style": "Body",
+        "value_expr": "The Lighthouse Keeper"
+       }
+      ]
+     }
+    ],
+    "note": "a page: a header and scrolling content"
+   },
+   {
+    "args": {
+     "title": "Groceries",
+     "spacing": 0
+    },
+    "children": [
+     {
+      "type": "core://Text",
+      "style": "Body",
+      "value_expr": "Milk"
+     }
+    ],
+    "slots": {
+     "actions": [
+      {
+       "type": "core://IconButton",
+       "icon": "add",
+       "content_description": "Add an item",
+       "on_click": {
+        "intent": "action.navigation.back"
+       }
+      }
+     ],
+     "footer": [
+      {
+       "type": "core://Use",
+       "component": "core:footer_bar",
+       "children": [
+        {
+         "type": "core://Use",
+         "component": "core:muted_text",
+         "args": {
+          "text": "3 to buy"
+         }
+        },
+        {
+         "type": "core://Spacer"
+        },
+        {
+         "type": "core://Button",
+         "label": "Done",
+         "on_click": {
+          "intent": "action.navigation.back"
+         }
+        }
+       ]
+      }
+     ]
+    },
+    "note": "an action in the header and a bar pinned under the content"
+   },
+   {
+    "args": {
+     "title": "$item.title",
+     "data": "/v1/collections/books/row?id=$route.id"
+    },
+    "children": [
+     {
+      "type": "core://Text",
+      "style": "Body",
+      "value_expr": "$item.notes"
+     }
+    ],
+    "note": "a screen that loads its item, with Try again when the load fails"
+   }
+  ]
+ }
+}

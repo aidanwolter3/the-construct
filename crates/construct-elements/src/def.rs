@@ -8,7 +8,11 @@
 //! "core://Children"}` is where the caller's children go (`"at": i` for one
 //! of them), `{"type": "core://IfArg", "arg", "equals"?, "then", "else"?}`
 //! keeps a branch by an argument, and `{"type": "core://Fragment",
-//! "children"}` stands for several siblings.
+//! "children"}` stands for several siblings. [`EACH_TYPE`] repeats a piece
+//! over a list argument, [`MATCH_TYPE`] chooses one by a key, and a
+//! `core://Children` with `"slot": "<name>"` takes the nodes a use passes
+//! as `"slots": {"<name>": [...]}` (`core://IfArg` with `slot` tests
+//! whether one was passed).
 
 use serde_json::{Map, Value};
 
@@ -21,6 +25,59 @@ pub const CHILDREN_TYPE: &str = "core://Children";
 pub const FRAGMENT_TYPE: &str = "core://Fragment";
 /// A template branch chosen by an argument.
 pub const IF_ARG_TYPE: &str = "core://IfArg";
+/// A template piece repeated once per entry of a list argument (decision
+/// `element-roles-and-reuse`): `{"type": "core://Each", "arg": "<list
+/// argument>", "as": "<name>", "template": <node>}`. Inside the template,
+/// `$arg.<name>` is the entry (when it is one value), `$arg.<name>_<key>`
+/// a key of an entry that is an object, and `$arg.<name>_index` its place
+/// from 0.
+pub const EACH_TYPE: &str = "core://Each";
+/// A template piece chosen by a key: `{"type": "core://Match", "arg" |
+/// "value", "cases": {"<key>": <node>}, "else"?: <node>}`. With `arg` the
+/// case the argument names is kept when the component is expanded. With
+/// `value` (a binding) every case stays, each under a `core://Conditional`
+/// that shows it while the binding equals its key, and `else` while it
+/// equals none of them.
+pub const MATCH_TYPE: &str = "core://Match";
+/// The most entries a `core://Each` repeats over.
+pub const MAX_EACH: usize = 200;
+
+/// The `as` of every `core://Each` in `v` (`item` when it has none).
+fn each_names<'a>(v: &'a Value, out: &mut Vec<&'a str>) {
+    match v {
+        Value::Object(o) => {
+            if o.get("type").and_then(Value::as_str) == Some(EACH_TYPE) {
+                out.push(o.get("as").and_then(Value::as_str).unwrap_or("item"));
+            }
+            for c in o.values() {
+                each_names(c, out);
+            }
+        }
+        Value::Array(a) => {
+            for c in a {
+                each_names(c, out);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Whether `v` (an element's `node`, or any node) uses what feature
+/// `component_templates` covers: `core://Each`, `core://Match`, a
+/// `core://Children` or `core://IfArg` with `slot`, or a use with `slots`.
+pub fn uses_templates(v: &Value) -> bool {
+    match v {
+        Value::Object(o) => {
+            let ty = o.get("type").and_then(Value::as_str);
+            matches!(ty, Some(EACH_TYPE | MATCH_TYPE))
+                || (matches!(ty, Some(CHILDREN_TYPE | IF_ARG_TYPE)) && o.contains_key("slot"))
+                || (ty == Some(USE_TYPE) && o.contains_key("slots"))
+                || o.values().any(uses_templates)
+        }
+        Value::Array(a) => a.iter().any(uses_templates),
+        _ => false,
+    }
+}
 /// Longest component name (after the prefix).
 pub const MAX_NAME_CHARS: usize = 48;
 /// Most parameters of one component.
@@ -229,9 +286,16 @@ impl Def {
             .clone();
         let mut strings = Vec::new();
         collect_strings(&template, &mut strings);
+        // What a `core://Each` names its entry: `$arg.<as>`, its keys
+        // `$arg.<as>_<key>` and `$arg.<as>_index`.
+        let mut entries = Vec::new();
+        each_names(&template, &mut entries);
         for s in strings {
             for n in arg_names(s) {
-                if !params.iter().any(|p| p.name == n) {
+                let of_each = entries
+                    .iter()
+                    .any(|e| n == *e || n.strip_prefix(e).is_some_and(|r| r.starts_with('_')));
+                if !of_each && !params.iter().any(|p| p.name == n) {
                     return Err(format!(
                         "the template uses $arg.{n}, which is not a parameter"
                     ));

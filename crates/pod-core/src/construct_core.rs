@@ -120,6 +120,11 @@ pub fn derive(
     if has_json_param(&el) {
         features.push(protocol::feature::COMPONENT_JSON_PARAMS);
     }
+    // The same for the template directives and named slots: a definition
+    // that uses them, and an element that passes slots to one.
+    if construct_elements::def::uses_templates(&el["node"]) {
+        features.push(protocol::feature::COMPONENT_TEMPLATES);
+    }
     features.sort_unstable();
     features.dedup();
     let features = features.join(",");
@@ -217,10 +222,13 @@ pub fn rederive_component_features(tx: &rusqlite::Transaction<'_>) -> rusqlite::
 }
 
 /// `v` with a template's `core://IfArg` as both its branches,
-/// `core://Fragment` as its children and `core://Children` as none: what
-/// any expansion of it can draw, for its features.
+/// `core://Fragment` as its children, `core://Children` as none,
+/// `core://Each` as its template and `core://Match` as every case: what any
+/// expansion of it can draw, for its features.
 fn as_expanded(v: &Value) -> Value {
-    use construct_elements::def::{CHILDREN_TYPE, FRAGMENT_TYPE, IF_ARG_TYPE};
+    use construct_elements::def::{
+        CHILDREN_TYPE, EACH_TYPE, FRAGMENT_TYPE, IF_ARG_TYPE, MATCH_TYPE,
+    };
     let column = |children: Vec<Value>| json!({ "type": "core://Column", "children": children });
     match v {
         Value::Object(o) => match o.get("type").and_then(Value::as_str) {
@@ -240,6 +248,19 @@ fn as_expanded(v: &Value) -> Value {
                     .collect(),
             ),
             Some(CHILDREN_TYPE) => column(Vec::new()),
+            // An Each draws its template; a Match any of its cases (by a
+            // binding, each under a core://Conditional, which is plumbing
+            // every client since `conditional` draws).
+            Some(EACH_TYPE) => column(o.get("template").map(as_expanded).into_iter().collect()),
+            Some(MATCH_TYPE) => column(
+                o.get("cases")
+                    .and_then(Value::as_object)
+                    .into_iter()
+                    .flat_map(|c| c.values())
+                    .chain(o.get("else").filter(|b| !b.is_null()))
+                    .map(as_expanded)
+                    .collect(),
+            ),
             _ => Value::Object(o.iter().map(|(k, c)| (k.clone(), as_expanded(c))).collect()),
         },
         Value::Array(a) => Value::Array(a.iter().map(as_expanded).collect()),
@@ -451,7 +472,8 @@ impl Builder<'_> {
             let use_ = json!({ "kind": "element", "node": { "type": "core://Use",
                 "ref": { "name": "@core/x", "el": id, "pin": true },
                 "args": ex.get("args").cloned().unwrap_or(json!({})),
-                "children": ex.get("children").cloned().unwrap_or(json!([])) } });
+                "children": ex.get("children").cloned().unwrap_or(json!([])),
+                "slots": ex.get("slots").cloned().unwrap_or(json!({})) } });
             let uid = object_id(&use_);
             self.core.objects.insert(uid.clone(), Arc::new(use_));
             let m = construct_elements::materialize(&self.core, &uid);
