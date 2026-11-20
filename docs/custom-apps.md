@@ -106,8 +106,28 @@ user's data (feeds, device data such as `local:notifications`, screens' data pat
 node's bounds, then tap, scroll or type into it (nothing is written; `target_uri` opens a screen directly, `item`
 and `entities` try a row with made-up data, `full_height` draws a long screen whole:
 [rendering.md](rendering.md#agent-previews-mcp)). `get_layout` takes `expanded: true`. Layouts are named `id` (`app` is still accepted).
-The server's MCP instructions tell Claude how to use them. After a change to the tools, the Claude connector needs
-"Refresh tools list" in its settings.
+After a change to the tools, the Claude connector needs "Refresh tools list" in its settings.
+
+**How an agent is taught to reuse** (decision [`element-roles-and-reuse`](decisions/element-roles-and-reuse.md)):
+
+- The MCP `instructions` are short on purpose (under 2,000 characters, held by a test; a client may show only the
+  start of long ones): what the pod is, a build procedure that begins with looking at what exists, and the names
+  of the guide's topics. `guide {topic}` has the detail: `navigation`, `pages`, `components`, `theme`, `actions`,
+  `jacks`, `sharing`, one per source (`collections`, `events`, `agents`), or `all`.
+- `find_elements {query?, role?, scope?, category?}` answers what exists to build with, by what it is for: the
+  pod's own layouts and components, the core ones and adopted ones, each with its role, scope, category, a line
+  saying when to use it, and its parameters. It answers from the `catalog.json` beside what ships.
+- Every layout and component write answers `warnings`: a hand-written piece that a component draws (with the
+  use to write instead), a piece written out three or more times, a row id written into a binding, fixed
+  colours, hand-made buttons, and what the write makes devices fetch when that is a lot (`refetch`).
+- `note_gap {what}` records what was missing when nothing fitted; `server pods gaps` reads it.
+- `use_kit {kit, collection?, title?}` starts from a kit: a core layout over a collection of a known shape. It
+  makes the collection (or checks one of that name has the kit's fields), has home bind its feed, and answers
+  `embed` and `open` with the kit's inputs bound, to put in home. `checklist` is the one kit so far.
+- `set_theme` also takes `scale`: `corner_s`, `corner_m`, `corner_l`, `pad_s`, `pad_m`, `pad_l` (dp) and
+  `title_weight`, which core components draw with, so a pod restyles them without copying them.
+- The `dates` source (feed `["dates", "days"]`) lists the days around today in the pod's time zone
+  (`dates:today`, `dates:this_week`, `dates:next_7`, …): a layout that lists days needs no collection of dates.
 
 ### Sharing with other users on the server
 

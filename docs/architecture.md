@@ -118,7 +118,8 @@ Every pod's layouts are a **content-addressed construct** (decision
 immutable **element** identified by the hash of its canonical JSON (`e1-…`), **names** (`home`, `c-…`, `@me/<component>`,
 `@core/<core layout or component>`) move between elements and keep their history, and every embed and link names its
 target by hash, so home's hash is the whole construct's. A device is current when its root matches the pod's
-(`GET /v1/construct`, `event: construct`), fetches only the objects it lacks (`POST /v1/objects`), and expands
+(`GET /v1/construct`, `event: construct`; the engine asks for the root as a manifest of names, so an edit moves
+one element and the manifest: decision `element-roles-and-reuse`), fetches only the objects it lacks (`POST /v1/objects`), and expands
 components itself (`crates/construct-elements`, shared with the pod). The engine keys each reachable layout by its
 edge and hands the renderer the edge graph; the renderer closes the stack entries the one below no longer reaches.
 An edge may bind its target's inputs (`bind`; only home binds the pod's data), the engine keeps the objects it
