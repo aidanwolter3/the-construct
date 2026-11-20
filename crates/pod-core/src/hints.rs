@@ -29,7 +29,7 @@ use crate::Pod;
 /// The most hints one write answers.
 pub const MAX_HINTS: usize = 10;
 /// How long a write may spend on its hints.
-const BUDGET: Duration = Duration::from_millis(250);
+const BUDGET: Duration = Duration::from_millis(1500);
 /// A repeated piece is worth a component from this many nodes.
 const MIN_REPEAT_NODES: usize = 5;
 /// ... written this many times.

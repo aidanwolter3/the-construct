@@ -385,8 +385,23 @@ impl LocalPod {
 /// The local pod's name when `--pod-name` isn't given.
 const LOCAL_POD: &str = "local";
 
-#[tokio::main]
-async fn serve(local: LocalPod) -> Result<(), String> {
+/// The stack of the runtime's threads. Reading, expanding and checking a
+/// layout recurse once per nested node, and components nest boxes in boxes:
+/// the default 2 MiB is not far above what a deep page needs, and a stack
+/// overflow ends the whole server (decision `element-roles-and-reuse`).
+/// Address space, not memory: pages are touched only as far as used.
+const THREAD_STACK: usize = 16 * 1024 * 1024;
+
+fn serve(local: LocalPod) -> Result<(), String> {
+    tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .thread_stack_size(THREAD_STACK)
+        .build()
+        .map_err(|e| format!("starting the runtime: {e}"))?
+        .block_on(serve_on(local))
+}
+
+async fn serve_on(local: LocalPod) -> Result<(), String> {
     let dir = data_dir();
     // A backup waiting in <data dir>/restore goes in place before anything
     // opens a database (docs/server.md "Backups and restore").

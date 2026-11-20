@@ -29,6 +29,11 @@ pub struct Viewport {
     pub scale: f32,
 }
 
+/// When less stack than this is left, building or drawing a node moves to
+/// a fresh piece of [`STACK_GROWTH`] bytes.
+const STACK_RED_ZONE: usize = 256 * 1024;
+const STACK_GROWTH: usize = 4 * 1024 * 1024;
+
 fn one() -> f32 {
     1.0
 }
@@ -1598,7 +1603,10 @@ impl<'i> Build<'_, 'i> {
     /// Builds `n`, sized for where it sits in its parent ([`placed`]);
     /// `None` when it draws nothing (a hidden conditional).
     fn node<'c>(&mut self, n: &'c UiNode, b: &B<'c>) -> Option<usize> {
-        let out = self.build_node(n, b)?;
+        // One level of recursion per nested node, and `build_node` is one
+        // large frame: components nest boxes in boxes, so a page 20 or 30
+        // deep must not depend on how big its thread's stack happens to be.
+        let out = stacker::maybe_grow(STACK_RED_ZONE, STACK_GROWTH, || self.build_node(n, b))?;
         let node = self.elems[out].node;
         let style = self.tree.style(node).cloned().unwrap_or_default();
         let _ = self
@@ -4269,8 +4277,29 @@ impl Laid {
             .fold(0.0, f32::max)
     }
 
+    /// [`Self::emit_node`], with room on the stack however deep the tree is.
     #[allow(clippy::too_many_arguments)]
     fn emit_at(
+        &self,
+        i: usize,
+        origin: (f32, f32),
+        clip: [f32; 4],
+        parent_sem: Option<usize>,
+        at: At,
+        scroll: &BTreeMap<String, f32>,
+        pressed: Option<&Pressed>,
+        pinned: &mut Vec<Pinned>,
+        scene: &mut Scene,
+    ) {
+        stacker::maybe_grow(STACK_RED_ZONE, STACK_GROWTH, || {
+            self.emit_node(
+                i, origin, clip, parent_sem, at, scroll, pressed, pinned, scene,
+            )
+        })
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn emit_node(
         &self,
         i: usize,
         origin: (f32, f32),
