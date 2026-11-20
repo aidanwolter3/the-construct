@@ -2904,6 +2904,7 @@ impl<'i> Build<'_, 'i> {
                 scale_min,
                 field,
                 on_click,
+                merge,
             } => self.bars(
                 n,
                 b,
@@ -2919,6 +2920,7 @@ impl<'i> Build<'_, 'i> {
                     scale_min: *scale_min,
                     field: field.as_deref(),
                     on_click: on_click.as_ref(),
+                    merge: merge.as_deref(),
                 },
             ),
             UiNode::Progress { size_dp } => {
@@ -3479,6 +3481,7 @@ struct BarsSpec<'n> {
     scale_min: u16,
     field: Option<&'n str>,
     on_click: Option<&'n ActionIntent>,
+    merge: Option<&'n str>,
 }
 
 /// A `core://Bars` chart's height without `height_dp`.
@@ -3582,20 +3585,36 @@ impl<'i> Build<'_, 'i> {
             let item = ctx.entity(first).expect("filtered");
             let item_ctx = ctx.with_item(first, item);
             // Segments, bottom first: a column that ends at the bottom.
-            let mut segs = Vec::new();
+            // `(value, colour, hatched, merge key)`, neighbours with the
+            // same merge key and hatching drawn as one (feature
+            // `bars_merge`).
+            let mut runs: Vec<(f32, Rgba, bool, Option<String>)> = Vec::new();
             for uri in items.iter() {
                 let Some(e) = ctx.entity(uri) else { continue };
                 let v = size_of(e);
                 if v <= 0.0 {
                     continue;
                 }
-                let ectx = ctx.with_item(uri, e);
-                let c = ectx.color(&ectx.text(spec.color)).unwrap_or(theme.outline);
                 let striped = spec.hatched.is_some_and(|f| {
                     matches!(e.get(f), Some(Value::Bool(true)))
                         || e.get(f)
                             .is_some_and(|v| matches!(render(v).as_str(), "true" | "1"))
                 });
+                let key = spec.merge.map(|f| e.get(f).map(render).unwrap_or_default());
+                if let Some(last) = runs.last_mut()
+                    && key.is_some()
+                    && last.3 == key
+                    && last.2 == striped
+                {
+                    last.0 += v;
+                    continue;
+                }
+                let ectx = ctx.with_item(uri, e);
+                let c = ectx.color(&ectx.text(spec.color)).unwrap_or(theme.outline);
+                runs.push((v, c, striped, key));
+            }
+            let mut segs = Vec::new();
+            for (v, c, striped, _) in runs {
                 let h = (v / top * spec.height - 2.0).max(2.0);
                 let style = Style {
                     size: Size {

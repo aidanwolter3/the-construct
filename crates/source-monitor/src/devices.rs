@@ -20,13 +20,24 @@ pub const BUILDS_QUERY: &str = "monitor:builds";
 /// Days the chart shows, today included.
 pub const CHART_DAYS: i64 = 14;
 
-/// Builds up to the server's, oldest to newest (the server's darkest).
-const RAMP: [&str; 6] = [
-    "#DAD5F0", "#C2BAE8", "#A69BDC", "#8A7DCF", "#6A5CBE", "#4537A6",
-];
-/// Builds newer than the server's.
-const AHEAD: [&str; 2] = ["#1F8A8A", "#4CB8B5"];
-const UNKNOWN: &str = "#9AA0A6";
+/// Builds behind the server's that get a series of their own (2 to 7);
+/// older ones are `other`.
+const BEHIND: usize = 6;
+/// The series of builds newer than the server's: red, on top of its blue.
+const AHEAD: &str = "8";
+/// The series of a build older than [`BEHIND`] holds, or with no time.
+const OTHER: &str = "other";
+
+/// A series' light colour, the theme's `chart_<series>` (decision
+/// `chart-colours`): the `color` field, for layouts that bind it rather
+/// than `${local://theme#chart_$item.series}`.
+pub fn series_color(series: &str) -> &'static str {
+    let token = format!("chart_{series}");
+    pod_core::porcelain::THEME_TOKENS
+        .iter()
+        .find(|t| t.0 == token)
+        .map_or("#9AA0A6", |t| t.1)
+}
 
 /// `(text, background)` of a relation's badge.
 fn relation_colors(r: Relation) -> (&'static str, &'static str) {
@@ -38,9 +49,12 @@ fn relation_colors(r: Relation) -> (&'static str, &'static str) {
     }
 }
 
-/// Each build's colour: older builds lighter, the server's darkest, newer
-/// ones teal, one with no time grey.
-pub fn build_colors(builds: &[&str], server: &str) -> HashMap<String, &'static str> {
+/// Each build's chart series (decision `chart-colours`): `1` the
+/// server's, `2` to `7` the builds behind it, newest first (so the builds
+/// most devices run get the strongest colours), `8` the ones past it, and
+/// `other` older builds and one with no time.
+pub fn build_series(builds: &[&str], server: &str) -> HashMap<String, &'static str> {
+    const BEHIND_SERIES: [&str; BEHIND] = ["2", "3", "4", "5", "6", "7"];
     let s = BuildId::parse(server);
     let mut known: Vec<(BuildId, &str)> = builds
         .iter()
@@ -50,30 +64,21 @@ pub fn build_colors(builds: &[&str], server: &str) -> HashMap<String, &'static s
         .collect();
     known.sort_by(|a, b| a.0.order(&b.0).unwrap_or(std::cmp::Ordering::Equal));
     known.dedup_by(|a, b| a.1 == b.1);
-    let ahead = |id: &BuildId| id.order(&s) == Some(std::cmp::Ordering::Greater);
-    let behind: Vec<&str> = known
-        .iter()
-        .filter(|(id, _)| !ahead(id))
-        .map(|(_, b)| *b)
-        .collect();
     let mut out = HashMap::new();
-    // The newest up to the server's get the darkest shades.
-    let skip = RAMP.len().saturating_sub(behind.len());
-    for (i, b) in behind.iter().enumerate() {
-        let shade = (skip + i).min(RAMP.len() - 1);
-        // Older than the ramp holds: the lightest.
-        let shade = if behind.len() > RAMP.len() {
-            (i + RAMP.len()).saturating_sub(behind.len())
-        } else {
-            shade
+    let mut behind = 0;
+    for (id, b) in known.iter().rev() {
+        let series = match id.order(&s) {
+            _ if *b == server => "1",
+            Some(std::cmp::Ordering::Greater) => AHEAD,
+            _ => {
+                behind += 1;
+                BEHIND_SERIES.get(behind - 1).copied().unwrap_or(OTHER)
+            }
         };
-        out.insert((*b).to_owned(), RAMP[shade]);
-    }
-    for (i, (_, b)) in known.iter().filter(|(id, _)| ahead(id)).enumerate() {
-        out.insert((*b).to_owned(), AHEAD[i.min(AHEAD.len() - 1)]);
+        out.insert((*b).to_owned(), series);
     }
     for b in builds {
-        out.entry((*b).to_owned()).or_insert(UNKNOWN);
+        out.entry((*b).to_owned()).or_insert(OTHER);
     }
     out
 }
@@ -103,6 +108,74 @@ fn build_label(build: &str) -> String {
     }
 }
 
+/// Slack for [`fold_replaced`]: a device's last ping can be written up to a
+/// minute late.
+const REPLACED_SLACK: i64 = 60;
+
+/// Folds a device that a newer one replaced into it: a browser whose stored
+/// id was lost (its site data cleared, another origin) or an app installed
+/// again comes back as a new device with the same kind and name, first seen
+/// after the old one was last seen. The two never ran side by side, so they
+/// are one device to the user: the old one's days count as the new one's
+/// and it leaves the list. Two that overlapped stay two.
+pub fn fold_replaced(devices: &[Device], days: &[DeviceDay]) -> (Vec<Device>, Vec<DeviceDay>) {
+    // The device that replaced each one, if any: the first of its kind and
+    // name to start after it stopped.
+    let next = |old: &Device| {
+        devices
+            .iter()
+            .filter(|d| {
+                d.id != old.id
+                    && d.platform == old.platform
+                    && d.name == old.name
+                    && (d.first_seen, d.id.as_str()) > (old.first_seen, old.id.as_str())
+                    && old.last_seen <= d.first_seen + REPLACED_SLACK
+            })
+            .min_by_key(|d| (d.first_seen, d.id.as_str()))
+    };
+    let mut into: HashMap<&str, &str> = HashMap::new();
+    for d in devices {
+        // Follow the replacements to the newest (each starts later than
+        // the one before, so this ends).
+        let mut cur = d;
+        while let Some(n) = next(cur) {
+            cur = n;
+        }
+        if cur.id != d.id {
+            into.insert(d.id.as_str(), cur.id.as_str());
+        }
+    }
+    let kept: Vec<Device> = devices
+        .iter()
+        .filter(|d| !into.contains_key(d.id.as_str()))
+        .cloned()
+        .collect();
+    // A day both ran on keeps the newer one's build.
+    let mut out: Vec<DeviceDay> = Vec::new();
+    let mut at: HashMap<(String, String), usize> = HashMap::new();
+    for d in days {
+        let owner = into.get(d.device.as_str()).copied().unwrap_or(&d.device);
+        let row = DeviceDay {
+            device: owner.to_owned(),
+            ..d.clone()
+        };
+        let key = (d.day.clone(), owner.to_owned());
+        match at.get(&key) {
+            Some(&i) => {
+                out[i].pings += d.pings;
+                if d.device == owner {
+                    out[i].build = d.build.clone();
+                }
+            }
+            None => {
+                at.insert(key, out.len());
+                out.push(row);
+            }
+        }
+    }
+    (kept, out)
+}
+
 /// The feed's data: `devices` the pod knows, `days` their builds per day
 /// (`day_keys`, oldest first, the last one today), against server build
 /// `server`, at `now`.
@@ -113,6 +186,8 @@ pub fn bundle(
     server: &str,
     now: i64,
 ) -> DataBundle {
+    let (devices, days) = fold_replaced(devices, days);
+    let (devices, days) = (devices.as_slice(), days.as_slice());
     let mut b = DataBundle::default();
     let today = day_keys.last().cloned().unwrap_or_default();
     let by_id: HashMap<&str, &Device> = devices.iter().map(|d| (d.id.as_str(), d)).collect();
@@ -134,18 +209,25 @@ pub fn bundle(
     }
     let mut builds: Vec<&str> = items.iter().map(|i| i.2.as_str()).collect();
     builds.push(server);
-    let colors = build_colors(&builds, server);
+    let series = build_series(&builds, server);
+    let series_of = |b: &str| series.get(b).copied().unwrap_or(OTHER);
     let order = |build: &str| BuildId::parse(build).stamp.unwrap_or(0);
-    // Within a day: older builds at the bottom (first).
+    // Within a day: older builds at the bottom (first), each build's
+    // devices together, the ones seen that day before the rest, so a chart
+    // that merges by build draws one block of each.
     items.sort_by(|a, b| {
         (
             day_keys.iter().position(|k| *k == a.0),
             order(&a.2),
+            &a.2,
+            !a.3,
             &a.1.name,
         )
             .cmp(&(
                 day_keys.iter().position(|k| *k == b.0),
                 order(&b.2),
+                &b.2,
+                !b.3,
                 &b.1.name,
             ))
     });
@@ -164,8 +246,10 @@ pub fn bundle(
                 "device": dev.name,
                 "device_id": dev.id,
                 "kind": dev.platform,
+                "build": build,
                 "build_label": build_label(build),
-                "color": colors.get(build.as_str()).copied().unwrap_or(UNKNOWN),
+                "series": series_of(build),
+                "color": series_color(series_of(build)),
                 "hatched": !seen,
                 "note": if *seen { String::new() } else {
                     format!("seen {}", seen_text(now - dev.last_seen))
@@ -205,7 +289,8 @@ pub fn bundle(
                 "label": label,
                 "note": note,
                 "legend": if note.is_empty() { label.clone() } else { format!("{label} · {note}") },
-                "color": colors.get(*build).copied().unwrap_or(UNKNOWN),
+                "series": series_of(build),
+                "color": series_color(series_of(build)),
             })),
         );
         uris.push(uri);
@@ -233,7 +318,8 @@ pub fn bundle(
                 "kind_text": platform_text(&d.platform),
                 "build": d.build,
                 "build_label": build_label(&d.build),
-                "color": colors.get(d.build.as_str()).copied().unwrap_or(UNKNOWN),
+                "series": series_of(&d.build),
+                "color": series_color(series_of(&d.build)),
                 "relation": d.relation.id(),
                 "relation_text": d.relation.text(),
                 "relation_color": fg,
@@ -300,20 +386,93 @@ mod tests {
     }
 
     #[test]
-    fn builds_get_darker_toward_the_servers_and_teal_past_it() {
-        let c = build_colors(
-            &[
-                "0.6.0+20261114100000.9be03a1",
-                SERVER,
-                "0.6.0+20261119100000.f02b77e",
-                "",
-            ],
-            SERVER,
+    fn each_build_gets_its_own_series_the_servers_first() {
+        let older: Vec<String> = (10..18)
+            .map(|d| format!("0.6.0+202611{d}090000.aaaa0{d}"))
+            .collect();
+        let mut builds: Vec<&str> = older.iter().map(String::as_str).collect();
+        builds.extend([SERVER, "0.6.0+20261119100000.f02b77e", ""]);
+        let c = build_series(&builds, SERVER);
+        assert_eq!(c[SERVER], "1");
+        assert_eq!(c["0.6.0+20261119100000.f02b77e"], "8");
+        // Newest behind first: the 17th 2, the 16th 3, ...
+        assert_eq!(c[older[7].as_str()], "2");
+        assert_eq!(c[older[6].as_str()], "3");
+        assert_eq!(c[older[2].as_str()], "7");
+        // Past the six: other, like a build with no time.
+        assert_eq!(c[older[1].as_str()], "other");
+        assert_eq!(c[""], "other");
+        // The colour field is the theme's light chart colour.
+        assert_eq!(series_color("1"), "#2A78D6");
+        assert_eq!(series_color("other"), "#9AA0A6");
+        let shown: std::collections::HashSet<&str> = older[2..]
+            .iter()
+            .map(|b| series_color(c[b.as_str()]))
+            .collect();
+        assert_eq!(shown.len(), 6, "six builds, six colours");
+    }
+
+    fn browser(id: &str, first_seen: i64, last_seen: i64) -> Device {
+        Device {
+            name: "Firefox on macOS".into(),
+            first_seen,
+            ..dev(id, "web", SERVER, Relation::Latest, last_seen)
+        }
+    }
+
+    fn day(day: &str, device: &str, build: &str) -> DeviceDay {
+        DeviceDay {
+            day: day.into(),
+            device: device.into(),
+            build: build.into(),
+            pings: 1,
+        }
+    }
+
+    #[test]
+    fn a_browser_that_lost_its_id_is_one_device() {
+        let old_build = "0.6.0+20261114100000.9be03a1";
+        // The old id stopped at 1000, the new one started 20 s later.
+        let devices = vec![
+            browser("newid0001", 1020, 5000),
+            browser("oldid0001", 100, 1000),
+        ];
+        let days = vec![
+            day("2026-11-18", "oldid0001", old_build),
+            day("2026-11-19", "newid0001", SERVER),
+            day("2026-11-19", "oldid0001", old_build),
+        ];
+        let (kept, days) = fold_replaced(&devices, &days);
+        assert_eq!(kept.len(), 1);
+        assert_eq!(kept[0].id, "newid0001");
+        assert_eq!(
+            days,
+            vec![
+                DeviceDay {
+                    pings: 1,
+                    ..day("2026-11-18", "newid0001", old_build)
+                },
+                DeviceDay {
+                    pings: 2,
+                    ..day("2026-11-19", "newid0001", SERVER)
+                },
+            ]
         );
-        assert_eq!(c[SERVER], "#4537A6");
-        assert_eq!(c["0.6.0+20261114100000.9be03a1"], "#6A5CBE");
-        assert_eq!(c["0.6.0+20261119100000.f02b77e"], AHEAD[0]);
-        assert_eq!(c[""], UNKNOWN);
+    }
+
+    #[test]
+    fn two_browsers_used_side_by_side_stay_two() {
+        let devices = vec![
+            browser("aaaa00001", 100, 5000),
+            browser("bbbb00001", 200, 4000),
+        ];
+        let (kept, _) = fold_replaced(&devices, &[]);
+        assert_eq!(kept.len(), 2);
+        // Another name (a nickname, another browser) is never folded.
+        let mut other = browser("cccc00001", 6000, 7000);
+        other.name = "Work Firefox".into();
+        let devices = vec![browser("aaaa00001", 100, 5000), other];
+        assert_eq!(fold_replaced(&devices, &[]).0.len(), 2);
     }
 
     #[test]

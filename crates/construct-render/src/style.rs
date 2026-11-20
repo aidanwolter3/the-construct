@@ -90,6 +90,15 @@ pub const THEME_DEFAULTS: &[(&str, &str, &str)] = &[
     ("success_surface", "#E6F4EA", "#1E3325"),
     ("error_surface", "#FCE8E6", "#3D2321"),
     ("highlight", "#FFF3CF", "#3B3320"),
+    ("chart_1", "#2A78D6", "#3987E5"),
+    ("chart_2", "#D95926", "#D95926"),
+    ("chart_3", "#199E70", "#199E70"),
+    ("chart_4", "#C98500", "#C98500"),
+    ("chart_5", "#D55181", "#D55181"),
+    ("chart_6", "#008300", "#0CA30C"),
+    ("chart_7", "#7A6BE0", "#9085E9"),
+    ("chart_8", "#E34948", "#E66767"),
+    ("chart_other", "#9AA0A6", "#80858D"),
 ];
 
 /// The entity the pod's bundle carries its theme in (`<token>` light,
