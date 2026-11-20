@@ -2,14 +2,14 @@
 //! layout of the pod shares, over the construct's names.
 //!
 //! - **Ids.** A pod layout's name is its id: [`crate::HOME_APP`] or `c-` and
-//!   10 base32 characters ([`is_layout_id`]); a blueprint is `@core/<id>`.
+//!   10 base32 characters ([`is_layout_id`]); a core layout is `@core/<id>`.
 //! - **Writes.** Caps and the write-rate window ([`Caps`], [`allow_write`]).
 //! - **Feeds.** Home owns every feed (its element's `bind`): which feeds a
 //!   layout binds ([`bound_feeds`]), which layout owns a feed for
 //!   notifications ([`feed_owners`]), and checks of feed lists.
-//! - **Files.** Blueprints ship as files `crates/source-*/layouts/<blueprint>/
+//! - **Files.** Core layouts ship as files `crates/source-*/layouts/<layout>/
 //!   NNNN.json` ([`LayoutSource`]); [`crate::construct::core`] makes them
-//!   elements named `@core/<blueprint>` when a pod opens. Files are
+//!   elements named `@core/<layout>` when a pod opens. Files are
 //!   append-only: never edit or renumber a deployed one; old ones may be
 //!   deleted, oldest first (decision `retired-layout-files`).
 //! - **Events.** What the construct's event stream sends besides new roots
@@ -335,7 +335,7 @@ pub(crate) fn notify_event(ev: &NotifyEvent) -> Event {
 // ---------- ids ----------
 
 /// Whether `id` has the shape of one of the pod's own layouts: `c-` and 10
-/// base32 characters, or the pod's own [`crate::HOME_APP`] (a blueprint's
+/// base32 characters, or the pod's own [`crate::HOME_APP`] (a core layout's
 /// id never holds `-`).
 pub fn is_layout_id(id: &str) -> bool {
     id == crate::HOME_APP
@@ -472,7 +472,7 @@ pub fn home_sources(catalog: &Catalog, conn: &Connection) -> Vec<&'static str> {
 
 /// Check a feeds list: at most `max` distinct `[source, feed]` pairs (or
 /// `"source/feed"`), each a declared feed of a source layouts may use (not
-/// a dev source unless dev blueprints are shown); `null` or `[]` is none.
+/// a dev source unless dev core layouts are shown); `null` or `[]` is none.
 pub fn check_feeds(pod: &Pod, v: &Value, max: usize) -> Result<Vec<(String, String)>, Value> {
     let offered = || -> Vec<String> {
         pod.catalog()
@@ -736,11 +736,11 @@ pub fn feed_owners(
     })
 }
 
-/// The pod's own layouts built on each blueprint: `blueprint id -> layout
+/// The pod's own layouts built on each core layout: `core layout id -> layout
 /// id`, the first live layout (oldest first, home last) whose element uses
-/// the blueprint whole (`core://Use` of `@core/<blueprint>`; decision
-/// `layouts-not-apps`: notifications of a blueprint open these). Blocking.
-pub fn layouts_for_blueprints(
+/// the core layout whole (`core://Use` of `@core/<layout>`; decision
+/// `layouts-not-apps`: notifications of a core layout open these). Blocking.
+pub fn layouts_for_core_layouts(
     catalog: &Catalog,
     conn: &Connection,
 ) -> rusqlite::Result<HashMap<String, String>> {
@@ -755,7 +755,7 @@ pub fn layouts_for_blueprints(
         construct_elements::refs::visit(&el["node"], &mut |r, site| {
             if site == construct_elements::refs::Site::Use
                 && let Some(bp) = r.name.strip_prefix(crate::construct::CORE_PREFIX)
-                && catalog.is_blueprint(bp)
+                && catalog.is_core_layout(bp)
             {
                 out.entry(bp.to_owned()).or_insert_with(|| l.id.clone());
             }
@@ -770,7 +770,7 @@ pub fn layouts_for_blueprints(
 pub struct NotificationOpens {
     /// The pod's layouts (home last), each with its screens' routes.
     layouts: Vec<(String, Vec<String>)>,
-    /// Blueprint id -> the pod's layout built on it: the first that uses
+    /// Core layout id -> the pod's layout built on it: the first that uses
     /// it whole, else the first copy of it (`copy_of`).
     built_on: HashMap<String, String>,
 }
@@ -778,7 +778,7 @@ pub struct NotificationOpens {
 impl NotificationOpens {
     /// Read from the pod's layouts. Blocking.
     pub fn read(catalog: &Catalog, conn: &Connection) -> rusqlite::Result<Self> {
-        let mut built_on = layouts_for_blueprints(catalog, conn)?;
+        let mut built_on = layouts_for_core_layouts(catalog, conn)?;
         let mut all = pod_layouts(conn)?;
         let home_first = all.first().is_some_and(|a| a.id == crate::HOME_APP);
         all.rotate_left(usize::from(home_first));
@@ -790,7 +790,7 @@ impl NotificationOpens {
                 let copy = crate::construct::trace::copy_of(
                     &l.title,
                     &uses,
-                    catalog.blueprints().map(|a| (a.id, a.title)),
+                    catalog.core_layouts().map(|a| (a.id, a.title)),
                 );
                 if let Some(bp) = copy
                     .as_deref()
@@ -817,11 +817,11 @@ impl NotificationOpens {
     }
 
     /// The layout a notification of channel layout `channel_layout` (a pod
-    /// layout or a blueprint id) with `target_uri` opens: the first that
+    /// layout or a core layout id) with `target_uri` opens: the first that
     /// has a screen routing `target_uri`, looking at the channel's own
-    /// layout, then the pod's layout built on that blueprint, then every
+    /// layout, then the pod's layout built on that core layout, then every
     /// other layout (home last); without one, the channel's layout, else
-    /// the one built on its blueprint, else `channel_layout` itself.
+    /// the one built on its core layout, else `channel_layout` itself.
     pub fn open(&self, channel_layout: &str, target_uri: Option<&str>) -> String {
         let own = self
             .layouts
@@ -848,7 +848,7 @@ impl NotificationOpens {
         own.or(built).unwrap_or(channel_layout).to_owned()
     }
 
-    /// Whether `id` is one of the pod's layouts (not a blueprint).
+    /// Whether `id` is one of the pod's layouts (not a core layout).
     pub fn is_layout(&self, id: &str) -> bool {
         self.layouts.iter().any(|(l, _)| l == id)
     }

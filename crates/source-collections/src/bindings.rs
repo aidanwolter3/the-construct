@@ -533,7 +533,7 @@ mod tests {
         );
         assert!(check(&ok, &["groceries".into()], &defs()).is_err());
         // Filler and alert keys may be bound before there is a filler or an
-        // alert (a blueprint on a new pod): they read blank until then.
+        // alert (a core layout on a new pod): they read blank until then.
         let derived = list(json!({"type": "core://Text",
             "value_expr": "$item.filler_title ${collections://todos/1#alert_names}"}));
         assert_eq!(check(&derived, &[], &defs()), Ok(()));

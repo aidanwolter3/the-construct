@@ -10,7 +10,7 @@
 //! that show it, with the inputs bound.
 
 use pod_core::layouts::LayoutSource;
-use pod_core::{AuthPolicy, BlueprintInfo};
+use pod_core::{AuthPolicy, CoreLayoutInfo};
 use serde_json::{Value, json};
 
 include!(concat!(env!("OUT_DIR"), "/layout_files.rs"));
@@ -18,7 +18,7 @@ include!(concat!(env!("OUT_DIR"), "/layout_files.rs"));
 /// One kit.
 pub struct Kit {
     /// Its layout, `@core/<id>` in every pod.
-    pub layout: BlueprintInfo,
+    pub layout: CoreLayoutInfo,
     /// One line: what it is for.
     pub summary: &'static str,
     /// The collection's name when the caller gives none.
@@ -27,8 +27,8 @@ pub struct Kit {
     pub fields: fn() -> Value,
 }
 
-const fn layout(id: &'static str, title: &'static str) -> BlueprintInfo {
-    BlueprintInfo {
+const fn layout(id: &'static str, title: &'static str) -> CoreLayoutInfo {
+    CoreLayoutInfo {
         id,
         title,
         icon: "check_box",

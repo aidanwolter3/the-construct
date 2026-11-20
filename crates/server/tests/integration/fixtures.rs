@@ -11,8 +11,8 @@
 //!   post screen data of every fixture post (D48);
 //! - every simulator bundle holds its layout as this build's app gets it:
 //!   a `core://Workspace` as the `core://Page` it expands to (decision
-//!   `plumbing-and-porcelain`, issue #126), the shell blueprints as
-//!   `blueprint_<id>_page.json`, and the hand-written bundles from their
+//!   `plumbing-and-porcelain`, issue #126), the shell core layouts as
+//!   `core_layout_<id>_page.json`, and the hand-written bundles from their
 //!   workspace sources in `crates/server/tests/data/simulator/` (and the
 //!   protocol tests' counter bundle, the shipped sample bundle).
 //!
@@ -64,7 +64,7 @@ fn core() -> pod_core::construct::core::Core {
     pod_core::construct::core::load(&server::catalog()).unwrap()
 }
 
-/// Blueprint `id`'s newest file as this build's clients draw it.
+/// Core layout `id`'s newest file as this build's clients draw it.
 fn newest(id: &str) -> Value {
     let core = core();
     let el = core.current(&format!("@core/{id}")).unwrap();
@@ -242,17 +242,17 @@ fn plumbing(layout: &UiNode) -> Value {
     page
 }
 
-/// The shell's blueprints (home, Settings, the inbox) for the simulator's
+/// The shell's core layouts (home, Settings, the inbox) for the simulator's
 /// fixture mode, as a pod serves them to this build:
-/// `blueprint_<id>_page.json`.
+/// `core_layout_<id>_page.json`.
 #[test]
-fn shell_blueprints() {
+fn shell_core_layouts() {
     for id in ["shell", "settings", "inbox"] {
         let page = newest(id);
         assert_eq!(page["type"], "core://Page");
         let mut text = serde_json::to_string_pretty(&page).unwrap();
         text.push('\n');
-        check_or_write(&format!("blueprint_{id}_page.json"), &text);
+        check_or_write(&format!("core_layout_{id}_page.json"), &text);
     }
 }
 
@@ -304,7 +304,7 @@ fn simulator_bundles() {
     }
 }
 
-/// The simulator's `server_health` pages: the `monitor` source's blueprint
+/// The simulator's `server_health` pages: the `monitor` source's core layout
 /// as this build's clients draw it, over made-up data
 /// (`tests/data/simulator/server_health_data.json`): with both feeds, and
 /// (`server_health_off`) as a pod without monitoring gets it, the devices

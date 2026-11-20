@@ -32,8 +32,8 @@ that uses only those.
 | `GET /v1/construct` | `{root, generation}`: home's element for the client's features. |
 | `POST /v1/objects {have: [ids], want: [ids]}` | `{objects: {id: object}, more}`: what `want` reaches that `have` doesn't list, `want`'s order first; `more` when one answer couldn't carry all (ask again). |
 | `GET /v1/objects/{id}` | One object (an id is `e1-` and the base32 SHA-256 of its canonical JSON): `{kind, title, icon, node, bind?, needs}`. A layout's `title` and `icon` are what devices show for it. |
-| `GET /v1/construct/data/{id}?bind=<JSON>` | `{entities, queries}`: the data of the home feeds element `id` needs (its `needs.feeds` and those of home's feeds its tree binds now, so a blueprint opened by its key gets the feeds home binds for it); with `bind` (a use site's bindings, `{"items": "collection:books"}`), also those its bound tree reads. Only home's feeds are loaded. An upstream that fails answers its source's `core://sources/<id>` entity with an `error`. |
-| `GET /v1/construct/names/{name}` | `{name, el}`: a layout's element (by its name, or a blueprint's key) for the client's features: a notification's layout that home doesn't reach is opened this way. `404 unknown_name`. |
+| `GET /v1/construct/data/{id}?bind=<JSON>` | `{entities, queries}`: the data of the home feeds element `id` needs (its `needs.feeds` and those of home's feeds its tree binds now, so a core layout opened by its key gets the feeds home binds for it); with `bind` (a use site's bindings, `{"items": "collection:books"}`), also those its bound tree reads. Only home's feeds are loaded. An upstream that fails answers its source's `core://sources/<id>` entity with an `error`. |
+| `GET /v1/construct/names/{name}` | `{name, el}`: a layout's element (by its name, or a core layout's key) for the client's features: a notification's layout that home doesn't reach is opened this way. `404 unknown_name`. |
 | `GET /v1/construct/events` | Server-sent events, below. |
 
 A bearer the pod no longer knows gets 401 with `X-Construct-Session: invalid`, and the client forgets it. On a
@@ -51,7 +51,7 @@ collection name, and field inputs `<input>__<field>` to this pod's field names).
 |---|---|---|
 | `construct` | `{root, generation}` | First, and whenever home's root for this client moves (any layout or component it reaches changed). |
 | `data` | `{workspace_id: "home"}`, and when the pod knows what changed: `source`, `changes` (Collections: `[{collection, rows}]`), `uri_prefixes`, `query_prefixes` | Data of a source of home's feeds changed for this session (e.g. a post finished uploading). With prefixes, reload only data holding an entity URI that starts with a `uri_prefix`, or a query whose key is a `query_prefix` or starts with one and `:`; without, reload everything. The device named by a write's `x-construct-device` isn't sent the event of its own write when the pod changed nothing else (decision `scoped-data-events`). |
-| `notification` | `{id, channel_layout, channel, title, body, target_uri, layout, unread_total}` | A notification for any layout of the pod. `channel_layout` is the layout (or blueprint) whose channel it is; `layout` is the layout to present it in. |
+| `notification` | `{id, channel_layout, channel, title, body, target_uri, layout, unread_total}` | A notification for any layout of the pod. `channel_layout` is the layout (or core layout) whose channel it is; `layout` is the layout to present it in. |
 | `notifications_read` | the new unread counts | Notifications were marked read on some device. |
 
 A `: keepalive` comment comes every 15 s. Streams opened without a session hear only `construct` events. A
@@ -68,7 +68,7 @@ layouts, 256 KiB per layout.
 |---|---|
 | `GET /v1/notifications?limit=0..100&before=<id>&layout=<id>` | `{notifications, unread_total, unread_by_layout, next_before?}`, newest first; switched-off channels are left out of both. Each notification may carry `subject`, the entity it is about. The same notifications are the rows of the `notifications` collection (`/v1/collections/notifications/rows`). |
 | `POST /v1/notifications/read {"ids": [...]}` or `{"all": true, "layout"?: id}` | `{unread_total, unread_by_layout}`. |
-| `GET /v1/notifications/channels` | `{channels: [{layout, id, title, description, default_enabled, importance, enabled}]}`; `layout` is the layout (or blueprint) the channel belongs to; `enabled` is the channel's switch, for the whole pod (a row of the `notification_channels` collection). |
+| `GET /v1/notifications/channels` | `{channels: [{layout, id, title, description, default_enabled, importance, enabled}]}`; `layout` is the layout (or core layout) the channel belongs to; `enabled` is the channel's switch, for the whole pod (a row of the `notification_channels` collection). |
 | `PUT /v1/devices/{id} {platform, name?, push?: {endpoint, p256dh, auth} \| null}` | Registers the device under the session; `push` sets or removes its Web Push subscription. |
 | `PUT /v1/devices/{id}/channels {"<layout>.<channel>": bool}` | Turns channels on or off for the whole pod (`{id}` must be a registered device). |
 | `DELETE /v1/devices/{id}` | Forgets the device. |

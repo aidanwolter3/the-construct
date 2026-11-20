@@ -3,7 +3,7 @@
 //! A client is sent home re-sealed for its features: each name an element
 //! follows is taken at the newest entry of its history whose recorded
 //! features the client draws (the latest when none fits, as the old system
-//! served a blueprint's newest file), and every element on the way is
+//! served a core layout's newest file), and every element on the way is
 //! sealed again with those. For a client that draws everything this is the
 //! stored home. The result is deterministic and cached per
 //! `(generation, features)`; the objects it makes are stored, so they can be
@@ -327,12 +327,12 @@ pub fn root_as(pod: &Pod, client: &ClientCaps, manifest: bool) -> rusqlite::Resu
 }
 
 /// The name a layout key stands for on this pod: the key itself when it is
-/// a name, else the blueprint's (`settings` → `@core/settings`).
+/// a name, else the core layout's (`settings` → `@core/settings`).
 pub fn name_of_key(conn: &Connection, key: &str) -> rusqlite::Result<Option<String>> {
     if cstore::name(conn, key)?.is_some() {
         return Ok(Some(key.to_owned()));
     }
-    let bp = super::blueprint_name(key);
+    let bp = super::core_layout_name(key);
     Ok(cstore::name(conn, &bp)?.map(|_| bp))
 }
 

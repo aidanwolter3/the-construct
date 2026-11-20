@@ -20,15 +20,15 @@ pub use source_monitor as monitor;
 pub use source_pixelfed as pixelfed;
 pub use source_pixelfed::{DEFAULT_PIXELFED_URL, PixelfedAdapter, PixelfedConfig};
 
-/// The pod's adapters, in the order their blueprints are listed: the Pixelfed feed (with the
+/// The pod's adapters, in the order their core layouts are listed: the Pixelfed feed (with the
 /// `pixelfed` sign-in), the Events app (the
 /// Collections `events` collection), then the
-/// `pixelfed_sample_no_login` dev app, the `shell` blueprint (every pod's
+/// `pixelfed_sample_no_login` dev app, the `shell` core layout (every pod's
 /// home app starts from it, decision `blueprints-and-home`); and
 /// Collections (no apps of its own: data custom apps declare; fillers
 /// configured from `CONSTRUCT_INFER_*` and `CONSTRUCT_FILL_*`), and the
-/// server monitoring source with its `server_health` blueprint (decision `server-monitoring`), and the
-/// agent runner source with its `agents` blueprint (decision
+/// server monitoring source with its `server_health` core layout (decision `server-monitoring`), and the
+/// agent runner source with its `agents` core layout (decision
 /// `agents-data-source`).
 pub fn adapters(pixelfed: PixelfedConfig) -> Vec<Arc<dyn Source>> {
     vec![

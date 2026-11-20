@@ -8,7 +8,9 @@ use std::sync::{Arc, LazyLock};
 
 use axum::{Json, Router, body::Bytes, response::IntoResponse, routing::post};
 use pod_core::layouts::LayoutSource;
-use pod_core::{AuthPolicy, BlueprintInfo, FeedSpec, PathSpec, Pod, SourceManifest, StaticAdapter};
+use pod_core::{
+    AuthPolicy, CoreLayoutInfo, FeedSpec, PathSpec, Pod, SourceManifest, StaticAdapter,
+};
 use protocol::WorkspaceSpec;
 use serde_json::json;
 
@@ -28,7 +30,7 @@ pub fn files() -> Vec<LayoutSource> {
 }
 
 /// The signed-in Pixelfed feed.
-pub const PIXELFED: BlueprintInfo = BlueprintInfo {
+pub const PIXELFED: CoreLayoutInfo = CoreLayoutInfo {
     id: crate::layout::WORKSPACE_ID,
     title: "Pixelfed",
     icon: "photo",
@@ -38,7 +40,7 @@ pub const PIXELFED: BlueprintInfo = BlueprintInfo {
 };
 
 /// The sample feed (fixed data, no upstream, no sign-in).
-pub const SAMPLE: BlueprintInfo = BlueprintInfo {
+pub const SAMPLE: CoreLayoutInfo = CoreLayoutInfo {
     id: SAMPLE_NAME,
     title: "Pixelfed sample",
     icon: "photo",

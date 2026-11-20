@@ -157,7 +157,7 @@ impl Expander<'_> {
     fn part(&mut self, r: &PartRef) -> Option<Value> {
         let key = (r.app.clone(), r.version);
         if !self.cache.contains_key(&key) {
-            let parts = if self.catalog.is_blueprint(&r.app) {
+            let parts = if self.catalog.is_core_layout(&r.app) {
                 parts(self.old, &r.app, r.version)
             } else {
                 None
@@ -377,7 +377,7 @@ impl Expander<'_> {
             (Some(REF_TYPE), _) => as_ref(v),
             (_, Some(n)) => n.strip_prefix(CORE).and_then(|bare| {
                 let app = bare.split('/').next().unwrap_or(bare);
-                (bare.contains('/') || self.catalog.is_blueprint(app))
+                (bare.contains('/') || self.catalog.is_core_layout(app))
                     .then(|| as_ref(v))
                     .flatten()
             }),
@@ -507,7 +507,7 @@ impl Expander<'_> {
         }
         let found = self.part(r);
         let Some(part) = found else {
-            let why = if self.catalog.is_blueprint(&r.app) {
+            let why = if self.catalog.is_core_layout(&r.app) {
                 "no such part (list_parts lists them)"
             } else {
                 "only built-in apps' parts can be referenced"

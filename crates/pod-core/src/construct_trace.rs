@@ -5,7 +5,7 @@
 //! that reaches it and how each step is taken ("on_swipe_down, Overlay").
 //! `list_layouts` and `get_layout` answer it, so an agent changing what the
 //! user sees edits the element that is actually drawn: a pod layout copied
-//! from a blueprint doesn't follow the blueprint.
+//! from a core layout doesn't follow the core layout.
 
 use std::collections::{BTreeMap, VecDeque};
 
@@ -15,7 +15,7 @@ use serde_json::{Value, json};
 use super::store as cstore;
 use super::write::ConnObjects;
 
-/// One step of a path: from a layout, how, to a layout (or blueprint).
+/// One step of a path: from a layout, how, to a layout (or core layout).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Step {
     pub from: String,
@@ -128,18 +128,18 @@ pub fn reached(reach: &Reach, name: &str) -> Value {
     }
 }
 
-/// The blueprint a pod layout titled `title` may be a copy of: one with
+/// The core layout a pod layout titled `title` may be a copy of: one with
 /// that title it doesn't reference. A copy is the layout as it was when
-/// copied; it doesn't follow the blueprint.
+/// copied; it doesn't follow the core layout.
 pub fn copy_of<'a>(
     title: &str,
     uses: &[String],
-    blueprints: impl Iterator<Item = (&'a str, &'a str)>,
+    core_layouts: impl Iterator<Item = (&'a str, &'a str)>,
 ) -> Option<String> {
     let t = title.trim().to_lowercase();
-    blueprints
+    core_layouts
         .filter(|(_, bt)| bt.trim().to_lowercase() == t)
-        .map(|(id, _)| super::blueprint_name(id))
+        .map(|(id, _)| super::core_layout_name(id))
         .find(|bp| {
             !uses
                 .iter()
@@ -186,7 +186,7 @@ mod tests {
     }
 
     #[test]
-    fn a_layout_titled_as_a_blueprint_it_doesnt_use_is_a_copy() {
+    fn a_layout_titled_as_a_core_layout_it_doesnt_use_is_a_copy() {
         let bps = [("inbox", "Notifications"), ("events", "Events")];
         assert_eq!(
             copy_of("Notifications", &[], bps.iter().copied()),

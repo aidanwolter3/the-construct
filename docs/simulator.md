@@ -22,7 +22,7 @@ screenshots PRs embed. The same scenarios, with stronger checks, are `crates/con
 
 **Fixture mode** (the default) needs no server. A fake pod (`fixture::FixturePod`) serves bundles from
 `crates/construct-sim/data/`: the start layout's bundle, the shell's Settings and inbox as a pod serves them to this
-build (`blueprint_<id>_page.json`), the other bundles to `open-layout`, screen data paths from
+build (`core_layout_<id>_page.json`), the other bundles to `open-layout`, screen data paths from
 `pixelfed_screen_data.json` and `events_screen_data.json`, and notifications and their channels from
 `notifications.json` (each created `age_seconds` before the run). Writes are accepted and kept by nobody: the device
 keeps its optimistic change, but a created entity (a posted comment) doesn't come back from the pod. `offline` makes
@@ -40,9 +40,9 @@ the `agent-report` scenario) is a hand-written page of made-up agent runs whose 
 `markdown`): two-line previews, a question and a whole report with every block the reader knows. `screen_sizes` (`screen_sizes_bundle.json`)
 is a hand-written recipes page using the size vocabulary (decision `screen-sizes`), for `screen tablet` and `screen desktop`. `device_versions` (`device_versions_bundle.json`, the `device-versions` scenario) is a Server health page with made-up
 devices as the `monitor` source's `devices` feed serves them: a `core://Bars` chart of devices per day by build (one block per build, coloured from the theme's chart colours, decision `chart-colours`), kind
-chips and a tap that picks a day (decision `device-versions`). `server_health` and `server_health_off` (`server_health_bundle.json`, `server_health_off_bundle.json`, the `server-health` and `server-health-off` scenarios) are the `monitor` source's `server_health` blueprint over made-up data (`crates/server/tests/data/simulator/server_health_data.json`): with both feeds (one check warning), and as a pod without monitoring gets it (the devices and the source's `error 403`); the fixtures test writes both. `list_trailing` (`list_trailing_bundle.json`, the `list-trailing` scenario) is a hand-written grid of made-up workout sessions ending with a dashed add tile (feature `list_trailing`), and an empty grid that still draws one. Every bundle's layout is what a pod serves this build: a workspace as the `core://Page` it
+chips and a tap that picks a day (decision `device-versions`). `server_health` and `server_health_off` (`server_health_bundle.json`, `server_health_off_bundle.json`, the `server-health` and `server-health-off` scenarios) are the `monitor` source's `server_health` core layout over made-up data (`crates/server/tests/data/simulator/server_health_data.json`): with both feeds (one check warning), and as a pod without monitoring gets it (the devices and the source's `error 403`); the fixtures test writes both. `list_trailing` (`list_trailing_bundle.json`, the `list-trailing` scenario) is a hand-written grid of made-up workout sessions ending with a dashed add tile (feature `list_trailing`), and an empty grid that still draws one. Every bundle's layout is what a pod serves this build: a workspace as the `core://Page` it
 expands to. `UPDATE_FIXTURES=1 cargo test -p server --test integration fixtures::` writes the Pixelfed ones and the
-blueprints from the pod (and the hand-written ones from their sources in `crates/server/tests/data/simulator/`; the
+core layouts from the pod (and the hand-written ones from their sources in `crates/server/tests/data/simulator/`; the
 test fails when one is stale); edit the source and rerun it.
 
 **Live mode** (`--base-url <pod>`) runs a live session (`remote::PodClient`) on a pod, starting on `home`. The session

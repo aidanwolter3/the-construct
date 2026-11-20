@@ -79,8 +79,8 @@ async fn get_construct(State(pod): State<Pod>, headers: HeaderMap) -> Response {
 }
 
 /// `GET /v1/construct/names/{name}`: the element a layout's name (or a
-/// blueprint's key, `events` for `@core/events`) points to, sealed for the
-/// client. Only layouts and blueprints: a component is reached through what
+/// core layout's key, `events` for `@core/events`) points to, sealed for the
+/// client. Only layouts and core layouts: a component is reached through what
 /// uses it.
 async fn get_name(
     State(pod): State<Pod>,
@@ -96,8 +96,8 @@ async fn get_name(
     let found = tokio::task::spawn_blocking(move || {
         let names = if super::is_layout_name(&name) {
             vec![name.clone()]
-        } else if p.catalog().is_blueprint(&name) {
-            vec![super::blueprint_name(&name)]
+        } else if p.catalog().is_core_layout(&name) {
+            vec![super::core_layout_name(&name)]
         } else {
             Vec::new()
         };
@@ -241,7 +241,7 @@ pub struct Served {
     pub inputs: Map<String, Value>,
 }
 
-/// Layout (or blueprint key) `id` as `client` draws it. Blocking.
+/// Layout (or core layout key) `id` as `client` draws it. Blocking.
 pub fn serve_layout(
     pod: &Pod,
     id: &str,
@@ -317,7 +317,7 @@ pub fn element_feeds(pod: &Pod, id: &str) -> Vec<(String, String)> {
 /// The home feeds element `id` needs drawn with `inputs` bound (a use
 /// site's `bind`): its own `needs.feeds` and those of home's feeds its
 /// (bound) tree binds now. The second part is what a built-in element
-/// needs: a blueprint's element (`@core/pixelfed`, opened by its key when
+/// needs: a core layout's element (`@core/pixelfed`, opened by its key when
 /// home doesn't reach it) is sealed with the build, before any pod's home
 /// binds a feed, so its `needs.feeds` is empty (issue #306). Only home's
 /// feeds are ever loaded: a binding reaches no other data.

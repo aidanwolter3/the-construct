@@ -33,8 +33,8 @@ use server::{AppState, PixelfedConfig, WithPixelfed};
 use tokio::runtime::Runtime;
 use tokio::task::JoinHandle;
 
-/// The blueprint the engines' layout uses ([`Harness::workspace`]).
-pub const BLUEPRINT: &str = "pixelfed";
+/// The core layout the engines' layout uses ([`Harness::workspace`]).
+pub const CORE_LAYOUT: &str = "pixelfed";
 pub const LIKE_ENDPOINT: &str = "/v1/pixelfed/posts/like";
 pub const BOOKMARK_ENDPOINT: &str = "/v1/pixelfed/posts/bookmark";
 const LIKE_COUNT_EXPR: &str = "entity.is_liked ? entity.like_count - 1 : entity.like_count + 1";
@@ -286,7 +286,7 @@ pub struct Harness {
     pub pod_state: Arc<AppState>,
     /// The URL engines use (through the proxy).
     pub pod_url: String,
-    /// The pod's layout of the Pixelfed blueprint (home binding its feed):
+    /// The pod's layout of the Pixelfed core layout (home binding its feed):
     /// what [`Self::engine`] shows.
     pub workspace: String,
     hits: Arc<Mutex<Vec<Hit>>>,
@@ -351,7 +351,7 @@ impl Harness {
         let pod_state = Arc::new(
             server::state_in_memory().with_pixelfed(PixelfedConfig::new(upstream.url(), None)),
         );
-        let workspace = rt.block_on(server::testing::use_blueprint(&pod_state, BLUEPRINT));
+        let workspace = rt.block_on(server::testing::use_core_layout(&pod_state, CORE_LAYOUT));
         let hits: Arc<Mutex<Vec<Hit>>> = Arc::default();
         let log = Arc::clone(&hits);
         let app = server::app(Arc::clone(&pod_state)).layer(middleware::from_fn(

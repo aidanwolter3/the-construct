@@ -12,7 +12,7 @@ pub mod events;
 use pod_core::layouts::LayoutSource;
 use pod_core::store::Step;
 use pod_core::{
-    AuthPolicy, BlueprintInfo, BoxFuture, Hydration, Pod, RequestCtx, Source, SourceManifest,
+    AuthPolicy, BoxFuture, CoreLayoutInfo, Hydration, Pod, RequestCtx, Source, SourceManifest,
 };
 use protocol::{Importance, NotificationChannel};
 use rusqlite::Transaction;
@@ -25,7 +25,7 @@ pub const APP_ID: &str = "events";
 pub const CHANNEL: &str = "matches";
 
 /// The Events app: the `events` collection.
-pub const APP: BlueprintInfo = BlueprintInfo {
+pub const APP: CoreLayoutInfo = CoreLayoutInfo {
     id: APP_ID,
     title: "Events",
     icon: "dashboard",
@@ -104,7 +104,7 @@ impl Source for EventsAdapter {
         NAME
     }
 
-    fn blueprints(&self) -> Vec<BlueprintInfo> {
+    fn core_layouts(&self) -> Vec<CoreLayoutInfo> {
         vec![APP]
     }
 

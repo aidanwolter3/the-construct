@@ -5,7 +5,7 @@
 //! `server pods mcp`): the host forwards such a request with
 //! [`crate::CREDENTIAL_HEADER`]` = mcp` and no bearer, and the credential
 //! reaches nothing else. The pod token itself works too (served alone, in
-//! tests). The tools read the pod's layouts, blueprints and data sources and
+//! tests). The tools read the pod's layouts, core layouts and data sources and
 //! write the construct ([`crate::construct::write`], decision
 //! `content-addressed-construct`); writes are recorded with author `claude`. Nothing
 //! here can call a source's routes or act for the user upstream, except
@@ -352,7 +352,7 @@ fn base_tools() -> Vec<Value> {
     let feeds = json!({ "type": "array", "description": "Feeds to add to home's (every layout binds home's feeds): [source, feed] pairs (see list_data_sources)",
         "items": { "type": "array", "items": { "type": "string" }, "minItems": 2, "maxItems": 2 } });
     let layout = json!({ "type": "object", "description": "A layout's root: a core://Page (or a core://Workspace, written as its page; see describe_vocabulary); its id is set by the pod" });
-    let id = json!({ "type": "string", "description": "A layout id: home, a c-... id from list_layouts, or a blueprint" });
+    let id = json!({ "type": "string", "description": "A layout id: home, a c-... id from list_layouts, or a core layout" });
     let note = json!({ "type": "string", "description": "What changed, in the user's words (shown in the name's history)" });
     vec![
         tool(
@@ -378,7 +378,7 @@ fn base_tools() -> Vec<Value> {
         ),
         tool(
             "list_layouts",
-            "The user's layouts (home first, with the feeds every layout may bind; each with its element, its history's newest version, reached: how the user gets to it from home (e.g. home → (on_swipe_down, Overlay from top) → c-...), or that home doesn't reach it, and copy_of: the blueprint it looks copied from, which it doesn't follow) and the blueprints layouts can use (@core/<id>, with their feeds, reached, used_by: the layouts that use them, and copies).",
+            "The user's layouts (home first, with the feeds every layout may bind; each with its element, its history's newest version, reached: how the user gets to it from home (e.g. home → (on_swipe_down, Overlay from top) → c-...), or that home doesn't reach it, and copy_of: the core layout it looks copied from, which it doesn't follow) and the core layouts layouts can use (@core/<id>, with their feeds, reached, used_by: the layouts that use them, and copies).",
             json!({}),
             &[],
         ),
@@ -402,7 +402,7 @@ fn base_tools() -> Vec<Value> {
         ),
         tool(
             "get_layout",
-            "A layout or blueprint (now, or one entry of its name's history), its element and needs, its history, reached (how the user gets to it from home, or that home doesn't reach it) and copy_of (the blueprint it looks copied from, which it doesn't follow). expanded: true adds what clients get (components expanded to plumbing).",
+            "A layout or core layout (now, or one entry of its name's history), its element and needs, its history, reached (how the user gets to it from home, or that home doesn't reach it) and copy_of (the core layout it looks copied from, which it doesn't follow). expanded: true adds what clients get (components expanded to plumbing).",
             json!({ "id": id, "version": { "type": "integer" }, "expanded": { "type": "boolean" } }),
             &["id"],
         ),
@@ -455,8 +455,8 @@ fn base_tools() -> Vec<Value> {
         ),
         tool(
             "list_parts",
-            "The parts of blueprints a layout can use whole, by reference: @core/<blueprint>/<part> (each slot of a blueprint, slot:<id>, and the parts it declares), with each part's node when with_layouts.",
-            json!({ "layout": { "type": "string", "description": "A blueprint (all when left out)" }, "with_layouts": { "type": "boolean" } }),
+            "The parts of core layouts a layout can use whole, by reference: @core/<layout>/<part> (each slot of a core layout, slot:<id>, and the parts it declares), with each part's node when with_layouts.",
+            json!({ "layout": { "type": "string", "description": "A core layout (all when left out)" }, "with_layouts": { "type": "boolean" } }),
             &[],
         ),
         tool(
@@ -476,7 +476,7 @@ fn base_tools() -> Vec<Value> {
         ),
         tool(
             "list_components",
-            "Porcelain the layouts can use: every component (@core/<name> ones ship with the server, @me/<name> ones are the user's own) with its doc and parameters, and the blueprints and their parts. Use one with {\"type\": \"core://Use\", \"ref\": <name>, \"args\": {...}, \"children\": [...]}.",
+            "Porcelain the layouts can use: every component (@core/<name> ones ship with the server, @me/<name> ones are the user's own) with its doc and parameters, and the core layouts and their parts. Use one with {\"type\": \"core://Use\", \"ref\": <name>, \"args\": {...}, \"children\": [...]}.",
             json!({}),
             &[],
         ),
@@ -1128,7 +1128,7 @@ fn plumbing_nodes() -> Vec<Value> {
 fn porcelain_nodes() -> Value {
     json!([
         { "type": crate::components::USE_TYPE, "fields": "ref, args?, children?",
-          "doc": "An element where it stands, by reference (\"ref\": a name): a component (list_components: @core/<name> ships with the server, @me/<name> is the user's own) with its args and children, a whole blueprint (@core/<blueprint>, as a layout's root; the layout keeps its own id) or a part of one (@core/<blueprint>/<part>, list_parts). It follows its name: when the name moves, the layout draws the new element. \"component\": \"core:<name>\" or \"pod:<name>\" is accepted for ref when written." },
+          "doc": "An element where it stands, by reference (\"ref\": a name): a component (list_components: @core/<name> ships with the server, @me/<name> is the user's own) with its args and children, a whole core layout (@core/<layout>, as a layout's root; the layout keeps its own id) or a part of one (@core/<layout>/<part>, list_parts). It follows its name: when the name moves, the layout draws the new element. \"component\": \"core:<name>\" or \"pod:<name>\" is accepted for ref when written." },
         { "type": "core://Workspace", "fields": "id, title, slots: [{slot_id, content}], screens?: [{id, route, title, data?, content, footer?}], title_scrolls?",
           "doc": "A page the older way: its slots stacked under a title, and screens with a bar (Back, title, a spinner while data loads) over their scrolling content and footer. Written as a core://Page through @core/workspace and @core/screen; prefer a core://Page for a new layout." },
         { "type": crate::components::CHILDREN_TYPE, "fields": "at?",
@@ -1280,8 +1280,8 @@ fn vocabulary_with(components: Vec<Value>) -> Value {
         "icons": protocol::ICONS,
         "intents": [
             { "intent": "action.navigation.open", "fields": "target_uri?, ref?, bind?, params?: {name: value}, presentation: Push|Modal|Replace|Sheet|Panel|Overlay, animation?: none|fade|slide|sheet_up, edge?: top|bottom|start|end, size_dp?",
-              "doc": "With ref (a layout's name: its id, or @core/<blueprint>; \"layout\": <id> is accepted when written): present that layout on the back stack (Push: whole screen; Sheet: from the bottom; Panel: from the start; Overlay: from edge, bottom when unset, size_dp tall or wide; drag it back toward its edge to dismiss), bind filling its inputs, params bound as $route.<name> in it, then its screen matching target_uri if any. Without: open the screen of the layout on top whose route matches target_uri. System Back pops either. A link may not lead back to a layout that leads here (layouts only go forward): use action.navigation.pop_to." },
-            { "intent": "action.navigation.pop_to", "fields": "edge", "doc": "Back to the nearest open layout with that key (a layout's id, a blueprint's id)." },
+              "doc": "With ref (a layout's name: its id, or @core/<layout>; \"layout\": <id> is accepted when written): present that layout on the back stack (Push: whole screen; Sheet: from the bottom; Panel: from the start; Overlay: from edge, bottom when unset, size_dp tall or wide; drag it back toward its edge to dismiss), bind filling its inputs, params bound as $route.<name> in it, then its screen matching target_uri if any. Without: open the screen of the layout on top whose route matches target_uri. System Back pops either. A link may not lead back to a layout that leads here (layouts only go forward): use action.navigation.pop_to." },
+            { "intent": "action.navigation.pop_to", "fields": "edge", "doc": "Back to the nearest open layout with that key (a layout's id, a core layout's id)." },
             { "intent": "action.navigation.pop_to_root", "fields": "", "doc": "Back to home." },
             { "intent": "action.navigation.back", "fields": "", "doc": "Close the screen." },
             { "intent": "action.mutation.optimistic", "fields": "entity_uri, field, value_expr, endpoint, payload, also?: [{field, value_expr}], rollback_value?",
@@ -1321,7 +1321,7 @@ fn vocabulary_with(components: Vec<Value>) -> Value {
             "$nonce": "a fresh id per action",
             "$value": "the new value in a mutation's payload",
         },
-        "rules": "Layouts may only use the sources of home's feeds: data paths, actions, query keys and entity schemes from list_data_sources. No action.auth.* intents (sign in with action.device sign_in instead) and no other /v1/ paths. Data the device provides (local_data) needs no feed. Layouts only go forward (no link or embed back to a layout that reaches this one). Read get_layout of a blueprint for complete examples.",
+        "rules": "Layouts may only use the sources of home's feeds: data paths, actions, query keys and entity schemes from list_data_sources. No action.auth.* intents (sign in with action.device sign_in instead) and no other /v1/ paths. Data the device provides (local_data) needs no feed. Layouts only go forward (no link or embed back to a layout that reaches this one). Read get_layout of a core layout for complete examples.",
     })
 }
 

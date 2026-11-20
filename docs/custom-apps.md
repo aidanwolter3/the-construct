@@ -2,7 +2,7 @@
 
 A pod's apps are the user's own: any layout the [vocabulary](layouts.md) can draw, over the feeds, screen data and
 actions the pod's data sources declare. They are usually built by Claude through the pod's MCP endpoint, often from a
-**blueprint** (a built-in layout the server ships and updates, such as `pixelfed` or `events`). A new pod
+**core layout** (a built-in layout the server ships and updates, such as `pixelfed` or `events`). A new pod
 has one app, `home`; nothing else until the user asks for it. Data an app keeps itself (a todo list, a maintenance
 log) lives in **Collections**.
 
@@ -11,21 +11,21 @@ Decisions: [`custom-apps-and-data-sources`](decisions/custom-apps-and-data-sourc
 [`collections`](decisions/collections.md), [`blueprints-and-home`](decisions/blueprints-and-home.md) and the
 `collection-*` decisions.
 
-## Blueprints and the home layout
+## Core layouts and the home layout
 
 There are no apps at runtime (decision `layouts-not-apps`): the pod's units are **layouts**, and every layout is a
 name in the pod's content-addressed construct (decisions `content-addressed-construct`, `one-layout-system`).
-Built-in layouts are blueprints, named `@core/<blueprint>` and moved to each deploy's files; MCP `list_layouts`
-answers `{layouts, blueprints}`. A layout can be a whole blueprint by reference, kept current by the pod:
+Built-in layouts are core layouts, named `@core/<layout>` and moved to each deploy's files; MCP `list_layouts`
+answers `{layouts, core layouts}`. A layout can be a whole core layout by reference, kept current by the pod:
 
 ```json
 {"title": "Events", "icon": "dashboard", "feeds": [["collections", "events"]],
  "layout": {"type": "core://Use", "ref": "@core/events"}}
 ```
 
-Name the blueprint's feeds (`list_layouts` shows them): they join home's. To change a blueprint, read it
+Name the core layout's feeds (`list_layouts` shows them): they join home's. To change a core layout, read it
 (`get_layout`) and write your own. Every pod's **`home`** layout is the screen clients open, and the only one: it
-is the user's whole interface, and it embeds or presents every other layout. It starts as the `shell` blueprint's
+is the user's whole interface, and it embeds or presents every other layout. It starts as the `shell` core layout's
 layout, a blank page with Notifications and Settings buttons, and the agent builds into it only what the user asks
 for: one layout is a `core://Layout` as home's one slot; with more, home lists them and each row pushes its layout
 (`action.navigation.open {"ref": "<layout id>", "presentation": "Push"}`); a `core://Layout` can also put a layout in
@@ -35,10 +35,10 @@ are Settings and the inbox. Snippets for each are in `describe_vocabulary`. Home
 **What the user sees is what home reaches** (decision [`trace-from-home`](decisions/trace-from-home.md)).
 `list_layouts` and `get_layout` give each layout `reached`: the shortest path from home, each step with the field
 that takes it, its presentation and its label (`home → (on_swipe_down, Overlay from top) → c-…`), or "not reached
-from home". A pod layout titled like a blueprint it doesn't reference gets `copy_of: "@core/<blueprint>"`: it is
-the blueprint as it was when copied, and doesn't follow it; a blueprint row lists its `copies`, the layouts that
+from home". A pod layout titled like a core layout it doesn't reference gets `copy_of: "@core/<layout>"`: it is
+the core layout as it was when copied, and doesn't follow it; a core layout row lists its `copies`, the layouts that
 `use` it (`used_by`) and its own `reached`. The pod's MCP instructions tell agents to change the element home
-actually reaches, not the blueprint it may have started from.
+actually reaches, not the core layout it may have started from.
 
 ## The pod's layouts
 
@@ -63,7 +63,7 @@ from home's feeds (a new home element without them), so home's scope holds no fe
   with `action.device` `sign_in` (`id`: a provider from `local:providers`; `value`: another server, e.g.
   `$form?.server`), e.g. a button shown while `signed_in` is false. The raw `action.auth.*` intents stay refused.
 - **Components.** `{"type": "core://Use", "ref": "@core/card", "args": {...}, "children": [...]}` uses a component:
-  one the server ships (`@core/card`, `@core/section_header`, `@core/workspace`, …), a blueprint or its part
+  one the server ships (`@core/card`, `@core/section_header`, `@core/workspace`, …), a core layout or its part
   (`@core/pixelfed/screen:post`), or the pod's own (`@me/<name>`), expanded by the app and kept current by its name
   ([layouts.md](layouts.md#porcelain-components)). `"component": "core:<name>"` is still accepted when written.
   `@core/` components are read-only: `copy_component` makes one of the user's own to change.
@@ -504,13 +504,13 @@ Try it locally: `CONSTRUCT_FILL_PRIVATE_HOSTS=1 cargo run -p server`, serve an `
 
 ## Agents
 
-The **Agents** source and blueprint (`agents`, `crates/source-agents`) show Claude Code sessions an external agent runner
+The **Agents** source and core layout (`agents`, `crates/source-agents`) show Claude Code sessions an external agent runner
 runs, with stop, wake, start and schedule actions, notifications, and an opt-in Tasks collection (MCP tool
 `agents_link_tasks`): see [agents.md](agents.md).
 
 ## Server health
 
-The **Server monitoring** source (`monitor`, `crates/source-monitor`) ships the blueprint `server_health`: the
+The **Server monitoring** source (`monitor`, `crates/source-monitor`) ships the core layout `server_health`: the
 server's status, its checks and every counter (feed `overview`, only in pods the operator turned monitoring on for)
 and the user's devices with the build each runs (feed `devices`, every pod). Nobody has to hand-write that screen:
 make a layout whose root is `{"type": "core://Use", "ref": "@core/server_health"}` with feeds

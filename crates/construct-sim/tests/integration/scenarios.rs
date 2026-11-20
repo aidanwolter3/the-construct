@@ -298,7 +298,7 @@ fn a_bar_chart_filters_and_picks_a_day() {
     assert!(drawn.contains(&"Now"), "{drawn:?}");
 }
 
-/// The `monitor` source's blueprint `server_health`: the status, the checks,
+/// The `monitor` source's core layout `server_health`: the status, the checks,
 /// the devices chart and list and the counters from core components; where
 /// monitoring is off (the source's 403) it says so and still shows the devices.
 #[test]

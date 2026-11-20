@@ -76,7 +76,7 @@ pub async fn objects(
         .collect())
 }
 
-/// Layout `id` (a layout's id or a blueprint's key) as a device draws it:
+/// Layout `id` (a layout's id or a core layout's key) as a device draws it:
 /// `{version, workspace, entities, queries}`. Its element by name
 /// (`/v1/construct/names/<id>`), the objects it reaches, materialized with
 /// what home binds it with, and its data (`/v1/construct/data/<element>`).
@@ -201,16 +201,16 @@ pub fn bind_home(pod: &crate::Pod, feeds: &[(&str, &str)]) {
     write::publish(pod, &moved);
 }
 
-/// A new layout of the pod that is the whole of blueprint `blueprint`
-/// (`{"type": "core://Use", "ref": "@core/<blueprint>"}`), with the
-/// blueprint's feeds added to home's ([`bind_home`]; a pod without a home
-/// gets a blank one): what draws a blueprint with its data on the
+/// A new layout of the pod that is the whole of core layout `core_layout`
+/// (`{"type": "core://Use", "ref": "@core/<layout>"}`), with the
+/// core layout's feeds added to home's ([`bind_home`]; a pod without a home
+/// gets a blank one): what draws a core layout with its data on the
 /// construct. Its id.
-pub async fn use_blueprint(pod: &crate::Pod, blueprint: &str) -> String {
+pub async fn use_core_layout(pod: &crate::Pod, core_layout: &str) -> String {
     let info = *pod
         .catalog()
-        .blueprint(blueprint)
-        .unwrap_or_else(|| panic!("no blueprint {blueprint}"));
+        .core_layout(core_layout)
+        .unwrap_or_else(|| panic!("no core layout {core_layout}"));
     let mut feeds: Vec<(&str, &str)> = Vec::new();
     let home = pod.store().with_conn(crate::layouts::home_feeds);
     for (s, f) in &home {
@@ -227,10 +227,10 @@ pub async fn use_blueprint(pod: &crate::Pod, blueprint: &str) -> String {
         "create_layout",
         &json!({ "title": info.title,
                  "layout": { "type": crate::components::USE_TYPE,
-                             "ref": crate::construct::blueprint_name(blueprint) } }),
+                             "ref": crate::construct::core_layout_name(core_layout) } }),
     )
     .await
     .expect("create_layout is a tool")
-    .unwrap_or_else(|e| panic!("{blueprint} as a layout: {e}"));
+    .unwrap_or_else(|e| panic!("{core_layout} as a layout: {e}"));
     made["id"].as_str().expect("an id").to_owned()
 }

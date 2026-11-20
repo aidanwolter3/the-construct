@@ -66,7 +66,7 @@ fn pod() -> Pod {
     pod
 }
 
-/// The events blueprint as a layout of the pod (made once), drawn as the
+/// The events core layout as a layout of the pod (made once), drawn as the
 /// phone draws it.
 async fn events_layout(pod: &Pod) -> (StatusCode, Value) {
     let id = match pod
@@ -77,7 +77,7 @@ async fn events_layout(pod: &Pod) -> (StatusCode, Value) {
         .find(|l| l.title == "Events")
     {
         Some(l) => l.id,
-        None => pod_core::testing::use_blueprint(pod, "events").await,
+        None => pod_core::testing::use_core_layout(pod, "events").await,
     };
     pod_core::testing::layout_for(&pod_core::app(pod.clone()), &id, Some("phone")).await
 }

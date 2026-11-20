@@ -22,7 +22,7 @@ use construct_render::signin::SignIn;
 use serde_json::{Value, json};
 
 const TIMEOUT: Duration = Duration::from_secs(15);
-/// The upstream sign-in a layout starts (as the pod's Pixelfed blueprint).
+/// The upstream sign-in a layout starts (as the pod's Pixelfed core layout).
 static LOGIN: std::sync::LazyLock<Value> = std::sync::LazyLock::new(|| {
     json!({ "intent": "action.auth.login", "instance_url": "https://pixelfed.example",
         "app_path": "/v1/auth/pixelfed/app", "token_path": "/v1/auth/pixelfed/token" })

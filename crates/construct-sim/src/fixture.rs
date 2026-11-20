@@ -1,7 +1,7 @@
 //! Fixture mode: a fake pod serving bundles from `data/` (no server, no
 //! network), so shots are the same on every run.
 //!
-//! - Layouts: `blueprint_<id>_page.json` (the shell's Settings and inbox, as
+//! - Layouts: `core_layout_<id>_page.json` (the shell's Settings and inbox, as
 //!   a pod serves them), else the layout's default bundle ([`default_bundle`]).
 //! - Data paths (a screen's `data`, `action.data.load`): from
 //!   `pixelfed_screen_data.json` and `events_screen_data.json`.
@@ -238,10 +238,10 @@ impl FixturePod {
             return Ok((root, DataBundle::default()));
         }
         let dir = self.lock().data.clone();
-        let blueprint = dir.join(format!("blueprint_{id}_page.json"));
-        if blueprint.is_file() {
-            let root: UiNode = serde_json::from_value(read_json(&blueprint)?)
-                .map_err(|e| format!("{}: {e}", blueprint.display()))?;
+        let core_layout = dir.join(format!("core_layout_{id}_page.json"));
+        if core_layout.is_file() {
+            let root: UiNode = serde_json::from_value(read_json(&core_layout)?)
+                .map_err(|e| format!("{}: {e}", core_layout.display()))?;
             return Ok((root, DataBundle::default()));
         }
         match default_bundle(id) {

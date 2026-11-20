@@ -3,12 +3,12 @@
 use axum::Router;
 use protocol::{DataBundle, WorkspaceSpec};
 
-use crate::adapter::{BlueprintInfo, BoxFuture, Hydration, Pod, RequestCtx, Source};
+use crate::adapter::{BoxFuture, CoreLayoutInfo, Hydration, Pod, RequestCtx, Source};
 use crate::layouts::LayoutSource;
 use crate::source::{FeedSpec, SourceManifest};
 
 /// The one feed of a [`StaticAdapter`]: list `(name, FEED)` in the app's
-/// [`BlueprintInfo::feeds`].
+/// [`CoreLayoutInfo::feeds`].
 pub const FEED: &str = "all";
 
 /// The feeds of a [`StaticAdapter`]'s default manifest (just [`FEED`]),
@@ -25,7 +25,7 @@ pub static FEEDS: &[FeedSpec] = &[FeedSpec {
 /// [`Self::with_router`]. Its app lists `(name, FEED)` among its feeds.
 pub struct StaticAdapter {
     name: &'static str,
-    app: BlueprintInfo,
+    app: CoreLayoutInfo,
     manifest: SourceManifest,
     files: &'static [LayoutSource],
     data: DataBundle,
@@ -46,7 +46,7 @@ impl StaticAdapter {
     /// `version` are ignored: the layout comes from `files`).
     pub fn new(
         name: &'static str,
-        app: BlueprintInfo,
+        app: CoreLayoutInfo,
         files: &'static [LayoutSource],
         data: &WorkspaceSpec,
     ) -> Self {
@@ -88,7 +88,7 @@ impl Source for StaticAdapter {
         self.name
     }
 
-    fn blueprints(&self) -> Vec<BlueprintInfo> {
+    fn core_layouts(&self) -> Vec<CoreLayoutInfo> {
         vec![self.app]
     }
 

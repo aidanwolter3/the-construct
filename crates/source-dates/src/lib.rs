@@ -19,7 +19,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 use pod_core::source::{EntityDoc, FeedSpec, SourceManifest};
 use pod_core::tz::jiff::civil::{Date, Weekday};
 use pod_core::tz::jiff::{self, ToSpan, tz::TimeZone};
-use pod_core::{BlueprintInfo, BoxFuture, Hydration, Pod, RequestCtx, Source};
+use pod_core::{BoxFuture, CoreLayoutInfo, Hydration, Pod, RequestCtx, Source};
 use protocol::{DataBundle, EntityRecord};
 use serde_json::{Value, json};
 
@@ -84,7 +84,7 @@ impl Source for DatesAdapter {
         NAME
     }
 
-    fn blueprints(&self) -> Vec<BlueprintInfo> {
+    fn core_layouts(&self) -> Vec<CoreLayoutInfo> {
         Vec::new()
     }
 

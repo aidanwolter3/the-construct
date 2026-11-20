@@ -170,7 +170,7 @@ fn error(v: Value) -> Value {
 }
 
 /// Whether `id` has the shape of a layout id (`home`, a `c-…` id, a
-/// blueprint's name): 1 to 64 lowercase letters, digits, `_` or `-`.
+/// core layout's name): 1 to 64 lowercase letters, digits, `_` or `-`.
 /// Nothing else goes into the internal request path, where a `/`, `?` or
 /// space would reach another route or make no valid request.
 fn is_layout_id(id: &str) -> bool {
@@ -273,7 +273,7 @@ pub(crate) async fn fetch(
 ) -> Result<WorkspaceSpec, Value> {
     if !is_layout_id(id) {
         return Err(json!({ "error": "unknown_layout", "id": id,
-            "detail": "not a layout id: home, a c-... id from list_layouts, or a blueprint" }));
+            "detail": "not a layout id: home, a c-... id from list_layouts, or a core layout" }));
     }
     let (p, lookup) = (pod.clone(), id.to_owned());
     let client = protocol::ClientCaps::from_header(&protocol::features_header());
@@ -360,13 +360,13 @@ impl Reader {
             })
     }
 
-    /// The titles of the pod's layouts and blueprints, for device data rows
+    /// The titles of the pod's layouts and core layouts, for device data rows
     /// (a notification's or channel's layout).
     fn layouts(&self) {
         let mut titles: HashMap<String, String> = self
             .pod
             .catalog()
-            .blueprints()
+            .core_layouts()
             .map(|b| (b.id.to_owned(), b.title.to_owned()))
             .collect();
         if let Ok(layouts) = self.pod.store().with_conn(crate::layouts::pod_layouts) {
@@ -1149,7 +1149,7 @@ mod tests {
 
     #[test]
     fn only_layout_ids_reach_the_request_path() {
-        for id in ["home", "c-abcdefgh23", "shell", "a_blueprint-2"] {
+        for id in ["home", "c-abcdefgh23", "shell", "a_core_layout-2"] {
             assert!(is_layout_id(id), "{id}");
         }
         let long = "a".repeat(65);

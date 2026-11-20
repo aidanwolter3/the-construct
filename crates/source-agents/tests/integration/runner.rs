@@ -475,7 +475,7 @@ pub async fn tool(pod: &Pod, name: &str, args: Value) -> Value {
     serde_json::from_str(r["content"][0]["text"].as_str().unwrap()).unwrap()
 }
 
-/// A layout that is the whole Agents blueprint; its id.
+/// A layout that is the whole Agents core layout; its id.
 pub async fn agents_layout(pod: &Pod) -> String {
     let app = tool(
         pod,

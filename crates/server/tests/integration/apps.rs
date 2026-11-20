@@ -1,6 +1,6 @@
 //! The construct through the real server (decision
 //! `content-addressed-construct`): its event stream (`/v1/construct/events`),
-//! the old layout system's routes gone, and this build's blueprints.
+//! the old layout system's routes gone, and this build's core layouts.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -229,29 +229,29 @@ async fn the_old_layout_systems_routes_are_gone() {
     assert_eq!(resp.status(), StatusCode::NOT_FOUND);
 }
 
-/// This build's newest element of a blueprint, as clients draw it.
-fn newest(blueprint: &str) -> UiNode {
+/// This build's newest element of a core layout, as clients draw it.
+fn newest(core_layout: &str) -> UiNode {
     let core = pod_core::construct::core::load(&server::catalog()).unwrap();
-    let el = core.current(&format!("@core/{blueprint}")).unwrap();
+    let el = core.current(&format!("@core/{core_layout}")).unwrap();
     serde_json::from_value(construct_elements::materialize(&core, el).unwrap().node).unwrap()
 }
 
-/// Decision `named-vocabulary`: no blueprint's newest file uses vocabulary
+/// Decision `named-vocabulary`: no core layout's newest file uses vocabulary
 /// current clients no longer draw.
 #[test]
 fn newest_layouts_use_no_removed_vocabulary() {
     let core = pod_core::construct::core::load(&server::catalog()).unwrap();
-    let mut blueprints = 0;
-    for b in server::catalog().blueprints() {
+    let mut core_layouts = 0;
+    for b in server::catalog().core_layouts() {
         let el = core.current(&format!("@core/{}", b.id)).unwrap();
         let removed: Vec<&str> = core.features[el]
             .split(',')
             .filter(|f| protocol::is_retired(f))
             .collect();
         assert!(removed.is_empty(), "{}: {removed:?}", b.id);
-        blueprints += 1;
+        core_layouts += 1;
     }
-    assert!(blueprints > 5);
+    assert!(core_layouts > 5);
 }
 
 /// `pixelfed`'s Share is a sequence (feature `action_sequence`).

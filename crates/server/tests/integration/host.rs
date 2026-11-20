@@ -208,22 +208,22 @@ async fn tool(env: &Env, token: &str, name: &str, args: Value) -> Value {
     serde_json::from_str(r["content"][0]["text"].as_str().unwrap()).unwrap()
 }
 
-/// The data a layout of blueprint `blueprint` on the pod of `token` draws
+/// The data a layout of core layout `core_layout` on the pod of `token` draws
 /// (`/v1/construct/data/<element>`; the layout is made with the
-/// blueprint's feeds): status, `X-Construct-Session` and body.
-async fn blueprint_data(
+/// core layout's feeds): status, `X-Construct-Session` and body.
+async fn core_layout_data(
     env: &Env,
     token: &str,
-    blueprint: &str,
+    core_layout: &str,
 ) -> (StatusCode, Option<String>, Value) {
-    let info = *server::catalog().blueprint(blueprint).unwrap();
+    let info = *server::catalog().core_layout(core_layout).unwrap();
     let feeds: Vec<[&str; 2]> = info.feeds.iter().map(|(s, f)| [*s, *f]).collect();
     let made = tool(
         env,
         token,
         "create_layout",
         json!({ "title": info.title, "feeds": feeds,
-                "layout": { "type": "core://Use", "ref": format!("@core/{blueprint}") } }),
+                "layout": { "type": "core://Use", "ref": format!("@core/{core_layout}") } }),
     )
     .await;
     let id = made["id"].as_str().unwrap();
@@ -365,14 +365,14 @@ async fn pods_keep_their_sign_ins_and_media_apart() {
     let a = env.create("a").await;
     let b = env.create("b").await;
     sign_in(&env, &a).await;
-    let (status, _, feed) = blueprint_data(&env, &a, "pixelfed").await;
+    let (status, _, feed) = core_layout_data(&env, &a, "pixelfed").await;
     assert_eq!(status, StatusCode::OK, "{feed}");
     assert_eq!(
         feed["queries"]["timeline:home"].as_array().unwrap().len(),
         5
     );
     // Pod b is not signed in to anything, and keeps its token (200, no header).
-    let (status, header, body) = blueprint_data(&env, &b, "pixelfed").await;
+    let (status, header, body) = core_layout_data(&env, &b, "pixelfed").await;
     assert_eq!((status, header), (StatusCode::OK, None));
     assert_eq!(
         body["entities"]["core://sources/pixelfed"]["signed_in"],
@@ -436,7 +436,7 @@ async fn logout_keeps_the_pod_token_and_rotation_replaces_it() {
     // Signed out of Pixelfed, still in the pod: no sign-ins left.
     let (status, _, body) = get(&env.url("/v1/auth/sign-ins"), Some(&token)).await;
     assert_eq!((status, &body["sign_ins"]), (StatusCode::OK, &json!([])));
-    let (status, header, body) = blueprint_data(&env, &token, "pixelfed").await;
+    let (status, header, body) = core_layout_data(&env, &token, "pixelfed").await;
     assert_eq!((status, header), (StatusCode::OK, None), "{body}");
     assert!(
         body["queries"]["timeline:home"].is_null(),
@@ -483,7 +483,7 @@ async fn temporary_pods_are_capped_and_swept() {
     assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
     assert_eq!(body["error"], "temporary_pods_full");
     // Full features.
-    let (status, _, _) = blueprint_data(&env, &tokens[0], "events").await;
+    let (status, _, _) = core_layout_data(&env, &tokens[0], "events").await;
     assert_eq!(status, StatusCode::OK);
     sign_in(&env, &tokens[0]).await;
     // Expired pods are swept: token dead, files gone.

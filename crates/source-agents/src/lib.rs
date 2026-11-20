@@ -21,7 +21,7 @@
 //! - Notifications ([`alerts`]) in the layout that shows the source.
 //! - Tasks wiring ([`tasks`]): a linked collection's queued rows start runs,
 //!   and each row's status follows its run through one table.
-//! - The `agents` blueprint: `layouts/agents/`.
+//! - The `agents` core layout: `layouts/agents/`.
 
 // Route helpers hand back the refusal as an axum `Response`.
 #![allow(clippy::result_large_err)]
@@ -52,7 +52,7 @@ use pod_core::layouts::LayoutSource;
 use pod_core::session::Caller;
 use pod_core::store::{Step, Store};
 use pod_core::{
-    AuthPolicy, BlueprintInfo, BoxFuture, Catalog, EntityDoc, FeedSpec, Hydration, PathSpec, Pod,
+    AuthPolicy, BoxFuture, Catalog, CoreLayoutInfo, EntityDoc, FeedSpec, Hydration, PathSpec, Pod,
     PollCtx, PollOutcome, RequestCtx, Source, SourceManifest,
 };
 use protocol::NotificationChannel;
@@ -62,7 +62,7 @@ use crate::cap::{CapError, Command, Runner};
 
 /// The adapter name and the entity scheme.
 pub const NAME: &str = "agents";
-/// The blueprint layout.
+/// The core layout layout.
 pub const APP_ID: &str = "agents";
 
 pub const SESSIONS_FEED: &str = "sessions";
@@ -476,8 +476,8 @@ pub const MANIFEST: SourceManifest = SourceManifest {
     dev: false,
 };
 
-/// The blueprint: an Agents layout over every feed.
-pub const APP: BlueprintInfo = BlueprintInfo {
+/// The core layout: an Agents layout over every feed.
+pub const APP: CoreLayoutInfo = CoreLayoutInfo {
     id: APP_ID,
     title: "Agents",
     icon: "dashboard",
@@ -554,7 +554,7 @@ impl AgentsAdapter {
 const INSTRUCTIONS: &str = "The agents source shows the runs (Claude Code work) an agent runner \
 runs for the user (feeds sessions, sandboxes, checks, schedules), with actions to stop a run, wake \
 or repair a sandbox, start a run, reopen a task, mark a run reviewed, and manage schedules. The \
-blueprint layout agents is a whole dashboard: use it whole ({type: core://Use, ref: @core/agents}) \
+core layout agents is a whole dashboard: use it whole ({type: core://Use, ref: @core/agents}) \
 as a layout and link it from home, where agents:status's summary_text (e.g. 1 working · 1 needs you) \
 makes a one-line summary. The pod signs in to the runner from that layout's form (the runner's URL \
 and token): never ask for the token in the conversation. agents_link_tasks links a tasks \
@@ -571,7 +571,7 @@ impl Source for AgentsAdapter {
         NAME
     }
 
-    fn blueprints(&self) -> Vec<BlueprintInfo> {
+    fn core_layouts(&self) -> Vec<CoreLayoutInfo> {
         vec![APP]
     }
 
@@ -724,7 +724,7 @@ impl Source for AgentsAdapter {
             summary: "An agent runner (the Foreman): runs, sandboxes and checks of Claude Code \
                       work, the pod's schedules and tasks collections that start runs \
                       (agents_schedules, agents_link_tasks), and their notifications (the agents \
-                      blueprint and source).",
+                      core layout and source).",
             kind: pod_core::jacks::JackKind::Account {
                 how: "sign in from the Agents layout's form (the runner's https:// URL and its token; \
                       never ask for the token in the conversation)",

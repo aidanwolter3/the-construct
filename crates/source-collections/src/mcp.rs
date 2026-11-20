@@ -30,7 +30,7 @@ collection notifications (one row per notification: title, body, channel_layout,
 subject, at, read, read_at, channel_enabled and channel_title from its channel, and subject_alert_matched: false once the row it is about no longer matches an alert of its collection, e.g. after the alert was narrowed; the newest 500 of 30 days; \
 actions mark_all_read and clear_read) and its channels notification_channels (key \"<layout>.<channel>\", title, \
 enabled: the pod-wide switch, remove_with_subject: whether a notification goes when the row it is about is \
-deleted): bind, filter, edit or delete them like any collection (the inbox blueprint shows notifications \
+deleted): bind, filter, edit or delete them like any collection (the inbox core layout shows notifications \
 whose channel_enabled and subject_alert_matched are true, read ones older than a day in a closed section). Any field may be computed from the row's other fields \
 whenever they change: compute: {kind: \"expr\", expr} evaluates a small expression at once (entity.<field>, \
 entity.id (the row's id), literals, + joins text or adds numbers, -, *, !, < <= > >= (numbers, or texts in \

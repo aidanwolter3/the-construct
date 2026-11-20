@@ -143,7 +143,7 @@ Schedule definitions were files in the runner's repository before CAP v3; they m
 decision). A schedule's prompt runs unattended with its workspace's access, so only a signed-in pod session or the
 pod's owner through MCP can write one.
 
-## The Agents blueprint
+## The Agents core layout
 
 `agents` (`crates/source-agents/layouts/agents/`): the sign-in form until the pod is signed in; then a summary card
 ("1 working · 1 needs you · 2 queued · 1 waiting"), chips for Runs, Schedules, Sandboxes and Checks, a "Start a run"
@@ -227,7 +227,7 @@ and optional text fields `run_id`, `session_id`, `workspace`, `stage` and `diagn
 
 ## Setting it up in a pod
 
-1. Make a layout from the blueprint and link it from home (ask Claude: "add the Agents layout to home").
+1. Make a layout from the core layout and link it from home (ask Claude: "add the Agents layout to home").
 2. Open it and sign in with the runner's URL and token.
 3. Optionally link a tasks collection: ask Claude to run `agents_link_tasks` with the collection and the default
    workspace.

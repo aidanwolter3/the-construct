@@ -26,9 +26,9 @@ use server::{AppState, PixelfedConfig, WithPixelfed};
 const TIMEOUT: Duration = Duration::from_secs(15);
 const SEED: &str = "seed-token";
 const CUSTOM_REDIRECT: &str = "construct://oauth";
-/// The blueprint the tests' layout uses.
-const BLUEPRINT: &str = "pixelfed";
-/// Each pod's layout of the Pixelfed blueprint (its URL → the layout id),
+/// The core layout the tests' layout uses.
+const CORE_LAYOUT: &str = "pixelfed";
+/// Each pod's layout of the Pixelfed core layout (its URL → the layout id),
 /// the engines' own layout.
 static WORKSPACES: std::sync::LazyLock<Mutex<std::collections::HashMap<String, String>>> =
     std::sync::LazyLock::new(Default::default);
@@ -40,7 +40,7 @@ fn workspace(pod: &str) -> String {
         .unwrap()
         .get(pod)
         .cloned()
-        .unwrap_or_else(|| BLUEPRINT.to_owned())
+        .unwrap_or_else(|| CORE_LAYOUT.to_owned())
 }
 const LIKE_COUNT_EXPR: &str = "entity.is_liked ? entity.like_count - 1 : entity.like_count + 1";
 
@@ -71,7 +71,7 @@ fn bind() -> (TcpListener, SocketAddr) {
 struct Env {
     fake: String,
     pod: String,
-    /// The layout of the Pixelfed blueprint the engines show.
+    /// The layout of the Pixelfed core layout the engines show.
     workspace: String,
     pod_state: Arc<AppState>,
     /// While true, the pod holds `POST /v1/pixelfed/posts/comment` requests
@@ -108,9 +108,9 @@ impl Env {
             ..PixelfedConfig::new(&fake, None)
         };
         let pod_state = Arc::new(server::state_in_memory().with_pixelfed(pixelfed));
-        // A layout of the Pixelfed blueprint, home binding its feeds: what
+        // A layout of the Pixelfed core layout, home binding its feeds: what
         // the engines show.
-        let workspace = rt.block_on(server::testing::use_blueprint(&pod_state, BLUEPRINT));
+        let workspace = rt.block_on(server::testing::use_core_layout(&pod_state, CORE_LAYOUT));
         let (pl, paddr) = bind();
         let hold_comments = Arc::new(AtomicBool::new(false));
         let hold = Arc::clone(&hold_comments);
@@ -576,12 +576,12 @@ fn restart_restores_the_session_from_the_store() {
     wait_signed_in(&engine);
 }
 
-/// Issue #306: the bare blueprint key (a notification's layout home
+/// Issue #306: the bare core layout key (a notification's layout home
 /// doesn't reach), opened by name on a pod whose home binds the Pixelfed
-/// feeds, draws with home's feed: the pod gives the blueprint's element
+/// feeds, draws with home's feed: the pod gives the core layout's element
 /// the home feeds its tree binds.
 #[test]
-fn a_blueprint_opened_by_its_key_gets_homes_feeds() {
+fn a_core_layout_opened_by_its_key_gets_homes_feeds() {
     let env = Env::start();
     let store = Arc::new(MemoryStore::new());
     {
@@ -592,7 +592,7 @@ fn a_blueprint_opened_by_its_key_gets_homes_feeds() {
     let engine = ConstructEngine::init_with_options(
         "",
         &env.pod,
-        BLUEPRINT,
+        CORE_LAYOUT,
         EngineOptions {
             config: fast_config(),
             secure_store: Some(Arc::clone(&store) as Arc<dyn SecureStore>),

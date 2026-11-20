@@ -15,7 +15,7 @@ use http_body_util::BodyExt;
 use pod_core::layouts::LayoutSource;
 use pod_core::session::session_hash;
 use pod_core::{
-    AppState, AuthPolicy, BlueprintInfo, BoxFuture, FeedSpec, Hydration, NewNotification, Pod,
+    AppState, AuthPolicy, BoxFuture, CoreLayoutInfo, FeedSpec, Hydration, NewNotification, Pod,
     RequestCtx, Source, SourceManifest,
 };
 use protocol::{DataBundle, Importance, NotificationChannel};
@@ -39,8 +39,8 @@ impl Source for Bell {
     fn name(&self) -> &'static str {
         "bell"
     }
-    fn blueprints(&self) -> Vec<BlueprintInfo> {
-        vec![BlueprintInfo {
+    fn core_layouts(&self) -> Vec<CoreLayoutInfo> {
+        vec![CoreLayoutInfo {
             id: "bell",
             title: "Bell",
             icon: "photo",
@@ -541,13 +541,13 @@ fn aimed(key: &str, target: Option<&str>) -> NewNotification {
     }
 }
 
-/// Issue #337: a notification of a blueprint's channel opens the pod's own
-/// layout that routes its target (the blueprint's copy, or another layout),
+/// Issue #337: a notification of a core layout's channel opens the pod's own
+/// layout that routes its target (the core layout's copy, or another layout),
 /// else the copy; rows stored without one get it when the pod opens.
 #[tokio::test]
 async fn notifications_open_the_pods_layout_that_routes_them() {
     let pod = pod();
-    // A copy of the Bell blueprint (same title, no reference to it) and an
+    // A copy of the Bell core layout (same title, no reference to it) and an
     // unrelated layout that routes the tasks.
     let copy = page(&pod, "Bell", &["bell://items/{id}"]).await;
     let tasks = page(&pod, "Tasks", &["bell://tasks/{id}"]).await;
@@ -580,7 +580,7 @@ async fn notifications_open_the_pods_layout_that_routes_them() {
         "{listed}"
     );
 
-    // A row stored before (no layout, or the blueprint's id) is filled in
+    // A row stored before (no layout, or the core layout's id) is filled in
     // when the pod opens; one already naming a pod layout stays.
     let id = |t: &str| {
         all.iter()

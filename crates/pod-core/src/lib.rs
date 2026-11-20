@@ -4,12 +4,12 @@
 //! construct (decision `content-addressed-construct`, see [`construct`]):
 //! elements by hash, names that move, home's element as the root, its data
 //! and its event stream; and owns sessions and sign-ins (see [`session`]).
-//! Blueprints are code (`layouts/<blueprint>/NNNN.json` in each source
-//! crate), named `@core/<blueprint>` in every pod when it opens.
+//! Core layouts are code (`layouts/<layout>/NNNN.json` in each source
+//! crate), named `@core/<layout>` in every pod when it opens.
 //!
 //! Sources plug in through [`Source`]: the `server` binary builds them and
 //! passes them to [`AppState::try_new`]. The core never names a source;
-//! sources supply data, routes, sign-ins, tables and blueprints ([`source`]).
+//! sources supply data, routes, sign-ins, tables and core layouts ([`source`]).
 
 pub mod adapter;
 pub mod components;
@@ -59,7 +59,7 @@ use serde_json::{Value, json};
 use store::Store;
 
 pub use adapter::{
-    AuthPolicy, BlueprintInfo, BoxFuture, Catalog, Hydration, Pod, RequestCtx, SignInAccount,
+    AuthPolicy, BoxFuture, Catalog, CoreLayoutInfo, Hydration, Pod, RequestCtx, SignInAccount,
     SignInProvider, SignInStart, Source,
 };
 pub use notify::{NewNotification, PollCtx, PollOutcome, PollStatus};
@@ -73,10 +73,10 @@ pub const BUNDLE_VERSION: &str = "1.0.0";
 
 /// Every pod's own home layout (decision `blueprints-and-home`): the root of
 /// its construct, which clients open first. It starts as the whole of
-/// [`HOME_BLUEPRINT`] and is the user's to change.
+/// [`HOME_CORE_LAYOUT`] and is the user's to change.
 pub const HOME_APP: &str = "home";
-/// The blueprint a pod's [`HOME_APP`] starts from.
-pub const HOME_BLUEPRINT: &str = "shell";
+/// The core layout a pod's [`HOME_APP`] starts from.
+pub const HOME_CORE_LAYOUT: &str = "shell";
 
 /// A pending injected fault (test hook): the next `remaining` mutation
 /// requests get `status` without being applied.
@@ -116,7 +116,7 @@ pub struct AppState {
     fault: Mutex<Option<Fault>>,
     /// Pod sessions older than this are invalid (`CONSTRUCT_SESSION_TTL_DAYS`).
     session_ttl_secs: i64,
-    /// `CONSTRUCT_SHOW_DEV_APPS=1`: MCP also lists the dev blueprints and
+    /// `CONSTRUCT_SHOW_DEV_APPS=1`: MCP also lists the dev core layouts and
     /// sources.
     show_dev_apps: bool,
     /// The construct's generation after each move of a name, fanned out to
@@ -271,7 +271,7 @@ impl AppState {
         Self::new(Store::open_in_memory().expect("in-memory SQLite"), adapters)
     }
 
-    /// `CONSTRUCT_SHOW_DEV_APPS=1`: MCP also lists the dev blueprints and
+    /// `CONSTRUCT_SHOW_DEV_APPS=1`: MCP also lists the dev core layouts and
     /// sources (they work either way).
     pub fn with_dev_apps(mut self, show: bool) -> Self {
         self.show_dev_apps = show;

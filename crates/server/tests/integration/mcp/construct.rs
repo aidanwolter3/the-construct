@@ -177,7 +177,7 @@ async fn a_pods_construct_is_edited_and_resealed() {
     .await;
     let changed = reachable(delta["objects"].as_object().unwrap());
     // The tile, the layouts that use it (B, A, home), nothing else: C and
-    // every server component and blueprint stay.
+    // every server component and core layout stay.
     assert_eq!(changed.len(), 4, "{changed:?}");
     let a_now = env.drawn(&a, &pod_code).await;
     assert!(
@@ -977,7 +977,7 @@ async fn a_change_set_edits_and_checks_the_constructs_layouts() {
 
 /// Decision `trace-from-home`: list_layouts and get_layout say how the user
 /// reaches each layout from home, and flag a layout copied from a
-/// blueprint, which doesn't follow it (a home whose swipe down opens its
+/// core layout, which doesn't follow it (a home whose swipe down opens its
 /// own copy of the inbox never shows a change to `@core/inbox`).
 #[tokio::test]
 async fn layouts_say_how_home_reaches_them_and_which_are_copies() {
@@ -1041,7 +1041,7 @@ async fn layouts_say_how_home_reaches_them_and_which_are_copies() {
         row(&lone)
     );
     assert!(row(&lone).get("copy_of").is_none());
-    let inbox = all["blueprints"]
+    let inbox = all["core_layouts"]
         .as_array()
         .unwrap()
         .iter()
@@ -1050,7 +1050,7 @@ async fn layouts_say_how_home_reaches_them_and_which_are_copies() {
         .clone();
     assert_eq!(inbox["copies"], json!([copy]));
     assert!(inbox.get("reached").is_none(), "{inbox}");
-    let settings = all["blueprints"]
+    let settings = all["core_layouts"]
         .as_array()
         .unwrap()
         .iter()

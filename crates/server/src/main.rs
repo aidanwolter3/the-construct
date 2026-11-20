@@ -35,7 +35,7 @@
 //! - `CONSTRUCT_TEMP_PODS=1`, `CONSTRUCT_TEMP_POD_HOURS`, `CONSTRUCT_TEMP_POD_MAX`:
 //!   anyone may create a temporary pod.
 //! - `CONSTRUCT_TEST_HOOKS=1`: enables `POST /v1/test/fault` in every pod.
-//! - `CONSTRUCT_SHOW_DEV_APPS=1`: MCP also lists the dev blueprints and sources.
+//! - `CONSTRUCT_SHOW_DEV_APPS=1`: MCP also lists the dev core layouts and sources.
 //! - `CONSTRUCT_SESSION_TTL_DAYS`: lifetime of sessions other than pod tokens.
 //! - `CONSTRUCT_VAPID_PRIVATE_KEY`, `CONSTRUCT_VAPID_SUBJECT`, `CONSTRUCT_PUSH=off`:
 //!   Web Push for notifications (D52); without a key the server makes one and

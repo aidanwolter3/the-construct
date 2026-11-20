@@ -263,7 +263,7 @@ fn check_overlay(overlay: bool, edge: bool, size_dp: Option<u16>) -> Result<(), 
 }
 
 /// A layout named by `core://Layout` or `action.navigation.open`: a layout
-/// id (`home`, `c-...`, a blueprint) or a binding to one (`$item.id`).
+/// id (`home`, `c-...`, a core layout) or a binding to one (`$item.id`).
 fn check_layout_ref(layout: &str) -> Result<(), String> {
     let l = layout.trim();
     if l.starts_with('$') {
@@ -273,7 +273,7 @@ fn check_layout_ref(layout: &str) -> Result<(), String> {
         Ok(())
     } else {
         Err(format!(
-            "'{layout}' is not a layout id (home, c-..., a blueprint id) or a binding such as $item.id"
+            "'{layout}' is not a layout id (home, c-..., a core layout id) or a binding such as $item.id"
         ))
     }
 }

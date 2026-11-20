@@ -8,7 +8,7 @@ Start with [architecture.md](architecture.md), then the guide for what you're do
 | [layouts.md](layouts.md) | Publishing a layout version; bindings, nodes, intents and features |
 | [server.md](server.md) | Running and configuring the server, pods and their admin CLI, monitoring, deploying |
 | [api.md](api.md) | The pod's core HTTP API and event stream |
-| [custom-apps.md](custom-apps.md) | Blueprints and home, the pod's layouts, building them with Claude (MCP), Collections, fillers and alerts, the Events app |
+| [custom-apps.md](custom-apps.md) | Core layouts and home, the pod's layouts, building them with Claude (MCP), Collections, fillers and alerts, the Events app |
 | [clients.md](clients.md) | Building and running the desktop and Android apps; home and the layouts it shows; sign-in |
 | [rendering.md](rendering.md) | The Rust rendering engine: layout, scenes, GPU and CPU rasterizers, agent previews, the native prototypes |
 | [simulator.md](simulator.md) | The headless simulator (`construct-sim`): fixture and live modes, flags, script commands, targets |
@@ -16,7 +16,7 @@ Start with [architecture.md](architecture.md), then the guide for what you're do
 | [pixelfed.md](pixelfed.md) | The Pixelfed source: sign-in, instances, its endpoints |
 | [posting.md](posting.md) | How photo posting works across client, engine, pod and source |
 | [notifications.md](notifications.md) | How notifications travel from an upstream to a device |
-| [agents.md](agents.md) | The Agents source: runs from an agent runner (CAP v3), the pod's schedules, its blueprint, notifications and Tasks wiring |
+| [agents.md](agents.md) | The Agents source: runs from an agent runner (CAP v3), the pod's schedules, its core layout, notifications and Tasks wiring |
 
 **Decisions.** [DECISIONS.md](DECISIONS.md) holds D1–D52, numbered and closed to new entries. Newer decisions are
 one file each in [decisions/](decisions/) ([how to write one](decisions/README.md)). They record why, at the time;

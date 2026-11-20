@@ -97,7 +97,7 @@ pub trait NotificationStore: Send + Sync {
     fn remove_about(&self, pod: &Pod, subjects: &[String]) -> rusqlite::Result<usize>;
 
     /// Give each stored notification whose `layout` is empty, or names no
-    /// layout of the pod (a blueprint, a layout since deleted), the layout
+    /// layout of the pod (a core layout, a layout since deleted), the layout
     /// `opens` finds for it, where that differs (issue #337: rows stored
     /// before the pod resolved them). Answers how many changed. A store
     /// that resolves when it lists (the core's) needs nothing here.

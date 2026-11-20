@@ -241,7 +241,7 @@ pub(crate) fn router() -> Router<Pod> {
 /// `GET /v1/auth/sign-ins`: the sign-ins on the caller's session, for
 /// the client's Settings: `{"sign_ins": [{"id", "title", "server"?,
 /// "username"?, "apps": [{"id", "title"}]}], "providers": [...]}` in sign-in
-/// id order. `apps` are the blueprints that require the sign-in (the field
+/// id order. `apps` are the core layouts that require the sign-in (the field
 /// keeps its name for clients that read it). No bearer: no sign-ins; a stale one: 401. Sign-ins no adapter
 /// provides any more are left out.
 ///
@@ -273,7 +273,7 @@ async fn sign_ins(State(state): State<Pod>, headers: HeaderMap) -> Response {
             .await
             .unwrap_or_default();
         let apps: Vec<Value> = catalog
-            .blueprints()
+            .core_layouts()
             .filter(|a| a.auth == AuthPolicy::SignIn(provider.id))
             .filter(|a| !a.dev || state.show_dev_apps())
             .map(|a| json!({ "id": a.id, "title": a.title }))

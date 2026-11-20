@@ -1,4 +1,4 @@
-//! The blueprint's files: embedded, valid, and usable by reference.
+//! The core layout's files: embedded, valid, and usable by reference.
 
 use std::sync::Arc;
 

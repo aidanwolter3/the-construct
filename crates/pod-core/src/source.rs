@@ -4,8 +4,8 @@
 //! A data source is an adapter seen from a layout: named feeds that home
 //! binds and its layouts read (`GET /v1/construct/data/<element>`), screen
 //! data paths, the actions its buttons may call, and the entities it
-//! serves. A blueprint names the feeds it reads
-//! ([`crate::BlueprintInfo::feeds`]); the core runs each feed and merges the
+//! serves. A core layout names the feeds it reads
+//! ([`crate::CoreLayoutInfo::feeds`]); the core runs each feed and merges the
 //! results ([`crate::Source::feed`]). A source's id is its
 //! adapter's [`crate::Source::name`].
 //!

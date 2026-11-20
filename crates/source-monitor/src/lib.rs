@@ -7,7 +7,7 @@
 //! it on for (`server pods monitoring <name> on`, pod setting
 //! [`ENABLED_SETTING`]); elsewhere it is 403 `monitoring_off`.
 //!
-//! The blueprint `server_health` ([`APP`]) is the built-in screen over both
+//! The core layout `server_health` ([`APP`]) is the built-in screen over both
 //! feeds; it says so where monitoring is off and still shows the devices.
 //!
 //! One feed, `overview`, fills three queries:
@@ -31,8 +31,8 @@ use pod_core::layouts::LayoutSource;
 use pod_core::metrics::{self, Gauge, Series};
 use pod_core::store::Store;
 use pod_core::{
-    AuthPolicy, BlueprintInfo, BoxFuture, Catalog, EntityDoc, FeedSpec, Hydration, NewNotification,
-    Pod, PollCtx, PollOutcome, RequestCtx, Source, SourceManifest,
+    AuthPolicy, BoxFuture, Catalog, CoreLayoutInfo, EntityDoc, FeedSpec, Hydration,
+    NewNotification, Pod, PollCtx, PollOutcome, RequestCtx, Source, SourceManifest,
 };
 use protocol::{DataBundle, EntityRecord, Importance, NotificationChannel};
 use serde_json::{Value, json};
@@ -54,13 +54,13 @@ pub const ALERT_CHANNEL: &str = "server_warnings";
 /// How often the checks are looked at for alerts.
 pub const ALERT_EVERY: Duration = Duration::from_secs(300);
 
-/// The blueprint's id (`@core/server_health`).
+/// The core layout's id (`@core/server_health`).
 pub const APP_ID: &str = "server_health";
 
 /// Server health, built in: the status, the checks and every counter where
 /// the operator turned monitoring on, and the user's devices everywhere
 /// (`layouts/server_health/`).
-pub const APP: BlueprintInfo = BlueprintInfo {
+pub const APP: CoreLayoutInfo = CoreLayoutInfo {
     id: APP_ID,
     title: "Server health",
     icon: "dashboard",
@@ -285,7 +285,7 @@ impl MonitorConfig {
     }
 }
 
-/// The monitor adapter: a data source and its one blueprint (no tables or routes).
+/// The monitor adapter: a data source and its one core layout (no tables or routes).
 #[derive(Debug, Default)]
 pub struct MonitorAdapter {
     config: MonitorConfig,
@@ -306,7 +306,7 @@ impl Source for MonitorAdapter {
         include_str!("../catalog.json")
     }
 
-    fn blueprints(&self) -> Vec<BlueprintInfo> {
+    fn core_layouts(&self) -> Vec<CoreLayoutInfo> {
         vec![APP]
     }
 

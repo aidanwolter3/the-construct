@@ -255,7 +255,7 @@ pub const STEPS: &[Step] = &[
     Step::sql(
         "blueprints",
         "INSERT INTO pod_settings (key, value)
-         SELECT 'blueprints.convert', '1' WHERE EXISTS (SELECT 1 FROM app_versions);",
+         SELECT 'core_layouts.convert', '1' WHERE EXISTS (SELECT 1 FROM app_versions);",
     ),
     // Decision `layouts-not-apps`: home owns every feed, and a home that
     // draws a retired navigation node becomes a plain list, on the pod's

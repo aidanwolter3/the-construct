@@ -90,7 +90,7 @@ use pod_core::layouts::LayoutSource;
 use pod_core::store::{Step, Store};
 use pod_core::validate::LayoutError;
 use pod_core::{
-    BlueprintInfo, BoxFuture, Catalog, EntityDoc, FeedSpec, Hydration, PathSpec, Pod, PollCtx,
+    BoxFuture, Catalog, CoreLayoutInfo, EntityDoc, FeedSpec, Hydration, PathSpec, Pod, PollCtx,
     PollOutcome, RequestCtx, Source, SourceManifest,
 };
 use protocol::NotificationChannel;
@@ -402,7 +402,7 @@ impl Source for CollectionsAdapter {
         !matches!(db::latest_def(conn, feed), Ok(None))
     }
 
-    fn blueprints(&self) -> Vec<BlueprintInfo> {
+    fn core_layouts(&self) -> Vec<CoreLayoutInfo> {
         kits::KITS.iter().map(|k| k.layout).collect()
     }
 

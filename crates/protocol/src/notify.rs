@@ -1,5 +1,5 @@
 //! Notifications (D52). Generic: the pod and the clients see the layout (or
-//! blueprint) a channel belongs to, a channel id its source declares,
+//! core layout) a channel belongs to, a channel id its source declares,
 //! ready-made text and a navigation target the client resolves against that
 //! layout's routes. Nothing here names a source.
 //!
@@ -47,7 +47,7 @@ pub enum Importance {
 /// its source. Users turn channels on and off per device.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct NotificationChannel {
-    /// The layout or blueprint the channel belongs to.
+    /// The layout or core layout the channel belongs to.
     #[serde(alias = "app_id")]
     pub layout: String,
     /// Unique within the layout; `[a-z0-9_]{1,32}`.
@@ -95,7 +95,7 @@ pub fn notification_layout_in(notification: &serde_json::Value) -> &str {
 pub struct Notification {
     /// Pod-assigned, sortable (newer ids sort later).
     pub id: String,
-    /// The layout or blueprint whose channel it is, the
+    /// The layout or core layout whose channel it is, the
     /// [`NotificationChannel::layout`].
     #[serde(alias = "app_id")]
     pub channel_layout: String,
@@ -111,7 +111,7 @@ pub struct Notification {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub target_uri: Option<String>,
     /// The layout to present for it (decision `layouts-not-apps`): the
-    /// pod's layout built on the blueprint `channel_layout` names, else
+    /// pod's layout built on the core layout `channel_layout` names, else
     /// `channel_layout`. Filled by the pod as it sends; never stored.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub layout: Option<String>,

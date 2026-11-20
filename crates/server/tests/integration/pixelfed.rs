@@ -31,7 +31,7 @@ struct Server {
     fake: Option<Arc<fake_pixelfed::AppState>>,
     /// The pod's state; None for the fake upstream.
     pod: Option<Arc<AppState>>,
-    /// The pod's layout of the pixelfed blueprint, made on first use.
+    /// The pod's layout of the pixelfed core layout, made on first use.
     layout: tokio::sync::OnceCell<String>,
 }
 
@@ -148,7 +148,7 @@ async fn get_home_full(pod: &Server, bearer: Option<&str>) -> (StatusCode, Optio
     get_layout(pod, bearer, &[]).await
 }
 
-/// The pixelfed blueprint as a layout of the pod (`core://Use` of
+/// The pixelfed core layout as a layout of the pod (`core://Use` of
 /// `@core/pixelfed`, home binding its feed), drawn as a device of the
 /// construct draws it: its element by name, materialized, and its data
 /// (`GET /v1/construct/data/<element>`) with `bearer` and `headers`.
@@ -162,7 +162,7 @@ async fn get_layout(
     let state = pod.pod.as_ref().expect("a pod");
     let id = pod
         .layout
-        .get_or_init(|| pod_core::testing::use_blueprint(state, "pixelfed"))
+        .get_or_init(|| pod_core::testing::use_core_layout(state, "pixelfed"))
         .await;
     let router = server::app(state.clone());
     let (status, named) = pod_core::testing::layout_for(&router, id, None).await;
@@ -386,7 +386,7 @@ async fn pixelfed_full_auth_flow_and_signed_in_feed() {
 
     // The layout is generic: core://Lists of posts (one per row, and the
     // two-column cards, D48) whose buttons hold the actions.
-    // The layout's page (the blueprint's, under the layout's id).
+    // The layout's page (the core layout's, under the layout's id).
     let UiNode::Page { id, .. } = &spec.workspace else {
         panic!("not a page: {:?}", spec.workspace);
     };
@@ -1077,7 +1077,7 @@ async fn bad_code_verifier_is_oauth_exchange_failed() {
 #[tokio::test]
 async fn sample_ack_accepts_likes() {
     let pod = spawn_pod(server::state_in_memory()).await;
-    // The sample blueprint's newest element, as clients draw it.
+    // The sample core layout's newest element, as clients draw it.
     let core = pod_core::construct::core::load(&server::catalog()).unwrap();
     let el = core.current("@core/pixelfed_sample_no_login").unwrap();
     let demo = construct_elements::materialize(&core, el).unwrap().node;

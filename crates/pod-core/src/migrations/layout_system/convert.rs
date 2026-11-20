@@ -31,7 +31,7 @@ use serde_json::{Map, Value, json};
 
 use super::tables::Old;
 use crate::adapter::Catalog;
-use crate::construct::{CORE_PREFIX, blueprint_name, component_name};
+use crate::construct::{CORE_PREFIX, component_name, core_layout_name};
 use crate::layouts::AUTHOR_POD;
 
 /// One planned move of a name.
@@ -127,9 +127,9 @@ pub fn convert(old: &Old, catalog: &Catalog) -> Plan {
     {
         c.component(n, None);
     }
-    let apps: Vec<&'static str> = catalog.blueprints().map(|a| a.id).collect();
+    let apps: Vec<&'static str> = catalog.core_layouts().map(|a| a.id).collect();
     for app in apps {
-        c.blueprint(app);
+        c.core_layout(app);
     }
     // The pod's layouts, home first, then the ones home doesn't reach.
     if c.layouts.contains_key(crate::HOME_APP) {
@@ -242,15 +242,15 @@ impl Converter<'_> {
     }
 
     /// Blueprint `app`: every recorded version, oldest first. Its current id.
-    fn blueprint(&mut self, app: &str) -> Option<String> {
-        let name = blueprint_name(app);
+    fn core_layout(&mut self, app: &str) -> Option<String> {
+        let name = core_layout_name(app);
         if let Some(done) = self.done.get(&name) {
             return done.clone();
         }
         if self.in_progress.contains(&name) {
             return None;
         }
-        let info = self.catalog.blueprint(app).copied()?;
+        let info = self.catalog.core_layout(app).copied()?;
         self.in_progress.insert(name.clone());
         let saved = std::mem::replace(&mut self.at, name.clone());
         let versions: Vec<(i64, Option<String>, String)> = self
@@ -490,7 +490,7 @@ impl Converter<'_> {
                     match c.strip_prefix(crate::components::CORE) {
                         Some(bare) => {
                             let (app, part) = bare.split_once('/').unwrap_or((bare, ""));
-                            if !part.is_empty() || self.catalog.is_blueprint(app) {
+                            if !part.is_empty() || self.catalog.is_core_layout(app) {
                                 (Some(app.to_owned()), Some(part.to_owned()))
                             } else {
                                 (None, None)
@@ -515,11 +515,11 @@ impl Converter<'_> {
                     // A whole blueprint (pinned: that version's element).
                     match version {
                         Some(n) => self
-                            .blueprint_version(&app, n)
-                            .map(|el| sealed(blueprint_name(&app), el, true, None)),
+                            .core_layout_version(&app, n)
+                            .map(|el| sealed(core_layout_name(&app), el, true, None)),
                         None => self
-                            .blueprint(&app)
-                            .map(|el| sealed(blueprint_name(&app), el, false, None)),
+                            .core_layout(&app)
+                            .map(|el| sealed(core_layout_name(&app), el, false, None)),
                     }
                 }
                 (Some(app), Some(part)) => self.part(&app, &part, version).map(|el| {
@@ -615,9 +615,9 @@ impl Converter<'_> {
                         };
                     }
                 }
-            } else if self.catalog.is_blueprint(target) {
-                self.blueprint(target)
-                    .map(|el| sealed(blueprint_name(target), el, false, Some(target.to_owned())))
+            } else if self.catalog.is_core_layout(target) {
+                self.core_layout(target)
+                    .map(|el| sealed(core_layout_name(target), el, false, Some(target.to_owned())))
             } else {
                 None
             };
@@ -643,8 +643,8 @@ impl Converter<'_> {
     }
 
     /// One version of blueprint `app` as an element (pinned uses).
-    fn blueprint_version(&mut self, app: &str, n: i64) -> Option<String> {
-        let info = self.catalog.blueprint(app).copied()?;
+    fn core_layout_version(&mut self, app: &str, n: i64) -> Option<String> {
+        let info = self.catalog.core_layout(app).copied()?;
         let (_, v) = self.old.version(app, Some(n))?;
         let Ok(doc) = serde_json::from_str::<Value>(&v.json) else {
             return None;

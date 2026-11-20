@@ -100,7 +100,7 @@ settings are logged at startup.
 | `CONSTRUCT_MONITOR_LLM_TOKENS_PER_DAY` | `1000000` | It warns above this many model tokens a day: uncached input, cache writes and output. Tokens read from the prompt cache (a twentieth of the price) are counted (`direction="cache_read"`) and shown, but not toward this. |
 | `CONSTRUCT_MONITOR_TEMP_PODS_PERCENT` | `80` | It warns once live temporary pods reach this share of `CONSTRUCT_TEMP_POD_MAX` (40 of 50), before new ones are refused. |
 | `CONSTRUCT_AGENTS_PRIVATE_HOSTS` | unset | `1`: the Agents source may sign in to a runner on any address over http (local development only); otherwise `https://` public hosts. |
-| `CONSTRUCT_SHOW_DEV_APPS` | unset | `1`: MCP also lists the dev blueprints and sources (`pixelfed_sample_no_login`; it works either way). |
+| `CONSTRUCT_SHOW_DEV_APPS` | unset | `1`: MCP also lists the dev core layouts and sources (`pixelfed_sample_no_login`; it works either way). |
 | `CONSTRUCT_TEST_HOOKS` | unset | `1` enables `POST /v1/test/fault` and local Web Push receivers. Tests only. |
 
 The fake Pixelfed's own variables are in [testing.md](testing.md#fake-pixelfed).
@@ -203,7 +203,7 @@ Counts live in memory and restart from zero.
 
 - **In a pod:** the **Server monitoring** data source (`monitor`, feed `overview`) serves a summary, plain-language
   checks and every counter. The data is server-wide, so a pod reads it only after
-  `server pods monitoring <name> on`. The built-in layout **Server health** (blueprint `server_health`,
+  `server pods monitoring <name> on`. The built-in layout **Server health** (core layout `server_health`,
   `crates/source-monitor/layouts/server_health/`) shows it: the status, the checks, the devices (below) and every
   counter. Use it whole, `{"type": "core://Use", "ref": "@core/server_health"}` as a layout's root with feeds
   `[["monitor","overview"],["monitor","devices"]]`, or open it by reference (`action.navigation.open` with

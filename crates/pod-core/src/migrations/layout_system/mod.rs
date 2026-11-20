@@ -47,7 +47,7 @@ pub const STEPS: &[Step] = &[
      DROP TABLE IF EXISTS layout_versions;
      DROP TABLE IF EXISTS workspace_revisions;
      DELETE FROM pod_settings
-       WHERE key IN ('apps.hidden', 'updates.dismissed', 'blueprints.convert', 'layouts.convert');",
+       WHERE key IN ('apps.hidden', 'updates.dismissed', 'core_layouts.convert', 'layouts.convert');",
     ),
     Step::rust(
         "component_features",

@@ -1,9 +1,9 @@
 # The Construct — notes for Claude
 
 Server-driven UI: a Rust pod serves app layouts (JSON `UiNode` trees) and entities; desktop, Android and a headless
-simulator draw them with one Rust renderer (`construct-render`) over one Rust engine (decision `rust-clients`). Built-in layouts are blueprints, not listed:
+simulator draw them with one Rust renderer (`construct-render`) over one Rust engine (decision `rust-clients`). Built-in layouts are core layouts, not listed:
 Pixelfed (`pixelfed`), Events (`events`), Agents (`agents`), Server health (`server_health`), the blank home (`shell`), Settings
-(`settings`) and the inbox (`inbox`). There are no apps at runtime: a pod's layouts are the user's own (from blueprints or Collections),
+(`settings`) and the inbox (`inbox`). There are no apps at runtime: a pod's layouts are the user's own (from core layouts or Collections),
 starting with `home`, which clients open first and which embeds and presents the others on one engine
 (decision `layouts-not-apps`).
 
@@ -20,7 +20,7 @@ issues. `docs/history/` is archived; don't treat it as current.
   binary and `server pods` CLI.
 - `crates/source-pixelfed`, `source-collections`, `source-events` (Events), `source-monitor`,
   `source-agents` (Agents: an external agent runner, [docs/agents.md](docs/agents.md)), `source-shell` (the home
-  blueprint): the sources.
+  core layout): the sources.
   `crates/web-extract`: the web module (page fetching and extraction, host policy, search, web prompts);
   `crates/agent` (`construct-agent`): the agent module every model call goes through; `pod_core::jacks`: the
   abilities a pod is plugged into (decisions `jacks`, `web-and-agent-modules`).
@@ -37,7 +37,7 @@ issues. `docs/history/` is archived; don't treat it as current.
   `/web` only with `CONSTRUCT_WEB=1`; `scripts/web_build.sh` builds it); `crates/construct-sim` the headless simulator over it
   ([docs/simulator.md](docs/simulator.md)).
 - `fake-pixelfed/` the fake upstream (primary test target); `crates/e2e` the end-to-end suite.
-- `crates/source-*/layouts/<blueprint>/NNNN.json` layout versions; `crates/protocol/features/` the named vocabulary
+- `crates/source-*/layouts/<layout>/NNNN.json` layout versions; `crates/protocol/features/` the named vocabulary
   (plumbing); `crates/pod-core/components/<name>/NNNN.json` the server components (porcelain, decision
   `plumbing-and-porcelain`); a source's own in `crates/source-*/components/` (decision `adapter-components`).
 - Each crate's integration tests are one binary, `tests/integration/main.rs`: add a test file as a `mod` there
@@ -160,8 +160,8 @@ connector); a new session started after that sees the new tools.
 ## House rules
 
 - **Change what the user actually sees.** A request about "my notifications" or "the shopping screen" is about
-  the element their pod's home reaches there, which may be the user's own copy of a blueprint (copies don't
-  follow blueprints). Before changing a blueprint, look at what real pods draw (on staging, MCP `list_layouts`:
+  the element their pod's home reaches there, which may be the user's own copy of a core layout (copies don't
+  follow core layouts). Before changing a core layout, look at what real pods draw (on staging, MCP `list_layouts`:
   `reached` and `copy_of`, decision `trace-from-home`), and say which pods' copies the change won't reach; a fix
   for one user's screen may be an edit of their copy instead (or as well). Agents without the repo get the same
   rule from the pod's MCP instructions.
