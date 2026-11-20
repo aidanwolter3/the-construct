@@ -107,7 +107,7 @@ impl Source for DatesAdapter {
                 return pod_core::unknown_feed(NAME, feed);
             }
             let tz = pod
-                .blocking(|s| pod_core::tz::time_zone(s))
+                .blocking(pod_core::tz::time_zone)
                 .await
                 .unwrap_or(TimeZone::UTC);
             turn_with_the_day(pod);
@@ -213,7 +213,7 @@ fn turn_with_the_day(pod: &Pod) {
                 break;
             };
             let tz = pod
-                .blocking(|s| pod_core::tz::time_zone(s))
+                .blocking(pod_core::tz::time_zone)
                 .await
                 .unwrap_or(TimeZone::UTC);
             let wait = until_midnight(&tz, pod_core::util::now_secs());
