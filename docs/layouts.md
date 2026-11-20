@@ -272,6 +272,7 @@ request. Any layout may bind them; a custom app needs no feed for them.
 | `local://nav` | Where the layout is drawn (feature `nav_data`): `can_go_back`, `presentation` (`root`, `push`, `sheet`, `panel`, `screen`, `inline`), `pushed`, `inline`, `in_frame` (in a sheet, panel or overlay; an overlay from the top or bottom says `sheet`, from the start or end `panel`) |
 | `local://screen` | In a page screen (feature `nav_data`): `loading`, `error` ("" when none) of its `data` load |
 | `local://theme` | The pod's theme colours for the app's mode (feature `theme`): `page` (a page's background), `card` (cards and rows on it), `card_border`, `muted_text`, `accent`, `accent_surface`, `muted_surface`, `success`, `success_surface`, `error`, `error_surface`, `highlight`, `like`, `unread`, and a chart's series `chart_1` to `chart_8` and `chart_other` (decision `chart-colours`: bind `${local://theme#chart_$item.series}`), each with a light and a dark value; set with MCP `set_theme`, plus up to 40 tokens a pod names itself (decision `custom-theme-tokens`). Once a pod sets `accent`, switches and `core://Button` draw in it in light mode too, and an optional `on_accent` of its own colours what goes on them (decision `controls-follow-the-theme`). Bind these instead of fixed `#RRGGBB` colours, which stay the same in dark mode (decision `dark-palette`; layout writes answer `warnings` for each). |
+| `local://<anything else>` | The layout's own values on this device: `action.local.set` writes them, any binding reads them (`${local://shell#tab}`). They last while the app runs; with `"keep": true` on the set (feature `local_keep`) the device keeps the fields across starts and puts them back before its first frame, per pod, at most 200 values of 1 KB, never sent to the pod. For what belongs to a device, not to the pod's data: the tab that is open, a filter. |
 | `local://session` | `open`, `server`, `error`, `message`: the pod sign-in; `status`: an upstream sign-in in progress or failed |
 
 A `core://Conditional` `equals` may bind the item (`"equals": "$item.id"`). A `core://Conditional` value may be such a binding: `{"value": "${local://inbox#unread}", "equals": "0", ...}`. With `"not": true` the same test shows its content only while something is unread.
@@ -325,8 +326,22 @@ sees one and changing one needs no app build. Use one anywhere a node goes:
   `component_json_params` to expand a component that has one). In the template,
   `$arg.<name>` is an argument (a string that is only `"$arg.n"` keeps the argument's type; it may name a key too),
   `{"type": "core://Children"}` is where the caller's children go (`"at": i` for one), `{"type": "core://IfArg",
-  "arg", "equals"?, "then", "else"?}` keeps a branch, and `{"type": "core://Fragment", "children"}` is several
-  siblings. Every example must expand to plumbing a pod would save and serve: within the limits layouts are held
+  "arg", "equals"?, "then", "else"?}` keeps a branch (`equals` may be another argument), and `{"type":
+  "core://Fragment", "children"}` is several siblings. Three more need feature `component_templates` (decision
+  `element-roles-and-reuse`; the pod records it on an element that uses one, and a client without it is sealed
+  the newest entry of the name it can read):
+  - `{"type": "core://Each", "arg": "<a json list argument>", "as": "<name>", "template": <node>}` repeats the
+    template once per entry (at most 200). Inside it `$arg.<name>` is the entry when it is one value,
+    `$arg.<name>_<key>` a key of an entry that is an object, and `$arg.<name>_index` its place from 0.
+  - `{"type": "core://Match", "arg" | "value", "cases": {"<key>": <node>}, "else"?: <node>}` keeps one piece by a
+    key. With `arg`, the case the argument names is chosen when the component is expanded. With `value` (a
+    binding), every case stays under a `core://Conditional` `equals`, and `else` under a `not` for each key.
+  - **Named slots**: `{"type": "core://Children", "slot": "<name>"}` takes the nodes a use passes as `"slots":
+    {"<name>": [nodes]}` (the name may come from an argument); `{"type": "core://IfArg", "slot": "<name>",
+    "then"}` keeps a piece while the use filled that slot. `children` stays the unnamed slot. An example may pass
+    `slots` too.
+  References never ride inside a `json` argument: a component that takes layouts takes them as `core://Layout`
+  nodes in a slot (`core:tab_shell`), so every reference is still at one of the three sites the pod follows. Every example must expand to plumbing a pod would save and serve: within the limits layouts are held
   to (`corner_dp` at most 512, known icons, …). A server component that doesn't stops the server from starting
   and names the file and example.
 - **Following and pinning.** Without `version` a use follows the component: the layout gets a new version when the
@@ -375,6 +390,23 @@ The server components:
 | `core:pixelfed_post` | `focus` | A Pixelfed post and its comments on a post screen (route `$route.id`), optionally scrolled to and highlighting one comment; the content of the blueprint's `post`, `comments` and `comment_thread` screens (shipped by `source-pixelfed`). |
 | `core:pixelfed_comment_box` | | The box that comments on the screen's post; those screens' footer (shipped by `source-pixelfed`). |
 | `core:message_page` | `title`, `body`, `background`; children: actions | A whole page with a message in the middle and actions under it. |
+| `core:screen_scaffold` | `title`, `spacing`, `padding_h`, `data`, `follow_end`; children: the content; slots `actions`, `footer` | The usual page or screen: a pinned header (Back, the title, a spinner while its data loads, the `actions` on the right), the children in a padded column that scrolls, and the `footer` pinned under it; with `data`, a failed load says so with Try again. |
+| `core:tab_shell` | `tabs` (`[{key, title, icon}]`), `first`, `state`, `rail_width`; a slot per tab key; slots `rail_top`, `rail_bottom` | A whole app's shell: one list of tabs is a dock along the bottom of a phone and a rail down the side of an `expanded` window, with the open tab's slot (usually one `core://Layout`) under or beside it. The open tab is kept on the device (`local://shell#tab`, feature `local_keep`); before any choice the `first` tab shows. |
+| `core:grouped_list` | `corner`; children | Rows in one rounded card with hairlines only between them: a `core://List` or `core://Column` with `spacing_dp` 1 whose rows draw on the card colour (`core:item_row` does). |
+| `core:item_row` | `title`, `meta`, `meta_lines`, `title_color`, `leading`, `trailing`, `chevron`, `background`; children: the leading child, then the trailing one | A row with room at both ends: a leading child (an icon, a checkbox, a picture), a title with a muted line under it, then with `trailing` its second child and a › with `chevron`; with `leading` false the first child trails. On the card colour, for `core:grouped_list`. |
+| `core:titled_section` | `text`, `space_above`; children | A section: space above, a `core:section_label` heading, then its children. |
+| `core:callout` | `title`, `text`, `tone`, `background`, `color`, `corner`; children | A tinted panel that says one thing in a tone: a heading in the tone's colour, a text, then its children. |
+| `core:counted_list` | `count`, `empty`, `corner`; children: the list | A list that is its rows in a `core:grouped_list` while `count` (the list's `{query_key, where?}`) has rows, and the `empty` line while it has none. |
+| `core:checkable_row` | `title`, `field`, `endpoint`, `meta`, `description`, `tint`; children: at the end | A row that ticks a yes/no field of `$item` at a tap (`{id, <field>}` to the endpoint): a ring, or a filled tick with the title struck through. |
+| `core:choice_chip` | `label`, `value`, `chosen`, `on_click`, `tint`, `on_tint`, `description` | One choice among several: filled while `chosen` (a binding) equals `value`, outlined otherwise; `on_click` chooses it (a mutation of a row's field, or `action.local.set` for a draft). |
+
+`core:pill` and `core:tinted_icon` also take `tone` (`accent`, `success`, `error`, `muted`: the theme's pair for
+it) in place of two colours, `core:card` its paddings (`padding_h`, `padding_v`), and `core:page_header` a `weight`,
+a least `height` and a `loading` spinner.
+
+What each is for, in a line, is in `components/catalog.json` beside the files (and each source's `catalog.json`
+for what it ships): MCP `find_elements` answers from it, by a query, a role, a scope or a category (`primitive`,
+`row`, `container`, `scaffold`, `pattern`, `layout`). A test fails when something shipped has no entry.
 
 Their definitions are the files; `get_component` reads them with examples. See decision
 [`plumbing-and-porcelain`](decisions/plumbing-and-porcelain.md), and [`layout-parts`](decisions/layout-parts.md) for
