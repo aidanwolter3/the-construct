@@ -52,7 +52,8 @@ newest() {
   local d
   for d in "$1"/*/; do
     d=${d%/}
-    [[ -e $d/$2 ]] && echo "$(basename "$d" | sed 's/^android-//') $d"
+    # `if`, not `&&`: a miss on the last folder would fail the pipeline and, under `set -e`, end the script silently.
+    if [[ -e $d/$2 ]]; then echo "$(basename "$d" | sed 's/^android-//') $d"; fi
   done | sort -t. -k1,1n -k2,2n -k3,3n | tail -1 | cut -d' ' -f2-
 }
 TOOLS=$(newest "$SDK/build-tools" aapt2)
