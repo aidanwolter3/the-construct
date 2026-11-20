@@ -574,12 +574,11 @@ pub fn reseal_followers(
             v["needs"] = union(&v["needs"], &needs);
             let id = object_id(&v);
             cstore::put_object(conn, &id, &v, &features)?;
-            if let Some(seq) = cstore::move_name(
+            if let Some(seq) = cstore::move_name_resealed(
                 conn,
                 &f,
                 &id,
-                crate::layouts::AUTHOR_POD,
-                Some(&format!("Re-sealed: {n} moved")),
+                &format!("{} {n} moved", cstore::RESEAL_NOTE),
             )? {
                 out.push((f.clone(), seq));
                 queue.push_back(f);
@@ -802,6 +801,23 @@ pub async fn mcp(pod: &Pod, name: &str, args: &Value) -> Option<Result<Value, Va
 
 type Tool = fn(&Pod, &Connection, &Value) -> Result<Value, Value>;
 
+/// `{objects, bytes}`: the elements a write moved (the one written and every
+/// one re-sealed above it) and their size together.
+fn refetch(pod: &Pod, moved: &[(String, i64)]) -> Value {
+    let names: BTreeSet<&str> = moved.iter().map(|(n, _)| n.as_str()).collect();
+    let bytes: i64 = pod
+        .store()
+        .with_conn(|c| {
+            let mut sum = 0;
+            for n in &names {
+                sum += cstore::name_bytes(c, n)?;
+            }
+            Ok::<_, rusqlite::Error>(sum)
+        })
+        .unwrap_or(0);
+    json!({ "objects": names.len(), "bytes": bytes })
+}
+
 async fn run(pod: &Pod, args: &Value, f: Tool) -> Result<Value, Value> {
     let (p, a) = (pod.clone(), args.clone());
     match tokio::task::spawn_blocking(move || p.store().with_conn(|c| f(&p, c, &a))).await {
@@ -846,7 +862,13 @@ pub(crate) async fn run_write(
     })
     .await
     .map_err(|e| refuse("internal", e.to_string()))?;
-    let ((answer, moved), p) = r?;
+    let ((mut answer, moved), p) = r?;
+    // What the write costs a device that had the construct before it: every
+    // name that moved is a new object, fetched whole (decision
+    // `element-roles-and-reuse`).
+    if answer.is_object() && !moved.is_empty() {
+        answer["refetch"] = refetch(&p, &moved);
+    }
     // Cached objects stay valid (they are immutable); roots don't.
     publish(&p, &moved);
     // Publications kept shared follow their names (decision `sharing`).
@@ -880,6 +902,7 @@ fn list_layouts(pod: &Pod, conn: &Connection, _: &Value) -> Result<Value, Value>
             "title": el.as_ref().map(|e| e["title"].clone()),
             "icon": el.as_ref().map(|e| e["icon"].clone()),
             "reached": super::trace::reached(&reach, n),
+            "bytes": cstore::name_bytes(conn, n).map_err(store_err)?,
         });
         let uses = el
             .as_ref()

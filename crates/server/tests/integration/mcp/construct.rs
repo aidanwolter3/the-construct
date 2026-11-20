@@ -212,6 +212,85 @@ async fn a_pods_construct_is_edited_and_resealed() {
     assert_eq!(cyc["error"], "cycle", "{cyc}");
 }
 
+/// Re-seals in a row are one entry of a name's history, a write says what
+/// it makes a device fetch, and the listing says how big each layout is
+/// (decision `element-roles-and-reuse`).
+#[tokio::test]
+async fn reseals_are_one_history_entry_and_a_write_says_what_it_costs() {
+    let env = env().await;
+    let pod_code = env.pod("mine").await;
+    let access = env.connect(&pod_code).await;
+    let (a, _, _) = build(&env, &access).await;
+
+    let (_, before) = env.tool(&access, "get_layout", json!({"id": "home"})).await;
+    let v = before["version"].as_i64().unwrap();
+
+    // Three edits of a component home uses: home is re-sealed three times.
+    let mut last = Value::Null;
+    for mark in ["a ", "b ", "c "] {
+        let (err, d) = env
+            .tool(
+                &access,
+                "update_component",
+                json!({"name": "tile", "component": tile(mark)}),
+            )
+            .await;
+        assert!(!err, "{d}");
+        last = d;
+    }
+    // The tile, and B, A and home above it.
+    assert_eq!(last["refetch"]["objects"], 4, "{last}");
+    assert!(last["refetch"]["bytes"].as_i64().unwrap() > 500, "{last}");
+
+    let (_, home) = env.tool(&access, "get_layout", json!({"id": "home"})).await;
+    assert_eq!(home["version"], v + 1, "one entry for the three re-seals");
+    let resealed: Vec<&Value> = home["history"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|h| {
+            h["note"]
+                .as_str()
+                .is_some_and(|n| n.starts_with("Re-sealed"))
+        })
+        .collect();
+    assert_eq!(resealed.len(), 1, "{home}");
+    assert!(home["layout"].to_string().contains("tile"), "{home}");
+    let drawn = env.drawn(&a, &pod_code).await;
+    assert!(
+        drawn["workspace"].to_string().contains("c Recipes"),
+        "{drawn}"
+    );
+
+    // An edit of home itself is a new entry, and the next re-seal one more.
+    let (err, d) = env
+        .tool(
+            &access,
+            "update_layout",
+            json!({"app": "home", "base_version": v + 1, "note": "Same again",
+                "json_patch": [{"op": "add", "path": "/root/spacing_dp", "value": 4}]}),
+        )
+        .await;
+    assert!(!err, "{d}");
+    assert_eq!(d["version"], v + 2, "{d}");
+    assert_eq!(d["refetch"]["objects"], 1, "{d}");
+    let (err, d) = env
+        .tool(
+            &access,
+            "update_component",
+            json!({"name": "tile", "component": tile("d ")}),
+        )
+        .await;
+    assert!(!err, "{d}");
+    let (_, home) = env.tool(&access, "get_layout", json!({"id": "home"})).await;
+    assert_eq!(home["version"], v + 3, "{home}");
+
+    let (_, list) = env.tool(&access, "list_layouts", json!({})).await;
+    for l in list["layouts"].as_array().unwrap() {
+        assert!(l["bytes"].as_i64().unwrap() > 100, "{l}");
+    }
+}
+
 /// Bindings between layouts (issue #301): one layout reads its list from an
 /// input, home embeds it twice bound to two collections, and each embed
 /// draws its own; an unbound use and a binding outside home are refused,

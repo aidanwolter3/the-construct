@@ -172,11 +172,93 @@ pub fn move_name(
             params![name, hash, at],
         )?;
     }
-    conn.execute(
-        "DELETE FROM name_history WHERE name = ?1 AND seq <= ?2",
-        params![name, seq - MAX_HISTORY],
-    )?;
+    trim_history(conn, name)?;
     Ok(Some(seq))
+}
+
+/// The start of a re-seal's note in a name's history (`Re-sealed: <name>
+/// moved`): the pod wrote the entry because something the element references
+/// moved, not because anyone edited it.
+pub const RESEAL_NOTE: &str = "Re-sealed:";
+
+/// [`move_name`] for a re-seal. Re-seals in a row are one entry: when the
+/// name's newest entry is a re-seal too, that entry takes the new element
+/// and note, and its `seq` stays. So a name's history holds what was
+/// written to it, with at most one re-seal between two writes, instead of
+/// one entry per move of anything it reaches (decision
+/// `element-roles-and-reuse`).
+pub fn move_name_resealed(
+    conn: &Connection,
+    name: &str,
+    hash: &str,
+    note: &str,
+) -> rusqlite::Result<Option<i64>> {
+    let now = self::name(conn, name)?;
+    if now.as_deref() == Some(hash) {
+        return Ok(None);
+    }
+    let newest: Option<(i64, String, Option<String>)> = conn
+        .query_row(
+            "SELECT seq, author, note FROM name_history WHERE name = ?1 ORDER BY seq DESC LIMIT 1",
+            [name],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+        )
+        .optional()?;
+    let author = crate::layouts::AUTHOR_POD;
+    match newest {
+        Some((seq, a, Some(n))) if a == author && n.starts_with(RESEAL_NOTE) => {
+            let at = now_secs();
+            conn.execute(
+                "UPDATE name_history SET hash = ?3, at = ?4, note = ?5 WHERE name = ?1 AND seq = ?2",
+                params![name, seq, hash, at, note],
+            )?;
+            conn.execute(
+                "INSERT OR REPLACE INTO names (name, hash, updated_at) VALUES (?1, ?2, ?3)",
+                params![name, hash, at],
+            )?;
+            Ok(Some(seq))
+        }
+        _ => move_name(conn, name, hash, author, Some(note)),
+    }
+}
+
+/// Keep the newest [`MAX_HISTORY`] entries somebody wrote, and the re-seals
+/// among them: re-seals don't count toward the limit, so they can't push a
+/// real edit out of what `restore_version` reaches.
+fn trim_history(conn: &Connection, name: &str) -> rusqlite::Result<()> {
+    let oldest_kept: Option<i64> = conn
+        .query_row(
+            "SELECT seq FROM name_history WHERE name = ?1
+             AND NOT (author = ?2 AND COALESCE(note, '') LIKE ?3)
+             ORDER BY seq DESC LIMIT 1 OFFSET ?4",
+            params![
+                name,
+                crate::layouts::AUTHOR_POD,
+                format!("{RESEAL_NOTE}%"),
+                MAX_HISTORY - 1
+            ],
+            |r| r.get(0),
+        )
+        .optional()?;
+    if let Some(seq) = oldest_kept {
+        conn.execute(
+            "DELETE FROM name_history WHERE name = ?1 AND seq < ?2",
+            params![name, seq],
+        )?;
+    }
+    Ok(())
+}
+
+/// The size in bytes of the element `name` points at now (0: none).
+pub fn name_bytes(conn: &Connection, name: &str) -> rusqlite::Result<i64> {
+    Ok(conn
+        .query_row(
+            "SELECT o.size FROM names n JOIN objects o ON o.hash = n.hash WHERE n.name = ?1",
+            [name],
+            |r| r.get(0),
+        )
+        .optional()?
+        .unwrap_or(0))
 }
 
 /// The names whose elements follow `name`.
