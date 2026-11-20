@@ -2539,6 +2539,9 @@ impl<'i> Build<'_, 'i> {
                     (*columns).max(1) as usize
                 };
                 let mut last_group: Option<String> = None;
+                // With headers_only, one header per distinct value wherever it
+                // comes (docs/layouts.md), not one per run of equal values.
+                let mut seen_groups: std::collections::HashSet<String> = Default::default();
                 let mut row_cells: Vec<usize> = Vec::new();
                 let flush = |this: &mut Self, cells: &mut Vec<usize>, kids: &mut Vec<usize>| {
                     if cells.is_empty() {
@@ -2600,7 +2603,12 @@ impl<'i> Build<'_, 'i> {
                     };
                     if let Some(g) = group_by {
                         let v = item.get(&g.field).map(render).unwrap_or_default();
-                        if last_group.as_deref() != Some(v.as_str()) {
+                        let new_group = if g.headers_only {
+                            seen_groups.insert(v.clone())
+                        } else {
+                            last_group.as_deref() != Some(v.as_str())
+                        };
+                        if new_group {
                             last_group = Some(v);
                             flush(self, &mut row_cells, &mut kids);
                             let hb = B {
