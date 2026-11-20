@@ -202,25 +202,33 @@ fn day_of(store: &Store, now: i64) -> rusqlite::Result<String> {
 }
 
 /// Middleware of the pod's routes: notes the calling device, off the
-/// request's path (the write runs after, on its own).
+/// request's path (the write runs after, on its own). Only a caller with a
+/// session is one of the pod's devices: a public path (an upload, a
+/// Pixelfed image, the OAuth callback) is open to anyone who has the pod's
+/// id, and what they send must not reach its devices or fire its watches.
 pub(crate) async fn note_layer(State(pod): State<Pod>, req: Request, next: Next) -> Response {
     let skip = req.uri().path() == "/v1/mcp"
         || req.headers().contains_key(crate::session::INTERNAL_HEADER);
-    if !skip && let Some(ping) = Ping::of(req.headers()) {
-        note(&pod, ping, now_secs());
+    if !skip
+        && let Some(token) = crate::session::bearer(req.headers())
+        && let Some(ping) = Ping::of(req.headers())
+    {
+        note(&pod, crate::session::session_hash(token), ping, now_secs());
     }
     next.run(req).await
 }
 
-/// Note a ping: written now when due ([`Recorder`]), then watches checked
-/// when the device changed.
-pub fn note(pod: &Pod, ping: Ping, now: i64) {
+/// Note a ping from the session whose hash is `session`: written now when
+/// due ([`Recorder`]) and the session is valid, then watches checked when
+/// the device changed.
+pub fn note(pod: &Pod, session: String, ping: Ping, now: i64) {
     let rec = pod.local::<Recorder>();
     let house = rec.housekeeping(now);
     let Some(due) = rec.due(ping, now) else {
         return;
     };
     let pod = pod.clone();
+    let ttl = pod.session_ttl_secs();
     tokio::spawn(async move {
         let device = due.ping.device.clone();
         let changed = due.changed;
@@ -230,15 +238,22 @@ pub fn note(pod: &Pod, ping: Ping, now: i64) {
                     note_server_build(s, protocol::build(), now)?;
                     prune(s, now)?;
                 }
+                if !s.session_valid(&session, ttl)? {
+                    return Ok(false);
+                }
                 let day = day_of(s, now)?;
-                s.with_conn(|c| write(c, &due.ping, due.pings, &day, now))
+                s.with_conn(|c| write(c, &due.ping, due.pings, &day, now))?;
+                Ok(true)
             })
             .await;
-        if let Err(e) = r {
-            tracing::warn!(status = ?e.0, "device ping not recorded");
-            return;
-        }
-        if changed {
+        let written = match r {
+            Ok(w) => w,
+            Err(e) => {
+                tracing::warn!(status = ?e.0, "device ping not recorded");
+                return;
+            }
+        };
+        if written && changed {
             check_watches(&pod, &device).await;
         }
     });

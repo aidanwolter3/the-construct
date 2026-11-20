@@ -169,3 +169,65 @@ async fn a_device_is_recorded_and_a_watch_fires_once_when_it_updates() {
     let v = tool(&pod, "list_devices", json!({"kind": "web"})).await;
     assert_eq!(v["devices"], json!([]));
 }
+
+/// A request from someone who isn't the pod's: on a public path anyone with
+/// the pod's id can reach (no bearer), or with a bearer that is no session.
+async fn stranger(pod: &Pod, uri: &str, bearer: Option<&str>, device: &str) {
+    let mut req = Request::builder()
+        .uri(uri)
+        .header(protocol::DEVICE_HEADER, device)
+        .header(
+            protocol::BUILD_HEADER,
+            "android 0.6.0+20261118153000.c41d9e2",
+        )
+        .header(protocol::DEVICE_NAME_HEADER, "Not yours")
+        .header(protocol::FEATURES_HEADER, "bars");
+    if let Some(b) = bearer {
+        req = req.header("authorization", format!("Bearer {b}"));
+    }
+    let resp = pod_core::app(pod.clone())
+        .oneshot(req.body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    let _ = resp.into_body().collect().await;
+}
+
+#[tokio::test]
+async fn only_the_pods_sessions_are_its_devices() {
+    let pod = pod();
+    let w = tool(
+        &pod,
+        "watch_device",
+        json!({"kind": "android", "until": {"feature": "bars"}, "then": {"notify": "x"}}),
+    )
+    .await;
+    assert_eq!(w["ok"], true, "{w}");
+    stranger(&pod, "/v1/uploads/0000", None, "stranger0device01").await;
+    stranger(
+        &pod,
+        "/v1/notifications/channels",
+        Some("not-a-session"),
+        "stranger0device02",
+    )
+    .await;
+    ping(&pod, "list").await;
+    devices_when(&pod, |v| {
+        v["devices"].as_array().is_some_and(|d| !d.is_empty())
+    })
+    .await;
+    // A second write of the phone's: the strangers' had time to land too.
+    ping(&pod, "list,text").await;
+    let v = devices_when(&pod, |v| {
+        v["devices"][0]["features"] == json!(["list", "text"])
+    })
+    .await;
+    let ids: Vec<&str> = v["devices"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|d| d["id"].as_str())
+        .collect();
+    assert_eq!(ids, [PHONE], "{v}");
+    // No stranger's device met the watch: it still waits.
+    assert_eq!(v["watches"].as_array().unwrap().len(), 1, "{v}");
+}
