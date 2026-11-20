@@ -199,7 +199,7 @@ pub fn reuse(pod: &Pod, doc: &Value, writing: Option<&str>) -> Vec<String> {
         });
     }
 
-    hints.sort_by(|a, b| b.saving.cmp(&a.saving));
+    hints.sort_by_key(|a| std::cmp::Reverse(a.saving));
     let extra = hints.len().saturating_sub(MAX_HINTS);
     let mut out: Vec<String> = hints.into_iter().take(MAX_HINTS).map(|h| h.text).collect();
     if extra > 0 {
@@ -455,7 +455,7 @@ fn patterns(pod: &Pod, writing: Option<&str>, deadline: Instant) -> Vec<Pattern>
         }
     }
     // The larger pattern first: a row before the icon inside it.
-    out.sort_by(|a, b| b.nodes.cmp(&a.nodes));
+    out.sort_by_key(|a| std::cmp::Reverse(a.nodes));
     out
 }
 
