@@ -1,5 +1,5 @@
 //! The core with test adapters only (D40): the catalog's checks, a
-//! layout-only blueprint, sign-in gating of a source's data, adapter routes
+//! layout-only core layout, sign-in gating of a source's data, adapter routes
 //! and migrations, logout.
 
 use std::sync::Arc;
@@ -16,7 +16,7 @@ use pod_core::layouts::LayoutSource;
 use pod_core::session::session_hash;
 use pod_core::store::{Step, open_session_on};
 use pod_core::{
-    AppState, AuthPolicy, BlueprintInfo, BoxFuture, Catalog, FeedSpec, Hydration, Pod, RequestCtx,
+    AppState, AuthPolicy, BoxFuture, Catalog, CoreLayoutInfo, FeedSpec, Hydration, Pod, RequestCtx,
     SignInProvider, Source, SourceManifest, StaticAdapter,
 };
 use protocol::{DataBundle, EntityRecord, WorkspaceSpec};
@@ -48,7 +48,7 @@ static GATED_FILES: &[LayoutSource] = &[LayoutSource {
     text: layout!("gated"),
 }];
 
-const OPEN: BlueprintInfo = BlueprintInfo {
+const OPEN: CoreLayoutInfo = CoreLayoutInfo {
     id: "open",
     title: "Open",
     icon: "photo",
@@ -56,7 +56,7 @@ const OPEN: BlueprintInfo = BlueprintInfo {
     auth: AuthPolicy::Public,
     feeds: &[("open", "all")],
 };
-const GATED: BlueprintInfo = BlueprintInfo {
+const GATED: CoreLayoutInfo = CoreLayoutInfo {
     id: "gated",
     title: "Gated",
     icon: "photo",
@@ -91,7 +91,7 @@ impl Source for Gated {
     fn name(&self) -> &'static str {
         "gated"
     }
-    fn blueprints(&self) -> Vec<BlueprintInfo> {
+    fn core_layouts(&self) -> Vec<CoreLayoutInfo> {
         vec![GATED]
     }
     fn layout_files(&self) -> &'static [LayoutSource] {
@@ -194,7 +194,7 @@ fn the_catalog_refuses_bad_adapter_sets() {
     ));
     assert_eq!(
         err(vec![open_app(), other_name]),
-        "blueprint 'open' is shipped by two adapters"
+        "core layout 'open' is shipped by two adapters"
     );
     let needs_unknown = Arc::new(StaticAdapter::new(
         "gated",
@@ -212,11 +212,11 @@ fn the_catalog_refuses_bad_adapter_sets() {
         "app 'gated' requires sign-in 'test', which no adapter provides"
     );
     assert!(Catalog::new(vec![open_app(), Arc::new(Gated)]).is_ok());
-    assert!(Catalog::empty().blueprints().next().is_none());
+    assert!(Catalog::empty().core_layouts().next().is_none());
 }
 
 #[tokio::test]
-async fn a_layout_only_blueprint_is_drawn_by_its_key() {
+async fn a_layout_only_core_layout_is_drawn_by_its_key() {
     let state = state();
     let router = pod_core::app(state.clone());
     let (status, body) = pod_core::testing::layout_for(&router, "open", None).await;
@@ -257,7 +257,7 @@ static SHELL_FILES: &[LayoutSource] = &[LayoutSource {
     text: layout!("shell"),
 }];
 
-/// The home blueprint: a pod's home (and so its feeds) needs one.
+/// The home core layout: a pod's home (and so its feeds) needs one.
 fn shell() -> Arc<dyn Source> {
     let data = WorkspaceSpec {
         version: "1.0.0".into(),
@@ -265,7 +265,7 @@ fn shell() -> Arc<dyn Source> {
         entities: Default::default(),
         queries: Default::default(),
     };
-    let info = BlueprintInfo {
+    let info = CoreLayoutInfo {
         id: "shell",
         title: "Home",
         icon: "dashboard",
@@ -396,7 +396,7 @@ async fn sign_ins_lists_the_session_sign_ins() {
             "apps": [{ "id": "gated", "title": "Gated" }],
         }], "providers": [{ "id": "test", "title": "Test service", "signed_in": true }] })
     );
-    // A dev blueprint is listed only when dev apps are shown.
+    // A dev core layout is listed only when dev apps are shown.
     let hidden = Arc::new(AppState::in_memory(vec![open_app(), Arc::new(Gated)]));
     hidden
         .store()
@@ -462,7 +462,7 @@ impl Source for Shipping {
     fn name(&self) -> &'static str {
         "shipping"
     }
-    fn blueprints(&self) -> Vec<BlueprintInfo> {
+    fn core_layouts(&self) -> Vec<CoreLayoutInfo> {
         Vec::new()
     }
     fn layout_files(&self) -> &'static [LayoutSource] {

@@ -332,6 +332,79 @@ pub fn theme_entity(store: &Store) -> rusqlite::Result<protocol::EntityRecord> {
 
 /// The tokens the pod set itself (`{token: {light?, dark?}}`); the rest
 /// follow the defaults, so a later default reaches the pod. Blocking.
+/// The pod setting holding the theme scale it set (decision
+/// `element-roles-and-reuse`): `{name: value}` of [`construct_elements::SCALE`]'s
+/// names; one left out has its default.
+pub const SCALE_SETTING: &str = "theme.scale";
+
+/// The scale values this pod set.
+pub fn scale_on(conn: &rusqlite::Connection) -> serde_json::Map<String, Value> {
+    crate::store::pod_setting_on(conn, SCALE_SETTING)
+        .ok()
+        .flatten()
+        .and_then(|t| serde_json::from_str::<Value>(&t).ok())
+        .and_then(|v| v.as_object().cloned())
+        .unwrap_or_default()
+}
+
+/// The whole scale: each name with the pod's value, else its default.
+pub fn scale(store: &Store) -> serde_json::Map<String, Value> {
+    let set = store.with_conn(scale_on);
+    construct_elements::SCALE
+        .iter()
+        .filter_map(|(n, _)| {
+            let v = set
+                .get(*n)
+                .cloned()
+                .or_else(|| construct_elements::scale_default(n))?;
+            Some(((*n).to_owned(), v))
+        })
+        .collect()
+}
+
+/// Change the scale: `{name: value}`; a size is 0 to 64 dp, `title_weight`
+/// one of the text weights, and `null` puts a name back to its default.
+/// `Err`: what is wrong. Blocking.
+pub fn set_scale(store: &Store, changes: &Value) -> Result<(), String> {
+    let Some(changes) = changes.as_object() else {
+        return Err("\"scale\" is {name: value}".into());
+    };
+    let mut set = store.with_conn(scale_on);
+    for (name, v) in changes {
+        if construct_elements::scale_default(name).is_none() {
+            let names: Vec<&str> = construct_elements::SCALE.iter().map(|(n, _)| *n).collect();
+            return Err(format!(
+                "'{name}' is not a scale name ({})",
+                names.join(", ")
+            ));
+        }
+        match v {
+            Value::Null => {
+                set.remove(name);
+            }
+            Value::String(w)
+                if name == "title_weight"
+                    && ["Regular", "Medium", "SemiBold", "Bold"].contains(&w.as_str()) =>
+            {
+                set.insert(name.clone(), v.clone());
+            }
+            Value::Number(n)
+                if name != "title_weight"
+                    && n.as_f64().is_some_and(|x| (0.0..=64.0).contains(&x)) =>
+            {
+                set.insert(name.clone(), v.clone());
+            }
+            _ if name == "title_weight" => {
+                return Err("title_weight is Regular, Medium, SemiBold or Bold".into());
+            }
+            _ => return Err(format!("{name} is a number of dp from 0 to 64")),
+        }
+    }
+    store
+        .set_pod_setting(SCALE_SETTING, &Value::Object(set).to_string())
+        .map_err(|e| e.to_string())
+}
+
 fn theme_set(store: &Store) -> rusqlite::Result<serde_json::Map<String, Value>> {
     Ok(store
         .pod_setting(THEME_SETTING)?

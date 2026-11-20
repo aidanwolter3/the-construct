@@ -21,7 +21,7 @@ use source_collections::remind;
 use tower::ServiceExt;
 
 fn pod() -> Pod {
-    // With the home blueprint, so the pod has a home whose feeds every
+    // With the home core layout, so the pod has a home whose feeds every
     // layout reports.
     let pod: Pod = Arc::new(AppState::in_memory(vec![
         Arc::new(CollectionsAdapter::new()),

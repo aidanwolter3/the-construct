@@ -1,6 +1,6 @@
-//! Blueprints on the construct (decisions `blueprints-and-home`,
+//! Core layouts on the construct (decisions `blueprints-and-home`,
 //! `content-addressed-construct`): a new pod's home is the whole home
-//! blueprint (`@core/shell`), a layout can be a whole blueprint by
+//! core layout (`@core/shell`), a layout can be a whole core layout by
 //! reference, home owns the feeds and each layout loads what it binds, and
 //! the layout writes are checked.
 
@@ -15,8 +15,8 @@ use pod_core::layouts::LayoutSource;
 use pod_core::session::session_hash;
 use pod_core::store::Store;
 use pod_core::{
-    AppState, AuthPolicy, BlueprintInfo, BoxFuture, FeedSpec, HOME_APP, HOME_BLUEPRINT, Hydration,
-    Pod, RequestCtx, Source, SourceManifest, StaticAdapter,
+    AppState, AuthPolicy, BoxFuture, CoreLayoutInfo, FeedSpec, HOME_APP, HOME_CORE_LAYOUT,
+    Hydration, Pod, RequestCtx, Source, SourceManifest, StaticAdapter,
 };
 use protocol::{DataBundle, EntityRecord, WorkspaceSpec};
 
@@ -35,7 +35,7 @@ const A_FILE: LayoutSource = LayoutSource {
 
 const SHELL_FILE: LayoutSource = LayoutSource {
     dir: "layouts",
-    app_id: HOME_BLUEPRINT,
+    app_id: HOME_CORE_LAYOUT,
     name: "0001",
     text: r#"{"note": "List", "layout": {"type": "core://Workspace", "id": "shell", "title": "Home",
       "slots": [{"slot_id": "list", "provider_uri": "local://inbox",
@@ -64,8 +64,8 @@ impl Source for A {
     fn name(&self) -> &'static str {
         "a"
     }
-    fn blueprints(&self) -> Vec<BlueprintInfo> {
-        vec![BlueprintInfo {
+    fn core_layouts(&self) -> Vec<CoreLayoutInfo> {
+        vec![CoreLayoutInfo {
             id: "a_home",
             title: "A",
             icon: "photo",
@@ -99,8 +99,8 @@ fn shell() -> Arc<dyn Source> {
         entities: Default::default(),
         queries: Default::default(),
     };
-    let info = BlueprintInfo {
-        id: HOME_BLUEPRINT,
+    let info = CoreLayoutInfo {
+        id: HOME_CORE_LAYOUT,
         title: "Home",
         icon: "dashboard",
         dev: false,
@@ -108,7 +108,7 @@ fn shell() -> Arc<dyn Source> {
         feeds: &[],
     };
     Arc::new(StaticAdapter::new(
-        HOME_BLUEPRINT,
+        HOME_CORE_LAYOUT,
         info,
         &[SHELL_FILE],
         &empty,
@@ -172,7 +172,7 @@ async fn layout(pod: &Pod, id: &str) -> (StatusCode, Value) {
 }
 
 #[tokio::test]
-async fn a_new_pod_starts_with_home_as_the_whole_home_blueprint() {
+async fn a_new_pod_starts_with_home_as_the_whole_home_core_layout() {
     let dir = tempfile::tempdir().unwrap();
     let pod = open(&dir.path().join("server.db"));
     let (status, root) = call(&pod, "GET", "/v1/construct", None).await;
@@ -181,12 +181,12 @@ async fn a_new_pod_starts_with_home_as_the_whole_home_blueprint() {
     assert_eq!(home["layout"]["ref"]["name"], "@core/shell", "{home}");
     assert_eq!(home["title"], "Home");
     assert_eq!(home["feeds"], json!([]));
-    // Home draws the whole home blueprint under its own id.
+    // Home draws the whole home core layout under its own id.
     let (status, ws) = layout(&pod, HOME_APP).await;
     assert_eq!(status, StatusCode::OK, "{ws}");
     assert_eq!(ws["workspace"]["type"], "core://Page", "{ws}");
     assert_eq!(ws["workspace"]["id"], HOME_APP, "{ws}");
-    // Blueprints are drawn by their key too (notifications and links name
+    // Core layouts are drawn by their key too (notifications and links name
     // them).
     let (status, _) = layout(&pod, "a_home").await;
     assert_eq!(status, StatusCode::OK);
@@ -216,7 +216,7 @@ fn rusqlite_conn(db: &std::path::Path) -> rusqlite::Connection {
 }
 
 #[tokio::test]
-async fn a_layout_can_be_a_whole_blueprint_by_reference() {
+async fn a_layout_can_be_a_whole_core_layout_by_reference() {
     let dir = tempfile::tempdir().unwrap();
     let pod = open(&dir.path().join("server.db"));
     let whole = json!({"type": "core://Use", "ref": "@core/a_home"});
@@ -427,7 +427,7 @@ async fn layout_writes_are_capped() {
 // ---------- a source that no longer exists (decision `remove-recipes-source`) ----------
 
 /// A pod whose home binds `a/all` and whose layout is the whole `a_home`
-/// blueprint, reopened by a build without source `a`: it opens, serves
+/// core layout, reopened by a build without source `a`: it opens, serves
 /// home, and home binds the feeds that remain.
 #[tokio::test]
 async fn a_removed_source_drops_out_of_home() {
@@ -458,7 +458,7 @@ async fn a_removed_source_drops_out_of_home() {
         .with_conn(|c| Ok::<_, rusqlite::Error>(pod_core::construct::write::home_feeds(c)))
         .unwrap();
     assert!(feeds.is_empty(), "{feeds:?}");
-    // The layout that showed a's blueprint is still there.
+    // The layout that showed a's core layout is still there.
     let (status, ws) = layout(&pod, &id).await;
     assert!(status != StatusCode::INTERNAL_SERVER_ERROR, "{ws}");
     // And layouts can still be written.

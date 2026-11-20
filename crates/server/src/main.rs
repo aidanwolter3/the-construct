@@ -35,7 +35,7 @@
 //! - `CONSTRUCT_TEMP_PODS=1`, `CONSTRUCT_TEMP_POD_HOURS`, `CONSTRUCT_TEMP_POD_MAX`:
 //!   anyone may create a temporary pod.
 //! - `CONSTRUCT_TEST_HOOKS=1`: enables `POST /v1/test/fault` in every pod.
-//! - `CONSTRUCT_SHOW_DEV_APPS=1`: MCP also lists the dev blueprints and sources.
+//! - `CONSTRUCT_SHOW_DEV_APPS=1`: MCP also lists the dev core layouts and sources.
 //! - `CONSTRUCT_SESSION_TTL_DAYS`: lifetime of sessions other than pod tokens.
 //! - `CONSTRUCT_VAPID_PRIVATE_KEY`, `CONSTRUCT_VAPID_SUBJECT`, `CONSTRUCT_PUSH=off`:
 //!   Web Push for notifications (D52); without a key the server makes one and
@@ -284,6 +284,26 @@ fn pods(args: &[&str]) -> Result<(), String> {
                 println!("Pod '{name}' can no longer read the server's monitoring data.");
             }
         }
+        ["gaps", rest @ ..] => {
+            let name = match rest {
+                [] => None,
+                [n] => Some(*n),
+                _ => return Err("usage: server pods gaps [name]".into()),
+            };
+            let all = host.gaps(name)?;
+            if all.iter().all(|(_, g)| g.is_empty()) {
+                println!("No agent has noted anything missing.");
+            }
+            for (pod, gaps) in all {
+                for g in gaps {
+                    println!(
+                        "{pod}\t{}\t{}",
+                        g["at"].as_i64().unwrap_or(0),
+                        g["what"].as_str().unwrap_or("")
+                    );
+                }
+            }
+        }
         ["revoke-mcp", name] => {
             let n = host.revoke_mcp(name)?;
             println!("Revoked {n} MCP credential(s) of pod '{name}'; Claude is disconnected.");
@@ -365,8 +385,23 @@ impl LocalPod {
 /// The local pod's name when `--pod-name` isn't given.
 const LOCAL_POD: &str = "local";
 
-#[tokio::main]
-async fn serve(local: LocalPod) -> Result<(), String> {
+/// The stack of the runtime's threads. Reading, expanding and checking a
+/// layout recurse once per nested node, and components nest boxes in boxes:
+/// the default 2 MiB is not far above what a deep page needs, and a stack
+/// overflow ends the whole server (decision `element-roles-and-reuse`).
+/// Address space, not memory: pages are touched only as far as used.
+const THREAD_STACK: usize = 16 * 1024 * 1024;
+
+fn serve(local: LocalPod) -> Result<(), String> {
+    tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .thread_stack_size(THREAD_STACK)
+        .build()
+        .map_err(|e| format!("starting the runtime: {e}"))?
+        .block_on(serve_on(local))
+}
+
+async fn serve_on(local: LocalPod) -> Result<(), String> {
     let dir = data_dir();
     // A backup waiting in <data dir>/restore goes in place before anything
     // opens a database (docs/server.md "Backups and restore").

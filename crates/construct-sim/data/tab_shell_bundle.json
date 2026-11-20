@@ -1,0 +1,2155 @@
+{
+  "entities": {},
+  "queries": {},
+  "version": "1.0.0",
+  "workspace": {
+    "id": "tab_shell",
+    "root": {
+      "background": "${local://theme#page}",
+      "content": {
+        "children": [
+          {
+            "content": {
+              "children": [
+                {
+                  "content": {
+                    "children": [
+                      {
+                        "content": {
+                          "children": [
+                            {
+                              "children": [
+                                {
+                                  "style": "Headline",
+                                  "type": "core://Text",
+                                  "value_expr": "Today",
+                                  "weight": "SemiBold"
+                                },
+                                {
+                                  "children": [
+                                    {
+                                      "size_dp": 14,
+                                      "type": "core://Spacer"
+                                    },
+                                    {
+                                      "content": {
+                                        "style": "Label",
+                                        "type": "core://Text",
+                                        "value_expr": "This week"
+                                      },
+                                      "content_color": "${local://theme#muted_text}",
+                                      "padding_h_dp": 4,
+                                      "type": "core://Box"
+                                    },
+                                    {
+                                      "size_dp": 8,
+                                      "type": "core://Spacer"
+                                    },
+                                    {
+                                      "background": "${local://theme#card}",
+                                      "border_color": "${local://theme#card_border}",
+                                      "content": {
+                                        "background": "${local://theme#card_border}",
+                                        "content": {
+                                          "children": [
+                                            {
+                                              "children": [
+                                                {
+                                                  "background": "${local://theme#card}",
+                                                  "content": {
+                                                    "align": "Center",
+                                                    "children": [
+                                                      {
+                                                        "children": [
+                                                          {
+                                                            "style": "Label",
+                                                            "type": "core://Text",
+                                                            "value_expr": "Water the seedlings"
+                                                          },
+                                                          {
+                                                            "content": {
+                                                              "content": {
+                                                                "max_lines": 2,
+                                                                "style": "Secondary",
+                                                                "type": "core://Text",
+                                                                "value_expr": ""
+                                                              },
+                                                              "content_color": "${local://theme#muted_text}",
+                                                              "type": "core://Box"
+                                                            },
+                                                            "type": "core://Conditional",
+                                                            "value": ""
+                                                          }
+                                                        ],
+                                                        "spacing_dp": 2,
+                                                        "type": "core://Column"
+                                                      },
+                                                      {
+                                                        "type": "core://Spacer"
+                                                      },
+                                                      {
+                                                        "content": {
+                                                          "style": "Title",
+                                                          "type": "core://Text",
+                                                          "value_expr": "›"
+                                                        },
+                                                        "content_color": "${local://theme#muted_text}",
+                                                        "type": "core://Box"
+                                                      }
+                                                    ],
+                                                    "padding_h_dp": 11,
+                                                    "padding_v_dp": 12,
+                                                    "spacing_dp": 12,
+                                                    "type": "core://Row"
+                                                  },
+                                                  "type": "core://Box"
+                                                },
+                                                {
+                                                  "background": "${local://theme#card}",
+                                                  "content": {
+                                                    "align": "Center",
+                                                    "children": [
+                                                      {
+                                                        "children": [
+                                                          {
+                                                            "style": "Label",
+                                                            "type": "core://Text",
+                                                            "value_expr": "Call the nursery"
+                                                          },
+                                                          {
+                                                            "content": {
+                                                              "content": {
+                                                                "max_lines": 2,
+                                                                "style": "Secondary",
+                                                                "type": "core://Text",
+                                                                "value_expr": ""
+                                                              },
+                                                              "content_color": "${local://theme#muted_text}",
+                                                              "type": "core://Box"
+                                                            },
+                                                            "type": "core://Conditional",
+                                                            "value": ""
+                                                          }
+                                                        ],
+                                                        "spacing_dp": 2,
+                                                        "type": "core://Column"
+                                                      },
+                                                      {
+                                                        "type": "core://Spacer"
+                                                      },
+                                                      {
+                                                        "content": {
+                                                          "style": "Title",
+                                                          "type": "core://Text",
+                                                          "value_expr": "›"
+                                                        },
+                                                        "content_color": "${local://theme#muted_text}",
+                                                        "type": "core://Box"
+                                                      }
+                                                    ],
+                                                    "padding_h_dp": 11,
+                                                    "padding_v_dp": 12,
+                                                    "spacing_dp": 12,
+                                                    "type": "core://Row"
+                                                  },
+                                                  "type": "core://Box"
+                                                }
+                                              ],
+                                              "spacing_dp": 1,
+                                              "type": "core://Column"
+                                            }
+                                          ],
+                                          "type": "core://Column"
+                                        },
+                                        "type": "core://Box"
+                                      },
+                                      "corner_dp": 18,
+                                      "padding_h_dp": 5,
+                                      "padding_v_dp": 6,
+                                      "type": "core://Box"
+                                    }
+                                  ],
+                                  "spacing_dp": 0,
+                                  "type": "core://Column"
+                                }
+                              ],
+                              "padding_h_dp": 20,
+                              "padding_v_dp": 12,
+                              "spacing_dp": 0,
+                              "type": "core://Column"
+                            }
+                          ],
+                          "type": "core://Column"
+                        },
+                        "equals": "today",
+                        "type": "core://Conditional",
+                        "value": "${local://shell#tab}"
+                      },
+                      {
+                        "content": {
+                          "children": [
+                            {
+                              "children": [
+                                {
+                                  "style": "Headline",
+                                  "type": "core://Text",
+                                  "value_expr": "Today",
+                                  "weight": "SemiBold"
+                                },
+                                {
+                                  "children": [
+                                    {
+                                      "size_dp": 14,
+                                      "type": "core://Spacer"
+                                    },
+                                    {
+                                      "content": {
+                                        "style": "Label",
+                                        "type": "core://Text",
+                                        "value_expr": "This week"
+                                      },
+                                      "content_color": "${local://theme#muted_text}",
+                                      "padding_h_dp": 4,
+                                      "type": "core://Box"
+                                    },
+                                    {
+                                      "size_dp": 8,
+                                      "type": "core://Spacer"
+                                    },
+                                    {
+                                      "background": "${local://theme#card}",
+                                      "border_color": "${local://theme#card_border}",
+                                      "content": {
+                                        "background": "${local://theme#card_border}",
+                                        "content": {
+                                          "children": [
+                                            {
+                                              "children": [
+                                                {
+                                                  "background": "${local://theme#card}",
+                                                  "content": {
+                                                    "align": "Center",
+                                                    "children": [
+                                                      {
+                                                        "children": [
+                                                          {
+                                                            "style": "Label",
+                                                            "type": "core://Text",
+                                                            "value_expr": "Water the seedlings"
+                                                          },
+                                                          {
+                                                            "content": {
+                                                              "content": {
+                                                                "max_lines": 2,
+                                                                "style": "Secondary",
+                                                                "type": "core://Text",
+                                                                "value_expr": ""
+                                                              },
+                                                              "content_color": "${local://theme#muted_text}",
+                                                              "type": "core://Box"
+                                                            },
+                                                            "type": "core://Conditional",
+                                                            "value": ""
+                                                          }
+                                                        ],
+                                                        "spacing_dp": 2,
+                                                        "type": "core://Column"
+                                                      },
+                                                      {
+                                                        "type": "core://Spacer"
+                                                      },
+                                                      {
+                                                        "content": {
+                                                          "style": "Title",
+                                                          "type": "core://Text",
+                                                          "value_expr": "›"
+                                                        },
+                                                        "content_color": "${local://theme#muted_text}",
+                                                        "type": "core://Box"
+                                                      }
+                                                    ],
+                                                    "padding_h_dp": 11,
+                                                    "padding_v_dp": 12,
+                                                    "spacing_dp": 12,
+                                                    "type": "core://Row"
+                                                  },
+                                                  "type": "core://Box"
+                                                },
+                                                {
+                                                  "background": "${local://theme#card}",
+                                                  "content": {
+                                                    "align": "Center",
+                                                    "children": [
+                                                      {
+                                                        "children": [
+                                                          {
+                                                            "style": "Label",
+                                                            "type": "core://Text",
+                                                            "value_expr": "Call the nursery"
+                                                          },
+                                                          {
+                                                            "content": {
+                                                              "content": {
+                                                                "max_lines": 2,
+                                                                "style": "Secondary",
+                                                                "type": "core://Text",
+                                                                "value_expr": ""
+                                                              },
+                                                              "content_color": "${local://theme#muted_text}",
+                                                              "type": "core://Box"
+                                                            },
+                                                            "type": "core://Conditional",
+                                                            "value": ""
+                                                          }
+                                                        ],
+                                                        "spacing_dp": 2,
+                                                        "type": "core://Column"
+                                                      },
+                                                      {
+                                                        "type": "core://Spacer"
+                                                      },
+                                                      {
+                                                        "content": {
+                                                          "style": "Title",
+                                                          "type": "core://Text",
+                                                          "value_expr": "›"
+                                                        },
+                                                        "content_color": "${local://theme#muted_text}",
+                                                        "type": "core://Box"
+                                                      }
+                                                    ],
+                                                    "padding_h_dp": 11,
+                                                    "padding_v_dp": 12,
+                                                    "spacing_dp": 12,
+                                                    "type": "core://Row"
+                                                  },
+                                                  "type": "core://Box"
+                                                }
+                                              ],
+                                              "spacing_dp": 1,
+                                              "type": "core://Column"
+                                            }
+                                          ],
+                                          "type": "core://Column"
+                                        },
+                                        "type": "core://Box"
+                                      },
+                                      "corner_dp": 18,
+                                      "padding_h_dp": 5,
+                                      "padding_v_dp": 6,
+                                      "type": "core://Box"
+                                    }
+                                  ],
+                                  "spacing_dp": 0,
+                                  "type": "core://Column"
+                                }
+                              ],
+                              "padding_h_dp": 20,
+                              "padding_v_dp": 12,
+                              "spacing_dp": 0,
+                              "type": "core://Column"
+                            }
+                          ],
+                          "type": "core://Column"
+                        },
+                        "not": true,
+                        "type": "core://Conditional",
+                        "value": "${local://shell#tab}"
+                      },
+                      {
+                        "content": {
+                          "children": [
+                            {
+                              "children": [
+                                {
+                                  "style": "Headline",
+                                  "type": "core://Text",
+                                  "value_expr": "Garden beds",
+                                  "weight": "SemiBold"
+                                },
+                                {
+                                  "children": [
+                                    {
+                                      "size_dp": 14,
+                                      "type": "core://Spacer"
+                                    },
+                                    {
+                                      "content": {
+                                        "style": "Label",
+                                        "type": "core://Text",
+                                        "value_expr": "This week"
+                                      },
+                                      "content_color": "${local://theme#muted_text}",
+                                      "padding_h_dp": 4,
+                                      "type": "core://Box"
+                                    },
+                                    {
+                                      "size_dp": 8,
+                                      "type": "core://Spacer"
+                                    },
+                                    {
+                                      "background": "${local://theme#card}",
+                                      "border_color": "${local://theme#card_border}",
+                                      "content": {
+                                        "background": "${local://theme#card_border}",
+                                        "content": {
+                                          "children": [
+                                            {
+                                              "children": [
+                                                {
+                                                  "background": "${local://theme#card}",
+                                                  "content": {
+                                                    "align": "Center",
+                                                    "children": [
+                                                      {
+                                                        "children": [
+                                                          {
+                                                            "style": "Label",
+                                                            "type": "core://Text",
+                                                            "value_expr": "Herb bed"
+                                                          },
+                                                          {
+                                                            "content": {
+                                                              "content": {
+                                                                "max_lines": 2,
+                                                                "style": "Secondary",
+                                                                "type": "core://Text",
+                                                                "value_expr": ""
+                                                              },
+                                                              "content_color": "${local://theme#muted_text}",
+                                                              "type": "core://Box"
+                                                            },
+                                                            "type": "core://Conditional",
+                                                            "value": ""
+                                                          }
+                                                        ],
+                                                        "spacing_dp": 2,
+                                                        "type": "core://Column"
+                                                      },
+                                                      {
+                                                        "type": "core://Spacer"
+                                                      },
+                                                      {
+                                                        "content": {
+                                                          "style": "Title",
+                                                          "type": "core://Text",
+                                                          "value_expr": "›"
+                                                        },
+                                                        "content_color": "${local://theme#muted_text}",
+                                                        "type": "core://Box"
+                                                      }
+                                                    ],
+                                                    "padding_h_dp": 11,
+                                                    "padding_v_dp": 12,
+                                                    "spacing_dp": 12,
+                                                    "type": "core://Row"
+                                                  },
+                                                  "type": "core://Box"
+                                                },
+                                                {
+                                                  "background": "${local://theme#card}",
+                                                  "content": {
+                                                    "align": "Center",
+                                                    "children": [
+                                                      {
+                                                        "children": [
+                                                          {
+                                                            "style": "Label",
+                                                            "type": "core://Text",
+                                                            "value_expr": "Tomato bed"
+                                                          },
+                                                          {
+                                                            "content": {
+                                                              "content": {
+                                                                "max_lines": 2,
+                                                                "style": "Secondary",
+                                                                "type": "core://Text",
+                                                                "value_expr": ""
+                                                              },
+                                                              "content_color": "${local://theme#muted_text}",
+                                                              "type": "core://Box"
+                                                            },
+                                                            "type": "core://Conditional",
+                                                            "value": ""
+                                                          }
+                                                        ],
+                                                        "spacing_dp": 2,
+                                                        "type": "core://Column"
+                                                      },
+                                                      {
+                                                        "type": "core://Spacer"
+                                                      },
+                                                      {
+                                                        "content": {
+                                                          "style": "Title",
+                                                          "type": "core://Text",
+                                                          "value_expr": "›"
+                                                        },
+                                                        "content_color": "${local://theme#muted_text}",
+                                                        "type": "core://Box"
+                                                      }
+                                                    ],
+                                                    "padding_h_dp": 11,
+                                                    "padding_v_dp": 12,
+                                                    "spacing_dp": 12,
+                                                    "type": "core://Row"
+                                                  },
+                                                  "type": "core://Box"
+                                                },
+                                                {
+                                                  "background": "${local://theme#card}",
+                                                  "content": {
+                                                    "align": "Center",
+                                                    "children": [
+                                                      {
+                                                        "children": [
+                                                          {
+                                                            "style": "Label",
+                                                            "type": "core://Text",
+                                                            "value_expr": "Compost"
+                                                          },
+                                                          {
+                                                            "content": {
+                                                              "content": {
+                                                                "max_lines": 2,
+                                                                "style": "Secondary",
+                                                                "type": "core://Text",
+                                                                "value_expr": ""
+                                                              },
+                                                              "content_color": "${local://theme#muted_text}",
+                                                              "type": "core://Box"
+                                                            },
+                                                            "type": "core://Conditional",
+                                                            "value": ""
+                                                          }
+                                                        ],
+                                                        "spacing_dp": 2,
+                                                        "type": "core://Column"
+                                                      },
+                                                      {
+                                                        "type": "core://Spacer"
+                                                      },
+                                                      {
+                                                        "content": {
+                                                          "style": "Title",
+                                                          "type": "core://Text",
+                                                          "value_expr": "›"
+                                                        },
+                                                        "content_color": "${local://theme#muted_text}",
+                                                        "type": "core://Box"
+                                                      }
+                                                    ],
+                                                    "padding_h_dp": 11,
+                                                    "padding_v_dp": 12,
+                                                    "spacing_dp": 12,
+                                                    "type": "core://Row"
+                                                  },
+                                                  "type": "core://Box"
+                                                }
+                                              ],
+                                              "spacing_dp": 1,
+                                              "type": "core://Column"
+                                            }
+                                          ],
+                                          "type": "core://Column"
+                                        },
+                                        "type": "core://Box"
+                                      },
+                                      "corner_dp": 18,
+                                      "padding_h_dp": 5,
+                                      "padding_v_dp": 6,
+                                      "type": "core://Box"
+                                    }
+                                  ],
+                                  "spacing_dp": 0,
+                                  "type": "core://Column"
+                                }
+                              ],
+                              "padding_h_dp": 20,
+                              "padding_v_dp": 12,
+                              "spacing_dp": 0,
+                              "type": "core://Column"
+                            }
+                          ],
+                          "type": "core://Column"
+                        },
+                        "equals": "garden",
+                        "type": "core://Conditional",
+                        "value": "${local://shell#tab}"
+                      },
+                      {
+                        "content": {
+                          "children": [
+                            {
+                              "children": [
+                                {
+                                  "style": "Headline",
+                                  "type": "core://Text",
+                                  "value_expr": "More",
+                                  "weight": "SemiBold"
+                                },
+                                {
+                                  "children": [
+                                    {
+                                      "size_dp": 14,
+                                      "type": "core://Spacer"
+                                    },
+                                    {
+                                      "content": {
+                                        "style": "Label",
+                                        "type": "core://Text",
+                                        "value_expr": "This week"
+                                      },
+                                      "content_color": "${local://theme#muted_text}",
+                                      "padding_h_dp": 4,
+                                      "type": "core://Box"
+                                    },
+                                    {
+                                      "size_dp": 8,
+                                      "type": "core://Spacer"
+                                    },
+                                    {
+                                      "background": "${local://theme#card}",
+                                      "border_color": "${local://theme#card_border}",
+                                      "content": {
+                                        "background": "${local://theme#card_border}",
+                                        "content": {
+                                          "children": [
+                                            {
+                                              "children": [
+                                                {
+                                                  "background": "${local://theme#card}",
+                                                  "content": {
+                                                    "align": "Center",
+                                                    "children": [
+                                                      {
+                                                        "children": [
+                                                          {
+                                                            "style": "Label",
+                                                            "type": "core://Text",
+                                                            "value_expr": "Settings"
+                                                          },
+                                                          {
+                                                            "content": {
+                                                              "content": {
+                                                                "max_lines": 2,
+                                                                "style": "Secondary",
+                                                                "type": "core://Text",
+                                                                "value_expr": ""
+                                                              },
+                                                              "content_color": "${local://theme#muted_text}",
+                                                              "type": "core://Box"
+                                                            },
+                                                            "type": "core://Conditional",
+                                                            "value": ""
+                                                          }
+                                                        ],
+                                                        "spacing_dp": 2,
+                                                        "type": "core://Column"
+                                                      },
+                                                      {
+                                                        "type": "core://Spacer"
+                                                      },
+                                                      {
+                                                        "content": {
+                                                          "style": "Title",
+                                                          "type": "core://Text",
+                                                          "value_expr": "›"
+                                                        },
+                                                        "content_color": "${local://theme#muted_text}",
+                                                        "type": "core://Box"
+                                                      }
+                                                    ],
+                                                    "padding_h_dp": 11,
+                                                    "padding_v_dp": 12,
+                                                    "spacing_dp": 12,
+                                                    "type": "core://Row"
+                                                  },
+                                                  "type": "core://Box"
+                                                },
+                                                {
+                                                  "background": "${local://theme#card}",
+                                                  "content": {
+                                                    "align": "Center",
+                                                    "children": [
+                                                      {
+                                                        "children": [
+                                                          {
+                                                            "style": "Label",
+                                                            "type": "core://Text",
+                                                            "value_expr": "About"
+                                                          },
+                                                          {
+                                                            "content": {
+                                                              "content": {
+                                                                "max_lines": 2,
+                                                                "style": "Secondary",
+                                                                "type": "core://Text",
+                                                                "value_expr": ""
+                                                              },
+                                                              "content_color": "${local://theme#muted_text}",
+                                                              "type": "core://Box"
+                                                            },
+                                                            "type": "core://Conditional",
+                                                            "value": ""
+                                                          }
+                                                        ],
+                                                        "spacing_dp": 2,
+                                                        "type": "core://Column"
+                                                      },
+                                                      {
+                                                        "type": "core://Spacer"
+                                                      },
+                                                      {
+                                                        "content": {
+                                                          "style": "Title",
+                                                          "type": "core://Text",
+                                                          "value_expr": "›"
+                                                        },
+                                                        "content_color": "${local://theme#muted_text}",
+                                                        "type": "core://Box"
+                                                      }
+                                                    ],
+                                                    "padding_h_dp": 11,
+                                                    "padding_v_dp": 12,
+                                                    "spacing_dp": 12,
+                                                    "type": "core://Row"
+                                                  },
+                                                  "type": "core://Box"
+                                                }
+                                              ],
+                                              "spacing_dp": 1,
+                                              "type": "core://Column"
+                                            }
+                                          ],
+                                          "type": "core://Column"
+                                        },
+                                        "type": "core://Box"
+                                      },
+                                      "corner_dp": 18,
+                                      "padding_h_dp": 5,
+                                      "padding_v_dp": 6,
+                                      "type": "core://Box"
+                                    }
+                                  ],
+                                  "spacing_dp": 0,
+                                  "type": "core://Column"
+                                }
+                              ],
+                              "padding_h_dp": 20,
+                              "padding_v_dp": 12,
+                              "spacing_dp": 0,
+                              "type": "core://Column"
+                            }
+                          ],
+                          "type": "core://Column"
+                        },
+                        "equals": "more",
+                        "type": "core://Conditional",
+                        "value": "${local://shell#tab}"
+                      }
+                    ],
+                    "type": "core://Column"
+                  },
+                  "fill": true,
+                  "type": "core://Box"
+                },
+                {
+                  "type": "core://Divider"
+                },
+                {
+                  "background": "${local://theme#card}",
+                  "content": {
+                    "children": [
+                      {
+                        "content": {
+                          "align": "Center",
+                          "children": [
+                            {
+                              "content": {
+                                "align": "Center",
+                                "background": "${local://theme#accent_surface}",
+                                "content": {
+                                  "icon": "check_box",
+                                  "text": "",
+                                  "type": "core://Badge"
+                                },
+                                "content_color": "${local://theme#accent}",
+                                "corner_dp": 15,
+                                "height_dp": 30,
+                                "type": "core://Box",
+                                "width_dp": 56
+                              },
+                              "equals": "today",
+                              "type": "core://Conditional",
+                              "value": "${local://shell#tab}"
+                            },
+                            {
+                              "content": {
+                                "align": "Center",
+                                "background": "${local://theme#accent_surface}",
+                                "content": {
+                                  "icon": "check_box",
+                                  "text": "",
+                                  "type": "core://Badge"
+                                },
+                                "content_color": "${local://theme#accent}",
+                                "corner_dp": 15,
+                                "height_dp": 30,
+                                "type": "core://Box",
+                                "width_dp": 56
+                              },
+                              "not": true,
+                              "type": "core://Conditional",
+                              "value": "${local://shell#tab}"
+                            },
+                            {
+                              "content": {
+                                "content": {
+                                  "align": "Center",
+                                  "content": {
+                                    "icon": "check_box",
+                                    "text": "",
+                                    "type": "core://Badge"
+                                  },
+                                  "content_color": "${local://theme#muted_text}",
+                                  "corner_dp": 15,
+                                  "height_dp": 30,
+                                  "type": "core://Box",
+                                  "width_dp": 56
+                                },
+                                "equals": "today",
+                                "not": true,
+                                "type": "core://Conditional",
+                                "value": "${local://shell#tab}"
+                              },
+                              "type": "core://Conditional",
+                              "value": "${local://shell#tab}"
+                            },
+                            {
+                              "content": {
+                                "content": {
+                                  "style": "Caption",
+                                  "type": "core://Text",
+                                  "value_expr": "Today",
+                                  "weight": "SemiBold"
+                                },
+                                "content_color": "${local://theme#accent}",
+                                "type": "core://Box"
+                              },
+                              "equals": "today",
+                              "type": "core://Conditional",
+                              "value": "${local://shell#tab}"
+                            },
+                            {
+                              "content": {
+                                "content": {
+                                  "style": "Caption",
+                                  "type": "core://Text",
+                                  "value_expr": "Today",
+                                  "weight": "SemiBold"
+                                },
+                                "content_color": "${local://theme#accent}",
+                                "type": "core://Box"
+                              },
+                              "not": true,
+                              "type": "core://Conditional",
+                              "value": "${local://shell#tab}"
+                            },
+                            {
+                              "content": {
+                                "content": {
+                                  "content": {
+                                    "style": "Caption",
+                                    "type": "core://Text",
+                                    "value_expr": "Today"
+                                  },
+                                  "content_color": "${local://theme#muted_text}",
+                                  "type": "core://Box"
+                                },
+                                "equals": "today",
+                                "not": true,
+                                "type": "core://Conditional",
+                                "value": "${local://shell#tab}"
+                              },
+                              "type": "core://Conditional",
+                              "value": "${local://shell#tab}"
+                            }
+                          ],
+                          "spacing_dp": 2,
+                          "type": "core://Column"
+                        },
+                        "content_description": "Today",
+                        "on_click": {
+                          "entity_uri": "local://shell",
+                          "field": "tab",
+                          "intent": "action.local.set",
+                          "keep": true,
+                          "value_expr": "\"today\""
+                        },
+                        "type": "core://Tappable"
+                      },
+                      {
+                        "content": {
+                          "align": "Center",
+                          "children": [
+                            {
+                              "content": {
+                                "align": "Center",
+                                "background": "${local://theme#accent_surface}",
+                                "content": {
+                                  "icon": "bookmark",
+                                  "text": "",
+                                  "type": "core://Badge"
+                                },
+                                "content_color": "${local://theme#accent}",
+                                "corner_dp": 15,
+                                "height_dp": 30,
+                                "type": "core://Box",
+                                "width_dp": 56
+                              },
+                              "equals": "garden",
+                              "type": "core://Conditional",
+                              "value": "${local://shell#tab}"
+                            },
+                            {
+                              "content": {
+                                "align": "Center",
+                                "content": {
+                                  "icon": "bookmark",
+                                  "text": "",
+                                  "type": "core://Badge"
+                                },
+                                "content_color": "${local://theme#muted_text}",
+                                "corner_dp": 15,
+                                "height_dp": 30,
+                                "type": "core://Box",
+                                "width_dp": 56
+                              },
+                              "equals": "garden",
+                              "not": true,
+                              "type": "core://Conditional",
+                              "value": "${local://shell#tab}"
+                            },
+                            {
+                              "content": {
+                                "content": {
+                                  "style": "Caption",
+                                  "type": "core://Text",
+                                  "value_expr": "Garden",
+                                  "weight": "SemiBold"
+                                },
+                                "content_color": "${local://theme#accent}",
+                                "type": "core://Box"
+                              },
+                              "equals": "garden",
+                              "type": "core://Conditional",
+                              "value": "${local://shell#tab}"
+                            },
+                            {
+                              "content": {
+                                "content": {
+                                  "style": "Caption",
+                                  "type": "core://Text",
+                                  "value_expr": "Garden"
+                                },
+                                "content_color": "${local://theme#muted_text}",
+                                "type": "core://Box"
+                              },
+                              "equals": "garden",
+                              "not": true,
+                              "type": "core://Conditional",
+                              "value": "${local://shell#tab}"
+                            }
+                          ],
+                          "spacing_dp": 2,
+                          "type": "core://Column"
+                        },
+                        "content_description": "Garden",
+                        "on_click": {
+                          "entity_uri": "local://shell",
+                          "field": "tab",
+                          "intent": "action.local.set",
+                          "keep": true,
+                          "value_expr": "\"garden\""
+                        },
+                        "type": "core://Tappable"
+                      },
+                      {
+                        "content": {
+                          "align": "Center",
+                          "children": [
+                            {
+                              "content": {
+                                "align": "Center",
+                                "background": "${local://theme#accent_surface}",
+                                "content": {
+                                  "icon": "settings",
+                                  "text": "",
+                                  "type": "core://Badge"
+                                },
+                                "content_color": "${local://theme#accent}",
+                                "corner_dp": 15,
+                                "height_dp": 30,
+                                "type": "core://Box",
+                                "width_dp": 56
+                              },
+                              "equals": "more",
+                              "type": "core://Conditional",
+                              "value": "${local://shell#tab}"
+                            },
+                            {
+                              "content": {
+                                "align": "Center",
+                                "content": {
+                                  "icon": "settings",
+                                  "text": "",
+                                  "type": "core://Badge"
+                                },
+                                "content_color": "${local://theme#muted_text}",
+                                "corner_dp": 15,
+                                "height_dp": 30,
+                                "type": "core://Box",
+                                "width_dp": 56
+                              },
+                              "equals": "more",
+                              "not": true,
+                              "type": "core://Conditional",
+                              "value": "${local://shell#tab}"
+                            },
+                            {
+                              "content": {
+                                "content": {
+                                  "style": "Caption",
+                                  "type": "core://Text",
+                                  "value_expr": "More",
+                                  "weight": "SemiBold"
+                                },
+                                "content_color": "${local://theme#accent}",
+                                "type": "core://Box"
+                              },
+                              "equals": "more",
+                              "type": "core://Conditional",
+                              "value": "${local://shell#tab}"
+                            },
+                            {
+                              "content": {
+                                "content": {
+                                  "style": "Caption",
+                                  "type": "core://Text",
+                                  "value_expr": "More"
+                                },
+                                "content_color": "${local://theme#muted_text}",
+                                "type": "core://Box"
+                              },
+                              "equals": "more",
+                              "not": true,
+                              "type": "core://Conditional",
+                              "value": "${local://shell#tab}"
+                            }
+                          ],
+                          "spacing_dp": 2,
+                          "type": "core://Column"
+                        },
+                        "content_description": "More",
+                        "on_click": {
+                          "entity_uri": "local://shell",
+                          "field": "tab",
+                          "intent": "action.local.set",
+                          "keep": true,
+                          "value_expr": "\"more\""
+                        },
+                        "type": "core://Tappable"
+                      }
+                    ],
+                    "justify": "space_evenly",
+                    "type": "core://Row"
+                  },
+                  "padding_h_dp": 8,
+                  "padding_v_dp": 6,
+                  "type": "core://Box"
+                }
+              ],
+              "type": "core://Column"
+            },
+            "equals": "expanded",
+            "not": true,
+            "type": "core://Conditional",
+            "value": "${local://device#size_class}"
+          },
+          {
+            "content": {
+              "align": "Start",
+              "children": [
+                {
+                  "content": {
+                    "children": [
+                      {
+                        "content": {
+                          "style": "Title",
+                          "type": "core://Text",
+                          "value_expr": "Allotment"
+                        },
+                        "padding_h_dp": 12,
+                        "padding_v_dp": 8,
+                        "type": "core://Box"
+                      },
+                      {
+                        "content": {
+                          "children": [
+                            {
+                              "content": {
+                                "background": "${local://theme#accent_surface}",
+                                "content": {
+                                  "align": "Center",
+                                  "children": [
+                                    {
+                                      "icon": "check_box",
+                                      "text": "",
+                                      "type": "core://Badge"
+                                    },
+                                    {
+                                      "style": "Label",
+                                      "type": "core://Text",
+                                      "value_expr": "Today",
+                                      "weight": "SemiBold"
+                                    },
+                                    {
+                                      "type": "core://Spacer"
+                                    }
+                                  ],
+                                  "spacing_dp": 12,
+                                  "type": "core://Row"
+                                },
+                                "content_color": "${local://theme#accent}",
+                                "corner_dp": 12,
+                                "padding_h_dp": 12,
+                                "padding_v_dp": 10,
+                                "type": "core://Box"
+                              },
+                              "equals": "today",
+                              "type": "core://Conditional",
+                              "value": "${local://shell#tab}"
+                            },
+                            {
+                              "content": {
+                                "background": "${local://theme#accent_surface}",
+                                "content": {
+                                  "align": "Center",
+                                  "children": [
+                                    {
+                                      "icon": "check_box",
+                                      "text": "",
+                                      "type": "core://Badge"
+                                    },
+                                    {
+                                      "style": "Label",
+                                      "type": "core://Text",
+                                      "value_expr": "Today",
+                                      "weight": "SemiBold"
+                                    },
+                                    {
+                                      "type": "core://Spacer"
+                                    }
+                                  ],
+                                  "spacing_dp": 12,
+                                  "type": "core://Row"
+                                },
+                                "content_color": "${local://theme#accent}",
+                                "corner_dp": 12,
+                                "padding_h_dp": 12,
+                                "padding_v_dp": 10,
+                                "type": "core://Box"
+                              },
+                              "not": true,
+                              "type": "core://Conditional",
+                              "value": "${local://shell#tab}"
+                            },
+                            {
+                              "content": {
+                                "content": {
+                                  "content": {
+                                    "align": "Center",
+                                    "children": [
+                                      {
+                                        "icon": "check_box",
+                                        "text": "",
+                                        "type": "core://Badge"
+                                      },
+                                      {
+                                        "style": "Label",
+                                        "type": "core://Text",
+                                        "value_expr": "Today",
+                                        "weight": "Medium"
+                                      },
+                                      {
+                                        "type": "core://Spacer"
+                                      }
+                                    ],
+                                    "spacing_dp": 12,
+                                    "type": "core://Row"
+                                  },
+                                  "content_color": "${local://theme#muted_text}",
+                                  "corner_dp": 12,
+                                  "padding_h_dp": 12,
+                                  "padding_v_dp": 10,
+                                  "type": "core://Box"
+                                },
+                                "equals": "today",
+                                "not": true,
+                                "type": "core://Conditional",
+                                "value": "${local://shell#tab}"
+                              },
+                              "type": "core://Conditional",
+                              "value": "${local://shell#tab}"
+                            }
+                          ],
+                          "type": "core://Column"
+                        },
+                        "content_description": "Today",
+                        "on_click": {
+                          "entity_uri": "local://shell",
+                          "field": "tab",
+                          "intent": "action.local.set",
+                          "keep": true,
+                          "value_expr": "\"today\""
+                        },
+                        "type": "core://Tappable"
+                      },
+                      {
+                        "content": {
+                          "children": [
+                            {
+                              "content": {
+                                "background": "${local://theme#accent_surface}",
+                                "content": {
+                                  "align": "Center",
+                                  "children": [
+                                    {
+                                      "icon": "bookmark",
+                                      "text": "",
+                                      "type": "core://Badge"
+                                    },
+                                    {
+                                      "style": "Label",
+                                      "type": "core://Text",
+                                      "value_expr": "Garden",
+                                      "weight": "SemiBold"
+                                    },
+                                    {
+                                      "type": "core://Spacer"
+                                    }
+                                  ],
+                                  "spacing_dp": 12,
+                                  "type": "core://Row"
+                                },
+                                "content_color": "${local://theme#accent}",
+                                "corner_dp": 12,
+                                "padding_h_dp": 12,
+                                "padding_v_dp": 10,
+                                "type": "core://Box"
+                              },
+                              "equals": "garden",
+                              "type": "core://Conditional",
+                              "value": "${local://shell#tab}"
+                            },
+                            {
+                              "content": {
+                                "content": {
+                                  "align": "Center",
+                                  "children": [
+                                    {
+                                      "icon": "bookmark",
+                                      "text": "",
+                                      "type": "core://Badge"
+                                    },
+                                    {
+                                      "style": "Label",
+                                      "type": "core://Text",
+                                      "value_expr": "Garden",
+                                      "weight": "Medium"
+                                    },
+                                    {
+                                      "type": "core://Spacer"
+                                    }
+                                  ],
+                                  "spacing_dp": 12,
+                                  "type": "core://Row"
+                                },
+                                "content_color": "${local://theme#muted_text}",
+                                "corner_dp": 12,
+                                "padding_h_dp": 12,
+                                "padding_v_dp": 10,
+                                "type": "core://Box"
+                              },
+                              "equals": "garden",
+                              "not": true,
+                              "type": "core://Conditional",
+                              "value": "${local://shell#tab}"
+                            }
+                          ],
+                          "type": "core://Column"
+                        },
+                        "content_description": "Garden",
+                        "on_click": {
+                          "entity_uri": "local://shell",
+                          "field": "tab",
+                          "intent": "action.local.set",
+                          "keep": true,
+                          "value_expr": "\"garden\""
+                        },
+                        "type": "core://Tappable"
+                      },
+                      {
+                        "content": {
+                          "children": [
+                            {
+                              "content": {
+                                "background": "${local://theme#accent_surface}",
+                                "content": {
+                                  "align": "Center",
+                                  "children": [
+                                    {
+                                      "icon": "settings",
+                                      "text": "",
+                                      "type": "core://Badge"
+                                    },
+                                    {
+                                      "style": "Label",
+                                      "type": "core://Text",
+                                      "value_expr": "More",
+                                      "weight": "SemiBold"
+                                    },
+                                    {
+                                      "type": "core://Spacer"
+                                    }
+                                  ],
+                                  "spacing_dp": 12,
+                                  "type": "core://Row"
+                                },
+                                "content_color": "${local://theme#accent}",
+                                "corner_dp": 12,
+                                "padding_h_dp": 12,
+                                "padding_v_dp": 10,
+                                "type": "core://Box"
+                              },
+                              "equals": "more",
+                              "type": "core://Conditional",
+                              "value": "${local://shell#tab}"
+                            },
+                            {
+                              "content": {
+                                "content": {
+                                  "align": "Center",
+                                  "children": [
+                                    {
+                                      "icon": "settings",
+                                      "text": "",
+                                      "type": "core://Badge"
+                                    },
+                                    {
+                                      "style": "Label",
+                                      "type": "core://Text",
+                                      "value_expr": "More",
+                                      "weight": "Medium"
+                                    },
+                                    {
+                                      "type": "core://Spacer"
+                                    }
+                                  ],
+                                  "spacing_dp": 12,
+                                  "type": "core://Row"
+                                },
+                                "content_color": "${local://theme#muted_text}",
+                                "corner_dp": 12,
+                                "padding_h_dp": 12,
+                                "padding_v_dp": 10,
+                                "type": "core://Box"
+                              },
+                              "equals": "more",
+                              "not": true,
+                              "type": "core://Conditional",
+                              "value": "${local://shell#tab}"
+                            }
+                          ],
+                          "type": "core://Column"
+                        },
+                        "content_description": "More",
+                        "on_click": {
+                          "entity_uri": "local://shell",
+                          "field": "tab",
+                          "intent": "action.local.set",
+                          "keep": true,
+                          "value_expr": "\"more\""
+                        },
+                        "type": "core://Tappable"
+                      }
+                    ],
+                    "padding_h_dp": 12,
+                    "padding_v_dp": 16,
+                    "spacing_dp": 4,
+                    "type": "core://Column"
+                  },
+                  "type": "core://Box",
+                  "width_dp": 220
+                },
+                {
+                  "content": {
+                    "children": [
+                      {
+                        "content": {
+                          "children": [
+                            {
+                              "children": [
+                                {
+                                  "style": "Headline",
+                                  "type": "core://Text",
+                                  "value_expr": "Today",
+                                  "weight": "SemiBold"
+                                },
+                                {
+                                  "children": [
+                                    {
+                                      "size_dp": 14,
+                                      "type": "core://Spacer"
+                                    },
+                                    {
+                                      "content": {
+                                        "style": "Label",
+                                        "type": "core://Text",
+                                        "value_expr": "This week"
+                                      },
+                                      "content_color": "${local://theme#muted_text}",
+                                      "padding_h_dp": 4,
+                                      "type": "core://Box"
+                                    },
+                                    {
+                                      "size_dp": 8,
+                                      "type": "core://Spacer"
+                                    },
+                                    {
+                                      "background": "${local://theme#card}",
+                                      "border_color": "${local://theme#card_border}",
+                                      "content": {
+                                        "background": "${local://theme#card_border}",
+                                        "content": {
+                                          "children": [
+                                            {
+                                              "children": [
+                                                {
+                                                  "background": "${local://theme#card}",
+                                                  "content": {
+                                                    "align": "Center",
+                                                    "children": [
+                                                      {
+                                                        "children": [
+                                                          {
+                                                            "style": "Label",
+                                                            "type": "core://Text",
+                                                            "value_expr": "Water the seedlings"
+                                                          },
+                                                          {
+                                                            "content": {
+                                                              "content": {
+                                                                "max_lines": 2,
+                                                                "style": "Secondary",
+                                                                "type": "core://Text",
+                                                                "value_expr": ""
+                                                              },
+                                                              "content_color": "${local://theme#muted_text}",
+                                                              "type": "core://Box"
+                                                            },
+                                                            "type": "core://Conditional",
+                                                            "value": ""
+                                                          }
+                                                        ],
+                                                        "spacing_dp": 2,
+                                                        "type": "core://Column"
+                                                      },
+                                                      {
+                                                        "type": "core://Spacer"
+                                                      },
+                                                      {
+                                                        "content": {
+                                                          "style": "Title",
+                                                          "type": "core://Text",
+                                                          "value_expr": "›"
+                                                        },
+                                                        "content_color": "${local://theme#muted_text}",
+                                                        "type": "core://Box"
+                                                      }
+                                                    ],
+                                                    "padding_h_dp": 11,
+                                                    "padding_v_dp": 12,
+                                                    "spacing_dp": 12,
+                                                    "type": "core://Row"
+                                                  },
+                                                  "type": "core://Box"
+                                                },
+                                                {
+                                                  "background": "${local://theme#card}",
+                                                  "content": {
+                                                    "align": "Center",
+                                                    "children": [
+                                                      {
+                                                        "children": [
+                                                          {
+                                                            "style": "Label",
+                                                            "type": "core://Text",
+                                                            "value_expr": "Call the nursery"
+                                                          },
+                                                          {
+                                                            "content": {
+                                                              "content": {
+                                                                "max_lines": 2,
+                                                                "style": "Secondary",
+                                                                "type": "core://Text",
+                                                                "value_expr": ""
+                                                              },
+                                                              "content_color": "${local://theme#muted_text}",
+                                                              "type": "core://Box"
+                                                            },
+                                                            "type": "core://Conditional",
+                                                            "value": ""
+                                                          }
+                                                        ],
+                                                        "spacing_dp": 2,
+                                                        "type": "core://Column"
+                                                      },
+                                                      {
+                                                        "type": "core://Spacer"
+                                                      },
+                                                      {
+                                                        "content": {
+                                                          "style": "Title",
+                                                          "type": "core://Text",
+                                                          "value_expr": "›"
+                                                        },
+                                                        "content_color": "${local://theme#muted_text}",
+                                                        "type": "core://Box"
+                                                      }
+                                                    ],
+                                                    "padding_h_dp": 11,
+                                                    "padding_v_dp": 12,
+                                                    "spacing_dp": 12,
+                                                    "type": "core://Row"
+                                                  },
+                                                  "type": "core://Box"
+                                                }
+                                              ],
+                                              "spacing_dp": 1,
+                                              "type": "core://Column"
+                                            }
+                                          ],
+                                          "type": "core://Column"
+                                        },
+                                        "type": "core://Box"
+                                      },
+                                      "corner_dp": 18,
+                                      "padding_h_dp": 5,
+                                      "padding_v_dp": 6,
+                                      "type": "core://Box"
+                                    }
+                                  ],
+                                  "spacing_dp": 0,
+                                  "type": "core://Column"
+                                }
+                              ],
+                              "padding_h_dp": 20,
+                              "padding_v_dp": 12,
+                              "spacing_dp": 0,
+                              "type": "core://Column"
+                            }
+                          ],
+                          "type": "core://Column"
+                        },
+                        "equals": "today",
+                        "type": "core://Conditional",
+                        "value": "${local://shell#tab}"
+                      },
+                      {
+                        "content": {
+                          "children": [
+                            {
+                              "children": [
+                                {
+                                  "style": "Headline",
+                                  "type": "core://Text",
+                                  "value_expr": "Today",
+                                  "weight": "SemiBold"
+                                },
+                                {
+                                  "children": [
+                                    {
+                                      "size_dp": 14,
+                                      "type": "core://Spacer"
+                                    },
+                                    {
+                                      "content": {
+                                        "style": "Label",
+                                        "type": "core://Text",
+                                        "value_expr": "This week"
+                                      },
+                                      "content_color": "${local://theme#muted_text}",
+                                      "padding_h_dp": 4,
+                                      "type": "core://Box"
+                                    },
+                                    {
+                                      "size_dp": 8,
+                                      "type": "core://Spacer"
+                                    },
+                                    {
+                                      "background": "${local://theme#card}",
+                                      "border_color": "${local://theme#card_border}",
+                                      "content": {
+                                        "background": "${local://theme#card_border}",
+                                        "content": {
+                                          "children": [
+                                            {
+                                              "children": [
+                                                {
+                                                  "background": "${local://theme#card}",
+                                                  "content": {
+                                                    "align": "Center",
+                                                    "children": [
+                                                      {
+                                                        "children": [
+                                                          {
+                                                            "style": "Label",
+                                                            "type": "core://Text",
+                                                            "value_expr": "Water the seedlings"
+                                                          },
+                                                          {
+                                                            "content": {
+                                                              "content": {
+                                                                "max_lines": 2,
+                                                                "style": "Secondary",
+                                                                "type": "core://Text",
+                                                                "value_expr": ""
+                                                              },
+                                                              "content_color": "${local://theme#muted_text}",
+                                                              "type": "core://Box"
+                                                            },
+                                                            "type": "core://Conditional",
+                                                            "value": ""
+                                                          }
+                                                        ],
+                                                        "spacing_dp": 2,
+                                                        "type": "core://Column"
+                                                      },
+                                                      {
+                                                        "type": "core://Spacer"
+                                                      },
+                                                      {
+                                                        "content": {
+                                                          "style": "Title",
+                                                          "type": "core://Text",
+                                                          "value_expr": "›"
+                                                        },
+                                                        "content_color": "${local://theme#muted_text}",
+                                                        "type": "core://Box"
+                                                      }
+                                                    ],
+                                                    "padding_h_dp": 11,
+                                                    "padding_v_dp": 12,
+                                                    "spacing_dp": 12,
+                                                    "type": "core://Row"
+                                                  },
+                                                  "type": "core://Box"
+                                                },
+                                                {
+                                                  "background": "${local://theme#card}",
+                                                  "content": {
+                                                    "align": "Center",
+                                                    "children": [
+                                                      {
+                                                        "children": [
+                                                          {
+                                                            "style": "Label",
+                                                            "type": "core://Text",
+                                                            "value_expr": "Call the nursery"
+                                                          },
+                                                          {
+                                                            "content": {
+                                                              "content": {
+                                                                "max_lines": 2,
+                                                                "style": "Secondary",
+                                                                "type": "core://Text",
+                                                                "value_expr": ""
+                                                              },
+                                                              "content_color": "${local://theme#muted_text}",
+                                                              "type": "core://Box"
+                                                            },
+                                                            "type": "core://Conditional",
+                                                            "value": ""
+                                                          }
+                                                        ],
+                                                        "spacing_dp": 2,
+                                                        "type": "core://Column"
+                                                      },
+                                                      {
+                                                        "type": "core://Spacer"
+                                                      },
+                                                      {
+                                                        "content": {
+                                                          "style": "Title",
+                                                          "type": "core://Text",
+                                                          "value_expr": "›"
+                                                        },
+                                                        "content_color": "${local://theme#muted_text}",
+                                                        "type": "core://Box"
+                                                      }
+                                                    ],
+                                                    "padding_h_dp": 11,
+                                                    "padding_v_dp": 12,
+                                                    "spacing_dp": 12,
+                                                    "type": "core://Row"
+                                                  },
+                                                  "type": "core://Box"
+                                                }
+                                              ],
+                                              "spacing_dp": 1,
+                                              "type": "core://Column"
+                                            }
+                                          ],
+                                          "type": "core://Column"
+                                        },
+                                        "type": "core://Box"
+                                      },
+                                      "corner_dp": 18,
+                                      "padding_h_dp": 5,
+                                      "padding_v_dp": 6,
+                                      "type": "core://Box"
+                                    }
+                                  ],
+                                  "spacing_dp": 0,
+                                  "type": "core://Column"
+                                }
+                              ],
+                              "padding_h_dp": 20,
+                              "padding_v_dp": 12,
+                              "spacing_dp": 0,
+                              "type": "core://Column"
+                            }
+                          ],
+                          "type": "core://Column"
+                        },
+                        "not": true,
+                        "type": "core://Conditional",
+                        "value": "${local://shell#tab}"
+                      },
+                      {
+                        "content": {
+                          "children": [
+                            {
+                              "children": [
+                                {
+                                  "style": "Headline",
+                                  "type": "core://Text",
+                                  "value_expr": "Garden beds",
+                                  "weight": "SemiBold"
+                                },
+                                {
+                                  "children": [
+                                    {
+                                      "size_dp": 14,
+                                      "type": "core://Spacer"
+                                    },
+                                    {
+                                      "content": {
+                                        "style": "Label",
+                                        "type": "core://Text",
+                                        "value_expr": "This week"
+                                      },
+                                      "content_color": "${local://theme#muted_text}",
+                                      "padding_h_dp": 4,
+                                      "type": "core://Box"
+                                    },
+                                    {
+                                      "size_dp": 8,
+                                      "type": "core://Spacer"
+                                    },
+                                    {
+                                      "background": "${local://theme#card}",
+                                      "border_color": "${local://theme#card_border}",
+                                      "content": {
+                                        "background": "${local://theme#card_border}",
+                                        "content": {
+                                          "children": [
+                                            {
+                                              "children": [
+                                                {
+                                                  "background": "${local://theme#card}",
+                                                  "content": {
+                                                    "align": "Center",
+                                                    "children": [
+                                                      {
+                                                        "children": [
+                                                          {
+                                                            "style": "Label",
+                                                            "type": "core://Text",
+                                                            "value_expr": "Herb bed"
+                                                          },
+                                                          {
+                                                            "content": {
+                                                              "content": {
+                                                                "max_lines": 2,
+                                                                "style": "Secondary",
+                                                                "type": "core://Text",
+                                                                "value_expr": ""
+                                                              },
+                                                              "content_color": "${local://theme#muted_text}",
+                                                              "type": "core://Box"
+                                                            },
+                                                            "type": "core://Conditional",
+                                                            "value": ""
+                                                          }
+                                                        ],
+                                                        "spacing_dp": 2,
+                                                        "type": "core://Column"
+                                                      },
+                                                      {
+                                                        "type": "core://Spacer"
+                                                      },
+                                                      {
+                                                        "content": {
+                                                          "style": "Title",
+                                                          "type": "core://Text",
+                                                          "value_expr": "›"
+                                                        },
+                                                        "content_color": "${local://theme#muted_text}",
+                                                        "type": "core://Box"
+                                                      }
+                                                    ],
+                                                    "padding_h_dp": 11,
+                                                    "padding_v_dp": 12,
+                                                    "spacing_dp": 12,
+                                                    "type": "core://Row"
+                                                  },
+                                                  "type": "core://Box"
+                                                },
+                                                {
+                                                  "background": "${local://theme#card}",
+                                                  "content": {
+                                                    "align": "Center",
+                                                    "children": [
+                                                      {
+                                                        "children": [
+                                                          {
+                                                            "style": "Label",
+                                                            "type": "core://Text",
+                                                            "value_expr": "Tomato bed"
+                                                          },
+                                                          {
+                                                            "content": {
+                                                              "content": {
+                                                                "max_lines": 2,
+                                                                "style": "Secondary",
+                                                                "type": "core://Text",
+                                                                "value_expr": ""
+                                                              },
+                                                              "content_color": "${local://theme#muted_text}",
+                                                              "type": "core://Box"
+                                                            },
+                                                            "type": "core://Conditional",
+                                                            "value": ""
+                                                          }
+                                                        ],
+                                                        "spacing_dp": 2,
+                                                        "type": "core://Column"
+                                                      },
+                                                      {
+                                                        "type": "core://Spacer"
+                                                      },
+                                                      {
+                                                        "content": {
+                                                          "style": "Title",
+                                                          "type": "core://Text",
+                                                          "value_expr": "›"
+                                                        },
+                                                        "content_color": "${local://theme#muted_text}",
+                                                        "type": "core://Box"
+                                                      }
+                                                    ],
+                                                    "padding_h_dp": 11,
+                                                    "padding_v_dp": 12,
+                                                    "spacing_dp": 12,
+                                                    "type": "core://Row"
+                                                  },
+                                                  "type": "core://Box"
+                                                },
+                                                {
+                                                  "background": "${local://theme#card}",
+                                                  "content": {
+                                                    "align": "Center",
+                                                    "children": [
+                                                      {
+                                                        "children": [
+                                                          {
+                                                            "style": "Label",
+                                                            "type": "core://Text",
+                                                            "value_expr": "Compost"
+                                                          },
+                                                          {
+                                                            "content": {
+                                                              "content": {
+                                                                "max_lines": 2,
+                                                                "style": "Secondary",
+                                                                "type": "core://Text",
+                                                                "value_expr": ""
+                                                              },
+                                                              "content_color": "${local://theme#muted_text}",
+                                                              "type": "core://Box"
+                                                            },
+                                                            "type": "core://Conditional",
+                                                            "value": ""
+                                                          }
+                                                        ],
+                                                        "spacing_dp": 2,
+                                                        "type": "core://Column"
+                                                      },
+                                                      {
+                                                        "type": "core://Spacer"
+                                                      },
+                                                      {
+                                                        "content": {
+                                                          "style": "Title",
+                                                          "type": "core://Text",
+                                                          "value_expr": "›"
+                                                        },
+                                                        "content_color": "${local://theme#muted_text}",
+                                                        "type": "core://Box"
+                                                      }
+                                                    ],
+                                                    "padding_h_dp": 11,
+                                                    "padding_v_dp": 12,
+                                                    "spacing_dp": 12,
+                                                    "type": "core://Row"
+                                                  },
+                                                  "type": "core://Box"
+                                                }
+                                              ],
+                                              "spacing_dp": 1,
+                                              "type": "core://Column"
+                                            }
+                                          ],
+                                          "type": "core://Column"
+                                        },
+                                        "type": "core://Box"
+                                      },
+                                      "corner_dp": 18,
+                                      "padding_h_dp": 5,
+                                      "padding_v_dp": 6,
+                                      "type": "core://Box"
+                                    }
+                                  ],
+                                  "spacing_dp": 0,
+                                  "type": "core://Column"
+                                }
+                              ],
+                              "padding_h_dp": 20,
+                              "padding_v_dp": 12,
+                              "spacing_dp": 0,
+                              "type": "core://Column"
+                            }
+                          ],
+                          "type": "core://Column"
+                        },
+                        "equals": "garden",
+                        "type": "core://Conditional",
+                        "value": "${local://shell#tab}"
+                      },
+                      {
+                        "content": {
+                          "children": [
+                            {
+                              "children": [
+                                {
+                                  "style": "Headline",
+                                  "type": "core://Text",
+                                  "value_expr": "More",
+                                  "weight": "SemiBold"
+                                },
+                                {
+                                  "children": [
+                                    {
+                                      "size_dp": 14,
+                                      "type": "core://Spacer"
+                                    },
+                                    {
+                                      "content": {
+                                        "style": "Label",
+                                        "type": "core://Text",
+                                        "value_expr": "This week"
+                                      },
+                                      "content_color": "${local://theme#muted_text}",
+                                      "padding_h_dp": 4,
+                                      "type": "core://Box"
+                                    },
+                                    {
+                                      "size_dp": 8,
+                                      "type": "core://Spacer"
+                                    },
+                                    {
+                                      "background": "${local://theme#card}",
+                                      "border_color": "${local://theme#card_border}",
+                                      "content": {
+                                        "background": "${local://theme#card_border}",
+                                        "content": {
+                                          "children": [
+                                            {
+                                              "children": [
+                                                {
+                                                  "background": "${local://theme#card}",
+                                                  "content": {
+                                                    "align": "Center",
+                                                    "children": [
+                                                      {
+                                                        "children": [
+                                                          {
+                                                            "style": "Label",
+                                                            "type": "core://Text",
+                                                            "value_expr": "Settings"
+                                                          },
+                                                          {
+                                                            "content": {
+                                                              "content": {
+                                                                "max_lines": 2,
+                                                                "style": "Secondary",
+                                                                "type": "core://Text",
+                                                                "value_expr": ""
+                                                              },
+                                                              "content_color": "${local://theme#muted_text}",
+                                                              "type": "core://Box"
+                                                            },
+                                                            "type": "core://Conditional",
+                                                            "value": ""
+                                                          }
+                                                        ],
+                                                        "spacing_dp": 2,
+                                                        "type": "core://Column"
+                                                      },
+                                                      {
+                                                        "type": "core://Spacer"
+                                                      },
+                                                      {
+                                                        "content": {
+                                                          "style": "Title",
+                                                          "type": "core://Text",
+                                                          "value_expr": "›"
+                                                        },
+                                                        "content_color": "${local://theme#muted_text}",
+                                                        "type": "core://Box"
+                                                      }
+                                                    ],
+                                                    "padding_h_dp": 11,
+                                                    "padding_v_dp": 12,
+                                                    "spacing_dp": 12,
+                                                    "type": "core://Row"
+                                                  },
+                                                  "type": "core://Box"
+                                                },
+                                                {
+                                                  "background": "${local://theme#card}",
+                                                  "content": {
+                                                    "align": "Center",
+                                                    "children": [
+                                                      {
+                                                        "children": [
+                                                          {
+                                                            "style": "Label",
+                                                            "type": "core://Text",
+                                                            "value_expr": "About"
+                                                          },
+                                                          {
+                                                            "content": {
+                                                              "content": {
+                                                                "max_lines": 2,
+                                                                "style": "Secondary",
+                                                                "type": "core://Text",
+                                                                "value_expr": ""
+                                                              },
+                                                              "content_color": "${local://theme#muted_text}",
+                                                              "type": "core://Box"
+                                                            },
+                                                            "type": "core://Conditional",
+                                                            "value": ""
+                                                          }
+                                                        ],
+                                                        "spacing_dp": 2,
+                                                        "type": "core://Column"
+                                                      },
+                                                      {
+                                                        "type": "core://Spacer"
+                                                      },
+                                                      {
+                                                        "content": {
+                                                          "style": "Title",
+                                                          "type": "core://Text",
+                                                          "value_expr": "›"
+                                                        },
+                                                        "content_color": "${local://theme#muted_text}",
+                                                        "type": "core://Box"
+                                                      }
+                                                    ],
+                                                    "padding_h_dp": 11,
+                                                    "padding_v_dp": 12,
+                                                    "spacing_dp": 12,
+                                                    "type": "core://Row"
+                                                  },
+                                                  "type": "core://Box"
+                                                }
+                                              ],
+                                              "spacing_dp": 1,
+                                              "type": "core://Column"
+                                            }
+                                          ],
+                                          "type": "core://Column"
+                                        },
+                                        "type": "core://Box"
+                                      },
+                                      "corner_dp": 18,
+                                      "padding_h_dp": 5,
+                                      "padding_v_dp": 6,
+                                      "type": "core://Box"
+                                    }
+                                  ],
+                                  "spacing_dp": 0,
+                                  "type": "core://Column"
+                                }
+                              ],
+                              "padding_h_dp": 20,
+                              "padding_v_dp": 12,
+                              "spacing_dp": 0,
+                              "type": "core://Column"
+                            }
+                          ],
+                          "type": "core://Column"
+                        },
+                        "equals": "more",
+                        "type": "core://Conditional",
+                        "value": "${local://shell#tab}"
+                      }
+                    ],
+                    "type": "core://Column"
+                  },
+                  "fill": true,
+                  "type": "core://Box"
+                }
+              ],
+              "type": "core://Row"
+            },
+            "equals": "expanded",
+            "type": "core://Conditional",
+            "value": "${local://device#size_class}"
+          }
+        ],
+        "type": "core://Column"
+      },
+      "fill": true,
+      "type": "core://Box"
+    },
+    "title": "Home",
+    "type": "core://Page"
+  }
+}

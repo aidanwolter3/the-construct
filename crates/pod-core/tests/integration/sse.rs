@@ -17,7 +17,7 @@ use pod_core::layouts::LayoutSource;
 use pod_core::session::session_hash;
 use pod_core::store::Store;
 use pod_core::{
-    AppState, AuthPolicy, BlueprintInfo, BoxFuture, FeedSpec, Hydration, NewNotification, Pod,
+    AppState, AuthPolicy, BoxFuture, CoreLayoutInfo, FeedSpec, Hydration, NewNotification, Pod,
     RequestCtx, Source, SourceManifest,
 };
 use protocol::{DataBundle, Importance, NotificationChannel};
@@ -32,7 +32,7 @@ static FILES: &[LayoutSource] = &[
         "title": "T", "slots": [{"slot_id": "main", "provider_uri": "core://test",
         "content": {"type": "core://Text", "style": "Body", "value_expr": "hi"}}]}}"#,
     },
-    // The home blueprint: the pod's home, the construct's root.
+    // The home core layout: the pod's home, the construct's root.
     LayoutSource {
         dir: "layouts",
         app_id: "shell",
@@ -49,9 +49,9 @@ impl Source for Bell {
     fn name(&self) -> &'static str {
         "bell"
     }
-    fn blueprints(&self) -> Vec<BlueprintInfo> {
+    fn core_layouts(&self) -> Vec<CoreLayoutInfo> {
         vec![
-            BlueprintInfo {
+            CoreLayoutInfo {
                 id: "bell",
                 title: "Bell",
                 icon: "photo",
@@ -59,7 +59,7 @@ impl Source for Bell {
                 auth: AuthPolicy::Public,
                 feeds: &[("bell", "all")],
             },
-            BlueprintInfo {
+            CoreLayoutInfo {
                 id: "shell",
                 title: "Home",
                 icon: "dashboard",

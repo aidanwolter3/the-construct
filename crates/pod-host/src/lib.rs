@@ -692,6 +692,36 @@ impl Host {
         store.set_pod_setting(key, value).map_err(|e| e.to_string())
     }
 
+    /// What agents said was missing while building (MCP `note_gap`,
+    /// decision `element-roles-and-reuse`): `(pod name, lines)` for the
+    /// pod `name`, or for every pod that has any.
+    pub fn gaps(
+        &self,
+        name: Option<&str>,
+    ) -> Result<Vec<(String, Vec<serde_json::Value>)>, String> {
+        let mut out = Vec::new();
+        for p in self.store.pods().map_err(|e| e.to_string())? {
+            if name.is_some_and(|n| n != p.name) {
+                continue;
+            }
+            let path = self.pod_dir(&p.id)?.join("server.db");
+            if !path.exists() {
+                continue;
+            }
+            let store = Store::open(&path).map_err(|e| e.to_string())?;
+            let gaps = pod_core::hints::gaps(&store);
+            if !gaps.is_empty() || name.is_some() {
+                out.push((p.name, gaps));
+            }
+        }
+        if let Some(n) = name
+            && out.is_empty()
+        {
+            return Err(format!("no pod named {n:?}"));
+        }
+        Ok(out)
+    }
+
     /// Whether pod `id` is on the construct (decision
     /// `content-addressed-construct`): its `construct.switched` setting, read
     /// without opening the pod (`None`: its database can't be read). A pod

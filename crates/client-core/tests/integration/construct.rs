@@ -138,8 +138,9 @@ fn one_hash_says_the_device_is_current_and_an_edit_fetches_only_what_changed() {
     let root = first.root.clone().unwrap();
     assert!(root.starts_with("e1-"), "{root}");
     let all = first.fetched[0];
-    // Home, the tile, A and B: everything the root reaches.
-    assert_eq!(all, 4, "every object from the root: {first:?}");
+    // The manifest, and home, the tile, A and B that it names: everything
+    // the root reaches (decision `element-roles-and-reuse`).
+    assert_eq!(all, 5, "every object from the root: {first:?}");
     // The edge graph the renderer cuts its stack by.
     let graph: Value = serde_json::from_str(&e.snapshot().construct_json).unwrap();
     assert_eq!(graph["root"], json!(root));
@@ -163,8 +164,9 @@ fn one_hash_says_the_device_is_current_and_an_edit_fetches_only_what_changed() {
             .is_some_and(|r| serde_json::to_string(&r).unwrap().contains("Inside A"))
     });
 
-    // One component edit: the device fetches the tile and the two layouts
-    // that use it (A, home), and nothing else.
+    // One component edit: the device fetches the tile and the new
+    // manifest, and nothing else. The two layouts that use it (A, home)
+    // are the elements they were, and are drawn again all the same.
     let state = p.state.clone();
     let r = p.rt.block_on(async move {
         server::construct::write::mcp(
@@ -180,7 +182,7 @@ fn one_hash_says_the_device_is_current_and_an_edit_fetches_only_what_changed() {
         s.root.as_deref() != Some(root.as_str()) && s.fetched.len() >= 2
     });
     let now = e.construct_status();
-    assert_eq!(now.fetched.last(), Some(&3), "{now:?}");
+    assert_eq!(now.fetched.last(), Some(&2), "{now:?}");
     wait_until("home redrawn", || home_json(&e).contains("› Home"));
     wait_until("A redrawn", || {
         e.layout_now(&a)
@@ -190,7 +192,7 @@ fn one_hash_says_the_device_is_current_and_an_edit_fetches_only_what_changed() {
 
     // Current: the same hash again changes nothing.
     let before = e.construct_status();
-    let again = server::construct::seal::root_for(
+    let again = server::construct::seal::manifest_for(
         &p.state,
         &protocol::ClientCaps::from_header(&protocol::features_header()),
     )
@@ -236,7 +238,7 @@ fn after_a_restart_no_object_is_fetched_again_when_the_root_is_unchanged() {
     wait_until("home drawn from the construct", || {
         e.construct_status().root.is_some() && home_json(&e).contains("Home")
     });
-    assert_eq!(e.construct_status().fetched.first(), Some(&4));
+    assert_eq!(e.construct_status().fetched.first(), Some(&5));
     let root = e.construct_status().root;
     drop(e);
 

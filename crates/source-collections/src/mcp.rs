@@ -30,7 +30,7 @@ collection notifications (one row per notification: title, body, channel_layout,
 subject, at, read, read_at, channel_enabled and channel_title from its channel, and subject_alert_matched: false once the row it is about no longer matches an alert of its collection, e.g. after the alert was narrowed; the newest 500 of 30 days; \
 actions mark_all_read and clear_read) and its channels notification_channels (key \"<layout>.<channel>\", title, \
 enabled: the pod-wide switch, remove_with_subject: whether a notification goes when the row it is about is \
-deleted): bind, filter, edit or delete them like any collection (the inbox blueprint shows notifications \
+deleted): bind, filter, edit or delete them like any collection (the inbox core layout shows notifications \
 whose channel_enabled and subject_alert_matched are true, read ones older than a day in a closed section). Any field may be computed from the row's other fields \
 whenever they change: compute: {kind: \"expr\", expr} evaluates a small expression at once (entity.<field>, \
 entity.id (the row's id), literals, + joins text or adds numbers, -, *, !, < <= > >= (numbers, or texts in \
@@ -172,6 +172,12 @@ pub fn tools() -> Vec<Value> {
             &[],
         ),
         tool(
+            "use_kit",
+            "Start from a kit: a core layout over a collection of a known shape, ready to use (find_elements lists them; category layout, scope core, their use_when says kit). It makes the collection (name it with collection; left out, the kit's own name) or, when one of that name exists, checks it has the kit's fields; adds its feed to home; and answers embed (a core://Layout to put in home, or in a tab's slot) and open (an action.navigation.open for a row or a button in home), each with the kit's inputs bound. The layout stays the server's: it follows deploys. Only home may hold the embed or the link (it binds the pod's data). Without kit it lists the kits.",
+            json!({ "kit": { "type": "string" }, "collection": collection, "title": { "type": "string", "description": "The page's title (the kit's own when left out)" } }),
+            &[],
+        ),
+        tool(
             "define_collection",
             "Declare a new collection (name [a-z][a-z0-9_]*, permanent) with typed fields. Custom apps then use it as a feed [\"collections\", name]. Define the collections a ref, lookup, rollup or action names first (a rollup's via is a ref of the other collection pointing at this one, so add the rollup with apply_change after both exist).",
             json!({ "name": collection, "title": { "type": "string" },
@@ -294,6 +300,7 @@ pub fn call<'a>(
     Some(match tool {
         "list_collections" => Box::pin(list(pod)),
         "define_collection" => Box::pin(define(pod, adapter, args)),
+        "use_kit" => Box::pin(use_kit(pod, adapter, args)),
         "describe_collection" => Box::pin(describe(pod, args)),
         "apply_change" => Box::pin(apply_change(pod, adapter, args)),
         "collections_preview" => Box::pin(preview(pod, adapter, args)),
@@ -403,6 +410,81 @@ async fn list(pod: &Pod) -> Result<Value, Value> {
         body["deleted"] = json!(deleted);
     }
     Ok(body)
+}
+
+/// MCP `use_kit {kit?, collection?, title?}` (decision
+/// `element-roles-and-reuse`): a kit's collection made or checked, its feed
+/// bound by home, and the references that show the kit's layout over it.
+async fn use_kit(pod: &Pod, adapter: &CollectionsAdapter, args: &Value) -> Result<Value, Value> {
+    let list = || -> Vec<Value> {
+        crate::kits::KITS
+            .iter()
+            .map(|k| {
+                json!({ "kit": k.layout.id, "title": k.layout.title, "summary": k.summary,
+                "collection": k.collection, "fields": (k.fields)() })
+            })
+            .collect()
+    };
+    let Some(id) = args["kit"].as_str().filter(|k| !k.is_empty()) else {
+        return Ok(json!({ "kits": list() }));
+    };
+    let Some(kit) = crate::kits::kit(id) else {
+        return Err(json!({ "error": "unknown_kit", "kits": list(), "status": 404 }));
+    };
+    let name = args["collection"]
+        .as_str()
+        .filter(|n| !n.is_empty())
+        .unwrap_or(kit.collection)
+        .to_owned();
+    let title = args["title"]
+        .as_str()
+        .map(str::trim)
+        .filter(|t| !t.is_empty())
+        .unwrap_or(kit.layout.title)
+        .to_owned();
+    let fields = (kit.fields)();
+    let existing = pod
+        .blocking(|s| s.with_conn(db::defs_by_name))
+        .await
+        .map_err(db_err)?
+        .remove(&name);
+    let created = match existing {
+        // One of that name exists: it must have the kit's fields, by name.
+        Some(def) => {
+            let missing: Vec<&str> = fields
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(|f| f["name"].as_str())
+                .filter(|n| !def.live_fields().any(|f| f.name == *n))
+                .collect();
+            if !missing.is_empty() {
+                return Err(
+                    json!({ "error": "collection_mismatch", "collection": name, "missing": missing,
+                    "detail": "the collection lacks fields the kit reads; add them (apply_change add_field, or rename a field to that name: its old name keeps working), or give the kit a collection of its own", "status": 409 }),
+                );
+            }
+            false
+        }
+        None => {
+            define(
+                pod,
+                adapter,
+                &json!({ "name": name, "title": title, "fields": fields }),
+            )
+            .await?;
+            true
+        }
+    };
+    pod_core::construct::write::add_home_feed(pod, (NAME.to_owned(), name.clone())).await?;
+    let reference = json!({ "name": format!("@core/{}", kit.layout.id), "as": format!("{}-{name}", kit.layout.id) });
+    let bind = json!({ "collection": name, "title": title });
+    Ok(json!({
+        "kit": kit.layout.id, "collection": name, "created": created,
+        "embed": { "type": "core://Layout", "ref": reference, "bind": bind },
+        "open": { "intent": "action.navigation.open", "ref": reference, "presentation": "Push", "bind": bind },
+        "next": "Put embed in home (as its content, or in a tab's slot of @core/tab_shell), or open on a row or button of home, with update_layout on home. Only home may hold them: it binds the pod's data.",
+    }))
 }
 
 async fn define(pod: &Pod, adapter: &CollectionsAdapter, args: &Value) -> Result<Value, Value> {

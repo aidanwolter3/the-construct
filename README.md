@@ -6,7 +6,7 @@ decides what every screen looks like. Desktop and Android clients draw those scr
 through the pod's MCP endpoint) builds the rest into it, only what you ask for, with no client release.
 
 - **Your layouts, built by your agent.** There are no apps at runtime. A pod's screens are its own layouts, starting
-  with `home`, and the agent writes them from blueprints, components and your data. Every write is validated and
+  with `home`, and the agent writes them from core layouts, components and your data. Every write is validated and
   appears live on your devices; any version can be restored.
 - **Server-driven, but native.** Layouts are JSON trees of generic nodes (`core://List`, `core://Carousel`,
   `core://TextField`, …) drawn by the Rust renderer, not a web view.
@@ -22,9 +22,9 @@ through the pod's MCP endpoint) builds the rest into it, only what you ask for, 
 
 | | |
 |---|---|
-| **Blueprints** | Built-in layouts the server ships and keeps current, for the agent to reference or copy: **Pixelfed** (a [Pixelfed](https://pixelfed.org) client with feed and card views, likes, bookmarks, threaded comments, photo posting and notifications, for any instance), **Events** (upcoming events from websites you watch, with alerts when one matches), **Settings** and the **inbox**. A new pod's `home` is the blank `shell` blueprint. |
+| **Core layouts** | Built-in layouts the server ships and keeps current, for the agent to reference or copy: **Pixelfed** (a [Pixelfed](https://pixelfed.org) client with feed and card views, likes, bookmarks, threaded comments, photo posting and notifications, for any instance), **Events** (upcoming events from websites you watch, with alerts when one matches), **Settings** and the **inbox**. A new pod's `home` is the blank `shell` core layout. |
 | **Collections** | Typed data the agent declares (a todo list, a maintenance log), with computed fields, reminders, and **fillers** that keep rows current from the web (iCalendar feeds, schema.org data, or a model reading a page). |
-| **Components** | Reusable pieces of layout defined as data and expanded by the pod: the server's (`core:card`, `core:section_header`, `core:back_button`, every blueprint and its parts) and the pod's own (`pod:…`, defined by the agent). Changing one needs no client build. |
+| **Components** | Reusable pieces of layout defined as data and expanded by the pod: the server's (`core:card`, `core:section_header`, `core:back_button`, every core layout and its parts) and the pod's own (`pod:…`, defined by the agent). Changing one needs no client build. |
 | **Theme** | The pod's colours (`${local://theme#accent}` and other tokens), set by the agent. |
 
 ## How it works
@@ -76,7 +76,7 @@ You need Rust; for the Android app also an Android SDK with an NDK. Details are 
      --header "Authorization: Bearer cmcp_localtest123"
    ```
 
-   Claude reads the pod's blueprints and sources, creates the layout and puts it on home; the app shows it at once.
+   Claude reads the pod's core layouts and sources, creates the layout and puts it on home; the app shows it at once.
    The Claude apps can connect to a deployed server as a custom connector instead
    ([docs/custom-apps.md](docs/custom-apps.md#building-apps-with-claude)).
 
@@ -98,7 +98,7 @@ cargo run -p construct-sim -- --workspace pixelfed_sample_no_login \
 | [Writing layouts](docs/layouts.md) | Publishing a layout version; nodes, intents, device data and components |
 | [Running the server](docs/server.md) | Configuration, pods, fixed local codes, monitoring, deploying |
 | [HTTP API](docs/api.md) | The pod's core routes |
-| [Custom apps, Collections and Events](docs/custom-apps.md) | Blueprints and home, the pod's layouts, Claude (MCP), Collections, fillers and the Events app |
+| [Custom apps, Collections and Events](docs/custom-apps.md) | Core layouts and home, the pod's layouts, Claude (MCP), Collections, fillers and the Events app |
 | [Clients](docs/clients.md) | Desktop and Android: building, options, home and the layouts it shows, sign-in |
 | [Simulator](docs/simulator.md) | Headless screenshots and UI scripts |
 | [Testing](docs/testing.md) | Test suites, the fake Pixelfed, a local real Pixelfed |
@@ -114,7 +114,7 @@ crates/pod-core         the generic pod: layouts and their versions, components,
 crates/pod-host         one server, many pods: host.db, pod tokens, temporary pods, scheduler
 crates/server           the server binary and the `server pods` admin CLI
 crates/source-*         sources: pixelfed, collections, events, monitor, agents, shell (home, Settings, the
-                          inbox); blueprint versions in layouts/<id>/NNNN.json
+                          inbox); core layout versions in layouts/<id>/NNNN.json
 crates/web-extract      fetching pages and reading structured data out of them, for fillers
 crates/client-core      the engine: SQLite cache, outbox, PKCE sign-in, event stream
 crates/construct-render the renderer and the clients: the desktop app (construct-viewer), the Android app

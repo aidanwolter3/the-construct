@@ -100,7 +100,7 @@ settings are logged at startup.
 | `CONSTRUCT_MONITOR_LLM_TOKENS_PER_DAY` | `1000000` | It warns above this many model tokens a day: uncached input, cache writes and output. Tokens read from the prompt cache (a twentieth of the price) are counted (`direction="cache_read"`) and shown, but not toward this. |
 | `CONSTRUCT_MONITOR_TEMP_PODS_PERCENT` | `80` | It warns once live temporary pods reach this share of `CONSTRUCT_TEMP_POD_MAX` (40 of 50), before new ones are refused. |
 | `CONSTRUCT_AGENTS_PRIVATE_HOSTS` | unset | `1`: the Agents source may sign in to a runner on any address over http (local development only); otherwise `https://` public hosts. |
-| `CONSTRUCT_SHOW_DEV_APPS` | unset | `1`: MCP also lists the dev blueprints and sources (`pixelfed_sample_no_login`; it works either way). |
+| `CONSTRUCT_SHOW_DEV_APPS` | unset | `1`: MCP also lists the dev core layouts and sources (`pixelfed_sample_no_login`; it works either way). |
 | `CONSTRUCT_TEST_HOOKS` | unset | `1` enables `POST /v1/test/fault` and local Web Push receivers. Tests only. |
 
 The fake Pixelfed's own variables are in [testing.md](testing.md#fake-pixelfed).
@@ -128,6 +128,7 @@ server pods notify-test <name>                 # a test notification to the inbo
 server pods mcp <name> [label]                 # a credential for Claude Code that reaches only /v1/mcp
 server pods revoke-mcp <name>                  # disconnect every Claude credential of the pod
 server pods monitoring <name> on|off           # let this pod's apps read server-wide monitoring data
+server pods gaps [name]                        # what agents said was missing while building (MCP note_gap)
 server pods adopt <name> <path/to/server.db>   # turn a pre-pods single-user database into a pod
 server pods remove-adopted [dir]               # delete the originals adopt left behind
 server backup <dir>                            # a consistent copy of host.db and every pod's database
@@ -202,7 +203,13 @@ Counts live in memory and restart from zero.
 
 - **In a pod:** the **Server monitoring** data source (`monitor`, feed `overview`) serves a summary, plain-language
   checks and every counter. The data is server-wide, so a pod reads it only after
-  `server pods monitoring <name> on`. Ask Claude to build an app on it.
+  `server pods monitoring <name> on`. The built-in layout **Server health** (core layout `server_health`,
+  `crates/source-monitor/layouts/server_health/`) shows it: the status, the checks, the devices (below) and every
+  counter. Use it whole, `{"type": "core://Use", "ref": "@core/server_health"}` as a layout's root with feeds
+  `[["monitor","overview"],["monitor","devices"]]`, or open it by reference (`action.navigation.open` with
+  `"ref": "@core/server_health"`); no agent has to write the screen. In a pod without monitoring it says that
+  monitoring is off for this pod and shows the devices alone (it reads `${core://sources/monitor#error}`, `error 403`
+  there).
 - **Alerts:** in such a pod, the layout that shows the source gets a "Server warnings" notification channel
   (decision [`notification-owner`](decisions/notification-owner.md)). The
   adapter looks at the checks every 5 minutes (while the pod has a registered device), and a check that turns to

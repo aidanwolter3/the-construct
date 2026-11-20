@@ -62,6 +62,7 @@ pub mod follow;
 pub mod images;
 pub mod import;
 pub mod inbox;
+pub mod kits;
 pub mod lookup;
 mod mcp;
 pub mod model;
@@ -89,7 +90,7 @@ use pod_core::layouts::LayoutSource;
 use pod_core::store::{Step, Store};
 use pod_core::validate::LayoutError;
 use pod_core::{
-    BlueprintInfo, BoxFuture, Catalog, EntityDoc, FeedSpec, Hydration, PathSpec, Pod, PollCtx,
+    BoxFuture, Catalog, CoreLayoutInfo, EntityDoc, FeedSpec, Hydration, PathSpec, Pod, PollCtx,
     PollOutcome, RequestCtx, Source, SourceManifest,
 };
 use protocol::NotificationChannel;
@@ -401,12 +402,16 @@ impl Source for CollectionsAdapter {
         !matches!(db::latest_def(conn, feed), Ok(None))
     }
 
-    fn blueprints(&self) -> Vec<BlueprintInfo> {
-        Vec::new()
+    fn core_layouts(&self) -> Vec<CoreLayoutInfo> {
+        kits::KITS.iter().map(|k| k.layout).collect()
     }
 
     fn layout_files(&self) -> &'static [LayoutSource] {
-        &[]
+        kits::layout_files()
+    }
+
+    fn element_catalog(&self) -> &'static str {
+        include_str!("../catalog.json")
     }
 
     fn router(&self) -> Router<Pod> {
@@ -634,6 +639,10 @@ impl Source for CollectionsAdapter {
 
     fn mcp_tools(&self) -> Vec<Value> {
         mcp::tools()
+    }
+
+    fn mcp_summary(&self) -> Option<&'static str> {
+        Some("data a layout keeps: lists, logs, any rows, with fillers and reminders")
     }
 
     fn mcp_instructions(&self) -> Option<&'static str> {

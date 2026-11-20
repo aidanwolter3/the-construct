@@ -170,7 +170,7 @@ fn error(v: Value) -> Value {
 }
 
 /// Whether `id` has the shape of a layout id (`home`, a `c-…` id, a
-/// blueprint's name): 1 to 64 lowercase letters, digits, `_` or `-`.
+/// core layout's name): 1 to 64 lowercase letters, digits, `_` or `-`.
 /// Nothing else goes into the internal request path, where a `/`, `?` or
 /// space would reach another route or make no valid request.
 fn is_layout_id(id: &str) -> bool {
@@ -273,7 +273,7 @@ pub(crate) async fn fetch(
 ) -> Result<WorkspaceSpec, Value> {
     if !is_layout_id(id) {
         return Err(json!({ "error": "unknown_layout", "id": id,
-            "detail": "not a layout id: home, a c-... id from list_layouts, or a blueprint" }));
+            "detail": "not a layout id: home, a c-... id from list_layouts, or a core layout" }));
     }
     let (p, lookup) = (pod.clone(), id.to_owned());
     let client = protocol::ClientCaps::from_header(&protocol::features_header());
@@ -360,13 +360,13 @@ impl Reader {
             })
     }
 
-    /// The titles of the pod's layouts and blueprints, for device data rows
+    /// The titles of the pod's layouts and core layouts, for device data rows
     /// (a notification's or channel's layout).
     fn layouts(&self) {
         let mut titles: HashMap<String, String> = self
             .pod
             .catalog()
-            .blueprints()
+            .core_layouts()
             .map(|b| (b.id.to_owned(), b.title.to_owned()))
             .collect();
         if let Ok(layouts) = self.pod.store().with_conn(crate::layouts::pod_layouts) {
@@ -984,7 +984,7 @@ pub(crate) async fn render_layout_preview(pod: &Pod, headers: &HeaderMap, args: 
     let reader = Reader::new(pod, headers, tokio::runtime::Handle::current());
     let pod = pod.clone();
     let args = args.clone();
-    tokio::task::spawn_blocking(move || {
+    on_render_thread(move || {
         // The device data, as a client builds it, for what these layouts bind.
         let mut needs = serde_json::to_string(&root).unwrap_or_default();
         for l in layouts.values() {
@@ -1054,7 +1054,29 @@ pub(crate) async fn render_layout_preview(pod: &Pod, headers: &HeaderMap, args: 
         answer(&preview_id, &mut p, opened.as_ref(), ms_load)
     })
     .await
-    .unwrap_or_else(|e| error(json!({ "error": "render_failed", "detail": e.to_string() })))
+    .unwrap_or_else(|e| error(json!({ "error": "render_failed", "detail": e })))
+}
+
+/// A drawing's stack. Laying out and drawing a layout recurses once per
+/// node and components nest boxes in boxes, so a deep page needs more than
+/// a runtime worker's 2 MB, most of all in an unoptimized build; a stack
+/// overflow would end the whole server, not one preview.
+const RENDER_STACK: usize = 64 * 1024 * 1024;
+
+/// Run `f` (blocking: it loads and draws) on a thread of its own with
+/// [`RENDER_STACK`], and wait for it without holding a runtime worker.
+async fn on_render_thread<T: Send + 'static>(
+    f: impl FnOnce() -> T + Send + 'static,
+) -> Result<T, String> {
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    std::thread::Builder::new()
+        .name("preview".into())
+        .stack_size(RENDER_STACK)
+        .spawn(move || {
+            let _ = tx.send(f());
+        })
+        .map_err(|e| e.to_string())?;
+    rx.await.map_err(|_| "the drawing stopped".to_owned())
 }
 
 /// The routes of a page's screens.
@@ -1080,7 +1102,7 @@ pub(crate) async fn dispatch_virtual_interaction(pod: &Pod, args: &Value) -> Val
             "detail": "previews last for a few renders; call render_layout_preview again" }));
     };
     let args = args.clone();
-    tokio::task::spawn_blocking(move || {
+    on_render_thread(move || {
         let mut p = shared.lock().unwrap_or_else(|p| p.into_inner());
         if let Some(m) = nodes_mode {
             p.options.nodes = m;
@@ -1118,7 +1140,7 @@ pub(crate) async fn dispatch_virtual_interaction(pod: &Pod, args: &Value) -> Val
         }
     })
     .await
-    .unwrap_or_else(|e| error(json!({ "error": "render_failed", "detail": e.to_string() })))
+    .unwrap_or_else(|e| error(json!({ "error": "render_failed", "detail": e })))
 }
 
 #[cfg(test)]
@@ -1127,7 +1149,7 @@ mod tests {
 
     #[test]
     fn only_layout_ids_reach_the_request_path() {
-        for id in ["home", "c-abcdefgh23", "shell", "a_blueprint-2"] {
+        for id in ["home", "c-abcdefgh23", "shell", "a_core_layout-2"] {
             assert!(is_layout_id(id), "{id}");
         }
         let long = "a".repeat(65);

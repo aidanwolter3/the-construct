@@ -16,7 +16,7 @@ use pod_core::layouts::LayoutSource;
 use pod_core::push::{PushSender, test_device_keys};
 use pod_core::session::session_hash;
 use pod_core::{
-    AppState, AuthPolicy, BlueprintInfo, BoxFuture, Catalog, FeedSpec, Hydration, NewNotification,
+    AppState, AuthPolicy, BoxFuture, Catalog, CoreLayoutInfo, FeedSpec, Hydration, NewNotification,
     Pod, PollCtx, PollOutcome, PollStatus, RequestCtx, Source, SourceManifest,
 };
 use protocol::{DataBundle, Importance, NotificationChannel, PushPayload};
@@ -32,7 +32,7 @@ static FILES: &[LayoutSource] = &[LayoutSource {
         "content": {"type": "core://Text", "style": "Body", "value_expr": "hi"}}]}}"#,
 }];
 
-const BELL: BlueprintInfo = BlueprintInfo {
+const BELL: CoreLayoutInfo = CoreLayoutInfo {
     id: "bell",
     title: "Bell",
     icon: "photo",
@@ -54,7 +54,7 @@ impl Source for Bell {
     fn name(&self) -> &'static str {
         "bell"
     }
-    fn blueprints(&self) -> Vec<BlueprintInfo> {
+    fn core_layouts(&self) -> Vec<CoreLayoutInfo> {
         vec![BELL]
     }
     fn layout_files(&self) -> &'static [LayoutSource] {
@@ -179,7 +179,7 @@ fn the_catalog_checks_channels() {
         fn name(&self) -> &'static str {
             "wrong"
         }
-        fn blueprints(&self) -> Vec<BlueprintInfo> {
+        fn core_layouts(&self) -> Vec<CoreLayoutInfo> {
             vec![BELL]
         }
         fn layout_files(&self) -> &'static [LayoutSource] {
@@ -217,7 +217,7 @@ fn the_catalog_checks_channels() {
         fn name(&self) -> &'static str {
             "silent"
         }
-        fn blueprints(&self) -> Vec<BlueprintInfo> {
+        fn core_layouts(&self) -> Vec<CoreLayoutInfo> {
             vec![BELL]
         }
         fn layout_files(&self) -> &'static [LayoutSource] {

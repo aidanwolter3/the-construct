@@ -1,4 +1,4 @@
-//! The Pixelfed blueprints' layout files (this crate's `layouts/`), checked
+//! The Pixelfed core layouts' layout files (this crate's `layouts/`), checked
 //! with the core's loader (`pod_core::construct::core`), plus the generic
 //! file rules exercised on them.
 
@@ -63,7 +63,7 @@ fn every_file_in_layouts_is_embedded() {
 #[test]
 fn every_file_parses_and_validates() {
     let core = load_with(&catalog(), &files()).unwrap();
-    for a in catalog().blueprints() {
+    for a in catalog().core_layouts() {
         assert!(
             core.names.contains_key(&format!("@core/{}", a.id)),
             "{} has a layout file",
@@ -138,7 +138,7 @@ fn invalid_files_are_refused_with_their_path() {
         ),
         (
             src("nope", "0001", ok),
-            "layouts/nope/0001.json: 'nope' is not a blueprint",
+            "layouts/nope/0001.json: 'nope' is not a core layout",
         ),
         (
             src("pixelfed_sample_no_login", "0001", r#"{"layout": {}}"#),

@@ -578,7 +578,7 @@ impl Definition {
         }
         out.extend(self.derived_names());
         // The filler and alert keys may be bound before the collection has a
-        // filler or an alert (a blueprint referenced on a new pod, decision
+        // filler or an alert (a core layout referenced on a new pod, decision
         // `blueprints-and-home`): they read blank until it has.
         for n in ["filler_id", "filler_title", "alert_matched", "alert_names"] {
             if !out.iter().any(|o| o == n) && self.field(n).is_none() {

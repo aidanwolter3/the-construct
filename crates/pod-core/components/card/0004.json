@@ -1,0 +1,141 @@
+{
+ "note": "Paddings as parameters (decision element-roles-and-reuse); the defaults draw what 0003 drew",
+ "component": {
+  "doc": "A bordered, rounded card holding its children in a column (events, sites, alerts). Wrap it in core://Tappable to open something. padding_h and padding_v set its paddings (14 and 12). Its corners follow the theme's scale (corner_m, set_theme) unless corner is given.",
+  "params": [
+   {
+    "name": "spacing",
+    "type": "number",
+    "doc": "Space between the children.",
+    "default": 0
+   },
+   {
+    "name": "border",
+    "type": "text",
+    "doc": "Border colour (#RRGGBB or a binding such as ${local://theme#card_border}).",
+    "default": "${local://theme#card_border}"
+   },
+   {
+    "name": "background",
+    "type": "text",
+    "doc": "Fill colour (#RRGGBB or a binding such as ${local://theme#card}).",
+    "default": "${local://theme#card}"
+   },
+   {
+    "name": "corner",
+    "type": "number",
+    "doc": "Corner radius in dp; 0 for the theme's corner_m (14 unless the pod set it).",
+    "default": 0
+   },
+   {
+    "name": "padding_h",
+    "type": "number",
+    "default": 14,
+    "doc": "Side padding in dp."
+   },
+   {
+    "name": "padding_v",
+    "type": "number",
+    "default": 12,
+    "doc": "Top and bottom padding in dp."
+   }
+  ],
+  "children": true,
+  "template": {
+   "type": "core://Box",
+   "background": "$arg.background",
+   "border_color": "$arg.border",
+   "corner_dp": {
+    "type": "core://IfArg",
+    "arg": "corner",
+    "then": "$arg.corner",
+    "else": "$theme.corner_m"
+   },
+   "padding_h_dp": "$arg.padding_h",
+   "padding_v_dp": "$arg.padding_v",
+   "content": {
+    "type": "core://Column",
+    "spacing_dp": "$arg.spacing",
+    "children": [
+     {
+      "type": "core://Children"
+     }
+    ]
+   }
+  },
+  "examples": [
+   {
+    "args": {
+     "spacing": 6
+    },
+    "children": [
+     {
+      "type": "core://Text",
+      "value_expr": "$item.title",
+      "style": "Label"
+     },
+     {
+      "type": "core://Text",
+      "value_expr": "$item.venue",
+      "style": "Secondary"
+     }
+    ],
+    "note": "an event"
+   },
+   {
+    "args": {
+     "spacing": 4,
+     "corner": 12
+    },
+    "children": [
+     {
+      "type": "core://Text",
+      "value_expr": "$item.store",
+      "style": "Label"
+     },
+     {
+      "type": "core://Text",
+      "value_expr": "$item.why",
+      "style": "Secondary"
+     }
+    ],
+    "note": "an option to pick, with tighter corners"
+   },
+   {
+    "args": {
+     "spacing": 6,
+     "corner": 12
+    },
+    "children": [
+     {
+      "type": "core://Text",
+      "value_expr": "$item.title",
+      "style": "Label"
+     },
+     {
+      "type": "core://Text",
+      "value_expr": "$item.body",
+      "style": "Secondary"
+     }
+    ],
+    "note": "a notification"
+   },
+   {
+    "args": {
+     "spacing": 8,
+     "corner": 18,
+     "padding_h": 16,
+     "padding_v": 14
+    },
+    "children": [
+     {
+      "type": "core://Text",
+      "style": "Label",
+      "value_expr": "Roomier"
+     }
+    ],
+    "note": "larger corners and paddings"
+   }
+  ]
+ }
+}

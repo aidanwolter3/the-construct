@@ -12,7 +12,7 @@ pub mod events;
 use pod_core::layouts::LayoutSource;
 use pod_core::store::Step;
 use pod_core::{
-    AuthPolicy, BlueprintInfo, BoxFuture, Hydration, Pod, RequestCtx, Source, SourceManifest,
+    AuthPolicy, BoxFuture, CoreLayoutInfo, Hydration, Pod, RequestCtx, Source, SourceManifest,
 };
 use protocol::{Importance, NotificationChannel};
 use rusqlite::Transaction;
@@ -25,7 +25,7 @@ pub const APP_ID: &str = "events";
 pub const CHANNEL: &str = "matches";
 
 /// The Events app: the `events` collection.
-pub const APP: BlueprintInfo = BlueprintInfo {
+pub const APP: CoreLayoutInfo = CoreLayoutInfo {
     id: APP_ID,
     title: "Events",
     icon: "dashboard",
@@ -96,11 +96,15 @@ add_alert, filler: <the site's id>, any: [phrases], none?: [phrases], days?, wit
 its own alerts. The events fields can't be renamed or removed.";
 
 impl Source for EventsAdapter {
+    fn element_catalog(&self) -> &'static str {
+        include_str!("../catalog.json")
+    }
+
     fn name(&self) -> &'static str {
         NAME
     }
 
-    fn blueprints(&self) -> Vec<BlueprintInfo> {
+    fn core_layouts(&self) -> Vec<CoreLayoutInfo> {
         vec![APP]
     }
 
@@ -141,6 +145,10 @@ impl Source for EventsAdapter {
             default_enabled: true,
             importance: Importance::default(),
         }]
+    }
+
+    fn mcp_summary(&self) -> Option<&'static str> {
+        Some("websites watched for events")
     }
 
     fn mcp_instructions(&self) -> Option<&'static str> {

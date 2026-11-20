@@ -1,5 +1,5 @@
 //! Notifications (D52). Generic: the pod and the clients see the layout (or
-//! blueprint) a channel belongs to, a channel id its source declares,
+//! core layout) a channel belongs to, a channel id its source declares,
 //! ready-made text and a navigation target the client resolves against that
 //! layout's routes. Nothing here names a source.
 //!
@@ -14,6 +14,19 @@ use serde::{Deserialize, Serialize};
 /// every call and on the events stream, so the pod can apply the device's
 /// channel choices and skip Web Push for a device that has the stream open.
 pub const DEVICE_HEADER: &str = "x-construct-device";
+
+/// Request header by which a client asks for the construct's root as a
+/// manifest (decision `element-roles-and-reuse`): with the value
+/// [`ROOT_MANIFEST`], `GET /v1/construct`, the `construct` event and
+/// `GET /v1/construct/names/{name}` answer the hash of an object `{"kind":
+/// "manifest", "home", "names": {name: hash}}` naming every element reached,
+/// and the elements fetched from it hold references that follow a name
+/// without its hash. Without it, the root is home sealed as before. It is
+/// not a layout feature: it changes how a construct is fetched, not what
+/// is drawn.
+pub const ROOT_HEADER: &str = "x-construct-root";
+/// [`ROOT_HEADER`]'s value.
+pub const ROOT_MANIFEST: &str = "manifest";
 
 /// SSE event name of a new notification ([`NotificationEvent`]).
 pub const NOTIFICATION_EVENT: &str = "notification";
@@ -34,7 +47,7 @@ pub enum Importance {
 /// its source. Users turn channels on and off per device.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct NotificationChannel {
-    /// The layout or blueprint the channel belongs to.
+    /// The layout or core layout the channel belongs to.
     #[serde(alias = "app_id")]
     pub layout: String,
     /// Unique within the layout; `[a-z0-9_]{1,32}`.
@@ -82,7 +95,7 @@ pub fn notification_layout_in(notification: &serde_json::Value) -> &str {
 pub struct Notification {
     /// Pod-assigned, sortable (newer ids sort later).
     pub id: String,
-    /// The layout or blueprint whose channel it is, the
+    /// The layout or core layout whose channel it is, the
     /// [`NotificationChannel::layout`].
     #[serde(alias = "app_id")]
     pub channel_layout: String,
@@ -98,7 +111,7 @@ pub struct Notification {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub target_uri: Option<String>,
     /// The layout to present for it (decision `layouts-not-apps`): the
-    /// pod's layout built on the blueprint `channel_layout` names, else
+    /// pod's layout built on the core layout `channel_layout` names, else
     /// `channel_layout`. Filled by the pod as it sends; never stored.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub layout: Option<String>,

@@ -19,7 +19,7 @@ use source_monitor::{ALERT_CHANNEL, ENABLED_SETTING, MonitorAdapter, MonitorConf
 use tower::ServiceExt;
 
 pub(crate) fn pod() -> Pod {
-    // With the home blueprint, so the pod has a home whose feeds every
+    // With the home core layout, so the pod has a home whose feeds every
     // layout reports.
     let pod: Pod = Arc::new(AppState::in_memory(vec![
         Arc::new(MonitorAdapter::new(MonitorConfig::default())),

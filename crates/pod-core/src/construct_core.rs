@@ -4,12 +4,12 @@
 //!
 //! - A server component file (`crates/pod-core/components/<name>/NNNN.json`,
 //!   or a source's own) is `@core/<name>`: its newest file's definition.
-//! - A blueprint's layout files (`crates/source-*/layouts/<id>/NNNN.json`)
+//! - A core layout's layout files (`crates/source-*/layouts/<id>/NNNN.json`)
 //!   are `@core/<id>`, one element per file, oldest first: its history, so
 //!   a client is sealed the newest file it can draw. A file's server
 //!   components are expanded and its `core://Workspace` becomes the page it
 //!   stands for (uses of `core:workspace` and `core:screen`).
-//! - Each slot of a blueprint's newest file, and each part it declares
+//! - Each slot of a core layout's newest file, and each part it declares
 //!   (`"parts"`), is `@core/<id>/<part>` (`slot:<slot id>`).
 //!
 //! [`load`] parses and checks every file (a bad one stops the start, as
@@ -25,7 +25,7 @@ use construct_elements::{Objects, object_id};
 use serde_json::{Map, Value, json};
 
 use super::store as cstore;
-use super::{CORE_PREFIX, blueprint_name};
+use super::{CORE_PREFIX, core_layout_name};
 use crate::adapter::Catalog;
 use crate::layouts::{AUTHOR_POD, LayoutSource};
 use crate::store::Store;
@@ -37,7 +37,7 @@ pub struct Core {
     /// Each object's features (comma-separated).
     pub features: BTreeMap<String, String>,
     /// Each name's elements, oldest first, with the note of its move: a
-    /// blueprint's files; a component's or part's one element.
+    /// core layout's files; a component's or part's one element.
     pub names: BTreeMap<String, Vec<(String, String)>>,
 }
 
@@ -119,6 +119,15 @@ pub fn derive(
     // `json` parameter needs a client that knows the type.
     if has_json_param(&el) {
         features.push(protocol::feature::COMPONENT_JSON_PARAMS);
+    }
+    // The same for the template directives and named slots: a definition
+    // that uses them, and an element that passes slots to one.
+    if construct_elements::def::uses_templates(&el["node"]) {
+        features.push(protocol::feature::COMPONENT_TEMPLATES);
+    }
+    // And for a template that reads the theme scale.
+    if construct_elements::uses_scale(&el["node"]) {
+        features.push(protocol::feature::THEME_SCALE);
     }
     features.sort_unstable();
     features.dedup();
@@ -217,10 +226,13 @@ pub fn rederive_component_features(tx: &rusqlite::Transaction<'_>) -> rusqlite::
 }
 
 /// `v` with a template's `core://IfArg` as both its branches,
-/// `core://Fragment` as its children and `core://Children` as none: what
-/// any expansion of it can draw, for its features.
+/// `core://Fragment` as its children, `core://Children` as none,
+/// `core://Each` as its template and `core://Match` as every case: what any
+/// expansion of it can draw, for its features.
 fn as_expanded(v: &Value) -> Value {
-    use construct_elements::def::{CHILDREN_TYPE, FRAGMENT_TYPE, IF_ARG_TYPE};
+    use construct_elements::def::{
+        CHILDREN_TYPE, EACH_TYPE, FRAGMENT_TYPE, IF_ARG_TYPE, MATCH_TYPE,
+    };
     let column = |children: Vec<Value>| json!({ "type": "core://Column", "children": children });
     match v {
         Value::Object(o) => match o.get("type").and_then(Value::as_str) {
@@ -240,6 +252,19 @@ fn as_expanded(v: &Value) -> Value {
                     .collect(),
             ),
             Some(CHILDREN_TYPE) => column(Vec::new()),
+            // An Each draws its template; a Match any of its cases (by a
+            // binding, each under a core://Conditional, which is plumbing
+            // every client since `conditional` draws).
+            Some(EACH_TYPE) => column(o.get("template").map(as_expanded).into_iter().collect()),
+            Some(MATCH_TYPE) => column(
+                o.get("cases")
+                    .and_then(Value::as_object)
+                    .into_iter()
+                    .flat_map(|c| c.values())
+                    .chain(o.get("else").filter(|b| !b.is_null()))
+                    .map(as_expanded)
+                    .collect(),
+            ),
             _ => Value::Object(o.iter().map(|(k, c)| (k.clone(), as_expanded(c))).collect()),
         },
         Value::Array(a) => Value::Array(a.iter().map(as_expanded).collect()),
@@ -274,7 +299,7 @@ pub fn load(catalog: &Catalog) -> Result<Core, String> {
     load_with(catalog, catalog.files())
 }
 
-/// [`load`] with these blueprint files instead of the catalog's (tests).
+/// [`load`] with these core layout files instead of the catalog's (tests).
 pub fn load_with(catalog: &Catalog, sources: &[LayoutSource]) -> Result<Core, String> {
     let mut defs: BTreeMap<String, (i64, Value, String)> = BTreeMap::new();
     for f in crate::components::core_files(catalog.component_files())? {
@@ -283,9 +308,9 @@ pub fn load_with(catalog: &Catalog, sources: &[LayoutSource]) -> Result<Core, St
             .strip_prefix(crate::components::CORE)
             .unwrap_or(&f.name)
             .to_owned();
-        if catalog.is_blueprint(&bare) {
+        if catalog.is_core_layout(&bare) {
             return Err(format!(
-                "{}: '{bare}' is a blueprint's id; name the component otherwise",
+                "{}: '{bare}' is a core layout's id; name the component otherwise",
                 f.path
             ));
         }
@@ -304,18 +329,18 @@ pub fn load_with(catalog: &Catalog, sources: &[LayoutSource]) -> Result<Core, St
     for n in &names {
         b.component(n)?;
     }
-    let mut by_blueprint: BTreeMap<&str, Vec<&LayoutSource>> = BTreeMap::new();
+    let mut by_core_layout: BTreeMap<&str, Vec<&LayoutSource>> = BTreeMap::new();
     for f in sources {
-        if !catalog.is_blueprint(f.app_id) {
+        if !catalog.is_core_layout(f.app_id) {
             return Err(format!(
-                "{}/{}/{}.json: '{}' is not a blueprint",
+                "{}/{}/{}.json: '{}' is not a core layout",
                 f.dir, f.app_id, f.name, f.app_id
             ));
         }
-        by_blueprint.entry(f.app_id).or_default().push(f);
+        by_core_layout.entry(f.app_id).or_default().push(f);
     }
-    for info in catalog.blueprints() {
-        let mut files = by_blueprint.remove(info.id).unwrap_or_default();
+    for info in catalog.core_layouts() {
+        let mut files = by_core_layout.remove(info.id).unwrap_or_default();
         files.sort_by(|a, b| a.name.cmp(b.name));
         let mut expected = None;
         for (i, src) in files.iter().enumerate() {
@@ -346,24 +371,24 @@ pub fn load_with(catalog: &Catalog, sources: &[LayoutSource]) -> Result<Core, St
                 });
             }
             expected = Some(number + 1);
-            b.blueprint_file(info, src, &path, i + 1 == files.len())?;
+            b.core_layout_file(info, src, &path, i + 1 == files.len())?;
         }
     }
-    b.link_blueprints();
+    b.link_core_layouts();
     Ok(b.core)
 }
 
-/// The blueprints a node's links and embeds name (`"layout": <id>`).
-fn blueprint_links(catalog: &Catalog, v: &Value, out: &mut BTreeSet<&'static str>) {
+/// The core layouts a node's links and embeds name (`"layout": <id>`).
+fn core_layout_links(catalog: &Catalog, v: &Value, out: &mut BTreeSet<&'static str>) {
     match v {
-        Value::Array(a) => a.iter().for_each(|c| blueprint_links(catalog, c, out)),
+        Value::Array(a) => a.iter().for_each(|c| core_layout_links(catalog, c, out)),
         Value::Object(o) => {
             if let Some(t) = link_target(o)
-                && let Some(info) = catalog.blueprint(t)
+                && let Some(info) = catalog.core_layout(t)
             {
                 out.insert(info.id);
             }
-            o.values().for_each(|c| blueprint_links(catalog, c, out));
+            o.values().for_each(|c| core_layout_links(catalog, c, out));
         }
         _ => {}
     }
@@ -451,7 +476,8 @@ impl Builder<'_> {
             let use_ = json!({ "kind": "element", "node": { "type": "core://Use",
                 "ref": { "name": "@core/x", "el": id, "pin": true },
                 "args": ex.get("args").cloned().unwrap_or(json!({})),
-                "children": ex.get("children").cloned().unwrap_or(json!([])) } });
+                "children": ex.get("children").cloned().unwrap_or(json!([])),
+                "slots": ex.get("slots").cloned().unwrap_or(json!({})) } });
             let uid = object_id(&use_);
             self.core.objects.insert(uid.clone(), Arc::new(use_));
             let m = construct_elements::materialize(&self.core, &uid);
@@ -480,18 +506,18 @@ impl Builder<'_> {
         Ok(())
     }
 
-    /// Every blueprint's links and embeds of another blueprint by key
+    /// Every core layout's links and embeds of another core layout by key
     /// (`"layout": "inbox"`) as edges to its element (`{"ref": {"name":
     /// "@core/inbox", "as": "inbox"}}`), so a device reaches it from the
     /// root. Elements only go forward: a link that would close a cycle
-    /// stays as written (home's blueprint first, then the catalog's order,
+    /// stays as written (home's core layout first, then the catalog's order,
     /// as the old system's switch converted them).
-    fn link_blueprints(&mut self) {
+    fn link_core_layouts(&mut self) {
         let mut order: Vec<&'static str> = Vec::new();
-        if let Some(home) = self.catalog.blueprint(crate::HOME_BLUEPRINT) {
+        if let Some(home) = self.catalog.core_layout(crate::HOME_CORE_LAYOUT) {
             order.push(home.id);
         }
-        order.extend(self.catalog.blueprints().map(|b| b.id));
+        order.extend(self.catalog.core_layouts().map(|b| b.id));
         let (mut done, mut busy) = (BTreeSet::new(), BTreeSet::new());
         for id in order {
             self.link_one(id, &mut done, &mut busy);
@@ -507,7 +533,7 @@ impl Builder<'_> {
         if done.contains(id) || !busy.insert(id) {
             return;
         }
-        let name = blueprint_name(id);
+        let name = core_layout_name(id);
         let parts = format!("{name}/");
         let names: Vec<String> = self
             .core
@@ -520,7 +546,7 @@ impl Builder<'_> {
         for n in &names {
             for (h, _) in &self.core.names[n] {
                 if let Some(el) = self.core.objects.get(h) {
-                    blueprint_links(self.catalog, &el["node"], &mut targets);
+                    core_layout_links(self.catalog, &el["node"], &mut targets);
                 }
             }
         }
@@ -550,16 +576,16 @@ impl Builder<'_> {
         done.insert(id);
     }
 
-    /// `v` with its links and embeds of the blueprints in `done` as edges.
+    /// `v` with its links and embeds of the core layouts in `done` as edges.
     fn linked(&self, v: &Value, done: &BTreeSet<&'static str>) -> Value {
         match v {
             Value::Array(a) => Value::Array(a.iter().map(|c| self.linked(c, done)).collect()),
             Value::Object(o) => {
                 let target = link_target(o)
-                    .and_then(|t| self.catalog.blueprint(t))
+                    .and_then(|t| self.catalog.core_layout(t))
                     .filter(|b| done.contains(b.id))
                     .and_then(|b| {
-                        let name = blueprint_name(b.id);
+                        let name = core_layout_name(b.id);
                         self.core
                             .current(&name)
                             .map(|el| (b.id, name.clone(), el.to_owned()))
@@ -653,11 +679,11 @@ impl Builder<'_> {
         Ok(m.node)
     }
 
-    /// One blueprint file: checked, and its element pushed on the
-    /// blueprint's name (with its parts, for the newest file).
-    fn blueprint_file(
+    /// One core layout file: checked, and its element pushed on the
+    /// core layout's name (with its parts, for the newest file).
+    fn core_layout_file(
         &mut self,
-        info: &crate::BlueprintInfo,
+        info: &crate::CoreLayoutInfo,
         src: &LayoutSource,
         path: &str,
         newest: bool,
@@ -712,7 +738,7 @@ impl Builder<'_> {
                 "invalid layout: unknown node type '{t}' (a typo? this build does not know it)"
             )));
         }
-        let sources = self.catalog.blueprint_sources(src.app_id);
+        let sources = self.catalog.core_layout_sources(src.app_id);
         crate::source::check_routes(&parsed, &sources)
             .map_err(|e| fail(format!("invalid layout: {e}")))?;
         let mut parts: Vec<(String, Value)> = Vec::new();
@@ -753,7 +779,7 @@ impl Builder<'_> {
             recorded.clone()
         };
         let node = self.uses(&node).map_err(fail)?;
-        // A blueprint reads its own feeds wherever it is drawn (the inbox
+        // A core layout reads its own feeds wherever it is drawn (the inbox
         // reads the notifications; decision `notifications-in-a-collection`).
         let feeds: Vec<(String, String)> = info
             .feeds
@@ -775,10 +801,10 @@ impl Builder<'_> {
                 true,
             )
         };
-        let name = blueprint_name(info.id);
+        let name = core_layout_name(info.id);
         self.core.names.entry(name).or_default().push((
             id,
-            format!("Blueprint {} file {}: {note}", info.id, src.name),
+            format!("Core layout {} file {}: {note}", info.id, src.name),
         ));
         if newest {
             for s in recorded["slots"].as_array().into_iter().flatten() {
@@ -793,7 +819,7 @@ impl Builder<'_> {
                     format!("{CORE_PREFIX}{}/{part}", info.id),
                     vec![(
                         id,
-                        format!("Part {part} of blueprint {} file {}", info.id, src.name),
+                        format!("Part {part} of core layout {} file {}", info.id, src.name),
                     )],
                 );
             }
@@ -887,7 +913,7 @@ pub fn refresh(
     })
 }
 
-/// The home a new pod starts with: the whole of [`crate::HOME_BLUEPRINT`],
+/// The home a new pod starts with: the whole of [`crate::HOME_CORE_LAYOUT`],
 /// binding no feeds (what a pod got before the construct, converted).
 pub fn home_element() -> Value {
     json!({
@@ -895,12 +921,12 @@ pub fn home_element() -> Value {
         "title": "Home",
         "icon": "dashboard",
         "node": { "type": crate::components::USE_TYPE, "id": crate::HOME_APP,
-                  "ref": blueprint_name(crate::HOME_BLUEPRINT) },
+                  "ref": core_layout_name(crate::HOME_CORE_LAYOUT) },
         "bind": { "feeds": [] },
     })
 }
 
-/// The home of a pod whose build has no home blueprint (a test's set of
+/// The home of a pod whose build has no home core layout (a test's set of
 /// sources): a blank page.
 fn blank_home() -> Value {
     json!({
@@ -914,7 +940,7 @@ fn blank_home() -> Value {
 }
 
 /// Give a pod without a home its first one: [`home_element`], or a blank
-/// page when this build has no home blueprint. Answers the names moved.
+/// page when this build has no home core layout. Answers the names moved.
 /// Blocking.
 pub fn seed_home(store: &Store, catalog: &Catalog) -> Result<Vec<(String, i64)>, String> {
     let mut out = Ok(Vec::new());
@@ -924,7 +950,7 @@ pub fn seed_home(store: &Store, catalog: &Catalog) -> Result<Vec<(String, i64)>,
         {
             return Ok(());
         }
-        let mut el = if catalog.is_blueprint(crate::HOME_BLUEPRINT) {
+        let mut el = if catalog.is_core_layout(crate::HOME_CORE_LAYOUT) {
             home_element()
         } else {
             blank_home()
@@ -938,12 +964,12 @@ pub fn seed_home(store: &Store, catalog: &Catalog) -> Result<Vec<(String, i64)>,
                 el,
                 true,
                 AUTHOR_POD,
-                "Started from the Home blueprint",
+                "Started from the Home core layout",
             )
         });
         match written {
             Ok(moved) => {
-                tracing::info!("the pod's home started from the Home blueprint");
+                tracing::info!("the pod's home started from the Home core layout");
                 out = Ok(moved);
                 Ok(())
             }

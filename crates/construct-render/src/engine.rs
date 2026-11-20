@@ -696,6 +696,12 @@ fn device_data(engine: &ConstructEngine, shared: &Shared) -> DataBundle {
     out
 }
 
+/// The form scope the kept `local://` fields are stored under (feature
+/// `local_keep`).
+const KEPT_SCOPE: &str = "local-keep";
+/// The most `local://` fields a device keeps.
+const MAX_KEPT: usize = 200;
+
 impl Loader for PodEngine {
     /// The engine's copy at once when it has one (its fetch goes on in the
     /// background and comes in through [`Loader::changes`]); else waits for
@@ -888,6 +894,36 @@ impl Loader for PodEngine {
     /// values back before the pod's answer brings the new ones.
     fn local_set(&self, intent: &Value) {
         self.engine.dispatch(&intent.to_string());
+    }
+
+    /// Kept in the engine's store beside the remembered form values, one
+    /// value per `<uri>#<field>`, as JSON.
+    fn keep_local(&self, entity_uri: &str, field: &str, value: &Value) {
+        let key = format!("{entity_uri}#{field}");
+        let kept = self.engine.remembered_form_values(KEPT_SCOPE);
+        if kept.len() >= MAX_KEPT && !kept.contains_key(&key) {
+            eprintln!("[construct] local keep {key}: {MAX_KEPT} values are kept already; not kept");
+            return;
+        }
+        // An empty value forgets it (the engine stores no empty values).
+        let text = match value {
+            Value::Null => String::new(),
+            v => v.to_string(),
+        };
+        self.engine
+            .remember_form_value(KEPT_SCOPE, &key, Some(&text));
+    }
+
+    fn kept_locals(&self) -> Vec<(String, String, Value)> {
+        self.engine
+            .remembered_form_values(KEPT_SCOPE)
+            .into_iter()
+            .filter_map(|(key, text)| {
+                let (uri, field) = key.rsplit_once('#')?;
+                let value = serde_json::from_str(&text).ok()?;
+                Some((uri.to_owned(), field.to_owned(), value))
+            })
+            .collect()
     }
 
     fn changes(&self) -> Option<Changes> {

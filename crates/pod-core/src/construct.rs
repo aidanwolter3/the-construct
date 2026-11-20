@@ -80,8 +80,8 @@ pub fn read_switched(store: &Store) -> bool {
         .is_some_and(|v| v == "1")
 }
 
-/// A blueprint's name (`@core/<id>`).
-pub fn blueprint_name(id: &str) -> String {
+/// A core layout's name (`@core/<id>`).
+pub fn core_layout_name(id: &str) -> String {
     format!("{CORE_PREFIX}{id}")
 }
 

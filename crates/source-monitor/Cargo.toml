@@ -6,7 +6,7 @@ publish.workspace = true
 
 # The `monitor` data source (decision `server-monitoring`): the server's security and
 # usage counters for the pod's layouts, in pods the operator turns it on for.
-# No blueprints or tables of its own.
+# Ships one blueprint, `server_health`; no tables of its own.
 
 [dependencies]
 pod-core = { path = "../pod-core" }

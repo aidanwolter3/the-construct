@@ -716,8 +716,29 @@ fn sequences_and_local_sets_round_trip_and_need_their_features() {
             field: "added".into(),
             value_expr: "true".into(),
             also: Vec::new(),
+            keep: false,
         }
     );
+    // `keep` (feature `local_keep`) is written only when set, and needs the
+    // feature only then.
+    let kept: ActionIntent = serde_json::from_value(json!({"intent": "action.local.set",
+        "entity_uri": "local://tabs", "field": "tab", "value_expr": "\"meals\"", "keep": true}))
+    .unwrap();
+    assert_eq!(serde_json::to_value(&kept).unwrap()["keep"], true);
+    assert!(
+        serde_json::to_value(&steps[1])
+            .unwrap()
+            .get("keep")
+            .is_none()
+    );
+    let needs = |on_click: &ActionIntent| -> Vec<&'static str> {
+        let n: UiNode = serde_json::from_value(json!({"type": "core://Button", "label": "Go",
+            "on_click": on_click}))
+        .unwrap();
+        protocol::required_features(&n)
+    };
+    assert!(needs(&kept).contains(&protocol::feature::LOCAL_KEEP));
+    assert!(!needs(&steps[1]).contains(&protocol::feature::LOCAL_KEEP));
     let button = |on_click: &ActionIntent| -> UiNode {
         serde_json::from_value(json!({
             "type": "core://IconButton", "icon": "add", "content_description": "Add",

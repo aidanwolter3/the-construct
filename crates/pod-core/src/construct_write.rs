@@ -18,7 +18,7 @@ use rusqlite::Connection;
 use serde_json::{Map, Value, json};
 
 use super::store as cstore;
-use super::{CORE_PREFIX, ME_PREFIX, blueprint_name, component_name};
+use super::{CORE_PREFIX, ME_PREFIX, component_name, core_layout_name};
 use crate::Pod;
 use crate::adapter::Catalog;
 pub use crate::layouts::home_feeds;
@@ -39,6 +39,17 @@ impl<'a> ConnObjects<'a> {
 }
 
 impl Objects for ConnObjects<'_> {
+    /// A reference without a hash follows its name to what it points at
+    /// now.
+    fn resolve(&self, name: &str) -> Option<String> {
+        cstore::name(self.conn, name).ok().flatten()
+    }
+
+    /// The pod's own theme scale.
+    fn scale(&self, name: &str) -> Option<Value> {
+        crate::porcelain::scale_on(self.conn).get(name).cloned()
+    }
+
     fn object(&self, id: &str) -> Option<Arc<Value>> {
         if let Some(v) = self.extra.borrow().get(id) {
             return Some(v.clone());
@@ -158,7 +169,7 @@ fn walk_object(
         let version = o.get("version").and_then(Value::as_i64);
         let c = o.get("component").and_then(Value::as_str).unwrap_or("");
         let name = component_name(c).ok_or_else(|| {
-            refuse("invalid_use", format!("core://Use needs \"ref\": a name (@core/<component>, @me/<component>, @core/<blueprint>, @core/<blueprint>/<part>), not {c:?}"))
+            refuse("invalid_use", format!("core://Use needs \"ref\": a name (@core/<component>, @me/<component>, @core/<layout>, @core/<layout>/<part>), not {c:?}"))
         })?;
         let el = match version {
             Some(n) => at_seq(conn, &name, n)?,
@@ -180,9 +191,9 @@ fn walk_object(
                         pin: false,
                         as_: None,
                     })
-                } else if catalog.is_blueprint(l) {
+                } else if catalog.is_core_layout(l) {
                     Some(Ref {
-                        name: blueprint_name(l),
+                        name: core_layout_name(l),
                         el: None,
                         pin: false,
                         as_: Some(l.to_owned()),
@@ -206,7 +217,7 @@ fn walk_object(
         if site == Site::Use {
             check_args(conn, &r, o)?;
         }
-        // A blueprint's whole layout keeps its key as the edge.
+        // A core layout's whole layout keeps its key as the edge.
         if site != Site::Use && r.as_.is_none() && r.name.starts_with(CORE_PREFIX) {
             r.as_ = Some(r.name.trim_start_matches(CORE_PREFIX).to_owned());
         }
@@ -574,12 +585,11 @@ pub fn reseal_followers(
             v["needs"] = union(&v["needs"], &needs);
             let id = object_id(&v);
             cstore::put_object(conn, &id, &v, &features)?;
-            if let Some(seq) = cstore::move_name(
+            if let Some(seq) = cstore::move_name_resealed(
                 conn,
                 &f,
                 &id,
-                crate::layouts::AUTHOR_POD,
-                Some(&format!("Re-sealed: {n} moved")),
+                &format!("{} {n} moved", cstore::RESEAL_NOTE),
             )? {
                 out.push((f.clone(), seq));
                 queue.push_back(f);
@@ -609,7 +619,7 @@ pub fn publish(pod: &Pod, moved: &[(String, i64)]) {
 /// switched pod ([`live_layouts`]).
 #[derive(Debug, Clone)]
 pub struct LiveLayout {
-    /// Its name (a pod layout's id, or `@core/<blueprint>`).
+    /// Its name (a pod layout's id, or `@core/<layout>`).
     pub name: String,
     pub title: String,
     pub icon: String,
@@ -784,6 +794,7 @@ pub async fn mcp(pod: &Pod, name: &str, args: &Value) -> Option<Result<Value, Va
         "rename_layout" => Some(run_write(pod, args, rename_layout).await),
         "delete_layout" => Some(run_write(pod, args, delete_layout).await),
         "list_components" => Some(run(pod, args, list_components).await),
+        "find_elements" => Some(run(pod, args, find_elements).await),
         "list_parts" => Some(run(pod, args, list_parts).await),
         "get_component" => Some(run(pod, args, get_component).await),
         "define_component" => {
@@ -801,6 +812,38 @@ pub async fn mcp(pod: &Pod, name: &str, args: &Value) -> Option<Result<Value, Va
 }
 
 type Tool = fn(&Pod, &Connection, &Value) -> Result<Value, Value>;
+
+/// What a write makes a device fetch: `{objects, bytes}` for a client on a
+/// manifest (the elements written and the new manifest: an element sealed
+/// again because something it references moved is the same element to it),
+/// and `sealed: {objects, bytes}` for a client sent home sealed (every
+/// element that moved, written or sealed again, whole).
+fn refetch(pod: &Pod, moved: &[(String, i64)]) -> Value {
+    let names: BTreeSet<&str> = moved.iter().map(|(n, _)| n.as_str()).collect();
+    let (sealed, written, bytes) = pod
+        .store()
+        .with_conn(|c| {
+            let (mut sealed, mut written, mut bytes) = (0, 0, 0);
+            for n in &names {
+                let size = cstore::name_bytes(c, n)?;
+                sealed += size;
+                if !cstore::newest_is_reseal(c, n)? {
+                    written += 1;
+                    bytes += size;
+                }
+            }
+            Ok::<_, rusqlite::Error>((sealed, written, bytes))
+        })
+        .unwrap_or((0, 0, 0));
+    // The manifest this build's clients are sent now.
+    let manifest = super::seal::manifest_for(pod, &protocol::ClientCaps::this_build())
+        .ok()
+        .flatten()
+        .and_then(|id| pod.store().with_conn(|c| cstore::object_bytes(c, &id)).ok())
+        .unwrap_or(0);
+    json!({ "objects": written + 1, "bytes": bytes + manifest,
+        "sealed": { "objects": names.len(), "bytes": sealed } })
+}
 
 async fn run(pod: &Pod, args: &Value, f: Tool) -> Result<Value, Value> {
     let (p, a) = (pod.clone(), args.clone());
@@ -846,7 +889,13 @@ pub(crate) async fn run_write(
     })
     .await
     .map_err(|e| refuse("internal", e.to_string()))?;
-    let ((answer, moved), p) = r?;
+    let ((mut answer, moved), p) = r?;
+    // What the write costs a device that had the construct before it: every
+    // name that moved is a new object, fetched whole (decision
+    // `element-roles-and-reuse`).
+    if answer.is_object() && !moved.is_empty() {
+        answer["refetch"] = refetch(&p, &moved);
+    }
     // Cached objects stay valid (they are immutable); roots don't.
     publish(&p, &moved);
     // Publications kept shared follow their names (decision `sharing`).
@@ -861,13 +910,13 @@ fn list_layouts(pod: &Pod, conn: &Connection, _: &Value) -> Result<Value, Value>
     let mut layouts = Vec::new();
     let names = cstore::names(conn).map_err(store_err)?;
     let reach = super::trace::from_home(conn).map_err(store_err)?;
-    let shown_blueprints: Vec<(&str, &str)> = pod
+    let shown_core_layouts: Vec<(&str, &str)> = pod
         .catalog()
-        .blueprints()
+        .core_layouts()
         .filter(|a| !a.dev || pod.show_dev_apps())
         .map(|a| (a.id, a.title))
         .collect();
-    // Blueprint name -> the pod's layouts that use it.
+    // Core layout name -> the pod's layouts that use it.
     let mut used_by: BTreeMap<String, Vec<String>> = BTreeMap::new();
     for (n, h) in &names {
         if !super::is_layout_name(n) {
@@ -880,6 +929,7 @@ fn list_layouts(pod: &Pod, conn: &Connection, _: &Value) -> Result<Value, Value>
             "title": el.as_ref().map(|e| e["title"].clone()),
             "icon": el.as_ref().map(|e| e["icon"].clone()),
             "reached": super::trace::reached(&reach, n),
+            "bytes": cstore::name_bytes(conn, n).map_err(store_err)?,
         });
         let uses = el
             .as_ref()
@@ -889,7 +939,7 @@ fn list_layouts(pod: &Pod, conn: &Connection, _: &Value) -> Result<Value, Value>
             used_by.entry(u.clone()).or_default().push(n.clone());
         }
         let title = el.as_ref().and_then(|e| e["title"].as_str()).unwrap_or("");
-        if let Some(bp) = super::trace::copy_of(title, &uses, shown_blueprints.iter().copied()) {
+        if let Some(bp) = super::trace::copy_of(title, &uses, shown_core_layouts.iter().copied()) {
             row["copy_of"] = json!(bp);
         }
         if n == crate::HOME_APP {
@@ -898,12 +948,12 @@ fn list_layouts(pod: &Pod, conn: &Connection, _: &Value) -> Result<Value, Value>
         layouts.push(row);
     }
     layouts.sort_by_key(|r| r["id"] != json!(crate::HOME_APP));
-    let blueprints: Vec<Value> = pod
+    let core_layouts: Vec<Value> = pod
         .catalog()
-        .blueprints()
+        .core_layouts()
         .filter(|a| !a.dev || pod.show_dev_apps())
         .map(|a| {
-            let name = blueprint_name(a.id);
+            let name = core_layout_name(a.id);
             let mut row = json!({ "id": a.id, "name": name, "title": a.title, "icon": a.icon,
             "feeds": a.feeds.iter().map(|(s, f)| json!([s, f])).collect::<Vec<_>>() });
             if let Some(p) = reach.get(&name) {
@@ -931,13 +981,17 @@ fn list_layouts(pod: &Pod, conn: &Connection, _: &Value) -> Result<Value, Value>
     Ok(json!({
         "construct": cstore::name(conn, crate::HOME_APP).map_err(store_err)?,
         "layouts": layouts,
-        "blueprints": blueprints,
+        "core_layouts": core_layouts,
+        // The word before decision `element-roles-and-reuse`, for agents
+        // whose instructions still say it; goes with the next change to
+        // this answer.
+        "blueprints": core_layouts,
         "note": "Layouts are names that point to elements; reference others with \"ref\": \
-                 \"<name>\" (layouts by id, @core/<blueprint>, @core/<blueprint>/<part>, \
+                 \"<name>\" (layouts by id, @core/<layout>, @core/<layout>/<part>, \
                  @core/<component>, @me/<component>). reached is how the user gets to each from \
                  home (the shortest path, each step's field, presentation and label); change what \
-                 the user sees there. copy_of names the blueprint a layout looks copied from: it \
-                 doesn't follow that blueprint, so a change to the blueprint doesn't reach it.",
+                 the user sees there. copy_of names the core layout a layout looks copied from: it \
+                 doesn't follow that core layout, so a change to the core layout doesn't reach it.",
     }))
 }
 
@@ -978,7 +1032,7 @@ fn get_layout(pod: &Pod, conn: &Connection, args: &Value) -> Result<Value, Value
     if let Some(bp) = super::trace::copy_of(
         title,
         &uses,
-        pod.catalog().blueprints().map(|a| (a.id, a.title)),
+        pod.catalog().core_layouts().map(|a| (a.id, a.title)),
     ) {
         out["copy_of"] = json!(bp);
     }
@@ -1178,7 +1232,7 @@ fn current_layout(conn: &Connection, id: &str) -> Result<(String, Arc<Value>), V
     if !super::is_layout_name(id) {
         return Err(refuse(
             "not_a_layout",
-            format!("'{id}' isn't one of the pod's layouts (blueprints are changed by deploys)"),
+            format!("'{id}' isn't one of the pod's layouts (core layouts are changed by deploys)"),
         ));
     }
     let h = cstore::name(conn, id)
@@ -1454,7 +1508,8 @@ fn check_examples(conn: &Connection, el: &Value) -> Result<(), Value> {
         let use_ = json!({ "kind": "element", "node": { "type": "core://Use",
             "ref": { "name": "@me/x", "el": id, "pin": true },
             "args": ex.get("args").cloned().unwrap_or(json!({})),
-            "children": ex.get("children").cloned().unwrap_or(json!([])) } });
+            "children": ex.get("children").cloned().unwrap_or(json!([])),
+            "slots": ex.get("slots").cloned().unwrap_or(json!({})) } });
         let uid = object_id(&use_);
         objects
             .extra
@@ -1624,15 +1679,23 @@ fn list_components(_pod: &Pod, conn: &Connection, _: &Value) -> Result<Value, Va
         let Some((el, _)) = cstore::object(conn, &h).map_err(store_err)? else {
             continue;
         };
-        let kind = if el.get("params").is_some() || el.get("doc").is_some() {
+        // What it is used as, and whose it is.
+        let role = if el.get("params").is_some() || el.get("doc").is_some() {
             "component"
         } else if el.get("title").is_some() {
-            "blueprint"
+            "layout"
         } else {
             "part"
         };
+        let scope = if n.starts_with(super::CORE_PREFIX) {
+            "core"
+        } else if n.starts_with("@me/") {
+            "own"
+        } else {
+            "adopted"
+        };
         out.push(
-            json!({ "name": n, "kind": kind, "element": h, "doc": el["doc"],
+            json!({ "name": n, "role": role, "scope": scope, "element": h, "doc": el["doc"],
             "params": el["params"], "children": el["children"], "title": el["title"] }),
         );
     }
@@ -1640,18 +1703,142 @@ fn list_components(_pod: &Pod, conn: &Connection, _: &Value) -> Result<Value, Va
         "use": "{\"type\": \"core://Use\", \"ref\": \"<name>\", \"args\": {...}, \"children\": [...]}" }))
 }
 
-/// MCP `list_parts {layout?}`: the parts of blueprints a layout can use
-/// whole (`@core/<blueprint>/<part>`: each slot of its newest file and the
+/// MCP `find_elements {query?, role?, scope?, category?, limit?}`: what
+/// already exists to build with, by what it is for (decision
+/// `element-roles-and-reuse`). Every layout and component a layout may
+/// reference: the pod's own, the core ones that ship with the server, and
+/// adopted ones. Each row is small (name, role, scope, category, the line
+/// that says when to use it, its parameters by name), so an agent reads the
+/// few that fit a query instead of every component's whole definition.
+fn find_elements(pod: &Pod, conn: &Connection, args: &Value) -> Result<Value, Value> {
+    let want = |k: &str| args[k].as_str().filter(|v| !v.is_empty());
+    let (role, scope, category) = (want("role"), want("scope"), want("category"));
+    let words: Vec<String> = want("query")
+        .unwrap_or("")
+        .to_lowercase()
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|w| w.len() >= 2)
+        .map(str::to_owned)
+        .collect();
+    let limit = args["limit"].as_u64().map_or(12, |n| n.clamp(1, 60)) as usize;
+    let mut rows: Vec<(i64, Value)> = Vec::new();
+    for (n, h) in cstore::names(conn).map_err(store_err)? {
+        let Some((el, _)) = cstore::object(conn, &h).map_err(store_err)? else {
+            continue;
+        };
+        let (el_scope, bare) = if let Some(b) = n.strip_prefix(super::CORE_PREFIX) {
+            ("core", b)
+        } else if let Some(b) = n.strip_prefix("@me/") {
+            ("own", b)
+        } else if super::is_layout_name(&n) {
+            ("own", n.as_str())
+        } else {
+            ("adopted", n.as_str())
+        };
+        // A part of a core layout is listed by list_parts.
+        if el_scope == "core" && bare.contains('/') {
+            continue;
+        }
+        if el_scope == "core"
+            && pod
+                .catalog()
+                .core_layout(bare)
+                .is_some_and(|b| b.dev && !pod.show_dev_apps())
+        {
+            continue;
+        }
+        let is_component = el.get("params").is_some() || el.get("doc").is_some();
+        let el_role = if is_component { "component" } else { "layout" };
+        let note = (el_scope == "core")
+            .then(|| pod.catalog().element_note(bare))
+            .flatten();
+        let doc = el["doc"].as_str().unwrap_or("");
+        let title = el["title"].as_str().unwrap_or("");
+        let use_when = match note {
+            Some(n) => n.use_when.clone(),
+            // Its doc's first sentence, or a layout's title.
+            None if is_component => doc.split(". ").next().unwrap_or("").to_owned(),
+            None => title.to_owned(),
+        };
+        let el_category = note
+            .map(|n| n.category.as_str())
+            .or((!is_component).then_some("layout"));
+        if role.is_some_and(|r| r != el_role)
+            || scope.is_some_and(|s| s != el_scope)
+            || category.is_some_and(|c| Some(c) != el_category)
+        {
+            continue;
+        }
+        let params: Vec<Value> = el["params"]
+            .as_array()
+            .map(|ps| {
+                ps.iter()
+                    .map(|p| {
+                        let mut o = json!({ "name": p["name"], "type": p["type"] });
+                        if p["required"] == json!(true) {
+                            o["required"] = json!(true);
+                        }
+                        o
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        let score = if words.is_empty() {
+            1
+        } else {
+            let hits = |text: &str, weight: i64| -> i64 {
+                let text = text.to_lowercase();
+                words.iter().filter(|w| text.contains(w.as_str())).count() as i64 * weight
+            };
+            let param_names: Vec<&str> = params.iter().filter_map(|p| p["name"].as_str()).collect();
+            hits(bare, 4)
+                + hits(title, 3)
+                + hits(&use_when, 2)
+                + hits(doc, 1)
+                + hits(&param_names.join(" "), 1)
+        };
+        if score == 0 {
+            continue;
+        }
+        let mut row =
+            json!({ "name": n, "role": el_role, "scope": el_scope, "use_when": use_when });
+        if let Some(c) = el_category {
+            row["category"] = json!(c);
+        }
+        if is_component {
+            row["params"] = json!(params);
+            if el["children"] == json!(true) {
+                row["children"] = json!(true);
+            }
+        } else if !title.is_empty() {
+            row["title"] = json!(title);
+        }
+        rows.push((score, row));
+    }
+    rows.sort_by(|a, b| {
+        b.0.cmp(&a.0)
+            .then_with(|| a.1["category"].as_str().cmp(&b.1["category"].as_str()))
+            .then_with(|| a.1["name"].as_str().cmp(&b.1["name"].as_str()))
+    });
+    let total = rows.len();
+    let elements: Vec<Value> = rows.into_iter().take(limit).map(|(_, r)| r).collect();
+    Ok(json!({ "elements": elements, "total": total,
+        "categories": crate::adapter::ELEMENT_CATEGORIES,
+        "use": "A component: {\"type\": \"core://Use\", \"ref\": \"<name>\", \"args\": {...}, \"children\": [...]}; get_component shows its template and examples. A layout: embed it with core://Layout or open it with action.navigation.open, \"ref\": \"<name>\"; a core layout is also a layout's whole root with core://Use." }))
+}
+
+/// MCP `list_parts {layout?}`: the parts of core layouts a layout can use
+/// whole (`@core/<layout>/<part>`: each slot of its newest file and the
 /// parts it declares), with each part's node when `with_layouts`.
 fn list_parts(pod: &Pod, conn: &Connection, args: &Value) -> Result<Value, Value> {
     let only = args["layout"].as_str().or(args["app"].as_str());
     let with = args["with_layouts"].as_bool() == Some(true);
     let mut out = Vec::new();
-    for b in pod.catalog().blueprints() {
+    for b in pod.catalog().core_layouts() {
         if only.is_some_and(|o| o != b.id) || (b.dev && !pod.show_dev_apps()) {
             continue;
         }
-        let prefix = format!("{}/", blueprint_name(b.id));
+        let prefix = format!("{}/", core_layout_name(b.id));
         let mut parts = Vec::new();
         for (n, h) in cstore::names(conn).map_err(store_err)? {
             let Some(part) = n.strip_prefix(&prefix) else {
@@ -1663,18 +1850,18 @@ fn list_parts(pod: &Pod, conn: &Connection, args: &Value) -> Result<Value, Value
             }
             parts.push(row);
         }
-        out.push(json!({ "layout": b.id, "name": blueprint_name(b.id), "title": b.title, "parts": parts }));
+        out.push(json!({ "layout": b.id, "name": core_layout_name(b.id), "title": b.title, "parts": parts }));
     }
     if let Some(o) = only
         && out.is_empty()
     {
         return Err(refuse(
-            "unknown_blueprint",
-            format!("no blueprint '{o}' (list_layouts lists them)"),
+            "unknown_core_layout",
+            format!("no core layout '{o}' (list_layouts lists them)"),
         ));
     }
     Ok(json!({ "layouts": out,
-        "use": "{\"type\": \"core://Use\", \"ref\": \"@core/<blueprint>/<part>\"} draws a part where it stands, and follows its blueprint" }))
+        "use": "{\"type\": \"core://Use\", \"ref\": \"@core/<layout>/<part>\"} draws a part where it stands, and follows its core layout" }))
 }
 
 fn get_component(_pod: &Pod, conn: &Connection, args: &Value) -> Result<Value, Value> {
@@ -1739,6 +1926,44 @@ pub fn draft_plumbing(pod: &Pod, node: &Value) -> Result<Value, Value> {
             .map(|m| m.node)
             .map_err(|e| refuse("invalid_layout", e.to_string()))
     })
+}
+
+/// The theme scale changed: a new construct for every client, so each
+/// expands its components again (the manifest carries the scale; a sealed
+/// root is asked for again by its generation).
+pub async fn scale_changed(pod: &Pod) {
+    let p = pod.clone();
+    let _ = tokio::task::spawn_blocking(move || {
+        let _ = p.store().with_conn(cstore::bump_generation);
+        publish(&p, &[(crate::HOME_APP.to_owned(), 0)]);
+    })
+    .await;
+}
+
+/// Have home bind `feed` too (a kit's collection, decision
+/// `element-roles-and-reuse`), as a write of the construct. Answers whether
+/// it was added (false: home bound it already).
+pub async fn add_home_feed(pod: &Pod, feed: (String, String)) -> Result<bool, Value> {
+    let r = run_write(pod, &json!({}), move |p, c, _| {
+        let mut feeds = home_feeds(c);
+        if feeds.contains(&feed) {
+            return Ok((json!(false), Vec::new()));
+        }
+        if feeds.len() >= crate::layouts::MAX_HOME_FEEDS {
+            return Err(refuse(
+                "too_many_feeds",
+                format!(
+                    "home binds at most {} feeds",
+                    crate::layouts::MAX_HOME_FEEDS
+                ),
+            ));
+        }
+        feeds.push(feed);
+        let moved = set_home_feeds(p, c, &feeds)?;
+        Ok((json!(true), moved))
+    })
+    .await?;
+    Ok(r == json!(true))
 }
 
 /// Stop home binding `feed` (a source dropping one it no longer has, such

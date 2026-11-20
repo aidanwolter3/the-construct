@@ -4,6 +4,7 @@
 //! made-up test dishes, and that rotation keeps and revocation ends the connection.
 
 mod construct;
+mod guide;
 mod previews;
 mod sharing;
 
@@ -619,7 +620,7 @@ async fn claude_builds_and_edits_a_custom_app_with_the_tools() {
         .iter()
         .map(|p| p["part"].as_str().unwrap())
         .collect();
-    // A blueprint's parts are its slots (and those it declares).
+    // A core layout's parts are its slots (and those it declares).
     assert!(names.contains(&"slot:feed"), "{names:?}");
 
     let (err, layout) = env
@@ -770,7 +771,7 @@ async fn claude_builds_and_edits_a_custom_app_with_the_tools() {
     assert!(!err);
     let rows = apps["layouts"].as_array().unwrap();
     assert!(
-        apps["blueprints"]
+        apps["core_layouts"]
             .as_array()
             .unwrap()
             .iter()
@@ -801,7 +802,7 @@ async fn claude_builds_and_edits_a_custom_app_with_the_tools() {
     assert_eq!(status, StatusCode::OK);
     assert_eq!(el["title"], "Supper");
     assert_eq!(el["node"]["title"], "Dinner");
-    // Blueprints can't be edited or deleted.
+    // Core layouts can't be edited or deleted.
     let (err, _) = env
         .tool(
             &access,
@@ -816,7 +817,7 @@ async fn claude_builds_and_edits_a_custom_app_with_the_tools() {
         .get(&format!("/v1/construct/names/{id}"), host_token)
         .await;
     assert_eq!(status, StatusCode::NOT_FOUND);
-    // `copied_from` is gone: a copy of a blueprint is a layout like any other.
+    // `copied_from` is gone: a copy of a core layout is a layout like any other.
     let (_, now) = env
         .tool(&access, "get_layout", json!({"app": "events"}))
         .await;
@@ -1076,7 +1077,7 @@ async fn components_are_defined_used_and_expanded() {
             .as_array()
             .unwrap()
             .iter()
-            .filter(|c| c["kind"] == kind)
+            .filter(|c| c["role"] == kind)
             .filter_map(|c| c["name"].as_str().map(str::to_owned))
             .collect()
     };
@@ -1093,7 +1094,7 @@ async fn components_are_defined_used_and_expanded() {
             "{want} in {components:?}"
         );
     }
-    assert!(of_kind("blueprint").iter().any(|b| b == "@core/events"));
+    assert!(of_kind("layout").iter().any(|b| b == "@core/events"));
 
     let (err, ws) = env
         .tool(&access, "get_component", json!({"name": "@core/workspace"}))

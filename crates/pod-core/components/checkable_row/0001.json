@@ -1,0 +1,186 @@
+{
+ "note": "A row that ticks a yes/no field (decision element-roles-and-reuse)",
+ "component": {
+  "doc": "A row of a list that ticks its item: a tap anywhere flips a yes/no field of $item at once and tells the endpoint ({id, <field>}). Unticked it leads with a ring; ticked, with a filled tick, its title struck through and muted. One muted line under the title while meta is set; its children go at the end (a tag, a count). It draws on the card colour, so it sits in core:grouped_list. A to-do, a grocery item, a packing list, a lesson done.",
+  "params": [
+   {
+    "name": "title",
+    "type": "text",
+    "required": true,
+    "doc": "The row's title, usually $item.<field>."
+   },
+   {
+    "name": "field",
+    "type": "text",
+    "default": "done",
+    "doc": "The yes/no field of the item it flips."
+   },
+   {
+    "name": "endpoint",
+    "type": "text",
+    "required": true,
+    "doc": "The update endpoint, e.g. /v1/collections/todos/update."
+   },
+   {
+    "name": "meta",
+    "type": "text",
+    "default": "",
+    "doc": "One muted line under the title; left out while empty."
+   },
+   {
+    "name": "description",
+    "type": "text",
+    "default": "Tick or untick",
+    "doc": "What a screen reader says the row does."
+   },
+   {
+    "name": "tint",
+    "type": "text",
+    "default": "${local://theme#accent}",
+    "doc": "The filled tick's colour."
+   }
+  ],
+  "children": true,
+  "template": {
+   "type": "core://Tappable",
+   "content_description": "$arg.description",
+   "on_click": {
+    "intent": "action.mutation.optimistic",
+    "entity_uri": "$item.uri",
+    "field": "$arg.field",
+    "value_expr": "!entity.$arg.field",
+    "rollback_value": false,
+    "endpoint": "$arg.endpoint",
+    "payload": {
+     "id": "$item.id",
+     "$arg.field": "$value"
+    }
+   },
+   "content": {
+    "type": "core://Box",
+    "background": "${local://theme#card}",
+    "content": {
+     "type": "core://Row",
+     "align": "Center",
+     "spacing_dp": 12,
+     "padding_h_dp": 11,
+     "padding_v_dp": 12,
+     "children": [
+      {
+       "type": "core://Conditional",
+       "value": "$item.$arg.field",
+       "content": {
+        "type": "core://Box",
+        "background": "$arg.tint",
+        "content_color": "${local://theme#card}",
+        "corner_dp": 512,
+        "width_dp": 22,
+        "height_dp": 22,
+        "align": "Center",
+        "content": {
+         "type": "core://Badge",
+         "text": "",
+         "icon": "check"
+        }
+       }
+      },
+      {
+       "type": "core://Conditional",
+       "value": "$item.$arg.field",
+       "not": true,
+       "content": {
+        "type": "core://Box",
+        "border_color": "${local://theme#muted_text}",
+        "corner_dp": 512,
+        "width_dp": 22,
+        "height_dp": 22,
+        "content": {
+         "type": "core://Spacer",
+         "size_dp": 0
+        }
+       }
+      },
+      {
+       "type": "core://Column",
+       "spacing_dp": 2,
+       "children": [
+        {
+         "type": "core://Conditional",
+         "value": "$item.$arg.field",
+         "content": {
+          "type": "core://Box",
+          "content_color": "${local://theme#muted_text}",
+          "content": {
+           "type": "core://Text",
+           "value_expr": "$arg.title",
+           "style": "Label",
+           "strike": true
+          }
+         }
+        },
+        {
+         "type": "core://Conditional",
+         "value": "$item.$arg.field",
+         "not": true,
+         "content": {
+          "type": "core://Text",
+          "value_expr": "$arg.title",
+          "style": "Label"
+         }
+        },
+        {
+         "type": "core://Conditional",
+         "value": "$arg.meta",
+         "content": {
+          "type": "core://Box",
+          "content_color": "${local://theme#muted_text}",
+          "content": {
+           "type": "core://Text",
+           "value_expr": "$arg.meta",
+           "style": "Secondary"
+          }
+         }
+        }
+       ]
+      },
+      {
+       "type": "core://Spacer"
+      },
+      {
+       "type": "core://Children"
+      }
+     ]
+    }
+   }
+  },
+  "examples": [
+   {
+    "args": {
+     "title": "$item.title",
+     "endpoint": "/v1/collections/todos/update"
+    },
+    "note": "a to-do"
+   },
+   {
+    "args": {
+     "title": "$item.name",
+     "field": "bought",
+     "endpoint": "/v1/collections/groceries/update",
+     "meta": "$item.quantity",
+     "description": "Mark bought"
+    },
+    "children": [
+     {
+      "type": "core://Use",
+      "component": "core:pill",
+      "args": {
+       "text": "$item.section",
+       "tone": "muted"
+      }
+     }
+    ],
+    "note": "a grocery item with its amount and a tag"
+   }
+  ]
+ }
+}

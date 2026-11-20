@@ -23,6 +23,7 @@ source-collections = { path = "../source-collections" }
 web-extract = { path = "../web-extract" }
 source-events = { path = "../source-events" }
 source-monitor = { path = "../source-monitor" }
+source-dates = { path = "../source-dates" }
 source-agents = { path = "../source-agents" }
 protocol = { workspace = true }
 axum = { version = "0.8", features = ["http2"] }

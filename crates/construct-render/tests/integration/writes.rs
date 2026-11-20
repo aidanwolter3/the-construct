@@ -218,7 +218,7 @@ fn opening_a_notification_marks_it_read_and_opens_its_layout() {
 
 /// A row of the pod's `notifications` collection (decision
 /// `notifications-in-a-collection`) opens the `layout` the pod filled in
-/// (issue #337), not its channel's blueprint, and that layout's screen.
+/// (issue #337), not its channel's core layout, and that layout's screen.
 #[test]
 fn a_notification_row_opens_the_layout_the_pod_filled_in() {
     let inbox = json!({ "type": "core://List", "query_key": "collection:notifications", "item_template": {

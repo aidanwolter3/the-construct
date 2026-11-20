@@ -5,7 +5,7 @@
 //! `server pods mcp`): the host forwards such a request with
 //! [`crate::CREDENTIAL_HEADER`]` = mcp` and no bearer, and the credential
 //! reaches nothing else. The pod token itself works too (served alone, in
-//! tests). The tools read the pod's layouts, blueprints and data sources and
+//! tests). The tools read the pod's layouts, core layouts and data sources and
 //! write the construct ([`crate::construct::write`], decision
 //! `content-addressed-construct`); writes are recorded with author `claude`. Nothing
 //! here can call a source's routes or act for the user upstream, except
@@ -142,67 +142,169 @@ fn initialize(pod: &Pod, params: &Value) -> Value {
     })
 }
 
-/// [`INSTRUCTIONS`] and every adapter's paragraph.
+/// What every agent reads before its first call: [`INSTRUCTIONS`] and the
+/// names of the guide's topics. Kept short on purpose: a client may show
+/// only the start of it (decision `element-roles-and-reuse`), so the detail
+/// is in [`guide`], read by topic.
 fn instructions(pod: &Pod) -> String {
-    let mut out = INSTRUCTIONS.to_owned();
+    let topics: Vec<String> = guide_topics(pod)
+        .iter()
+        .map(|t| format!("{} ({})", t.id, t.summary))
+        .collect();
+    format!("{INSTRUCTIONS} {}.", topics.join("; "))
+}
+
+/// The longest [`instructions`] may be, in characters.
+pub const MAX_INSTRUCTIONS: usize = 2000;
+
+const INSTRUCTIONS: &str = "This is the user's own pod in The Construct. It serves layouts (JSON screens, server-driven UI) over data \
+sources. The user's app opens on the layout home and shows nothing else: home embeds or links every other \
+layout. Build only what the user asks for, as small as it can be.\n\nBuilding a screen:\n1. See what exists: \
+list_layouts (the pod's layouts, how home reaches each, and the core layouts that ship with the server) and \
+find_elements (layouts and components by what they are for).\n2. Use a core or adopted layout whole when one \
+fits.\n3. Otherwise compose it from components (core://Use): a scaffold, sections, rows. Write plain nodes \
+only for what no component draws.\n4. A piece that appears twice is a component: define_component before the \
+second copy.\n5. Look at it (render_layout_preview) and act on the write's warnings. If nothing fitted, say \
+what was missing with note_gap.\n\nChanging a screen: find what is drawn there first. Start at home and \
+follow its references; list_layouts and get_layout give each layout's path from home (reached) and flag a \
+copy of a core layout (copy_of). Change that element, not what it was copied from.\n\nEvery write is \
+validated (errors give a JSON pointer and what is allowed), shows live on the user's devices and keeps \
+history (restore_version). list_data_sources and sample_data show the real fields. Before working in an area \
+read guide {topic}:";
+
+/// One topic of the guide: an area an agent reads about before working in it.
+struct Topic {
+    id: &'static str,
+    /// A few words, listed in the instructions.
+    summary: &'static str,
+    text: &'static str,
+}
+
+/// The core's topics.
+const TOPICS: &[Topic] = &[
+    Topic {
+        id: "navigation",
+        summary: "home, links, sheets, panels, gestures",
+        text: "The user's app opens on the home layout (id home) and shows nothing else: home IS the user's whole \
+interface, and it embeds or presents every other layout. A new pod's home is a blank page with Notifications \
+and Settings buttons. \"Show my photo feed\" is one layout (create_layout using the core layout that fits \
+whole: {\"type\": \"core://Use\", \"ref\": \"@core/<name>\"}, with its feeds) and a home that shows it \
+(update_layout on home: a core://Layout with \"ref\": \"<layout id>\" as the one slot). With more than one \
+layout, home lists them and each row pushes its layout (action.navigation.open {\"ref\": \"<layout id>\", \
+\"presentation\": \"Push\"}); system Back comes back. Layouts only go forward: a link back to a layout that \
+leads here is action.navigation.pop_to {\"edge\": <id>} (pop_to_root for home). A core://Layout can also \
+show a layout in part of the screen, or as a Sheet, Panel or Overlay (from any edge) while a condition \
+holds; core://Gesture runs an intent on a tap, long press or swipe, and core://SwipeCard is a card that \
+follows the finger and runs an intent when swiped off (a core://List with stack: true is a deck of them). \
+Home owns every feed: feeds you name when creating a layout are added to home's, and every layout may bind \
+any of home's feeds; a core://Layout or action.navigation.open binds a layout's inputs ($in.<name>) with \
+\"bind\" (only home binds the pod's data). The inbox and Settings are the core layouts inbox and settings \
+(\"ref\": \"@core/inbox\" with presentation Sheet, \"@core/settings\" with Panel); describe_vocabulary has \
+small snippets. home can't be deleted. Keep home small: it is fetched again by every device whenever \
+anything it reaches changes (a write's refetch says how much), so it should hold embeds, links and component \
+uses, not screens written out.",
+    },
+    Topic {
+        id: "pages",
+        summary: "headers, Back, screens, previews",
+        text: "A layout whose root is a core://Page gets no chrome from the app: it draws its own header (a title with \
+actions on one line) and Back (@core/back_button); core://Workspace is written as the page @core/workspace \
+draws. render_layout_preview shows what a layout looks like (an image and every node's bounds, with the \
+user's data, as their device shows it; target_uri opens a screen, item tries a row with one entity, \
+full_height draws a long screen whole), and dispatch_virtual_interaction taps or scrolls that preview, so \
+look at a layout after changing it.",
+    },
+    Topic {
+        id: "components",
+        summary: "using, defining, names, references",
+        text: "Everything is a name that points to an immutable element. An element is used as a layout (a screen, reached \
+by a core://Layout or an action.navigation.open) or as a component (a template, expanded in place by \
+core://Use). The pod's layouts are named by their id and its components @me/<name>; what ships with the \
+server is @core/<name> (core layouts and core components) and @core/<layout>/<part> (a named piece of a core \
+layout). A reference follows its name (a deploy moves @core/ names, an edit moves the user's), so use a core \
+layout, a part or a component by reference to keep it current; read it (get_layout, get_component) and write \
+your own only to change what it draws. The vocabulary is plumbing (what the app draws) and porcelain: \
+components, used with {\"type\": \"core://Use\", \"ref\": \"@core/<name>\" or \"@me/<name>\", \"args\", \
+\"children\"} and expanded by the app. find_elements finds layouts and components by what they are for; \
+list_components lists every component, list_parts the parts. Prefer a component over repeating nodes, and \
+define one (define_component, or copy_component to change a @core/ one) when a piece repeats. expand shows \
+what any layout or component becomes. A write's warnings name the component a hand-written piece could be, \
+pieces written out several times, and row ids written into bindings.",
+    },
+    Topic {
+        id: "theme",
+        summary: "colours",
+        text: "Use ${local://theme#<token>} for colours, never a fixed #RRGGBB (it stays the same in dark mode; a write \
+warns about each). set_theme without arguments lists the tokens; with them it sets a token's light and dark \
+value, or adds a token of the pod's own.",
+    },
+    Topic {
+        id: "actions",
+        summary: "buttons, confirming",
+        text: "Every button is a core://Button (style Primary, Secondary, Tonal or Text; size Regular or Small), never a \
+core://Tappable over a Box, so buttons side by side match. A button whose step can't be undone \
+(action.device leave_pod or sign_out, a delete) asks first: wrap its intent in action.confirm.",
+    },
+    Topic {
+        id: "jacks",
+        summary: "models, web, accounts",
+        text: "Jacks are the abilities the pod is plugged into (a model, fetching websites, web search with the pod's own \
+key, accounts such as an agent runner): list_jacks shows each and its state, plug_jack and unplug_jack \
+change the switch and config ones (a search key is given once and never shown back); account jacks are \
+plugged through their own sign-in. A feature whose jack is unplugged says so: tell the user which jack it \
+needs rather than working around it.",
+    },
+    Topic {
+        id: "sharing",
+        summary: "publish, adopt",
+        text: "The user can share with other users of this server: publish answers a review first (show it: elements, \
+inputs, and flagged text and URLs) and shares only with confirm; adopt binds a share link to the user's own \
+data (propose, show the user its flags and confirm, then put its \"use\" in home); a revoked share keeps \
+drawing where it was adopted.",
+    },
+];
+
+/// The core's topics, then one per source that has a paragraph (named
+/// after the source).
+fn guide_topics(pod: &Pod) -> Vec<Topic> {
+    let mut out: Vec<Topic> = TOPICS
+        .iter()
+        .map(|t| Topic {
+            id: t.id,
+            summary: t.summary,
+            text: t.text,
+        })
+        .collect();
     for a in pod.catalog().adapters() {
-        if let Some(more) = a.mcp_instructions() {
-            out.push_str("\n\n");
-            out.push_str(more);
+        if let Some(text) = a.mcp_instructions() {
+            out.push(Topic {
+                id: a.name(),
+                summary: a.mcp_summary().unwrap_or("its tools"),
+                text,
+            });
         }
     }
     out
 }
 
-const INSTRUCTIONS: &str = "This is the user's own pod in The Construct. It serves layouts: JSON screens \
-(server-driven UI) over data sources. The user's app opens on the home layout (id home) and shows nothing else: \
-home IS the user's whole interface, and it embeds or presents every other layout. A new pod's home is a blank page \
-with Notifications and Settings buttons. Build only what the user asks for, as small as it can be: \"show my photo \
-feed\" is one layout (create_layout using the blueprint that fits whole: {\"type\": \"core://Use\", \"ref\": \
-\"@core/<blueprint>\"}, with its feeds) and a home that shows it (update_layout on home: a core://Layout with \
-\"ref\": \"<layout id>\" as the one slot). With more than one layout, home lists them and each row pushes its \
-layout (action.navigation.open {\"ref\": \"<layout id>\", \"presentation\": \"Push\"}); system Back comes back. \
-Layouts only go forward: a link back to a layout that leads here is action.navigation.pop_to {\"edge\": <id>} \
-(pop_to_root for home). A core://Layout can also show a layout in part of the screen, or as a Sheet, Panel or \
-Overlay (from any edge) while a condition holds; core://Gesture runs an intent on a tap, long press or swipe, and \
-core://SwipeCard is a card that follows the finger and runs an intent when swiped off (a core://List with stack: \
-true is a deck of them). Every button is a core://Button (style Primary, Secondary, Tonal or Text; size \
-Regular or Small), never a core://Tappable over a Box, so buttons side by side match. Home owns every feed: feeds you name when creating a layout are added to home's, and \
-every layout may bind any of home's feeds; a core://Layout or action.navigation.open binds a layout's inputs \
-($in.<name>) with \"bind\" (only home binds the pod's data). The inbox and Settings are the blueprints inbox and \
-settings (\"ref\": \"@core/inbox\" with presentation Sheet, \"@core/settings\" with Panel); describe_vocabulary \
-has small snippets. home can't be deleted. Everything is a name that points to an immutable element: the pod's \
-layouts are named by their id, blueprints (the built-in layouts) @core/<blueprint>, their parts \
-@core/<blueprint>/<part>, components @core/<name> (ship with the server) and @me/<name> (the user's own). A \
-reference follows its name (a deploy moves @core/ names, an edit moves the user's), so use a blueprint, a part or \
-a component by reference to keep it current, or read it (get_layout, get_component) and write your own to change \
-it. list_layouts lists layouts and blueprints, list_parts blueprints' parts, list_components components. Call \
-list_data_sources and describe_vocabulary first and sample_data to see real fields. Every write is validated \
-(errors give a JSON pointer and what is allowed) and appears live on the user's devices; each name keeps its \
-history, and restore_version moves a layout back to an earlier one. Before changing anything the user sees (\"my \
-notifications\", \"the shopping screen\"), find what is drawn there: start at home and follow its references \
-(embeds, components, links and gestures) to the element on that screen; list_layouts and get_layout give each \
-layout's path from home (reached) and flag a layout copied from a blueprint (copy_of). Change that element, not \
-the blueprint it may have started from: a copy doesn't follow its blueprint, and a blueprint changes only with the \
-server. Then look at it with render_layout_preview. The vocabulary is plumbing (what the app \
-draws) and porcelain: components, used with {\"type\": \"core://Use\", \"ref\": \"@core/<name>\" or \
-\"@me/<name>\", \"args\", \"children\"} and expanded by the app. Prefer a component over repeating nodes, and \
-define one (define_component, or copy_component to change a @core/ one) when a piece repeats across layouts. \
-expand shows what any layout or component becomes; render_layout_preview shows what it looks like (an image and \
-every node's bounds, with the user's data, as their device shows it; target_uri opens a screen, item tries a row \
-with one entity, full_height draws a long screen whole), and dispatch_virtual_interaction taps or scrolls that \
-preview, so look at a layout after changing it. A layout whose root is a core://Page gets no chrome from the app: \
-it draws its own header (a title with actions on one line) and Back (@core/back_button); core://Workspace is \
-written as the page @core/workspace draws. Use ${local://theme#<token>} for colours (set_theme). A button whose \
-step can't be undone (action.device leave_pod or sign_out, a delete) asks first: wrap its intent in \
-action.confirm. Jacks are the abilities the pod is plugged into (a model, fetching websites, web search with the \
-pod's own key, accounts such as an agent runner): list_jacks shows each and its state, plug_jack and unplug_jack \
-change the switch and config ones (a search key is given once and never shown back); account jacks are plugged \
-through their own sign-in. A feature whose jack is unplugged says so: tell the user which jack it needs rather \
-than working around it. The user can share with other users of this server: publish \
-answers a review first (show it: elements, inputs, and flagged text and URLs) and shares only with confirm; \
-adopt binds a share link to the user's own data (propose, show the user its flags and confirm, then put its \"use\" in \
-home); a revoked share keeps drawing where it was adopted.";
+/// MCP `guide {topic}`: one topic's text, or with `all` every topic's.
+fn guide(pod: &Pod, args: &Value) -> Result<Value, Value> {
+    let topics = guide_topics(pod);
+    let ids: Vec<&str> = topics.iter().map(|t| t.id).collect();
+    let topic = args["topic"].as_str().unwrap_or("");
+    if topic == "all" {
+        let text: Vec<String> = topics
+            .iter()
+            .map(|t| format!("{}: {}", t.id, t.text))
+            .collect();
+        return Ok(json!({ "topic": "all", "text": text.join("\n\n") }));
+    }
+    match topics.iter().find(|t| t.id == topic) {
+        Some(t) => Ok(json!({ "topic": t.id, "text": t.text, "topics": ids })),
+        None => Err(json!({ "error": "unknown_topic", "topics": ids,
+            "detail": "pass one of topics, or all" })),
+    }
+}
 
 // ---------- tools ----------
 
@@ -250,7 +352,7 @@ fn base_tools() -> Vec<Value> {
     let feeds = json!({ "type": "array", "description": "Feeds to add to home's (every layout binds home's feeds): [source, feed] pairs (see list_data_sources)",
         "items": { "type": "array", "items": { "type": "string" }, "minItems": 2, "maxItems": 2 } });
     let layout = json!({ "type": "object", "description": "A layout's root: a core://Page (or a core://Workspace, written as its page; see describe_vocabulary); its id is set by the pod" });
-    let id = json!({ "type": "string", "description": "A layout id: home, a c-... id from list_layouts, or a blueprint" });
+    let id = json!({ "type": "string", "description": "A layout id: home, a c-... id from list_layouts, or a core layout" });
     let note = json!({ "type": "string", "description": "What changed, in the user's words (shown in the name's history)" });
     vec![
         tool(
@@ -276,7 +378,7 @@ fn base_tools() -> Vec<Value> {
         ),
         tool(
             "list_layouts",
-            "The user's layouts (home first, with the feeds every layout may bind; each with its element, its history's newest version, reached: how the user gets to it from home (e.g. home → (on_swipe_down, Overlay from top) → c-...), or that home doesn't reach it, and copy_of: the blueprint it looks copied from, which it doesn't follow) and the blueprints layouts can use (@core/<id>, with their feeds, reached, used_by: the layouts that use them, and copies).",
+            "The user's layouts (home first, with the feeds every layout may bind; each with its element, its history's newest version, reached: how the user gets to it from home (e.g. home → (on_swipe_down, Overlay from top) → c-...), or that home doesn't reach it, and copy_of: the core layout it looks copied from, which it doesn't follow) and the core layouts layouts can use (@core/<id>, with their feeds, reached, used_by: the layouts that use them, and copies).",
             json!({}),
             &[],
         ),
@@ -287,6 +389,12 @@ fn base_tools() -> Vec<Value> {
             &[],
         ),
         tool(
+            "guide",
+            "How to work in one area of the pod, read before working there: the topics the instructions name (navigation, pages, components, theme, actions, jacks, sharing, and one per source), or all for every topic.",
+            json!({ "topic": { "type": "string" } }),
+            &["topic"],
+        ),
+        tool(
             "describe_vocabulary",
             "The layout vocabulary: node types with their fields, action intents and binding syntax.",
             json!({}),
@@ -294,7 +402,7 @@ fn base_tools() -> Vec<Value> {
         ),
         tool(
             "get_layout",
-            "A layout or blueprint (now, or one entry of its name's history), its element and needs, its history, reached (how the user gets to it from home, or that home doesn't reach it) and copy_of (the blueprint it looks copied from, which it doesn't follow). expanded: true adds what clients get (components expanded to plumbing).",
+            "A layout or core layout (now, or one entry of its name's history), its element and needs, its history, reached (how the user gets to it from home, or that home doesn't reach it) and copy_of (the core layout it looks copied from, which it doesn't follow). expanded: true adds what clients get (components expanded to plumbing).",
             json!({ "id": id, "version": { "type": "integer" }, "expanded": { "type": "boolean" } }),
             &["id"],
         ),
@@ -347,13 +455,28 @@ fn base_tools() -> Vec<Value> {
         ),
         tool(
             "list_parts",
-            "The parts of blueprints a layout can use whole, by reference: @core/<blueprint>/<part> (each slot of a blueprint, slot:<id>, and the parts it declares), with each part's node when with_layouts.",
-            json!({ "layout": { "type": "string", "description": "A blueprint (all when left out)" }, "with_layouts": { "type": "boolean" } }),
+            "The parts of core layouts a layout can use whole, by reference: @core/<layout>/<part> (each slot of a core layout, slot:<id>, and the parts it declares), with each part's node when with_layouts.",
+            json!({ "layout": { "type": "string", "description": "A core layout (all when left out)" }, "with_layouts": { "type": "boolean" } }),
+            &[],
+        ),
+        tool(
+            "note_gap",
+            "Say what was missing when nothing that exists fitted and you wrote plain nodes instead: one line naming the shape (\"a row with a leading checkbox and a trailing tag\", \"a week strip of day tiles\"), never the user's content. The server's operator reads these to decide what to ship for everyone.",
+            json!({ "what": { "type": "string" } }),
+            &["what"],
+        ),
+        tool(
+            "find_elements",
+            "What already exists to build with, by what it is for: layouts and components of the pod's own (scope own), the core ones that ship with the server (core) and adopted ones (adopted). Each answer is small: name, role (layout or component), scope, category (primitive, row, container, scaffold, pattern, layout), a line saying when to use it, and its parameters. Call it before writing nodes: query is a few words for what you need (\"row with icon\", \"empty list\", \"photo feed\"); role, scope and category narrow it. Without a query it lists everything that passes the filters.",
+            json!({ "query": { "type": "string" }, "role": { "type": "string", "enum": ["layout", "component"] },
+                "scope": { "type": "string", "enum": ["core", "own", "adopted"] },
+                "category": { "type": "string", "enum": crate::adapter::ELEMENT_CATEGORIES },
+                "limit": { "type": "integer", "description": "At most this many (12; up to 60)" } }),
             &[],
         ),
         tool(
             "list_components",
-            "Porcelain the layouts can use: every component (@core/<name> ones ship with the server, @me/<name> ones are the user's own) with its doc and parameters, and the blueprints and their parts. Use one with {\"type\": \"core://Use\", \"ref\": <name>, \"args\": {...}, \"children\": [...]}.",
+            "Porcelain the layouts can use: every component (@core/<name> ones ship with the server, @me/<name> ones are the user's own) with its doc and parameters, and the core layouts and their parts. Use one with {\"type\": \"core://Use\", \"ref\": <name>, \"args\": {...}, \"children\": [...]}.",
             json!({}),
             &[],
         ),
@@ -408,7 +531,8 @@ fn base_tools() -> Vec<Value> {
         tool(
             "set_theme",
             "The pod's theme colours, each with a light and a dark value; layouts bind them as ${local://theme#<token>} and the app picks the value for the device's mode. Besides the built-in tokens, a pod may name up to 40 of its own (e.g. a colour per category, a toolbar's fill): any new name [a-z][a-z0-9_]{0,31}, not ending in _dark; give it a light and a dark value (one alone is used for both). Without theme: answers the current theme and its tokens.",
-            json!({ "theme": { "type": "object", "description": "{token: {light?: #RRGGBB, dark?: #RRGGBB}}, or flat: {token: #RRGGBB (light), token_dark: #RRGGBB}. A built-in token left unset follows its default for each mode; {token: null} puts a built-in back to its defaults or removes a token of the pod's own." } }),
+            json!({ "theme": { "type": "object", "description": "{token: {light?: #RRGGBB, dark?: #RRGGBB}}, or flat: {token: #RRGGBB (light), token_dark: #RRGGBB}. A built-in token left unset follows its default for each mode; {token: null} puts a built-in back to its defaults or removes a token of the pod's own." },
+                "scale": { "type": "object", "description": "The sizes core components draw with, so a pod restyles them without copying them: {corner_s, corner_m, corner_l, pad_s, pad_m, pad_l: 0 to 64 dp; title_weight: Regular, Medium, SemiBold or Bold}. Tags use corner_s, cards and callouts corner_m, grouped lists corner_l, page titles title_weight. {name: null} puts one back to its default. The answer lists the whole scale." } }),
             &[],
         ),
     ]
@@ -488,14 +612,23 @@ async fn call_tool(pod: &Pod, headers: &HeaderMap, params: &Value) -> Value {
     // The layout and component tools write the construct (decision
     // `content-addressed-construct`).
     if let Some(r) = crate::construct::write::mcp(pod, name, &args).await {
-        let r = match name {
-            "create_layout" | "update_layout" | "validate_layout" => {
-                r.map(|v| with_advice(v, &args["layout"]))
+        let r = match (name, r) {
+            ("create_layout" | "update_layout" | "validate_layout", Ok(v)) => {
+                Ok(with_advice(pod, v, args["layout"].clone(), None).await)
             }
-            "define_component" | "update_component" => {
-                r.map(|v| with_advice(v, &args["component"]["template"]))
+            ("define_component" | "update_component", Ok(v)) => {
+                // The component being written, by its name in the pod
+                // (`tile`, `pod:tile` and `@me/tile` are one).
+                let writing = args["name"].as_str().map(|n| {
+                    if n.starts_with('@') {
+                        n.to_owned()
+                    } else {
+                        format!("@me/{}", n.strip_prefix("pod:").unwrap_or(n))
+                    }
+                });
+                Ok(with_advice(pod, v, args["component"]["template"].clone(), writing).await)
             }
-            _ => r,
+            (_, r) => r,
         };
         return tool_result(r);
     }
@@ -504,6 +637,8 @@ async fn call_tool(pod: &Pod, headers: &HeaderMap, params: &Value) -> Value {
         "plug_jack" => crate::jacks::plug_tool(pod, &args).await,
         "unplug_jack" => crate::jacks::unplug_tool(pod, &args).await,
         "list_data_sources" => list_data_sources(pod).await,
+        "guide" => guide(pod, &args),
+        "note_gap" => crate::hints::note_gap(pod, &args),
         "describe_vocabulary" => vocabulary(pod).await,
         "sample_data" => sample_data(pod, headers, &args).await,
         "set_time_zone" => set_time_zone(pod, &args).await,
@@ -524,6 +659,16 @@ async fn call_tool(pod: &Pod, headers: &HeaderMap, params: &Value) -> Value {
 
 async fn set_theme(pod: &Pod, args: &Value) -> Result<Value, Value> {
     let changes = args["theme"].clone();
+    // The scale: sizes and a weight core components read when expanded
+    // (decision `element-roles-and-reuse`). A change is a new construct
+    // for devices, so they expand again.
+    if let Some(scale) = args.get("scale").filter(|s| !s.is_null()).cloned() {
+        crate::blocking(pod, move |s| Ok(crate::porcelain::set_scale(s, &scale)))
+            .await
+            .map_err(store_err)?
+            .map_err(|e| json!({ "error": "invalid_theme", "detail": e }))?;
+        crate::construct::write::scale_changed(pod).await;
+    }
     let r = crate::blocking(pod, move |s| {
         Ok(if changes.is_null() {
             crate::porcelain::theme(s).map_err(|e| e.to_string())
@@ -547,8 +692,13 @@ async fn set_theme(pod: &Pod, args: &Value) -> Result<Value, Value> {
             {
                 tokens.insert(own, json!("the pod's own token"));
             }
-            Ok(json!({ "ok": true, "theme": t, "tokens": tokens,
-            "use": "bind ${local://theme#<token>} where a colour goes (core://Box background, border_color, content_color; core://IconButton active_tint; core://List focus colours) instead of a fixed #RRGGBB, so the layout follows the device's light or dark mode: page for a page's background, card for cards and rows on it, card_border for their borders, muted_text for secondary text. Devices pick a change up the next time they load the layout." }))
+            let scale = crate::blocking(pod, |s| Ok(crate::porcelain::scale(s)))
+                .await
+                .map_err(store_err)?;
+            Ok(
+                json!({ "ok": true, "theme": t, "tokens": tokens, "scale": scale,
+            "use": "bind ${local://theme#<token>} where a colour goes (core://Box background, border_color, content_color; core://IconButton active_tint; core://List focus colours) instead of a fixed #RRGGBB, so the layout follows the device's light or dark mode: page for a page's background, card for cards and rows on it, card_border for their borders, muted_text for secondary text. Devices pick a change up the next time they load the layout." }),
+            )
         }
         Err(e) => Err(json!({ "error": "invalid_theme", "detail": e })),
     }
@@ -610,11 +760,24 @@ async fn list_data_sources(pod: &Pod) -> Result<Value, Value> {
 }
 
 /// A layout or component write's answer with `warnings`: the fixed
-/// colours it uses, which stay the same in dark mode, and its hand-made
-/// button faces (none: the answer as it is).
-fn with_advice(mut answer: Value, layout: &Value) -> Value {
-    let mut warnings = crate::validate::fixed_colours(layout);
-    warnings.extend(crate::validate::button_faces(layout));
+/// colours it uses, which stay the same in dark mode, its hand-made button
+/// faces, and the reuse hints of [`crate::hints`] (none: the answer as it
+/// is). Advice only, worked out after the write.
+async fn with_advice(
+    pod: &Pod,
+    mut answer: Value,
+    layout: Value,
+    writing: Option<String>,
+) -> Value {
+    let mut warnings = crate::validate::fixed_colours(&layout);
+    warnings.extend(crate::validate::button_faces(&layout));
+    let p = pod.clone();
+    let reuse =
+        tokio::task::spawn_blocking(move || crate::hints::reuse(&p, &layout, writing.as_deref()))
+            .await
+            .unwrap_or_default();
+    warnings.extend(reuse);
+    warnings.extend(crate::hints::refetch(&answer));
     if !warnings.is_empty() {
         answer["warnings"] = json!(warnings);
     }
@@ -965,7 +1128,7 @@ fn plumbing_nodes() -> Vec<Value> {
 fn porcelain_nodes() -> Value {
     json!([
         { "type": crate::components::USE_TYPE, "fields": "ref, args?, children?",
-          "doc": "An element where it stands, by reference (\"ref\": a name): a component (list_components: @core/<name> ships with the server, @me/<name> is the user's own) with its args and children, a whole blueprint (@core/<blueprint>, as a layout's root; the layout keeps its own id) or a part of one (@core/<blueprint>/<part>, list_parts). It follows its name: when the name moves, the layout draws the new element. \"component\": \"core:<name>\" or \"pod:<name>\" is accepted for ref when written." },
+          "doc": "An element where it stands, by reference (\"ref\": a name): a component (list_components: @core/<name> ships with the server, @me/<name> is the user's own) with its args and children, a whole core layout (@core/<layout>, as a layout's root; the layout keeps its own id) or a part of one (@core/<layout>/<part>, list_parts). It follows its name: when the name moves, the layout draws the new element. \"component\": \"core:<name>\" or \"pod:<name>\" is accepted for ref when written." },
         { "type": "core://Workspace", "fields": "id, title, slots: [{slot_id, content}], screens?: [{id, route, title, data?, content, footer?}], title_scrolls?",
           "doc": "A page the older way: its slots stacked under a title, and screens with a bar (Back, title, a spinner while data loads) over their scrolling content and footer. Written as a core://Page through @core/workspace and @core/screen; prefer a core://Page for a new layout." },
         { "type": crate::components::CHILDREN_TYPE, "fields": "at?",
@@ -1117,8 +1280,8 @@ fn vocabulary_with(components: Vec<Value>) -> Value {
         "icons": protocol::ICONS,
         "intents": [
             { "intent": "action.navigation.open", "fields": "target_uri?, ref?, bind?, params?: {name: value}, presentation: Push|Modal|Replace|Sheet|Panel|Overlay, animation?: none|fade|slide|sheet_up, edge?: top|bottom|start|end, size_dp?",
-              "doc": "With ref (a layout's name: its id, or @core/<blueprint>; \"layout\": <id> is accepted when written): present that layout on the back stack (Push: whole screen; Sheet: from the bottom; Panel: from the start; Overlay: from edge, bottom when unset, size_dp tall or wide; drag it back toward its edge to dismiss), bind filling its inputs, params bound as $route.<name> in it, then its screen matching target_uri if any. Without: open the screen of the layout on top whose route matches target_uri. System Back pops either. A link may not lead back to a layout that leads here (layouts only go forward): use action.navigation.pop_to." },
-            { "intent": "action.navigation.pop_to", "fields": "edge", "doc": "Back to the nearest open layout with that key (a layout's id, a blueprint's id)." },
+              "doc": "With ref (a layout's name: its id, or @core/<layout>; \"layout\": <id> is accepted when written): present that layout on the back stack (Push: whole screen; Sheet: from the bottom; Panel: from the start; Overlay: from edge, bottom when unset, size_dp tall or wide; drag it back toward its edge to dismiss), bind filling its inputs, params bound as $route.<name> in it, then its screen matching target_uri if any. Without: open the screen of the layout on top whose route matches target_uri. System Back pops either. A link may not lead back to a layout that leads here (layouts only go forward): use action.navigation.pop_to." },
+            { "intent": "action.navigation.pop_to", "fields": "edge", "doc": "Back to the nearest open layout with that key (a layout's id, a core layout's id)." },
             { "intent": "action.navigation.pop_to_root", "fields": "", "doc": "Back to home." },
             { "intent": "action.navigation.back", "fields": "", "doc": "Close the screen." },
             { "intent": "action.mutation.optimistic", "fields": "entity_uri, field, value_expr, endpoint, payload, also?: [{field, value_expr}], rollback_value?",
@@ -1158,7 +1321,7 @@ fn vocabulary_with(components: Vec<Value>) -> Value {
             "$nonce": "a fresh id per action",
             "$value": "the new value in a mutation's payload",
         },
-        "rules": "Layouts may only use the sources of home's feeds: data paths, actions, query keys and entity schemes from list_data_sources. No action.auth.* intents (sign in with action.device sign_in instead) and no other /v1/ paths. Data the device provides (local_data) needs no feed. Layouts only go forward (no link or embed back to a layout that reaches this one). Read get_layout of a blueprint for complete examples.",
+        "rules": "Layouts may only use the sources of home's feeds: data paths, actions, query keys and entity schemes from list_data_sources. No action.auth.* intents (sign in with action.device sign_in instead) and no other /v1/ paths. Data the device provides (local_data) needs no feed. Layouts only go forward (no link or embed back to a layout that reaches this one). Read get_layout of a core layout for complete examples.",
     })
 }
 

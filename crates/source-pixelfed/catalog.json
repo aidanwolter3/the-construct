@@ -1,0 +1,18 @@
+{
+  "pixelfed": {
+    "category": "layout",
+    "use_when": "The user wants their Pixelfed photo feed: the timeline, a post with its comments, posting photos."
+  },
+  "pixelfed_comment_box": {
+    "category": "pattern",
+    "use_when": "The box that comments on the post of a Pixelfed post screen."
+  },
+  "pixelfed_post": {
+    "category": "pattern",
+    "use_when": "A Pixelfed post with its comments, on a post screen of your own."
+  },
+  "pixelfed_sign_in": {
+    "category": "pattern",
+    "use_when": "Pixelfed's sign-in, where a layout shows the feed signed out."
+  }
+}

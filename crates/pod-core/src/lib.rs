@@ -4,18 +4,19 @@
 //! construct (decision `content-addressed-construct`, see [`construct`]):
 //! elements by hash, names that move, home's element as the root, its data
 //! and its event stream; and owns sessions and sign-ins (see [`session`]).
-//! Blueprints are code (`layouts/<blueprint>/NNNN.json` in each source
-//! crate), named `@core/<blueprint>` in every pod when it opens.
+//! Core layouts are code (`layouts/<layout>/NNNN.json` in each source
+//! crate), named `@core/<layout>` in every pod when it opens.
 //!
 //! Sources plug in through [`Source`]: the `server` binary builds them and
 //! passes them to [`AppState::try_new`]. The core never names a source;
-//! sources supply data, routes, sign-ins, tables and blueprints ([`source`]).
+//! sources supply data, routes, sign-ins, tables and core layouts ([`source`]).
 
 pub mod adapter;
 pub mod components;
 pub mod construct;
 pub mod devices;
 pub mod disk;
+pub mod hints;
 pub mod ical;
 pub mod jacks;
 pub mod layouts;
@@ -58,7 +59,7 @@ use serde_json::{Value, json};
 use store::Store;
 
 pub use adapter::{
-    AuthPolicy, BlueprintInfo, BoxFuture, Catalog, Hydration, Pod, RequestCtx, SignInAccount,
+    AuthPolicy, BoxFuture, Catalog, CoreLayoutInfo, Hydration, Pod, RequestCtx, SignInAccount,
     SignInProvider, SignInStart, Source,
 };
 pub use notify::{NewNotification, PollCtx, PollOutcome, PollStatus};
@@ -72,10 +73,10 @@ pub const BUNDLE_VERSION: &str = "1.0.0";
 
 /// Every pod's own home layout (decision `blueprints-and-home`): the root of
 /// its construct, which clients open first. It starts as the whole of
-/// [`HOME_BLUEPRINT`] and is the user's to change.
+/// [`HOME_CORE_LAYOUT`] and is the user's to change.
 pub const HOME_APP: &str = "home";
-/// The blueprint a pod's [`HOME_APP`] starts from.
-pub const HOME_BLUEPRINT: &str = "shell";
+/// The core layout a pod's [`HOME_APP`] starts from.
+pub const HOME_CORE_LAYOUT: &str = "shell";
 
 /// A pending injected fault (test hook): the next `remaining` mutation
 /// requests get `status` without being applied.
@@ -115,7 +116,7 @@ pub struct AppState {
     fault: Mutex<Option<Fault>>,
     /// Pod sessions older than this are invalid (`CONSTRUCT_SESSION_TTL_DAYS`).
     session_ttl_secs: i64,
-    /// `CONSTRUCT_SHOW_DEV_APPS=1`: MCP also lists the dev blueprints and
+    /// `CONSTRUCT_SHOW_DEV_APPS=1`: MCP also lists the dev core layouts and
     /// sources.
     show_dev_apps: bool,
     /// The construct's generation after each move of a name, fanned out to
@@ -270,7 +271,7 @@ impl AppState {
         Self::new(Store::open_in_memory().expect("in-memory SQLite"), adapters)
     }
 
-    /// `CONSTRUCT_SHOW_DEV_APPS=1`: MCP also lists the dev blueprints and
+    /// `CONSTRUCT_SHOW_DEV_APPS=1`: MCP also lists the dev core layouts and
     /// sources (they work either way).
     pub fn with_dev_apps(mut self, show: bool) -> Self {
         self.show_dev_apps = show;
@@ -774,15 +775,22 @@ pub(crate) async fn get_element_data(
         Ok(c) => c,
         Err(e) => return e.into_response(),
     };
+    let manifest = construct::seal::wants_manifest(&headers);
     let req = RequestCtx {
         client: layouts::client_caps(&headers),
         headers,
         session: caller.clone().into_session(),
     };
     let (p, lookup) = (state.clone(), id.clone());
+    let client = req.client.clone();
     // A use site's bindings (`?bind=`): the data its bound tree reads too.
     let inputs = construct::http::inputs_param(q.get("bind").map(String::as_str));
     let owned = tokio::task::spawn_blocking(move || {
+        // The elements a manifest names are made when it is: have them
+        // here, should a write have cleared them since this client asked.
+        if manifest {
+            let _ = construct::seal::manifest_for(&p, &client);
+        }
         construct::http::bound_element_feeds(&p, &lookup, &inputs)
     })
     .await

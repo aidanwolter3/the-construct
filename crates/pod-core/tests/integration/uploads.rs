@@ -13,7 +13,7 @@ use http_body_util::BodyExt;
 use pod_core::layouts::LayoutSource;
 use pod_core::session::session_hash;
 use pod_core::{
-    AppState, AuthPolicy, BlueprintInfo, BoxFuture, FeedSpec, Hydration, Pod, RequestCtx, Session,
+    AppState, AuthPolicy, BoxFuture, CoreLayoutInfo, FeedSpec, Hydration, Pod, RequestCtx, Session,
     Source, SourceManifest,
 };
 use protocol::DataBundle;
@@ -35,8 +35,8 @@ impl Source for Up {
     fn name(&self) -> &'static str {
         "up"
     }
-    fn blueprints(&self) -> Vec<BlueprintInfo> {
-        vec![BlueprintInfo {
+    fn core_layouts(&self) -> Vec<CoreLayoutInfo> {
+        vec![CoreLayoutInfo {
             id: "up",
             title: "Up",
             icon: "photo",

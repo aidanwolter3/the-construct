@@ -4,7 +4,7 @@
 //! and the named migration then drops the old tables. The fixtures in
 //! `tests/data/migrations/` were made with the build before the old
 //! system was removed: `old_pod.sql` a pod with layouts (links, embeds, a
-//! cycle, `pod:` components, a pinned version, a blueprint part), and what
+//! cycle, `pod:` components, a pinned version, a core layout part), and what
 //! that build's switch made of it and of a fresh pod (`*_switched.json`,
 //! `switched_pod.sql`).
 
@@ -149,7 +149,7 @@ fn set(v: &Value) -> Vec<String> {
 /// `remove-recipes-source`).
 const REMOVED_SOURCES: &[&str] = &["recipes"];
 
-/// Whether `name` is a blueprint (or a part of one) of a removed source.
+/// Whether `name` is a core layout (or a part of one) of a removed source.
 fn of_removed_source(name: &str) -> bool {
     REMOVED_SOURCES.iter().any(|s| {
         let b = format!("@core/{s}");
@@ -171,7 +171,7 @@ fn today(name: &str, element: &Value) -> Value {
 }
 
 /// Whether a history entry is one this build adds when the pod opens: a
-/// re-seal (a blueprint it uses changed) or home dropping a removed
+/// re-seal (a core layout it uses changed) or home dropping a removed
 /// source's feeds.
 fn added_on_open(e: &Value) -> bool {
     let note = e["note"].as_str().unwrap_or("");
@@ -179,9 +179,9 @@ fn added_on_open(e: &Value) -> bool {
         && (note.starts_with("Re-sealed") || note.starts_with("Home no longer binds"))
 }
 
-/// Layouts that drew a part of a removed source's blueprint: drawn
+/// Layouts that drew a part of a removed source's core layout: drawn
 /// differently now, in the dry run and after.
-const USES_A_REMOVED_BLUEPRINT: &[&str] = &["c-r7jeifhpzm"];
+const USES_A_REMOVED_CORE_LAYOUT: &[&str] = &["c-r7jeifhpzm"];
 
 /// An old pod opens on the construct: the dry run compared every layout
 /// and found what draws differently, and the pod's names are what the
@@ -216,7 +216,7 @@ fn an_old_pod_is_converted_when_it_opens() {
         .filter(|l| l["same"] == false)
         .map(|l| l["id"].as_str().unwrap())
         .collect();
-    want_different.extend_from_slice(USES_A_REMOVED_BLUEPRINT);
+    want_different.extend_from_slice(USES_A_REMOVED_CORE_LAYOUT);
     want_different.sort();
     assert_eq!(different, want_different, "{report:#?}");
     assert_eq!(different, ["c-jyiz6is4ld", "c-r7jeifhpzm", "c-u4zg5a4d4t"]);
@@ -230,7 +230,7 @@ fn an_old_pod_is_converted_when_it_opens() {
     for key in [
         "apps.hidden",
         "updates.dismissed",
-        "blueprints.convert",
+        "core_layouts.convert",
         "layouts.convert",
     ] {
         assert_eq!(setting(&state, key), None, "{key}");
@@ -245,7 +245,7 @@ fn an_old_pod_is_converted_when_it_opens() {
         }
         let g = got.get(name).unwrap_or_else(|| panic!("no name {name}"));
         assert_eq!(g["element"], today(name, &w["element"]), "{name}'s element");
-        // The history the old build recorded, then (when a blueprint it
+        // The history the old build recorded, then (when a core layout it
         // uses changed in this build: settings) the pod's re-seal.
         let (g_hist, w_hist) = (
             g["history"].as_array().unwrap(),
@@ -256,7 +256,7 @@ fn an_old_pod_is_converted_when_it_opens() {
         for e in &g_hist[..extra] {
             assert!(added_on_open(e), "{name}: {e}");
         }
-        if USES_A_REMOVED_BLUEPRINT.contains(&name.as_str()) {
+        if USES_A_REMOVED_CORE_LAYOUT.contains(&name.as_str()) {
             continue;
         }
         assert_eq!(
@@ -331,7 +331,7 @@ fn an_already_switched_pod_keeps_its_names() {
             && !name.starts_with("@core/")
         {
             assert_eq!(g["element"], today(name, &w["element"]), "{name}'s element");
-            if !USES_A_REMOVED_BLUEPRINT.contains(&name.as_str()) {
+            if !USES_A_REMOVED_CORE_LAYOUT.contains(&name.as_str()) {
                 assert_eq!(
                     g["materialized"], w["materialized"],
                     "{name} draws the same"
@@ -342,7 +342,7 @@ fn an_already_switched_pod_keeps_its_names() {
 }
 
 /// A fresh pod starts on the construct with today's home (a use of the
-/// home blueprint), without the old tables.
+/// home core layout), without the old tables.
 #[test]
 fn a_fresh_pod_starts_with_todays_home() {
     let dir = tempfile::tempdir().unwrap();
@@ -410,7 +410,7 @@ fn a_failed_conversion_keeps_the_old_pod() {
 /// `core://Ref` belonged to the old system: a write that uses it is
 /// refused (only the one-time conversion reads it).
 #[tokio::test]
-async fn a_layout_may_not_use_the_old_blueprint_reference() {
+async fn a_layout_may_not_use_the_old_core_layout_reference() {
     let pod = std::sync::Arc::new(server::state_in_memory());
     let r = pod_core::construct::write::mcp(
         &pod,

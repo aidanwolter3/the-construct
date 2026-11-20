@@ -60,26 +60,26 @@ A source implements `pod_core::Source` (`crates/pod-core/src/adapter.rs`). It ca
   wait for a request (`keeps_open`, decision `agents-runs`);
 - declare **jacks** (decision `jacks`): abilities a pod can be plugged into, such as an account it connects.
 
-The server binary picks the sources at compile time (`server::adapters`). Blueprints in this repository:
+The server binary picks the sources at compile time (`server::adapters`). Core layouts in this repository:
 
-| Blueprint | Title | Source | What it is |
+| Core layout | Title | Source | What it is |
 |---|---|---|---|
 | `pixelfed` | Pixelfed | `source-pixelfed` | A Pixelfed client: feed, carousels, likes, bookmarks, threaded comments, photo posting, notifications |
 | `pixelfed_sample_no_login` | Pixelfed sample | `source-pixelfed` (static) | A one-post sample that needs no sign-in; listed only with `CONSTRUCT_SHOW_DEV_APPS=1` |
 | `events` | Events | `source-events` | Upcoming events from websites the user watches, with alerts (decision `collection-fillers`) |
-| `shell` | Home | `source-shell` | The home blueprint: a blank page with Notifications and Settings, which every pod's `home` references |
+| `shell` | Home | `source-shell` | The home core layout: a blank page with Notifications and Settings, which every pod's `home` references |
 | `settings` | Settings | `source-shell` | Settings as a layout over device data: connection, sign-ins, channels, server |
 | `inbox` | Notifications | `source-shell` | The notification inbox as a layout over device data |
 | `agents` | Agents | `source-agents` | Claude Code runs, sandboxes and checks of an external agent runner, and the pod's own schedules for it ([agents.md](agents.md)) |
 
-These are **blueprints** (decision `blueprints-and-home`): served by id and updated by deploys, but not listed.
+These are **core layouts** (decision `blueprints-and-home`): served by id and updated by deploys, but not listed.
 There are no apps at runtime (decision `layouts-not-apps`): a pod has **layouts**, starting with `home`, the root
 every client opens, which embeds (`core://Layout`) and presents (`action.navigation.open {layout}`) the others. A new
-pod has only `home`, a reference to the `shell` blueprint; the user's agent adds layouts that reference or copy
-blueprints. Home owns every feed; each layout binds any of them, and loads only the ones it binds.
+pod has only `home`, a reference to the `shell` core layout; the user's agent adds layouts that reference or copy
+core layouts. Home owns every feed; each layout binds any of them, and loads only the ones it binds.
 
-Two more sources have no blueprint of their own: **Collections** (`source-collections`), typed data that custom apps
-declare, and **Server monitoring** (`source-monitor`). The **Agents** source (`source-agents`) follows an external
+Two more sources: **Collections** (`source-collections`), typed data that custom apps
+declare, and **Server monitoring** (`source-monitor`), with its **Server health** core layout (`server_health`). The **Agents** source (`source-agents`) follows an external
 agent runner ([agents.md](agents.md)). Users build their own layouts on top of all of these; see
 [custom-apps.md](custom-apps.md).
 
@@ -93,14 +93,14 @@ rooted at a `core://Page` (any node, no chrome from the app) or a `core://Worksp
 - **Plumbing and porcelain** (decision `plumbing-and-porcelain`). Plumbing is what the app draws: the nodes, intents
   and device data, each a named feature. Porcelain is **components** defined as data in terms of plumbing and
   expanded by the pod (`pod_core::parts`, `pod_core::components`) before serving: the server's (`core:`, files in
-  `crates/pod-core/components/` or a source's `crates/source-*/components/`, and every blueprint and its parts)
+  `crates/pod-core/components/` or a source's `crates/source-*/components/`, and every core layout and its parts)
   and the pod's own (`pod:`, made by an agent). A
   `core://Workspace` is porcelain too: an app that draws the plumbing gets it as a `core://Page`
   (`core:workspace`, `core:screen`; `pod_core::porcelain`), older apps the workspace. The app has no workspace
   drawing of its own (decision `workspace-drawn-by-the-pod`).
 
-- **Layouts are code.** Blueprints' layouts are files, `crates/source-*/layouts/<blueprint>/NNNN.json`, embedded in
-  the binary; at startup each `@core/<blueprint>` name moves to this build's element, keeping its history. Files are append-only: the pod refuses to start if
+- **Layouts are code.** Core layouts' layouts are files, `crates/source-*/layouts/<layout>/NNNN.json`, embedded in
+  the binary; at startup each `@core/<layout>` name moves to this build's element, keeping its history. Files are append-only: the pod refuses to start if
   a deployed one changed (D32).
 - **Every version stays servable.** Each piece of vocabulary is a named **feature**
   (`crates/protocol/features/<name>.md`). A client sends the features it can draw in `X-Construct-Features`, and the
@@ -116,9 +116,10 @@ How to write one: [layouts.md](layouts.md).
 Every pod's layouts are a **content-addressed construct** (decision
 [`content-addressed-construct`](decisions/content-addressed-construct.md)): every layout and component is an
 immutable **element** identified by the hash of its canonical JSON (`e1-…`), **names** (`home`, `c-…`, `@me/<component>`,
-`@core/<blueprint or component>`) move between elements and keep their history, and every embed and link names its
+`@core/<core layout or component>`) move between elements and keep their history, and every embed and link names its
 target by hash, so home's hash is the whole construct's. A device is current when its root matches the pod's
-(`GET /v1/construct`, `event: construct`), fetches only the objects it lacks (`POST /v1/objects`), and expands
+(`GET /v1/construct`, `event: construct`; the engine asks for the root as a manifest of names, so an edit moves
+one element and the manifest: decision `element-roles-and-reuse`), fetches only the objects it lacks (`POST /v1/objects`), and expands
 components itself (`crates/construct-elements`, shared with the pod). The engine keys each reachable layout by its
 edge and hands the renderer the edge graph; the renderer closes the stack entries the one below no longer reaches.
 An edge may bind its target's inputs (`bind`; only home binds the pod's data), the engine keeps the objects it

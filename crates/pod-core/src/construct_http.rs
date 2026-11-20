@@ -57,9 +57,10 @@ async fn get_construct(State(pod): State<Pod>, headers: HeaderMap) -> Response {
         return r;
     }
     let client = crate::layouts::client_caps(&headers);
+    let manifest = super::seal::wants_manifest(&headers);
     let p = pod.clone();
     let r = tokio::task::spawn_blocking(move || {
-        let root = super::seal::root_for(&p, &client)?;
+        let root = super::seal::root_as(&p, &client, manifest)?;
         let g = p.store().with_conn(cstore::generation)?;
         Ok::<_, rusqlite::Error>((root, g))
     })
@@ -78,8 +79,8 @@ async fn get_construct(State(pod): State<Pod>, headers: HeaderMap) -> Response {
 }
 
 /// `GET /v1/construct/names/{name}`: the element a layout's name (or a
-/// blueprint's key, `events` for `@core/events`) points to, sealed for the
-/// client. Only layouts and blueprints: a component is reached through what
+/// core layout's key, `events` for `@core/events`) points to, sealed for the
+/// client. Only layouts and core layouts: a component is reached through what
 /// uses it.
 async fn get_name(
     State(pod): State<Pod>,
@@ -90,19 +91,26 @@ async fn get_name(
         return r;
     }
     let client = crate::layouts::client_caps(&headers);
+    let manifest = super::seal::wants_manifest(&headers);
     let p = pod.clone();
     let found = tokio::task::spawn_blocking(move || {
         let names = if super::is_layout_name(&name) {
             vec![name.clone()]
-        } else if p.catalog().is_blueprint(&name) {
-            vec![super::blueprint_name(&name)]
+        } else if p.catalog().is_core_layout(&name) {
+            vec![super::core_layout_name(&name)]
         } else {
             Vec::new()
         };
         for n in names {
-            let el = p
-                .store()
-                .with_conn(|c| super::seal::seal_name(c, &n, &client, &mut Default::default()))?;
+            // For a client on manifests: a manifest of what this name
+            // reaches, with the name as its home.
+            let el = p.store().with_conn(|c| {
+                if manifest {
+                    super::seal::manifest_of(c, &n, &client)
+                } else {
+                    super::seal::seal_name(c, &n, &client, &mut Default::default())
+                }
+            })?;
             if let Some(el) = el {
                 return Ok::<_, rusqlite::Error>(Some((name, el)));
             }
@@ -159,6 +167,9 @@ async fn post_objects(State(pod): State<Pod>, headers: HeaderMap, body: Bytes) -
             let Some(v) = construct_elements::Objects::object(&objects, &id) else {
                 continue;
             };
+            if let Some((_, names)) = construct_elements::manifest_names(&v) {
+                queue.extend(names.into_values().filter(|h| !seen.contains(h)));
+            }
             construct_elements::refs::visit(&v["node"], &mut |r, _| {
                 if let Some(e) = &r.el
                     && !seen.contains(e)
@@ -230,38 +241,52 @@ pub struct Served {
     pub inputs: Map<String, Value>,
 }
 
-/// Layout (or blueprint key) `id` as `client` draws it. Blocking.
+/// Layout (or core layout key) `id` as `client` draws it. Blocking.
 pub fn serve_layout(
     pod: &Pod,
     id: &str,
     client: &protocol::ClientCaps,
 ) -> rusqlite::Result<Option<Served>> {
     let store = pod.store();
-    let Some(name) = store.with_conn(|c| super::seal::name_of_key(c, id))? else {
-        return Ok(None);
-    };
-    let Some(el) =
-        store.with_conn(|c| super::seal::seal_name(c, &name, client, &mut Default::default()))?
-    else {
-        return Ok(None);
-    };
-    // A layout that reads inputs draws what the first use site reaching it
-    // from home binds, as the engine draws it.
     let objects = super::seal::objects(pod);
-    let reads = construct_elements::Objects::object(&objects, &el)
-        .is_some_and(|v| !construct_elements::template::inputs_of(&v).is_empty());
-    let root = if reads {
-        super::seal::root_for(pod, client)?
-    } else {
-        None
+    let (el, inputs) = match store.with_conn(|c| super::seal::name_of_key(c, id))? {
+        Some(name) => {
+            let Some(el) = store
+                .with_conn(|c| super::seal::seal_name(c, &name, client, &mut Default::default()))?
+            else {
+                return Ok(None);
+            };
+            // A layout that reads inputs draws what the first use site
+            // reaching it from home binds, as the engine draws it.
+            let reads = construct_elements::Objects::object(&objects, &el)
+                .is_some_and(|v| !construct_elements::template::inputs_of(&v).is_empty());
+            let root = if reads {
+                super::seal::root_for(pod, client)?
+            } else {
+                None
+            };
+            let inputs = root
+                .and_then(|root| {
+                    construct_elements::keyed(&objects, crate::HOME_APP, &root)
+                        .remove(id)
+                        .map(|k| k.inputs)
+                })
+                .unwrap_or_default();
+            (el, inputs)
+        }
+        // Not a name: an edge's own key (`as`), which home reaches with its
+        // binding, e.g. a kit's layout over one collection
+        // (`checklist-packing`).
+        None => {
+            let Some(root) = super::seal::root_for(pod, client)? else {
+                return Ok(None);
+            };
+            match construct_elements::keyed(&objects, crate::HOME_APP, &root).remove(id) {
+                Some(k) => (k.el, k.inputs),
+                None => return Ok(None),
+            }
+        }
     };
-    let inputs = root
-        .and_then(|root| {
-            construct_elements::keyed(&objects, crate::HOME_APP, &root)
-                .remove(id)
-                .map(|k| k.inputs)
-        })
-        .unwrap_or_default();
     let m = if inputs.is_empty() {
         super::seal::materialize(pod, &el)
     } else {
@@ -292,7 +317,7 @@ pub fn element_feeds(pod: &Pod, id: &str) -> Vec<(String, String)> {
 /// The home feeds element `id` needs drawn with `inputs` bound (a use
 /// site's `bind`): its own `needs.feeds` and those of home's feeds its
 /// (bound) tree binds now. The second part is what a built-in element
-/// needs: a blueprint's element (`@core/pixelfed`, opened by its key when
+/// needs: a core layout's element (`@core/pixelfed`, opened by its key when
 /// home doesn't reach it) is sealed with the build, before any pod's home
 /// binds a feed, so its `needs.feeds` is empty (issue #306). Only home's
 /// feeds are ever loaded: a binding reaches no other data.

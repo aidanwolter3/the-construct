@@ -50,12 +50,24 @@ assert-text Recipe: Lentil soup; shot deeper; back; shot back; screen phone; cli
 scenario text-styles text_styles \
   "assert-text Move often · this week; assert-text Still to do; assert-no-text All done for the week; \
 assert-text Nothing archived yet; assert-no-text Inbox clear; shot light; mode dark; shot dark"
+scenario core-set core_set \
+  "assert-text Garden week; assert-text Nothing archived yet.; assert-no-text Nothing to do.; shot light; \
+click Stake the tomatoes; click Morning; shot ticked; mode dark; shot dark"
+scenario tab-shell tab_shell \
+  "assert-text Water the seedlings; shot today; click Garden; assert-text Tomato bed; \
+assert-no-text Call the nursery; shot garden; screen desktop; assert-text Allotment; shot wide"
 scenario buttons buttons \
   "assert-text Open in Claude; assert-text Stop; shot light; mode dark; shot dark"
 scenario agent-report agent_report \
   "assert-text Agent runs; assert-text Should I merge now, or wait for review on #42?; shot light; mode dark; shot dark"
 scenario device-versions device_versions \
   "shot all; click Web; click 16; assert-text Mon Nov 16; shot web-16; mode dark; shot dark"
+scenario server-health server_health \
+  "assert-text 1 check needs a look; assert-text Disk space; shot light; scroll-to Devices per day; click Web; \
+assert-no-text Studio MacBook; shot devices; mode dark; shot dark"
+scenario server-health-off server_health_off \
+  "assert-text Server monitoring is off for this pod; assert-no-text Checks; assert-text Devices per day; \
+shot light; mode dark; shot dark"
 scenario tiles-home tiles_home \
   "shot top; scroll-to Photos; assert-text Read more; shot tiles"
 scenario screen-sizes screen_sizes \

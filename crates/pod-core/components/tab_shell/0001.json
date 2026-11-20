@@ -1,0 +1,695 @@
+{
+ "note": "Tabs as a phone dock and a wide rail from one list, the open tab kept on the device (decision element-roles-and-reuse)",
+ "component": {
+  "doc": "A whole app's shell: tabs. One list of tabs draws a dock along the bottom of a phone and a rail down the side of a wide window, and under or beside it the body of the tab that is open. Each tab's body is the slot named by its key, usually one core://Layout embed, so every tab is its own small layout: \"slots\": {\"home\": [{\"type\": \"core://Layout\", \"ref\": \"c-…\"}], …}. The open tab is kept on the device (local://shell#tab by default, feature local_keep), so the app starts where it was left and nothing is written to the pod; before any choice the first tab shows. Slots rail_top and rail_bottom add to the wide rail (a title above, Settings below). The root of home.",
+  "params": [
+   {
+    "name": "tabs",
+    "type": "json",
+    "required": true,
+    "doc": "The tabs in order: [{\"key\", \"title\", \"icon\"}]. key names its slot and is what the state holds; icon is an icon name or path:<svg path>. Up to 5 fit a phone."
+   },
+   {
+    "name": "first",
+    "type": "text",
+    "required": true,
+    "doc": "The key of the tab shown before any is chosen (usually the first)."
+   },
+   {
+    "name": "state",
+    "type": "text",
+    "default": "local://shell",
+    "doc": "The local:// entity whose field tab holds the open tab's key. Give two shells in one construct different ones."
+   },
+   {
+    "name": "rail_width",
+    "type": "number",
+    "default": 220,
+    "doc": "The rail's width on a wide window, in dp."
+   }
+  ],
+  "children": true,
+  "template": {
+   "type": "core://Box",
+   "fill": true,
+   "background": "${local://theme#page}",
+   "content": {
+    "type": "core://Column",
+    "children": [
+     {
+      "type": "core://Conditional",
+      "value": "${local://device#size_class}",
+      "equals": "expanded",
+      "not": true,
+      "content": {
+       "type": "core://Column",
+       "children": [
+        {
+         "type": "core://Box",
+         "fill": true,
+         "content": {
+          "type": "core://Column",
+          "children": [
+           {
+            "type": "core://Each",
+            "arg": "tabs",
+            "as": "tab",
+            "template": {
+             "type": "core://Fragment",
+             "children": [
+              {
+               "type": "core://Conditional",
+               "value": "${$arg.state#tab}",
+               "equals": "$arg.tab_key",
+               "content": {
+                "type": "core://Column",
+                "children": [
+                 {
+                  "type": "core://Children",
+                  "slot": "$arg.tab_key"
+                 }
+                ]
+               }
+              },
+              {
+               "type": "core://IfArg",
+               "arg": "tab_key",
+               "equals": "$arg.first",
+               "then": {
+                "type": "core://Conditional",
+                "value": "${$arg.state#tab}",
+                "not": true,
+                "content": {
+                 "type": "core://Column",
+                 "children": [
+                  {
+                   "type": "core://Children",
+                   "slot": "$arg.tab_key"
+                  }
+                 ]
+                }
+               }
+              }
+             ]
+            }
+           }
+          ]
+         }
+        },
+        {
+         "type": "core://Divider"
+        },
+        {
+         "type": "core://Box",
+         "background": "${local://theme#card}",
+         "padding_h_dp": 8,
+         "padding_v_dp": 6,
+         "content": {
+          "type": "core://Row",
+          "justify": "space_evenly",
+          "children": [
+           {
+            "type": "core://Each",
+            "arg": "tabs",
+            "as": "tab",
+            "template": {
+             "type": "core://Tappable",
+             "content_description": "$arg.tab_title",
+             "on_click": {
+              "intent": "action.local.set",
+              "entity_uri": "$arg.state",
+              "field": "tab",
+              "value_expr": "\"$arg.tab_key\"",
+              "keep": true
+             },
+             "content": {
+              "type": "core://Column",
+              "align": "Center",
+              "spacing_dp": 2,
+              "children": [
+               {
+                "type": "core://Fragment",
+                "children": [
+                 {
+                  "type": "core://Conditional",
+                  "value": "${$arg.state#tab}",
+                  "equals": "$arg.tab_key",
+                  "content": {
+                   "type": "core://Box",
+                   "align": "Center",
+                   "width_dp": 56,
+                   "height_dp": 30,
+                   "corner_dp": 15,
+                   "background": "${local://theme#accent_surface}",
+                   "content_color": "${local://theme#accent}",
+                   "content": {
+                    "type": "core://Badge",
+                    "text": "",
+                    "icon": "$arg.tab_icon"
+                   }
+                  }
+                 },
+                 {
+                  "type": "core://IfArg",
+                  "arg": "tab_key",
+                  "equals": "$arg.first",
+                  "then": {
+                   "type": "core://Conditional",
+                   "value": "${$arg.state#tab}",
+                   "not": true,
+                   "content": {
+                    "type": "core://Box",
+                    "align": "Center",
+                    "width_dp": 56,
+                    "height_dp": 30,
+                    "corner_dp": 15,
+                    "background": "${local://theme#accent_surface}",
+                    "content_color": "${local://theme#accent}",
+                    "content": {
+                     "type": "core://Badge",
+                     "text": "",
+                     "icon": "$arg.tab_icon"
+                    }
+                   }
+                  }
+                 }
+                ]
+               },
+               {
+                "type": "core://IfArg",
+                "arg": "tab_key",
+                "equals": "$arg.first",
+                "then": {
+                 "type": "core://Conditional",
+                 "value": "${$arg.state#tab}",
+                 "content": {
+                  "type": "core://Conditional",
+                  "value": "${$arg.state#tab}",
+                  "equals": "$arg.tab_key",
+                  "content": {
+                   "type": "core://Box",
+                   "align": "Center",
+                   "width_dp": 56,
+                   "height_dp": 30,
+                   "corner_dp": 15,
+                   "content_color": "${local://theme#muted_text}",
+                   "content": {
+                    "type": "core://Badge",
+                    "text": "",
+                    "icon": "$arg.tab_icon"
+                   }
+                  },
+                  "not": true
+                 }
+                },
+                "else": {
+                 "type": "core://Conditional",
+                 "value": "${$arg.state#tab}",
+                 "equals": "$arg.tab_key",
+                 "content": {
+                  "type": "core://Box",
+                  "align": "Center",
+                  "width_dp": 56,
+                  "height_dp": 30,
+                  "corner_dp": 15,
+                  "content_color": "${local://theme#muted_text}",
+                  "content": {
+                   "type": "core://Badge",
+                   "text": "",
+                   "icon": "$arg.tab_icon"
+                  }
+                 },
+                 "not": true
+                }
+               },
+               {
+                "type": "core://Fragment",
+                "children": [
+                 {
+                  "type": "core://Conditional",
+                  "value": "${$arg.state#tab}",
+                  "equals": "$arg.tab_key",
+                  "content": {
+                   "type": "core://Box",
+                   "content_color": "${local://theme#accent}",
+                   "content": {
+                    "type": "core://Text",
+                    "style": "Caption",
+                    "weight": "SemiBold",
+                    "value_expr": "$arg.tab_title"
+                   }
+                  }
+                 },
+                 {
+                  "type": "core://IfArg",
+                  "arg": "tab_key",
+                  "equals": "$arg.first",
+                  "then": {
+                   "type": "core://Conditional",
+                   "value": "${$arg.state#tab}",
+                   "not": true,
+                   "content": {
+                    "type": "core://Box",
+                    "content_color": "${local://theme#accent}",
+                    "content": {
+                     "type": "core://Text",
+                     "style": "Caption",
+                     "weight": "SemiBold",
+                     "value_expr": "$arg.tab_title"
+                    }
+                   }
+                  }
+                 }
+                ]
+               },
+               {
+                "type": "core://IfArg",
+                "arg": "tab_key",
+                "equals": "$arg.first",
+                "then": {
+                 "type": "core://Conditional",
+                 "value": "${$arg.state#tab}",
+                 "content": {
+                  "type": "core://Conditional",
+                  "value": "${$arg.state#tab}",
+                  "equals": "$arg.tab_key",
+                  "content": {
+                   "type": "core://Box",
+                   "content_color": "${local://theme#muted_text}",
+                   "content": {
+                    "type": "core://Text",
+                    "style": "Caption",
+                    "value_expr": "$arg.tab_title"
+                   }
+                  },
+                  "not": true
+                 }
+                },
+                "else": {
+                 "type": "core://Conditional",
+                 "value": "${$arg.state#tab}",
+                 "equals": "$arg.tab_key",
+                 "content": {
+                  "type": "core://Box",
+                  "content_color": "${local://theme#muted_text}",
+                  "content": {
+                   "type": "core://Text",
+                   "style": "Caption",
+                   "value_expr": "$arg.tab_title"
+                  }
+                 },
+                 "not": true
+                }
+               }
+              ]
+             }
+            }
+           }
+          ]
+         }
+        }
+       ]
+      }
+     },
+     {
+      "type": "core://Conditional",
+      "value": "${local://device#size_class}",
+      "equals": "expanded",
+      "content": {
+       "type": "core://Row",
+       "align": "Start",
+       "children": [
+        {
+         "type": "core://Box",
+         "width_dp": "$arg.rail_width",
+         "content": {
+          "type": "core://Column",
+          "spacing_dp": 4,
+          "padding_h_dp": 12,
+          "padding_v_dp": 16,
+          "children": [
+           {
+            "type": "core://Children",
+            "slot": "rail_top"
+           },
+           {
+            "type": "core://Each",
+            "arg": "tabs",
+            "as": "tab",
+            "template": {
+             "type": "core://Tappable",
+             "content_description": "$arg.tab_title",
+             "on_click": {
+              "intent": "action.local.set",
+              "entity_uri": "$arg.state",
+              "field": "tab",
+              "value_expr": "\"$arg.tab_key\"",
+              "keep": true
+             },
+             "content": {
+              "type": "core://Column",
+              "children": [
+               {
+                "type": "core://Fragment",
+                "children": [
+                 {
+                  "type": "core://Conditional",
+                  "value": "${$arg.state#tab}",
+                  "equals": "$arg.tab_key",
+                  "content": {
+                   "type": "core://Box",
+                   "corner_dp": 12,
+                   "background": "${local://theme#accent_surface}",
+                   "content_color": "${local://theme#accent}",
+                   "padding_h_dp": 12,
+                   "padding_v_dp": 10,
+                   "content": {
+                    "type": "core://Row",
+                    "align": "Center",
+                    "spacing_dp": 12,
+                    "children": [
+                     {
+                      "type": "core://Badge",
+                      "text": "",
+                      "icon": "$arg.tab_icon"
+                     },
+                     {
+                      "type": "core://Text",
+                      "style": "Label",
+                      "weight": "SemiBold",
+                      "value_expr": "$arg.tab_title"
+                     },
+                     {
+                      "type": "core://Spacer"
+                     }
+                    ]
+                   }
+                  }
+                 },
+                 {
+                  "type": "core://IfArg",
+                  "arg": "tab_key",
+                  "equals": "$arg.first",
+                  "then": {
+                   "type": "core://Conditional",
+                   "value": "${$arg.state#tab}",
+                   "not": true,
+                   "content": {
+                    "type": "core://Box",
+                    "corner_dp": 12,
+                    "background": "${local://theme#accent_surface}",
+                    "content_color": "${local://theme#accent}",
+                    "padding_h_dp": 12,
+                    "padding_v_dp": 10,
+                    "content": {
+                     "type": "core://Row",
+                     "align": "Center",
+                     "spacing_dp": 12,
+                     "children": [
+                      {
+                       "type": "core://Badge",
+                       "text": "",
+                       "icon": "$arg.tab_icon"
+                      },
+                      {
+                       "type": "core://Text",
+                       "style": "Label",
+                       "weight": "SemiBold",
+                       "value_expr": "$arg.tab_title"
+                      },
+                      {
+                       "type": "core://Spacer"
+                      }
+                     ]
+                    }
+                   }
+                  }
+                 }
+                ]
+               },
+               {
+                "type": "core://IfArg",
+                "arg": "tab_key",
+                "equals": "$arg.first",
+                "then": {
+                 "type": "core://Conditional",
+                 "value": "${$arg.state#tab}",
+                 "content": {
+                  "type": "core://Conditional",
+                  "value": "${$arg.state#tab}",
+                  "equals": "$arg.tab_key",
+                  "content": {
+                   "type": "core://Box",
+                   "corner_dp": 12,
+                   "content_color": "${local://theme#muted_text}",
+                   "padding_h_dp": 12,
+                   "padding_v_dp": 10,
+                   "content": {
+                    "type": "core://Row",
+                    "align": "Center",
+                    "spacing_dp": 12,
+                    "children": [
+                     {
+                      "type": "core://Badge",
+                      "text": "",
+                      "icon": "$arg.tab_icon"
+                     },
+                     {
+                      "type": "core://Text",
+                      "style": "Label",
+                      "weight": "Medium",
+                      "value_expr": "$arg.tab_title"
+                     },
+                     {
+                      "type": "core://Spacer"
+                     }
+                    ]
+                   }
+                  },
+                  "not": true
+                 }
+                },
+                "else": {
+                 "type": "core://Conditional",
+                 "value": "${$arg.state#tab}",
+                 "equals": "$arg.tab_key",
+                 "content": {
+                  "type": "core://Box",
+                  "corner_dp": 12,
+                  "content_color": "${local://theme#muted_text}",
+                  "padding_h_dp": 12,
+                  "padding_v_dp": 10,
+                  "content": {
+                   "type": "core://Row",
+                   "align": "Center",
+                   "spacing_dp": 12,
+                   "children": [
+                    {
+                     "type": "core://Badge",
+                     "text": "",
+                     "icon": "$arg.tab_icon"
+                    },
+                    {
+                     "type": "core://Text",
+                     "style": "Label",
+                     "weight": "Medium",
+                     "value_expr": "$arg.tab_title"
+                    },
+                    {
+                     "type": "core://Spacer"
+                    }
+                   ]
+                  }
+                 },
+                 "not": true
+                }
+               }
+              ]
+             }
+            }
+           },
+           {
+            "type": "core://Children",
+            "slot": "rail_bottom"
+           }
+          ]
+         }
+        },
+        {
+         "type": "core://Box",
+         "fill": true,
+         "content": {
+          "type": "core://Column",
+          "children": [
+           {
+            "type": "core://Each",
+            "arg": "tabs",
+            "as": "tab",
+            "template": {
+             "type": "core://Fragment",
+             "children": [
+              {
+               "type": "core://Conditional",
+               "value": "${$arg.state#tab}",
+               "equals": "$arg.tab_key",
+               "content": {
+                "type": "core://Column",
+                "children": [
+                 {
+                  "type": "core://Children",
+                  "slot": "$arg.tab_key"
+                 }
+                ]
+               }
+              },
+              {
+               "type": "core://IfArg",
+               "arg": "tab_key",
+               "equals": "$arg.first",
+               "then": {
+                "type": "core://Conditional",
+                "value": "${$arg.state#tab}",
+                "not": true,
+                "content": {
+                 "type": "core://Column",
+                 "children": [
+                  {
+                   "type": "core://Children",
+                   "slot": "$arg.tab_key"
+                  }
+                 ]
+                }
+               }
+              }
+             ]
+            }
+           }
+          ]
+         }
+        }
+       ]
+      }
+     }
+    ]
+   }
+  },
+  "examples": [
+   {
+    "args": {
+     "first": "home",
+     "tabs": [
+      {
+       "key": "home",
+       "title": "Home",
+       "icon": "check_box"
+      },
+      {
+       "key": "lists",
+       "title": "Lists",
+       "icon": "bookmark"
+      },
+      {
+       "key": "more",
+       "title": "More",
+       "icon": "settings"
+      }
+     ]
+    },
+    "slots": {
+     "home": [
+      {
+       "type": "core://Text",
+       "style": "Title",
+       "value_expr": "Today"
+      }
+     ],
+     "lists": [
+      {
+       "type": "core://Text",
+       "style": "Title",
+       "value_expr": "Lists"
+      }
+     ],
+     "more": [
+      {
+       "type": "core://Text",
+       "style": "Title",
+       "value_expr": "More"
+      }
+     ]
+    },
+    "note": "three tabs, each body a slot (a core://Layout embed in a real home)"
+   },
+   {
+    "args": {
+     "first": "a",
+     "state": "local://reader",
+     "rail_width": 180,
+     "tabs": [
+      {
+       "key": "a",
+       "title": "Unread",
+       "icon": "notifications"
+      },
+      {
+       "key": "b",
+       "title": "Saved",
+       "icon": "bookmark"
+      }
+     ]
+    },
+    "slots": {
+     "a": [
+      {
+       "type": "core://Text",
+       "style": "Body",
+       "value_expr": "Unread"
+      }
+     ],
+     "b": [
+      {
+       "type": "core://Text",
+       "style": "Body",
+       "value_expr": "Saved"
+      }
+     ],
+     "rail_top": [
+      {
+       "type": "core://Text",
+       "style": "Headline",
+       "value_expr": "Reader"
+      }
+     ]
+    },
+    "note": "a second shell with its own state and a title above the rail"
+   },
+   {
+    "args": {
+     "first": "a",
+     "tabs": [
+      {
+       "key": "a",
+       "title": "One",
+       "icon": "check"
+      },
+      {
+       "key": "b",
+       "title": "Two",
+       "icon": "add"
+      }
+     ]
+    },
+    "slots": {
+     "a": [
+      {
+       "type": "core://Text",
+       "style": "Body",
+       "value_expr": "Only the first tab has a body yet"
+      }
+     ]
+    },
+    "note": "a tab whose slot isn't filled yet draws nothing"
+   }
+  ]
+ }
+}

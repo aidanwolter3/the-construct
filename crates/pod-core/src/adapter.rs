@@ -32,8 +32,8 @@ pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 ///
 /// A source connects the pod to its data (an upstream service such as
 /// Pixelfed, or tables of its own), with its routes and jacks, and ships
-/// one or more blueprints. Each blueprint's layout comes from
-/// `layouts/<blueprint>/NNNN.json` in the source's crate. The core owns everything generic: the
+/// one or more core layouts. Each core layout's layout comes from
+/// `layouts/<layout>/NNNN.json` in the source's crate. The core owns everything generic: the
 /// construct, feature negotiation, SSE, sessions and logout. The
 /// adapter supplies only data, its own routes and its own tables.
 ///
@@ -48,7 +48,7 @@ pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 /// - The `server` binary builds each adapter once at startup, and every
 ///   request shares it. Keep any mutable state behind a lock.
 ///
-/// A layout-only blueprint (layout files plus fixed data, no upstream)
+/// A layout-only core layout (layout files plus fixed data, no upstream)
 /// needs no source of its own: use [`crate::StaticAdapter`].
 pub trait Source: Any + Send + Sync {
     /// A short, unique name for this adapter, such as `pixelfed`.
@@ -58,20 +58,20 @@ pub trait Source: Any + Send + Sync {
     /// (`pixelfed_*`) and routes (`/v1/pixelfed/...`).
     fn name(&self) -> &'static str;
 
-    /// The blueprints this adapter ships (named `@core/<id>` in every pod).
+    /// The core layouts this adapter ships (named `@core/<id>` in every pod).
     ///
-    /// Called once at startup. Each `BlueprintInfo::id` must be unique across
+    /// Called once at startup. Each `CoreLayoutInfo::id` must be unique across
     /// all adapters (the pod refuses to start on a duplicate) and must have a
     /// `layouts/<id>/` directory among `layout_files`.
-    fn blueprints(&self) -> Vec<BlueprintInfo>;
+    fn core_layouts(&self) -> Vec<CoreLayoutInfo>;
 
-    /// The layout files of this adapter's blueprints, per blueprint in number
+    /// The layout files of this adapter's core layouts, per core layout in number
     /// order.
     ///
     /// Called once at startup, before the pod serves. The usual rules apply:
-    /// numbers have no gaps from the blueprint's oldest file, and a deployed
+    /// numbers have no gaps from the core layout's oldest file, and a deployed
     /// file is never edited or renumbered; old files may be deleted (decision
-    /// `retired-layout-files`). Every blueprint in `blueprints` needs at
+    /// `retired-layout-files`). Every core layout in `core_layouts` needs at
     /// least one file.
     fn layout_files(&self) -> &'static [LayoutSource];
 
@@ -183,7 +183,7 @@ pub trait Source: Any + Send + Sync {
         req: &'a RequestCtx,
     ) -> BoxFuture<'a, Hydration>;
 
-    /// The kinds of notification this source's blueprints send (D52), such
+    /// The kinds of notification this source's core layouts send (D52), such
     /// as "Likes". Called at startup and when listing channels. Each
     /// channel's `layout` must be one of [`Self::apps`]; ids are
     /// `[a-z0-9_]{1,32}`, unique per layout, and never change once shipped (devices store their
@@ -417,8 +417,23 @@ pub trait Source: Any + Send + Sync {
         Vec::new()
     }
 
-    /// One more paragraph for the MCP `instructions` (how to use
-    /// [`Self::mcp_tools`]). Default: none.
+    /// What `find_elements` says about the layouts and components this
+    /// source ships: the text of its `catalog.json`, `{"<name>": {"category",
+    /// "use_when"}}` (decision `element-roles-and-reuse`). It sits beside the
+    /// files rather than in them: they are append-only, and a new component
+    /// file moves every pod's layouts. Default: none.
+    fn element_catalog(&self) -> &'static str {
+        "{}"
+    }
+
+    /// A few words for the MCP instructions' list of guide topics, beside
+    /// this source's name (what [`Self::mcp_instructions`] is about).
+    fn mcp_summary(&self) -> Option<&'static str> {
+        None
+    }
+
+    /// This source's topic of the MCP `guide`, named after the source: how
+    /// to use [`Self::mcp_tools`]. Default: none.
     fn mcp_instructions(&self) -> Option<&'static str> {
         None
     }
@@ -478,10 +493,10 @@ pub enum Hydration {
     Error(Response),
 }
 
-/// A blueprint a source ships: the layout files `layouts/<id>/` of its crate,
+/// A core layout a source ships: the layout files `layouts/<id>/` of its crate,
 /// named `@core/<id>` in every pod (decision `content-addressed-construct`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct BlueprintInfo {
+pub struct CoreLayoutInfo {
     /// Its id and `layouts/` directory name, e.g. `pixelfed`: its name is
     /// `@core/<id>`, and an edge to it is keyed `<id>`. Renaming it takes an
     /// adapter migration ([`crate::store::rename_app_on`]).
@@ -504,7 +519,7 @@ pub struct BlueprintInfo {
     pub feeds: &'static [(&'static str, &'static str)],
 }
 
-/// Whether a blueprint needs a sign-in; see [`BlueprintInfo::auth`].
+/// Whether a core layout needs a sign-in; see [`CoreLayoutInfo::auth`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AuthPolicy {
     /// Anyone may open it; a bearer is ignored unless it is valid.
@@ -544,13 +559,71 @@ pub struct Catalog {
     adapters: Vec<Arc<dyn Source>>,
     /// Each adapter's manifest, by index into `adapters`.
     manifests: Vec<SourceManifest>,
-    /// `(blueprint, index into adapters)`, in adapter order.
-    blueprints: Vec<(BlueprintInfo, usize)>,
+    /// `(core layout, index into adapters)`, in adapter order.
+    core_layouts: Vec<(CoreLayoutInfo, usize)>,
     files: Vec<LayoutSource>,
     /// `(sign-in id, index into adapters)`.
     sign_ins: Vec<(SignInProvider, usize)>,
     /// Every server component file: the core's, then each adapter's.
     components: Vec<crate::components::ComponentSource>,
+    /// What `find_elements` says about each core component and layout, by
+    /// its bare name ([`Source::element_catalog`]).
+    notes: std::collections::BTreeMap<String, ElementNote>,
+}
+
+/// What a catalog file says about one element: where it belongs and when
+/// to reach for it.
+#[derive(Clone, Debug, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ElementNote {
+    /// `primitive`, `row`, `container`, `scaffold`, `pattern` or `layout`.
+    pub category: String,
+    /// One line: the situation it is for.
+    pub use_when: String,
+}
+
+/// The categories a catalog file may name.
+pub const ELEMENT_CATEGORIES: &[&str] = &[
+    "primitive",
+    "row",
+    "container",
+    "scaffold",
+    "pattern",
+    "layout",
+];
+
+/// The core's own catalog (`crates/pod-core/components/catalog.json`).
+const CORE_ELEMENT_CATALOG: &str = include_str!("../components/catalog.json");
+
+fn read_element_catalog(
+    whose: &str,
+    text: &str,
+    known: &dyn Fn(&str) -> bool,
+    into: &mut std::collections::BTreeMap<String, ElementNote>,
+) -> Result<(), String> {
+    let map: std::collections::BTreeMap<String, ElementNote> =
+        serde_json::from_str(text).map_err(|e| format!("{whose}'s catalog.json: {e}"))?;
+    for (name, note) in map {
+        // A server built with some of a crate's sources (a test's, say)
+        // doesn't ship every name its catalog file holds; a test with every
+        // source checks no file names something nobody ships.
+        if !known(&name) {
+            continue;
+        }
+        if !ELEMENT_CATEGORIES.contains(&note.category.as_str()) {
+            return Err(format!(
+                "{whose}'s catalog.json: '{name}' has category '{}', not one of {ELEMENT_CATEGORIES:?}",
+                note.category
+            ));
+        }
+        if note.use_when.trim().is_empty() || note.use_when.chars().count() > 200 {
+            return Err(format!(
+                "{whose}'s catalog.json: '{name}' needs a use_when of at most 200 characters"
+            ));
+        }
+        into.insert(name, note);
+    }
+    Ok(())
 }
 
 impl Catalog {
@@ -560,7 +633,7 @@ impl Catalog {
     /// manifest, an entity scheme or query key two sources claim, a sign-in
     /// no adapter provides, or an app feed no source declares.
     pub fn new(adapters: Vec<Arc<dyn Source>>) -> Result<Self, String> {
-        let mut apps: Vec<(BlueprintInfo, usize)> = Vec::new();
+        let mut apps: Vec<(CoreLayoutInfo, usize)> = Vec::new();
         let mut files = Vec::new();
         let mut sign_ins: Vec<(SignInProvider, usize)> = Vec::new();
         let mut names: Vec<&'static str> = Vec::new();
@@ -580,7 +653,7 @@ impl Catalog {
                     return Err(format!("jack '{}' is declared twice", j.id));
                 }
             }
-            for app in a.blueprints() {
+            for app in a.core_layouts() {
                 if !app
                     .id
                     .bytes()
@@ -588,12 +661,15 @@ impl Catalog {
                     || app.id.is_empty()
                 {
                     return Err(format!(
-                        "blueprint id '{}' is not [A-Za-z0-9_]+ ('-' is kept for the pod's layouts)",
+                        "core layout id '{}' is not [A-Za-z0-9_]+ ('-' is kept for the pod's layouts)",
                         app.id
                     ));
                 }
                 if apps.iter().any(|(x, _)| x.id == app.id) {
-                    return Err(format!("blueprint '{}' is shipped by two adapters", app.id));
+                    return Err(format!(
+                        "core layout '{}' is shipped by two adapters",
+                        app.id
+                    ));
                 }
                 apps.push((app, i));
             }
@@ -684,13 +760,23 @@ impl Catalog {
                 ));
             }
         }
+        // A catalog describes what the server ships: a component (the core's
+        // or any source's) or a core layout.
+        let mut notes = std::collections::BTreeMap::new();
+        let shipped =
+            |n: &str| components.iter().any(|c| c.name == n) || apps.iter().any(|(b, _)| b.id == n);
+        read_element_catalog("the core", CORE_ELEMENT_CATALOG, &shipped, &mut notes)?;
+        for a in &adapters {
+            read_element_catalog(a.name(), a.element_catalog(), &shipped, &mut notes)?;
+        }
         Ok(Self {
             adapters,
             manifests,
-            blueprints: apps,
+            core_layouts: apps,
             files,
             sign_ins,
             components,
+            notes,
         })
     }
 
@@ -709,21 +795,32 @@ impl Catalog {
         &self.adapters
     }
 
-    /// Every blueprint, in adapter order.
-    pub fn blueprints(&self) -> impl Iterator<Item = &BlueprintInfo> {
-        self.blueprints.iter().map(|(a, _)| a)
+    /// What the catalog files say about the core element `name` (bare:
+    /// `card`, `pixelfed`).
+    pub fn element_note(&self, name: &str) -> Option<&ElementNote> {
+        self.notes.get(name)
     }
 
-    pub fn blueprint(&self, id: &str) -> Option<&BlueprintInfo> {
-        self.blueprints
+    /// Every server component's name (the core's and each source's), once.
+    pub fn component_names(&self) -> std::collections::BTreeSet<&'static str> {
+        self.components.iter().map(|c| c.name).collect()
+    }
+
+    /// Every core layout, in adapter order.
+    pub fn core_layouts(&self) -> impl Iterator<Item = &CoreLayoutInfo> {
+        self.core_layouts.iter().map(|(a, _)| a)
+    }
+
+    pub fn core_layout(&self, id: &str) -> Option<&CoreLayoutInfo> {
+        self.core_layouts
             .iter()
             .find(|(a, _)| a.id == id)
             .map(|(a, _)| a)
     }
 
-    /// Whether `id` is a blueprint's.
-    pub fn is_blueprint(&self, id: &str) -> bool {
-        self.blueprint(id).is_some()
+    /// Whether `id` is a core layout's.
+    pub fn is_core_layout(&self, id: &str) -> bool {
+        self.core_layout(id).is_some()
     }
 
     /// Data source `id` (an adapter name) and its manifest.
@@ -740,11 +837,11 @@ impl Catalog {
             .map(|(a, m)| (a.name(), m))
     }
 
-    /// The data sources blueprint `id` draws on: those of its feeds, then
+    /// The data sources core layout `id` draws on: those of its feeds, then
     /// the adapter shipping it (whose routes its layouts may always use).
-    /// Empty for an unknown blueprint.
-    pub fn blueprint_sources(&self, id: &str) -> Vec<(&'static str, &SourceManifest)> {
-        let Some((app, i)) = self.blueprints.iter().find(|(a, _)| a.id == id) else {
+    /// Empty for an unknown core layout.
+    pub fn core_layout_sources(&self, id: &str) -> Vec<(&'static str, &SourceManifest)> {
+        let Some((app, i)) = self.core_layouts.iter().find(|(a, _)| a.id == id) else {
             return Vec::new();
         };
         let mut out: Vec<(&'static str, &SourceManifest)> = Vec::new();
@@ -786,7 +883,7 @@ impl Catalog {
                 .any(|p| path.starts_with(p))
     }
 
-    /// Every adapter's blueprint layout files.
+    /// Every adapter's core layout layout files.
     pub fn files(&self) -> &[LayoutSource] {
         &self.files
     }
@@ -796,7 +893,7 @@ impl Catalog {
 fn check_sources(
     adapters: &[Arc<dyn Source>],
     manifests: &[SourceManifest],
-    apps: &[(BlueprintInfo, usize)],
+    apps: &[(CoreLayoutInfo, usize)],
     sign_ins: &[(SignInProvider, usize)],
 ) -> Result<(), String> {
     for (i, (a, m)) in adapters.iter().zip(manifests).enumerate() {

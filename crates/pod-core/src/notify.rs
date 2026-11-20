@@ -63,7 +63,7 @@ const MAX_BODY: usize = 1000;
 /// A notification an adapter reports.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NewNotification {
-    /// The layout (or blueprint) whose channel it is.
+    /// The layout (or core layout) whose channel it is.
     pub layout: String,
     /// A channel the source declared for that layout.
     pub channel: String,
@@ -357,12 +357,12 @@ impl AppState {
         out
     }
 
-    /// The layouts notifications may belong to: blueprints and the pod's
+    /// The layouts notifications may belong to: core layouts and the pod's
     /// live layouts.
     fn layout_ids(&self) -> Vec<String> {
         let mut ids: Vec<String> = self
             .catalog()
-            .blueprints()
+            .core_layouts()
             .map(|a| a.id.to_owned())
             .collect();
         match self.store().with_conn(crate::layouts::pod_layouts) {

@@ -3,12 +3,12 @@
 use axum::Router;
 use protocol::{DataBundle, WorkspaceSpec};
 
-use crate::adapter::{BlueprintInfo, BoxFuture, Hydration, Pod, RequestCtx, Source};
+use crate::adapter::{BoxFuture, CoreLayoutInfo, Hydration, Pod, RequestCtx, Source};
 use crate::layouts::LayoutSource;
 use crate::source::{FeedSpec, SourceManifest};
 
 /// The one feed of a [`StaticAdapter`]: list `(name, FEED)` in the app's
-/// [`BlueprintInfo::feeds`].
+/// [`CoreLayoutInfo::feeds`].
 pub const FEED: &str = "all";
 
 /// The feeds of a [`StaticAdapter`]'s default manifest (just [`FEED`]),
@@ -25,20 +25,28 @@ pub static FEEDS: &[FeedSpec] = &[FeedSpec {
 /// [`Self::with_router`]. Its app lists `(name, FEED)` among its feeds.
 pub struct StaticAdapter {
     name: &'static str,
-    app: BlueprintInfo,
+    app: CoreLayoutInfo,
     manifest: SourceManifest,
     files: &'static [LayoutSource],
     data: DataBundle,
     router: fn() -> Router<Pod>,
+    catalog: &'static str,
 }
 
 impl StaticAdapter {
+    /// What `find_elements` says about its layout: the text of the crate's
+    /// `catalog.json` ([`Source::element_catalog`]).
+    pub fn with_catalog(mut self, catalog: &'static str) -> Self {
+        self.catalog = catalog;
+        self
+    }
+
     /// `name`: the adapter name ([`Source::name`]). `data`: the entities
     /// and queries every workspace fetch returns (its `workspace` and
     /// `version` are ignored: the layout comes from `files`).
     pub fn new(
         name: &'static str,
-        app: BlueprintInfo,
+        app: CoreLayoutInfo,
         files: &'static [LayoutSource],
         data: &WorkspaceSpec,
     ) -> Self {
@@ -55,6 +63,7 @@ impl StaticAdapter {
                 queries: data.queries.clone(),
             },
             router: Router::new,
+            catalog: "{}",
         }
     }
 
@@ -79,8 +88,12 @@ impl Source for StaticAdapter {
         self.name
     }
 
-    fn blueprints(&self) -> Vec<BlueprintInfo> {
+    fn core_layouts(&self) -> Vec<CoreLayoutInfo> {
         vec![self.app]
+    }
+
+    fn element_catalog(&self) -> &'static str {
+        self.catalog
     }
 
     fn layout_files(&self) -> &'static [LayoutSource] {

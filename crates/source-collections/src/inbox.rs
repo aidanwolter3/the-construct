@@ -3,7 +3,7 @@
 //! [`NotificationStore`].
 //!
 //! - `notifications`: one row per notification any source sent, newest
-//!   first. Layouts bind it like any collection (the inbox blueprint does),
+//!   first. Layouts bind it like any collection (the inbox core layout does),
 //!   filter it, and edit it: marking read is setting `read`, removing one is
 //!   deleting its row. `channel_enabled` and `channel_title` follow the
 //!   channel's row (live lookups); `read_at` follows `read`.
@@ -34,7 +34,7 @@ use crate::{Caps, follow};
 pub const NOTIFICATIONS: &str = "notifications";
 /// The channels and their switches.
 pub const CHANNELS: &str = "notification_channels";
-/// The blueprint the system collections are recorded under.
+/// The core layout the system collections are recorded under.
 const APP: &str = "inbox";
 
 /// Whether `collection` is one of these (they don't count against the

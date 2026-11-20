@@ -1,0 +1,174 @@
+{
+  "author_header": {
+    "category": "row",
+    "use_when": "Who wrote something: an avatar beside a name and handle, above a post or a comment."
+  },
+  "back_button": {
+    "category": "primitive",
+    "use_when": "Back in a header you draw yourself; @core/page_header already has it."
+  },
+  "button": {
+    "category": "primitive",
+    "use_when": "Any button. Use it or core://Button; never a Tappable over a Box."
+  },
+  "callout": {
+    "category": "container",
+    "use_when": "A panel that says one thing in a tone: a tip, a warning, pros or cons, one section of a detail screen."
+  },
+  "card": {
+    "category": "container",
+    "use_when": "One thing in a bordered card: an event, a site, an alert. For several rows in one card use @core/grouped_card."
+  },
+  "checkable_row": {
+    "category": "row",
+    "use_when": "A row that ticks a yes/no field of its item at a tap: a to-do, a grocery item, a lesson done."
+  },
+  "chevron_card": {
+    "category": "container",
+    "use_when": "A card that opens something, with a › at its end: a banner or a link to another screen."
+  },
+  "choice_chip": {
+    "category": "pattern",
+    "use_when": "One choice among several that a tap writes to a row's field or keeps as a draft: a kind, a time slot, a day."
+  },
+  "collapsible": {
+    "category": "container",
+    "use_when": "A section the user opens and closes (Older, Advanced)."
+  },
+  "counted_list": {
+    "category": "pattern",
+    "use_when": "A list that shows its rows in a card, or one quiet line while it is empty, from a single count query."
+  },
+  "date_block": {
+    "category": "primitive",
+    "use_when": "A compact date leading a row: the weekday over the day of the month."
+  },
+  "divided_item": {
+    "category": "row",
+    "use_when": "A list item with a divider under it, on the page rather than in a card."
+  },
+  "dot": {
+    "category": "primitive",
+    "use_when": "A small coloured dot: unread, online, a legend or a status."
+  },
+  "filled_card": {
+    "category": "container",
+    "use_when": "A filled card whose text takes one colour: an item's heading, a status at a glance."
+  },
+  "footer_bar": {
+    "category": "scaffold",
+    "use_when": "A bar pinned under a page: a count or a hint, then the page's main button."
+  },
+  "grouped_card": {
+    "category": "container",
+    "use_when": "Several rows in one rounded card, as a settings group or a short list; the rows bring their dividers."
+  },
+  "grouped_list": {
+    "category": "container",
+    "use_when": "Rows in one rounded card with hairlines between them: a list, a menu, a settings group. The usual home of rows."
+  },
+  "header_bar": {
+    "category": "scaffold",
+    "use_when": "A root page's header: a title on the left, icon buttons on the right, no Back."
+  },
+  "icon_row": {
+    "category": "row",
+    "use_when": "A row that leads with an icon: a title, one muted line, optional trailing text and a ›. The usual row of a menu or a list."
+  },
+  "item_row": {
+    "category": "row",
+    "use_when": "Any row with something at either end: a leading icon, checkbox or picture, a title and a muted line, a trailing tag or value, a ›."
+  },
+  "labeled_text": {
+    "category": "row",
+    "use_when": "One field of an item on its own screen (Description, Notes), hidden while empty."
+  },
+  "link_button": {
+    "category": "primitive",
+    "use_when": "A button that opens a web link, hidden while there is no link."
+  },
+  "list_row": {
+    "category": "row",
+    "use_when": "A plain row: a title and a quiet value at the end (a version, a count)."
+  },
+  "message_page": {
+    "category": "scaffold",
+    "use_when": "A whole page that only says something: a welcome, an empty pod, an error with Try again."
+  },
+  "muted_note": {
+    "category": "pattern",
+    "use_when": "What a list says while it is empty, or a hint under a heading. Give it the list's count and it shows only while the list is empty."
+  },
+  "muted_text": {
+    "category": "primitive",
+    "use_when": "Any quiet text: a row's second line, a date, a caption. Use it instead of a Box that only sets the muted colour."
+  },
+  "page_header": {
+    "category": "scaffold",
+    "use_when": "A pushed page's header: Back, the title, icon buttons on the right."
+  },
+  "pill": {
+    "category": "primitive",
+    "use_when": "A small tag with text: a status, a date, a count, a category."
+  },
+  "screen": {
+    "category": "scaffold",
+    "use_when": "A screen with the app's old chrome: Back, title, spinner, error with Try again, scrolling content and a footer."
+  },
+  "screen_scaffold": {
+    "category": "scaffold",
+    "use_when": "The usual root of a page or a screen: a header with Back, title and actions, scrolling content, and an optional bar pinned underneath."
+  },
+  "scroll_page": {
+    "category": "scaffold",
+    "use_when": "A whole page: header with Back, a divider, then the children scrolling. The usual root of a page or a screen."
+  },
+  "section_header": {
+    "category": "row",
+    "use_when": "A section's heading on the page, optionally under a divider."
+  },
+  "section_label": {
+    "category": "row",
+    "use_when": "A quiet heading above a grouped card: a month, a settings group."
+  },
+  "stat": {
+    "category": "primitive",
+    "use_when": "A number with a label under it: a count tile, one cell of a row of figures."
+  },
+  "tab_shell": {
+    "category": "scaffold",
+    "use_when": "The root of home once there are a few layouts: tabs as a dock on a phone and a rail on a wide window, each tab one embedded layout."
+  },
+  "text_link": {
+    "category": "primitive",
+    "use_when": "A quiet action in words: Clear beside a list, Edit in a header."
+  },
+  "tinted_icon": {
+    "category": "primitive",
+    "use_when": "An icon in a tinted circle: a row's leading icon, a category."
+  },
+  "title_meta": {
+    "category": "row",
+    "use_when": "A bold title over one muted line: a name and its details."
+  },
+  "titled_section": {
+    "category": "container",
+    "use_when": "A section of a page: a quiet heading with the space around it, over a card or a list."
+  },
+  "toggle_action": {
+    "category": "pattern",
+    "use_when": "An icon that flips a yes/no field at once and tells an endpoint: like, favourite, pin, bookmark."
+  },
+  "two_pane": {
+    "category": "scaffold",
+    "use_when": "A list beside its detail on a wide window, the list alone on a phone."
+  },
+  "warning_chip": {
+    "category": "primitive",
+    "use_when": "A warning said in a few words."
+  },
+  "workspace": {
+    "category": "scaffold",
+    "use_when": "A page as the app once drew a workspace: a headline title, the content scrolling under it."
+  }
+}

@@ -1,5 +1,5 @@
 //! Data sources (decision `custom-apps-and-data-sources`): the catalog's
-//! checks of manifests and blueprint feeds, the route check of layout files,
+//! checks of manifests and core layout feeds, the route check of layout files,
 //! a layout's data composed of several sources' feeds (home's), and data
 //! events by source on the construct's stream.
 
@@ -15,7 +15,7 @@ use pod_core::layouts::LayoutSource;
 use pod_core::session::session_hash;
 use pod_core::store::open_session_on;
 use pod_core::{
-    AppState, AuthPolicy, BlueprintInfo, BoxFuture, Catalog, FeedSpec, Hydration, PathSpec, Pod,
+    AppState, AuthPolicy, BoxFuture, Catalog, CoreLayoutInfo, FeedSpec, Hydration, PathSpec, Pod,
     RequestCtx, Session, SignInProvider, Source, SourceManifest,
 };
 use protocol::{DataBundle, EntityRecord, WorkspaceSpec};
@@ -63,7 +63,7 @@ struct Src {
     name: &'static str,
     sign_in: Option<&'static str>,
     provides: Option<&'static str>,
-    apps: Vec<BlueprintInfo>,
+    apps: Vec<CoreLayoutInfo>,
     files: &'static [LayoutSource],
     answer: Answer,
     schemes: &'static [&'static str],
@@ -87,7 +87,7 @@ impl Src {
     /// Serve app `id` (public) whose root lists `feeds`, with a layout that
     /// uses this source's routes.
     fn app(mut self, id: &'static str, feeds: &[(&'static str, &'static str)]) -> Self {
-        self.apps.push(BlueprintInfo {
+        self.apps.push(CoreLayoutInfo {
             id,
             title: "T",
             icon: "photo",
@@ -110,7 +110,7 @@ impl Source for Src {
     fn name(&self) -> &'static str {
         self.name
     }
-    fn blueprints(&self) -> Vec<BlueprintInfo> {
+    fn core_layouts(&self) -> Vec<CoreLayoutInfo> {
         self.apps.clone()
     }
     fn layout_files(&self) -> &'static [LayoutSource] {
@@ -240,7 +240,7 @@ fn a_layout_file_may_only_use_its_sources_routes() {
     // Its own adapter's routes, and those of the sources its feeds name.
     assert_eq!(start(vec![Src::new("a").app("a", &[])]), Ok(()));
     let mut a = Src::new("a");
-    a.apps.push(BlueprintInfo {
+    a.apps.push(CoreLayoutInfo {
         id: "x",
         title: "T",
         icon: "photo",
@@ -253,7 +253,7 @@ fn a_layout_file_may_only_use_its_sources_routes() {
     // Another source's action, without a feed of it: refused, naming what
     // is offered.
     let mut a = Src::new("a");
-    a.apps.push(BlueprintInfo {
+    a.apps.push(CoreLayoutInfo {
         id: "x",
         title: "T",
         icon: "photo",
@@ -270,7 +270,7 @@ fn a_layout_file_may_only_use_its_sources_routes() {
     );
     // A screen data path no source declares.
     let mut a = Src::new("a");
-    a.apps.push(BlueprintInfo {
+    a.apps.push(CoreLayoutInfo {
         id: "x",
         title: "T",
         icon: "photo",
@@ -290,7 +290,7 @@ fn a_layout_file_may_only_use_its_sources_routes() {
     );
 }
 
-/// A pod over a public source `a` (which ships the home blueprint) and a
+/// A pod over a public source `a` (which ships the home core layout) and a
 /// source `b` that needs sign-in `test` (answering `b_answer`), with a
 /// layout that lists both feeds (home binds them): the pod and the
 /// layout's id.

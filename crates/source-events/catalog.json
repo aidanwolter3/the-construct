@@ -1,0 +1,6 @@
+{
+  "events": {
+    "category": "layout",
+    "use_when": "The user watches websites for events: upcoming events, the sites, their alerts."
+  }
+}

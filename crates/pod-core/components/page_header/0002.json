@@ -1,0 +1,148 @@
+{
+ "note": "Title weight, a least height and a loading spinner (decision element-roles-and-reuse)",
+ "component": {
+  "doc": "A page's header on one line: Back (while the page can go back), the title, and actions (icon buttons) on the right. The top of a layout whose root is a core://Page, which gets no chrome from the app. weight sets the title's weight, height a least height, loading a spinner while the screen loads.",
+  "params": [
+   {
+    "name": "title",
+    "type": "text",
+    "doc": "The title (bindings allowed).",
+    "required": true
+   },
+   {
+    "name": "style",
+    "type": "text",
+    "doc": "A core://Text style.",
+    "default": "Title"
+   },
+   {
+    "name": "padding_h",
+    "type": "number",
+    "doc": "Side padding.",
+    "default": 12
+   },
+   {
+    "name": "padding_v",
+    "type": "number",
+    "doc": "Top and bottom padding.",
+    "default": 4
+   },
+   {
+    "name": "weight",
+    "type": "text",
+    "default": "",
+    "doc": "The title's weight (Regular, Medium, SemiBold, Bold); empty for the style's own."
+   },
+   {
+    "name": "height",
+    "type": "number",
+    "default": 0,
+    "doc": "The least height in dp, so the title sits at the same height with and without Back (48 does it); 0 for the content's own."
+   },
+   {
+    "name": "loading",
+    "type": "bool",
+    "default": false,
+    "doc": "A small spinner after the title while the screen's data loads (local://screen#loading)."
+   }
+  ],
+  "children": true,
+  "template": {
+   "type": "core://Row",
+   "align": "Center",
+   "spacing_dp": 4,
+   "padding_h_dp": "$arg.padding_h",
+   "padding_v_dp": "$arg.padding_v",
+   "children": [
+    {
+     "type": "core://Use",
+     "component": "core:back_button"
+    },
+    {
+     "type": "core://Text",
+     "value_expr": "$arg.title",
+     "style": "$arg.style",
+     "weight": {
+      "type": "core://IfArg",
+      "arg": "weight",
+      "then": "$arg.weight"
+     }
+    },
+    {
+     "type": "core://IfArg",
+     "arg": "loading",
+     "then": {
+      "type": "core://Conditional",
+      "value": "${local://screen#loading}",
+      "content": {
+       "type": "core://Progress",
+       "size_dp": 18
+      }
+     }
+    },
+    {
+     "type": "core://Spacer"
+    },
+    {
+     "type": "core://Children"
+    },
+    {
+     "type": "core://IfArg",
+     "arg": "height",
+     "then": {
+      "type": "core://Box",
+      "width_dp": 1,
+      "height_dp": "$arg.height",
+      "content": {
+       "type": "core://Spacer",
+       "size_dp": 0
+      }
+     }
+    }
+   ]
+  },
+  "examples": [
+   {
+    "args": {
+     "title": "Reading list"
+    },
+    "note": "a pushed list page: Back and the title, no actions"
+   },
+   {
+    "args": {
+     "title": "Packing"
+    },
+    "children": [
+     {
+      "type": "core://IconButton",
+      "icon": "add",
+      "content_description": "Add an item",
+      "on_click": {
+       "intent": "action.navigation.open",
+       "layout": "c-example",
+       "presentation": "Sheet"
+      }
+     }
+    ],
+    "note": "a checklist page with an add button on the right"
+   },
+   {
+    "args": {
+     "title": "${collections://trips/$route.id#name}",
+     "style": "Headline"
+    },
+    "note": "an item's page titled from its data, in the headline style"
+   },
+   {
+    "args": {
+     "title": "Workouts",
+     "style": "Headline",
+     "weight": "SemiBold",
+     "height": 48,
+     "padding_h": 0
+    },
+    "note": "a headline title at one height on every page"
+   }
+  ]
+ }
+}

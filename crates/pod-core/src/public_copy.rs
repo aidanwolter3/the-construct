@@ -846,7 +846,7 @@ pub async fn make(pod: &Pod, ask: &Ask) -> Result<Made, Value> {
             }
             let why = if ask.leave_out.contains(&t) {
                 Some("left out (leave_out)".to_owned())
-            } else if pod.catalog().blueprint(&t).is_some() {
+            } else if pod.catalog().core_layout(&t).is_some() {
                 Some("a built-in layout (Settings, the inbox, …)".to_owned())
             } else if full.len() >= MAX_LAYOUTS {
                 Some(format!("a copy carries at most {MAX_LAYOUTS} layouts"))

@@ -1,0 +1,143 @@
+{
+ "note": "A tone in place of two colours (decision element-roles-and-reuse)",
+ "component": {
+  "doc": "A small tinted tag with text (a date, a status, a count). tone picks the theme's pair in one word (accent, success, error, muted). Its corners follow the theme's scale (corner_s, set_theme) unless corner is given.",
+  "params": [
+   {
+    "name": "text",
+    "type": "text",
+    "doc": "The text.",
+    "required": true
+   },
+   {
+    "name": "tone",
+    "type": "text",
+    "default": "",
+    "doc": "A tone instead of the two colours: accent, success, error or muted (the theme's pair for it). Empty: the colours given."
+   },
+   {
+    "name": "background",
+    "type": "text",
+    "doc": "Fill colour.",
+    "default": "${local://theme#accent_surface}"
+   },
+   {
+    "name": "color",
+    "type": "text",
+    "doc": "Text colour.",
+    "default": "${local://theme#accent}"
+   },
+   {
+    "name": "style",
+    "type": "text",
+    "doc": "A core://Text style.",
+    "default": "Caption"
+   },
+   {
+    "name": "corner",
+    "type": "number",
+    "doc": "Corner radius in dp; 0 for the theme's corner_s (8 unless the pod set it).",
+    "default": 0
+   }
+  ],
+  "template": {
+   "type": "core://Box",
+   "background": {
+    "type": "core://IfArg",
+    "arg": "tone",
+    "equals": "success",
+    "then": "${local://theme#success_surface}",
+    "else": {
+     "type": "core://IfArg",
+     "arg": "tone",
+     "equals": "error",
+     "then": "${local://theme#error_surface}",
+     "else": {
+      "type": "core://IfArg",
+      "arg": "tone",
+      "equals": "muted",
+      "then": "${local://theme#muted_surface}",
+      "else": {
+       "type": "core://IfArg",
+       "arg": "tone",
+       "equals": "accent",
+       "then": "${local://theme#accent_surface}",
+       "else": "$arg.background"
+      }
+     }
+    }
+   },
+   "content_color": {
+    "type": "core://IfArg",
+    "arg": "tone",
+    "equals": "success",
+    "then": "${local://theme#success}",
+    "else": {
+     "type": "core://IfArg",
+     "arg": "tone",
+     "equals": "error",
+     "then": "${local://theme#error}",
+     "else": {
+      "type": "core://IfArg",
+      "arg": "tone",
+      "equals": "muted",
+      "then": "${local://theme#muted_text}",
+      "else": {
+       "type": "core://IfArg",
+       "arg": "tone",
+       "equals": "accent",
+       "then": "${local://theme#accent}",
+       "else": "$arg.color"
+      }
+     }
+    }
+   },
+   "corner_dp": {
+    "type": "core://IfArg",
+    "arg": "corner",
+    "then": "$arg.corner",
+    "else": "$theme.corner_s"
+   },
+   "padding_h_dp": 8,
+   "padding_v_dp": 3,
+   "content": {
+    "type": "core://Text",
+    "value_expr": "$arg.text",
+    "style": "$arg.style"
+   }
+  },
+  "examples": [
+   {
+    "args": {
+     "text": "$item.start_text"
+    },
+    "note": "an event's date"
+   },
+   {
+    "args": {
+     "text": "$item.status",
+     "background": "${local://theme#error_surface}",
+     "color": "${local://theme#error}",
+     "corner": 6
+    },
+    "note": "a task's status, with tighter corners"
+   },
+   {
+    "args": {
+     "text": "3 unread",
+     "background": "${local://theme#unread}",
+     "color": "${local://theme#card}",
+     "corner": 6
+    },
+    "note": "a count on a list row"
+   },
+   {
+    "args": {
+     "text": "Failed",
+     "tone": "error"
+    },
+    "note": "a status in the error tone"
+   }
+  ]
+ }
+}

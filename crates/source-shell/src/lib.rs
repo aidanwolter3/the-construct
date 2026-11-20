@@ -1,9 +1,9 @@
-//! The `shell` blueprint (decision `blueprints-and-home`): the home layout
+//! The `shell` core layout (decision `blueprints-and-home`): the home layout
 //! every pod starts with, a blank page saying "The Construct" and "Ask your
 //! agent to build anything". The agent builds the rest into the pod's home.
 //! It reads no data, so it has no feeds.
 //!
-//! Also the `settings` and `inbox` blueprints (decision `layouts-not-apps`):
+//! Also the `settings` and `inbox` core layouts (decision `layouts-not-apps`):
 //! Settings and the notification inbox as layouts over device data, which any
 //! layout presents with `action.navigation.open {"layout": "settings"}`.
 //!
@@ -14,17 +14,17 @@ use std::sync::Arc;
 
 use pod_core::layouts::LayoutSource;
 use pod_core::source::{EntityDoc, PathSpec, SourceManifest};
-use pod_core::{AuthPolicy, BlueprintInfo, Source, StaticAdapter};
+use pod_core::{AuthPolicy, CoreLayoutInfo, Source, StaticAdapter};
 use protocol::WorkspaceSpec;
 
 // `FILES`: every `layouts/shell/*.json`, in number order (`build.rs`).
 include!(concat!(env!("OUT_DIR"), "/layout_files.rs"));
 
-/// The adapter name and the blueprint's app id ([`pod_core::HOME_BLUEPRINT`]).
-pub const NAME: &str = pod_core::HOME_BLUEPRINT;
+/// The adapter name and the core layout's app id ([`pod_core::HOME_CORE_LAYOUT`]).
+pub const NAME: &str = pod_core::HOME_CORE_LAYOUT;
 
-/// The blueprint. Never listed as an app; each pod's `home` app references it.
-pub const SHELL: BlueprintInfo = BlueprintInfo {
+/// The core layout. Never listed as an app; each pod's `home` app references it.
+pub const SHELL: CoreLayoutInfo = CoreLayoutInfo {
     id: NAME,
     title: "Home",
     icon: "dashboard",
@@ -33,7 +33,7 @@ pub const SHELL: BlueprintInfo = BlueprintInfo {
     feeds: &[],
 };
 
-/// The blueprint's adapter: its layout files and no data.
+/// The core layout's adapter: its layout files and no data.
 pub fn adapter() -> Arc<dyn Source> {
     let empty = WorkspaceSpec {
         version: pod_core::BUNDLE_VERSION.into(),
@@ -41,17 +41,20 @@ pub fn adapter() -> Arc<dyn Source> {
         entities: Default::default(),
         queries: Default::default(),
     };
-    Arc::new(StaticAdapter::new(NAME, SHELL, FILES, &empty))
+    Arc::new(StaticAdapter::new(NAME, SHELL, FILES, &empty).with_catalog(CATALOG))
 }
 
-/// The Settings blueprint's id.
+/// What `find_elements` says about this crate's layouts.
+const CATALOG: &str = include_str!("../catalog.json");
+
+/// The Settings core layout's id.
 pub const SETTINGS: &str = "settings";
-/// The inbox blueprint's id.
+/// The inbox core layout's id.
 pub const INBOX: &str = "inbox";
 
 /// Settings as a layout: connection, layouts and versions, sign-ins, the
 /// pod's jacks, notification channels, the server, leaving the pod.
-pub const SETTINGS_APP: BlueprintInfo = BlueprintInfo {
+pub const SETTINGS_APP: CoreLayoutInfo = CoreLayoutInfo {
     id: SETTINGS,
     title: "Settings",
     icon: "dashboard",
@@ -63,7 +66,7 @@ pub const SETTINGS_APP: BlueprintInfo = BlueprintInfo {
 /// The notification inbox as a layout: the pod's `notifications`
 /// collection (decision `notifications-in-a-collection`), and the device's
 /// own notification data for builds before it.
-pub const INBOX_APP: BlueprintInfo = BlueprintInfo {
+pub const INBOX_APP: CoreLayoutInfo = CoreLayoutInfo {
     id: INBOX,
     title: "Notifications",
     icon: "dashboard",
@@ -143,15 +146,16 @@ pub const SETTINGS_MANIFEST: SourceManifest = SourceManifest {
     ..SourceManifest::new("Settings")
 };
 
-/// The Settings blueprint's adapter.
+/// The Settings core layout's adapter.
 pub fn settings_adapter() -> Arc<dyn Source> {
     Arc::new(
         StaticAdapter::new(SETTINGS, SETTINGS_APP, SETTINGS_FILES, &empty())
-            .with_manifest(SETTINGS_MANIFEST),
+            .with_manifest(SETTINGS_MANIFEST)
+            .with_catalog(CATALOG),
     )
 }
 
-/// The inbox blueprint's adapter.
+/// The inbox core layout's adapter.
 pub fn inbox_adapter() -> Arc<dyn Source> {
-    Arc::new(StaticAdapter::new(INBOX, INBOX_APP, INBOX_FILES, &empty()))
+    Arc::new(StaticAdapter::new(INBOX, INBOX_APP, INBOX_FILES, &empty()).with_catalog(CATALOG))
 }

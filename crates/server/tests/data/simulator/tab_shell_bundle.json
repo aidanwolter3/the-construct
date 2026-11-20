@@ -1,0 +1,215 @@
+{
+  "version": "1.0.0",
+  "workspace": {
+    "type": "core://Page",
+    "id": "tab_shell",
+    "title": "Home",
+    "root": {
+      "type": "core://Use",
+      "component": "core:tab_shell",
+      "args": {
+        "first": "today",
+        "tabs": [
+          {
+            "key": "today",
+            "title": "Today",
+            "icon": "check_box"
+          },
+          {
+            "key": "garden",
+            "title": "Garden",
+            "icon": "bookmark"
+          },
+          {
+            "key": "more",
+            "title": "More",
+            "icon": "settings"
+          }
+        ]
+      },
+      "slots": {
+        "today": [
+          {
+            "type": "core://Column",
+            "padding_h_dp": 20,
+            "padding_v_dp": 12,
+            "spacing_dp": 0,
+            "children": [
+              {
+                "type": "core://Text",
+                "style": "Headline",
+                "weight": "SemiBold",
+                "value_expr": "Today"
+              },
+              {
+                "type": "core://Use",
+                "component": "core:titled_section",
+                "args": {
+                  "text": "This week"
+                },
+                "children": [
+                  {
+                    "type": "core://Use",
+                    "component": "core:grouped_list",
+                    "children": [
+                      {
+                        "type": "core://Column",
+                        "spacing_dp": 1,
+                        "children": [
+                          {
+                            "type": "core://Use",
+                            "component": "core:item_row",
+                            "args": {
+                              "title": "Water the seedlings",
+                              "chevron": true
+                            }
+                          },
+                          {
+                            "type": "core://Use",
+                            "component": "core:item_row",
+                            "args": {
+                              "title": "Call the nursery",
+                              "chevron": true
+                            }
+                          }
+                        ]
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+        ],
+        "garden": [
+          {
+            "type": "core://Column",
+            "padding_h_dp": 20,
+            "padding_v_dp": 12,
+            "spacing_dp": 0,
+            "children": [
+              {
+                "type": "core://Text",
+                "style": "Headline",
+                "weight": "SemiBold",
+                "value_expr": "Garden beds"
+              },
+              {
+                "type": "core://Use",
+                "component": "core:titled_section",
+                "args": {
+                  "text": "This week"
+                },
+                "children": [
+                  {
+                    "type": "core://Use",
+                    "component": "core:grouped_list",
+                    "children": [
+                      {
+                        "type": "core://Column",
+                        "spacing_dp": 1,
+                        "children": [
+                          {
+                            "type": "core://Use",
+                            "component": "core:item_row",
+                            "args": {
+                              "title": "Herb bed",
+                              "chevron": true
+                            }
+                          },
+                          {
+                            "type": "core://Use",
+                            "component": "core:item_row",
+                            "args": {
+                              "title": "Tomato bed",
+                              "chevron": true
+                            }
+                          },
+                          {
+                            "type": "core://Use",
+                            "component": "core:item_row",
+                            "args": {
+                              "title": "Compost",
+                              "chevron": true
+                            }
+                          }
+                        ]
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+        ],
+        "more": [
+          {
+            "type": "core://Column",
+            "padding_h_dp": 20,
+            "padding_v_dp": 12,
+            "spacing_dp": 0,
+            "children": [
+              {
+                "type": "core://Text",
+                "style": "Headline",
+                "weight": "SemiBold",
+                "value_expr": "More"
+              },
+              {
+                "type": "core://Use",
+                "component": "core:titled_section",
+                "args": {
+                  "text": "This week"
+                },
+                "children": [
+                  {
+                    "type": "core://Use",
+                    "component": "core:grouped_list",
+                    "children": [
+                      {
+                        "type": "core://Column",
+                        "spacing_dp": 1,
+                        "children": [
+                          {
+                            "type": "core://Use",
+                            "component": "core:item_row",
+                            "args": {
+                              "title": "Settings",
+                              "chevron": true
+                            }
+                          },
+                          {
+                            "type": "core://Use",
+                            "component": "core:item_row",
+                            "args": {
+                              "title": "About",
+                              "chevron": true
+                            }
+                          }
+                        ]
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+        ],
+        "rail_top": [
+          {
+            "type": "core://Box",
+            "padding_h_dp": 12,
+            "padding_v_dp": 8,
+            "content": {
+              "type": "core://Text",
+              "style": "Title",
+              "value_expr": "Allotment"
+            }
+          }
+        ]
+      }
+    }
+  },
+  "entities": {},
+  "queries": {}
+}

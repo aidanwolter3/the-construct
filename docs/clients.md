@@ -187,7 +187,7 @@ The client opens the pod's `home` layout (the default) and draws everything from
 
 - **Before a pod is open** it draws a bundled sign-in layout: a pod code, or **Try a temporary pod**. It needs no
   server to draw, and shows the sign-in error under the button.
-- **With a pod** it draws `home`, the user's whole interface. A new pod's home is the `shell` blueprint: a blank
+- **With a pod** it draws `home`, the user's whole interface. A new pod's home is the `shell` core layout: a blank
   off-white page saying "The Construct", with Notifications and Settings buttons. The agent builds the rest into home,
   only as much as the user asks for.
 - **Other layouts** show inside home (`core://Layout`: in place, in a card-sized region, or as a sheet or side panel
@@ -212,13 +212,13 @@ The client opens the pod's `home` layout (the default) and draws everything from
   end, with a Back arrow and the screen's title at its top; Back (the arrow or system Back) slides it out again, and
   a scrim tap or dragging a sheet down closes the frame with whatever is open in it. Screens of pushed layouts and of
   home cover the whole screen, as before.
-- **Settings and the inbox are layouts** (the `settings` and `inbox` blueprints), presented as a side panel and a
+- **Settings and the inbox are layouts** (the `settings` and `inbox` core layouts), presented as a side panel and a
   sheet. Settings shows the connection, the pod's layouts (a tap lists a layout's versions and offers Hide; picking one
   shows it on this device only, and the pin is kept across restarts until Show latest or leaving the pod), the
   hidden layouts with a Show button, sign-ins, the pod's jacks (a list with each one's state; a jack's screen plugs it in,
   takes a search provider and its key in a hidden field, or unplugs it; decision `jacks-in-settings`), notifications (one row per layout that sends them; a tap opens that layout's
   switches inside the panel), and **Leave pod**. On Android the notification permission row sits above it. The
-  blueprint no longer lists servers: the platform still offers them in `local:servers` (Staging, Local, or its
+  core layout no longer lists servers: the platform still offers them in `local:servers` (Staging, Local, or its
   others; each server has its own cache and outbox), so a layout can add a picker with `set_server`; the desktop
   also takes `CONSTRUCT_POD_URL`.
 - **The inbox** lists the newest page of notifications and a **Load older** button while there are more.

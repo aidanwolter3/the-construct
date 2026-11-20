@@ -11,3 +11,15 @@ if [ -n "$hits" ]; then
   echo "$hits" >&2
   exit 1
 fi
+
+# The word "blueprint" (decision `element-roles-and-reuse`): what ships with the server is a core layout or a
+# core component. It may stay in migration code, in the name of decision `blueprints-and-home`, and as the one
+# alias `list_layouts` still answers for agents that haven't refreshed.
+hits=$(grep -rniE 'blueprint' --include='*.rs' crates/ \
+  | grep -vE '^[^:]*migrations[^:]*:' \
+  | grep -vE 'blueprints-and-home|"blueprints": core_layouts|The word before decision' || true)
+if [ -n "$hits" ]; then
+  echo "\"blueprint\" in code (decision element-roles-and-reuse: say core layout):" >&2
+  echo "$hits" >&2
+  exit 1
+fi

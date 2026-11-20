@@ -2,7 +2,7 @@
 
 A pod's apps are the user's own: any layout the [vocabulary](layouts.md) can draw, over the feeds, screen data and
 actions the pod's data sources declare. They are usually built by Claude through the pod's MCP endpoint, often from a
-**blueprint** (a built-in layout the server ships and updates, such as `pixelfed` or `events`). A new pod
+**core layout** (a built-in layout the server ships and updates, such as `pixelfed` or `events`). A new pod
 has one app, `home`; nothing else until the user asks for it. Data an app keeps itself (a todo list, a maintenance
 log) lives in **Collections**.
 
@@ -11,21 +11,21 @@ Decisions: [`custom-apps-and-data-sources`](decisions/custom-apps-and-data-sourc
 [`collections`](decisions/collections.md), [`blueprints-and-home`](decisions/blueprints-and-home.md) and the
 `collection-*` decisions.
 
-## Blueprints and the home layout
+## Core layouts and the home layout
 
 There are no apps at runtime (decision `layouts-not-apps`): the pod's units are **layouts**, and every layout is a
 name in the pod's content-addressed construct (decisions `content-addressed-construct`, `one-layout-system`).
-Built-in layouts are blueprints, named `@core/<blueprint>` and moved to each deploy's files; MCP `list_layouts`
-answers `{layouts, blueprints}`. A layout can be a whole blueprint by reference, kept current by the pod:
+Built-in layouts are core layouts, named `@core/<layout>` and moved to each deploy's files; MCP `list_layouts`
+answers `{layouts, core layouts}`. A layout can be a whole core layout by reference, kept current by the pod:
 
 ```json
 {"title": "Events", "icon": "dashboard", "feeds": [["collections", "events"]],
  "layout": {"type": "core://Use", "ref": "@core/events"}}
 ```
 
-Name the blueprint's feeds (`list_layouts` shows them): they join home's. To change a blueprint, read it
+Name the core layout's feeds (`list_layouts` shows them): they join home's. To change a core layout, read it
 (`get_layout`) and write your own. Every pod's **`home`** layout is the screen clients open, and the only one: it
-is the user's whole interface, and it embeds or presents every other layout. It starts as the `shell` blueprint's
+is the user's whole interface, and it embeds or presents every other layout. It starts as the `shell` core layout's
 layout, a blank page with Notifications and Settings buttons, and the agent builds into it only what the user asks
 for: one layout is a `core://Layout` as home's one slot; with more, home lists them and each row pushes its layout
 (`action.navigation.open {"ref": "<layout id>", "presentation": "Push"}`); a `core://Layout` can also put a layout in
@@ -35,10 +35,10 @@ are Settings and the inbox. Snippets for each are in `describe_vocabulary`. Home
 **What the user sees is what home reaches** (decision [`trace-from-home`](decisions/trace-from-home.md)).
 `list_layouts` and `get_layout` give each layout `reached`: the shortest path from home, each step with the field
 that takes it, its presentation and its label (`home → (on_swipe_down, Overlay from top) → c-…`), or "not reached
-from home". A pod layout titled like a blueprint it doesn't reference gets `copy_of: "@core/<blueprint>"`: it is
-the blueprint as it was when copied, and doesn't follow it; a blueprint row lists its `copies`, the layouts that
+from home". A pod layout titled like a core layout it doesn't reference gets `copy_of: "@core/<layout>"`: it is
+the core layout as it was when copied, and doesn't follow it; a core layout row lists its `copies`, the layouts that
 `use` it (`used_by`) and its own `reached`. The pod's MCP instructions tell agents to change the element home
-actually reaches, not the blueprint it may have started from.
+actually reaches, not the core layout it may have started from.
 
 ## The pod's layouts
 
@@ -63,7 +63,7 @@ from home's feeds (a new home element without them), so home's scope holds no fe
   with `action.device` `sign_in` (`id`: a provider from `local:providers`; `value`: another server, e.g.
   `$form?.server`), e.g. a button shown while `signed_in` is false. The raw `action.auth.*` intents stay refused.
 - **Components.** `{"type": "core://Use", "ref": "@core/card", "args": {...}, "children": [...]}` uses a component:
-  one the server ships (`@core/card`, `@core/section_header`, `@core/workspace`, …), a blueprint or its part
+  one the server ships (`@core/card`, `@core/section_header`, `@core/workspace`, …), a core layout or its part
   (`@core/pixelfed/screen:post`), or the pod's own (`@me/<name>`), expanded by the app and kept current by its name
   ([layouts.md](layouts.md#porcelain-components)). `"component": "core:<name>"` is still accepted when written.
   `@core/` components are read-only: `copy_component` makes one of the user's own to change.
@@ -106,8 +106,28 @@ user's data (feeds, device data such as `local:notifications`, screens' data pat
 node's bounds, then tap, scroll or type into it (nothing is written; `target_uri` opens a screen directly, `item`
 and `entities` try a row with made-up data, `full_height` draws a long screen whole:
 [rendering.md](rendering.md#agent-previews-mcp)). `get_layout` takes `expanded: true`. Layouts are named `id` (`app` is still accepted).
-The server's MCP instructions tell Claude how to use them. After a change to the tools, the Claude connector needs
-"Refresh tools list" in its settings.
+After a change to the tools, the Claude connector needs "Refresh tools list" in its settings.
+
+**How an agent is taught to reuse** (decision [`element-roles-and-reuse`](decisions/element-roles-and-reuse.md)):
+
+- The MCP `instructions` are short on purpose (under 2,000 characters, held by a test; a client may show only the
+  start of long ones): what the pod is, a build procedure that begins with looking at what exists, and the names
+  of the guide's topics. `guide {topic}` has the detail: `navigation`, `pages`, `components`, `theme`, `actions`,
+  `jacks`, `sharing`, one per source (`collections`, `events`, `agents`), or `all`.
+- `find_elements {query?, role?, scope?, category?}` answers what exists to build with, by what it is for: the
+  pod's own layouts and components, the core ones and adopted ones, each with its role, scope, category, a line
+  saying when to use it, and its parameters. It answers from the `catalog.json` beside what ships.
+- Every layout and component write answers `warnings`: a hand-written piece that a component draws (with the
+  use to write instead), a piece written out three or more times, a row id written into a binding, fixed
+  colours, hand-made buttons, and what the write makes devices fetch when that is a lot (`refetch`).
+- `note_gap {what}` records what was missing when nothing fitted; `server pods gaps` reads it.
+- `use_kit {kit, collection?, title?}` starts from a kit: a core layout over a collection of a known shape. It
+  makes the collection (or checks one of that name has the kit's fields), has home bind its feed, and answers
+  `embed` and `open` with the kit's inputs bound, to put in home. `checklist` is the one kit so far.
+- `set_theme` also takes `scale`: `corner_s`, `corner_m`, `corner_l`, `pad_s`, `pad_m`, `pad_l` (dp) and
+  `title_weight`, which core components draw with, so a pod restyles them without copying them.
+- The `dates` source (feed `["dates", "days"]`) lists the days around today in the pod's time zone
+  (`dates:today`, `dates:this_week`, `dates:next_7`, …): a layout that lists days needs no collection of dates.
 
 ### Sharing with other users on the server
 
@@ -483,10 +503,18 @@ capped: tool names of at most 128 characters (longer ones are skipped), descript
 
 The **Events** app (app id `events`, `crates/source-events`) shows every upcoming event of the websites the user
 watches and notifies when one matches ("a show with Brass Lanterns at Improv Millbrook"). Its data is the system collection
-`events` (`source_id`, `title`, `start`, `end`, `venue`, `description`, `url`, `tickets_url`, `seen`): each website is a
-fetch filler, and each rule an alert on that filler. Claude adds and changes them with the Collections tools; the
-MCP instructions include the recipe. The app shows matches, sites with their health and alerts, a site's events, and
-an event with ticket and page links. The fields of `events` can't be renamed or removed.
+`events` (`source_id`, `title`, `start`, `end`, `venue`, `description`, `url`, `tickets_url`, `seen`, `going`): each
+website is a fetch filler, and each rule an alert on that filler. Claude adds and changes them with the Collections
+tools; the MCP instructions include the recipe. The app shows matches, sites with their health and alerts, a site's
+events, and an event with ticket and page links. The fields of `events` can't be renamed or removed.
+
+`seen` and `going` are the user's own toggles, which no filler writes. Opening an event from a list marks it seen
+(until then its row is tagged "New"); "I'm going" on an event's screen sets `going` (the row is tagged "Going", and a
+[calendar feed](#calendar-feeds) can list those events), and "Going ✓" takes it back. Matches and a site's events
+leave out an event once it started more than six hours ago. A pod made before `going` shipped gets the field when it
+next opens (`source_events::events::ensure`), unless its `events` already has a field of that name; rows read false
+until set. The layout is a `core://Page` built from the core components (`screen_scaffold`, `counted_list`,
+`item_row`, `titled_section`, `pill`, `card`), so a pod can show it by reference (`@core/events`) rather than a copy.
 
 The app replaced an earlier Watcher with its own tables (decisions [`watcher`](decisions/watcher.md),
 [`watcher-rules-per-site`](decisions/watcher-rules-per-site.md)); its app id was `watcher` until decision
@@ -496,6 +524,15 @@ Try it locally: `CONSTRUCT_FILL_PRIVATE_HOSTS=1 cargo run -p server`, serve an `
 
 ## Agents
 
-The **Agents** source and blueprint (`agents`, `crates/source-agents`) show Claude Code sessions an external agent runner
+The **Agents** source and core layout (`agents`, `crates/source-agents`) show Claude Code sessions an external agent runner
 runs, with stop, wake, start and schedule actions, notifications, and an opt-in Tasks collection (MCP tool
 `agents_link_tasks`): see [agents.md](agents.md).
+
+## Server health
+
+The **Server monitoring** source (`monitor`, `crates/source-monitor`) ships the core layout `server_health`: the
+server's status, its checks and every counter (feed `overview`, only in pods the operator turned monitoring on for)
+and the user's devices with the build each runs (feed `devices`, every pod). Nobody has to hand-write that screen:
+make a layout whose root is `{"type": "core://Use", "ref": "@core/server_health"}` with feeds
+`[["monitor","overview"],["monitor","devices"]]`, or open it by reference from a row or a button. Where monitoring is
+off it says so and shows the devices alone. See [server.md](server.md#monitoring).

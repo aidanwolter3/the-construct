@@ -1,0 +1,19 @@
+[package]
+name = "source-dates"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+# The `dates` data source (decision `element-roles-and-reuse`): the days
+# around today in the pod's time zone, for layouts that list days (an agenda,
+# a week strip, a day picker) without a collection of dates of their own.
+# No blueprints, tables or routes.
+
+[dependencies]
+pod-core = { path = "../pod-core" }
+protocol = { workspace = true }
+serde_json.workspace = true
+tokio = { version = "1", features = ["rt", "time"] }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }

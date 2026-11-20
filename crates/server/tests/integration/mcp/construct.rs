@@ -177,7 +177,7 @@ async fn a_pods_construct_is_edited_and_resealed() {
     .await;
     let changed = reachable(delta["objects"].as_object().unwrap());
     // The tile, the layouts that use it (B, A, home), nothing else: C and
-    // every server component and blueprint stay.
+    // every server component and core layout stay.
     assert_eq!(changed.len(), 4, "{changed:?}");
     let a_now = env.drawn(&a, &pod_code).await;
     assert!(
@@ -210,6 +210,465 @@ async fn a_pods_construct_is_edited_and_resealed() {
         .await;
     assert!(err, "{cyc}");
     assert_eq!(cyc["error"], "cycle", "{cyc}");
+}
+
+/// Re-seals in a row are one entry of a name's history, a write says what
+/// it makes a device fetch, and the listing says how big each layout is
+/// (decision `element-roles-and-reuse`).
+#[tokio::test]
+async fn reseals_are_one_history_entry_and_a_write_says_what_it_costs() {
+    let env = env().await;
+    let pod_code = env.pod("mine").await;
+    let access = env.connect(&pod_code).await;
+    let (a, _, _) = build(&env, &access).await;
+
+    let (_, before) = env.tool(&access, "get_layout", json!({"id": "home"})).await;
+    let v = before["version"].as_i64().unwrap();
+
+    // Three edits of a component home uses: home is re-sealed three times.
+    let mut last = Value::Null;
+    for mark in ["a ", "b ", "c "] {
+        let (err, d) = env
+            .tool(
+                &access,
+                "update_component",
+                json!({"name": "tile", "component": tile(mark)}),
+            )
+            .await;
+        assert!(!err, "{d}");
+        last = d;
+    }
+    // A client on a manifest fetches the tile and the new manifest; one
+    // sent home sealed, the tile and B, A and home above it.
+    assert_eq!(last["refetch"]["objects"], 2, "{last}");
+    assert_eq!(last["refetch"]["sealed"]["objects"], 4, "{last}");
+    // A component is not advised to use itself.
+    assert!(last.get("warnings").is_none(), "{last}");
+    assert!(
+        last["refetch"]["sealed"]["bytes"].as_i64().unwrap()
+            > last["refetch"]["bytes"].as_i64().unwrap(),
+        "{last}"
+    );
+
+    let (_, home) = env.tool(&access, "get_layout", json!({"id": "home"})).await;
+    assert_eq!(home["version"], v + 1, "one entry for the three re-seals");
+    let resealed: Vec<&Value> = home["history"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|h| {
+            h["note"]
+                .as_str()
+                .is_some_and(|n| n.starts_with("Re-sealed"))
+        })
+        .collect();
+    assert_eq!(resealed.len(), 1, "{home}");
+    assert!(home["layout"].to_string().contains("tile"), "{home}");
+    let drawn = env.drawn(&a, &pod_code).await;
+    assert!(
+        drawn["workspace"].to_string().contains("c Recipes"),
+        "{drawn}"
+    );
+
+    // An edit of home itself is a new entry, and the next re-seal one more.
+    let (err, d) = env
+        .tool(
+            &access,
+            "update_layout",
+            json!({"app": "home", "base_version": v + 1, "note": "Same again",
+                "json_patch": [{"op": "add", "path": "/root/spacing_dp", "value": 4}]}),
+        )
+        .await;
+    assert!(!err, "{d}");
+    assert_eq!(d["version"], v + 2, "{d}");
+    assert_eq!(d["refetch"]["objects"], 2, "home and the manifest: {d}");
+    let (err, d) = env
+        .tool(
+            &access,
+            "update_component",
+            json!({"name": "tile", "component": tile("d ")}),
+        )
+        .await;
+    assert!(!err, "{d}");
+    let (_, home) = env.tool(&access, "get_layout", json!({"id": "home"})).await;
+    assert_eq!(home["version"], v + 3, "{home}");
+
+    let (_, list) = env.tool(&access, "list_layouts", json!({})).await;
+    for l in list["layouts"].as_array().unwrap() {
+        assert!(l["bytes"].as_i64().unwrap() > 100, "{l}");
+    }
+}
+
+/// A client's view of a manifest: its objects, and names resolved through
+/// the manifest.
+struct ByManifest {
+    objects: std::collections::BTreeMap<String, std::sync::Arc<Value>>,
+    names: std::collections::BTreeMap<String, String>,
+}
+
+impl construct_elements::Objects for ByManifest {
+    fn object(&self, id: &str) -> Option<std::sync::Arc<Value>> {
+        self.objects.get(id).cloned()
+    }
+    fn resolve(&self, name: &str) -> Option<String> {
+        self.names.get(name).cloned()
+    }
+}
+
+/// The construct's root as a manifest (decision `element-roles-and-reuse`):
+/// a client that asks for it is told one map of names to elements, the
+/// elements hold references by name alone, and an edit costs the edited
+/// element and a new manifest instead of every element above it.
+#[tokio::test]
+async fn a_manifest_root_makes_an_edit_cost_one_element() {
+    let env = env().await;
+    let pod_code = env.pod("mine").await;
+    let access = env.connect(&pod_code).await;
+    let (a, b, c) = build(&env, &access).await;
+
+    let as_manifest = |path: String, body: Option<Value>| {
+        let (env, pod_code) = (&env, pod_code.clone());
+        async move {
+            let c = client();
+            let req = match body {
+                Some(b) => c.post(format!("{}{path}", env.url)).json(&b),
+                None => c.get(format!("{}{path}", env.url)),
+            };
+            req.bearer_auth(&pod_code)
+                .header(protocol::FEATURES_HEADER, protocol::features_header())
+                .header(protocol::ROOT_HEADER, protocol::ROOT_MANIFEST)
+                .send()
+                .await
+                .unwrap()
+                .json::<Value>()
+                .await
+                .unwrap()
+        }
+    };
+    let fetch = |have: Vec<String>, root: String| {
+        let as_manifest = &as_manifest;
+        async move {
+            let got = as_manifest(
+                "/v1/objects".into(),
+                Some(json!({"have": have, "want": [root]})),
+            )
+            .await;
+            got["objects"]
+                .as_object()
+                .unwrap()
+                .iter()
+                .map(|(k, v)| (k.clone(), std::sync::Arc::new(v.clone())))
+                .collect::<std::collections::BTreeMap<_, _>>()
+        }
+    };
+
+    // The root is a manifest naming home, the layouts, the pod's component
+    // and the core ones they use.
+    let root = as_manifest("/v1/construct".into(), None).await["root"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let objects = fetch(Vec::new(), root.clone()).await;
+    let (home, names) = construct_elements::manifest_names(&objects[&root]).expect("a manifest");
+    assert_eq!(home, "home");
+    for want in [
+        "home",
+        a.as_str(),
+        b.as_str(),
+        "@me/tile",
+        "@core/header_bar",
+    ] {
+        assert!(names.contains_key(want), "{want}: {names:?}");
+    }
+    // Every name's element came with it, holds no hash for a reference
+    // that follows its name, and carries no examples.
+    for (name, id) in &names {
+        let el = objects
+            .get(id)
+            .unwrap_or_else(|| panic!("{name} was not sent"));
+        assert!(el.get("examples").is_none(), "{name}");
+        construct_elements::refs::visit(&el["node"], &mut |r, _| {
+            assert!(
+                r.pin || r.el.is_none(),
+                "{name} holds a hash for {}",
+                r.name
+            );
+        });
+    }
+    // It draws what a sealed root draws.
+    let view = ByManifest {
+        objects: objects.clone(),
+        names: names.clone(),
+    };
+    let drawn = construct_elements::materialize(&view, &names[&a]).unwrap();
+    assert!(drawn.missing.is_empty(), "{:?}", drawn.missing);
+    assert_eq!(drawn.node, env.drawn(&a, &pod_code).await["workspace"]);
+    assert!(drawn.node.to_string().contains("Recipes"));
+    assert_eq!(drawn.edges[0].el.as_deref(), Some(names[&b].as_str()));
+
+    // One component edit. A sealed client is sent the component and every
+    // layout above it (four objects, the test before this one); this
+    // client, which has everything it had, is sent the component and the
+    // new manifest.
+    let (err, d) = env
+        .tool(
+            &access,
+            "update_component",
+            json!({"name": "tile", "component": tile("› ")}),
+        )
+        .await;
+    assert!(!err, "{d}");
+    let now = as_manifest("/v1/construct".into(), None).await["root"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert_ne!(now, root);
+    let delta = fetch(objects.keys().cloned().collect(), now.clone()).await;
+    assert_eq!(delta.len(), 2, "{:?}", delta.keys().collect::<Vec<_>>());
+    let (_, after) = construct_elements::manifest_names(&delta[&now]).unwrap();
+    assert_ne!(after["@me/tile"], names["@me/tile"]);
+    for same in ["home", a.as_str(), b.as_str()] {
+        assert_eq!(after[same], names[same], "{same} did not change");
+    }
+    let mut all = objects.clone();
+    all.extend(delta);
+    let view = ByManifest {
+        objects: all,
+        names: after.clone(),
+    };
+    let drawn = construct_elements::materialize(&view, &after[&a]).unwrap();
+    assert!(
+        drawn.node.to_string().contains("› Recipes"),
+        "{}",
+        drawn.node
+    );
+
+    // Its data is read by the element the manifest names.
+    let data = as_manifest(format!("/v1/construct/data/{}", after[&c]), None).await;
+    assert!(data["queries"]["collection:dishes"].is_array(), "{data}");
+
+    // A layout opened by name comes as a manifest of its own.
+    let named = as_manifest(format!("/v1/construct/names/{b}"), None).await;
+    let own = fetch(Vec::new(), named["el"].as_str().unwrap().to_owned()).await;
+    let (own_home, own_names) =
+        construct_elements::manifest_names(&own[named["el"].as_str().unwrap()]).unwrap();
+    assert_eq!(own_home, b);
+    assert!(own_names.contains_key("@me/tile") && !own_names.contains_key("home"));
+}
+
+/// The theme scale (feature `theme_scale`, decision
+/// `element-roles-and-reuse`): a pod sets the sizes core components draw
+/// with, the pod's own expansions use them, and the manifest carries them
+/// to devices as a new root.
+#[tokio::test]
+async fn the_theme_scale_restyles_core_components_without_copying_them() {
+    let env = env().await;
+    let pod_code = env.pod("mine").await;
+    let access = env.connect(&pod_code).await;
+    build(&env, &access).await;
+
+    let card = json!({"node": {"type": "core://Use", "ref": "@core/card", "children": [
+        {"type": "core://Use", "ref": "@core/pill", "args": {"text": "New"}}]}});
+    let corners = |x: &Value| {
+        (
+            x["expanded"]["corner_dp"].clone(),
+            x["expanded"]["content"]["children"][0]["corner_dp"].clone(),
+        )
+    };
+    // The defaults are what the components drew before there was a scale.
+    let (_, x) = env.tool(&access, "expand", card.clone()).await;
+    assert_eq!(corners(&x), (json!(14), json!(8)), "{x}");
+
+    let root_of = || {
+        let (env, pod_code) = (&env, pod_code.clone());
+        async move {
+            client()
+                .get(format!("{}/v1/construct", env.url))
+                .bearer_auth(&pod_code)
+                .header(protocol::FEATURES_HEADER, protocol::features_header())
+                .header(protocol::ROOT_HEADER, protocol::ROOT_MANIFEST)
+                .send()
+                .await
+                .unwrap()
+                .json::<Value>()
+                .await
+                .unwrap()["root"]
+                .as_str()
+                .unwrap()
+                .to_owned()
+        }
+    };
+    let before = root_of().await;
+
+    let (err, t) = env
+        .tool(
+            &access,
+            "set_theme",
+            json!({"scale": {"corner_m": 4, "corner_s": 2, "title_weight": "Bold"}}),
+        )
+        .await;
+    assert!(!err, "{t}");
+    assert_eq!(t["scale"]["corner_m"], 4, "{t}");
+    assert_eq!(
+        t["scale"]["corner_l"], 18,
+        "the rest keep their defaults: {t}"
+    );
+    let (_, x) = env.tool(&access, "expand", card.clone()).await;
+    assert_eq!(corners(&x), (json!(4), json!(2)), "{x}");
+    // A corner given on the use still wins.
+    let (_, own) = env
+        .tool(
+            &access,
+            "expand",
+            json!({"node": {"type": "core://Use", "ref": "@core/card", "args": {"corner": 20}}}),
+        )
+        .await;
+    assert_eq!(own["expanded"]["corner_dp"], 20, "{own}");
+
+    // A device is told: the manifest carries the scale, so its hash moved.
+    let after = root_of().await;
+    assert_ne!(after, before);
+    let (_, got) = post(
+        &env,
+        "/v1/objects",
+        &pod_code,
+        json!({"have": [], "want": [after]}),
+    )
+    .await;
+    assert_eq!(
+        got["objects"][&after]["scale"],
+        json!({"corner_m": 4, "corner_s": 2, "title_weight": "Bold"}),
+        "{got}"
+    );
+
+    // What isn't a scale value is refused, and null puts a default back.
+    for bad in [
+        json!({"corner_m": 200}),
+        json!({"corner_x": 4}),
+        json!({"title_weight": "Heavy"}),
+    ] {
+        let (err, no) = env.tool(&access, "set_theme", json!({"scale": bad})).await;
+        assert!(err, "{no}");
+        assert_eq!(no["error"], "invalid_theme", "{no}");
+    }
+    let (err, t) = env
+        .tool(&access, "set_theme", json!({"scale": {"corner_m": null}}))
+        .await;
+    assert!(!err, "{t}");
+    assert_eq!(t["scale"]["corner_m"], 14, "{t}");
+}
+
+/// Template directives and named slots (feature `component_templates`,
+/// decision `element-roles-and-reuse`): a component repeats over a list
+/// argument, a use fills named slots, and a client without the feature is
+/// sealed the newest entry of the name it can read.
+#[tokio::test]
+async fn a_component_repeats_and_takes_slots_and_old_clients_get_the_entry_they_read() {
+    let env = env().await;
+    let pod_code = env.pod("mine").await;
+    let access = env.connect(&pod_code).await;
+
+    // First a component any client reads, then the same name with an Each.
+    let plain = json!({"doc": "Steps of a recipe.",
+        "params": [{"name": "steps", "type": "json", "required": true, "doc": "The steps."}],
+        "template": {"type": "core://Text", "style": "Body", "value_expr": "Steps"},
+        "examples": [{"args": {"steps": ["Chop", "Fry"]}, "note": "two steps"}]});
+    let (err, d) = env
+        .tool(
+            &access,
+            "define_component",
+            json!({"name": "steps", "component": plain}),
+        )
+        .await;
+    assert!(!err, "{d}");
+    let (_, v1) = env
+        .tool(&access, "get_component", json!({"name": "@me/steps"}))
+        .await;
+    let v1 = v1["element"].as_str().unwrap().to_owned();
+    let mut each = plain.clone();
+    each["template"] = json!({"type": "core://Column", "children": [
+        {"type": "core://Each", "arg": "steps", "as": "step", "template":
+            {"type": "core://Text", "style": "Body", "value_expr": "$arg.step_index. $arg.step"}}]});
+    let (err, d) = env
+        .tool(
+            &access,
+            "update_component",
+            json!({"name": "steps", "component": each}),
+        )
+        .await;
+    assert!(!err, "{d}");
+    let (_, v2) = env
+        .tool(&access, "get_component", json!({"name": "@me/steps"}))
+        .await;
+    let v2 = v2["element"].as_str().unwrap().to_owned();
+    assert_ne!(v1, v2);
+
+    // A page on the core scaffold, its footer and header action in slots.
+    let (err, made) = env
+        .tool(&access, "create_layout", json!({"title": "Pancakes",
+            "layout": {"type": "core://Page", "title": "Pancakes", "root":
+                {"type": "core://Use", "ref": "@core/screen_scaffold", "args": {"title": "Pancakes"},
+                    "children": [{"type": "core://Use", "ref": "@me/steps", "args": {"steps": ["Whisk", "Rest", "Fry"]}}],
+                    "slots": {
+                        "actions": [{"type": "core://IconButton", "icon": "add", "content_description": "Add a step",
+                            "on_click": {"intent": "action.navigation.back"}}],
+                        "footer": [{"type": "core://Text", "style": "Caption", "value_expr": "Serves four"}]}}}}))
+        .await;
+    assert!(!err, "{made}");
+    let id = made["id"].as_str().unwrap().to_owned();
+    let drawn = env.drawn(&id, &pod_code).await["workspace"].to_string();
+    for want in [
+        "0. Whisk",
+        "2. Fry",
+        "Add a step",
+        "Serves four",
+        "Pancakes",
+    ] {
+        assert!(drawn.contains(want), "{want}: {drawn}");
+    }
+    for gone in ["core://Each", "core://Children", "core://Use", "\"slots\""] {
+        assert!(!drawn.contains(gone), "{gone}: {drawn}");
+    }
+
+    // What each kind of client is sent for the layout: this build the
+    // component with the Each, a build without the feature the entry before.
+    let objects_for = |features: String| {
+        let (env, id, pod_code) = (&env, id.clone(), pod_code.clone());
+        async move {
+            let c = client();
+            let el: Value = c
+                .get(format!("{}/v1/construct/names/{id}", env.url))
+                .bearer_auth(&pod_code)
+                .header(protocol::FEATURES_HEADER, &features)
+                .send()
+                .await
+                .unwrap()
+                .json()
+                .await
+                .unwrap();
+            let got: Value = c
+                .post(format!("{}/v1/objects", env.url))
+                .bearer_auth(&pod_code)
+                .header(protocol::FEATURES_HEADER, &features)
+                .json(&json!({"have": [], "want": [el["el"]]}))
+                .send()
+                .await
+                .unwrap()
+                .json()
+                .await
+                .unwrap();
+            reachable(got["objects"].as_object().unwrap())
+        }
+    };
+    let now = objects_for(protocol::features_header()).await;
+    assert!(now.contains(&v2) && !now.contains(&v1), "{now:?}");
+    let without: Vec<&str> = protocol::FEATURES
+        .iter()
+        .copied()
+        .filter(|f| *f != protocol::feature::COMPONENT_TEMPLATES)
+        .collect();
+    let old = objects_for(without.join(",")).await;
+    assert!(old.contains(&v1) && !old.contains(&v2), "{old:?}");
 }
 
 /// Bindings between layouts (issue #301): one layout reads its list from an
@@ -518,7 +977,7 @@ async fn a_change_set_edits_and_checks_the_constructs_layouts() {
 
 /// Decision `trace-from-home`: list_layouts and get_layout say how the user
 /// reaches each layout from home, and flag a layout copied from a
-/// blueprint, which doesn't follow it (a home whose swipe down opens its
+/// core layout, which doesn't follow it (a home whose swipe down opens its
 /// own copy of the inbox never shows a change to `@core/inbox`).
 #[tokio::test]
 async fn layouts_say_how_home_reaches_them_and_which_are_copies() {
@@ -582,7 +1041,7 @@ async fn layouts_say_how_home_reaches_them_and_which_are_copies() {
         row(&lone)
     );
     assert!(row(&lone).get("copy_of").is_none());
-    let inbox = all["blueprints"]
+    let inbox = all["core_layouts"]
         .as_array()
         .unwrap()
         .iter()
@@ -591,7 +1050,7 @@ async fn layouts_say_how_home_reaches_them_and_which_are_copies() {
         .clone();
     assert_eq!(inbox["copies"], json!([copy]));
     assert!(inbox.get("reached").is_none(), "{inbox}");
-    let settings = all["blueprints"]
+    let settings = all["core_layouts"]
         .as_array()
         .unwrap()
         .iter()
@@ -707,7 +1166,8 @@ fn every_shipped_components_examples_expand_to_valid_layouts() {
             let use_ = json!({"kind": "element", "node": {"type": "core://Use",
                 "ref": {"name": name, "el": el, "pin": true},
                 "args": ex.get("args").cloned().unwrap_or(json!({})),
-                "children": ex.get("children").cloned().unwrap_or(json!([]))}});
+                "children": ex.get("children").cloned().unwrap_or(json!([])),
+                "slots": ex.get("slots").cloned().unwrap_or(json!({}))}});
             let mut objects = core.objects.clone();
             let id = construct_elements::object_id(&use_);
             objects.insert(id.clone(), std::sync::Arc::new(use_));

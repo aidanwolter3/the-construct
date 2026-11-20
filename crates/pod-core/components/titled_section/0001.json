@@ -1,0 +1,82 @@
+{
+ "note": "A heading with its content and the space around them, from a pod's own layouts (decision element-roles-and-reuse)",
+ "component": {
+  "doc": "A section of a page: space above, a quiet heading (core:section_label), then its children (usually one core:grouped_list or a card). Put sections one after another in a core://Column with spacing 0; in a list's group header a section shows only while its group has rows.",
+  "params": [
+   {
+    "name": "text",
+    "type": "text",
+    "required": true,
+    "doc": "The heading (bindings allowed)."
+   },
+   {
+    "name": "space_above",
+    "type": "number",
+    "default": 14,
+    "doc": "Space above the heading in dp."
+   }
+  ],
+  "children": true,
+  "template": {
+   "type": "core://Column",
+   "spacing_dp": 0,
+   "children": [
+    {
+     "type": "core://Spacer",
+     "size_dp": "$arg.space_above"
+    },
+    {
+     "type": "core://Use",
+     "component": "core:section_label",
+     "args": {
+      "text": "$arg.text"
+     }
+    },
+    {
+     "type": "core://Spacer",
+     "size_dp": 8
+    },
+    {
+     "type": "core://Children"
+    }
+   ]
+  },
+  "examples": [
+   {
+    "args": {
+     "text": "In progress"
+    },
+    "children": [
+     {
+      "type": "core://Use",
+      "component": "core:grouped_list",
+      "children": [
+       {
+        "type": "core://Use",
+        "component": "core:item_row",
+        "args": {
+         "title": "Fix the feed"
+        }
+       }
+      ]
+     }
+    ],
+    "note": "a heading over a card of rows"
+   },
+   {
+    "args": {
+     "text": "$item.month_name",
+     "space_above": 8
+    },
+    "children": [
+     {
+      "type": "core://Text",
+      "style": "Body",
+      "value_expr": "$item.summary"
+     }
+    ],
+    "note": "a month from the item, tighter"
+   }
+  ]
+ }
+}

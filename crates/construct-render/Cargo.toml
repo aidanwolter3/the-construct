@@ -31,6 +31,10 @@ protocol = { workspace = true }
 serde.workspace = true
 serde_json.workspace = true
 taffy = { version = "0.15", default-features = false, features = ["std", "flexbox", "grid", "taffy_tree"] }
+# Grows the stack where building and drawing a layout recurse (one level per
+# nested node, with large frames): a deep page must not overflow a 1-2 MB
+# thread (decision `element-roles-and-reuse`).
+stacker = "0.1"
 cosmic-text = "0.19"
 # Icon paths (SVG path data) to coverage masks; already under cosmic-text.
 zeno = "0.3"

@@ -1,0 +1,93 @@
+{
+ "note": "A list in a card or its empty note, from one count (decision element-roles-and-reuse)",
+ "component": {
+  "doc": "A list that is either its rows in one card or a quiet line saying it is empty, from one count query: while the count has rows, its children (the core://List) in core:grouped_list; while it has none, the empty text. Give it the same query_key and where the list has, once.",
+  "params": [
+   {
+    "name": "count",
+    "type": "json",
+    "required": true,
+    "doc": "The list's {query_key, where?}: what decides between the rows and the empty text."
+   },
+   {
+    "name": "empty",
+    "type": "text",
+    "required": true,
+    "doc": "What it says while the list is empty."
+   },
+   {
+    "name": "corner",
+    "type": "number",
+    "default": 0,
+    "doc": "The card's corner radius in dp; 0 for the theme's corner_l."
+   }
+  ],
+  "children": true,
+  "template": {
+   "type": "core://Fragment",
+   "children": [
+    {
+     "type": "core://Conditional",
+     "count": "$arg.count",
+     "content": {
+      "type": "core://Use",
+      "component": "core:grouped_list",
+      "args": {
+       "corner": "$arg.corner"
+      },
+      "children": [
+       {
+        "type": "core://Children"
+       }
+      ]
+     }
+    },
+    {
+     "type": "core://Use",
+     "component": "core:muted_note",
+     "args": {
+      "text": "$arg.empty",
+      "count": "$arg.count"
+     }
+    }
+   ]
+  },
+  "examples": [
+   {
+    "args": {
+     "count": {
+      "query_key": "collection:tasks",
+      "where": [
+       {
+        "field": "done",
+        "equals": "false"
+       }
+      ]
+     },
+     "empty": "Nothing to do."
+    },
+    "children": [
+     {
+      "type": "core://List",
+      "query_key": "collection:tasks",
+      "where": [
+       {
+        "field": "done",
+        "equals": "false"
+       }
+      ],
+      "spacing_dp": 1,
+      "item_template": {
+       "type": "core://Use",
+       "component": "core:item_row",
+       "args": {
+        "title": "$item.title"
+       }
+      }
+     }
+    ],
+    "note": "open tasks, or a line saying there are none"
+   }
+  ]
+ }
+}

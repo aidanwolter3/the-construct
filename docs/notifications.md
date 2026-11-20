@@ -25,14 +25,14 @@ Only a source knows where its notifications come from. The pod, the engine and t
 the `layout` to present it in, which the pod fills in (decision `layouts-not-apps`, issue #337):
 
 1. with a `target_uri`, the first of the pod's layouts with a screen whose `route` matches it: the channel's own
-   layout (`channel_layout`, when it is a pod layout), then the pod's layout built on that blueprint, then every
+   layout (`channel_layout`, when it is a pod layout), then the pod's layout built on that core layout, then every
    other layout, home last (so an Agents run opens in whichever layout routes `agents://sessions/{id}`);
-2. otherwise the channel's own layout, else the pod's layout built on its blueprint: the first that uses it whole
-   (`core://Use` of `@core/<blueprint>`), else the first copy of it (`copy_of`, as `list_layouts` says);
-3. else the blueprint's id.
+2. otherwise the channel's own layout, else the pod's layout built on its core layout: the first that uses it whole
+   (`core://Use` of `@core/<layout>`), else the first copy of it (`copy_of`, as `list_layouts` says);
+3. else the core layout's id.
 
 The pod resolves it when it stores a notification, when `GET /v1/notifications` lists one without it, and each time
-the pod opens for rows whose `layout` is empty or names no layout of the pod (a blueprint, or a layout since deleted);
+the pod opens for rows whose `layout` is empty or names no layout of the pod (a core layout, or a layout since deleted);
 a row already naming a pod layout keeps it. The client presents that layout and opens the screen of it whose route
 matches `target_uri`, like any navigation, so it needs nothing of channels. Adding notifications to a new source
 needs source code only.
@@ -81,7 +81,7 @@ caps and can't be deleted. A pod's first open with them moves the core table's n
 ## Delivery
 
 1. Each notification is stored once per pod, keyed by `(layout, dedupe_key)`, so repeated polls are harmless (a
-   row the user deleted isn't stored again). `layout` is the layout (or blueprint) whose channel it is: on the wire
+   row the user deleted isn't stored again). `layout` is the layout (or core layout) whose channel it is: on the wire
    a channel's `layout` and a notification's `channel_layout` (`app_id` before decision
    [`one-layout-system`](decisions/one-layout-system.md)); a notification's `layout` is the layout it opens.
 2. **Channel switches are the pod's**, one per channel for every device. A switched-off channel's notifications
@@ -105,11 +105,18 @@ in a row. Limits per pod: 20 devices, 60 deliveries a minute. The routes are in 
   caches the newest 200 notifications (for builds whose inbox reads `local:notifications`), the channels and the
   unread counts, so the badge works offline; marking read is optimistic and queued. A listener fires only for live
   arrivals, so one notification never alerts twice. Sign-out unregisters the device and clears the cache.
-- **Layouts:** the `inbox` blueprint (file 0006) binds `collection:notifications`: the notifications whose channel
-  is on and whose event still matches its alert, grouped by day, and below them, in a section that starts closed (`@core/collapsible`), those read more than
-  a day ago (`where` `older_than`, feature `list_where_age`). Tapping one marks its row read and presents its layout
-  and target (`open_notification` with the row's URI). Builds before `list_where_age` get file 0004 (device data).
-  The `settings` blueprint lists the channels with switches (for the whole pod). Any layout can open them, bind the
+- **Layouts:** the `inbox` core layout (file 0007, a `core://Page` built from the core components: decision
+  [`element-roles-and-reuse`](decisions/element-roles-and-reuse.md)) binds `collection:notifications` and shows the
+  notifications whose channel is on and whose event still matches its alert in three groups, each a card of rows
+  (`@core/grouped_list`): **New** (unread, with the unread count), **Earlier** (read within the last day) and, in a
+  section that starts closed (`@core/collapsible`), **Older** (read more than a day ago: `where` `older_than`,
+  feature `list_where_age`). A row has a bell (`@core/tinted_icon`, in the accent while unread and muted once read:
+  channels carry no icon of their own yet), its channel, day and time, the title, the body on at most two lines, and
+  a dot while unread. Tapping one marks its row read and presents its layout and target (`open_notification` with
+  the row's URI). "Mark all read" is in the header while something is unread, and "Manage channels" under the
+  groups opens Settings as a panel. Builds that can't draw it get file 0006 (the same lists grouped by day), and
+  builds before `list_where_age` file 0004 (device data).
+  The `settings` core layout lists the channels with switches (for the whole pod). Any layout can open them, bind the
   collections for its own view of notifications, or bind `${local://inbox#unread}` for a badge.
 - **Android:** asks for `POST_NOTIFICATIONS` once; layouts can ask again with the
   `action.device` command `request_notification_permission`, which shows the system prompt, or the app's notification

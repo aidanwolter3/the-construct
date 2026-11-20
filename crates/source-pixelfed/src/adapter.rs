@@ -6,7 +6,7 @@ use std::sync::{Arc, RwLock};
 use axum::Router;
 use pod_core::layouts::LayoutSource;
 use pod_core::{
-    BlueprintInfo, BoxFuture, EntityDoc, FeedSpec, Hydration, PathSpec, Pod, PollCtx, PollOutcome,
+    BoxFuture, CoreLayoutInfo, EntityDoc, FeedSpec, Hydration, PathSpec, Pod, PollCtx, PollOutcome,
     RequestCtx, Session, SignInAccount, SignInProvider, Source, SourceManifest,
 };
 use protocol::NotificationChannel;
@@ -22,7 +22,7 @@ pub const SIGN_IN: &str = "pixelfed";
 /// and routes.
 pub const NAME: &str = "pixelfed";
 
-/// The home timeline feed (`BlueprintInfo::feeds` entry `("pixelfed", "home")`).
+/// The home timeline feed (`CoreLayoutInfo::feeds` entry `("pixelfed", "home")`).
 pub const HOME_FEED: &str = "home";
 
 /// What layouts may use of Pixelfed (decision
@@ -239,11 +239,15 @@ impl PixelfedAdapter {
 }
 
 impl Source for PixelfedAdapter {
+    fn element_catalog(&self) -> &'static str {
+        include_str!("../catalog.json")
+    }
+
     fn name(&self) -> &'static str {
         NAME
     }
 
-    fn blueprints(&self) -> Vec<BlueprintInfo> {
+    fn core_layouts(&self) -> Vec<CoreLayoutInfo> {
         vec![apps::PIXELFED]
     }
 
@@ -377,7 +381,7 @@ impl Source for PixelfedAdapter {
             id: JACK,
             title: "Pixelfed",
             summary: "A Pixelfed account: the photo feed, likes, bookmarks, comments, posting and \
-                      Pixelfed notifications (the pixelfed blueprint and source).",
+                      Pixelfed notifications (the pixelfed core layout and source).",
             kind: pod_core::jacks::JackKind::Account {
                 how: "sign in from Settings → Sign-ins (or the Pixelfed layout's Sign in button); \
                       sign out there too",
