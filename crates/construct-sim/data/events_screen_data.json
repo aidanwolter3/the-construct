@@ -1,112 +1,56 @@
 {
-  "/v1/collections/events/fillers/s3nxebzbjjp": {
+  "/v1/collections/events/fillers/s6q66ypcx6t": {
     "entities": {
-      "collections://events/fillers/s3nxebzbjjp": {
+      "collections://events/fillers/s6q66ypcx6t": {
         "alert_count": 0,
         "alerts_text": "No alerts yet",
         "can_check": true,
         "detail": "the site answered 404 Not Found (1 failed fills in a row)",
         "failing": true,
-        "id": "s3nxebzbjjp",
+        "id": "s6q66ypcx6t",
         "kind": "fetch",
         "refreshing": false,
         "state": "failing",
         "title": "Laugh Loft",
-        "uri": "collections://events/fillers/s3nxebzbjjp",
+        "uri": "collections://events/fillers/s6q66ypcx6t",
         "url": "https://improvclub.example/missing.ics"
       }
     },
     "queries": {
-      "collection:events:filler:s3nxebzbjjp": [
-        "collections://events/fillers/s3nxebzbjjp"
+      "collection:events:filler:s6q66ypcx6t": [
+        "collections://events/fillers/s6q66ypcx6t"
       ],
-      "collection:events:filler:s3nxebzbjjp:alerts": [],
-      "collection:events:filler:s3nxebzbjjp:rows": []
+      "collection:events:filler:s6q66ypcx6t:alerts": [],
+      "collection:events:filler:s6q66ypcx6t:rows": []
     }
   },
-  "/v1/collections/events/fillers/spor5e4ku76": {
+  "/v1/collections/events/fillers/soqtnpahzc5": {
     "entities": {
-      "collections://events/alerts/a4kuzf75v64": {
-        "filler_id": "spor5e4ku76",
-        "id": "a4kuzf75v64",
+      "collections://events/alerts/anmi5rcttat": {
+        "filler_id": "soqtnpahzc5",
+        "id": "anmi5rcttat",
         "name": "Brass Lanterns",
         "summary": "\"Brass Lanterns\" · not \"class\"",
-        "uri": "collections://events/alerts/a4kuzf75v64"
+        "uri": "collections://events/alerts/anmi5rcttat"
       },
-      "collections://events/fillers/spor5e4ku76": {
+      "collections://events/fillers/soqtnpahzc5": {
         "alert_count": 1,
         "alerts_text": "Watching for Brass Lanterns",
         "can_check": true,
         "detail": "4 items · filled just now",
         "failing": false,
-        "id": "spor5e4ku76",
+        "id": "soqtnpahzc5",
         "kind": "fetch",
         "refreshing": false,
         "state": "ok",
         "title": "Improv Club",
-        "uri": "collections://events/fillers/spor5e4ku76",
+        "uri": "collections://events/fillers/soqtnpahzc5",
         "url": "https://improvclub.example/cal.ics"
       },
-      "collections://events/r2gkdcoxghp": {
+      "collections://events/rebgxku5z7q": {
         "alert_matched": false,
         "alert_names": "",
-        "created_at": "2026-11-20T18:37:16Z",
-        "deleted": false,
-        "description": "Taught by Brass Lanterns",
-        "end": null,
-        "end_date": "",
-        "end_day": "",
-        "end_text": "",
-        "end_time": "",
-        "filler_id": "spor5e4ku76",
-        "filler_title": "Improv Club",
-        "going": false,
-        "id": "r2gkdcoxghp",
-        "seen": false,
-        "source_id": "cl1",
-        "start": "2099-11-07T10:00-07:00",
-        "start_date": "2099-11-07",
-        "start_day": "Sat Nov 7",
-        "start_text": "Sat Nov 7 · 10 AM",
-        "start_time": "10 AM",
-        "tickets_url": null,
-        "title": "Intro to Improv (class)",
-        "updated_at": "2026-11-20T18:37:16Z",
-        "url": null,
-        "venue": "The Back Room"
-      },
-      "collections://events/r7exmgmla56": {
-        "alert_matched": true,
-        "alert_names": "Brass Lanterns",
-        "created_at": "2026-11-20T18:37:16Z",
-        "deleted": false,
-        "description": "Lineup: Brass Lanterns, Teacup Riot, Open Tab",
-        "end": null,
-        "end_date": "",
-        "end_day": "",
-        "end_text": "",
-        "end_time": "",
-        "filler_id": "spor5e4ku76",
-        "filler_title": "Improv Club",
-        "going": false,
-        "id": "r7exmgmla56",
-        "seen": false,
-        "source_id": "bc1",
-        "start": "2099-11-06T19:30-07:00",
-        "start_date": "2099-11-06",
-        "start_day": "Fri Nov 6",
-        "start_text": "Fri Nov 6 · 7:30 PM",
-        "start_time": "7:30 PM",
-        "tickets_url": null,
-        "title": "Friday Night Improv",
-        "updated_at": "2026-11-20T18:37:16Z",
-        "url": null,
-        "venue": "The Back Room"
-      },
-      "collections://events/rrgdqik24ga": {
-        "alert_matched": false,
-        "alert_names": "",
-        "created_at": "2026-11-20T18:37:16Z",
+        "created_at": "2026-11-20T21:31:16Z",
         "deleted": false,
         "description": "Open jam",
         "end": null,
@@ -114,10 +58,10 @@
         "end_day": "",
         "end_text": "",
         "end_time": "",
-        "filler_id": "spor5e4ku76",
+        "filler_id": "soqtnpahzc5",
         "filler_title": "Improv Club",
         "going": false,
-        "id": "rrgdqik24ga",
+        "id": "rebgxku5z7q",
         "seen": false,
         "source_id": "jm1",
         "start": "2099-11-07T19:00-07:00",
@@ -127,60 +71,14 @@
         "start_time": "7 PM",
         "tickets_url": null,
         "title": "Saturday Jam",
-        "updated_at": "2026-11-20T18:37:16Z",
+        "updated_at": "2026-11-20T21:31:16Z",
         "url": null,
         "venue": "The Back Room"
       },
-      "collections://events/rz6gcayjint": {
-        "alert_matched": true,
-        "alert_names": "Brass Lanterns",
-        "created_at": "2026-11-20T18:37:16Z",
-        "deleted": false,
-        "description": "An hour of Brass Lanterns",
-        "end": null,
-        "end_date": "",
-        "end_day": "",
-        "end_text": "",
-        "end_time": "",
-        "filler_id": "spor5e4ku76",
-        "filler_title": "Improv Club",
-        "going": false,
-        "id": "rz6gcayjint",
-        "seen": true,
-        "source_id": "bc2",
-        "start": "2099-11-13T20:00-07:00",
-        "start_date": "2099-11-13",
-        "start_day": "Fri Nov 13",
-        "start_text": "Fri Nov 13 · 8 PM",
-        "start_time": "8 PM",
-        "tickets_url": null,
-        "title": "Brass Lanterns: Live!",
-        "updated_at": "2026-11-20T18:37:18Z",
-        "url": null,
-        "venue": "The Back Room"
-      }
-    },
-    "queries": {
-      "collection:events:filler:spor5e4ku76": [
-        "collections://events/fillers/spor5e4ku76"
-      ],
-      "collection:events:filler:spor5e4ku76:alerts": [
-        "collections://events/alerts/a4kuzf75v64"
-      ],
-      "collection:events:filler:spor5e4ku76:rows": [
-        "collections://events/r7exmgmla56",
-        "collections://events/r2gkdcoxghp",
-        "collections://events/rrgdqik24ga",
-        "collections://events/rz6gcayjint"
-      ]
-    }
-  },
-  "/v1/collections/events/row?id=r2gkdcoxghp": {
-    "entities": {
-      "collections://events/r2gkdcoxghp": {
+      "collections://events/rfreow4vze7": {
         "alert_matched": false,
         "alert_names": "",
-        "created_at": "2026-11-20T18:37:16Z",
+        "created_at": "2026-11-20T21:31:16Z",
         "deleted": false,
         "description": "Taught by Brass Lanterns",
         "end": null,
@@ -188,10 +86,10 @@
         "end_day": "",
         "end_text": "",
         "end_time": "",
-        "filler_id": "spor5e4ku76",
+        "filler_id": "soqtnpahzc5",
         "filler_title": "Improv Club",
         "going": false,
-        "id": "r2gkdcoxghp",
+        "id": "rfreow4vze7",
         "seen": false,
         "source_id": "cl1",
         "start": "2099-11-07T10:00-07:00",
@@ -201,97 +99,14 @@
         "start_time": "10 AM",
         "tickets_url": null,
         "title": "Intro to Improv (class)",
-        "updated_at": "2026-11-20T18:37:16Z",
+        "updated_at": "2026-11-20T21:31:16Z",
         "url": null,
         "venue": "The Back Room"
-      }
-    },
-    "queries": {
-      "collection:events:row:r2gkdcoxghp": [
-        "collections://events/r2gkdcoxghp"
-      ]
-    }
-  },
-  "/v1/collections/events/row?id=r7exmgmla56": {
-    "entities": {
-      "collections://events/r7exmgmla56": {
+      },
+      "collections://events/rgatv3xbvgo": {
         "alert_matched": true,
         "alert_names": "Brass Lanterns",
-        "created_at": "2026-11-20T18:37:16Z",
-        "deleted": false,
-        "description": "Lineup: Brass Lanterns, Teacup Riot, Open Tab",
-        "end": null,
-        "end_date": "",
-        "end_day": "",
-        "end_text": "",
-        "end_time": "",
-        "filler_id": "spor5e4ku76",
-        "filler_title": "Improv Club",
-        "going": false,
-        "id": "r7exmgmla56",
-        "seen": false,
-        "source_id": "bc1",
-        "start": "2099-11-06T19:30-07:00",
-        "start_date": "2099-11-06",
-        "start_day": "Fri Nov 6",
-        "start_text": "Fri Nov 6 · 7:30 PM",
-        "start_time": "7:30 PM",
-        "tickets_url": null,
-        "title": "Friday Night Improv",
-        "updated_at": "2026-11-20T18:37:16Z",
-        "url": null,
-        "venue": "The Back Room"
-      }
-    },
-    "queries": {
-      "collection:events:row:r7exmgmla56": [
-        "collections://events/r7exmgmla56"
-      ]
-    }
-  },
-  "/v1/collections/events/row?id=rrgdqik24ga": {
-    "entities": {
-      "collections://events/rrgdqik24ga": {
-        "alert_matched": false,
-        "alert_names": "",
-        "created_at": "2026-11-20T18:37:16Z",
-        "deleted": false,
-        "description": "Open jam",
-        "end": null,
-        "end_date": "",
-        "end_day": "",
-        "end_text": "",
-        "end_time": "",
-        "filler_id": "spor5e4ku76",
-        "filler_title": "Improv Club",
-        "going": false,
-        "id": "rrgdqik24ga",
-        "seen": false,
-        "source_id": "jm1",
-        "start": "2099-11-07T19:00-07:00",
-        "start_date": "2099-11-07",
-        "start_day": "Sat Nov 7",
-        "start_text": "Sat Nov 7 · 7 PM",
-        "start_time": "7 PM",
-        "tickets_url": null,
-        "title": "Saturday Jam",
-        "updated_at": "2026-11-20T18:37:16Z",
-        "url": null,
-        "venue": "The Back Room"
-      }
-    },
-    "queries": {
-      "collection:events:row:rrgdqik24ga": [
-        "collections://events/rrgdqik24ga"
-      ]
-    }
-  },
-  "/v1/collections/events/row?id=rz6gcayjint": {
-    "entities": {
-      "collections://events/rz6gcayjint": {
-        "alert_matched": true,
-        "alert_names": "Brass Lanterns",
-        "created_at": "2026-11-20T18:37:16Z",
+        "created_at": "2026-11-20T21:31:16Z",
         "deleted": false,
         "description": "An hour of Brass Lanterns",
         "end": null,
@@ -299,10 +114,10 @@
         "end_day": "",
         "end_text": "",
         "end_time": "",
-        "filler_id": "spor5e4ku76",
+        "filler_id": "soqtnpahzc5",
         "filler_title": "Improv Club",
         "going": false,
-        "id": "rz6gcayjint",
+        "id": "rgatv3xbvgo",
         "seen": true,
         "source_id": "bc2",
         "start": "2099-11-13T20:00-07:00",
@@ -312,14 +127,199 @@
         "start_time": "8 PM",
         "tickets_url": null,
         "title": "Brass Lanterns: Live!",
-        "updated_at": "2026-11-20T18:37:18Z",
+        "updated_at": "2026-11-20T21:31:18Z",
+        "url": null,
+        "venue": "The Back Room"
+      },
+      "collections://events/ry4t3dxsd7h": {
+        "alert_matched": true,
+        "alert_names": "Brass Lanterns",
+        "created_at": "2026-11-20T21:31:16Z",
+        "deleted": false,
+        "description": "Lineup: Brass Lanterns, Teacup Riot, Open Tab",
+        "end": null,
+        "end_date": "",
+        "end_day": "",
+        "end_text": "",
+        "end_time": "",
+        "filler_id": "soqtnpahzc5",
+        "filler_title": "Improv Club",
+        "going": false,
+        "id": "ry4t3dxsd7h",
+        "seen": false,
+        "source_id": "bc1",
+        "start": "2099-11-06T19:30-07:00",
+        "start_date": "2099-11-06",
+        "start_day": "Fri Nov 6",
+        "start_text": "Fri Nov 6 · 7:30 PM",
+        "start_time": "7:30 PM",
+        "tickets_url": null,
+        "title": "Friday Night Improv",
+        "updated_at": "2026-11-20T21:31:16Z",
         "url": null,
         "venue": "The Back Room"
       }
     },
     "queries": {
-      "collection:events:row:rz6gcayjint": [
-        "collections://events/rz6gcayjint"
+      "collection:events:filler:soqtnpahzc5": [
+        "collections://events/fillers/soqtnpahzc5"
+      ],
+      "collection:events:filler:soqtnpahzc5:alerts": [
+        "collections://events/alerts/anmi5rcttat"
+      ],
+      "collection:events:filler:soqtnpahzc5:rows": [
+        "collections://events/ry4t3dxsd7h",
+        "collections://events/rfreow4vze7",
+        "collections://events/rebgxku5z7q",
+        "collections://events/rgatv3xbvgo"
+      ]
+    }
+  },
+  "/v1/collections/events/row?id=rebgxku5z7q": {
+    "entities": {
+      "collections://events/rebgxku5z7q": {
+        "alert_matched": false,
+        "alert_names": "",
+        "created_at": "2026-11-20T21:31:16Z",
+        "deleted": false,
+        "description": "Open jam",
+        "end": null,
+        "end_date": "",
+        "end_day": "",
+        "end_text": "",
+        "end_time": "",
+        "filler_id": "soqtnpahzc5",
+        "filler_title": "Improv Club",
+        "going": false,
+        "id": "rebgxku5z7q",
+        "seen": false,
+        "source_id": "jm1",
+        "start": "2099-11-07T19:00-07:00",
+        "start_date": "2099-11-07",
+        "start_day": "Sat Nov 7",
+        "start_text": "Sat Nov 7 · 7 PM",
+        "start_time": "7 PM",
+        "tickets_url": null,
+        "title": "Saturday Jam",
+        "updated_at": "2026-11-20T21:31:16Z",
+        "url": null,
+        "venue": "The Back Room"
+      }
+    },
+    "queries": {
+      "collection:events:row:rebgxku5z7q": [
+        "collections://events/rebgxku5z7q"
+      ]
+    }
+  },
+  "/v1/collections/events/row?id=rfreow4vze7": {
+    "entities": {
+      "collections://events/rfreow4vze7": {
+        "alert_matched": false,
+        "alert_names": "",
+        "created_at": "2026-11-20T21:31:16Z",
+        "deleted": false,
+        "description": "Taught by Brass Lanterns",
+        "end": null,
+        "end_date": "",
+        "end_day": "",
+        "end_text": "",
+        "end_time": "",
+        "filler_id": "soqtnpahzc5",
+        "filler_title": "Improv Club",
+        "going": false,
+        "id": "rfreow4vze7",
+        "seen": false,
+        "source_id": "cl1",
+        "start": "2099-11-07T10:00-07:00",
+        "start_date": "2099-11-07",
+        "start_day": "Sat Nov 7",
+        "start_text": "Sat Nov 7 · 10 AM",
+        "start_time": "10 AM",
+        "tickets_url": null,
+        "title": "Intro to Improv (class)",
+        "updated_at": "2026-11-20T21:31:16Z",
+        "url": null,
+        "venue": "The Back Room"
+      }
+    },
+    "queries": {
+      "collection:events:row:rfreow4vze7": [
+        "collections://events/rfreow4vze7"
+      ]
+    }
+  },
+  "/v1/collections/events/row?id=rgatv3xbvgo": {
+    "entities": {
+      "collections://events/rgatv3xbvgo": {
+        "alert_matched": true,
+        "alert_names": "Brass Lanterns",
+        "created_at": "2026-11-20T21:31:16Z",
+        "deleted": false,
+        "description": "An hour of Brass Lanterns",
+        "end": null,
+        "end_date": "",
+        "end_day": "",
+        "end_text": "",
+        "end_time": "",
+        "filler_id": "soqtnpahzc5",
+        "filler_title": "Improv Club",
+        "going": false,
+        "id": "rgatv3xbvgo",
+        "seen": true,
+        "source_id": "bc2",
+        "start": "2099-11-13T20:00-07:00",
+        "start_date": "2099-11-13",
+        "start_day": "Fri Nov 13",
+        "start_text": "Fri Nov 13 · 8 PM",
+        "start_time": "8 PM",
+        "tickets_url": null,
+        "title": "Brass Lanterns: Live!",
+        "updated_at": "2026-11-20T21:31:18Z",
+        "url": null,
+        "venue": "The Back Room"
+      }
+    },
+    "queries": {
+      "collection:events:row:rgatv3xbvgo": [
+        "collections://events/rgatv3xbvgo"
+      ]
+    }
+  },
+  "/v1/collections/events/row?id=ry4t3dxsd7h": {
+    "entities": {
+      "collections://events/ry4t3dxsd7h": {
+        "alert_matched": true,
+        "alert_names": "Brass Lanterns",
+        "created_at": "2026-11-20T21:31:16Z",
+        "deleted": false,
+        "description": "Lineup: Brass Lanterns, Teacup Riot, Open Tab",
+        "end": null,
+        "end_date": "",
+        "end_day": "",
+        "end_text": "",
+        "end_time": "",
+        "filler_id": "soqtnpahzc5",
+        "filler_title": "Improv Club",
+        "going": false,
+        "id": "ry4t3dxsd7h",
+        "seen": false,
+        "source_id": "bc1",
+        "start": "2099-11-06T19:30-07:00",
+        "start_date": "2099-11-06",
+        "start_day": "Fri Nov 6",
+        "start_text": "Fri Nov 6 · 7:30 PM",
+        "start_time": "7:30 PM",
+        "tickets_url": null,
+        "title": "Friday Night Improv",
+        "updated_at": "2026-11-20T21:31:16Z",
+        "url": null,
+        "venue": "The Back Room"
+      }
+    },
+    "queries": {
+      "collection:events:row:ry4t3dxsd7h": [
+        "collections://events/ry4t3dxsd7h"
       ]
     }
   }
