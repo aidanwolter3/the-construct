@@ -25,9 +25,9 @@ Decision:
   ... the server renders no pages`). It still serves everything else. Off Fly, the old fallback stands.
 - **Fly's API socket.** At startup a root server checks `/.fly/api`; if other users may connect to it, it takes
   that away (root keeps it) and logs it.
-- **Metrics on the 6PN address only.** `deploy/fly/pod.toml` binds `CONSTRUCT_METRICS_ADDR` to
-  `fly-local-6pn:9091` (Fly's name for the machine's private address in `/etc/hosts`), not `[::]:9091`, so the
-  metrics no longer listen on loopback or other interfaces. Fly still scrapes them over the 6PN.
+- **Metrics stay on `[::]:9091`.** The fence already refuses the browser's user there. Binding them to the 6PN
+  address only (`fly-local-6pn:9091` in `deploy/fly/pod.toml`) would also keep them off loopback for every other
+  local user; it is a deploy change, left for its own PR.
 - The log lines stay: `browser private network block: on` (now naming the proxy) or a `... off` warning.
 
 Consequences: no layout vocabulary and no client build. The server itself still runs as root (volumes mount

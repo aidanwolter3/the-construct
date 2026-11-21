@@ -95,7 +95,7 @@ settings are logged at startup.
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `CONSTRUCT_METRICS_ADDR` | unset | Serve Prometheus `GET /metrics` on this separate address (a host name is resolved). Staging uses `fly-local-6pn:9091`: the machine's private address only, where Fly scrapes it. |
+| `CONSTRUCT_METRICS_ADDR` | unset | Serve Prometheus `GET /metrics` on this separate address. |
 | `CONSTRUCT_MONITOR_AUTH_FAILURES_PER_HOUR` | `20` | The monitoring source warns above this many wrong pod codes and unknown tokens an hour. |
 | `CONSTRUCT_MONITOR_LLM_TOKENS_PER_DAY` | `1000000` | It warns above this many model tokens a day: uncached input, cache writes and output. Tokens read from the prompt cache (a twentieth of the price) are counted (`direction="cache_read"`) and shown, but not toward this. |
 | `CONSTRUCT_MONITOR_TEMP_PODS_PERCENT` | `80` | It warns once live temporary pods reach this share of `CONSTRUCT_TEMP_POD_MAX` (40 of 50), before new ones are refused. |
@@ -294,8 +294,8 @@ and as the browser's user the server's port and the metrics port are refused, wh
 ```bash
 # The image has no curl; bash's /dev/tcp opens the connection.
 setpriv --reuid=65534 --regid=65534 --clear-groups bash -c 'echo > /dev/tcp/127.0.0.1/8080'      # refused
-setpriv --reuid=65534 --regid=65534 --clear-groups bash -c 'echo > /dev/tcp/fly-local-6pn/9091'  # refused
-bash -c 'echo > /dev/tcp/127.0.0.1/8080 && echo > /dev/tcp/fly-local-6pn/9091'                   # connects
+setpriv --reuid=65534 --regid=65534 --clear-groups bash -c 'echo > /dev/tcp/127.0.0.1/9091'       # refused
+bash -c 'echo > /dev/tcp/127.0.0.1/8080 && echo > /dev/tcp/127.0.0.1/9091'                       # connects
 ```
 
 Set secrets with `flyctl secrets set`, never in the file: at least `CONSTRUCT_SECRETS_KEY`, and

@@ -51,7 +51,7 @@
 //!   keep their default).
 //! - `CONSTRUCT_METRICS_ADDR`: serve `GET /metrics` (Prometheus text) on
 //!   this address, apart from the public one (decision `server-monitoring`). Unset:
-//!   off. On Fly, `fly-local-6pn:9091`: the machine's private (6PN) address only.
+//!   off. On Fly, `[::]:9091`, which only Fly's private network reaches.
 //! - `PIXELFED_*`: see `PixelfedConfig::from_env` and docs/server.md.
 //!
 //! A pod's layout files are synced into its database when the pod is first

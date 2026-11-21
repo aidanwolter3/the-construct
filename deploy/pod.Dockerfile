@@ -63,8 +63,8 @@ RUN scripts/web_build.sh /web
 
 FROM ${RUNTIME_IMAGE}
 # Chromium (and fonts, so pages lay out as they do for people) for rendered fillers; CA certificates for it;
-# nftables, with which the server fences the browser's user's network at startup (decision
-# `browser-network-fence`; without it the server logs a warning and serves anyway).
+# nftables, with which the server keeps the browser's user off Fly's private network at startup (decision
+# `browser-private-network`; without it the server logs a warning and serves anyway).
 # Chromium loads untrusted pages, so it must stay current (decision `browser-sandbox`): a builder reuses this
 # layer until its inputs change, and CHROMIUM_REFRESH is one. CI's deploy sets it to the ISO week
 # (ci.yml, which also deploys weekly), so this layer is rebuilt at least once a week with Debian's latest

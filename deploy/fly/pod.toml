@@ -63,10 +63,9 @@ primary_region = "dfw"
   CONSTRUCT_POD_STORAGE_QUOTA_BYTES = "805306368"
   CONSTRUCT_MIN_FREE_DISK_BYTES = "104857600"
   # GET /metrics (Prometheus) on a port of its own, outside [http_service], so
-  # only Fly's private network reaches it (bound to the machine's 6PN address, not [::]: decision
-  # `browser-network-fence`); Fly scrapes it into its Grafana
+  # only Fly's private network reaches it; Fly scrapes it into its Grafana
   # (fly-metrics.net). Decision `server-monitoring`.
-  CONSTRUCT_METRICS_ADDR = "fly-local-6pn:9091"
+  CONSTRUCT_METRICS_ADDR = "[::]:9091"
 
 [metrics]
   port = 9091
