@@ -204,13 +204,6 @@ const MIGRATIONS: &[Step] = &[
      UPDATE credentials SET last_used_at = CAST(strftime('%s', 'now') AS INTEGER)
          WHERE kind = 'mcp';",
     ),
-<<<<<<< HEAD
-    // 12 (decision `link-tokens-hashed`): share, public and calendar tokens
-    // are kept as their SHA-256, so a backup holds no working link. The
-    // links already given out keep working: lookups hash what they are
-    // given.
-    Step::rust("hash_link_tokens", hash_link_tokens),
-=======
     // 12: a browser's (`web`) credential expires with its session; rows
     // from before get the default lifetime from their creation.
     Step::sql(
@@ -219,7 +212,11 @@ const MIGRATIONS: &[Step] = &[
      UPDATE credentials SET expires_at = created_at + 30 * 24 * 3600
          WHERE kind = 'web';",
     ),
->>>>>>> origin/main
+    // 13 (decision `link-tokens-hashed`): share, public and calendar tokens
+    // are kept as their SHA-256, so a backup holds no working link. The
+    // links already given out keep working: lookups hash what they are
+    // given.
+    Step::rust("hash_link_tokens", hash_link_tokens),
 ];
 
 pub(crate) fn hash_link_tokens(tx: &rusqlite::Transaction<'_>) -> rusqlite::Result<()> {
