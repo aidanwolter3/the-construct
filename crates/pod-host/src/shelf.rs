@@ -6,7 +6,8 @@
 use std::sync::Arc;
 
 use pod_core::construct::share::{
-    CalendarCopy, NewVersion, PublicCopy, Publication, Shelf, ShelfError, VISIBILITY_LINK, new_link,
+    CalendarCopy, NewVersion, PublicCopy, Publication, Shelf, ShelfError, VISIBILITY_LINK,
+    is_token_id, new_link, token_id,
 };
 use pod_core::public_copy::{MAX_LIVE, MAX_REVOKED};
 use pod_core::util::now_secs;
@@ -94,7 +95,8 @@ fn row(r: &rusqlite::Row<'_>) -> rusqlite::Result<Publication> {
     })
 }
 
-fn by_link(conn: &Connection, link: &str) -> rusqlite::Result<Option<Publication>> {
+/// A publication by its stored id (the hash of its link).
+fn by_id(conn: &Connection, link: &str) -> rusqlite::Result<Option<Publication>> {
     conn.query_row(
         &format!(
             "SELECT {COLUMNS} FROM publications p
@@ -105,6 +107,39 @@ fn by_link(conn: &Connection, link: &str) -> rusqlite::Result<Option<Publication
         row,
     )
     .optional()
+}
+
+/// Matches a row of the table aliased `c` whose pod is still live: a
+/// temporary pod's pages and feeds stop answering the moment it expires,
+/// not when the sweep deletes it.
+const LIVE_POD: &str = "EXISTS (SELECT 1 FROM pods WHERE id = c.owner_pod \
+    AND (expires_at IS NULL OR expires_at > strftime('%s', 'now')))";
+
+/// The stored id of a token the pod names: the token's hash, or, when the
+/// pod names a row of its own by the id the list gave, that id. Also the
+/// token to show (a new one) so a caller can hand it out once.
+fn owned_id(
+    conn: &Connection,
+    table: &str,
+    column: &str,
+    named: &str,
+    pod: &str,
+) -> Result<(String, Option<String>), ShelfError> {
+    if is_token_id(named) {
+        let mine: bool = conn
+            .query_row(
+                &format!(
+                    "SELECT EXISTS (SELECT 1 FROM {table} WHERE {column} = ?1 AND owner_pod = ?2)"
+                ),
+                params![named, pod],
+                |r| r.get(0),
+            )
+            .map_err(err)?;
+        if mine {
+            return Ok((named.to_owned(), None));
+        }
+    }
+    Ok((token_id(named), Some(named.to_owned())))
 }
 
 /// Delete the shelf's objects no publication holds.
@@ -196,6 +231,7 @@ impl Shelf for HostShelf {
         let mut conn = self.store.conn();
         let tx = conn.transaction().map_err(err)?;
         let now = now_secs();
+        let mut shown: Option<String> = None;
         let live: Option<(String, i64, String)> = tx
             .query_row(
                 "SELECT link, version, owner_pod FROM publications WHERE name = ?1 AND revoked_at IS NULL",
@@ -240,7 +276,10 @@ impl Shelf for HostShelf {
                 link
             }
             None => {
-                let link = new_link();
+                // Only its hash is kept; the caller gets the link itself.
+                let raw = new_link();
+                let link = token_id(&raw);
+                shown = Some(raw);
                 tx.execute(
                     "INSERT INTO publications (link, name, owner_pod, source, visibility, version,
                          root, interface, approved, keep_shared, created_at, updated_at)
@@ -276,10 +315,14 @@ impl Shelf for HostShelf {
             .map_err(err)?;
         }
         collect_garbage(&tx).map_err(err)?;
-        let p = by_link(&tx, &link)
+        let mut p = by_id(&tx, &link)
             .map_err(err)?
             .ok_or_else(|| ShelfError::Store("the publication went missing".into()))?;
         tx.commit().map_err(err)?;
+        // A new link is shown once, here; a later version carries only its id.
+        if let Some(raw) = shown {
+            p.link = raw;
+        }
         Ok(p)
     }
 
@@ -295,7 +338,7 @@ impl Shelf for HostShelf {
     }
 
     fn by_link(&self, link: &str) -> Result<Option<Publication>, ShelfError> {
-        by_link(&self.store.conn(), link).map_err(err)
+        by_id(&self.store.conn(), &token_id(link)).map_err(err)
     }
 
     fn of_pod(&self, pod: &str) -> Result<Vec<Publication>, ShelfError> {
@@ -313,7 +356,7 @@ impl Shelf for HostShelf {
 
     fn objects(&self, link: &str) -> Result<Vec<(String, Value, String)>, ShelfError> {
         let conn = self.store.conn();
-        let live = by_link(&conn, link)
+        let live = by_id(&conn, &token_id(link))
             .map_err(err)?
             .is_some_and(|p| p.revoked_at.is_none());
         if !live {
@@ -326,7 +369,7 @@ impl Shelf for HostShelf {
             )
             .map_err(err)?;
         let rows = stmt
-            .query_map([link], |r| {
+            .query_map([token_id(link)], |r| {
                 Ok((
                     r.get::<_, String>(0)?,
                     r.get::<_, Vec<u8>>(1)?,
@@ -366,7 +409,7 @@ impl Shelf for HostShelf {
         tx.execute("DELETE FROM publication_objects WHERE link = ?1", [&link])
             .map_err(err)?;
         collect_garbage(&tx).map_err(err)?;
-        let p = by_link(&tx, &link).map_err(err)?;
+        let p = by_id(&tx, &link).map_err(err)?;
         tx.commit().map_err(err)?;
         Ok(p)
     }
@@ -385,6 +428,10 @@ impl Shelf for HostShelf {
         let now = now_secs();
         let rows = serde_json::to_string(&c.rows).unwrap_or_default();
         let copy = c.copy.to_string();
+        // The pod names a link it already has by its id (from the list) and
+        // a new one by the link itself, of which only the hash is kept.
+        let (id, shown) = owned_id(&tx, "public_copies", "link", &c.link, &c.owner_pod)?;
+        let c = PublicCopy { link: id, ..c };
         if let Some(slug) = &c.slug {
             let taken: bool = tx
                 .query_row(
@@ -435,7 +482,10 @@ impl Shelf for HostShelf {
             )
             .map_err(err)?;
         tx.commit().map_err(err)?;
-        Ok(stored)
+        Ok(PublicCopy {
+            link: shown.unwrap_or(stored.link.clone()),
+            ..stored
+        })
     }
 
     fn public_of_pod(&self, pod: &str) -> Result<Vec<PublicCopy>, ShelfError> {
@@ -458,9 +508,10 @@ impl Shelf for HostShelf {
             .conn()
             .query_row(
                 &format!(
-                    "SELECT {PUBLIC_COLUMNS} FROM public_copies WHERE link = ?1 AND revoked_at IS NULL"
+                    "SELECT {PUBLIC_COLUMNS} FROM public_copies c WHERE link = ?1 AND revoked_at IS NULL
+                         AND {LIVE_POD}"
                 ),
-                [link],
+                [token_id(link)],
                 public_row,
             )
             .optional()
@@ -472,9 +523,9 @@ impl Shelf for HostShelf {
             .conn()
             .query_row(
                 &format!(
-                    "SELECT {PUBLIC_COLUMNS} FROM public_copies
+                    "SELECT {PUBLIC_COLUMNS} FROM public_copies c
                      WHERE owner_pod = (SELECT pod_id FROM handles WHERE handle = ?1)
-                       AND slug = ?2 AND revoked_at IS NULL"
+                       AND slug = ?2 AND revoked_at IS NULL AND {LIVE_POD}"
                 ),
                 [handle, slug],
                 public_row,
@@ -486,6 +537,8 @@ impl Shelf for HostShelf {
     fn revoke_public(&self, pod: &str, link: &str) -> Result<bool, ShelfError> {
         let mut conn = self.store.conn();
         let tx = conn.transaction().map_err(err)?;
+        let (link, _) = owned_id(&tx, "public_copies", "link", link, pod)?;
+        let link = link.as_str();
         let n = tx
             .execute(
                 "UPDATE public_copies SET revoked_at = ?3, updated_at = ?3, copy = 'null',
@@ -516,7 +569,7 @@ impl Shelf for HostShelf {
                  VALUES (?1, ?2, ?3, ?4, ?5, ?5)
                  ON CONFLICT(token) DO UPDATE SET name = ?3, ics = ?4, updated_at = ?5
                  WHERE owner_pod = ?2 AND revoked_at IS NULL",
-                params![c.token, c.owner_pod, c.name, c.ics, now_secs()],
+                params![token_id(&c.token), c.owner_pod, c.name, c.ics, now_secs()],
             )
             .map_err(err)?;
         Ok(())
@@ -526,12 +579,14 @@ impl Shelf for HostShelf {
         self.store
             .conn()
             .query_row(
-                "SELECT token, owner_pod, name, ics, created_at, updated_at, revoked_at
-                 FROM calendar_feeds WHERE token = ?1 AND revoked_at IS NULL",
-                [token],
+                &format!(
+                    "SELECT token, owner_pod, name, ics, created_at, updated_at, revoked_at
+                 FROM calendar_feeds c WHERE token = ?1 AND revoked_at IS NULL AND {LIVE_POD}"
+                ),
+                [token_id(token)],
                 |r| {
                     Ok(CalendarCopy {
-                        token: r.get(0)?,
+                        token: token.to_owned(),
                         owner_pod: r.get(1)?,
                         name: r.get(2)?,
                         ics: r.get(3)?,
@@ -552,7 +607,7 @@ impl Shelf for HostShelf {
             .execute(
                 "UPDATE calendar_feeds SET revoked_at = ?3, updated_at = ?3, ics = ''
                  WHERE token = ?1 AND owner_pod = ?2 AND revoked_at IS NULL",
-                params![token, pod, now_secs()],
+                params![token_id(token), pod, now_secs()],
             )
             .map_err(err)?;
         Ok(n > 0)
@@ -615,7 +670,10 @@ mod tests {
         let p = s.publish(version("one")).unwrap();
         assert_eq!(p.version, 1);
         let q = s.publish(version("two")).unwrap();
-        assert_eq!((q.link.as_str(), q.version), (p.link.as_str(), 2));
+        assert_eq!(
+            (q.link.as_str(), q.version),
+            (token_id(&p.link).as_str(), 2)
+        );
         let objs = s.objects(&p.link).unwrap();
         assert_eq!(objs.len(), 1);
         assert_eq!(objs[0].0, q.root);
@@ -631,7 +689,7 @@ mod tests {
         assert!(s.objects(&p.link).unwrap().is_empty());
         // Published again: a new link.
         let again = s.publish(version("three")).unwrap();
-        assert_ne!(again.link, p.link);
+        assert_ne!(token_id(&again.link), token_id(&p.link));
         assert_eq!(again.version, 1);
         assert_eq!(s.of_pod("a").unwrap().len(), 2);
     }
@@ -753,7 +811,7 @@ mod tests {
         assert_eq!(listed.len(), MAX_REVOKED);
         assert!(listed.iter().all(|c| c.revoked_at.is_some()));
         // The newest are the ones kept.
-        let last = format!("pub-{:032}", 2000 + MAX_REVOKED + 4);
+        let last = token_id(&format!("pub-{:032}", 2000 + MAX_REVOKED + 4));
         assert!(listed.iter().any(|c| c.link == last));
         assert_eq!(shelf.public_of_pod("b").unwrap().len(), 1);
     }
@@ -818,7 +876,7 @@ mod tests {
             .unwrap();
         assert_eq!(
             shelf.public_by_slug("ann", "meals").unwrap().unwrap().link,
-            first.link
+            token_id(&first.link)
         );
         assert!(shelf.public_by_slug("bob", "meals").unwrap().is_none());
         assert_eq!(
@@ -829,5 +887,184 @@ mod tests {
         assert!(shelf.revoke_public("a", &first.link).unwrap());
         assert!(shelf.public_by_slug("ann", "meals").unwrap().is_none());
         shelf.set_handle("a", "anna").unwrap();
+    }
+
+    fn public(link: &str, slug: Option<&str>) -> PublicCopy {
+        PublicCopy {
+            link: link.into(),
+            owner_pod: "a".into(),
+            layout: "home".into(),
+            rows: vec![],
+            title: "T".into(),
+            copy: json!({"node": {}}),
+            slug: slug.map(str::to_owned),
+            created_at: 0,
+            updated_at: 0,
+            revoked_at: None,
+        }
+    }
+
+    /// Decision `link-tokens-hashed`: the host keeps only hashes, looks
+    /// links up by their hash, and the owner's list names a link by its id.
+    #[test]
+    fn tokens_are_kept_hashed_and_looked_up_by_hash() {
+        let (shelf, store) = shelf();
+        let shelf = shelf.with_public_links(true);
+        let raw = "pub-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        let made = shelf.put_public(public(raw, None)).unwrap();
+        assert_eq!(made.link, raw, "the new link is returned once");
+        let id = token_id(raw);
+        assert_eq!(shelf.public_by_link(raw).unwrap().unwrap().link, id);
+        // The id is no link: it opens nothing.
+        assert!(shelf.public_by_link(&id).unwrap().is_none());
+        let listed = shelf.public_of_pod("a").unwrap();
+        assert_eq!(listed[0].link, id);
+        // The list's id updates the same copy, and revokes it, for its owner only.
+        let again = shelf.put_public(public(&id, None)).unwrap();
+        assert_eq!(again.link, id);
+        assert_eq!(shelf.public_of_pod("a").unwrap().len(), 1);
+        assert!(!shelf.revoke_public("b", &id).unwrap());
+        assert!(shelf.revoke_public("a", &id).unwrap());
+        assert!(shelf.public_by_link(raw).unwrap().is_none());
+
+        let t = "cal-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        shelf
+            .put_calendar(CalendarCopy {
+                token: t.into(),
+                owner_pod: "a".into(),
+                name: "mine".into(),
+                ics: "x".into(),
+                created_at: 0,
+                updated_at: 0,
+                revoked_at: None,
+            })
+            .unwrap();
+        assert_eq!(shelf.calendar_by_token(t).unwrap().unwrap().token, t);
+        assert!(shelf.calendar_by_token(&token_id(t)).unwrap().is_none());
+
+        let p = shelf.publish(version("x")).unwrap();
+        assert!(p.link.starts_with("share-"), "{}", p.link);
+        assert_eq!(
+            shelf.by_link(&p.link).unwrap().unwrap().link,
+            token_id(&p.link)
+        );
+        assert_eq!(shelf.objects(&p.link).unwrap().len(), 1);
+        assert!(shelf.by_link(&token_id(&p.link)).unwrap().is_none());
+        let next = shelf.publish(version("y")).unwrap();
+        assert_eq!(
+            next.link,
+            token_id(&p.link),
+            "a later version has no link to show"
+        );
+
+        // Nothing in the database is a working token.
+        let conn = store.conn();
+        for (table, column) in [
+            ("publications", "link"),
+            ("publication_objects", "link"),
+            ("public_copies", "link"),
+            ("calendar_feeds", "token"),
+        ] {
+            let stored: Vec<String> = conn
+                .prepare(&format!("SELECT {column} FROM {table}"))
+                .unwrap()
+                .query_map([], |r| r.get(0))
+                .unwrap()
+                .collect::<Result<_, _>>()
+                .unwrap();
+            assert!(!stored.is_empty(), "{table}");
+            assert!(stored.iter().all(|t| is_token_id(t)), "{table}: {stored:?}");
+        }
+    }
+
+    /// Links made before the hash keep working once the migration hashes them.
+    #[test]
+    fn the_migration_keeps_existing_links_working() {
+        let (shelf, store) = shelf();
+        let shelf = shelf.with_public_links(true);
+        let old = "pub-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+        let share = "share-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+        let feed = "cal-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+        {
+            let conn = store.conn();
+            conn.execute(
+                "INSERT INTO public_copies (link, owner_pod, layout, rows, title, copy, created_at, updated_at)
+                 VALUES (?1, 'a', 'home', '[]', 'T', '{}', 1, 1)",
+                [old],
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO calendar_feeds (token, owner_pod, name, ics, created_at, updated_at)
+                 VALUES (?1, 'a', 'm', 'x', 1, 1)",
+                [feed],
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO publications (link, name, owner_pod, source, visibility, version, root,
+                     interface, approved, created_at, updated_at)
+                 VALUES (?1, '@a/x', 'a', 'x', 'link', 1, 'r', '{}', '{}', 1, 1)",
+                [share],
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO publication_objects (link, hash) VALUES (?1, 'h')",
+                [share],
+            )
+            .unwrap();
+        }
+        {
+            let mut conn = store.conn();
+            let tx = conn.transaction().unwrap();
+            crate::db::hash_link_tokens(&tx).unwrap();
+            tx.commit().unwrap();
+        }
+        assert!(shelf.public_by_link(old).unwrap().is_some());
+        assert!(shelf.calendar_by_token(feed).unwrap().is_some());
+        assert!(shelf.by_link(share).unwrap().is_some());
+        let n: i64 = store
+            .conn()
+            .query_row(
+                "SELECT COUNT(*) FROM publication_objects WHERE link = ?1",
+                [token_id(share)],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(n, 1);
+    }
+
+    /// An expired temporary pod's pages and feeds stop answering before the
+    /// sweep deletes it.
+    #[test]
+    fn an_expired_pod_s_links_answer_nothing() {
+        let (shelf, store) = shelf();
+        let shelf = shelf.with_public_links(true);
+        let raw = "pub-cccccccccccccccccccccccccccccccc";
+        shelf.put_public(public(raw, Some("pg"))).unwrap();
+        shelf.set_handle("a", "ann").unwrap();
+        let t = "cal-cccccccccccccccccccccccccccccccc";
+        shelf
+            .put_calendar(CalendarCopy {
+                token: t.into(),
+                owner_pod: "a".into(),
+                name: "m".into(),
+                ics: "x".into(),
+                created_at: 0,
+                updated_at: 0,
+                revoked_at: None,
+            })
+            .unwrap();
+        assert!(shelf.public_by_link(raw).unwrap().is_some());
+        assert!(shelf.public_by_slug("ann", "pg").unwrap().is_some());
+        assert!(shelf.calendar_by_token(t).unwrap().is_some());
+        store
+            .conn()
+            .execute(
+                "UPDATE pods SET expires_at = ?1 WHERE id = 'a'",
+                [now_secs() - 1],
+            )
+            .unwrap();
+        assert!(shelf.public_by_link(raw).unwrap().is_none());
+        assert!(shelf.public_by_slug("ann", "pg").unwrap().is_none());
+        assert!(shelf.calendar_by_token(t).unwrap().is_none());
     }
 }

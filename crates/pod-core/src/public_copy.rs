@@ -1390,13 +1390,21 @@ fn answer(c: &PublicCopy, base: Option<&str>, handle: Option<&str>) -> Value {
     let ask = Ask::from_key(&c.layout, &c.rows);
     let mut out = json!({
         "link": c.link,
-        "url": url(format!("/s/{}", c.link)),
         "layout": c.layout,
         "rows": ask.rows,
         "title": c.title,
         "updated_at": c.updated_at,
         "revoked": c.revoked_at.is_some(),
     });
+    // The host keeps only a hash of a link (decision `link-tokens-hashed`):
+    // its url is known when the link is made, not afterwards.
+    if is_link(&c.link) {
+        out["url"] = json!(url(format!("/s/{}", c.link)));
+    } else if c.revoked_at.is_none() {
+        out["url_note"] = json!(
+            "the url was shown when this link was made and the server doesn't keep it; unshare_publicly takes this link id, and sharing again makes a new url"
+        );
+    }
     if let Some(i) = ask.item {
         out["item"] = json!(i);
     }

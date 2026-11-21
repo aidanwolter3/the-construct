@@ -844,11 +844,12 @@ async fn media_proxy_neutralizes_non_media_content_types() {
         media_hosts: vec![origin.url.trim_start_matches("http://").to_owned()],
         ..PixelfedConfig::default()
     });
+    let secret = state.store().media_secret().unwrap();
     let urls: Vec<(String, String)> = ["page", "img.svg", "img.jpg"]
         .iter()
         .map(|p| {
             let url = format!("{}/{p}", origin.url);
-            (server::pixelfed::media_key(&url), url)
+            (server::pixelfed::media_key(&secret, &url), url)
         })
         .collect();
     state
@@ -1503,11 +1504,12 @@ async fn media_proxy_ssrf_guards() {
         media_hosts: vec![origin.url.trim_start_matches("http://").to_owned()],
         ..PixelfedConfig::default()
     });
+    let secret = state.store().media_secret().unwrap();
     let mut urls: Vec<(String, String)> = ["img.jpg", "redir-ok", "redir-out", "big", "big-stream"]
         .iter()
         .map(|p| format!("{}/{p}", origin.url))
         .chain([out_url.clone()])
-        .map(|u| (server::pixelfed::media_key(&u), u))
+        .map(|u| (server::pixelfed::media_key(&secret, &u), u))
         .collect();
     // Keys stored for a disallowed URL (e.g. by an older pod) are refused too.
     state

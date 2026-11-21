@@ -1835,7 +1835,13 @@ mod web {
         let mut confirm = ask.clone();
         confirm["confirm"] = review["review_id"].clone();
         let again = tool(&env, &key, "share_publicly", confirm).await;
-        assert_eq!(again["link"], link.as_str(), "{again}");
+        // The host kept only a hash of the link: the same link, by its id.
+        assert_eq!(
+            again["link"],
+            server::construct::share::token_id(&link).as_str(),
+            "{again}"
+        );
+        assert!(again.get("url").is_none(), "{again}");
         assert!(view().await.contains("Pho"));
         add("Soba").await;
         let mut shown = false;
@@ -1877,7 +1883,8 @@ mod web {
             json!({ "layout": layout, "confirm": review["review_id"] }),
         )
         .await;
-        assert_eq!(again["link"], link.as_str(), "{again}");
+        let id = server::construct::share::token_id(&link);
+        assert_eq!(again["link"], id.as_str(), "{again}");
         assert!(view().await.contains("birthday"));
 
         // Revoked: gone at once.

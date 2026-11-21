@@ -128,6 +128,11 @@ a page saying sharing is paused, and the copies stay stored. A page address with
 Pods make and revoke them with the MCP tools `share_publicly`, `list_public_links` and `unshare_publicly`
 ([custom-apps.md](custom-apps.md#public-links-for-people-without-a-pod)).
 
+The host keeps only a SHA-256 of each share, public and calendar token (decision
+[`link-tokens-hashed`](decisions/link-tokens-hashed.md)), so a backup holds no working link. A public or share link
+is shown when it is made; later lists name it by its `id`, which `unshare_publicly` accepts. A page or feed of an
+expired temporary pod answers 404 at once.
+
 **Calendar feeds** (decision [`ical-feeds`](decisions/ical-feeds.md)), under the same settings: a calendar app
 subscribes to the text the pod last rendered, never reaching the pod. With `CONSTRUCT_PUBLIC_WEB` unset it answers
 503 and the feeds stay stored.
