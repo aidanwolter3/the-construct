@@ -287,6 +287,16 @@ pub enum UiNode {
         /// item in its row), and drawn when the list is empty too.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         trailing: Option<Box<UiNode>>,
+        /// Feature `list_merge` (decision `merged-lists`): the entities of
+        /// these queries too, after `query_key`'s, each once; `where` and
+        /// the rest apply to them all (an agenda of workouts and events).
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        merge_query_keys: Vec<String>,
+        /// Feature `list_merge`: the items in the order of this field's
+        /// value as text (`2026-11-22T09:00` before `2026-11-22T14:00`),
+        /// equal or missing values keeping their order.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        sort_by: Option<String>,
     },
     /// An image from a URL (a literal or a binding such as
     /// `"$item.avatar_url"`). `size_dp` makes it a square of that size;

@@ -1422,6 +1422,12 @@ impl<'a> Caps<'a> {
                     let here = format!("{at}/{}", escape_pointer(k));
                     match (k.as_str(), child) {
                         ("query_key", Value::String(q)) => self.query_key(&here, q)?,
+                        ("merge_query_keys", Value::Array(keys)) => {
+                            for (i, q) in keys.iter().enumerate() {
+                                let Some(q) = q.as_str() else { continue };
+                                self.query_key(&format!("{here}/{i}"), q)?;
+                            }
+                        }
                         // Checked with their intent above.
                         ("endpoint" | "path" | "entity_uri", Value::String(_))
                             if map.contains_key("intent") => {}

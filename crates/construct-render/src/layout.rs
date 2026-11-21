@@ -2460,18 +2460,30 @@ impl<'i> Build<'_, 'i> {
                 stack,
                 min_column_dp,
                 trailing,
+                merge_query_keys,
+                sort_by,
             } => {
-                let Some(all) = ctx.query(query_key) else {
+                let Some(first) = ctx.query(query_key) else {
                     // Not loaded yet: nothing, as the app shows while loading.
                     return Some(self.push(Style::default(), Vec::new(), Paint::None, None, false));
                 };
+                // Feature `list_merge`: the other queries' entities after
+                // these, each once (a query not loaded yet adds nothing).
+                let mut all: Vec<&String> = first.iter().collect();
+                for k in merge_query_keys {
+                    for u in ctx.query(k).into_iter().flatten() {
+                        if !all.contains(&u) {
+                            all.push(u);
+                        }
+                    }
+                }
                 // Each condition's value once (it binds the form, not the
                 // item); a blank one matches everything.
                 let wants = Where::of(where_.as_ref().map_or(&[][..], |w| w.conditions()), &ctx);
                 let (now, zone) = (self.now, self.zone.clone());
                 let mut next = None;
                 let mut uris: Vec<&String> = all
-                    .iter()
+                    .into_iter()
                     .filter(|u| {
                         ctx.entity(u).is_some_and(|e| {
                             wants
@@ -2481,6 +2493,16 @@ impl<'i> Build<'_, 'i> {
                     })
                     .collect();
                 self.changes_at = earliest(self.changes_at, next);
+                if let Some(field) = sort_by {
+                    // Stable: equal or missing values keep the queries' order.
+                    let key = |u: &&String| {
+                        ctx.entity(u)
+                            .and_then(|e| e.get(field))
+                            .map(render)
+                            .unwrap_or_default()
+                    };
+                    uris.sort_by_cached_key(key);
+                }
                 let mut no_match = None;
                 if let Some(f) = filter {
                     let q = fold(&ctx.text(&f.value));

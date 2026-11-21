@@ -181,5 +181,38 @@ fn headers_only_gives_one_header_per_distinct_value() {
     assert!(
         scene.find_text("Card 0").is_none(),
         "headers only, no items"
+/// Feature `list_merge`: a list over two queries, each entity once, the
+/// list's `where` applied to both, in the order of a field's value.
+#[test]
+fn a_merged_list_interleaves_its_queries_by_a_field() {
+    let root: UiNode = serde_json::from_value(json!({
+        "type": "core://List", "query_key": "workouts", "merge_query_keys": ["events", "workouts"],
+        "sort_by": "starts_at",
+        "where": [{"field": "day", "equals": "2026-11-22"}],
+        "item_template": {"type": "core://Text", "style": "Body", "value_expr": "$item.title"}}))
+    .unwrap();
+    let data: DataBundle = serde_json::from_value(json!({
+        "entities": {
+            "w://1": {"title": "Hike", "day": "2026-11-22", "starts_at": "2026-11-22T14:00"},
+            "w://2": {"title": "Swim", "day": "2026-11-22", "starts_at": "2026-11-22T09:00"},
+            "w://3": {"title": "Class", "day": "2026-11-23", "starts_at": "2026-11-23T08:00"},
+            "e://1": {"title": "Masters", "day": "2026-11-22", "starts_at": "2026-11-22T09:00"},
+            "e://2": {"title": "Greg", "day": "2026-11-22", "starts_at": "2026-11-22T11:00"}},
+        "queries": {"workouts": ["w://1", "w://2", "w://3"], "events": ["e://2", "e://1"]}}))
+    .unwrap();
+    let scene = build(&root, &data, &BTreeMap::new(), at(390.0));
+    let titles: Vec<&str> = scene
+        .semantics
+        .iter()
+        .filter_map(|n| n.text_content.as_deref())
+        .collect();
+    // Swim before Masters: equal times keep the queries' order.
+    assert_eq!(titles, ["Swim", "Masters", "Greg", "Hike"]);
+    assert_eq!(
+        protocol::required_features(&root)
+            .into_iter()
+            .filter(|f| f.starts_with("list"))
+            .collect::<Vec<_>>(),
+        ["list", "list_merge", "list_where", "list_where_all"]
     );
 }
