@@ -212,6 +212,7 @@ pub fn sign_ins_bundle(v: &Value) -> DataBundle {
             &mut out,
             &uri,
             json!({ "id": id, "title": p["title"],
+                "server": p["intent"]["instance_url"].as_str().unwrap_or(""),
                 "custom_server": !p["server_placeholder"].is_null(),
                 "server_placeholder": p["server_placeholder"].as_str().unwrap_or("") }),
         );
