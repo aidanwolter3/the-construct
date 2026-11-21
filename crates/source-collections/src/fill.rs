@@ -1663,7 +1663,7 @@ async fn run_fetch(
         } else {
             adapter.fetch_client()
         };
-        web_extract::hosts::fetch(
+        let fetched = web_extract::hosts::fetch(
             &hosts(pod),
             client,
             &u,
@@ -1671,7 +1671,22 @@ async fn run_fetch(
             lm.as_deref(),
             &resolved.headers,
         )
-        .await
+        .await?;
+        // A host that echoes the request's headers would put the secret
+        // into the rows (and a model's prompt): scrub it before anything is
+        // extracted, as the preview does (issue #460).
+        Ok(match fetched {
+            web_extract::fetch::Fetched::Body {
+                bytes,
+                etag,
+                last_modified,
+            } if !resolved.sensitive.is_empty() => web_extract::fetch::Fetched::Body {
+                bytes: redact(&String::from_utf8_lossy(&bytes), &resolved.sensitive).into_bytes(),
+                etag,
+                last_modified,
+            },
+            other => other,
+        })
     };
     // One page's rows (by field id).
     let read = |body: String, page: String, day: String| {

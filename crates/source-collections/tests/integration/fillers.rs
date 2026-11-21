@@ -731,6 +731,56 @@ async fn preview_redacts_an_echoed_secret() {
     assert!(!sample.to_string().contains("s3cret"), "{sample}");
 }
 
+/// A filler's fills scrub an echoed secret too, not only the preview: on
+/// its one URL and on each row's own page (issue #460).
+#[tokio::test]
+async fn fills_redact_an_echoed_secret() {
+    let site = Arc::new(Site::default());
+    let base = serve(site).await;
+    let pod = pod_with(None);
+    ok(
+        &pod,
+        "collections_set_secret",
+        json!({"name": "api_key", "value": "k3y/s3cret+value", "host": "127.0.0.1"}),
+    )
+    .await;
+    let headers = json!({"Authorization": "Bearer {secret:api_key}"});
+    ok(&pod, "define_collection", json!({"name": "echoed", "fields": [{"name": "title", "type": "text", "optional": true}],
+        "fillers": [{"kind": "fetch", "url": format!("{base}/headers"), "extract": "json", "items": "data",
+                     "map": {"title": "title"}, "headers": headers}]})).await;
+    settle(&pod, "echoed").await;
+    ok(&pod, "collections_refresh", json!({"collection": "echoed"})).await;
+    let got = rows(&pod, "echoed").await;
+    let text = got[0]["title"].as_str().unwrap();
+    assert!(text.contains("authorization"), "{got:?}");
+    assert!(text.contains("[redacted secret]"), "{got:?}");
+    assert!(!text.contains("s3cret"), "{got:?}");
+
+    ok(
+        &pod,
+        "define_collection",
+        json!({"name": "per_row", "fields": [
+            {"name": "page", "type": "text"}, {"name": "title", "type": "text", "optional": true}],
+        "fillers": [{"kind": "fetch", "url_field": "page", "extract": "json", "items": "data",
+                     "map": {"title": "title"}, "headers": headers}]}),
+    )
+    .await;
+    ok(
+        &pod,
+        "add_row",
+        json!({"collection": "per_row", "values": {"page": format!("{base}/headers")}}),
+    )
+    .await;
+    settle(&pod, "per_row").await;
+    let filler = filler_ids(&pod, "per_row").await.remove(0);
+    let out = fill::fill(&pod, "per_row", &filler, true).await;
+    assert!(matches!(out, Outcome::Filled { .. }), "{out:?}");
+    let got = rows(&pod, "per_row").await;
+    let text = got[0]["title"].as_str().unwrap_or_default();
+    assert!(text.contains("[redacted secret]"), "{got:?}");
+    assert!(!text.contains("s3cret"), "{got:?}");
+}
+
 /// A secret is sent only over https: a recipe can't send it in the clear,
 /// even to its own host (a pod that may fetch private hosts may, for local
 /// development).
