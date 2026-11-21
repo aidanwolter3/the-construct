@@ -19,7 +19,9 @@ cargo run --release -p construct-render --features viewer --bin construct-viewer
 
 `CONSTRUCT_POD_URL` is the server the sign-in screen opens (default staging); once a pod is open, the window reopens
 it (`pod.json`). Settings' server picker (`local:servers`, `set_server`) offers Staging, Local
-(`http://127.0.0.1:8080`) and `CONSTRUCT_POD_URL` when it is another; each server has its own cache and outbox. Plain
+(`http://127.0.0.1:8080`) and `CONSTRUCT_POD_URL` when it is another; each server has its own cache and outbox. The
+app asks before it switches, and switches only to a server of that list, never one a layout wrote (decision
+`device-owned-local-state`). Plain
 `http://` is accepted only for this machine and private network addresses.
 
 The viewer keeps its pod and the engine's cache in `~/Library/Application Support/The Construct` on macOS (else

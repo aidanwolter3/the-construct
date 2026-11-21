@@ -302,6 +302,40 @@ pub const RETIRED_DEVICE_COMMANDS: [&str; 2] = ["open_app", "show"];
 /// refused; versions that hold them still parse and clients still run them.
 pub const RETIRED_SHELL_COMMANDS: [&str; 2] = ["open_settings", "open_inbox"];
 
+/// The `local://` entities the device itself owns (decision
+/// `device-owned-local-state`): layouts read them but never write them
+/// (`action.local.set` is refused on them, by the pod's validator and by
+/// the clients), so a layout can't pick the server the app opens, fake a
+/// sign-in or rewrite the inbox. Named by the first segment after
+/// `local://` (`local://servers/x`, `local://theme`); every other
+/// `local://` entity (`local://shell`, `local://collapsible/...`) is the
+/// layouts' own view state.
+pub const DEVICE_OWNED_LOCAL: [&str; 12] = [
+    "servers",
+    "session",
+    "device",
+    "providers",
+    "sign_ins",
+    "connection",
+    "notifications",
+    "inbox",
+    "channels",
+    "theme",
+    "nav",
+    "screen",
+];
+
+/// Whether `uri` is one of [`DEVICE_OWNED_LOCAL`] (`local://servers/x`,
+/// `local://session`, `local://theme#accent`). A binding in the first
+/// segment (`local://$arg.key`) is not known until the client binds it.
+pub fn is_device_owned(uri: &str) -> bool {
+    let Some(rest) = uri.trim().strip_prefix("local://") else {
+        return false;
+    };
+    let name = rest.split(['/', '#', '?']).next().unwrap_or("");
+    DEVICE_OWNED_LOCAL.contains(&name)
+}
+
 /// One extra field update carried by `ActionIntent::OptimisticMutate.also`
 /// (and `ActionIntent::LocalSet.also`).
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
