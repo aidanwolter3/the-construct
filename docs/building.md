@@ -187,7 +187,9 @@ admin pod: a temporary pod can't share a public page (decision [`web-on-staging`
 
 - `share_publicly {layout}` answers a review and shares nothing: every text and value a visitor would read, every
   URL, the rows and fields that go (only the rows each list's `where` and conditions show, with only the fields
-  read where they show; a condition that can't be decided then, such as a date test, keeps its rows home), per
+  read where they show; a list's age (`older_than`) is decided on the pod's clock as the copy is made, so
+  upcoming events go and past ones stay home; a condition that can't be decided then, such as a
+  `core://Conditional` date test, keeps its rows home), per
   layout, and what was taken out (controls that write, opens and embeds of layouts it doesn't carry, screens, and
   the layouts left out with why). A list whose rows push a screen carries that screen once, with the rows it shows
   for each listed row; `leave_out: [<layout>]` keeps one out (its openers go). `params: {id: <meal id>}` draws a
