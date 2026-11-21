@@ -1,7 +1,8 @@
 # Public links are reviewed, read-only copies of a layout and the Collections rows it shows
 
 Extended by [public-links-share-the-closure](public-links-share-the-closure.md): a copy carries the layouts its
-root opens and embeds, takes `params`, keeps only the rows each list's `where` shows, and is versioned.
+root opens and embeds, takes `params`, keeps only the rows each list's `where` shows, and is versioned. Amended by
+[public-links-decide-ages](public-links-decide-ages.md): a list's `older_than` is decided on the pod's clock.
 
 Date: 2026-11-17. Related: [sharing](sharing.md), [web-client](web-client.md), [screen-sizes](screen-sizes.md),
 [collections](collections.md).
