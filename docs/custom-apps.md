@@ -385,7 +385,9 @@ A collection can keep itself current from the web (decision
   `filler-map-constants`). `details` reads each new row's own page once; with `extract: "llm"` and `fields` (and a
   `hint`) a model reads that page for those fields, for pages with no structured data (decision `details-llm`). Conditional requests and a body hash skip unchanged pages; errors back off; values are coerced to the fields'
   types. Headers can carry a sealed secret (`collections_set_secret`, with the host it may be sent to; a
-  request to any other host, a redirect off it, or a plain `http://` request doesn't get it). Extraction lives in
+  request to any other host, a redirect off it, or a plain `http://` request doesn't get it; `collections_preview` scrubs the
+  secret, and its base64, URL-encoded and JSON-escaped forms, from what a host answers, so one that echoes request headers
+  can't put the key in Claude's context). Extraction lives in
   `crates/web-extract`.
 - **Per-row fetches:** `url_field` fills each row from its own page; `query_field` (with `extract: "llm"` and
   `fields`) searches each row's text with the pod's `web_search` jack and has a model pick the row's fields from
