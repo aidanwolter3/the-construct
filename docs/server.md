@@ -243,7 +243,8 @@ Counts live in memory and restart from zero.
   Pixelfed image, the OAuth callback), which anyone with the pod's id can reach, is no device of the pod. The `monitor` source's `devices` feed shows them in any pod (no operator switch): how
   each device's build stands against the server's (latest, behind, ahead) and devices per day by build for a
   `core://Bars` chart. Over MCP, `list_devices`, `rename_device` and `watch_device` (run a source action or send a
-  "Device updates" notification once a device draws a feature or runs a newer build).
+  "Device updates" notification once a device draws a feature or runs a newer build; an MCP credential's watch runs
+  only actions an MCP credential reaches, such as a collection's row writes or reopening an agent's run).
 - **Prometheus:** with `CONSTRUCT_METRICS_ADDR`, `GET /metrics` on that address serves the same counters as
   `construct_*` metrics.
 

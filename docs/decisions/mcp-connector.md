@@ -29,7 +29,11 @@ Decision:
   (`at`, `allowed`), so Claude can fix them.
 - **Samples act as the owner:** the pod's pinned (pod token) session. A feed runs with that session; a data path runs
   through the pod's own router with an internal header, `<per-process random secret>:<session hash>`, which nothing
-  outside the process can make. Nothing else in MCP acts as the user.
+  outside the process can make. Nothing else in MCP acts as the user. The internal header also carries the scope
+  of the credential that started the request (issue #435): `<secret>:<scope>:<session hash>`. Samples and previews
+  always use `mcp`, a device watch its maker's; an `mcp`-scoped request may read (`GET`) and run only the actions
+  sources list as `mcp_actions` (what MCP tools already do); the pod's router answers anything else 403
+  `mcp_credential_scope`.
 - **OAuth on the host** (`pod_host::oauth`): `/.well-known/oauth-protected-resource[/v1/mcp]`,
   `/.well-known/oauth-authorization-server` (with `authorization_response_iss_parameter_supported`), `POST
   /oauth/register` (public clients; 1-5 redirect URIs, `https://…` or `http://localhost|127.0.0.1|[::1]`; 20 a

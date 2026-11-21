@@ -54,6 +54,7 @@ static A_MANIFEST: SourceManifest = SourceManifest {
     }],
     data_paths: &[],
     actions: &[],
+    mcp_actions: &[],
     entities: &[],
     dev: false,
 };

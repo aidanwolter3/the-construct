@@ -231,6 +231,10 @@ pub const MANIFEST: SourceManifest = SourceManifest {
             doc: "Delete a schedule: {name}. Its runs go on. Wrap it in action.confirm.",
         },
     ],
+    // Reopening a run with a message (what a device watch's action is for):
+    // the MCP tool agents_schedules already starts runs. Not sign-in, start,
+    // stop or the rest.
+    mcp_actions: &[REOPEN_PATH],
     entities: &[
         EntityDoc {
             uri: "agents://runner/status",

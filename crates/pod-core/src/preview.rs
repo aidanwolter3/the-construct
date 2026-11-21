@@ -218,7 +218,7 @@ async fn get(pod: &Pod, headers: &HeaderMap, path: &str) -> Result<Value, Value>
         .ok()
         .flatten();
     if let Some(hash) = owner
-        && let Ok(v) = HeaderValue::from_str(&pod.internal_as(&hash))
+        && let Ok(v) = HeaderValue::from_str(&pod.internal_as(&hash, crate::session::Scope::Mcp))
     {
         req.headers_mut().insert(crate::session::INTERNAL_HEADER, v);
     }

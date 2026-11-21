@@ -101,6 +101,7 @@ pub const MANIFEST: SourceManifest = SourceManifest {
     ],
     data_paths: &[],
     actions: &[],
+    mcp_actions: &[],
     entities: &[
         EntityDoc {
             uri: "monitor://summary/server",
