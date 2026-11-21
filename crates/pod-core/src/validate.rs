@@ -1410,6 +1410,20 @@ impl<'a> Caps<'a> {
                     }
                 }
             }
+            "action.form.clear" => {
+                let named = |k: &str| match map.get(k) {
+                    Some(Value::Array(a)) => !a.is_empty(),
+                    Some(Value::String(f)) => !f.is_empty(),
+                    _ => false,
+                };
+                if !named("fields") && !named("focus") {
+                    return Err(LayoutError::new(
+                        at,
+                        "action.form.clear names no field: give fields (the $form fields to empty) or focus".to_owned(),
+                    )
+                    .allowing([r#"{"intent": "action.form.clear", "fields": ["name"], "focus": "name"}"#.to_owned()]));
+                }
+            }
             "action.link.open" => {
                 // A literal link must be http(s); a binding is checked by the client.
                 if let Some(u) = field("url") {
@@ -2021,6 +2035,21 @@ mod tests {
         assert!(check_values(&chips(json!([]))).is_err());
         assert!(check_values(&chips(json!([{"label": "A"}, {"label": "B"}]))).is_err());
         assert!(check_values(&chips(json!([{"label": " ", "value": "a"}]))).is_err());
+    }
+
+    #[test]
+    fn a_form_clear_names_a_field() {
+        let layout = |clear: Value| {
+            json!({"type": "core://Page", "id": "home", "root": {"type": "core://Button",
+                "label": "Add", "on_click": {"intent": "action.sequence", "steps": [clear]}}})
+        };
+        let ok = json!({"intent": "action.form.clear", "fields": ["name", "qty"], "focus": "name"});
+        assert!(custom_layout("home", &layout(ok), &[]).is_ok());
+        let focus_only = json!({"intent": "action.form.clear", "focus": "name"});
+        assert!(custom_layout("home", &layout(focus_only), &[]).is_ok());
+        let err = custom_layout("home", &layout(json!({"intent": "action.form.clear"})), &[])
+            .unwrap_err();
+        assert!(err.message.contains("names no field"), "{err:?}");
     }
 
     #[test]

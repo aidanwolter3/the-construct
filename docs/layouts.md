@@ -200,6 +200,7 @@ A node type the client doesn't know is skipped, and its JSON kept, so old versio
 | `action.data.load` | `path` | Loads and caches a data path. |
 | `action.sequence` | `steps` | Runs intents in order as one tap, e.g. a create then `action.navigation.back`. |
 | `action.link.open` | `url` | Opens an `http(s)://` URL in the browser. |
+| `action.form.clear` | `fields`, `focus?` | Empties those form values (`$form.<field>`) on the device and, with `focus`, keeps typing in that field (feature `form_clear`). After an Add in an `action.sequence`, the boxes empty, ready for the next one; the create reads its `$form` values first. Nothing is sent to the pod. |
 | `action.confirm` | `title`, `message`, `confirm_label`, `then` | Asks first: the app's own dialog with the layout's wording, a `confirm_label` button and Cancel; runs `then` only on confirm (in a sequence, the later steps wait too). Wrap `leave_pod`, `sign_out` and deletes in it (decision `confirm-intent`). |
 | `action.auth.login` | `instance_url`, `app_path`, `token_path` | Starts an OAuth2 PKCE sign-in to an upstream. On a server other than its provider's own (`local:providers` `server`), the app shows the host and asks first (decision `sign-in-host-dialog`). |
 | `action.auth.session` | `path`, `payload` | Opens a pod session (the pod code screen). |

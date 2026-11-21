@@ -107,10 +107,11 @@ pub fn is_link(s: &str) -> bool {
 
 /// The intents a public page keeps: nothing that writes, loads or signs
 /// in; an open only of a layout the copy carries.
-const KEPT_INTENTS: [&str; 3] = [
+const KEPT_INTENTS: [&str; 4] = [
     "action.navigation.back",
     "action.local.set",
     "action.link.open",
+    "action.form.clear",
 ];
 const OPEN: &str = "action.navigation.open";
 

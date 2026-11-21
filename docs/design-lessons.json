@@ -260,7 +260,7 @@
       "position": 1
     },
     {
-      "body": "`action.navigation.open` (a screen, or another layout pushed, as a sheet, panel or overlay), `.back`, `.pop_to`, `.pop_to_root`; `action.mutation.optimistic` and `action.mutation.create` (change or add data at once, sent through the outbox); `action.local.set` (view state on this device only); `action.sequence`, `action.confirm`, `action.link.open`, `action.data.load`; `action.device` (something only the device does: sign in, sign out, mark notifications read, leave the pod).",
+      "body": "`action.navigation.open` (a screen, or another layout pushed, as a sheet, panel or overlay), `.back`, `.pop_to`, `.pop_to_root`; `action.mutation.optimistic` and `action.mutation.create` (change or add data at once, sent through the outbox); `action.local.set` (view state on this device only); `action.form.clear` (empty form boxes after an Add, typing going on); `action.sequence`, `action.confirm`, `action.link.open`, `action.data.load`; `action.device` (something only the device does: sign in, sign out, mark notifications read, leave the pod).",
       "heading": "Intents",
       "key": "plumbing-the-vocabulary/2",
       "lesson": "plumbing-the-vocabulary",

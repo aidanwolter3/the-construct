@@ -1332,6 +1332,8 @@ fn vocabulary_with(components: Vec<Value>) -> Value {
               "doc": "Set fields of a loaded entity on this device only (no request), e.g. view state like added/expanded shown with core://Conditional. The next load of the entity from the pod replaces it. The device's own local:// entities (servers, session, device, providers, sign_ins, connection, notifications, inbox, channels, theme, nav, screen) are read-only." },
             { "intent": "action.link.open", "fields": "url",
               "doc": "Open an http(s) link in the device's browser (e.g. a Get tickets button with url $item.tickets_url). Nothing is sent to the pod." },
+            { "intent": "action.form.clear", "fields": "fields: [field, ...], focus?: field",
+              "doc": "Empty form values ($form.<field>) on the device, and with focus put the cursor in that field so typing goes on (the keyboard stays up). After an Add in an action.sequence: [create, {action.form.clear fields [name, quantity], focus name}] empties the boxes, ready for the next item; a create's $form values are read before the boxes empty. Nothing is sent to the pod." },
             { "intent": "action.confirm", "fields": "title, message?, confirm_label, then: intent",
               "doc": "Ask \"Are you sure?\" in the app's own dialog and run then only if the user confirms (Cancel does nothing). Wrap every step that can't be undone in it: action.device leave_pod and sign_out, and anything that deletes. In an action.sequence the later steps wait for the answer too." },
             { "intent": "action.device", "fields": "command, layout?, id?, value?",

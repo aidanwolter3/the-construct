@@ -165,6 +165,20 @@ pub enum ActionIntent {
     #[serde(rename = "action.link.open")]
     OpenLink { url: String },
 
+    /// Feature `form_clear`: empty the form values `$form.<field>` of
+    /// `fields` on this device (a field that was never set stays unset),
+    /// and with `focus` put the cursor in that field so typing goes on
+    /// there (the keyboard stays up). After an Add in an
+    /// `action.sequence`: the boxes empty, ready for the next one.
+    /// Nothing is sent to the pod.
+    #[serde(rename = "action.form.clear")]
+    FormClear {
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        fields: Vec<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        focus: Option<String>,
+    },
+
     /// Feature `device_action`: something the device does itself, named by
     /// `command` ([`DEVICE_COMMANDS`]): `refresh`, `leave_pod`
     /// (forget the pod on this device), `open_notification` (`id`),
