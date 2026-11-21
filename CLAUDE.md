@@ -8,8 +8,8 @@ starting with `home`, which clients open first and which embeds and presents the
 (decision `layouts-not-apps`).
 
 **Read [CONTRIBUTING.md](CONTRIBUTING.md) first: its rules and checks apply to you.** Then, as the task needs:
-[docs/architecture.md](docs/architecture.md) (read before changing architecture), [docs/layouts.md](docs/layouts.md)
-(layout files and vocabulary), the other guides in [docs/](docs/), and the decisions
+[docs/design.md](docs/design.md) (the whole system breadth first: read before changing architecture),
+[docs/layouts.md](docs/layouts.md) (layout files and vocabulary), the other guides in [docs/](docs/), and the decisions
 ([docs/DECISIONS.md](docs/DECISIONS.md) D1–D52, [docs/decisions/](docs/decisions/) newer). Open work is in GitHub
 issues. `docs/history/` is archived; don't treat it as current.
 
@@ -19,8 +19,8 @@ issues. `docs/history/` is archived; don't treat it as current.
   `adapter.rs`; `validate.rs` checks layout files); `crates/pod-host` many pods per server; `crates/server` the
   binary and `server pods` CLI.
 - `crates/source-pixelfed`, `source-collections`, `source-events` (Events), `source-monitor`,
-  `source-agents` (Agents: an external agent runner, [docs/agents.md](docs/agents.md)), `source-shell` (the home
-  core layout): the sources.
+  `source-agents` (Agents: an external agent runner, [docs/agents.md](docs/agents.md)), `source-dates` (the days
+  around today), `source-shell` (the home core layout): the sources.
   `crates/web-extract`: the web module (page fetching and extraction, host policy, search, web prompts);
   `crates/agent` (`construct-agent`): the agent module every model call goes through; `pod_core::jacks`: the
   abilities a pod is plugged into (decisions `jacks`, `web-and-agent-modules`).
@@ -37,6 +37,9 @@ issues. `docs/history/` is archived; don't treat it as current.
   `/web` only with `CONSTRUCT_WEB=1`; `scripts/web_build.sh` builds it); `crates/construct-sim` the headless simulator over it
   ([docs/simulator.md](docs/simulator.md)).
 - `fake-pixelfed/` the fake upstream (primary test target); `crates/e2e` the end-to-end suite.
+- `docs/design.md` the design as a course; `crates/design-lessons` reads it into `docs/design-lessons.json`, which
+  the developer's pod fetches from `main` to show it as the public course "Inside The Construct" (decision
+  `design-doc-and-lessons`). After editing design.md run `UPDATE_DESIGN_LESSONS=1 cargo test -p design-lessons`.
 - `crates/source-*/layouts/<layout>/NNNN.json` layout versions; `crates/protocol/features/` the named vocabulary
   (plumbing); `crates/pod-core/components/<name>/NNNN.json` the server components (porcelain, decision
   `plumbing-and-porcelain`); a source's own in `crates/source-*/components/` (decision `adapter-components`).
@@ -168,4 +171,5 @@ connector); a new session started after that sees the new tools.
 
 - No model names in commit messages or docs prose.
 - Keep docs current: a change to behaviour, configuration or vocabulary updates the guide in `docs/` that covers
-  it, in the same PR.
+  it, in the same PR; a change to a piece, an interface or a name that `docs/design.md` describes updates it too
+  (and regenerates `docs/design-lessons.json`).

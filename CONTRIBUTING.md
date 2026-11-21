@@ -1,7 +1,8 @@
 # Contributing
 
 Thanks for helping. This page covers setup, the checks to run, and the rules that keep the architecture intact.
-Read [docs/architecture.md](docs/architecture.md) first if you are new to the codebase.
+Read [docs/design.md](docs/design.md) first if you are new to the codebase: it explains the whole system from the top
+down.
 
 > **No license yet.** The project hasn't chosen a license, so it can't accept outside code contributions for now:
 > each contribution would stay its author's, which would complicate choosing a license later. Issues, bug reports

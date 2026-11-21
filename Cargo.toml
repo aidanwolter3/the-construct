@@ -18,6 +18,7 @@ members = [
     "crates/source-shell",
     "crates/web-extract",
     "crates/agent",
+    "crates/design-lessons",
     "crates/server",
     "fake-pixelfed",
     "crates/e2e",

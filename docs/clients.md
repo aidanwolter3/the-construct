@@ -236,7 +236,7 @@ The client opens the pod's `home` layout (the default) and draws everything from
 The last workspace and every loaded screen are cached, so the app opens and scrolls offline. A tap changes the screen
 at once and queues the request; Settings shows "N pending" (and `local://connection` lets a layout show it too). Queued actions are sent in order when the server is
 reachable again, including after a restart. If the server refuses one, its change is rolled back. Details:
-[architecture.md](architecture.md#the-engine).
+[design.md](design.md#71-the-engine).
 
 ## Signing in to an upstream
 
@@ -248,7 +248,7 @@ the upstream tokens. Clients hold only a pod session.
 - **Android:** the redirect is a verified App Link, `https://<server>/oauth/android`, when the server is the build's
   App Link host and Android has verified it; otherwise `construct://oauth`. The session is encrypted with an
   AndroidKeyStore key. Check verification with `adb shell pm get-app-links org.theconstruct.android`.
-- **Simulator:** an in-memory session and a scripted browser; see [simulator.md](simulator.md#live-mode).
+- **Simulator:** an in-memory session and a scripted browser; see [simulator.md](simulator.md#modes).
 
 Signing out (or a 401 from the pod) removes cached private data from the device. More in [pixelfed.md](pixelfed.md).
 

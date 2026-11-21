@@ -494,7 +494,7 @@ Arguments for real screens: `target_uri` opens the layout's screen whose route m
 `target_uri` does, loading its data; no match answers `no_screen` with the layout's routes), and `params` sets
 the layout's own `$route.<name>`. `item` binds `$item` to an entity URI, or to an object of made-up fields
 (stored as `preview://item`), and `entities` (`{uri: {field: value}}`) and `queries` (`{key: [uri]}`) add or
-replace data, so a row template or a `pod:` component can be drawn against one entity. `full_height` grows the
+replace data, so a row template or an `@me/` component can be drawn against one entity. `full_height` grows the
 frame until the screen's scrolling content fits (up to 10,000 points; the scale drops to stay within the pixel
 budget), and `scroll_to` scrolls a node into view first. `nodes` is `text` (the default: id, type, bounds, text
 and a short tap summary such as `action.navigation.open layout=inbox presentation=Sheet`), `full` (each tap's whole

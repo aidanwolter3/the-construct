@@ -142,7 +142,7 @@ Pixelfed logs in by e-mail (`alice@example.test`). Point a pod at it with
 script expects [Colima](https://github.com/abiosoft/colima) and the docker CLI with the compose plugin on `PATH`; on
 macOS they can be installed as release binaries in `~/.local/bin` without Homebrew.
 
-Ways the real instance differs from the fake, all handled by the adapter: OAuth routes are throttled to 10 requests a
+Ways the real instance differs from the fake, all handled by the source: OAuth routes are throttled to 10 requests a
 minute; the home timeline hides boosts unless `include_reblogs=true` and hides text-only posts; JSON shapes differ in
 small ways (covered by `test_pixelfed_recorded_timeline_normalization`); an unfavourite's count can lag; and Passport
 rejects a token whose user id equals the OAuth client's id, so the dev stack starts client ids at 1000.

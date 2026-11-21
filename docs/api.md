@@ -1,7 +1,7 @@
 # HTTP API
 
-The pod's core routes. Adapters add their own: see [pixelfed.md](pixelfed.md#endpoints) and
-[custom-apps.md](custom-apps.md#collections). Every call except those marked *public* needs
+The pod's core routes. Sources add their own: see [pixelfed.md](pixelfed.md#endpoints) and
+[building.md](building.md#collections). Every call except those marked *public* needs
 `Authorization: Bearer <pod session>`. Errors answer `{"error": "<code>", ...}` with a matching status.
 
 Clients also send `X-Construct-Features` (the [layout features](layouts.md#features-and-compatibility) they draw)
@@ -58,7 +58,7 @@ A `: keepalive` comment comes every 15 s. Streams opened without a session hear 
 session's stream ends when the session is revoked; one session may hold 8 streams (then 429 `too_many_streams`).
 
 The pod's layouts are written through Claude (MCP `create_layout`, `update_layout`, `rename_layout`,
-`delete_layout`, `restore_version`; [custom-apps.md](custom-apps.md#building-apps-with-claude)): every write is
+`delete_layout`, `restore_version`; [building.md](building.md#building-with-claude)): every write is
 validated against the sources of home's feeds, and errors name a JSON pointer and what is allowed. Limits per pod: 50
 layouts, 256 KiB per layout.
 
@@ -91,11 +91,11 @@ How a create carries attachments: [posting.md](posting.md).
 `POST /v1/mcp` is the pod's MCP endpoint, with OAuth discovery at `/.well-known/oauth-protected-resource` and
 `/.well-known/oauth-authorization-server`, and `/oauth/register` (20 an hour per client address, 40 per IPv6 /48;
 503 `temporarily_unavailable` when the data volume is nearly full), `/oauth/authorize` and `/oauth/token`. The
-credential it issues reaches only `/v1/mcp`. See [custom-apps.md](custom-apps.md#building-apps-with-claude).
+credential it issues reaches only `/v1/mcp`. See [building.md](building.md#building-with-claude).
 
 The other way round, the pod is a client of remote MCP servers (decision [`mcp-jack`](decisions/mcp-jack.md)):
 `GET /v1/mcp-servers/callback?code&state` *public* is where a server's OAuth sign-in comes back to (on a host,
-under the pod's public prefix); it answers a short HTML page. See [custom-apps.md](custom-apps.md#mcp-servers).
+under the pod's public prefix); it answers a short HTML page. See [building.md](building.md#mcp-servers).
 
 ## Web client
 
@@ -126,7 +126,7 @@ a page saying sharing is paused, and the copies stay stored. A page address with
 | `GET /s/<link>/image?url=<url>` *public* | An image the copy names, passed on as `/web/image` does; a URL the copy doesn't name is 404. |
 
 Pods make and revoke them with the MCP tools `share_publicly`, `list_public_links` and `unshare_publicly`
-([custom-apps.md](custom-apps.md#public-links-for-people-without-a-pod)).
+([building.md](building.md#public-links-for-people-without-a-pod)).
 
 The host keeps only a SHA-256 of each share, public and calendar token (decision
 [`link-tokens-hashed`](decisions/link-tokens-hashed.md)), so a backup holds no working link. A public or share link
@@ -142,7 +142,7 @@ subscribes to the text the pod last rendered, never reaching the pod. With `CONS
 | `GET /ical/<token>.ics` *public* | The feed (`text/calendar; charset=utf-8`, RFC 5545: CRLF lines folded at 75 octets, times in UTC or whole days). 404 for an unknown, revoked or rotated token. |
 
 Pods make, list, rotate and revoke them with the MCP tools `set_calendar_feed`, `list_calendar_feeds`,
-`rotate_calendar_feed` and `revoke_calendar_feed` ([custom-apps.md](custom-apps.md#calendar-feeds)).
+`rotate_calendar_feed` and `revoke_calendar_feed` ([building.md](building.md#calendar-feeds)).
 
 ## Development and test routes
 

@@ -1,14 +1,15 @@
 # Documentation
 
-Start with [architecture.md](architecture.md), then the guide for what you're doing.
+Start with [design.md](design.md), the whole system from the top down (also a course on a pod:
+[Inside The Construct](https://the-construct-pod.fly.dev/aidan/design)), then the guide for what you're doing.
 
 | Guide | Covers |
 |---|---|
-| [architecture.md](architecture.md) | How the pieces fit: pods, sources, layouts, the engine, the clients |
+| [design.md](design.md) | The design breadth first: goals, the big pieces and their interfaces, then each piece; a glossary |
 | [layouts.md](layouts.md) | Publishing a layout version; bindings, nodes, intents and features |
 | [server.md](server.md) | Running and configuring the server, pods and their admin CLI, monitoring, deploying |
 | [api.md](api.md) | The pod's core HTTP API and event stream |
-| [custom-apps.md](custom-apps.md) | Core layouts and home, the pod's layouts, building them with Claude (MCP), Collections, fillers and alerts, the Events app |
+| [building.md](building.md) | Core layouts and home, the pod's layouts, building them with Claude (MCP), sharing, Collections, fillers and alerts, jacks, Events |
 | [clients.md](clients.md) | Building and running the desktop and Android apps; home and the layouts it shows; sign-in |
 | [rendering.md](rendering.md) | The Rust rendering engine: layout, scenes, GPU and CPU rasterizers, agent previews, the native prototypes |
 | [simulator.md](simulator.md) | The headless simulator (`construct-sim`): fixture and live modes, flags, script commands, targets |
