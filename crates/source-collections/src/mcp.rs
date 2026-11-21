@@ -7,6 +7,7 @@ use std::collections::HashMap;
 
 use axum::http::StatusCode;
 use pod_core::layouts::{self as pod_layouts, SourceUse};
+use pod_core::mcp::untrusted;
 use pod_core::{BoxFuture, Pod};
 use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
@@ -1182,6 +1183,11 @@ async fn preview(pod: &Pod, adapter: &CollectionsAdapter, args: &Value) -> Resul
         ));
     };
     let body = String::from_utf8_lossy(&bytes);
+    // What the page holds is its site's text (issue #439).
+    let from = reqwest::Url::parse(&url)
+        .ok()
+        .and_then(|u| u.host_str().map(str::to_owned))
+        .unwrap_or_else(|| url.clone());
     let mut out = json!({ "url": url, "extract": spec.kind.name(), "bytes": bytes.len() });
     if render.is_some() {
         out["rendered"] = json!(true);
@@ -1190,7 +1196,8 @@ async fn preview(pod: &Pod, adapter: &CollectionsAdapter, args: &Value) -> Resul
         // Sample items to write the paths from.
         let items = crate::fill::sample_items(&spec, &body).map_err(bad)?;
         out["items"] = json!(items.len());
-        out["sample_items"] = json!(items.into_iter().take(3).collect::<Vec<_>>());
+        out["sample_items"] =
+            untrusted(&from, json!(items.into_iter().take(3).collect::<Vec<_>>()));
         out["next"] = json!("write map: {field: path into an item} and preview again");
         return Ok(out);
     }
@@ -1208,15 +1215,21 @@ async fn preview(pod: &Pod, adapter: &CollectionsAdapter, args: &Value) -> Resul
             .collect();
         let (vals, skipped) =
             crate::fill::coerce_preview(def, by_id, adapter.caps.text_chars, spec.zone().as_ref());
-        out["rows"] = json!(
-            vals.iter()
-                .take(PREVIEW_ROWS)
-                .map(|v| model::by_name(def, v))
-                .collect::<Vec<_>>()
+        out["rows"] = untrusted(
+            &from,
+            json!(
+                vals.iter()
+                    .take(PREVIEW_ROWS)
+                    .map(|v| model::by_name(def, v))
+                    .collect::<Vec<_>>()
+            ),
         );
         out["values_skipped"] = json!(skipped);
     } else {
-        out["rows"] = json!(rows.into_iter().take(PREVIEW_ROWS).collect::<Vec<_>>());
+        out["rows"] = untrusted(
+            &from,
+            json!(rows.into_iter().take(PREVIEW_ROWS).collect::<Vec<_>>()),
+        );
     }
     if out["items"] == 0 {
         out["detail"] =
@@ -1240,9 +1253,19 @@ async fn preview_mcp(
     let n = rows.len();
     let (vals, skipped) =
         crate::fill::coerce_preview(def, rows, adapter.caps.text_chars, f.zone().as_ref());
+    // The tool's answer is its server's text (issue #439).
+    let from = match &f.source {
+        crate::filler::Source::Mcp { server, .. } => format!("mcp:{server}"),
+        _ => format!("filler:{}", f.id),
+    };
+    let rows: Vec<Map<String, Value>> = vals
+        .iter()
+        .take(PREVIEW_ROWS)
+        .map(|v| model::by_name(def, v))
+        .collect();
     let mut out = json!({
         "filler": f.id, "kind": "mcp", "items": n,
-        "rows": vals.iter().take(PREVIEW_ROWS).map(|v| model::by_name(def, v)).collect::<Vec<_>>(),
+        "rows": untrusted(&from, json!(rows)),
         "values_skipped": skipped,
     });
     if n == 0 {
@@ -2352,8 +2375,53 @@ fn own_state(def: Option<&Definition>, state: &Value) -> Value {
 async fn export(pod: &Pod, args: &Value) -> Result<Value, Value> {
     let name = str_arg(args, "collection")?.to_owned();
     let lookup = name.clone();
-    pod.blocking(move |s| s.with_conn(|c| crate::export(c, &lookup, pod_core::util::now_secs())))
+    let (out, def, writers) = pod
+        .blocking(move |s| {
+            s.with_conn(|c| {
+                let Some(out) = crate::export(c, &lookup, pod_core::util::now_secs())? else {
+                    return Ok(None);
+                };
+                let def = db::latest_def(c, &lookup)?.map(|(_, d)| d);
+                Ok(Some((out, def, db::field_writers(c, &lookup)?)))
+            })
+        })
         .await
         .map_err(db_err)?
-        .ok_or_else(|| missing(&name))
+        .ok_or_else(|| missing(&name))?;
+    let mut out = out;
+    if let Some(def) = def {
+        mark_written(&mut out, &def, &writers);
+    }
+    Ok(out)
+}
+
+/// Each row value of an export that a filler or a model wrote last, in an
+/// untrusted envelope naming the writer (`filler:<id>`, `model`, `derived`;
+/// issue #439): the store records who wrote each field
+/// ([`db::note_writes`]), so a person's values stay plain.
+fn mark_written(
+    out: &mut Value,
+    def: &Definition,
+    writers: &std::collections::HashMap<String, std::collections::BTreeMap<String, String>>,
+) {
+    let Some(rows) = out["rows"].as_array_mut() else {
+        return;
+    };
+    for row in rows {
+        let Some(w) = row["id"].as_str().and_then(|id| writers.get(id)) else {
+            continue;
+        };
+        let w = w.clone();
+        let Some(values) = row["values"].as_object_mut() else {
+            continue;
+        };
+        for (field_id, writer) in &w {
+            let Some(f) = def.by_id(field_id) else {
+                continue;
+            };
+            if let Some(v) = values.get_mut(&f.name) {
+                *v = untrusted(writer, v.take());
+            }
+        }
+    }
 }

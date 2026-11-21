@@ -273,8 +273,24 @@ pub fn summaries(c: &Connection) -> rusqlite::Result<Vec<Value>> {
         .collect())
 }
 
+/// Where server `s`'s own text comes from, for [`crate::mcp::untrusted`]:
+/// its URL's host.
+fn origin(s: &Server) -> String {
+    host_of(&s.url)
+}
+
+fn host_of(url: &str) -> String {
+    reqwest::Url::parse(url)
+        .ok()
+        .and_then(|u| u.host_str().map(str::to_owned))
+        .unwrap_or_else(|| url.to_owned())
+}
+
 /// A server as Claude sees it. `schemas`: each tool's input schema too.
+/// The server's own text (each tool's description and schema, its last
+/// error) is marked untrusted: another party wrote it (issue #439).
 fn describe(s: &Server, schemas: bool) -> Value {
+    let from = origin(s);
     let allowed = allow_list(s);
     let tools: Vec<Value> = s
         .tools
@@ -285,7 +301,7 @@ fn describe(s: &Server, schemas: bool) -> Value {
                     let tool = t["name"].as_str().unwrap_or("");
                     let mut v = json!({
                         "name": t["name"],
-                        "description": t["description"],
+                        "description": crate::mcp::untrusted(&from, t["description"].clone()),
                         "read_only": read_only(t),
                         "callable": read_only(t) || allowed.iter().any(|a| a == tool),
                     });
@@ -293,7 +309,7 @@ fn describe(s: &Server, schemas: bool) -> Value {
                         v["destructive"] = json!(true);
                     }
                     if schemas {
-                        v["input_schema"] = t["inputSchema"].clone();
+                        v["input_schema"] = crate::mcp::untrusted(&from, t["inputSchema"].clone());
                     }
                     v
                 })
@@ -309,7 +325,7 @@ fn describe(s: &Server, schemas: bool) -> Value {
         "tools": tools,
     });
     if let Some(e) = &s.last_error {
-        v["last_error"] = json!(e);
+        v["last_error"] = crate::mcp::untrusted(&from, json!(e));
     }
     if s.auth == "token" {
         v["token_set"] = json!(s.secrets.contains_key("token"));
@@ -1682,10 +1698,34 @@ pub async fn call(
                         ));
                     }
                 };
+                // The server's answer is its own text (issue #439); the
+                // pod's own refusals (jack unplugged, no such server or
+                // tool, a tool not allowed) stay plain.
+                let from = if plugged(pod) {
+                    load(pod, s)
+                        .await
+                        .filter(|x| {
+                            permitted(&x.name, &x.tools, &allow_list(x), t, Caller::Claude).is_ok()
+                        })
+                        .map(|x| origin(&x))
+                } else {
+                    None
+                };
                 call_tool(pod, s, t, &a, Caller::Claude)
                     .await
-                    .map(|v| json!({ "ok": true, "result": shorten(v, 0) }))
-                    .map_err(|e| json!({ "error": if e.sign_in { "needs_sign_in" } else { "mcp_failed" }, "detail": e.message }))
+                    .map(|v| {
+                        let from = from.clone().unwrap_or_else(|| s.to_owned());
+                        json!({ "ok": true, "result": crate::mcp::untrusted(&from, shorten(v, 0)) })
+                    })
+                    .map_err(|e| {
+                        if e.sign_in {
+                            json!({ "error": "needs_sign_in", "detail": e.message })
+                        } else if let Some(from) = &from {
+                            json!({ "error": "mcp_failed", "detail": crate::mcp::untrusted(from, json!(e.message)) })
+                        } else {
+                            json!({ "error": "mcp_failed", "detail": e.message })
+                        }
+                    })
             }
             (None, _) => Err(missing("server")),
             (_, None) => Err(missing("tool")),

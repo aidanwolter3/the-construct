@@ -192,7 +192,10 @@ async fn a_rendered_product_page_fills_its_card() {
     )
     .await;
     assert_eq!(rendered["rendered"], true);
-    assert_eq!(rendered["rows"][0]["name"], "Wool scarf", "{rendered}");
+    assert_eq!(
+        rendered["rows"]["untrusted"]["content"][0]["name"], "Wool scarf",
+        "{rendered}"
+    );
 
     style_cards(&pod, &url).await;
     let (status, rows) = filled(&pod).await;

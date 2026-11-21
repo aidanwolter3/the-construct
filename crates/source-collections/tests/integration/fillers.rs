@@ -339,7 +339,12 @@ async fn a_fetch_recipe_keeps_results_current() {
     )
     .await;
     assert_eq!(p["items"], 2, "{p}");
-    assert_eq!(p["sample_items"][0]["name"], "Avery");
+    // The page's items are its site's text (issue #439).
+    assert_eq!(p["sample_items"]["untrusted"]["from"], "127.0.0.1", "{p}");
+    assert_eq!(
+        p["sample_items"]["untrusted"]["content"][0]["name"],
+        "Avery"
+    );
     ok(
         &pod,
         "define_collection",
@@ -568,13 +573,28 @@ async fn rows_fill_from_their_own_pages_and_secrets_stay_sealed() {
         );
         assert!(w.get(&id_of("url")).is_none(), "{w:?}");
     }
+    // An export marks the filler's values, not the person's (issue #439).
+    let export = ok(&pod, "export_collection", json!({"collection": "wishlist"})).await;
+    let values = export["rows"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| &r["values"])
+        .find(|v| v["url"].as_str().is_some_and(|u| u.ends_with("/p/1")))
+        .unwrap();
+    assert_eq!(
+        values["price"]["untrusted"],
+        json!({"from": source_collections::db::filler_writer(&filler), "content": 1299}),
+        "{export}"
+    );
+    assert!(values["url"].is_string(), "{export}");
     let p = ok(
         &pod,
         "collections_preview",
         json!({"collection": "wishlist"}),
     )
     .await;
-    assert_eq!(p["rows"][0]["price"], 1299, "{p}");
+    assert_eq!(p["rows"]["untrusted"]["content"][0]["price"], 1299, "{p}");
 
     // A header with a secret: unset fails, set works, never shown back.
     ok(&pod, "define_collection", json!({"name": "hidden", "fields": [{"name": "title", "type": "text", "optional": true}],
