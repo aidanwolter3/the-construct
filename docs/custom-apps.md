@@ -205,7 +205,8 @@ admin pod: a temporary pod can't share a public page (decision [`web-on-staging`
 
 Where the server serves public links (the same setting), Claude can give a calendar app a private `.ics` URL of
 chosen rows, such as Proton Calendar's "Add calendar from link" (decision [`ical-feeds`](decisions/ical-feeds.md)).
-A pod keeps up to five feeds; each lists up to ten sources:
+A pod keeps up to five feeds (a pod's feed and publication changes run one at a time, so changes sent at once can't
+pass the caps together or drop each other's feed from the list); each lists up to ten sources:
 
 ```json
 { "name": "mine", "title": "My plans", "sources": [

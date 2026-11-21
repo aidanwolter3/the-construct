@@ -437,6 +437,14 @@ pub async fn tool(
     };
     let base = crate::public_copy::base_url(headers);
     let base = base.as_deref();
+    // The feed list is read, checked against MAX_FEEDS and saved again
+    // around slow renders: one change at a time.
+    let _one_at_a_time = match name {
+        "set_calendar_feed" | "revoke_calendar_feed" | "rotate_calendar_feed" => {
+            Some(pod.sharing.lock().await)
+        }
+        _ => None,
+    };
     Some(match name {
         "set_calendar_feed" => set(pod, &pod_id, shelf.as_ref(), args, base).await,
         "list_calendar_feeds" => list(pod, base).await,
