@@ -682,6 +682,14 @@ pub trait StoreOps {
             .execute([])
     }
 
+    /// Delete every outbox row (another pod's session replaces this one:
+    /// the rows were all meant for this pod). Returns the number deleted.
+    fn delete_all_outbox_rows(&self) -> StoreResult<usize> {
+        self.conn()
+            .prepare_cached("DELETE FROM action_outbox")?
+            .execute([])
+    }
+
     /// Record a failed attempt: `retry_count += 1`, set `next_attempt_at`
     /// and `last_error`.
     fn mark_retry(&self, id: i64, next_attempt_at: i64, last_error: &str) -> StoreResult<()> {
