@@ -1,53 +1,53 @@
 # The Construct
 
-**Native apps whose screens come from your own server.** A Rust server, the *pod*, holds your data and sign-ins and
-decides what every screen looks like. Desktop and Android clients draw those screens natively with one Rust renderer
-(wgpu, no web view) over one Rust engine, and keep working offline. A new pod starts as a blank home screen; your agent (Claude,
-through the pod's MCP endpoint) builds the rest into it, only what you ask for, with no client release.
+**Native apps whose screens come from your own server, built by your agent.**
 
-- **Your layouts, built by your agent.** There are no apps at runtime. A pod's screens are its own layouts, starting
-  with `home`, and the agent writes them from core layouts, components and your data. Every write is validated and
-  appears live on your devices; any version can be restored.
-- **Server-driven, but native.** Layouts are JSON trees of generic nodes (`core://List`, `core://Carousel`,
-  `core://TextField`, …) drawn by the Rust renderer, not a web view.
-- **Device data and commands.** Layouts read what the device knows (`local://connection`, the inbox, the pod's
-  layouts, the theme) and ask the device to act (`action.device`: sign in, hide a layout, leave the pod), so even
-  Settings and the inbox are layouts.
-- **Offline first.** Everything is cached in SQLite on the device. Taps apply at once and queue in an outbox that
-  syncs when the network returns.
-- **Your pod, your data.** Each user gets a pod: one SQLite database with their sessions, upstream tokens (sealed at
-  rest) and data. Upstream tokens never reach the device.
+The Construct is a server-driven UI system. A server you own, the **pod**, holds your data and your sign-ins and
+decides what every screen looks like. Native clients on your phone and computer draw those screens with one Rust
+renderer (no web view) and keep working offline. A new pod is a blank home screen: you ask your agent (Claude,
+connected to the pod over MCP) for what you want, a grocery list that knows your recipes, a car maintenance log, your
+photo feed, and it builds just that into your pod. Every device shows it a moment later, with no app release.
 
-## What a pod offers
+**New here? Take the course:** [Inside The Construct](https://the-construct-pod.fly.dev/aidan/design) walks through
+the whole design, from the goals down to each piece, in short lessons. It is drawn by The Construct itself from
+[docs/design.md](docs/design.md), which holds the same lessons as one document.
 
-| | |
-|---|---|
-| **Core layouts** | Built-in layouts the server ships and keeps current, for the agent to reference or copy: **Pixelfed** (a [Pixelfed](https://pixelfed.org) client with feed and card views, likes, bookmarks, threaded comments, photo posting and notifications, for any instance), **Events** (upcoming events from websites you watch, with alerts when one matches), **Settings** and the **inbox**. A new pod's `home` is the blank `shell` core layout. |
-| **Collections** | Typed data the agent declares (a todo list, a maintenance log), with computed fields, reminders, and **fillers** that keep rows current from the web (iCalendar feeds, schema.org data, or a model reading a page). |
-| **Components** | Reusable pieces of layout defined as data and expanded by the pod: the server's (`core:card`, `core:section_header`, `core:back_button`, every core layout and its parts) and the pod's own (`pod:…`, defined by the agent). Changing one needs no client build. |
-| **Theme** | The pod's colours (`${local://theme#accent}` and other tokens), set by the agent. |
+## Goals
 
-## How it works
+- **Your data stays yours.** Each user has their own pod: one SQLite database with their data, layouts and
+  sign-ins. Tokens for other services are sealed on the pod and never reach a device.
+- **Native and offline first.** Screens are drawn natively. Everything loaded is cached on the device; a tap
+  changes the screen at once and is sent when the network returns.
+- **Most changes ship from the server.** Screens are data (JSON **layouts**) and the clients know no particular
+  app, so a new screen or data source reaches users without a client build.
+- **Your agent builds, only what you ask.** The pod validates every write, keeps every version, and draws previews
+  for the agent to check its work.
+- **Old clients keep working.** Each client says which vocabulary it can draw, and the pod serves it the newest
+  version of each layout it can.
+
+## The pieces
 
 ```
- Pixelfed, web pages ◀──▶ pod (Rust, Axum, SQLite) ── layouts + entities, events ──▶ engine (Rust) ──▶ renderer (Rust)
-                          sources: pixelfed,                                          cache, outbox,     desktop,
- Claude (MCP) ──────────▶ collections, events, …                                       sign-in, SSE       Android
+ agent (Claude) ── MCP ──▶ pod ◀──▶ websites, Pixelfed, a model API, …
+                            │  layouts + data, live events
+                            ▼
+              engine + renderer on each device
+              (desktop, Android, web, headless simulator)
 ```
 
-Clients open the pod's `home` layout. Home embeds other layouts (`core://Layout`: in place, in a card, or as a sheet
-or panel while a condition holds) and presents them (`action.navigation.open {layout}`: pushed, a sheet or a side
-panel), all on one engine that shares their data; system Back pops them. Home owns the pod's feeds, and every layout
-may bind any of them.
+- **The pod and its host** (`crates/pod-core`, `crates/pod-host`, `crates/server`): one server process hosts many
+  pods, one per user. A pod serves its **construct** (its layouts and components, stored by content hash) and its
+  data to devices, and an MCP server to the agent.
+- **Sources** (`crates/source-*`): each kind of data is a source behind one trait: **Collections** (typed data the
+  agent declares, kept current from the web by fillers), **Pixelfed**, **Events**, **Agents**, and a few small ones.
+- **Jacks** and two shared modules: the abilities a pod is plugged into (a model, the web, search, MCP servers,
+  accounts), with every web request going through the web module (`crates/web-extract`) and every model call
+  through the agent module (`crates/agent`).
+- **The engine** (`crates/client-core`): the device's cache, outbox of pending changes, sign-in and event stream.
+- **The renderer** (`crates/construct-render`): draws any layout, on the GPU or CPU; the desktop and Android apps,
+  the web client (`crates/construct-web`), the simulator (`crates/construct-sim`) and the pod's previews all use it.
 
-The vocabulary has two layers. **Plumbing** is what the app draws: nodes, intents and device data, each a named
-feature. **Porcelain** is components, expanded by the pod before serving, so the app only ever sees plumbing. A layout
-rooted at a `core://Page` draws its own header and Back; a `core://Workspace` is porcelain over the same nodes.
-
-The engine caches layouts and entities, applies actions optimistically and keeps an event stream open, so new layout
-versions, data changes and notifications arrive live. A goal of the design is that old clients keep working: a client
-says which features it can draw, and the pod serves it the newest version of each layout that uses only those. Read
-[docs/architecture.md](docs/architecture.md) for the full picture.
+Read [docs/design.md](docs/design.md) for how they fit and the interfaces between them.
 
 ## Quick start
 
@@ -69,21 +69,22 @@ You need Rust; for the Android app also an Android SDK with an NDK. Details are 
    CONSTRUCT_POD_URL=http://127.0.0.1:8080 cargo run --release -p construct-render --features viewer --bin construct-viewer
    ```
 
-3. Connect Claude Code to the pod and ask for a first layout, such as "keep my recipes in a collection and show them on home":
+3. Connect Claude Code to the pod and ask for a first screen, such as "keep my recipes in a collection and show them
+   on home":
 
    ```bash
    claude mcp add --transport http construct-local http://127.0.0.1:8080/v1/mcp \
      --header "Authorization: Bearer cmcp_localtest123"
    ```
 
-   Claude reads the pod's core layouts and sources, creates the layout and puts it on home; the app shows it at once.
-   The Claude apps can connect to a deployed server as a custom connector instead
-   ([docs/custom-apps.md](docs/custom-apps.md#building-apps-with-claude)).
+   Claude reads the pod's core layouts and sources, declares the collection, writes the layout and puts it on home;
+   the app shows it at once. The Claude apps can connect to a deployed server as a custom connector instead
+   ([docs/building.md](docs/building.md#building-with-claude)).
 
 Without `CONSTRUCT_POD_URL`, clients use the public staging server, where **Try a temporary pod** gives you a
 24-hour pod to explore.
 
-To render layouts headlessly to PNGs (no window, no device), use the simulator:
+To draw layouts headlessly to PNGs (no window, no device), use the simulator:
 
 ```bash
 cargo run -p construct-sim -- --workspace pixelfed_sample_no_login \
@@ -94,41 +95,21 @@ cargo run -p construct-sim -- --workspace pixelfed_sample_no_login \
 
 | Guide | |
 |---|---|
-| [Architecture](docs/architecture.md) | Pods, sources, layouts, the engine and the clients |
-| [Writing layouts](docs/layouts.md) | Publishing a layout version; nodes, intents, device data and components |
+| [Design](docs/design.md) | The whole system from the top down: goals, the pieces, their interfaces (also [as a course](https://the-construct-pod.fly.dev/aidan/design)) |
+| [Writing layouts](docs/layouts.md) | Layout files and the vocabulary: nodes, intents, bindings, device data, components |
+| [Layouts, Collections and sharing](docs/building.md) | Core layouts and home, building with Claude (MCP), Collections and fillers, jacks, sharing |
+| [HTTP API](docs/api.md) | The pod's core routes and event stream |
 | [Running the server](docs/server.md) | Configuration, pods, fixed local codes, monitoring, deploying |
-| [HTTP API](docs/api.md) | The pod's core routes |
-| [Custom apps, Collections and Events](docs/custom-apps.md) | Core layouts and home, the pod's layouts, Claude (MCP), Collections, fillers and the Events app |
-| [Clients](docs/clients.md) | Desktop and Android: building, options, home and the layouts it shows, sign-in |
-| [Simulator](docs/simulator.md) | Headless screenshots and UI scripts |
-| [Testing](docs/testing.md) | Test suites, the fake Pixelfed, a local real Pixelfed |
-| [Pixelfed](docs/pixelfed.md), [Posting photos](docs/posting.md), [Notifications](docs/notifications.md) | Feature guides |
+| [Clients](docs/clients.md) and [rendering](docs/rendering.md) | Desktop, Android and web; the Rust renderer |
+| [Simulator](docs/simulator.md) and [testing](docs/testing.md) | Headless screenshots and UI scripts; the test suites |
+| [Pixelfed](docs/pixelfed.md), [posting photos](docs/posting.md), [notifications](docs/notifications.md), [Agents](docs/agents.md) | Feature guides |
 | [Decisions](docs/DECISIONS.md) and [newer decisions](docs/decisions/) | Why things are the way they are |
-
-## Repository layout
-
-```
-crates/protocol         wire types: UiNode, ActionIntent, bundles; features/, the named vocabulary
-crates/pod-core         the generic pod: layouts and their versions, components, sessions, sign-ins, uploads,
-                          notifications, MCP; components/, the server's components
-crates/pod-host         one server, many pods: host.db, pod tokens, temporary pods, scheduler
-crates/server           the server binary and the `server pods` admin CLI
-crates/source-*         sources: pixelfed, collections, events, monitor, agents, shell (home, Settings, the
-                          inbox); core layout versions in layouts/<id>/NNNN.json
-crates/web-extract      fetching pages and reading structured data out of them, for fillers
-crates/client-core      the engine: SQLite cache, outbox, PKCE sign-in, event stream
-crates/construct-render the renderer and the clients: the desktop app (construct-viewer), the Android app
-                          (NativeActivity, android/), the pod's layout previews
-crates/construct-sim    the headless simulator: scripted UI checks to PNGs
-crates/e2e              end-to-end suite
-fake-pixelfed/          a fake Pixelfed upstream for tests and staging
-deploy/, dev/, scripts/, assets/icon/
-```
 
 ## Status
 
-The Construct is under active development. The server and both clients work and run on a staging server; the
-Android app and the Mac app come from GitHub releases (`.github/workflows/release.yml`), not a store. The API and the layout format may change.
+The Construct is under active development. The server and the clients work and run on a staging server; the Android
+app and the Mac app come from GitHub releases (`.github/workflows/release.yml`), not a store. The API and the layout
+format may change.
 
 ## Contributing
 

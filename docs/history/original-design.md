@@ -2,7 +2,7 @@
 
 > **Archived.** This is the design the project started from, kept for history: the early decisions in
 > [`../DECISIONS.md`](../DECISIONS.md) refer to its sections (§2.2A and so on). It is **not** how the system works
-> today; read [`../architecture.md`](../architecture.md) for that. The main differences:
+> today; read [`../design.md`](../design.md) for that. The main differences:
 >
 > - The product was renamed from Project Canvas to The Construct (D31); identifiers below were updated to match.
 > - There are no app-specific nodes: the `pixelfed://` widgets became generic `core://` nodes, and the post card is a

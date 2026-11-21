@@ -123,7 +123,7 @@ The fake Pixelfed's own variables are in [testing.md](testing.md#fake-pixelfed).
 
 ## Pods
 
-A pod is one user's space: their sessions, sign-ins, layout history, custom apps and data, in one SQLite file
+A pod is one user's space: their sessions, sign-ins, layouts and their history, and data, in one SQLite file
 (D46). Clients name their pod with a **pod token** (`cpod_…`, 256 random bits). The server stores only its hash; the
 code is shown once when the pod is made. Any number of devices can use the same code.
 
@@ -144,7 +144,7 @@ server pods delete <name>                      # stops now; files deleted within
 server pods notify-test <name>                 # a test notification to the inbox and the pod's devices
 server pods mcp <name> [label]                 # a credential for Claude Code that reaches only /v1/mcp
 server pods revoke-mcp <name>                  # disconnect every connected app (MCP credential) of the pod
-server pods monitoring <name> on|off           # let this pod's apps read server-wide monitoring data
+server pods monitoring <name> on|off           # let this pod's layouts read server-wide monitoring data
 server pods gaps [name]                        # what agents said was missing while building (MCP note_gap)
 server pods adopt <name> <path/to/server.db>   # turn a pre-pods single-user database into a pod
 server pods remove-adopted [dir]               # delete the originals adopt left behind
@@ -242,7 +242,7 @@ Counts live in memory and restart from zero.
   there).
 - **Alerts:** in such a pod, the layout that shows the source gets a "Server warnings" notification channel
   (decision [`notification-owner`](decisions/notification-owner.md)). The
-  adapter looks at the checks every 5 minutes (while the pod has a registered device), and a check that turns to
+  source looks at the checks every 5 minutes (while the pod has a registered device), and a check that turns to
   warning sends one notification ("Server: <check>"); it notifies again only after it has been back to ok (decision
   [`server-monitoring-alerts`](decisions/server-monitoring-alerts.md)).
 - **Devices** (decision [`device-versions`](decisions/device-versions.md)): every pod records the devices that reach

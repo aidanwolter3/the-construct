@@ -1,6 +1,6 @@
 # Notifications
 
-Sources send notifications through their pod: likes and comments from Pixelfed, matches from the Events app, reminders
+Sources send notifications through their pod: likes and comments from Pixelfed, matches from Events, reminders
 from a collection. They reach every device of the pod: an in-app inbox, OS notifications while an app runs, and Web
 Push when the Android app is closed. Decision D52 in [DECISIONS.md](DECISIONS.md) records the design and what was
 weighed; the original build plan is in [history/notifications-plan.md](history/notifications-plan.md). They are
@@ -42,8 +42,8 @@ needs source code only.
 - **Polling:** a source implements `Source::poll_notifications` and `poll_interval`, and keeps its cursor in
   its own tables. Pixelfed polls `GET /api/v1/notifications` every 2 minutes; the first poll stores the recent
   backlog as already read, so nothing floods in. Collections uses the same poll to send due reminders and to run
-  scheduled fills, whose alerts notify. Its channels belong to the custom app showing the collection. Server
-  monitoring looks at its checks every 5 minutes and notifies the custom apps built on it when one turns to warning.
+  scheduled fills, whose alerts notify. Its channels belong to the layout showing the collection. Server
+  monitoring looks at its checks every 5 minutes and notifies the layouts built on it when one turns to warning.
 - **From a stream:** the Agents source follows its runner's event stream and notifies as records change (a run
   that needs you, a run that ends with a report, runner warnings; [agents.md](agents.md)).
 - **From a route:** a source calls `AppState::notify` from its own handlers.

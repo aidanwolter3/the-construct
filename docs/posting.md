@@ -31,7 +31,7 @@ route and layout.
 ## The flow
 
 ```
-client                     engine (outbox)              pod-core            pixelfed adapter          Pixelfed
+client                     engine (outbox)              pod-core            pixelfed source           Pixelfed
 MediaPicker ── pick ──▶ stage_attachment
                         (JPEG, no EXIF, ≤2048 px)
 Share ── Create ──────▶ temp post at top of feed
@@ -73,10 +73,10 @@ Share ── Create ──────▶ temp post at top of feed
   20 MB) stores the file in the pod's own database (`uploads`, deleted with the pod) and answers `{upload_id}`.
 - `GET /v1/uploads/{id}` is a public capability URL (like the media proxy), so placeholders can show the photos on any
   device. Uploads nobody claimed are deleted after 24 h; claimed ones when their owner releases them.
-- Adapters use `AppState::uploads()` (`get`, `claim`, `release`, `public_url`) and `AppState::publish_data`.
+- Sources use `AppState::uploads()` (`get`, `claim`, `release`, `public_url`) and `AppState::publish_data`.
 - `Source::resume` runs when a pod opens, so interrupted jobs start again.
 
-### Pixelfed adapter
+### Pixelfed source
 - `POST /v1/pixelfed/posts/create {caption, media, client_id}` checks 1–4 media and the caption length (500,
   Pixelfed's default), claims the
   uploads, saves a `pixelfed_pending_posts` row (one per `client_id`) and answers 202. A job then:
@@ -97,15 +97,15 @@ Share ── Create ──────▶ temp post at top of feed
 | State | Where | Feed shows |
 | --- | --- | --- |
 | queued | client outbox (maybe offline) | placeholder, "Posting…" |
-| posting | adapter row, job running | placeholder from the server, "Posting…" |
+| posting | source row, job running | placeholder from the server, "Posting…" |
 | failed | adapter row | "Couldn't post: <reason>", Retry, Discard |
 | done | adapter row until the timeline lists it | the real post |
 
-A refusal before the adapter accepts (a 4xx on upload or create, rare since the layout enforces the limits) drops the
+A refusal before the source accepts (a 4xx on upload or create, rare since the layout enforces the limits) drops the
 placeholder, like any refused create (D35).
 
 ## Later
-- Alt text per photo, visibility, content warnings: a field per photo and chips in the layout, plus the adapter
+- Alt text per photo, visibility, content warnings: a field per photo and chips in the layout, plus the source
   passing them on.
 - Video.
 - A post (and its uploads) blocks the outbox queue while it uploads; likes made meanwhile wait.

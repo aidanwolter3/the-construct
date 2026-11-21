@@ -43,6 +43,8 @@ Names older decisions may still use, and what they are now.
 | `unread_by_app`, `GET /v1/notifications?app=`, `toggle_channel` `app` | `unread_by_layout`, `?layout=`, `toggle_channel` `layout` | [one-layout-system](one-layout-system.md) |
 | `AppInfo`, `Source::apps` | `BlueprintInfo`, `Source::blueprints` | [one-layout-system](one-layout-system.md) |
 | `GET /v1/workspaces/{id}/events` | `GET /v1/construct/events` | [one-layout-system](one-layout-system.md) |
+| `docs/architecture.md` | `docs/design.md` (the design, breadth first, also read as a course) | [design-doc-and-lessons](design-doc-and-lessons.md) |
+| `docs/custom-apps.md` ("Custom apps, Collections and Events") | `docs/building.md` ("Building on a pod") | [design-doc-and-lessons](design-doc-and-lessons.md) |
 
 The decision files [watcher](watcher.md) and [watcher-rules-per-site](watcher-rules-per-site.md) keep their names:
 other decisions link to them.

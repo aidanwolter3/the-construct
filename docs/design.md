@@ -16,7 +16,7 @@ The same lessons are a course you can take on a phone: **[Inside The Construct](
 drawn by The Construct itself from this file (see [Keeping this current](#keeping-this-current)).
 
 This document explains how things fit. The guides go deeper on each subject: [layouts.md](layouts.md) (the layout
-vocabulary), [custom-apps.md](custom-apps.md) (layouts, Collections, sharing, jacks), [api.md](api.md) (the HTTP
+vocabulary), [building.md](building.md) (layouts, Collections, sharing, jacks), [api.md](api.md) (the HTTP
 API), [server.md](server.md), [clients.md](clients.md), [rendering.md](rendering.md), [agents.md](agents.md),
 [notifications.md](notifications.md), [testing.md](testing.md) and [simulator.md](simulator.md). Why each choice
 was made is in the decisions: [DECISIONS.md](DECISIONS.md) (D1–D52) and [decisions/](decisions/).

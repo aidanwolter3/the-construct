@@ -1,10 +1,10 @@
-# Custom apps, Collections and Events
+# Building on a pod: layouts, Collections and sharing
 
-A pod's apps are the user's own: any layout the [vocabulary](layouts.md) can draw, over the feeds, screen data and
+A pod's layouts are the user's own: any layout the [vocabulary](layouts.md) can draw, over the feeds, screen data and
 actions the pod's data sources declare. They are usually built by Claude through the pod's MCP endpoint, often from a
 **core layout** (a built-in layout the server ships and updates, such as `pixelfed` or `events`). A new pod
-has one app, `home`; nothing else until the user asks for it. Data an app keeps itself (a todo list, a maintenance
-log) lives in **Collections**.
+has one layout, `home`; nothing else until the user asks for it. Data the user keeps (a todo list, a maintenance
+log) lives in **Collections**. How these fit into the whole system: [design.md](design.md), Parts 4 to 6.
 
 Decisions: [`custom-apps-and-data-sources`](decisions/custom-apps-and-data-sources.md),
 [`mcp-connector`](decisions/mcp-connector.md), [`layout-parts`](decisions/layout-parts.md),
@@ -77,7 +77,7 @@ from home's feeds (a new home element without them), so home's scope holds no fe
   [device data](layouts.md#device-data) need no feed.
 - **Deleting.** The pod's layouts can be deleted with MCP `delete_layout`, except `home`.
 
-## Building apps with Claude
+## Building with Claude
 
 Each pod has an MCP endpoint, `POST /v1/mcp`, so Claude can read the pod's sources and build and edit its layouts.
 Writes are validated and appear in each name's history as written by Claude.
@@ -143,7 +143,7 @@ filler or a model wrote, and another pod's publication in `describe_publication`
 ### Sharing with other users on the server
 
 Claude can share a layout, a component or the whole construct (`home`) with other users of the same server, and adopt what
-they share (decision [`sharing`](decisions/sharing.md)). Share links work through Claude only: the apps have no
+they share (decision [`sharing`](decisions/sharing.md)). Share links work through Claude only: the clients have no
 share screen.
 
 - `set_handle` chooses the pod's handle (`@ann`, unique on the server); publications are named `@<handle>/<slug>`.
@@ -377,7 +377,7 @@ MCP tools: `list_collections`, `define_collection`, `describe_collection`, `appl
 
 A collection can keep itself current from the web (decision
 [`collection-fillers`](decisions/collection-fillers.md)). Each **filler** writes its own rows: on a schedule
-(`every_minutes`), when an app showing it opens with stale data (`on_open_minutes`), from Claude
+(`every_minutes`), when a layout showing it opens with stale data (`on_open_minutes`), from Claude
 (`collections_refresh`), or from a layout's refresh action. A filler is data in the definition, not code.
 
 - **`fetch`** (no model call per fill): a URL (or each row's own URL), an extractor and a map from fields to paths in
@@ -536,13 +536,13 @@ session over Streamable HTTP, with no redirects, a minute per request and 8 MB p
 capped: tool names of at most 128 characters (longer ones are skipped), descriptions of 600, an input schema of
 16 KB (a larger one reads as a bare object schema), 200 tools and 1 MB in all.
 
-## The Events app
+## Events
 
-The **Events** app (app id `events`, `crates/source-events`) shows every upcoming event of the websites the user
+The **Events** core layout (id `events`, `crates/source-events`) shows every upcoming event of the websites the user
 watches and notifies when one matches ("a show with Brass Lanterns at Improv Millbrook"). Its data is the system collection
 `events` (`source_id`, `title`, `start`, `end`, `venue`, `description`, `url`, `tickets_url`, `seen`, `going`): each
 website is a fetch filler, and each rule an alert on that filler. Claude adds and changes them with the Collections
-tools; the MCP instructions include the recipe. The app shows matches, sites with their health and alerts, a site's
+tools; the MCP instructions include the recipe. It shows matches, sites with their health and alerts, a site's
 events, and an event with ticket and page links. The fields of `events` can't be renamed or removed.
 
 `seen` and `going` are the user's own toggles, which no filler writes. Opening an event from a list marks it seen
@@ -554,7 +554,7 @@ until set. The layout is a `core://Page` built from the core components (`screen
 `item_row`, `titled_section`, `pill`, `card`), so a pod can show it by reference (`@core/events`) rather than a copy.
 
 The app replaced an earlier Watcher with its own tables (decisions [`watcher`](decisions/watcher.md),
-[`watcher-rules-per-site`](decisions/watcher-rules-per-site.md)); its app id was `watcher` until decision
+[`watcher-rules-per-site`](decisions/watcher-rules-per-site.md)); its id was `watcher` until decision
 [`rename-apps-and-folders`](decisions/rename-apps-and-folders.md).
 
 Try it locally: `CONSTRUCT_FILL_PRIVATE_HOSTS=1 cargo run -p server`, serve an `.ics` file, and ask Claude to watch it.

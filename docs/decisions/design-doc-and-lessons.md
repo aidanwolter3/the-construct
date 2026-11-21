@@ -37,6 +37,11 @@ Decision:
   `new_rows: publish`, so a new lesson reaches the public page without a new review; an edit to the layouts still
   needs one.
 
+`docs/design.md` replaces `docs/architecture.md`, which it covers, so the two can't disagree; the guide on layouts,
+Collections and sharing is renamed from `custom-apps.md` to `building.md`, and the guides say `@core/<name>` and
+`@me/<name>` for components (the names the pod uses), "layout" for what they called a custom app, and "source" for
+what they called an app adapter.
+
 Nothing in the server or the clients changed for this: the course is Collections, fillers and layouts a pod already
 has. Not done: the course on other pods (they could adopt a publication of its layouts and point the same fillers at
 the file).
