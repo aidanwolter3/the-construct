@@ -7,6 +7,7 @@ mod construct;
 mod guide;
 mod previews;
 mod sharing;
+mod watches;
 
 use std::sync::Arc;
 

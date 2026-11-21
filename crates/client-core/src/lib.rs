@@ -2040,6 +2040,13 @@ impl ConstructEngine {
         self.inner.stage_attachment(path)
     }
 
+    /// The current session's bearer, for the one request the engine doesn't
+    /// make itself: images of other sites, fetched through the pod's image
+    /// proxy (`GET /v1/image`, issue #443). `None` when signed out.
+    pub fn session_bearer(&self) -> Option<String> {
+        self.inner.session_token()
+    }
+
     /// Where staged attachments are: the only local files an image may be
     /// drawn from.
     pub fn attachments_dir(&self) -> &Path {

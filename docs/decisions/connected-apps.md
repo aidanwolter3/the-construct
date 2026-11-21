@@ -23,7 +23,7 @@ Decision:
   machine. The pre-registered client's hosts are trusted too (the operator set them).
 - **Request errors** (bad `response_type`, PKCE, `resource`) redirect back only for those trusted clients; any other
   client gets an error page here, so the server is no open redirect.
-- **Idle expiry:** host.db migration 10 (`mcp_credential_use`) adds `credentials.last_used_at` (existing MCP
+- **Idle expiry:** host.db migration 11 (`mcp_credential_use`) adds `credentials.last_used_at` (existing MCP
   credentials count as used at the migration) and `redirect_host`. A use records the time at most once an hour; an MCP
   credential unused for 90 days (`MCP_IDLE_SECS`) is no credential and the sweeper deletes it. No refresh token.
 - **Settings → Connected apps** (layout `settings` 0010, no new vocabulary): a screen over

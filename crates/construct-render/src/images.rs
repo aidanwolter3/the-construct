@@ -2,7 +2,9 @@
 //! whoever sets a fetcher (`crate::remote` on devices), kept here, and cut to
 //! the box they are drawn in (cropped to fill it, corners rounded) for both
 //! rasterizers. Without a fetcher (the pod's previews) nothing loads and
-//! the placeholders stay.
+//! the placeholders stay. Decoded images are kept under a byte budget
+//! ([`BUDGET_BYTES`]): the least recently drawn goes first, and loads again
+//! if it is asked for again.
 
 use image::RgbaImage;
 use std::collections::HashMap;
@@ -18,9 +20,12 @@ enum Slot {
     Failed,
 }
 
-#[derive(Default)]
 struct Inner {
-    slots: HashMap<String, Slot>,
+    /// By url: the slot and when it was last asked for.
+    slots: HashMap<String, (Slot, u64)>,
+    /// Bytes of the ready images in `slots`.
+    used: usize,
+    budget: usize,
     /// Cut versions: (url, width, height, radius px) → pixels and when
     /// last asked for (the least recent goes first when full).
     cut: HashMap<CutKey, (Arc<RgbaImage>, u64)>,
@@ -34,6 +39,83 @@ struct Inner {
     waker: Option<Waker>,
 }
 
+impl Default for Inner {
+    fn default() -> Inner {
+        Inner {
+            slots: HashMap::new(),
+            used: 0,
+            budget: BUDGET_BYTES,
+            cut: HashMap::new(),
+            cutting: Default::default(),
+            tick: 0,
+            ids: HashMap::new(),
+            by_id: Vec::new(),
+            fetch: None,
+            waker: None,
+        }
+    }
+}
+
+impl Inner {
+    /// The ready image at `url`, marked as just used.
+    fn ready(&mut self, url: &str) -> Option<Arc<RgbaImage>> {
+        self.tick += 1;
+        let tick = self.tick;
+        match self.slots.get_mut(url) {
+            Some((Slot::Ready(i), seen)) => {
+                *seen = tick;
+                Some(i.clone())
+            }
+            _ => None,
+        }
+    }
+
+    /// Drops the least recently used images (never `keep`) until the ready
+    /// ones fit the budget, and failed urls past [`MAX_FAILED`] (they are
+    /// tried again if asked for again).
+    fn evict(&mut self, keep: &str) {
+        while self.used > self.budget {
+            let Some(oldest) = self
+                .slots
+                .iter()
+                .filter(|(u, (s, _))| matches!(s, Slot::Ready(_)) && u.as_str() != keep)
+                .min_by_key(|(_, (_, seen))| *seen)
+                .map(|(u, _)| u.clone())
+            else {
+                break;
+            };
+            self.remove(&oldest);
+        }
+        let failed = || {
+            self.slots
+                .values()
+                .filter(|(s, _)| matches!(s, Slot::Failed))
+        };
+        if failed().count() > MAX_FAILED {
+            let mut old: Vec<(u64, String)> = self
+                .slots
+                .iter()
+                .filter(|(_, (s, _))| matches!(s, Slot::Failed))
+                .map(|(u, (_, seen))| (*seen, u.clone()))
+                .collect();
+            old.sort();
+            for (_, u) in old.iter().take(old.len() - MAX_FAILED) {
+                self.slots.remove(u);
+            }
+        }
+    }
+
+    fn remove(&mut self, url: &str) {
+        if let Some((Slot::Ready(i), _)) = self.slots.remove(url) {
+            self.used = self.used.saturating_sub(bytes_of(&i));
+        }
+    }
+}
+
+fn bytes_of(i: &RgbaImage) -> usize {
+    i.as_raw().len()
+}
+
 /// Shared and cheap to clone.
 #[derive(Clone, Default)]
 pub struct ImageStore {
@@ -44,10 +126,27 @@ pub struct ImageStore {
 pub const FIRST_GLYPH_ID: u16 = 256;
 /// Most cut versions kept (the least recently used goes first).
 const MAX_CUT: usize = 64;
+/// Most bytes of decoded images kept at once (about sixteen of the largest,
+/// `crate::remote`'s 1600 px side): the least recently drawn goes first.
+pub const BUDGET_BYTES: usize = 160 << 20;
+/// Most failed urls remembered (so they aren't fetched again every frame).
+const MAX_FAILED: usize = 1024;
 
 impl ImageStore {
     pub fn new() -> ImageStore {
         ImageStore::default()
+    }
+
+    /// A store that keeps at most `bytes` of decoded images.
+    pub fn with_budget(bytes: usize) -> ImageStore {
+        let store = ImageStore::default();
+        store.lock().budget = bytes;
+        store
+    }
+
+    /// Bytes of decoded images kept now.
+    pub fn bytes_used(&self) -> usize {
+        self.lock().used
     }
 
     fn lock(&self) -> std::sync::MutexGuard<'_, Inner> {
@@ -74,7 +173,9 @@ impl ImageStore {
             let Some(f) = g.fetch.clone() else {
                 return;
             };
-            g.slots.insert(url.to_owned(), Slot::Pending);
+            g.tick += 1;
+            let tick = g.tick;
+            g.slots.insert(url.to_owned(), (Slot::Pending, tick));
             f
         };
         fetch(url.to_owned());
@@ -84,13 +185,18 @@ impl ImageStore {
     pub fn insert(&self, url: &str, img: Option<RgbaImage>) {
         let waker = {
             let mut g = self.lock();
-            g.slots.insert(
-                url.to_owned(),
-                match img {
-                    Some(i) => Slot::Ready(Arc::new(i)),
-                    None => Slot::Failed,
-                },
-            );
+            g.remove(url);
+            g.tick += 1;
+            let tick = g.tick;
+            let slot = match img {
+                Some(i) => {
+                    g.used += bytes_of(&i);
+                    Slot::Ready(Arc::new(i))
+                }
+                None => Slot::Failed,
+            };
+            g.slots.insert(url.to_owned(), (slot, tick));
+            g.evict(url);
             g.waker.clone()
         };
         if let Some(w) = waker {
@@ -109,15 +215,15 @@ impl ImageStore {
     /// `ready`, `loading`, `failed` or `none` (never asked for).
     pub fn status(&self, url: &str) -> &'static str {
         match self.lock().slots.get(url) {
-            Some(Slot::Ready(_)) => "ready",
-            Some(Slot::Pending) => "loading",
-            Some(Slot::Failed) => "failed",
+            Some((Slot::Ready(_), _)) => "ready",
+            Some((Slot::Pending, _)) => "loading",
+            Some((Slot::Failed, _)) => "failed",
             None => "none",
         }
     }
 
     pub fn is_ready(&self, url: &str) -> bool {
-        matches!(self.lock().slots.get(url), Some(Slot::Ready(_)))
+        matches!(self.lock().slots.get(url), Some((Slot::Ready(_), _)))
     }
 
     /// The image cut to `w` × `h` pixels with corners of `radius` pixels,
@@ -133,10 +239,7 @@ impl ImageStore {
                 c.1 = tick;
                 return Some(c.0.clone());
             }
-            match g.slots.get(url) {
-                Some(Slot::Ready(i)) => i.clone(),
-                _ => return None,
-            }
+            g.ready(url)?
         };
         let out = Arc::new(cut(&src, w.max(1), h.max(1), r as f32));
         self.keep(key, out.clone());
@@ -179,9 +282,9 @@ impl ImageStore {
             if g.cutting.contains(&key) {
                 return false;
             }
-            match g.slots.get(url) {
-                Some(Slot::Ready(i)) => i.clone(),
-                _ => return false,
+            match g.ready(url) {
+                Some(i) => i,
+                None => return false,
             }
         };
         self.lock().cutting.insert(key.clone());
@@ -302,5 +405,50 @@ mod tests {
             Some(("https://img.example/a.jpg".into(), 2))
         );
         assert_eq!(store.glyph_id("https://img.example/a.jpg", 2.0), id);
+    }
+
+    /// Decoded images stay under the budget: the least recently drawn goes
+    /// first, and loads again when asked for.
+    #[test]
+    fn the_store_stays_under_its_budget() {
+        let one = 100 * 100 * 4;
+        let store = ImageStore::with_budget(3 * one);
+        let asked = Arc::new(Mutex::new(Vec::new()));
+        let a = asked.clone();
+        store.set_fetcher(move |u| a.lock().unwrap().push(u));
+        let url = |i: usize| format!("https://img.example/{i}.jpg");
+        for i in 0..3 {
+            store.request(&url(i));
+            store.insert(&url(i), Some(RgbaImage::new(100, 100)));
+        }
+        assert_eq!(store.bytes_used(), 3 * one);
+        // Drawing 0 makes 1 the least recently used.
+        assert!(store.cut(&url(0), 10, 10, 0.0).is_some());
+        for i in 3..300 {
+            store.request(&url(i));
+            store.insert(&url(i), Some(RgbaImage::new(100, 100)));
+            assert!(store.bytes_used() <= 3 * one, "{i}");
+        }
+        assert!(store.is_ready(&url(299)));
+        assert_eq!(store.status(&url(1)), "none");
+        // An image larger than the whole budget is kept alone, while drawn.
+        store.insert(&url(1000), Some(RgbaImage::new(200, 200)));
+        assert!(store.is_ready(&url(1000)));
+        assert_eq!(store.bytes_used(), 200 * 200 * 4);
+        // An evicted image loads again when asked for.
+        let before = asked.lock().unwrap().len();
+        store.request(&url(1));
+        assert_eq!(asked.lock().unwrap().len(), before + 1);
+        // Failed urls are remembered only up to a point.
+        for i in 0..(MAX_FAILED + 10) {
+            store.insert(&format!("https://bad.example/{i}"), None);
+        }
+        let failed = store
+            .lock()
+            .slots
+            .values()
+            .filter(|(s, _)| matches!(s, Slot::Failed))
+            .count();
+        assert_eq!(failed, MAX_FAILED);
     }
 }

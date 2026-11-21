@@ -425,6 +425,13 @@ pub const STEPS: &[Step] = &[
         "agent_usage_tokens",
         "ALTER TABLE agent_usage ADD COLUMN tokens INTEGER NOT NULL DEFAULT 0;",
     ),
+    // Issue #435: a device watch runs its action with the scope of the
+    // credential that made it; watches made before this are taken as an MCP
+    // credential's, the narrower scope.
+    Step::sql(
+        "device_watch_scope",
+        "ALTER TABLE device_watches ADD COLUMN scope TEXT NOT NULL DEFAULT 'mcp';",
+    ),
 ];
 
 /// Whether the old layout system's tables are still there (dropped by

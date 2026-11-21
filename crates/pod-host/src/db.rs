@@ -187,7 +187,13 @@ const MIGRATIONS: &[Step] = &[
      );
      CREATE INDEX calendar_feeds_owner ON calendar_feeds(owner_pod);",
     ),
-    // 10 (decision `connected-apps`): when each MCP credential was last
+    // 10 (issue #446): a revoked public copy keeps neither its title nor
+    // the rows it asked for, only that it was revoked.
+    Step::sql(
+        "public_copies_revoked_forget",
+        "UPDATE public_copies SET title = '', rows = '[]' WHERE revoked_at IS NOT NULL;",
+    ),
+    // 11 (decision `connected-apps`): when each MCP credential was last
     // used (one unused for `MCP_IDLE_SECS` stops working and is swept) and
     // the host its OAuth redirect went to, for Settings' Connected apps.
     // Existing credentials count as used now, so none expires at once.

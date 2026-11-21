@@ -211,7 +211,7 @@ does when it finishes.
   also `Strict-Transport-Security`.
 - Opening a pod by code is limited to 10 tries a minute per client address (behind Fly, `Fly-Client-IP`).
 - Outbound requests to user-chosen hosts (typed Pixelfed servers, push endpoints, MCP servers, agent runners, filler
-  URLs, `/web/image`) all go through `pod_core::net::OutboundClient` (decision
+  URLs, the image proxies `/web/image` and `/v1/image`) all go through `pod_core::net::OutboundClient` (decision
   [`outbound-client`](decisions/outbound-client.md)): the URL is checked first (scheme, a public host name, no IP
   literal, the port), names resolve only to public addresses, redirects never lead into private space, and a body is
   read only up to a cap (4 MiB unless the caller sets another; Pixelfed API answers 4 MiB). `clippy.toml` refuses
@@ -251,7 +251,8 @@ Counts live in memory and restart from zero.
   Pixelfed image, the OAuth callback), which anyone with the pod's id can reach, is no device of the pod. The `monitor` source's `devices` feed shows them in any pod (no operator switch): how
   each device's build stands against the server's (latest, behind, ahead) and devices per day by build for a
   `core://Bars` chart. Over MCP, `list_devices`, `rename_device` and `watch_device` (run a source action or send a
-  "Device updates" notification once a device draws a feature or runs a newer build).
+  "Device updates" notification once a device draws a feature or runs a newer build; an MCP credential's watch runs
+  only actions an MCP credential reaches, such as a collection's row writes or reopening an agent's run).
 - **Prometheus:** with `CONSTRUCT_METRICS_ADDR`, `GET /metrics` on that address serves the same counters as
   `construct_*` metrics.
 

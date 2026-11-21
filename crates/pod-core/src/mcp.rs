@@ -7,10 +7,14 @@
 //! reaches nothing else. The pod token itself works too (served alone, in
 //! tests). The tools read the pod's layouts, core layouts and data sources and
 //! write the construct ([`crate::construct::write`], decision
-//! `content-addressed-construct`); writes are recorded with author `claude`. Nothing
-//! here can call a source's routes or act for the user upstream, except
-//! `sample_data`, which reads (truncated) data the user's own pod already
-//! serves them.
+//! `content-addressed-construct`); writes are recorded with author `claude`.
+//! An MCP credential can't call a source's routes or act for the user
+//! upstream: the requests its tools make through the pod's router
+//! (`sample_data`'s reads, previews, a device watch's action) carry its scope
+//! ([`crate::session::Scope::Mcp`]), which reads and runs only the actions
+//! sources list as [`crate::SourceManifest::mcp_actions`] (collections' row
+//! writes and actions, reopening an agent's run), which its tools can already
+//! do.
 
 use axum::{
     Json, Router,
@@ -66,6 +70,16 @@ async fn authorized(pod: &Pod, headers: &HeaderMap) -> Result<(), Box<Response>>
             Err(Box::new(r))
         }
         Err(e) => Err(Box::new(e.into_response())),
+    }
+}
+
+/// The scope of the credential calling the endpoint ([`authorized`]): an
+/// MCP credential's, else the pod token's session's.
+pub(crate) fn credential_scope(pod: &Pod, headers: &HeaderMap) -> crate::session::Scope {
+    if pod.host_credential(headers).as_deref() == Some("mcp") {
+        crate::session::Scope::Mcp
+    } else {
+        crate::session::Scope::Full
     }
 }
 
@@ -617,7 +631,7 @@ async fn call_tool(pod: &Pod, headers: &HeaderMap, params: &Value) -> Value {
         return tool_result(r);
     }
     // Devices and their builds (decision `device-versions`).
-    if let Some(r) = crate::devices::tool(pod, name, &args).await {
+    if let Some(r) = crate::devices::tool(pod, credential_scope(pod, headers), name, &args).await {
         return tool_result(r);
     }
     // Sharing between the server's pods (decision `sharing`).
@@ -839,7 +853,8 @@ async fn sample_data(pod: &Pod, headers: &HeaderMap, args: &Value) -> Result<Val
             .expect("a valid request");
         *req.headers_mut() = forwarded;
         if let Some(o) = &owner
-            && let Ok(v) = HeaderValue::from_str(&pod.internal_as(&o.token_hash))
+            && let Ok(v) =
+                HeaderValue::from_str(&pod.internal_as(&o.token_hash, crate::session::Scope::Mcp))
         {
             req.headers_mut().insert(crate::session::INTERNAL_HEADER, v);
         }

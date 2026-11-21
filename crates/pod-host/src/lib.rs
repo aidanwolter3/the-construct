@@ -1491,6 +1491,11 @@ async fn dispatch(State(host): State<Arc<Host>>, mut req: Request) -> Response {
     if connected_apps::is_ours(req.uri().path()) {
         return connected_apps::route(&host, &pod_id, req).await;
     }
+    // The native clients' image proxy shares the web proxy's per-pod limit.
+    if req.uri().path() == pod_core::image_proxy::IMAGE_PATH && !web::image_allowed(&host, &pod_id)
+    {
+        return rate_limited();
+    }
     let open = match host.pod(&pod_id).await {
         Ok(p) => p,
         Err(r) => return *r,
