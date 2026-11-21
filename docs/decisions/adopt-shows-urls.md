@@ -1,5 +1,8 @@
 # Adopting shows a publication's URLs and texts, and URLs that send the adopter's data wait for consent
 
+Partly superseded by [adoption-capabilities](adoption-capabilities.md): what an adopted element may reach,
+and how URL consent is kept.
+
 Date: 2026-11-19. Related: [sharing](sharing.md), [content-addressed-construct](content-addressed-construct.md).
 Issue #357.
 

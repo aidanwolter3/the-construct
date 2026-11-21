@@ -15,7 +15,11 @@
 //! - [`events`]: `GET /v1/construct/events`.
 //! - [`share`]: publishing to the host's shelf and adopting from it
 //!   (decision `sharing`).
+//! - [`adopted`]: what an adopted element may reach (decision
+//!   `adoption-capabilities`).
 
+#[path = "construct_adopted.rs"]
+pub mod adopted;
 #[path = "construct_core.rs"]
 pub mod core;
 #[path = "construct_events.rs"]

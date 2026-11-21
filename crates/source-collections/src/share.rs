@@ -145,12 +145,28 @@ impl Rewriter<'_> {
     /// Collection names in a string: `collection:<c>` (the whole string),
     /// `collections://<c>/<row>` and `/v1/collections/<c>/`.
     fn names(&mut self, s: &str, at: &str) -> Result<String, LayoutError> {
-        if let Some(c) = s.strip_prefix("collection:")
-            && !c.is_empty()
-            && c.chars().all(is_name_char)
-        {
+        // Every key of a collection (`collection:<c>`, `…:view:<v>`,
+        // `…:alerts`, `…:filler:<id>`, ...) names it first.
+        if let Some(rest) = s.strip_prefix("collection:") {
+            let end = rest
+                .find(|ch: char| !is_name_char(ch))
+                .unwrap_or(rest.len());
+            let (c, tail) = rest.split_at(end);
+            // An input or an argument (a component's): bound where it is used.
+            if rest.starts_with('$') {
+                return Ok(s.to_owned());
+            }
+            if c.is_empty() || !(tail.is_empty() || tail.starts_with(':')) {
+                return Err(err(
+                    at,
+                    format!(
+                        "{s:?} names a collection the copy can't turn into an input: name it \
+                         literally (collection:<name>…), or leave this element out"
+                    ),
+                ));
+            }
             self.input(c);
-            return Ok(format!("collection:$in.{c}"));
+            return Ok(format!("collection:$in.{c}{tail}"));
         }
         let mut out = s.to_owned();
         for marker in ["collections://", "/v1/collections/"] {
@@ -227,7 +243,8 @@ impl Rewriter<'_> {
         let listed = map
             .get("query_key")
             .and_then(Value::as_str)
-            .and_then(crate::bindings::collection_of_key)
+            .and_then(crate::bindings::list_of_key)
+            .map(|(c, _)| c)
             .filter(|c| !c.starts_with('$'))
             .map(str::to_owned);
         if let Some(c) = listed {
@@ -357,6 +374,23 @@ impl Rewriter<'_> {
     }
 }
 
+/// The collection a query key, data path, endpoint or entity URI names
+/// (`collection:<c>…`, `/v1/collections/<c>/…`, `collections://<c>/…`):
+/// what an adopted element's reach is judged by (decision
+/// `adoption-capabilities`). `None` when it names none literally.
+pub fn named_collection(value: &str) -> Option<&str> {
+    let v = value.trim();
+    let rest = v
+        .strip_prefix("collection:")
+        .or_else(|| v.strip_prefix("/v1/collections/"))
+        .or_else(|| v.strip_prefix("collections://"))?;
+    let end = rest
+        .find(|ch: char| !is_name_char(ch))
+        .unwrap_or(rest.len());
+    let (c, tail) = rest.split_at(end);
+    (!c.is_empty() && (tail.is_empty() || tail.starts_with([':', '/', '?']))).then_some(c)
+}
+
 /// See the module docs.
 pub fn share_inputs(
     node: &mut Value,
@@ -441,6 +475,40 @@ mod tests {
         assert_eq!(done.kind, "bool");
         assert_eq!(d.schema["tool"], DEFINE_TOOL);
         assert_eq!(d.schema["args"]["fields"][0]["name"], "title");
+    }
+
+    #[test]
+    fn every_key_of_a_collection_becomes_an_input() {
+        for (key, want) in [
+            ("collection:todos:view:all", "collection:$in.todos:view:all"),
+            ("collection:todos:alerts", "collection:$in.todos:alerts"),
+            (
+                "collection:todos:filler:3:rows",
+                "collection:$in.todos:filler:3:rows",
+            ),
+        ] {
+            let mut node = json!({"type": "core://List", "query_key": key,
+                "item_template": {"type": "core://Text", "value_expr": "$item.title"}});
+            let made = share_inputs(&mut node, &defs()).unwrap();
+            assert_eq!(node["query_key"], want);
+            assert_eq!(made[0].name, "todos");
+        }
+        let mut node = json!({"type": "core://List", "query_key": "collection:todos:view:all",
+            "item_template": {"type": "core://Text", "value_expr": "$item.title"}});
+        share_inputs(&mut node, &defs()).unwrap();
+        assert_eq!(
+            node["item_template"]["value_expr"],
+            "$item.$in.todos__title"
+        );
+        let mut odd = json!({"type": "core://List", "query_key": "collection:to-dos"});
+        assert!(share_inputs(&mut odd, &defs()).is_err());
+        assert_eq!(
+            named_collection("collection:secret:view:all"),
+            Some("secret")
+        );
+        assert_eq!(named_collection("/v1/collections/a/update"), Some("a"));
+        assert_eq!(named_collection("collections://a/$item.id"), Some("a"));
+        assert_eq!(named_collection("collection:$arg.c"), None);
     }
 
     #[test]

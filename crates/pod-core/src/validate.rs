@@ -1442,6 +1442,12 @@ impl<'a> Caps<'a> {
                         // Checked with their intent above.
                         ("endpoint" | "path" | "entity_uri", Value::String(_))
                             if map.contains_key("intent") => {}
+                        (k, Value::String(s))
+                            if matches!(k, "url" | "src" | "href" | "image")
+                                || k.ends_with("_url") =>
+                        {
+                            self.url(&here, s)?
+                        }
                         (_, Value::String(s)) => self.string(&here, s)?,
                         ("screens", Value::Array(items)) => {
                             for (i, item) in items.iter().enumerate() {
@@ -1492,10 +1498,34 @@ impl<'a> Caps<'a> {
         }
         for binding in s.split("${").skip(1) {
             let inner = binding.split('}').next().unwrap_or("");
+            // `${}` (or any `${…}` naming no field) draws as nothing: it
+            // only hides what a string says (decision
+            // `adoption-capabilities`).
+            if !inner.contains('#') {
+                return Err(LayoutError::new(
+                    at,
+                    format!(
+                        "'{s}' has a ${{…}} that names no field: bind an entity's field as ${{<uri>#<field>}}"
+                    ),
+                ));
+            }
             let uri = inner.split('#').next().unwrap_or("");
             self.entity(at, uri)?;
         }
         Ok(())
+    }
+
+    /// A URL a device fetches (an image's `url`, any `…_url`): never put
+    /// together from the device's own data (`${local://…}`), which would
+    /// send it to whoever serves the URL.
+    fn url(&self, at: &str, s: &str) -> Result<(), LayoutError> {
+        if s.contains("${local://") && !s.trim().starts_with("${local://") {
+            return Err(LayoutError::new(
+                at,
+                format!("'{s}' puts the device's own data (${{local://…}}) into a URL"),
+            ));
+        }
+        self.string(at, s)
     }
 }
 

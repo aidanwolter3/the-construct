@@ -1,5 +1,8 @@
 # Pods share elements by link through the host's shelf, and adopt them over their own data
 
+Partly superseded by [adoption-capabilities](adoption-capabilities.md): what an adopted element may reach,
+and how URL consent is kept.
+
 Date: 2026-11-16. Related: D46, [content-addressed-construct](content-addressed-construct.md),
 [collections](collections.md), [mcp-connector](mcp-connector.md), [source-adapters](source-adapters.md). Issue #296.
 

