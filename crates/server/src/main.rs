@@ -456,6 +456,7 @@ async fn serve_on(local: LocalPod) -> Result<(), String> {
     if config.open_pod.is_some() {
         let opt_in = std::env::var(server::INSECURE_OPEN_POD_VAR).is_ok_and(|v| v == "1");
         server::check_open_pod(&addr, on_fly, opt_in)?;
+        config.open_pod_any_ip = opt_in;
         if opt_in && !server::is_loopback_addr(&addr) {
             tracing::warn!(
                 %addr,
