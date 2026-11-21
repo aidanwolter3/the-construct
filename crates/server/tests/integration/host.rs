@@ -1766,7 +1766,8 @@ mod web {
             .unwrap();
         assert_eq!(unknown.status(), StatusCode::NOT_FOUND);
 
-        // New rows go out without a review; a layout edited since doesn't.
+        // New rows wait for a review (issue #446) unless the link lets them
+        // out; a layout edited since never goes without one.
         let view = || async {
             client()
                 .get(env.url(&format!("/s/{link}/view")))
@@ -1786,9 +1787,25 @@ mod web {
             )
         };
         add("Pho").await;
+        // Past the refresh's settling time: the new row waits.
+        tokio::time::sleep(Duration::from_secs(4)).await;
+        assert!(!view().await.contains("Pho"), "{}", view().await);
+        let links = tool(&env, &key, "list_public_links", json!({})).await;
+        assert_eq!(links["links"][0]["new_rows_waiting"], 1, "{links}");
+        assert_eq!(links["links"][0]["new_rows"], "hold", "{links}");
+        // Shared again, letting new rows out: the same link shows it, and
+        // the next new row without a review.
+        let ask = json!({ "layout": layout, "new_rows": "publish" });
+        let review = tool(&env, &key, "share_publicly", ask.clone()).await;
+        let mut confirm = ask.clone();
+        confirm["confirm"] = review["review_id"].clone();
+        let again = tool(&env, &key, "share_publicly", confirm).await;
+        assert_eq!(again["link"], link.as_str(), "{again}");
+        assert!(view().await.contains("Pho"));
+        add("Soba").await;
         let mut shown = false;
         for _ in 0..100 {
-            if view().await.contains("Pho") {
+            if view().await.contains("Soba") {
                 shown = true;
                 break;
             }

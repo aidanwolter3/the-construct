@@ -488,7 +488,8 @@ impl Shelf for HostShelf {
         let tx = conn.transaction().map_err(err)?;
         let n = tx
             .execute(
-                "UPDATE public_copies SET revoked_at = ?3, updated_at = ?3, copy = 'null'
+                "UPDATE public_copies SET revoked_at = ?3, updated_at = ?3, copy = 'null',
+                     title = '', rows = '[]'
                  WHERE link = ?1 AND owner_pod = ?2 AND revoked_at IS NULL",
                 params![link, pod, now_secs()],
             )
@@ -683,6 +684,8 @@ mod tests {
         assert!(shelf.public_by_link(&first.link).unwrap().is_none());
         let listed = shelf.public_of_pod("a").unwrap();
         assert!(listed[0].revoked_at.is_some() && listed[0].copy.is_null());
+        // Issue #446: nor what it showed (its title, the rows it asked for).
+        assert!(listed[0].title.is_empty() && listed[0].rows.is_empty());
         // A deleted pod takes its copies.
         shelf
             .put_public(PublicCopy {
