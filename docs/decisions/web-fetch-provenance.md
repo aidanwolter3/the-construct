@@ -26,3 +26,10 @@ Limits: a hostile site that serves many links can still learn a little, one link
 the task's page-read budget (a few characters at most). The model can no longer guess a site's page (e.g.
 `/events`) it wasn't shown; it searches for it instead. `web_search` queries go to the pod's search provider,
 not to a host the page chooses.
+
+## Search queries (issue #462)
+
+`web_search` queries also go out, so they are limited: at most 300 characters (real queries are a few words), and
+a query that repeats a run of 40 or more characters of a current row's text (compared ignoring case and spacing)
+is refused. The error tells the model to search with a few key words; a refused query doesn't use up one of the
+task's searches. Short quotes of a row (a name, a venue) still pass.
