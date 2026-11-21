@@ -11,7 +11,8 @@
 //!   and redirects back with a single-use code (PKCE S256 required, 5 min).
 //! - `POST /oauth/token`: the code (with its verifier) for an access token:
 //!   a new `mcp` credential of that pod (`cmcp_…`), good only for the pod's
-//!   `/v1/mcp` until revoked (`server pods revoke-mcp`).
+//!   `/v1/mcp` until revoked (Settings' Connected apps, `server pods
+//!   revoke-mcp`) or unused for 90 days (decision `connected-apps`).
 //!
 //! - A pre-registered client (`CONSTRUCT_OAUTH_CLIENT_ID`, `_SECRET`,
 //!   `_REDIRECT_URIS`; decision `oauth-preregistered-client`) for MCP apps
@@ -19,9 +20,14 @@
 //!   itself at the token endpoint with its secret (`client_secret_post` or
 //!   `client_secret_basic`). The user still types the pod code.
 //!
-//! The access token does not expire and no refresh token is issued: the
-//! credential is revocable, reaches nothing but the MCP endpoint, and MCP
-//! clients must not assume refresh tokens.
+//! No refresh token is issued (MCP clients must not assume one): the
+//! credential is revocable, reaches nothing but the MCP endpoint, and ends
+//! once unused for [`crate::db::MCP_IDLE_SECS`].
+//!
+//! Anyone can register a client with any name, so the consent page shows
+//! where the code goes, warns when that isn't a known MCP client host, and
+//! request errors of other clients are a page here, not a redirect
+//! (decision `connected-apps`).
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -259,24 +265,86 @@ pub(crate) async fn authorization_server(
     .into_response()
 }
 
-/// A redirect URI a client may register: `https://…`, or plain HTTP to the
-/// local machine (Claude Code's loopback); no fragment.
-fn valid_redirect(u: &str) -> bool {
-    if u.len() > MAX_URI_LEN || u.contains('#') || u.chars().any(char::is_whitespace) {
-        return false;
+/// The scheme and host (with any port, lowercased) of a redirect URI a
+/// client may register: `https://…`, or plain HTTP to the local machine
+/// (Claude Code's loopback); no fragment, no userinfo (`https://claude.ai@
+/// evil.example/` would read as Claude's), no backslash (browsers read it as
+/// `/`), no whitespace. `None`: not allowed.
+fn redirect_host(u: &str) -> Option<(&'static str, String)> {
+    if u.len() > MAX_URI_LEN
+        || u.contains(['#', '\\'])
+        || u.chars().any(|c| c.is_whitespace() || c.is_control())
+    {
+        return None;
     }
-    if let Some(rest) = u.strip_prefix("https://") {
-        return !rest.is_empty() && !rest.starts_with('/');
-    }
-    let Some(rest) = u.strip_prefix("http://") else {
-        return false;
+    let (scheme, rest) = if let Some(rest) = u.strip_prefix("https://") {
+        ("https", rest)
+    } else {
+        ("http", u.strip_prefix("http://")?)
     };
     let authority = rest.split(['/', '?']).next().unwrap_or("");
+    if authority.is_empty() || authority.contains(['@', '%']) {
+        return None;
+    }
     let name = match authority.rsplit_once(':') {
-        Some((n, p)) if !p.is_empty() && p.bytes().all(|b| b.is_ascii_digit()) => n,
+        Some((n, p)) if !n.ends_with(':') && p.bytes().all(|b| b.is_ascii_digit()) => {
+            if p.is_empty() {
+                return None;
+            }
+            n
+        }
         _ => authority,
     };
-    matches!(name, "localhost" | "127.0.0.1" | "[::1]")
+    let host_ok = name == "[::1]"
+        || (!name.is_empty()
+            && name
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'.')));
+    if !host_ok || (scheme == "http" && !is_loopback(name)) {
+        return None;
+    }
+    Some((scheme, authority.to_ascii_lowercase()))
+}
+
+fn valid_redirect(u: &str) -> bool {
+    redirect_host(u).is_some()
+}
+
+fn is_loopback(name: &str) -> bool {
+    matches!(
+        name.to_ascii_lowercase().as_str(),
+        "localhost" | "127.0.0.1" | "[::1]"
+    )
+}
+
+/// Hosts known to run MCP clients: Claude on the web and its apps, and the
+/// local machine (Claude Code and other local clients).
+const KNOWN_CLIENT_DOMAINS: &[&str] = &["claude.ai", "claude.com"];
+
+/// Whether a redirect host (as [`redirect_host`] gives it) belongs to a
+/// known MCP client: [`KNOWN_CLIENT_DOMAINS`] or a subdomain, or loopback.
+fn known_client_host(host: &str) -> bool {
+    let name = match host.rsplit_once(':') {
+        Some((n, p)) if !n.ends_with(':') && p.bytes().all(|b| b.is_ascii_digit()) => n,
+        _ => host,
+    };
+    is_loopback(name)
+        || KNOWN_CLIENT_DOMAINS
+            .iter()
+            .any(|d| name == *d || name.strip_suffix(d).is_some_and(|s| s.ends_with('.')))
+}
+
+/// Whether the authorization server may answer `client`'s request errors by
+/// redirecting to `redirect_uri`: only for the operator's pre-registered
+/// client or a known client host. Anyone can register a client, so for the
+/// rest an error is a page here, and this server is no open redirect.
+fn may_redirect_errors(host: &Host, client: &OAuthClient, redirect_uri: &str) -> bool {
+    let preregistered = host
+        .config
+        .oauth_client
+        .as_ref()
+        .is_some_and(|sc| sc.client_id == client.client_id);
+    preregistered || redirect_host(redirect_uri).is_some_and(|(_, h)| known_client_host(&h))
 }
 
 fn random_token(prefix: &str) -> String {
@@ -400,6 +468,9 @@ pub(crate) async fn register(State(host): State<Arc<Host>>, req: Request) -> Res
 /// The checked parameters of an authorization request.
 struct AuthRequest {
     client: OAuthClient,
+    /// The pre-registered client or a known client host
+    /// ([`may_redirect_errors`]): no warning on the page.
+    trusted: bool,
     redirect_uri: String,
     challenge: String,
     state: Option<String>,
@@ -446,7 +517,11 @@ async fn check_request(
         _ => return Err(page_error("the redirect URI isn't registered")),
     };
     let state = p.get("state").cloned();
+    let redirect_errors = may_redirect_errors(host, &client, &redirect_uri);
     let back = |error: &str| {
+        if !redirect_errors {
+            return page_error(&format!("the request is not valid ({error})"));
+        }
         Box::new(redirect_with(
             &redirect_uri,
             &[("error", error)],
@@ -471,6 +546,7 @@ async fn check_request(
     }
     Ok(AuthRequest {
         client,
+        trusted: redirect_errors,
         redirect_uri,
         challenge,
         state,
@@ -527,15 +603,16 @@ fn esc(s: &str) -> String {
 }
 
 /// The authorize page: `form` = `(client name, hidden params, redirect
-/// origin)` to show the code form; `message` above it.
+/// origin, whether that is a known client)` to show the code form;
+/// `message` above it.
 fn page(
-    form: Option<(&str, &HashMap<String, String>, &str)>,
+    form: Option<(&str, &HashMap<String, String>, &str, bool)>,
     message: &str,
     error: Option<&str>,
 ) -> Response {
     let mut body = String::new();
     let mut form_action = "'self'".to_owned();
-    if let Some((client, params, origin)) = form {
+    if let Some((client, params, origin, trusted)) = form {
         form_action = format!("'self' {origin}");
         let hidden: String = [
             "client_id",
@@ -551,20 +628,33 @@ fn page(
         .filter_map(|k| params.get(*k).map(|v| (k, v)))
         .map(|(k, v)| format!("<input type=\"hidden\" name=\"{k}\" value=\"{}\">", esc(v)))
         .collect();
+        let host = destination(origin);
+        let warning = if trusted {
+            String::new()
+        } else {
+            format!(
+                "<p class=\"warn\"><b>{} is not a site Claude uses.</b> Anyone can make a page like \
+                 this one and give their app any name. Only connect if you set up this app yourself \
+                 and know {}.</p>",
+                esc(host),
+                esc(host)
+            )
+        };
         body = format!(
-            "<p><b>{}</b> wants to read your pod's apps and data sources, and to create and edit your \
-             <b>custom apps</b>. It can't use your apps' accounts or change built-in apps.</p>\
-             <p>Connecting gives access to <b>{}</b>. The name above is the one the app gave itself; \
-             only connect if you started this from Claude and that is where it should go.</p>\
+            "<p>Your pod code is about to go to</p><p class=\"dest\">{}</p>{warning}\
+             <p><b>{}</b> (the name the app gave itself) wants to read your pod's apps and data \
+             sources, and to create and edit your <b>custom apps</b>. It can't use your apps' \
+             accounts or change built-in apps.</p>\
              {}\
              <form method=\"post\" action=\"/oauth/authorize\">{hidden}\
              <label>Your pod code<br><input name=\"pod_code\" type=\"password\" autocomplete=\"off\" \
              placeholder=\"cpod_…\" required></label>\
              <div class=\"row\"><button name=\"decision\" value=\"allow\">Connect</button>\
              <button name=\"decision\" value=\"deny\" formnovalidate class=\"secondary\">Cancel</button></div></form>\
-             <p class=\"small\">You can disconnect it later with <code>server pods revoke-mcp</code>.</p>",
+             <p class=\"small\">You can disconnect it later in the app: Settings, Connected apps. A \
+             connection unused for 90 days ends by itself.</p>",
+            esc(host),
             esc(client),
-            esc(destination(origin)),
             error
                 .map(|e| format!("<p class=\"error\">{}</p>", esc(e)))
                 .unwrap_or_default(),
@@ -577,7 +667,9 @@ fn page(
          body{{font:16px/1.5 system-ui,sans-serif;max-width:28rem;margin:3rem auto;padding:0 1rem;color:#1b1b1f}}\
          input{{width:100%;padding:.6rem;font:inherit;border:1px solid #79747e;border-radius:8px;box-sizing:border-box}}\
          button{{padding:.6rem 1.2rem;font:inherit;border-radius:20px;border:0;background:#6750a4;color:#fff;margin-right:.5rem}}\
-         .secondary{{background:#e8def8;color:#1d192b}}.row{{margin-top:1rem}}.error{{color:#b3261e}}.small{{font-size:.85rem;color:#49454f}}\
+         .secondary{{background:#e8def8;color:#1d192b}}.row{{margin-top:1rem}}\
+         .dest{{font-size:1.4rem;font-weight:700;word-break:break-all;margin:.25rem 0 1rem}}\
+         .warn{{background:#fce8e6;color:#8c1d18;padding:.6rem .8rem;border-radius:8px}}.error{{color:#b3261e}}.small{{font-size:.85rem;color:#49454f}}\
          </style></head><body><h1>The Construct</h1><p>{}</p>{body}</body></html>",
         esc(message)
     );
@@ -599,13 +691,10 @@ fn destination(origin: &str) -> &str {
     origin.split_once("://").map_or(origin, |(_, host)| host)
 }
 
+/// `scheme://host[:port]` of a redirect URI (registered ones always parse:
+/// [`redirect_host`]); empty if it doesn't.
 fn origin_of(uri: &str) -> String {
-    match uri.split_once("://") {
-        Some((scheme, rest)) => {
-            format!("{scheme}://{}", rest.split(['/', '?']).next().unwrap_or(""))
-        }
-        None => String::new(),
-    }
+    redirect_host(uri).map_or_else(String::new, |(scheme, host)| format!("{scheme}://{host}"))
 }
 
 /// `GET /oauth/authorize`.
@@ -616,7 +705,7 @@ pub(crate) async fn authorize_page(
 ) -> Response {
     match check_request(&host, &headers, &p).await {
         Ok(r) => page(
-            Some((&r.client.name, &p, &origin_of(&r.redirect_uri))),
+            Some((&r.client.name, &p, &origin_of(&r.redirect_uri), r.trusted)),
             "Connect Claude to your pod",
             None,
         ),
@@ -650,7 +739,7 @@ pub(crate) async fn authorize_submit(State(host): State<Arc<Host>>, req: Request
         tracing::warn!("OAuth: pod code tries rate-limited");
         metrics::inc(metrics::RATE_LIMITED, &[("limit", "oauth_pod_code")]);
         return page(
-            Some((&r.client.name, &p, &origin_of(&r.redirect_uri))),
+            Some((&r.client.name, &p, &origin_of(&r.redirect_uri), r.trusted)),
             "Connect Claude to your pod",
             Some("Too many tries. Wait a minute and try again."),
         );
@@ -668,7 +757,7 @@ pub(crate) async fn authorize_submit(State(host): State<Arc<Host>>, req: Request
         tracing::info!("OAuth: pod code rejected");
         metrics::inc(metrics::AUTH_FAILURES, &[("kind", "oauth_pod_code")]);
         return page(
-            Some((&r.client.name, &p, &origin_of(&r.redirect_uri))),
+            Some((&r.client.name, &p, &origin_of(&r.redirect_uri), r.trusted)),
             "Connect Claude to your pod",
             Some("That pod code didn't work. Check it and try again."),
         );
@@ -798,10 +887,11 @@ pub(crate) async fn token(State(host): State<Arc<Host>>, req: Request) -> Respon
     let access_hash = session_hash(&access);
     let pod_id = c.pod_id.clone();
     let stored = label.clone();
+    let via = redirect_host(&c.redirect_uri).map(|(_, h)| h);
     match host
         .blocking(move |h| {
             h.store
-                .insert_mcp_credential(&pod_id, &access_hash, &stored)
+                .insert_mcp_credential(&pod_id, &access_hash, &stored, via.as_deref())
         })
         .await
     {
@@ -887,8 +977,38 @@ mod tests {
             "https:///nohost",
             "http://localhost.evil.example/cb",
             "ftp://x",
+            // Userinfo would show as Claude's host on the consent page.
+            "https://claude.ai@evil.example/cb",
+            "https://claude.ai:x@evil.example/cb",
+            "https://claude.ai\\@evil.example/cb",
+            "https://evil.example%2fclaude.ai/cb",
+            "https://claude.ai:/cb",
+            "http://localhost@evil.example/cb",
         ] {
             assert!(!valid_redirect(bad), "{bad}");
+        }
+        assert_eq!(
+            redirect_host("https://Claude.AI:443/api/cb?x=1"),
+            Some(("https", "claude.ai:443".to_owned()))
+        );
+        assert_eq!(origin_of("http://[::1]:8080/cb"), "http://[::1]:8080");
+    }
+
+    #[test]
+    fn known_client_hosts() {
+        for known in [
+            "claude.ai",
+            "claude.com",
+            "www.claude.ai",
+            "claude.ai:443",
+            "localhost:33418",
+            "127.0.0.1",
+            "[::1]:9",
+        ] {
+            assert!(known_client_host(known), "{known}");
+        }
+        for unknown in ["evil.example", "notclaude.ai", "claude.ai.evil.example"] {
+            assert!(!known_client_host(unknown), "{unknown}");
         }
     }
 

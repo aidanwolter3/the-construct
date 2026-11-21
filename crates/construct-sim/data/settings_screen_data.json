@@ -1,0 +1,28 @@
+{
+  "/v1/connected-apps/screen": {
+    "entities": {
+      "connected_apps://0a1b2c3d4e5f6a7b": {
+        "connected": true,
+        "detail": "claude.ai · connected 12 days ago · last used today",
+        "expiry": "Ends by itself if unused for 90 more days.",
+        "host": "claude.ai",
+        "id": "0a1b2c3d4e5f6a7b",
+        "title": "Claude"
+      },
+      "connected_apps://9f8e7d6c5b4a3f2e": {
+        "connected": true,
+        "detail": "made on the server (server pods mcp) · connected 40 days ago · last used 31 days ago",
+        "expiry": "Ends by itself if unused for 59 more days.",
+        "host": "made on the server (server pods mcp)",
+        "id": "9f8e7d6c5b4a3f2e",
+        "title": "Claude Code"
+      }
+    },
+    "queries": {
+      "connected_apps": [
+        "connected_apps://0a1b2c3d4e5f6a7b",
+        "connected_apps://9f8e7d6c5b4a3f2e"
+      ]
+    }
+  }
+}

@@ -10,7 +10,8 @@
 //!   database a pod (copied and checked first; the original is renamed).
 //! - `pods remove-adopted [dir]`: delete those renamed originals (default: the
 //!   data dir) once the pod works, without a shell on the machine.
-//! - `pods rotate <name>`: a new token; the old one stops working.
+//! - `pods rotate <name> [--revoke-mcp]`: a new token; the old one stops working
+//!   (with `--revoke-mcp`, every connected app is disconnected too).
 //! - `pods delete <name>`: stop a pod now; its files go at the next sweep.
 //! - `pods notify-test <name>`: send the pod a test notification (stored in
 //!   its inbox and sent by Web Push to its devices).
@@ -145,7 +146,7 @@ fn main() -> std::process::ExitCode {
                  server serve --pod-code <cpod_…> [--mcp-key <cmcp_…>] [--pod-name <name>]   (local testing)\n       \
                  server pods create <name>\n       \
                  server pods adopt <name> <path/to/server.db>\n       server pods remove-adopted [dir]\n       \
-                 server pods rotate <name>\n       \
+                 server pods rotate <name> [--revoke-mcp]\n       \
                  server pods delete <name>\n       server pods notify-test <name>\n       \
                  server pods mcp <name> [label]\n       server pods revoke-mcp <name>\n       \
                  server pods monitoring <name> on|off\n       server pods list\n       \
@@ -221,10 +222,25 @@ fn pods(args: &[&str]) -> Result<(), String> {
                  with `server pods remove-adopted`."
             );
         }
-        ["rotate", name] => {
-            let token = host.rotate(name)?;
+        ["rotate", name, flags @ ..] => {
+            let revoke = match flags {
+                [] => false,
+                ["--revoke-mcp"] => true,
+                _ => return Err("usage: server pods rotate <name> [--revoke-mcp]".into()),
+            };
+            let connected = host.mcp_credentials(name)?.len();
+            let token = host.rotate(name, revoke)?;
             print_token("New code for", name, &token);
             println!("The old code no longer works; sign in to your apps again.");
+            if revoke {
+                println!("Disconnected {connected} connected app(s) (MCP credentials).");
+            } else if connected > 0 {
+                println!(
+                    "{connected} connected app(s) (MCP credentials) stay connected. If the old code \
+                     leaked, disconnect them in Settings > Connected apps, or run \
+                     `server pods rotate {name} --revoke-mcp` (or `server pods revoke-mcp {name}`)."
+                );
+            }
         }
         ["delete", name] => {
             host.delete(name)?;
