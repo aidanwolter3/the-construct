@@ -991,6 +991,9 @@ page, because Settings and the inbox are layouts too.
 
 One layout serves every window: the pod never sends a different layout per size. A layout uses
 `${local://device#size_class}` (`compact`, `medium`, `expanded`), `max_width_dp` and grid columns to use the room.
+A layout that uses none of them was written for a phone: the renderer draws it at most 480 points wide (centred on a
+screen of its own, against the pane before it when embedded or in a panel), so it stays phone-sized in a browser
+or beside a sidebar.
 
 ## Part 8 · Building with an agent
 

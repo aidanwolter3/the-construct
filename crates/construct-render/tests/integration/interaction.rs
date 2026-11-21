@@ -1,7 +1,7 @@
 //! Phase 3's engine half: hit-testing, taps, reflow on resize (no window).
 
-use construct_render::Viewport;
 use construct_render::interact::{Effect, Session, Target};
+use construct_render::{PHONE_WIDTH_DP, Viewport};
 use serde_json::json;
 
 use crate::common::fixture;
@@ -125,7 +125,13 @@ fn resize_reflows_wider() {
         .find_text("Book the van for the move to Oakridge Lane")
         .unwrap()
         .bounds;
-    assert!((wide[2] - (800.0 - 32.0)).abs() < 0.01, "{wide:?}");
+    // A layout written for a phone draws at most phone width, centred
+    // (decision `phone-width-layouts`).
+    assert!((wide[2] - (PHONE_WIDTH_DP - 32.0)).abs() < 0.01, "{wide:?}");
+    assert!(
+        (wide[0] - ((800.0 - PHONE_WIDTH_DP) / 2.0 + 16.0)).abs() < 0.01,
+        "{wide:?}"
+    );
     assert!(wide[2] > narrow[2]);
     assert!(
         one_line[3] < tall[3],
@@ -166,7 +172,7 @@ fn window_events_drive_the_session() {
     use construct_render::viewer::{Controller, Event};
     let (root, data) = fixture("home");
     let mut c = Controller::new(Session::new("home", root, data, Viewport::PHONE));
-    // A 400pt window at 2x, then 800pt: the root reflows.
+    // A 400pt window at 2x, then 800pt: the root reflows, up to phone width.
     c.handle(Event::Resized {
         width_px: 800,
         height_px: 1688,
@@ -193,7 +199,10 @@ fn window_events_drive_the_session() {
         .find_node("field:note")
         .unwrap()
         .bounds;
-    assert!((field[2] - (800.0 - 32.0 - 48.0)).abs() < 0.01, "{field:?}");
+    assert!(
+        (field[2] - (PHONE_WIDTH_DP - 32.0 - 48.0)).abs() < 0.01,
+        "{field:?}"
+    );
     // A click on the field focuses it; typed text fills it; Backspace removes a character.
     c.handle(Event::Tap {
         x: field[0] + 10.0,

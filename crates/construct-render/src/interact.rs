@@ -3444,6 +3444,11 @@ impl Session {
     /// A tap on `target`.
     pub fn tap(&mut self, target: &Target) -> Result<Outcome, String> {
         let Some(node) = self.find(target)? else {
+            // A tap on bare background (beside a layout drawn at phone
+            // width, decision `phone-width-layouts`) still ends typing.
+            if matches!(target, Target::Point(..)) && self.focused.take().is_some() {
+                self.scene = None;
+            }
             return Err(format!("nothing at {target:?}"));
         };
         // A tap anywhere but a field ends typing (the field's tap sets it
