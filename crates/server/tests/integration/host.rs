@@ -2467,6 +2467,9 @@ mod web {
 /// Decision `ical-feeds`.
 mod calendar_feeds;
 
+/// Decision `site-origins`.
+mod site_origins;
+
 /// Security audit #461: the open pod refuses cross-site writes and an
 /// invalid bearer, and only answers loopback (or the emulator) by IP.
 #[tokio::test]

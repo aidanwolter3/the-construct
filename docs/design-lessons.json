@@ -176,7 +176,7 @@
       "position": 1
     },
     {
-      "body": "- **Routing**: a request's bearer token names its pod; the host opens that pod lazily on its first request.\n- **Temporary pods**: `POST /v1/pods/temporary` makes a 24-hour pod for trying a server, deleted afterwards, with risky jacks locked off.\n- **The scheduler**: every 30 seconds it opens pods whose `next_wake_at` is due (notification polls, collection fillers, reminders). A pod polls upstreams only while it has a device seen in the last 30 days, so idle pods cost nothing.\n- **OAuth for agents**, connected apps, public media under `/v1/p/<pod>/…`, the web client at `/web`, and public links at `/s/…` and `/<handle>/<slug>`.",
+      "body": "- **Routing**: a request's bearer token names its pod; the host opens that pod lazily on its first request.\n- **Temporary pods**: `POST /v1/pods/temporary` makes a 24-hour pod for trying a server, deleted afterwards, with risky jacks locked off.\n- **The scheduler**: every 30 seconds it opens pods whose `next_wake_at` is due (notification polls, collection fillers, reminders). A pod polls upstreams only while it has a device seen in the last 30 days, so idle pods cost nothing.\n- **OAuth for agents**, connected apps, public media under `/v1/p/<pod>/…`, the web client at `/web` (also loaded by the owner's own sites, decision `site-origins`), and public links at `/s/…` and `/<handle>/<slug>`.",
       "heading": "What the host does",
       "key": "the-host-and-the-server-binary/2",
       "lesson": "the-host-and-the-server-binary",
@@ -351,7 +351,7 @@
       "position": 1
     },
     {
-      "body": "`share_publicly` makes a read-only copy of a layout, the layouts it opens, and only the Collections rows they show, served as a web page at `/s/pub-…` or `/<handle>/<slug>` and drawn by the web client. Buttons that write are taken out. The copy is refreshed when its rows change; new rows wait for a new review unless the link says to publish them (decisions `public-web-links`, `public-links-share-the-closure`).",
+      "body": "`share_publicly` makes a read-only copy of a layout, the layouts it opens, and only the Collections rows they show, served as a web page at `/s/pub-…` or `/<handle>/<slug>` and drawn by the web client, also on the owner's own site (decision `site-origins`). Buttons that write are taken out. The copy is refreshed when its rows change; new rows wait for a new review unless the link says to publish them (decisions `public-web-links`, `public-links-share-the-closure`).",
       "heading": "Public links",
       "key": "sharing-between-people/2",
       "lesson": "sharing-between-people",

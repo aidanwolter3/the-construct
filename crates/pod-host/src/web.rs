@@ -656,40 +656,17 @@ async fn open_session(State(host): State<Arc<Host>>, req: Request) -> Response {
         }
         Err(r) => return *r,
     };
-    let open = match host.pod(&pod_id).await {
-        Ok(p) => p,
+    let token = match new_browser_session(
+        &host,
+        &pod_id,
+        Some(&session_hash(&code)),
+        session_ttl_from_env(),
+    )
+    .await
+    {
+        Ok(t) => t,
         Err(r) => return *r,
     };
-    let token = new_session_token();
-    let hash = session_hash(&token);
-    let h = hash.clone();
-    if let Err(e) = open.pod.blocking(move |s| s.create_session(&h)).await {
-        return e.into_response();
-    }
-    // The browser starts signed in where the pod code is (decision
-    // `web-sessions-share-sign-ins`): typing the code proved it's the owner.
-    match pod_core::session::share_sign_ins(&open.pod, &session_hash(&code), &hash).await {
-        Ok(n) if n > 0 => tracing::info!(sign_ins = n, "the browser got the pod code's sign-ins"),
-        Ok(_) => {}
-        Err(e) => tracing::warn!(status = %e.0, "the browser's session got no sign-ins"),
-    }
-    let added = host
-        .blocking(move |h| {
-            h.store
-                .insert_web_credential(&pod_id, &hash, session_ttl_from_env())
-        })
-        .await;
-    match added {
-        Ok(Ok(())) => {}
-        Ok(Err(e)) => {
-            tracing::error!(error = %e, "host store error");
-            return json_error(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                json!({ "error": "host_error" }),
-            );
-        }
-        Err(r) => return *r,
-    }
     tracing::info!("a browser opened a pod");
     let mut r = axum::Json(json!({ "ok": true })).into_response();
     r.headers_mut().insert(
@@ -699,37 +676,92 @@ async fn open_session(State(host): State<Arc<Host>>, req: Request) -> Response {
     r
 }
 
+/// A new browser session of `pod_id` (a pod session and the host's `web`
+/// credential for it, good for `ttl` seconds), starting with the sign-ins
+/// of the session hashed `share_from` (the pod code's: decision
+/// `web-sessions-share-sign-ins`): its token. The cookie holds it, or a
+/// site's page (decision `site-origins`).
+pub(crate) async fn new_browser_session(
+    host: &Arc<Host>,
+    pod_id: &str,
+    share_from: Option<&str>,
+    ttl: i64,
+) -> Result<String, Box<Response>> {
+    let open = host.pod(pod_id).await?;
+    let token = new_session_token();
+    let hash = session_hash(&token);
+    let h = hash.clone();
+    if let Err(e) = open.pod.blocking(move |s| s.create_session(&h)).await {
+        return Err(Box::new(e.into_response()));
+    }
+    // The browser starts signed in where the pod code is: typing the code
+    // proved it's the owner.
+    if let Some(from) = share_from {
+        match pod_core::session::share_sign_ins(&open.pod, from, &hash).await {
+            Ok(n) if n > 0 => {
+                tracing::info!(sign_ins = n, "the browser got the pod code's sign-ins")
+            }
+            Ok(_) => {}
+            Err(e) => tracing::warn!(status = %e.0, "the browser's session got no sign-ins"),
+        }
+    }
+    let pod_id = pod_id.to_owned();
+    let added = host
+        .blocking(move |h| h.store.insert_web_credential(&pod_id, &hash, ttl))
+        .await;
+    match added {
+        Ok(Ok(())) => Ok(token),
+        Ok(Err(e)) => {
+            tracing::error!(error = %e, "host store error");
+            Err(Box::new(json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                json!({ "error": "host_error" }),
+            )))
+        }
+        Err(r) => Err(r),
+    }
+}
+
+/// A browser session's token and pod: the cookie's (same site), or a
+/// bearer that is a `web` credential (a site's page, decision
+/// `site-origins`).
+async fn browser_session(host: &Arc<Host>, headers: &HeaderMap) -> Option<(String, String)> {
+    let token = cookie_token(host, headers)
+        .or_else(|| pod_core::session::bearer(headers).map(str::to_owned))?;
+    match host.credential(&token).await {
+        Ok(Some((pod_id, CredentialKind::Web))) => Some((token, pod_id)),
+        _ => None,
+    }
+}
+
 /// `POST /web/logout`: ends the browser's session (the pod's and the host's
-/// credential) and clears the cookie. The pod code is untouched.
+/// credential; the cookie's, or a site's bearer) and clears the cookie. The
+/// pod code is untouched.
 async fn logout(State(host): State<Arc<Host>>, req: Request) -> Response {
     let mut r = axum::Json(json!({ "ok": true })).into_response();
     r.headers_mut()
         .insert(header::SET_COOKIE, set_cookie(&host, "", 0));
-    let Some(token) = cookie_token(&host, req.headers()) else {
+    let Some((token, pod_id)) = browser_session(&host, req.headers()).await else {
         return r;
     };
-    if let Ok(Some((pod_id, CredentialKind::Web))) = host.credential(&token).await {
-        if let Ok(open) = host.pod(&pod_id).await {
-            let hash = session_hash(&token);
-            let _ = open.pod.blocking(move |s| s.delete_session(&hash)).await;
-        }
+    if let Ok(open) = host.pod(&pod_id).await {
         let hash = session_hash(&token);
-        let _ = host
-            .blocking(move |h| h.store.delete_web_credential(&hash))
-            .await;
+        let _ = open.pod.blocking(move |s| s.delete_session(&hash)).await;
     }
+    let hash = session_hash(&token);
+    let _ = host
+        .blocking(move |h| h.store.delete_web_credential(&hash))
+        .await;
     r
 }
 
-/// `GET /web/image?url=<url>` (a browser with a session): a public image of
+/// `GET /web/image?url=<url>` (a browser with a session: the cookie, or a
+/// site's bearer): a public image of
 /// another site, passed on so the canvas can draw it. Only `http(s)` to
 /// public hosts (names that resolve to private addresses are refused at
 /// connect time), only images, at most 10 MiB.
 async fn image(State(host): State<Arc<Host>>, RawQuery(q): RawQuery, req: Request) -> Response {
-    let Some(token) = cookie_token(&host, req.headers()) else {
-        return json_error(StatusCode::UNAUTHORIZED, json!({ "error": "unauthorized" }));
-    };
-    let Ok(Some((pod_id, CredentialKind::Web))) = host.credential(&token).await else {
+    let Some((_, pod_id)) = browser_session(&host, req.headers()).await else {
         return json_error(StatusCode::UNAUTHORIZED, json!({ "error": "unauthorized" }));
     };
     let Some(url) = pod_core::image_proxy::url_param(q) else {

@@ -25,6 +25,7 @@ pub mod limits;
 pub mod oauth;
 pub mod screen;
 pub mod shelf;
+pub mod site;
 pub mod streams;
 pub mod web;
 
@@ -219,6 +220,11 @@ pub struct HostConfig {
     /// pods may share a layout's copy at `/s/<link>`. Only with the web
     /// client on, which draws them.
     pub public_web: bool,
+    /// The owner's own websites (`CONSTRUCT_SITE_ORIGINS`, decision
+    /// `site-origins`): they load the web client from this server, may call
+    /// it across origins and sign in at `/web/site`. Only with the web
+    /// client on.
+    pub sites: site::SiteOrigins,
 }
 
 impl HostConfig {
@@ -265,6 +271,7 @@ impl HostConfig {
             oauth_client: oauth::StaticClient::from_env(),
             web: web::WebConfig::from_env(),
             public_web: var("CONSTRUCT_PUBLIC_WEB").as_deref() == Some("1"),
+            sites: site::SiteOrigins::from_env(),
         }
     }
 }
@@ -1180,6 +1187,14 @@ pub fn app(host: Arc<Host>) -> Router {
     } else {
         Router::new()
     };
+    if host.config.web.is_some() && !host.config.sites.is_empty() {
+        web = web
+            .route(
+                site::SIGN_IN_PATH,
+                get(site::sign_in_page).post(site::sign_in_submit),
+            )
+            .route(site::TOKEN_PATH, post(site::token));
+    }
     if host.config.public_links() {
         web = web.merge(web::public_routes());
     } else {
@@ -1219,6 +1234,10 @@ pub fn app(host: Arc<Host>) -> Router {
         .layer(axum::middleware::map_response_with_state(
             host.config.hsts,
             security_headers,
+        ))
+        .layer(axum::middleware::from_fn_with_state(
+            host.clone(),
+            site::cors,
         ))
         .layer(axum::middleware::from_fn(count_responses))
 }
@@ -1508,13 +1527,14 @@ async fn dispatch(State(host): State<Arc<Host>>, mut req: Request) -> Response {
                 && let Ok(v) = HeaderValue::from_str(&format!("Bearer {t}"))
             {
                 req.headers_mut().insert(header::AUTHORIZATION, v);
-                // The cookie is `HttpOnly`: the pod answers the page's script
-                // without its value (`pod_core::CREDENTIAL_WEB`).
-                req.headers_mut().insert(
-                    pod_core::CREDENTIAL_HEADER,
-                    HeaderValue::from_static(pod_core::CREDENTIAL_WEB),
-                );
             }
+            // A browser's session (the `HttpOnly` cookie, or a site's bearer,
+            // decision `site-origins`): the pod answers the page's script
+            // without session tokens (`pod_core::CREDENTIAL_WEB`).
+            req.headers_mut().insert(
+                pod_core::CREDENTIAL_HEADER,
+                HeaderValue::from_static(pod_core::CREDENTIAL_WEB),
+            );
             Some(id)
         }
         None if is_mcp => return oauth::mcp_unauthorized(&host, req.headers()),

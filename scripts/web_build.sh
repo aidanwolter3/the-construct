@@ -50,6 +50,9 @@ glue=$(hashed construct_web.js construct_web js)
 fonts=$(cat "$out"/fonts/*.ttf | hash)
 sed -i -e "s|\"/web/construct_web.js\"|\"/web/$glue\"|" -e "s|\"FONT_VERSION\"|\"$fonts\"|" "$out/app.js"
 grep -q "/web/$glue" "$out/app.js" && grep -q "\"$fonts\"" "$out/app.js" || { echo "app.js wasn't rewritten" >&2; exit 1; }
+# mount.js (decision `site-origins`) keeps its name, which other sites load; it names the glue and fonts as app.js does.
+sed -i -e "s|\"/web/construct_web.js\"|\"/web/$glue\"|" -e "s|\"FONT_VERSION\"|\"$fonts\"|" "$out/mount.js"
+grep -q "/web/$glue" "$out/mount.js" && grep -q "\"$fonts\"" "$out/mount.js" || { echo "mount.js wasn't rewritten" >&2; exit 1; }
 app=$(hashed app.js app js)
 style=$(hashed style.css style css)
 favicon=$(hashed favicon.ico favicon ico)
