@@ -1149,10 +1149,12 @@ async fn preview(pod: &Pod, adapter: &CollectionsAdapter, args: &Value) -> Resul
     for (k, v) in headers {
         sent.insert(k, v);
     }
+    let mut sensitive: Vec<String> = Vec::new();
     let fetched = if let Some(r) = &render {
         crate::fill::render_page(pod, adapter, &url, r).await
     } else {
         let resolved = crate::fill::resolve_headers_for(pod, adapter, &sent, &url).map_err(bad)?;
+        sensitive = resolved.sensitive.clone();
         let client = if resolved.has_secret {
             adapter.secret_fetch_client()
         } else {
@@ -1182,7 +1184,14 @@ async fn preview(pod: &Pod, adapter: &CollectionsAdapter, args: &Value) -> Resul
             "the site answered 304",
         ));
     };
-    let body = String::from_utf8_lossy(&bytes);
+    // A host that echoes the request's headers would hand the secret to
+    // Claude: scrub it before anything is extracted (issue #460).
+    let body = if sensitive.is_empty() {
+        String::from_utf8_lossy(&bytes).into_owned()
+    } else {
+        crate::fill::redact(&String::from_utf8_lossy(&bytes), &sensitive)
+    };
+    let body = body.as_str();
     // What the page holds is its site's text (issue #439).
     let from = reqwest::Url::parse(&url)
         .ok()
@@ -1194,14 +1203,14 @@ async fn preview(pod: &Pod, adapter: &CollectionsAdapter, args: &Value) -> Resul
     }
     if map.is_empty() {
         // Sample items to write the paths from.
-        let items = crate::fill::sample_items(&spec, &body).map_err(bad)?;
+        let items = crate::fill::sample_items(&spec, body).map_err(bad)?;
         out["items"] = json!(items.len());
         out["sample_items"] =
             untrusted(&from, json!(items.into_iter().take(3).collect::<Vec<_>>()));
         out["next"] = json!("write map: {field: path into an item} and preview again");
         return Ok(out);
     }
-    let rows = web_extract::items::extract(&spec, &body, &url, &map).map_err(bad)?;
+    let rows = web_extract::items::extract(&spec, body, &url, &map).map_err(bad)?;
     out["items"] = json!(rows.len());
     if let Some(def) = &def {
         // As the collection would store them.
