@@ -46,7 +46,7 @@
 //!   pod databases (`pod_core::secrets`). Unset: stored unsealed, with a
 //!   warning; a malformed value stops the server.
 //! - `CONSTRUCT_PUBLIC_URL`: the base URL clients use (OAuth metadata for
-//!   Claude); default: from each request's `Host`, `https` behind Fly.
+//!   Claude); default: from each request's `Host` off Fly; on Fly `https://$FLY_APP_NAME.fly.dev`.
 //! - `CONSTRUCT_INFER_API_KEY`, `CONSTRUCT_INFER_MODEL`, `CONSTRUCT_INFER_URL`:
 //!   the model Collections asks for `model`-computed fields (unset: they
 //!   keep their default).
