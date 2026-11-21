@@ -25,8 +25,8 @@ app asks before it switches, and switches only to a server of that list, never o
 `http://` is accepted only for this machine and private network addresses.
 
 The viewer keeps its pod and the engine's cache in `~/Library/Application Support/The Construct` on macOS (else
-`$XDG_CONFIG_HOME/the-construct` or `~/.config/the-construct`), and sessions in the login Keychain on macOS (else
-`secure.json` there, readable by you only).
+`$XDG_CONFIG_HOME/the-construct` or `~/.config/the-construct`), and sessions in the login Keychain on macOS, the Credential Manager on Windows or the Secret Service on Linux
+(else `secure.json` there, readable by you only, when the machine has none).
 
 **The Mac app:** `scripts/macos_app.sh` (on a Mac) builds `build/macos/The Construct.app` and
 `build/macos/The-Construct.dmg`; copy the app to Applications. It is signed ad hoc, not notarized: a copy
