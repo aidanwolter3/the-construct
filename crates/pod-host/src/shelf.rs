@@ -20,6 +20,8 @@ pub struct HostShelf {
     store: Arc<HostStore>,
     /// The host serves public links (decision `public-web-links`).
     public: bool,
+    /// The pod is temporary: no handle, no publishing.
+    temporary: bool,
 }
 
 impl HostShelf {
@@ -27,7 +29,15 @@ impl HostShelf {
         Self {
             store,
             public: false,
+            temporary: false,
         }
+    }
+
+    /// For a temporary pod (anyone can make one): it may not take a handle
+    /// or publish.
+    pub fn temporary(mut self, temporary: bool) -> Self {
+        self.temporary = temporary;
+        self
     }
 
     /// With public links on (`CONSTRUCT_PUBLIC_WEB=1`).
@@ -132,6 +142,9 @@ impl Shelf for HostShelf {
     }
 
     fn set_handle(&self, pod: &str, handle: &str) -> Result<(), ShelfError> {
+        if self.temporary {
+            return Err(ShelfError::TemporaryPod);
+        }
         let conn = self.store.conn();
         let current: Option<String> = conn
             .query_row("SELECT handle FROM handles WHERE pod_id = ?1", [pod], |r| {
@@ -177,6 +190,9 @@ impl Shelf for HostShelf {
     }
 
     fn publish(&self, v: NewVersion) -> Result<Publication, ShelfError> {
+        if self.temporary {
+            return Err(ShelfError::TemporaryPod);
+        }
         let mut conn = self.store.conn();
         let tx = conn.transaction().map_err(err)?;
         let now = now_secs();
@@ -353,6 +369,10 @@ impl Shelf for HostShelf {
         let p = by_link(&tx, &link).map_err(err)?;
         tx.commit().map_err(err)?;
         Ok(p)
+    }
+
+    fn may_publish(&self) -> bool {
+        !self.temporary
     }
 
     fn public_links_enabled(&self) -> bool {
