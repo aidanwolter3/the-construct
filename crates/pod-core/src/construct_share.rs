@@ -1237,8 +1237,14 @@ fn describe_publication(pod: &Pod, args: &Value) -> Result<Value, Value> {
     let (me, shelf) = shelf(pod)?;
     let link = link_arg(args)?;
     let p = live_by_link(shelf.as_ref(), &link)?;
-    let mut out = publication_row(&p, p.owner_pod == me);
-    out["interface"] = p.interface.clone();
+    let mine = p.owner_pod == me;
+    let mut out = publication_row(&p, mine);
+    // Another pod's interface is its publisher's text (issue #439).
+    out["interface"] = if mine {
+        p.interface.clone()
+    } else {
+        crate::mcp::untrusted(&p.name, p.interface.clone())
+    };
     Ok(out)
 }
 
@@ -1867,12 +1873,13 @@ async fn adopt(pod: &Pod, args: &Value) -> Result<Value, Value> {
             "ready": ready,
             "name": fetched.publication.name,
             "version": fetched.publication.version,
-            "interface": fetched.publication.interface,
+            // The publisher's text (issue #439).
+            "interface": crate::mcp::untrusted(&fetched.publication.name, fetched.publication.interface.clone()),
             "bind": plan.bind,
             "create": plan.create.iter().map(|(t, a)| json!({"tool": t, "args": a})).collect::<Vec<_>>(),
             "problems": plan.problems,
             "proposed": plan.proposed,
-            "flags": fetched.flags,
+            "flags": crate::mcp::untrusted(&fetched.publication.name, json!(fetched.flags)),
         })
     };
     let accept = accepted_arg(args);
@@ -2114,7 +2121,7 @@ fn update_check(pod: &Pod, conn: &Connection, args: &Value) -> Result<Update, Va
     if !unaccepted.is_empty() {
         let mut r = data_urls_refusal(&f.publication.name, &unaccepted);
         r["version"] = json!(f.publication.version);
-        r["flags"] = json!(f.flags);
+        r["flags"] = crate::mcp::untrusted(&f.publication.name, json!(f.flags));
         return Err(r);
     }
     // The saved bindings, as adopt's arguments, with any new ones on top.

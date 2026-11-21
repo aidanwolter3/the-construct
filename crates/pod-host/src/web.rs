@@ -758,17 +758,15 @@ async fn image(State(host): State<Arc<Host>>, RawQuery(q): RawQuery, req: Reques
 /// Images one pod's pages may pass through the proxy per minute.
 pub const IMAGES_PER_MINUTE: u32 = 120;
 
-/// The proxy's one client: public addresses only, redirects only to public
-/// `https://` names.
-fn image_client() -> Option<&'static reqwest::Client> {
-    static CLIENT: std::sync::OnceLock<Option<reqwest::Client>> = std::sync::OnceLock::new();
-    CLIENT
-        .get_or_init(|| {
-            pod_core::net::public_builder(Duration::from_secs(15))
-                .build()
-                .ok()
-        })
-        .as_ref()
+/// The proxy's one client (public websites, bodies capped at 10 MiB).
+fn image_client() -> &'static pod_core::net::OutboundClient {
+    static CLIENT: std::sync::OnceLock<pod_core::net::OutboundClient> = std::sync::OnceLock::new();
+    CLIENT.get_or_init(|| {
+        pod_core::net::OutboundClient::builder(Duration::from_secs(15))
+            .web()
+            .body_cap(MAX_IMAGE_BYTES)
+            .build()
+    })
 }
 
 /// A public `http(s)` image for `pod`'s page, passed on: public hosts on
@@ -781,19 +779,14 @@ async fn proxy_image(host: &Host, pod: &str, url: reqwest::Url) -> Response {
         pod_core::metrics::inc(pod_core::metrics::RATE_LIMITED, &[("limit", "web_image")]);
         return crate::rate_limited();
     }
-    if !matches!(url.scheme(), "http" | "https")
-        || url.port().is_some()
-        || !pod_core::net::is_public_host(url.host_str().unwrap_or(""))
-    {
+    let client = image_client();
+    if url.port().is_some() || !client.allows(&url) {
         return json_error(
             StatusCode::BAD_REQUEST,
             json!({ "error": "not_a_public_url" }),
         );
     }
-    let Some(client) = image_client() else {
-        return json_error(StatusCode::BAD_GATEWAY, json!({ "error": "fetch_failed" }));
-    };
-    let Ok(mut resp) = client.get(url).send().await else {
+    let Ok(resp) = client.get(url).send().await else {
         return json_error(StatusCode::BAD_GATEWAY, json!({ "error": "fetch_failed" }));
     };
     let kind = resp
@@ -805,14 +798,13 @@ async fn proxy_image(host: &Host, pod: &str, url: reqwest::Url) -> Response {
     if !resp.status().is_success() || !is_raster_image(&kind) {
         return json_error(StatusCode::BAD_GATEWAY, json!({ "error": "not_an_image" }));
     }
-    let mut bytes = Vec::new();
-    while let Ok(Some(chunk)) = resp.chunk().await {
-        if bytes.len() + chunk.len() > MAX_IMAGE_BYTES {
-            return json_error(StatusCode::BAD_GATEWAY, json!({ "error": "too_large" }));
+    match resp.bytes().await {
+        Ok(bytes) => image_response(&kind, bytes),
+        Err(e) if e.is_too_large() => {
+            json_error(StatusCode::BAD_GATEWAY, json!({ "error": "too_large" }))
         }
-        bytes.extend_from_slice(&chunk);
+        Err(_) => json_error(StatusCode::BAD_GATEWAY, json!({ "error": "fetch_failed" })),
     }
-    image_response(&kind, bytes)
 }
 
 /// An image type the proxy passes on: not SVG, a document that runs scripts

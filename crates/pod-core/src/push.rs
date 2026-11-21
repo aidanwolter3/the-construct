@@ -71,8 +71,7 @@ pub struct PushSender {
     public_key: String,
     /// VAPID `sub`: `mailto:` or `https:` contact for push services.
     subject: String,
-    client: reqwest::Client,
-    allow_private: bool,
+    client: crate::net::OutboundClient,
 }
 
 impl std::fmt::Debug for PushSender {
@@ -97,20 +96,15 @@ impl PushSender {
                 .map_err(|e| format!("invalid VAPID private key: {e}"))?;
             URL_SAFE_NO_PAD.encode(secret.public_key().to_encoded_point(false).as_bytes())
         };
-        let client = if allow_private {
-            crate::net::builder(SEND_TIMEOUT)
-        } else {
-            crate::net::public_builder(SEND_TIMEOUT)
-        }
-        .redirect(reqwest::redirect::Policy::none())
-        .build()
-        .map_err(|e| e.to_string())?;
+        let client = crate::net::OutboundClient::builder(SEND_TIMEOUT)
+            .private(allow_private)
+            .no_redirects()
+            .build();
         Ok(Self {
             key,
             public_key,
             subject: subject.to_owned(),
             client,
-            allow_private,
         })
     }
 
@@ -134,11 +128,7 @@ impl PushSender {
         if endpoint.len() > 1024 || url.username() != "" || url.password().is_some() {
             return false;
         }
-        if self.allow_private {
-            matches!(url.scheme(), "http" | "https") && url.host_str().is_some()
-        } else {
-            crate::net::is_public_https(&url)
-        }
+        self.client.allows(&url)
     }
 
     /// Check that a subscription's keys parse.

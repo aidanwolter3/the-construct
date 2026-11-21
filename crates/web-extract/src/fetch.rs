@@ -82,7 +82,7 @@ pub const DEFAULT_ACCEPT: &str = "text/html,application/xhtml+xml,text/calendar,
 /// GET `url`, sending the validators of the last fetch and `headers`
 /// (which may replace `Accept`).
 pub async fn fetch(
-    client: &reqwest::Client,
+    client: &pod_core::net::OutboundClient,
     url: &str,
     etag: Option<&str>,
     last_modified: Option<&str>,
@@ -104,7 +104,7 @@ pub async fn fetch(
     if let Some(m) = last_modified {
         req = req.header(header::IF_MODIFIED_SINCE, m);
     }
-    let mut resp = req.send().await.map_err(|e| {
+    let resp = req.send().await.map_err(|e| {
         let e = if e.is_timeout() {
             "timed out".to_owned()
         } else if e.is_connect() {
@@ -146,13 +146,13 @@ pub async fn fetch(
     };
     let etag = header_of(header::ETAG);
     let last_modified = header_of(header::LAST_MODIFIED);
-    let mut bytes = Vec::new();
-    while let Some(chunk) = resp.chunk().await.map_err(|e| fail(e.to_string()))? {
-        if bytes.len() + chunk.len() > MAX_BODY {
-            return Err(fail(format!("the page is over {} MiB", MAX_BODY >> 20)));
+    let bytes = resp.body_cap(MAX_BODY).bytes().await.map_err(|e| {
+        if e.is_too_large() {
+            fail(format!("the page is over {} MiB", MAX_BODY >> 20))
+        } else {
+            fail(e.to_string())
         }
-        bytes.extend_from_slice(&chunk);
-    }
+    })?;
     if let Some(reason) = block_reason(&bytes) {
         return Err(FetchError {
             message: format!(
