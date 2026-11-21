@@ -686,6 +686,7 @@ fn fills_width(n: &UiNode) -> bool {
         | UiNode::Page { .. }
         | UiNode::Dock { .. } => true,
         UiNode::Image { size_dp, .. } => size_dp.is_none(),
+        UiNode::Progress { value, .. } => value.is_some(),
         // Markdown's blocks (a code card, a table) span the width.
         UiNode::Text {
             markdown: true,
@@ -2459,18 +2460,30 @@ impl<'i> Build<'_, 'i> {
                 stack,
                 min_column_dp,
                 trailing,
+                merge_query_keys,
+                sort_by,
             } => {
-                let Some(all) = ctx.query(query_key) else {
+                let Some(first) = ctx.query(query_key) else {
                     // Not loaded yet: nothing, as the app shows while loading.
                     return Some(self.push(Style::default(), Vec::new(), Paint::None, None, false));
                 };
+                // Feature `list_merge`: the other queries' entities after
+                // these, each once (a query not loaded yet adds nothing).
+                let mut all: Vec<&String> = first.iter().collect();
+                for k in merge_query_keys {
+                    for u in ctx.query(k).into_iter().flatten() {
+                        if !all.contains(&u) {
+                            all.push(u);
+                        }
+                    }
+                }
                 // Each condition's value once (it binds the form, not the
                 // item); a blank one matches everything.
                 let wants = Where::of(where_.as_ref().map_or(&[][..], |w| w.conditions()), &ctx);
                 let (now, zone) = (self.now, self.zone.clone());
                 let mut next = None;
                 let mut uris: Vec<&String> = all
-                    .iter()
+                    .into_iter()
                     .filter(|u| {
                         ctx.entity(u).is_some_and(|e| {
                             wants
@@ -2480,6 +2493,16 @@ impl<'i> Build<'_, 'i> {
                     })
                     .collect();
                 self.changes_at = earliest(self.changes_at, next);
+                if let Some(field) = sort_by {
+                    // Stable: equal or missing values keep the queries' order.
+                    let key = |u: &&String| {
+                        ctx.entity(u)
+                            .and_then(|e| e.get(field))
+                            .map(render)
+                            .unwrap_or_default()
+                    };
+                    uris.sort_by_cached_key(key);
+                }
                 let mut no_match = None;
                 if let Some(f) = filter {
                     let q = fold(&ctx.text(&f.value));
@@ -2539,6 +2562,9 @@ impl<'i> Build<'_, 'i> {
                     (*columns).max(1) as usize
                 };
                 let mut last_group: Option<String> = None;
+                // With headers_only, one header per distinct value wherever it
+                // comes (docs/layouts.md), not one per run of equal values.
+                let mut seen_groups: std::collections::HashSet<String> = Default::default();
                 let mut row_cells: Vec<usize> = Vec::new();
                 let flush = |this: &mut Self, cells: &mut Vec<usize>, kids: &mut Vec<usize>| {
                     if cells.is_empty() {
@@ -2600,7 +2626,12 @@ impl<'i> Build<'_, 'i> {
                     };
                     if let Some(g) = group_by {
                         let v = item.get(&g.field).map(render).unwrap_or_default();
-                        if last_group.as_deref() != Some(v.as_str()) {
+                        let new_group = if g.headers_only {
+                            seen_groups.insert(v.clone())
+                        } else {
+                            last_group.as_deref() != Some(v.as_str())
+                        };
+                        if new_group {
                             last_group = Some(v);
                             flush(self, &mut row_cells, &mut kids);
                             let hb = B {
@@ -2931,7 +2962,71 @@ impl<'i> Build<'_, 'i> {
                     merge: merge.as_deref(),
                 },
             ),
-            UiNode::Progress { size_dp } => {
+            UiNode::Progress {
+                size_dp,
+                value: Some(value),
+                max,
+                color,
+            } => {
+                // A determinate bar (feature `progress_value`): the track as
+                // wide as it is given, the fill value / max of it.
+                let num = |v: &serde_json::Value| match v {
+                    serde_json::Value::Number(n) => n.as_f64(),
+                    serde_json::Value::String(s) => ctx.text(s).trim().parse::<f64>().ok(),
+                    _ => None,
+                };
+                let max = max.as_ref().and_then(num).unwrap_or(1.0);
+                let frac = match num(value) {
+                    Some(v) if max > 0.0 && v.is_finite() => (v / max).clamp(0.0, 1.0) as f32,
+                    _ => 0.0,
+                };
+                let h = size_dp.map_or(6.0, f32::from);
+                let fill_color = color
+                    .as_deref()
+                    .and_then(|c| ctx.color(c))
+                    .unwrap_or(theme.primary);
+                let fill = self.push(
+                    Style {
+                        size: Size {
+                            width: percent(frac),
+                            height: percent(1.0),
+                        },
+                        ..Default::default()
+                    },
+                    Vec::new(),
+                    Paint::Quad {
+                        bg: fill_color,
+                        border: None,
+                        dashed: false,
+                        radius: h / 2.0,
+                    },
+                    None,
+                    false,
+                );
+                let i = self.push(
+                    Style {
+                        size: Size {
+                            width: percent(1.0),
+                            height: length(h),
+                        },
+                        flex_shrink: 0.0,
+                        ..Default::default()
+                    },
+                    vec![fill],
+                    Paint::Quad {
+                        bg: theme.surface_variant,
+                        border: None,
+                        dashed: false,
+                        radius: h / 2.0,
+                    },
+                    None,
+                    true,
+                );
+                self.elems[i].sem =
+                    Some(self.sem(b, n, Some(format!("{}%", (frac * 100.0).round())), None));
+                i
+            }
+            UiNode::Progress { size_dp, .. } => {
                 let s = size_dp.map_or(16.0, f32::from);
                 let i = self.push(
                     fixed(s, s),
