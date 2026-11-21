@@ -8,8 +8,10 @@
 //!
 //! - refuses when the pod's `model` jack is unplugged
 //!   ([`pod_core::jacks::MODEL`]);
-//! - counts the call toward the pod's daily [`Budgets`] (per feature and per
-//!   pod, in `agent_usage`) and refuses once one is spent;
+//! - counts each request, retries included, toward the pod's daily
+//!   [`Budgets`] (calls per feature and per pod, and the pod's tokens, in
+//!   `agent_usage`) and the server's daily token cap ([`HostUsage`]), and
+//!   refuses once one is spent;
 //! - picks the tier's model, sends the request, and retries a busy or
 //!   failing API (429, 5xx, 529, a timeout) with backoff;
 //! - runs the tool loop: a `pause_turn` is resumed, a call to one of the
@@ -17,7 +19,7 @@
 //!   the task's finish tool ends the task with that tool's input;
 //! - records the call in the metrics (`construct_llm_*`, by feature).
 
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
 use pod_core::BoxFuture;
@@ -36,6 +38,16 @@ pub const CHEAP_MODEL_VAR: &str = "CONSTRUCT_INFER_MODEL";
 pub const CAPABLE_MODEL_VAR: &str = "CONSTRUCT_FILL_MODEL";
 /// The env var with the Messages API URL.
 pub const URL_VAR: &str = "CONSTRUCT_INFER_URL";
+/// The env var with the server's daily token cap across every pod
+/// ([`HostUsage`]); unset: [`DEFAULT_HOST_TOKENS_PER_DAY`].
+pub const HOST_TOKENS_VAR: &str = "CONSTRUCT_INFER_MAX_TOKENS_PER_DAY";
+/// [`HOST_TOKENS_VAR`] when unset.
+pub const DEFAULT_HOST_TOKENS_PER_DAY: u64 = 5_000_000;
+/// The env var with each pod's daily token budget; unset:
+/// [`DEFAULT_POD_TOKENS_PER_DAY`].
+pub const POD_TOKENS_VAR: &str = "CONSTRUCT_INFER_POD_TOKENS_PER_DAY";
+/// [`POD_TOKENS_VAR`] when unset.
+pub const DEFAULT_POD_TOKENS_PER_DAY: u64 = 2_000_000;
 /// [`URL_VAR`] when unset.
 pub const DEFAULT_URL: &str = "https://api.anthropic.com/v1/messages";
 /// [`CAPABLE_MODEL_VAR`] when unset.
@@ -261,12 +273,104 @@ impl std::fmt::Display for AgentError {
     }
 }
 
-/// Model calls a pod may make per day: per feature (unlisted features share
-/// only the pod's total) and in all.
+/// Model requests a pod may make per day (each retry is a request): per
+/// feature (unlisted features share only the pod's total) and in all; and
+/// the tokens it may spend per day ([`billed_tokens`]).
 #[derive(Debug, Clone, PartialEq)]
 pub struct Budgets {
     pub per_feature: Vec<(&'static str, u32)>,
     pub per_pod: u32,
+    pub tokens_per_pod: u64,
+}
+
+impl Budgets {
+    /// The defaults, with [`POD_TOKENS_VAR`].
+    pub fn from_env() -> Self {
+        Self {
+            tokens_per_pod: env_u64(POD_TOKENS_VAR).unwrap_or(DEFAULT_POD_TOKENS_PER_DAY),
+            ..Self::default()
+        }
+    }
+}
+
+fn env_u64(k: &str) -> Option<u64> {
+    std::env::var(k).ok().and_then(|v| v.trim().parse().ok())
+}
+
+/// The tokens an answer counts toward the budgets: uncached input, cache
+/// writes and output. Reads from the prompt cache (a small fraction of the
+/// price) aren't counted, as in the server's monitoring.
+pub fn billed_tokens(answer: &Value) -> u64 {
+    let u = &answer["usage"];
+    [
+        "input_tokens",
+        "cache_creation_input_tokens",
+        "output_tokens",
+    ]
+    .iter()
+    .map(|k| u[*k].as_u64().unwrap_or(0))
+    .sum()
+}
+
+/// The server's daily token cap across every pod on it: all of them spend
+/// the one [`API_KEY_VAR`]. Kept in memory ([`HostUsage::global`] is the
+/// process's one), so a restart counts the day afresh.
+#[derive(Debug)]
+pub struct HostUsage {
+    cap: u64,
+    /// The day counted and its tokens.
+    used: Mutex<(String, u64)>,
+}
+
+impl HostUsage {
+    pub fn new(cap: u64) -> Self {
+        Self {
+            cap,
+            used: Mutex::new((String::new(), 0)),
+        }
+    }
+
+    /// The process's one, capped by [`HOST_TOKENS_VAR`].
+    pub fn global() -> Arc<Self> {
+        static G: OnceLock<Arc<HostUsage>> = OnceLock::new();
+        G.get_or_init(|| {
+            Arc::new(Self::new(
+                env_u64(HOST_TOKENS_VAR).unwrap_or(DEFAULT_HOST_TOKENS_PER_DAY),
+            ))
+        })
+        .clone()
+    }
+
+    pub fn cap(&self) -> u64 {
+        self.cap
+    }
+
+    /// Tokens spent on the day of `now`.
+    pub fn used(&self, now: i64) -> u64 {
+        let day = utc_day(now);
+        let u = self.used.lock().unwrap_or_else(|e| e.into_inner());
+        if u.0 == day { u.1 } else { 0 }
+    }
+
+    fn add(&self, tokens: u64, now: i64) {
+        let day = utc_day(now);
+        let mut u = self.used.lock().unwrap_or_else(|e| e.into_inner());
+        if u.0 != day {
+            *u = (day, 0);
+        }
+        u.1 = u.1.saturating_add(tokens);
+    }
+
+    fn check(&self, now: i64) -> Result<(), AgentError> {
+        let used = self.used(now);
+        if used >= self.cap {
+            return Err(AgentError::Budget(format!(
+                "server budget reached: this server's pods already spent {used} model tokens \
+                 today (its daily cap, {HOST_TOKENS_VAR}); model features resume tomorrow (UTC)"
+            )));
+        }
+        Ok(())
+    }
 }
 
 impl Default for Budgets {
@@ -279,6 +383,7 @@ impl Default for Budgets {
                 ("web_pick", 300),
             ],
             per_pod: 3_000,
+            tokens_per_pod: DEFAULT_POD_TOKENS_PER_DAY,
         }
     }
 }
@@ -307,7 +412,7 @@ fn now_secs() -> i64 {
         .unwrap_or(0)
 }
 
-/// Count one call of `feature` today, unless a budget is spent.
+/// Count one request of `feature` today, unless a budget is spent.
 pub fn admit(store: &Store, budgets: &Budgets, feature: &str, now: i64) -> Result<(), AgentError> {
     let day = utc_day(now);
     let cap = budgets
@@ -324,11 +429,17 @@ pub fn admit(store: &Store, budgets: &Budgets, feature: &str, now: i64) -> Resul
             )
             .optional()?
             .unwrap_or(0);
-        let all: i64 = tx.query_row(
-            "SELECT COALESCE(SUM(calls), 0) FROM agent_usage WHERE day = ?1",
+        let (all, tokens): (i64, i64) = tx.query_row(
+            "SELECT COALESCE(SUM(calls), 0), COALESCE(SUM(tokens), 0)
+             FROM agent_usage WHERE day = ?1",
             [&day],
-            |r| r.get(0),
+            |r| Ok((r.get(0)?, r.get(1)?)),
         )?;
+        if u64::try_from(tokens).unwrap_or(0) >= budgets.tokens_per_pod {
+            return Ok(Err(AgentError::Budget(format!(
+                "this pod already spent {tokens} model tokens today (its daily budget)"
+            ))));
+        }
         if let Some(cap) = cap
             && mine >= i64::from(cap)
         {
@@ -355,7 +466,37 @@ pub fn admit(store: &Store, budgets: &Budgets, feature: &str, now: i64) -> Resul
     r.map_err(|e| AgentError::Failed(format!("counting the model call: {e}")))?
 }
 
-/// Model calls of `feature` today (all features: `None`).
+/// Add `tokens` to `feature`'s count today (the request was admitted).
+pub fn spend(store: &Store, feature: &str, tokens: u64, now: i64) -> Result<(), AgentError> {
+    let day = utc_day(now);
+    store
+        .with_conn(|c| {
+            c.execute(
+                "INSERT INTO agent_usage (day, feature, calls, tokens) VALUES (?1, ?2, 0, ?3)
+                 ON CONFLICT (day, feature) DO UPDATE SET tokens = tokens + ?3",
+                params![day, feature, i64::try_from(tokens).unwrap_or(i64::MAX)],
+            )
+        })
+        .map(|_| ())
+        .map_err(|e| AgentError::Failed(format!("counting the model tokens: {e}")))
+}
+
+/// Model tokens this pod spent today ([`billed_tokens`]).
+pub fn tokens_today(store: &Store) -> i64 {
+    let day = utc_day(now_secs());
+    store
+        .with_conn(|c| {
+            c.query_row(
+                "SELECT COALESCE(SUM(tokens), 0) FROM agent_usage WHERE day = ?1",
+                [&day],
+                |r| r.get(0),
+            )
+        })
+        .unwrap_or(0)
+}
+
+/// Model requests of `feature` today, retries included (all features:
+/// `None`).
 pub fn used_today(store: &Store, feature: Option<&str>) -> i64 {
     let day = utc_day(now_secs());
     store
@@ -440,6 +581,7 @@ pub struct Agent {
     cheap: Option<String>,
     capable: String,
     budgets: Budgets,
+    host: Arc<HostUsage>,
     /// The first retry's wait (doubling, plus up to as much again).
     retry_base: Duration,
 }
@@ -460,12 +602,19 @@ impl Agent {
             cheap,
             capable,
             budgets: Budgets::default(),
+            host: HostUsage::global(),
             retry_base: Duration::from_secs(2),
         }
     }
 
     pub fn with_budgets(mut self, budgets: Budgets) -> Self {
         self.budgets = budgets;
+        self
+    }
+
+    /// Count tokens against `host` instead of [`HostUsage::global`].
+    pub fn with_host_usage(mut self, host: Arc<HostUsage>) -> Self {
+        self.host = host;
         self
     }
 
@@ -486,11 +635,14 @@ impl Agent {
         let key = var(API_KEY_VAR)?;
         let url = var(URL_VAR).unwrap_or_else(|| DEFAULT_URL.to_owned());
         let capable = var(CAPABLE_MODEL_VAR).unwrap_or_else(|| DEFAULT_CAPABLE_MODEL.to_owned());
-        Some(Arc::new(Self::new(
-            Arc::new(HttpTransport::new(url, key)),
-            var(CHEAP_MODEL_VAR),
-            capable,
-        )))
+        Some(Arc::new(
+            Self::new(
+                Arc::new(HttpTransport::new(url, key)),
+                var(CHEAP_MODEL_VAR),
+                capable,
+            )
+            .with_budgets(Budgets::from_env()),
+        ))
     }
 
     /// The model of `tier`, if one is configured.
@@ -505,12 +657,20 @@ impl Agent {
         &self.budgets
     }
 
-    /// One request with retries, counted and recorded.
+    /// One request with retries, each attempt counted and recorded.
     async fn post(&self, store: &Store, task: &Task, body: &Value) -> Result<Value, AgentError> {
-        admit(store, &self.budgets, task.feature, now_secs())?;
         let mut attempt = 0;
         loop {
+            self.host.check(now_secs())?;
+            admit(store, &self.budgets, task.feature, now_secs())?;
             let r = self.transport.post(body).await;
+            if let Ok((_, answer)) = &r {
+                let n = billed_tokens(answer);
+                if n > 0 {
+                    self.host.add(n, now_secs());
+                    spend(store, task.feature, n, now_secs())?;
+                }
+            }
             let retry = match &r {
                 Ok((status, _)) => retryable(*status),
                 Err(_) => true,
@@ -716,6 +876,17 @@ mod tests {
     fn agent(s: &Arc<Script>) -> Agent {
         Agent::new(s.clone(), Some("cheap-m".into()), "capable-m".into())
             .with_retry_base(Duration::from_millis(1))
+            .with_host_usage(Arc::new(HostUsage::new(u64::MAX)))
+    }
+
+    fn costing(t: &str, input: u64, output: u64) -> Result<(u16, Value), String> {
+        let mut a = text(t);
+        a["usage"] = json!({
+            "input_tokens": input,
+            "output_tokens": output,
+            "cache_read_input_tokens": 1_000_000,
+        });
+        Ok((200, a))
     }
 
     fn text(t: &str) -> Value {
@@ -772,6 +943,7 @@ mod tests {
         let a = agent(&s).with_budgets(Budgets {
             per_feature: vec![("collections", 1)],
             per_pod: 10,
+            ..Budgets::default()
         });
         a.run(&store, Task::new("collections", Tier::Cheap, "q"))
             .await
@@ -781,6 +953,81 @@ mod tests {
             .await
             .unwrap_err();
         assert!(matches!(e, AgentError::Budget(_)), "{e:?}");
+    }
+
+    #[tokio::test]
+    async fn retries_use_up_the_budget() {
+        let s = Script::new(vec![
+            Ok((529, json!({"error": {"message": "overloaded"}}))),
+            Ok((529, json!({"error": {"message": "overloaded"}}))),
+            Ok((200, text("ok"))),
+        ]);
+        let store = Store::open_in_memory().unwrap();
+        let e = agent(&s)
+            .with_budgets(Budgets {
+                per_pod: 2,
+                ..Budgets::default()
+            })
+            .run(&store, Task::new("fill_page", Tier::Capable, "q"))
+            .await
+            .unwrap_err();
+        assert!(matches!(e, AgentError::Budget(_)), "{e:?}");
+        assert_eq!(s.bodies.lock().unwrap().len(), 2);
+        assert_eq!(used_today(&store, Some("fill_page")), 2);
+    }
+
+    #[tokio::test]
+    async fn a_pods_token_budget_refuses_once_spent() {
+        let s = Script::new(vec![costing("a", 40, 20), costing("b", 1, 1)]);
+        let store = Store::open_in_memory().unwrap();
+        let a = agent(&s).with_budgets(Budgets {
+            tokens_per_pod: 50,
+            ..Budgets::default()
+        });
+        a.run(&store, Task::new("collections", Tier::Cheap, "q"))
+            .await
+            .unwrap();
+        // Cache reads aren't counted.
+        assert_eq!(tokens_today(&store), 60);
+        let e = a
+            .run(&store, Task::new("collections", Tier::Cheap, "q"))
+            .await
+            .unwrap_err();
+        assert!(e.to_string().contains("this pod already spent 60"), "{e}");
+        assert_eq!(s.bodies.lock().unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn the_host_wide_cap_refuses_every_pod_once_reached() {
+        let host = Arc::new(HostUsage::new(100));
+        let s = Script::new(vec![
+            costing("a", 50, 10),
+            costing("b", 30, 20),
+            costing("c", 1, 1),
+        ]);
+        let a = agent(&s).with_host_usage(host.clone());
+        let (one, two) = (
+            Store::open_in_memory().unwrap(),
+            Store::open_in_memory().unwrap(),
+        );
+        a.run(&one, Task::new("collections", Tier::Cheap, "q"))
+            .await
+            .unwrap();
+        a.run(&two, Task::new("collections", Tier::Cheap, "q"))
+            .await
+            .unwrap();
+        assert_eq!(host.used(now_secs()), 110);
+        for store in [&one, &two, &Store::open_in_memory().unwrap()] {
+            let e = a
+                .run(store, Task::new("collections", Tier::Cheap, "q"))
+                .await
+                .unwrap_err();
+            assert!(matches!(e, AgentError::Budget(_)), "{e:?}");
+            assert!(e.to_string().starts_with("server budget reached"), "{e}");
+        }
+        assert_eq!(s.bodies.lock().unwrap().len(), 2);
+        // A new day starts afresh.
+        assert_eq!(host.used(now_secs() + 86_400), 0);
     }
 
     #[tokio::test]
