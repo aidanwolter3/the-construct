@@ -419,6 +419,12 @@ pub const STEPS: &[Step] = &[
              outcome    TEXT
          ) WITHOUT ROWID;",
     ),
+    // The model tokens each day's calls of a feature spent (the agent
+    // module's daily token budget).
+    Step::sql(
+        "agent_usage_tokens",
+        "ALTER TABLE agent_usage ADD COLUMN tokens INTEGER NOT NULL DEFAULT 0;",
+    ),
 ];
 
 /// Whether the old layout system's tables are still there (dropped by
