@@ -34,7 +34,7 @@ async fn a_session_from_before_v11_stays_signed_in() {
                  AND (name LIKE 'recipes%' OR name LIKE 'collections%' OR name LIKE 'agents%' OR name IN ('pixelfed_session_instance', 'pixelfed_pending_posts'))
                  OR (type = 'table' AND name IN ('pod_settings', 'uploads', 'notifications',
                      'notification_polls', 'devices', 'device_channel_prefs', 'notification_switches',
-                     'pixelfed_notify_cursor', 'custom_apps', 'components', 'jacks', 'agent_usage',
+                     'pixelfed_notify_cursor', 'pixelfed_media_secret', 'custom_apps', 'components', 'jacks', 'agent_usage',
                      'mcp_servers', 'client_devices', 'client_days', 'server_builds',
                      'device_watches'))",
             )

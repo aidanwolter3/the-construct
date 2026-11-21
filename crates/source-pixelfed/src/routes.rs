@@ -174,6 +174,11 @@ pub(crate) fn proxy_base(headers: &HeaderMap) -> String {
     format!("{scheme}://{host}{prefix}{MEDIA_PATH}")
 }
 
+/// The pod's secret for media keys (made on first use).
+pub(crate) async fn media_secret(state: &Pod) -> Result<String, ApiError> {
+    blocking(state, |s| s.media_secret()).await
+}
+
 pub(crate) async fn save_media_keys(state: &Pod, media: MediaUrls) -> Result<(), ApiError> {
     if media.keys.is_empty() {
         return Ok(());
@@ -555,7 +560,11 @@ async fn exchange_token(State(state): State<Pod>, headers: HeaderMap, body: Byte
         }
         Err(e) => return bad_gateway(&e),
     };
-    let mut media = MediaUrls::new(&proxy_base(&headers), rt.media_for(others));
+    let secret = match media_secret(&state).await {
+        Ok(s) => s,
+        Err(e) => return e.into_response(),
+    };
+    let mut media = MediaUrls::new(&proxy_base(&headers), rt.media_for(others), &secret);
     let user = normalize_account(&account, &mut media);
     // Owner pinning (D17): only the owner's account may sign in, so another
     // user of the instance cannot replace the stored account.
@@ -671,7 +680,11 @@ pub async fn home_feed(pf: &PixelfedAdapter, state: &Pod, req: &RequestCtx) -> H
         Ok(o) => o,
         Err(e) => return Hydration::Error(e.into_response()),
     };
-    let mut media = MediaUrls::new(&proxy_base(&req.headers), rt.media_for(others));
+    let secret = match media_secret(state).await {
+        Ok(s) => s,
+        Err(e) => return Hydration::Error(e.into_response()),
+    };
+    let mut media = MediaUrls::new(&proxy_base(&req.headers), rt.media_for(others), &secret);
     let mut timeline = normalize_timeline(&statuses, &mut media);
     // Posts on their way (D50) go first: placeholders, then finished posts
     // the timeline does not list yet.
@@ -948,7 +961,11 @@ async fn comments_screen(
         Ok(o) => o,
         Err(e) => return e.into_response(),
     };
-    let mut media = MediaUrls::new(&proxy_base(&headers), rt.media_for(others));
+    let secret = match media_secret(&state).await {
+        Ok(s) => s,
+        Err(e) => return e.into_response(),
+    };
+    let mut media = MediaUrls::new(&proxy_base(&headers), rt.media_for(others), &secret);
     let list = normalize_comments(&post_id, &context, &own, now_secs(), &mut media);
     // The post above the comments, listed as `post:<id>` (the id asked for).
     let post = super::normalize_post_screen(&id, &root, &mut media);
@@ -1005,7 +1022,11 @@ async fn post_screen(
         Ok(o) => o,
         Err(e) => return e.into_response(),
     };
-    let mut media = MediaUrls::new(&proxy_base(&headers), rt.media_for(others));
+    let secret = match media_secret(&state).await {
+        Ok(s) => s,
+        Err(e) => return e.into_response(),
+    };
+    let mut media = MediaUrls::new(&proxy_base(&headers), rt.media_for(others), &secret);
     let Some(bundle) = super::normalize_post_screen(&id, &raw, &mut media) else {
         return api_error(
             StatusCode::BAD_GATEWAY,
@@ -1095,7 +1116,11 @@ async fn comment(State(state): State<Pod>, headers: HeaderMap, body: Bytes) -> R
     };
     rt.recent_comments
         .record(&instance.url, &own, created.clone());
-    let mut media = MediaUrls::new(&proxy_base(&headers), rt.media_for(others));
+    let secret = match media_secret(&state).await {
+        Ok(s) => s,
+        Err(e) => return e.into_response(),
+    };
+    let mut media = MediaUrls::new(&proxy_base(&headers), rt.media_for(others), &secret);
     let comment = normalize_comment(&status, &id, 0, &own, now_secs(), &mut media);
     if let Err(e) = save_media_keys(&state, media).await {
         return e.into_response();
@@ -1107,7 +1132,7 @@ async fn comment(State(state): State<Pod>, headers: HeaderMap, body: Bytes) -> R
 // ---------- media proxy ----------
 
 /// `GET /v1/pixelfed/media/{key}`: streams a media/avatar URL the pod emitted.
-/// No auth: keys are opaque hashes of URLs that are public upstream anyway.
+/// No auth: keys are HMACs of the URL under the pod's secret, so one can't be computed from a URL.
 async fn media(State(state): State<Pod>, Path(key): Path<String>) -> Response {
     let rt = adapter(&state).runtime();
     let not_found = || {
