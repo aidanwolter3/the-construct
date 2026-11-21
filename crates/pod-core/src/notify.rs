@@ -55,6 +55,30 @@ pub const MAX_BACKOFF_SECS: i64 = 3600;
 pub const MAX_PUSH_FAILURES: i64 = 5;
 /// Web Push deliveries per pod per minute.
 pub const PUSH_PER_MINUTE: u32 = 60;
+/// New Web Push endpoints a pod takes per hour (a device refreshing the
+/// endpoint it has doesn't count): each is a host the server will send to.
+pub const PUSH_REGISTRATIONS_PER_HOUR: u32 = 20;
+
+/// The pod's count of new push endpoints this hour (`Pod::local`).
+#[derive(Default)]
+struct PushRegistrations(std::sync::Mutex<Option<(std::time::Instant, u32)>>);
+
+impl PushRegistrations {
+    fn allow(&self) -> bool {
+        let now = std::time::Instant::now();
+        let mut w = self.0.lock().unwrap_or_else(|e| e.into_inner());
+        let (start, n) = match *w {
+            Some((start, n)) if now.duration_since(start) < Duration::from_secs(3600) => (start, n),
+            _ => (now, 0),
+        };
+        if n >= PUSH_REGISTRATIONS_PER_HOUR {
+            *w = Some((start, n));
+            return false;
+        }
+        *w = Some((start, n + 1));
+        true
+    }
+}
 const DEFAULT_LIMIT: usize = 50;
 const MAX_LIMIT: usize = 100;
 const MAX_TITLE: usize = 200;
@@ -1116,6 +1140,25 @@ async fn register_device(
             };
             if let Err(e) = crate::push::PushSender::check_subscription(&sub) {
                 return bad_request(&e);
+            }
+            let (dev, ep) = (id.clone(), sub.endpoint.clone());
+            let same = blocking(&state, move |s| {
+                s.with_conn(|c| {
+                    c.query_row(
+                        "SELECT EXISTS (SELECT 1 FROM devices WHERE id = ?1 AND push_endpoint = ?2)",
+                        params![dev, ep],
+                        |r| r.get::<_, bool>(0),
+                    )
+                })
+            })
+            .await
+            .unwrap_or(false);
+            if !same && !state.local::<PushRegistrations>().allow() {
+                tracing::warn!("push registration refused: too many new endpoints this hour");
+                return json_error(
+                    StatusCode::TOO_MANY_REQUESTS,
+                    json!({ "error": "rate_limited" }),
+                );
             }
             Some(Some(sub))
         }

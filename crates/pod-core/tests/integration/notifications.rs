@@ -780,3 +780,35 @@ async fn a_notification_goes_with_its_subject() {
     assert_eq!(titles, ["title b"]);
     assert_eq!(list["unread_total"], 1);
 }
+
+/// Issue #445: a pod takes a bounded number of new push endpoints an hour
+/// (each is a host the server sends to); refreshing the same one is free.
+#[tokio::test]
+async fn new_push_endpoints_are_rate_limited_per_pod() {
+    let sender = Arc::new(
+        PushSender::new(
+            &PushSender::generate_private_key(),
+            "mailto:test@example.com",
+            false,
+        )
+        .unwrap(),
+    );
+    let p = pod_with(Some(sender));
+    let (_, p256dh, auth) = test_device_keys();
+    let put = |n: u32| {
+        let body = json!({"platform": "android", "push": {
+            "endpoint": format!("https://push.example.com/{n}"), "p256dh": p256dh, "auth": auth}});
+        let p = &p;
+        async move { call(p, "PUT", "/v1/devices/device-0001", Some(body), None).await }
+    };
+    for n in 0..pod_core::notify::PUSH_REGISTRATIONS_PER_HOUR {
+        let (status, v) = put(n).await;
+        assert_eq!(status, StatusCode::OK, "{v}");
+    }
+    // The endpoint the device has: a refresh, not counted.
+    let (status, v) = put(pod_core::notify::PUSH_REGISTRATIONS_PER_HOUR - 1).await;
+    assert_eq!(status, StatusCode::OK, "{v}");
+    let (status, v) = put(999).await;
+    assert_eq!(status, StatusCode::TOO_MANY_REQUESTS, "{v}");
+    assert_eq!(v["error"], "rate_limited");
+}
