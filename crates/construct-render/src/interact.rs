@@ -765,6 +765,10 @@ struct Prepared {
 /// A live layout.
 pub struct Session {
     stack: Vec<Entry>,
+    /// Whether the intent being run came from the user's own gesture on the
+    /// edit menu (or the platform keyboard), not from a layout: only then may
+    /// it read or write the clipboard (`edit.paste`, `edit.copy`, `edit.cut`).
+    clipboard_ok: bool,
     /// The device command waiting for the user's OK in the app's own
     /// dialog ([`Session::ask_device`]), with the nonce its OK carries.
     asked: Option<(String, Asked)>,
@@ -1010,6 +1014,7 @@ impl Session {
             pressed: None,
             hovered: None,
             prepared: None,
+            clipboard_ok: false,
             merges: 0,
             scenes_built: 0,
             spin_from: Instant::now(),
@@ -1893,6 +1898,7 @@ impl Session {
                 // Back in its place, where the next card of a deck shows.
                 let ti = self.top_index();
                 self.stack[ti].scroll.remove(&format!("card:{id}"));
+                self.clipboard_ok = false;
                 let mut effects = Vec::new();
                 match self.bind_form(&intent) {
                     Some(bound) => self.run(&bound, &mut effects),
@@ -3439,6 +3445,7 @@ impl Session {
         // Only opened or closed a layout or screen: what is laid out stays.
         let mut moved_only = false;
         let menu = node.node_type == "menu";
+        self.clipboard_ok = menu;
         if !menu {
             self.focused = None;
         }
@@ -3545,6 +3552,9 @@ impl Session {
         let mut effects = Vec::new();
         let (focused, merges) = (self.focused.clone(), self.merges);
         let mut moved_only = false;
+        // Callers of `dispatch` are the platform (keyboard, notifications),
+        // never a layout's tap.
+        self.clipboard_ok = true;
         match self.bind_form(intent) {
             Some(bound) => {
                 self.run(&bound, &mut effects);
@@ -3552,6 +3562,7 @@ impl Session {
             }
             None => effects.push(Effect::Nothing),
         }
+        self.clipboard_ok = false;
         // System Back closing a screen: what is under it stays laid out.
         self.relay_unless(moved_only && self.focused == focused);
         Ok(Outcome {
@@ -3694,6 +3705,7 @@ impl Session {
             });
         };
         let mut effects = Vec::new();
+        self.clipboard_ok = false;
         match self.bind_form(&node.gestures[kind]) {
             Some(bound) => self.run(&bound, &mut effects),
             None => effects.push(Effect::Nothing),
@@ -3771,6 +3783,11 @@ impl Session {
                     entity_uri: uri,
                     fields,
                 });
+            }
+            // The clipboard is the user's: a layout's button can't read it
+            // into a field or overwrite it (security audit, #459).
+            "edit.paste" | "edit.copy" | "edit.cut" if !self.clipboard_ok => {
+                out.push(Effect::Nothing);
             }
             "edit.paste" => {
                 if let Some(f) = self.edit.as_ref().map(|e| e.field.clone()) {
@@ -5332,6 +5349,28 @@ mod tests {
         assert!(shown.contains(&"Sage".to_owned()));
         assert_eq!(s.take_work().data_changes, 1);
         assert!(!s.animating());
+    }
+
+    #[test]
+    fn the_clipboard_is_the_users_not_a_layouts() {
+        let root: UiNode = serde_json::from_value(json!({ "type": "core://Column", "children": [
+            { "type": "core://TextField", "field": "f", "placeholder": "F" } ] }))
+        .unwrap();
+        let mut s = Session::new("home", root, DataBundle::default(), Viewport::PHONE);
+        s.focus_at("f", 20.0, 20.0, false);
+        let paste = json!({ "intent": "edit.paste" });
+        let copy = json!({ "intent": "edit.copy" });
+        // Run as a layout's tap or gesture would: nothing is read or written.
+        for intent in [&paste, &copy] {
+            let mut out = Vec::new();
+            s.run(intent, &mut out);
+            assert_eq!(out, vec![Effect::Nothing], "{intent}");
+        }
+        // The edit menu's own tap, or the platform keyboard's, may.
+        s.clipboard_ok = true;
+        let mut out = Vec::new();
+        s.run(&paste, &mut out);
+        assert_eq!(out, vec![Effect::Paste { field: "f".into() }]);
     }
 
     #[test]

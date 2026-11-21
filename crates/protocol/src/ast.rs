@@ -986,6 +986,18 @@ impl UiNode {
         }
     }
 
+    /// How many nodes deep the tree runs (a leaf is 1), counted level by
+    /// level without recursing, so a tree nested too deep for the stack
+    /// can still be measured, and refused, before anything recurses over it.
+    pub fn depth(&self) -> usize {
+        let (mut level, mut depth) = (vec![self], 0);
+        while !level.is_empty() {
+            depth += 1;
+            level = level.iter().flat_map(|n| n.children()).collect();
+        }
+        depth
+    }
+
     /// Every node of the tree, depth first (this one first).
     pub fn walk(&self) -> Vec<&UiNode> {
         let mut out = vec![self];

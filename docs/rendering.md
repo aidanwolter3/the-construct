@@ -184,7 +184,8 @@ cargo run --release -p construct-render --features viewer --bin construct-viewer
 With no file it opens your pod as the phone app does (`pods`, shared with Android): the pod opened last
 (`pod.json`, in `~/Library/Application Support/The Construct` on macOS, else `$XDG_CONFIG_HOME/the-construct` or
 `~/.config/the-construct`), with the engine's cache next to it (`engine/<server>/`) and its session in the login
-Keychain on macOS, else in `secure.json` there (readable by you only); without a session, the pod's sign-in screen
+Keychain on macOS, the Credential Manager on Windows or the Secret Service on Linux, else in `secure.json` there
+(readable by you only); without a session, the pod's sign-in screen
 (staging, or `CONSTRUCT_POD_URL`). `local:servers` offers Staging, Local (`http://127.0.0.1:8080`) and
 `CONSTRUCT_POD_URL` when it is another; `set_server` opens that server (its session and last pod code are in the
 secure store already). `pod.json` keeps only the server: a pod code is the login itself, so it lives in the secure store
