@@ -1474,6 +1474,11 @@ async fn dispatch(State(host): State<Arc<Host>>, mut req: Request) -> Response {
         }
         (None, None) => return no_pod(&host, &req, token.is_some()),
     };
+    // The native clients' image proxy shares the web proxy's per-pod limit.
+    if req.uri().path() == pod_core::image_proxy::IMAGE_PATH && !web::image_allowed(&host, &pod_id)
+    {
+        return rate_limited();
+    }
     let open = match host.pod(&pod_id).await {
         Ok(p) => p,
         Err(r) => return *r,

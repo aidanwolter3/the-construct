@@ -1159,6 +1159,41 @@ async fn a_local_pod_keeps_the_codes_it_was_given() {
     assert!(ensure(other, None).await.is_err());
 }
 
+/// The native clients' image proxy (`GET /v1/image`, issue #443): a
+/// session only, never the pod's own network, and the per-pod limit.
+#[tokio::test]
+async fn the_native_image_proxy_needs_a_session_and_a_public_url() {
+    let env = env().await;
+    let code = env.create("images").await;
+    let img = |q: &str, bearer: Option<&str>| {
+        let mut req = client().get(env.url(&format!("/v1/image?url={q}")));
+        if let Some(t) = bearer {
+            req = req.bearer_auth(t);
+        }
+        async move { req.send().await.unwrap().status() }
+    };
+    assert_eq!(
+        img("https%3A%2F%2Fexample.org%2Fa.png", None).await,
+        StatusCode::UNAUTHORIZED
+    );
+    for q in [
+        "http%3A%2F%2F127.0.0.1%3A8080%2Fhealthz",
+        "http%3A%2F%2F192.168.1.1%2Fa.png",
+        "file%3A%2F%2F%2Fetc%2Fpasswd",
+    ] {
+        assert_eq!(img(q, Some(&code)).await, StatusCode::BAD_REQUEST, "{q}");
+    }
+    // It shares the web proxy's per-pod limit (issue #445): every try counts.
+    for _ in 3..server::host::web::IMAGES_PER_MINUTE {
+        let q = "http%3A%2F%2F127.0.0.1%2Fa.png";
+        assert_eq!(img(q, Some(&code)).await, StatusCode::BAD_REQUEST);
+    }
+    assert_eq!(
+        img("https%3A%2F%2Fexample.org%2Fa.png", Some(&code)).await,
+        StatusCode::TOO_MANY_REQUESTS
+    );
+}
+
 /// The web client's routes and cookie (decision `web-client`).
 mod web {
     use super::*;

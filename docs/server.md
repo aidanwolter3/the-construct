@@ -210,7 +210,7 @@ does when it finishes.
   also `Strict-Transport-Security`.
 - Opening a pod by code is limited to 10 tries a minute per client address (behind Fly, `Fly-Client-IP`).
 - Outbound requests to user-chosen hosts (typed Pixelfed servers, push endpoints, MCP servers, agent runners, filler
-  URLs, `/web/image`) all go through `pod_core::net::OutboundClient` (decision
+  URLs, the image proxies `/web/image` and `/v1/image`) all go through `pod_core::net::OutboundClient` (decision
   [`outbound-client`](decisions/outbound-client.md)): the URL is checked first (scheme, a public host name, no IP
   literal, the port), names resolve only to public addresses, redirects never lead into private space, and a body is
   read only up to a cap (4 MiB unless the caller sets another; Pixelfed API answers 4 MiB). `clippy.toml` refuses

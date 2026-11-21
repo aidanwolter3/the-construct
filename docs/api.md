@@ -82,6 +82,7 @@ How the pipeline works: [notifications.md](notifications.md).
 |---|---|
 | `POST /v1/uploads` (raw body, `Idempotency-Key`) | `{upload_id}`. JPEG, PNG or WebP, checked by content; 413 over `CONSTRUCT_UPLOAD_MAX_BYTES`, 507 `upload_quota_exceeded` or `low_disk_space`. |
 | `GET /v1/uploads/{id}` *public* | The file. The id is a 128-bit capability; it lives until a source releases it, or 24 h if never claimed. |
+| `GET /v1/image?url=<url>` | A signed-in session: an image of a public `http(s)` site, fetched by the pod for the native clients as `/web/image` is for the browser (the device never fetches another host, issue #443); 400 for other URLs (a port other than the default too), 401 without a session; 429 `rate_limited` past 120 tries a minute per pod, counted with `/web/image`. |
 
 How a create carries attachments: [posting.md](posting.md).
 

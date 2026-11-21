@@ -18,6 +18,7 @@ pub mod devices;
 pub mod disk;
 pub mod hints;
 pub mod ical;
+pub mod image_proxy;
 pub mod jacks;
 pub mod layouts;
 pub mod mcp;
@@ -640,6 +641,7 @@ pub fn app(state: Pod) -> Router {
         .merge(notify::router())
         .merge(construct::http::router())
         .merge(mcp::router())
+        .merge(image_proxy::router())
         .route("/v1/jacks", get(get_jacks))
         .route("/v1/jacks/screen", get(get_jacks_screen))
         .route("/v1/jacks/plug", post(post_jack_plug))
