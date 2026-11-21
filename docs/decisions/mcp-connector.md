@@ -1,5 +1,7 @@
 # Claude edits custom apps through an MCP endpoint on each pod, with a host-issued, pod-scoped credential
 
+Lifetime, redirect URIs and revoking partly superseded by [connected-apps](connected-apps.md).
+
 Date: 2026-11-03. Related: D46, [custom-apps-and-data-sources](custom-apps-and-data-sources.md), issue #45 (P2).
 
 Custom apps are written through `/v1/custom-apps` with the pod token. Users should be able to ask Claude for an app

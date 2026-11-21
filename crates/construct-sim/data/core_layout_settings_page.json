@@ -246,6 +246,56 @@
                     {
                       "style": "Label",
                       "type": "core://Text",
+                      "value_expr": "Connected apps"
+                    }
+                  ],
+                  "padding_h_dp": 16,
+                  "padding_v_dp": 8,
+                  "type": "core://Column"
+                },
+                {
+                  "content": {
+                    "children": [
+                      {
+                        "style": "Body",
+                        "type": "core://Text",
+                        "value_expr": "Claude and other MCP apps"
+                      },
+                      {
+                        "type": "core://Spacer"
+                      },
+                      {
+                        "style": "Secondary",
+                        "type": "core://Text",
+                        "value_expr": "›"
+                      }
+                    ],
+                    "padding_h_dp": 16,
+                    "padding_v_dp": 10,
+                    "spacing_dp": 8,
+                    "type": "core://Row"
+                  },
+                  "content_description": "Connected apps: what can reach this pod through MCP",
+                  "on_click": {
+                    "intent": "action.navigation.open",
+                    "presentation": "Push",
+                    "target_uri": "settings://connected_apps"
+                  },
+                  "type": "core://Tappable"
+                }
+              ],
+              "type": "core://Column"
+            },
+            {
+              "children": [
+                {
+                  "type": "core://Divider"
+                },
+                {
+                  "children": [
+                    {
+                      "style": "Label",
+                      "type": "core://Text",
                       "value_expr": "Notifications"
                     }
                   ],
@@ -1055,6 +1105,180 @@
       },
       "route": "settings://jacks/{id}",
       "title": "${jacks://$route.id#title}"
+    },
+    {
+      "data": "/v1/connected-apps/screen",
+      "id": "connected_apps",
+      "root": {
+        "children": [
+          {
+            "children": [
+              {
+                "content_description": "Back",
+                "icon": "arrow_back",
+                "on_click": {
+                  "intent": "action.navigation.back"
+                },
+                "tag": "screen-back",
+                "type": "core://IconButton"
+              },
+              {
+                "style": "Title",
+                "type": "core://Text",
+                "value_expr": "Connected apps"
+              },
+              {
+                "content": {
+                  "size_dp": 16,
+                  "type": "core://Progress"
+                },
+                "type": "core://Conditional",
+                "value": "${local://screen#loading}"
+              },
+              {
+                "size_dp": 12,
+                "type": "core://Spacer"
+              }
+            ],
+            "padding_v_dp": 4,
+            "spacing_dp": 0,
+            "type": "core://Row"
+          },
+          {
+            "type": "core://Divider"
+          },
+          {
+            "content": {
+              "children": [
+                {
+                  "content": {
+                    "style": "Caption",
+                    "type": "core://Text",
+                    "value_expr": "${local://screen#error}"
+                  },
+                  "content_color": "${local://theme#error}",
+                  "type": "core://Box"
+                },
+                {
+                  "type": "core://Spacer"
+                },
+                {
+                  "label": "Try again",
+                  "on_click": {
+                    "intent": "action.data.load",
+                    "path": "/v1/connected-apps/screen"
+                  },
+                  "type": "core://Button"
+                }
+              ],
+              "padding_h_dp": 16,
+              "padding_v_dp": 4,
+              "spacing_dp": 8,
+              "type": "core://Row"
+            },
+            "type": "core://Conditional",
+            "value": "${local://screen#error}"
+          },
+          {
+            "content": {
+              "children": [
+                {
+                  "children": [
+                    {
+                      "style": "Secondary",
+                      "type": "core://Text",
+                      "value_expr": "Apps you connected with your pod code, such as Claude. Each can read your pod's layouts and data and edit your own layouts. Disconnect any you don't recognise; changing the pod code doesn't disconnect them."
+                    }
+                  ],
+                  "padding_h_dp": 16,
+                  "padding_v_dp": 8,
+                  "spacing_dp": 8,
+                  "type": "core://Column"
+                },
+                {
+                  "empty_text": "No apps are connected.",
+                  "item_template": {
+                    "content": {
+                      "children": [
+                        {
+                          "align": "Center",
+                          "children": [
+                            {
+                              "children": [
+                                {
+                                  "style": "Body",
+                                  "type": "core://Text",
+                                  "value_expr": "$item.title"
+                                },
+                                {
+                                  "style": "Secondary",
+                                  "type": "core://Text",
+                                  "value_expr": "$item.detail"
+                                },
+                                {
+                                  "style": "Secondary",
+                                  "type": "core://Text",
+                                  "value_expr": "$item.expiry"
+                                }
+                              ],
+                              "orientation": "Vertical",
+                              "padding_dp": 0,
+                              "type": "core://Container"
+                            },
+                            {
+                              "type": "core://Spacer"
+                            },
+                            {
+                              "label": "Disconnect",
+                              "on_click": {
+                                "confirm_label": "Disconnect",
+                                "intent": "action.confirm",
+                                "message": "It stops reaching your pod at once. To use it again, connect it again with your pod code.",
+                                "then": {
+                                  "endpoint": "/v1/connected-apps/revoke",
+                                  "entity_uri": "connected_apps://$item.id",
+                                  "field": "connected",
+                                  "intent": "action.mutation.optimistic",
+                                  "payload": {
+                                    "id": "$item.id"
+                                  },
+                                  "rollback_value": null,
+                                  "value_expr": "false"
+                                },
+                                "title": "Disconnect this app?"
+                              },
+                              "style": "Secondary",
+                              "type": "core://Button"
+                            }
+                          ],
+                          "padding_h_dp": 16,
+                          "padding_v_dp": 10,
+                          "spacing_dp": 8,
+                          "type": "core://Row"
+                        },
+                        {
+                          "type": "core://Divider"
+                        }
+                      ],
+                      "type": "core://Column"
+                    },
+                    "type": "core://Conditional",
+                    "value": "$item.connected"
+                  },
+                  "query_key": "connected_apps",
+                  "type": "core://List"
+                }
+              ],
+              "type": "core://Column"
+            },
+            "follow_end": true,
+            "type": "core://Scroll"
+          }
+        ],
+        "type": "core://Column"
+      },
+      "route": "settings://connected_apps",
+      "title": "Connected apps"
     }
   ],
   "title": "Settings",

@@ -19,6 +19,7 @@
 
 pub mod app_links;
 pub mod backup;
+pub mod connected_apps;
 pub mod db;
 pub mod limits;
 pub mod oauth;
@@ -589,7 +590,7 @@ impl Host {
             format!("{}{}", oauth::MCP_TOKEN_PREFIX, hex(&buf))
         };
         self.store
-            .insert_mcp_credential(&pod.id, &session_hash(&token), label)
+            .insert_mcp_credential(&pod.id, &session_hash(&token), label, None)
             .map_err(|e| e.to_string())?;
         Ok(token)
     }
@@ -618,10 +619,15 @@ impl Host {
     }
 
     /// A new token for pod `name`; the old one stops working everywhere and
-    /// the pod's sign-ins (made with it) end. Claude's MCP credentials stay.
-    pub fn rotate(&self, name: &str) -> Result<String, String> {
+    /// the pod's sign-ins (made with it) end. Claude's MCP credentials stay
+    /// unless `revoke_mcp` (then every connected app is disconnected too:
+    /// whoever learned the old code may have connected one).
+    pub fn rotate(&self, name: &str, revoke_mcp: bool) -> Result<String, String> {
         let token = new_pod_token();
         self.set_token(name, &token)?;
+        if revoke_mcp {
+            self.revoke_mcp(name)?;
+        }
         Ok(token)
     }
 
@@ -830,9 +836,15 @@ impl Host {
         self.store.expire_pod(&pod.id).map_err(|e| e.to_string())
     }
 
-    /// Delete expired pods: close them, remove their files, forget them.
-    /// Returns how many went.
+    /// Delete expired pods: close them, remove their files, forget them;
+    /// and MCP credentials idle past [`db::MCP_IDLE_SECS`]. Returns how many
+    /// pods went.
     pub fn sweep(&self) -> usize {
+        match self.store.delete_idle_mcp() {
+            Ok(0) => {}
+            Ok(n) => tracing::info!(count = n, "idle MCP credentials deleted"),
+            Err(e) => tracing::error!(error = %e, "sweep: cannot delete idle MCP credentials"),
+        }
         let expired = match self.store.expired_pods() {
             Ok(p) => p,
             Err(e) => {
@@ -1474,6 +1486,11 @@ async fn dispatch(State(host): State<Arc<Host>>, mut req: Request) -> Response {
         }
         (None, None) => return no_pod(&host, &req, token.is_some()),
     };
+    // Settings' Connected apps (decision `connected-apps`): the host's own
+    // data, for the pod's own sessions (an MCP credential never gets here).
+    if connected_apps::is_ours(req.uri().path()) {
+        return connected_apps::route(&host, &pod_id, req).await;
+    }
     // The native clients' image proxy shares the web proxy's per-pod limit.
     if req.uri().path() == pod_core::image_proxy::IMAGE_PATH && !web::image_allowed(&host, &pod_id)
     {

@@ -445,7 +445,7 @@ async fn logout_keeps_the_pod_token_and_rotation_replaces_it() {
     );
     // Rotation: the old token stops working, the new one opens the pod.
     let host = env.host.clone();
-    let new = tokio::task::spawn_blocking(move || host.rotate("me").unwrap())
+    let new = tokio::task::spawn_blocking(move || host.rotate("me", false).unwrap())
         .await
         .unwrap();
     let (status, header, _) = get(&env.url("/v1/construct"), Some(&token)).await;

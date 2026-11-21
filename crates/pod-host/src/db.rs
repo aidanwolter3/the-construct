@@ -193,7 +193,41 @@ const MIGRATIONS: &[Step] = &[
         "public_copies_revoked_forget",
         "UPDATE public_copies SET title = '', rows = '[]' WHERE revoked_at IS NOT NULL;",
     ),
+    // 11 (decision `connected-apps`): when each MCP credential was last
+    // used (one unused for `MCP_IDLE_SECS` stops working and is swept) and
+    // the host its OAuth redirect went to, for Settings' Connected apps.
+    // Existing credentials count as used now, so none expires at once.
+    Step::sql(
+        "mcp_credential_use",
+        "ALTER TABLE credentials ADD COLUMN last_used_at INTEGER;
+     ALTER TABLE credentials ADD COLUMN redirect_host TEXT;
+     UPDATE credentials SET last_used_at = CAST(strftime('%s', 'now') AS INTEGER)
+         WHERE kind = 'mcp';",
+    ),
 ];
+
+/// An MCP credential unused this long stops working (decision
+/// `connected-apps`): 90 days.
+pub const MCP_IDLE_SECS: i64 = 90 * 24 * 3600;
+/// How stale `last_used_at` may get before a use records it again, so a
+/// busy connection doesn't write on every request.
+const LAST_USED_EVERY_SECS: i64 = 3600;
+/// How many characters of a credential's hash name it in Connected apps.
+pub const CONNECTED_APP_ID_LEN: usize = 16;
+
+/// One MCP credential as Settings' Connected apps shows it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConnectedApp {
+    /// The first [`CONNECTED_APP_ID_LEN`] characters of its hash.
+    pub id: String,
+    /// The name its client gave itself (or the CLI's label).
+    pub label: String,
+    /// Where the OAuth flow sent its code; `None` for a credential made with
+    /// `server pods mcp`.
+    pub redirect_host: Option<String>,
+    pub created_at: i64,
+    pub last_used_at: i64,
+}
 
 /// What a credential is for (`credentials.kind`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -346,19 +380,45 @@ impl HostStore {
             .map(|(id, _)| id))
     }
 
-    /// The live pod a credential's hash belongs to, and its kind.
+    /// The live pod a credential's hash belongs to, and its kind. An MCP
+    /// credential unused for [`MCP_IDLE_SECS`] is no credential; a use of
+    /// one records when (at most every [`LAST_USED_EVERY_SECS`]).
     pub fn credential(
         &self,
         token_hash: &str,
     ) -> rusqlite::Result<Option<(String, CredentialKind)>> {
-        self.conn()
+        let now = now_secs();
+        let conn = self.conn();
+        let found = conn
             .query_row(
-                "SELECT p.id, c.kind FROM credentials c JOIN pods p ON p.id = c.pod_id
+                "SELECT p.id, c.kind, COALESCE(c.last_used_at, c.created_at)
+                 FROM credentials c JOIN pods p ON p.id = c.pod_id
                  WHERE c.token_hash = ?1 AND (p.expires_at IS NULL OR p.expires_at > ?2)",
-                params![token_hash, now_secs()],
-                |r| Ok((r.get(0)?, CredentialKind::parse(&r.get::<_, String>(1)?))),
+                params![token_hash, now],
+                |r| {
+                    Ok((
+                        r.get::<_, String>(0)?,
+                        CredentialKind::parse(&r.get::<_, String>(1)?),
+                        r.get::<_, i64>(2)?,
+                    ))
+                },
             )
-            .optional()
+            .optional()?;
+        let Some((pod, kind, used)) = found else {
+            return Ok(None);
+        };
+        if kind == CredentialKind::Mcp {
+            if used <= now - MCP_IDLE_SECS {
+                return Ok(None);
+            }
+            if used <= now - LAST_USED_EVERY_SECS {
+                conn.execute(
+                    "UPDATE credentials SET last_used_at = ?2 WHERE token_hash = ?1",
+                    params![token_hash, now],
+                )?;
+            }
+        }
+        Ok(Some((pod, kind)))
     }
 
     /// Add an MCP credential to a pod.
@@ -370,9 +430,12 @@ impl HostStore {
         token_hash: &str,
         label: &str,
     ) -> rusqlite::Result<()> {
+        // A local key that sat unused past the idle limit works again.
         self.conn().execute(
-            "INSERT OR IGNORE INTO credentials (token_hash, pod_id, kind, created_at, label)
-             VALUES (?1, ?2, 'mcp', ?3, ?4)",
+            "INSERT INTO credentials (token_hash, pod_id, kind, created_at, label, last_used_at)
+             VALUES (?1, ?2, 'mcp', ?3, ?4, ?3)
+             ON CONFLICT (token_hash) DO UPDATE SET last_used_at = excluded.last_used_at
+             WHERE credentials.kind = 'mcp' AND credentials.pod_id = excluded.pod_id",
             params![token_hash, pod_id, now_secs(), label],
         )?;
         Ok(())
@@ -396,18 +459,75 @@ impl HostStore {
         )? > 0)
     }
 
+    /// Add an MCP credential to a pod: `label` says whose it is and
+    /// `redirect_host` where its OAuth flow sent the code (none from the
+    /// CLI).
     pub fn insert_mcp_credential(
         &self,
         pod_id: &str,
         token_hash: &str,
         label: &str,
+        redirect_host: Option<&str>,
     ) -> rusqlite::Result<()> {
         self.conn().execute(
-            "INSERT INTO credentials (token_hash, pod_id, kind, created_at, label)
-             VALUES (?1, ?2, 'mcp', ?3, ?4)",
-            params![token_hash, pod_id, now_secs(), label],
+            "INSERT INTO credentials
+                 (token_hash, pod_id, kind, created_at, label, last_used_at, redirect_host)
+             VALUES (?1, ?2, 'mcp', ?3, ?4, ?3, ?5)",
+            params![token_hash, pod_id, now_secs(), label, redirect_host],
         )?;
         Ok(())
+    }
+
+    /// A pod's working MCP credentials (not idle past [`MCP_IDLE_SECS`]),
+    /// most recently used first, for Settings' Connected apps.
+    pub fn connected_apps(&self, pod_id: &str) -> rusqlite::Result<Vec<ConnectedApp>> {
+        let conn = self.conn();
+        let mut stmt = conn.prepare(
+            "SELECT substr(token_hash, 1, ?3), COALESCE(label, ''), redirect_host, created_at,
+                    COALESCE(last_used_at, created_at) AS used
+             FROM credentials WHERE pod_id = ?1 AND kind = 'mcp' AND used > ?2
+             ORDER BY used DESC, created_at DESC",
+        )?;
+        stmt.query_map(
+            params![
+                pod_id,
+                now_secs() - MCP_IDLE_SECS,
+                CONNECTED_APP_ID_LEN as i64
+            ],
+            |r| {
+                Ok(ConnectedApp {
+                    id: r.get(0)?,
+                    label: r.get(1)?,
+                    redirect_host: r.get(2)?,
+                    created_at: r.get(3)?,
+                    last_used_at: r.get(4)?,
+                })
+            },
+        )?
+        .collect()
+    }
+
+    /// Revoke one of a pod's MCP credentials by its Connected apps id; how
+    /// many went (an id shorter than [`CONNECTED_APP_ID_LEN`] matches
+    /// none).
+    pub fn revoke_connected_app(&self, pod_id: &str, id: &str) -> rusqlite::Result<usize> {
+        if id.len() != CONNECTED_APP_ID_LEN || !id.bytes().all(|b| b.is_ascii_hexdigit()) {
+            return Ok(0);
+        }
+        self.conn().execute(
+            "DELETE FROM credentials WHERE pod_id = ?1 AND kind = 'mcp'
+             AND substr(token_hash, 1, ?3) = ?2",
+            params![pod_id, id, CONNECTED_APP_ID_LEN as i64],
+        )
+    }
+
+    /// Delete MCP credentials unused for [`MCP_IDLE_SECS`]; how many went.
+    pub fn delete_idle_mcp(&self) -> rusqlite::Result<usize> {
+        self.conn().execute(
+            "DELETE FROM credentials WHERE kind = 'mcp'
+             AND COALESCE(last_used_at, created_at) <= ?1",
+            [now_secs() - MCP_IDLE_SECS],
+        )
     }
 
     /// Revoke every MCP credential of a pod; how many went.
@@ -418,7 +538,8 @@ impl HostStore {
         )
     }
 
-    /// `(label, created_at)` of a pod's MCP credentials.
+    /// `(label, created_at)` of a pod's MCP credentials (idle ones too,
+    /// until the sweeper deletes them).
     pub fn mcp_credentials(&self, pod_id: &str) -> rusqlite::Result<Vec<(String, i64)>> {
         let conn = self.conn();
         let mut stmt = conn.prepare(
@@ -589,8 +710,8 @@ impl HostStore {
         let mut conn = self.conn();
         let tx = conn.transaction()?;
         // The pod token and the browsers it opened (decision `web-client`):
-        // Claude's MCP credentials stay (revoke them with `server pods
-        // revoke-mcp`).
+        // Claude's MCP credentials stay (revoke them in Settings, with
+        // `server pods revoke-mcp`, or `server pods rotate --revoke-mcp`).
         tx.execute(
             "DELETE FROM credentials WHERE pod_id = ?1 AND kind IN ('pod_token', 'web')",
             [pod_id],
@@ -749,6 +870,65 @@ mod tests {
     }
 
     #[test]
+    fn mcp_credentials_end_when_idle_and_revoke_one_by_one() {
+        let store = HostStore::open_in_memory().unwrap();
+        let pod = PodRow {
+            id: "p1".into(),
+            name: "mine".into(),
+            kind: PodKind::Admin,
+            created_at: 1,
+            expires_at: None,
+        };
+        store.insert_pod(&pod, "tok").unwrap();
+        let a = "a".repeat(64);
+        let b = "b".repeat(64);
+        store
+            .insert_mcp_credential("p1", &a, "Claude", Some("claude.ai"))
+            .unwrap();
+        store
+            .insert_mcp_credential("p1", &b, "Other", None)
+            .unwrap();
+        let apps = store.connected_apps("p1").unwrap();
+        assert_eq!(apps.len(), 2);
+        let first = apps.iter().find(|x| x.label == "Claude").unwrap();
+        assert_eq!(first.id, "a".repeat(CONNECTED_APP_ID_LEN));
+        assert_eq!(first.redirect_host.as_deref(), Some("claude.ai"));
+
+        // Unused for the idle limit: no credential, not listed, swept.
+        let old = now_secs() - MCP_IDLE_SECS - 1;
+        store
+            .conn()
+            .execute(
+                "UPDATE credentials SET last_used_at = ?2 WHERE token_hash = ?1",
+                params![b, old],
+            )
+            .unwrap();
+        assert_eq!(store.credential(&b).unwrap(), None);
+        assert_eq!(store.connected_apps("p1").unwrap().len(), 1);
+        assert_eq!(store.delete_idle_mcp().unwrap(), 1);
+
+        // A use more than an hour after the last one records it.
+        let stale = now_secs() - 2 * LAST_USED_EVERY_SECS;
+        store
+            .conn()
+            .execute(
+                "UPDATE credentials SET last_used_at = ?2 WHERE token_hash = ?1",
+                params![a, stale],
+            )
+            .unwrap();
+        assert!(store.credential(&a).unwrap().is_some());
+        assert!(store.connected_apps("p1").unwrap()[0].last_used_at > stale);
+
+        // Revoking needs the whole id, and only reaches its own pod's.
+        assert_eq!(store.revoke_connected_app("p1", "a").unwrap(), 0);
+        let id = "a".repeat(CONNECTED_APP_ID_LEN);
+        assert_eq!(store.revoke_connected_app("p2", &id).unwrap(), 0);
+        assert_eq!(store.revoke_connected_app("p1", &id).unwrap(), 1);
+        assert_eq!(store.credential(&a).unwrap(), None);
+        assert_eq!(store.pod_for_token("tok").unwrap().as_deref(), Some("p1"));
+    }
+
+    #[test]
     fn migration_3_keeps_pod_tokens_and_adds_mcp_credentials() {
         // A host.db as staging has it: migrations 1 and 2, one pod token.
         let conn = Connection::open_in_memory().unwrap();
@@ -771,7 +951,9 @@ mod tests {
         .unwrap();
         let store = HostStore::init(conn).unwrap();
         assert_eq!(store.pod_for_token("h1").unwrap().as_deref(), Some("p1"));
-        store.insert_mcp_credential("p1", "m1", "Claude").unwrap();
+        store
+            .insert_mcp_credential("p1", "m1", "Claude", None)
+            .unwrap();
         assert_eq!(
             store.credential("m1").unwrap(),
             Some(("p1".to_owned(), CredentialKind::Mcp))

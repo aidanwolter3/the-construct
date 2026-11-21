@@ -138,11 +138,12 @@ Run on the server machine (on Fly: `fly ssh console -a <app> -C "/server pods â€
 ```bash
 server pods create <name>                      # prints the pod code once
 server pods list
-server pods rotate <name>                      # new code; the old one stops working and app sign-ins end
+server pods rotate <name> [--revoke-mcp]       # new code; the old one stops working and app sign-ins end
+                                               # (--revoke-mcp: connected apps are disconnected too)
 server pods delete <name>                      # stops now; files deleted within 5 minutes
 server pods notify-test <name>                 # a test notification to the inbox and the pod's devices
 server pods mcp <name> [label]                 # a credential for Claude Code that reaches only /v1/mcp
-server pods revoke-mcp <name>                  # disconnect every Claude credential of the pod
+server pods revoke-mcp <name>                  # disconnect every connected app (MCP credential) of the pod
 server pods monitoring <name> on|off           # let this pod's apps read server-wide monitoring data
 server pods gaps [name]                        # what agents said was missing while building (MCP note_gap)
 server pods adopt <name> <path/to/server.db>   # turn a pre-pods single-user database into a pod
@@ -215,6 +216,13 @@ does when it finishes.
   literal, the port), names resolve only to public addresses, redirects never lead into private space, and a body is
   read only up to a cap (4 MiB unless the caller sets another; Pixelfed API answers 4 MiB). `clippy.toml` refuses
   any other `reqwest` client outside `net.rs`.
+- OAuth for MCP apps (decision [`connected-apps`](decisions/connected-apps.md)): a registered redirect URI may not
+  carry userinfo (`https://claude.ai@evil.example/`), a backslash or a percent sign in its host; the connect page
+  shows the host the pod code's grant goes to, in large type, and warns when it isn't Claude's (`claude.ai`,
+  `claude.com`) or the local machine; request errors redirect only to those hosts or the pre-registered client's,
+  else they are a page (no open redirect). An MCP credential unused for 90 days stops working and is deleted.
+  Users see and disconnect their connected apps in Settings â†’ Connected apps; `rotate` keeps them unless
+  `--revoke-mcp`.
 
 ## Monitoring
 

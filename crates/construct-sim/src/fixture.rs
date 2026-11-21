@@ -4,7 +4,8 @@
 //! - Layouts: `core_layout_<id>_page.json` (the shell's Settings and inbox, as
 //!   a pod serves them), else the layout's default bundle ([`default_bundle`]).
 //! - Data paths (a screen's `data`, `action.data.load`): from
-//!   `pixelfed_screen_data.json` and `events_screen_data.json`.
+//!   `pixelfed_screen_data.json`, `events_screen_data.json` and
+//!   `settings_screen_data.json` (Settings' Connected apps).
 //! - Writes are accepted and change nothing on the pod: the device keeps its
 //!   optimistic change. Offline, loads and writes fail as an unreachable pod
 //!   does (the Rust clients have no outbox), so a write is undone.
@@ -127,7 +128,11 @@ impl FixturePod {
     pub fn new(root: &Path) -> Result<FixturePod, String> {
         let data = root.join(DATA_DIR);
         let mut screen_data = BTreeMap::new();
-        for name in ["pixelfed_screen_data.json", "events_screen_data.json"] {
+        for name in [
+            "pixelfed_screen_data.json",
+            "events_screen_data.json",
+            "settings_screen_data.json",
+        ] {
             let v = read_json(&data.join(name))?;
             let paths: BTreeMap<String, DataBundle> =
                 serde_json::from_value(v).map_err(|e| format!("{name}: {e}"))?;

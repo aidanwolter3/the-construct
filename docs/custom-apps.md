@@ -94,7 +94,11 @@ Writes are validated and appear in each name's history as written by Claude.
   claude mcp add --transport http construct https://<server>/v1/mcp --header "Authorization: Bearer cmcp_…"
   ```
 
-- **Disconnect:** `server pods revoke-mcp <name>`. Rotating the pod code keeps Claude connected.
+- **Disconnect:** in the app, Settings → Connected apps lists each connection (its name, where it signed in, when it
+  was last used) with a Disconnect button (`GET /v1/connected-apps/screen`, `POST /v1/connected-apps/revoke`, answered
+  by the host; decision [`connected-apps`](decisions/connected-apps.md)); or `server pods revoke-mcp <name>` for all.
+  Rotating the pod code keeps them connected unless `server pods rotate <name> --revoke-mcp`. A connection unused for
+  90 days ends by itself.
 
 Tools: `list_layouts`, `list_data_sources`, `describe_vocabulary`, `get_layout`, `sample_data`, `validate_layout`,
 `create_layout`, `update_layout` (a whole layout or a JSON Patch, with `base_version`), `restore_version`,
