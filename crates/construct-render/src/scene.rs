@@ -175,6 +175,10 @@ pub enum Tap {
     Intent { intent: Value },
 }
 
+/// The node type of a surface drawn over content that stays laid out
+/// under it (a screen inside its layout's sheet or panel): taps stop there.
+pub const COVER: &str = "cover";
+
 /// A node of the semantic tree: what is where, in logical points.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SemanticNode {
@@ -275,19 +279,25 @@ impl Scene {
     }
 
     /// The innermost interactive node under a point, else the innermost
-    /// node there.
+    /// node there. A [`COVER`] node hides what was drawn under it: nothing
+    /// below one is hit.
     pub fn hit_test(&self, x: f32, y: f32) -> Option<&SemanticNode> {
         let inside = |n: &&SemanticNode| {
             let [bx, by, bw, bh] = n.bounds;
             x >= bx && x < bx + bw && y >= by && y < by + bh
         };
         // Later nodes are drawn on top and nested deeper.
-        self.semantics
-            .iter()
-            .rev()
-            .filter(inside)
-            .find(|n| n.interactive)
-            .or_else(|| self.semantics.iter().rev().find(inside))
+        let mut found = None;
+        for n in self.semantics.iter().rev().filter(inside) {
+            if n.interactive {
+                return Some(n);
+            }
+            found.get_or_insert(n);
+            if n.node_type == COVER {
+                break;
+            }
+        }
+        found
     }
 
     /// The innermost interactive node at or around `id`: the node itself,
