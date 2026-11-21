@@ -35,6 +35,10 @@ pub const DESIGN_URL: &str =
 /// The longest card text, in bytes: a card is read on a phone.
 pub const MAX_CARD_BYTES: usize = 6000;
 
+/// The widest line of an untagged code fence (a diagram), in characters: as
+/// wide as a phone shows monospace text in a card without wrapping.
+pub const MAX_DIAGRAM_WIDTH: usize = 40;
+
 /// The document read as a course.
 #[derive(Debug, Default, Clone, PartialEq)]
 pub struct Course {
@@ -280,7 +284,13 @@ fn finish(course: &mut Course, mode: &Mode, buf: &[&str]) -> Result<(), String> 
             }
             let mut position = 0;
             for (heading, body) in cards {
-                let body = absolute_links(body.join("\n").trim());
+                let body = unwrap(&absolute_links(body.join("\n").trim()));
+                if let Some(wide) = wide_diagram_line(&body) {
+                    return Err(format!(
+                        "lesson {number}: card `{heading}` has a diagram line {wide} characters wide, over \
+                         {MAX_DIAGRAM_WIDTH}: a phone wraps it (draw it narrower, or tag the fence with a language)"
+                    ));
+                }
                 if heading.is_empty() && body.is_empty() {
                     continue;
                 }
@@ -335,6 +345,86 @@ fn read_glossary(course: &mut Course, buf: &[&str]) {
     for term in &mut course.glossary {
         term.definition = absolute_links(&term.definition);
     }
+}
+
+/// Join the lines a paragraph, list item or quote was wrapped over into one:
+/// the renderer keeps a single line break, as GitHub comments do, while the
+/// file wraps its prose. Code fences, tables and headings stay as written.
+pub fn unwrap(text: &str) -> String {
+    let mut out: Vec<String> = Vec::new();
+    let mut fence = false;
+    // Whether the last line written can take the next one.
+    let mut open = false;
+    let mut quote = false;
+    for line in text.split('\n') {
+        let t = line.trim_start();
+        if t.starts_with("```") || t.starts_with("~~~") {
+            fence = !fence;
+            out.push(line.to_string());
+            open = false;
+            continue;
+        }
+        if fence {
+            out.push(line.to_string());
+            continue;
+        }
+        if t.is_empty() {
+            out.push(String::new());
+            open = false;
+            continue;
+        }
+        let is_quote = t.starts_with('>');
+        let starts_block = is_quote
+            || t.starts_with('|')
+            || t.starts_with('#')
+            || t.starts_with("- ")
+            || t.starts_with("* ")
+            || t.starts_with("+ ")
+            || ordered_item(t);
+        if open && is_quote && quote {
+            let last = out.last_mut().expect("open means a line");
+            last.push(' ');
+            last.push_str(t[1..].trim());
+            continue;
+        }
+        if open && !starts_block {
+            let last = out.last_mut().expect("open means a line");
+            last.push(' ');
+            last.push_str(t);
+            continue;
+        }
+        out.push(line.to_string());
+        open = !(t.starts_with('|') || t.starts_with('#'));
+        quote = is_quote;
+    }
+    out.join("\n")
+}
+
+/// `1. ` or `12) `: an ordered list item.
+fn ordered_item(t: &str) -> bool {
+    let digits = t.bytes().take_while(u8::is_ascii_digit).count();
+    digits > 0 && (t[digits..].starts_with(". ") || t[digits..].starts_with(") "))
+}
+
+/// The width of the widest line of an untagged fence, when over
+/// [`MAX_DIAGRAM_WIDTH`].
+fn wide_diagram_line(text: &str) -> Option<usize> {
+    let mut diagram: Option<bool> = None;
+    let mut widest = 0;
+    for line in text.split('\n') {
+        let t = line.trim_start();
+        if t.starts_with("```") || t.starts_with("~~~") {
+            diagram = match diagram {
+                Some(_) => None,
+                None => Some(matches!(t[3..].trim(), "" | "text")),
+            };
+            continue;
+        }
+        if diagram == Some(true) {
+            widest = widest.max(line.trim_end().chars().count());
+        }
+    }
+    (widest > MAX_DIAGRAM_WIDTH).then_some(widest)
 }
 
 /// The first paragraph (joined into one line) and the lines after it.
@@ -539,6 +629,10 @@ mod tests {
             ("what-it-is-for", "1.1")
         );
         assert_eq!(l.summary, "The summary, over two lines.");
+        assert_eq!(
+            c.cards[1].body.lines().next(),
+            Some("Text with `code](x)`.")
+        );
         assert_eq!(l.why, "Because.");
         assert_eq!(l.try_it, "Run it, twice.");
         assert_eq!(l.url, format!("{DESIGN_URL}#11-what-it-is-for"));
@@ -575,6 +669,26 @@ mod tests {
         assert!(parse(empty).unwrap_err().contains("no cards"));
         let part = "## Part 2 · A\n\nS.\n";
         assert!(parse(part).unwrap_err().contains("follows part 0"));
+    }
+
+    #[test]
+    fn unwraps_prose_but_not_code_or_tables() {
+        let text =
+            "One\ntwo.\n\n- a\n  b\n- c\n1. d\n   e\n\n> q\n> r\n\n| x |\n| y |\n```\nk\nl\n```";
+        assert_eq!(
+            unwrap(text),
+            "One two.\n\n- a b\n- c\n1. d e\n\n> q r\n\n| x |\n| y |\n```\nk\nl\n```"
+        );
+    }
+
+    #[test]
+    fn refuses_wide_diagrams_only() {
+        let wide = "x".repeat(MAX_DIAGRAM_WIDTH + 1);
+        assert_eq!(
+            wide_diagram_line(&format!("```\n{wide}\n```")),
+            Some(MAX_DIAGRAM_WIDTH + 1)
+        );
+        assert_eq!(wide_diagram_line(&format!("```json\n{wide}\n```")), None);
     }
 
     #[test]

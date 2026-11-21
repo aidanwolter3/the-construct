@@ -59,12 +59,16 @@ later. No app store, no build, no release.
 #### In one picture
 
 ```
- the web, Pixelfed, …  ◀──▶  pod (your server)  ◀── MCP ──  your agent (Claude)
-                                  │
-                       layouts + data, live events
-                                  ▼
-                    engine + renderer on each device
-                    (desktop, Android, web, simulator)
+ your agent (Claude)
+        │ MCP
+        ▼
+ pod (your server) ◀──▶ the web,
+        │               Pixelfed, …
+        │ layouts + data,
+        │ live events
+        ▼
+ engine + renderer on each device
+ (desktop, Android, web, simulator)
 ```
 
 ### 1.2 The goals
@@ -132,8 +136,8 @@ into a canvas; it is not HTML.
 
 ## Part 2 · The big pieces
 
-Five big pieces make up the system: the pod on its host, the sources and jacks inside it, the construct of
-layouts, the engine and renderer on each device, and the agent that builds.
+A handful of big pieces make up the system: the pod on its host, the sources and jacks inside it, the construct
+of layouts, the engine and renderer on each device, and the agent that builds.
 
 ### 2.1 The map
 
@@ -144,25 +148,33 @@ by every client.
 #### The whole system
 
 ```
-                        ┌──────────────── server (crates/server) ────────────────┐
-  Pixelfed, websites,   │  host (pod-host): many pods, tokens, scheduler, shelf  │
-  a model API, an   ◀──▶│  ┌───────────── pod (pod-core) ─────────────────────┐  │◀── MCP ── agent
-  agent runner, MCP     │  │ the construct (layouts) · sessions · notifications│  │
-  servers               │  │ sources: collections, pixelfed, events, agents,   │  │
-                        │  │          shell, monitor, dates                    │  │
-                        │  │ jacks: model, web, web_search, mcp, accounts      │  │
-                        │  └───────────────────────────────────────────────────┘  │
-                        └───────────────▲─────────────────────────▲───────────────┘
-                     HTTP: construct,   │                         │ SSE: construct,
-                     objects, data,     │                         │ data, notification
-                     actions            │                         │ events
-                        ┌───────────────┴─────────────────────────┴───────────────┐
-                        │ engine (client-core): cache, outbox, sign-in, events     │
-                        ├──────────────────────────────────────────────────────────┤
-                        │ renderer (construct-render): layout → scene → pixels     │
-                        ├──────────┬──────────┬──────────┬────────────┬───────────┤
-                        │ desktop  │ Android  │ web      │ simulator  │ previews  │
-                        └──────────┴──────────┴──────────┴────────────┴───────────┘
+ agent (Claude)    websites, Pixelfed,
+      │ MCP        models, runners
+      ▼                  ▲
+┌─ server ───────────────┼───────┐
+│ host: pods, tokens, scheduler  │
+│ ┌─ pod ──────────────────────┐ │
+│ │ the construct · sessions · │ │
+│ │ notifications              │ │
+│ │ sources: collections,      │ │
+│ │ pixelfed, events, agents,  │ │
+│ │ shell, monitor, dates      │ │
+│ │ jacks: model, web,         │ │
+│ │ web_search, mcp, accounts  │ │
+│ └────────────────────────────┘ │
+└──────▲─────────────────┬───────┘
+       │ HTTP: construct,│ SSE:
+       │ objects, data,  │ construct,
+       │ actions         ▼ data, …
+┌─ each device ──────────────────┐
+│ engine: cache, outbox,         │
+│ sign-in, event stream          │
+├────────────────────────────────┤
+│ renderer: layout → pixels      │
+├────────────────────────────────┤
+│ desktop · Android · web ·      │
+│ simulator · previews           │
+└────────────────────────────────┘
 ```
 
 #### The pieces in one line each
@@ -776,12 +788,23 @@ declared, and the pod stores it, delivers it to every device, and works out whic
 #### The path
 
 ```
- upstream ─poll─▶ source ── NewNotification{channel, title, body, target_uri}
-                                │
-        pod: store once (the notifications collection), channel on?
-                                ├─▶ `notification` event on open streams
-                                └─▶ Web Push to registered devices
- device: inbox, badge, OS notification ── tap ─▶ open its layout, then its target screen
+upstream
+   │ poll
+   ▼
+source ── a notification:
+   │      channel, title,
+   │      body, target_uri
+   ▼
+pod: stored once, in the
+notifications collection
+   ├─▶ `notification` event
+   │   on open streams
+   └─▶ Web Push to devices
+          │
+          ▼
+device: inbox, badge, OS
+notification ─ tap ─▶ its
+layout, then its screen
 ```
 
 #### Who knows what
@@ -919,16 +942,18 @@ CPU. It is the only renderer: every client and the pod's previews use it.
 #### The pipeline
 
 ```
-layout + entities + form, route, theme
-   │  layout: taffy flexbox; text shaped with cosmic-text (bundled fonts)
+layout + entities + form,
+route, theme
+   │ layout: taffy flexbox,
+   │ text by cosmic-text
    ▼
-Scene { quads (rounded boxes), text runs, semantic tree }
-   │                              │
-   ▼                              ▼
-cpu: a signed-distance          gpu: wgpu, one instanced shader
-function per pixel              + glyphon text
-   ▼                              ▼
-PNG (simulator, previews)       a window, an Android surface, a canvas
+Scene: rounded quads, text
+runs, a semantic tree
+   │
+   ├─▶ cpu: a distance function
+   │   per pixel → PNG
+   └─▶ gpu: wgpu + glyphon →
+       window, surface, canvas
 ```
 
 #### The session

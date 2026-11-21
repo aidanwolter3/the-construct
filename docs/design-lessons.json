@@ -1,91 +1,91 @@
 {
   "cards": [
     {
-      "body": "Most personal software is someone else's app: its screens, its data model, its server. If you want a grocery list\nthat knows your recipes, a log of your car's maintenance, and your photo feed in one place, you either accept\nseveral apps that don't talk to each other or you write and ship your own app, for every platform, and keep it\nupdated.",
+      "body": "Most personal software is someone else's app: its screens, its data model, its server. If you want a grocery list that knows your recipes, a log of your car's maintenance, and your photo feed in one place, you either accept several apps that don't talk to each other or you write and ship your own app, for every platform, and keep it updated.",
       "heading": "The problem",
       "key": "the-idea-in-one-page/1",
       "lesson": "the-idea-in-one-page",
       "position": 1
     },
     {
-      "body": "Split an app into three parts and give each one a single owner:\n\n- **What the screens look like and what data they show** lives on a server you own, the **pod**, as data: JSON\n  trees called **layouts**.\n- **Drawing** happens on your devices, in one native renderer that knows how to draw any layout but nothing about\n  any particular app.\n- **Building** is done by your **agent**: Claude connects to the pod and writes layouts and data definitions for\n  you, checked by the pod on every write.\n\nSo changing your grocery screen means the agent writes a new layout to the pod, and every device shows it a moment\nlater. No app store, no build, no release.",
+      "body": "Split an app into three parts and give each one a single owner:\n\n- **What the screens look like and what data they show** lives on a server you own, the **pod**, as data: JSON trees called **layouts**.\n- **Drawing** happens on your devices, in one native renderer that knows how to draw any layout but nothing about any particular app.\n- **Building** is done by your **agent**: Claude connects to the pod and writes layouts and data definitions for you, checked by the pod on every write.\n\nSo changing your grocery screen means the agent writes a new layout to the pod, and every device shows it a moment later. No app store, no build, no release.",
       "heading": "The answer",
       "key": "the-idea-in-one-page/2",
       "lesson": "the-idea-in-one-page",
       "position": 2
     },
     {
-      "body": "```\n the web, Pixelfed, …  ◀──▶  pod (your server)  ◀── MCP ──  your agent (Claude)\n                                  │\n                       layouts + data, live events\n                                  ▼\n                    engine + renderer on each device\n                    (desktop, Android, web, simulator)\n```",
+      "body": "```\n your agent (Claude)\n        │ MCP\n        ▼\n pod (your server) ◀──▶ the web,\n        │               Pixelfed, …\n        │ layouts + data,\n        │ live events\n        ▼\n engine + renderer on each device\n (desktop, Android, web, simulator)\n```",
       "heading": "In one picture",
       "key": "the-idea-in-one-page/3",
       "lesson": "the-idea-in-one-page",
       "position": 3
     },
     {
-      "body": "Each user has their own pod: one SQLite database with their data, their layouts and their sign-ins to other\nservices. Tokens for those services are sealed at rest and never reach a device. A pod can be exported whole, and a\ncollection's data can be exported row by row.",
+      "body": "Each user has their own pod: one SQLite database with their data, their layouts and their sign-ins to other services. Tokens for those services are sealed at rest and never reach a device. A pod can be exported whole, and a collection's data can be exported row by row.",
       "heading": "Your data stays yours",
       "key": "the-goals/1",
       "lesson": "the-goals",
       "position": 1
     },
     {
-      "body": "Screens are drawn natively by a Rust renderer (GPU or CPU), not in a web view. Everything a device has loaded is\ncached, so the app opens and scrolls with no network. A tap changes the screen at once and is queued to be sent when\nthe network returns.",
+      "body": "Screens are drawn natively by a Rust renderer (GPU or CPU), not in a web view. Everything a device has loaded is cached, so the app opens and scrolls with no network. A tap changes the screen at once and is queued to be sent when the network returns.",
       "heading": "Native and offline first",
       "key": "the-goals/2",
       "lesson": "the-goals",
       "position": 2
     },
     {
-      "body": "The core of the system is generic: it handles layouts, entities and actions in general, never a particular app. A\nnew screen or a new data source is server code and layout files, so it reaches users without a client release. Only\nnew **vocabulary** (a new kind of node the renderer must learn to draw) needs a new client build.",
+      "body": "The core of the system is generic: it handles layouts, entities and actions in general, never a particular app. A new screen or a new data source is server code and layout files, so it reaches users without a client release. Only new **vocabulary** (a new kind of node the renderer must learn to draw) needs a new client build.",
       "heading": "Most changes ship from the server alone",
       "key": "the-goals/3",
       "lesson": "the-goals",
       "position": 3
     },
     {
-      "body": "A new pod is a blank home screen. Your agent adds only what you ask for, through the pod's MCP server. The pod\nvalidates every write, keeps every version so any change can be undone, and draws previews so the agent can look at\nwhat it made.",
+      "body": "A new pod is a blank home screen. Your agent adds only what you ask for, through the pod's MCP server. The pod validates every write, keeps every version so any change can be undone, and draws previews so the agent can look at what it made.",
       "heading": "Your agent builds, only what you ask",
       "key": "the-goals/4",
       "lesson": "the-goals",
       "position": 4
     },
     {
-      "body": "A phone that hasn't updated must still draw something sensible. Every piece of vocabulary is a named **feature**;\na client says which features it can draw, and the pod serves it the newest version of each layout that uses only\nthose.",
+      "body": "A phone that hasn't updated must still draw something sensible. Every piece of vocabulary is a named **feature**; a client says which features it can draw, and the pod serves it the newest version of each layout that uses only those.",
       "heading": "Old clients keep working",
       "key": "the-goals/5",
       "lesson": "the-goals",
       "position": 5
     },
     {
-      "body": "The pod reaches other hosts only through a client that refuses private network addresses. Text that other people\nwrote (web pages, shared layouts, tool output) is marked as data, never instructions, before an agent sees it.\nAnything shared with another person is reviewed first.",
+      "body": "The pod reaches other hosts only through a client that refuses private network addresses. Text that other people wrote (web pages, shared layouts, tool output) is marked as data, never instructions, before an agent sees it. Anything shared with another person is reviewed first.",
       "heading": "Safe by default",
       "key": "the-goals/6",
       "lesson": "the-goals",
       "position": 6
     },
     {
-      "body": "There is no app store and no \"installing an app\". A pod has **layouts**, starting with `home`, which the clients\nopen first; home embeds or opens every other layout. Built-in screens (Pixelfed, Events, Settings, the inbox) are\n**core layouts** the server ships, which your layouts reference or copy (decisions `layouts-not-apps`,\n`blueprints-and-home`).",
+      "body": "There is no app store and no \"installing an app\". A pod has **layouts**, starting with `home`, which the clients open first; home embeds or opens every other layout. Built-in screens (Pixelfed, Events, Settings, the inbox) are **core layouts** the server ships, which your layouts reference or copy (decisions `layouts-not-apps`, `blueprints-and-home`).",
       "heading": "No apps, only layouts",
       "key": "what-it-is-not/1",
       "lesson": "what-it-is-not",
       "position": 1
     },
     {
-      "body": "A layout says what to draw and what each tap sends, nothing more. It binds fields of entities (`$item.title`), shows\nor hides things on simple conditions, and attaches **intents** (\"change this field and send it to this endpoint\").\nAnything that needs real logic lives in a source on the pod, in Rust.",
+      "body": "A layout says what to draw and what each tap sends, nothing more. It binds fields of entities (`$item.title`), shows or hides things on simple conditions, and attaches **intents** (\"change this field and send it to this endpoint\"). Anything that needs real logic lives in a source on the pod, in Rust.",
       "heading": "No logic in layouts",
       "key": "what-it-is-not/2",
       "lesson": "what-it-is-not",
       "position": 2
     },
     {
-      "body": "The renderer is Rust from layout to pixels. The web client is the same renderer compiled to WebAssembly and drawn\ninto a canvas; it is not HTML.",
+      "body": "The renderer is Rust from layout to pixels. The web client is the same renderer compiled to WebAssembly and drawn into a canvas; it is not HTML.",
       "heading": "No web view",
       "key": "what-it-is-not/3",
       "lesson": "what-it-is-not",
       "position": 3
     },
     {
-      "body": "```\n                        ┌──────────────── server (crates/server) ────────────────┐\n  Pixelfed, websites,   │  host (pod-host): many pods, tokens, scheduler, shelf  │\n  a model API, an   ◀──▶│  ┌───────────── pod (pod-core) ─────────────────────┐  │◀── MCP ── agent\n  agent runner, MCP     │  │ the construct (layouts) · sessions · notifications│  │\n  servers               │  │ sources: collections, pixelfed, events, agents,   │  │\n                        │  │          shell, monitor, dates                    │  │\n                        │  │ jacks: model, web, web_search, mcp, accounts      │  │\n                        │  └───────────────────────────────────────────────────┘  │\n                        └───────────────▲─────────────────────────▲───────────────┘\n                     HTTP: construct,   │                         │ SSE: construct,\n                     objects, data,     │                         │ data, notification\n                     actions            │                         │ events\n                        ┌───────────────┴─────────────────────────┴───────────────┐\n                        │ engine (client-core): cache, outbox, sign-in, events     │\n                        ├──────────────────────────────────────────────────────────┤\n                        │ renderer (construct-render): layout → scene → pixels     │\n                        ├──────────┬──────────┬──────────┬────────────┬───────────┤\n                        │ desktop  │ Android  │ web      │ simulator  │ previews  │\n                        └──────────┴──────────┴──────────┴────────────┴───────────┘\n```",
+      "body": "```\n agent (Claude)    websites, Pixelfed,\n      │ MCP        models, runners\n      ▼                  ▲\n┌─ server ───────────────┼───────┐\n│ host: pods, tokens, scheduler  │\n│ ┌─ pod ──────────────────────┐ │\n│ │ the construct · sessions · │ │\n│ │ notifications              │ │\n│ │ sources: collections,      │ │\n│ │ pixelfed, events, agents,  │ │\n│ │ shell, monitor, dates      │ │\n│ │ jacks: model, web,         │ │\n│ │ web_search, mcp, accounts  │ │\n│ └────────────────────────────┘ │\n└──────▲─────────────────┬───────┘\n       │ HTTP: construct,│ SSE:\n       │ objects, data,  │ construct,\n       │ actions         ▼ data, …\n┌─ each device ──────────────────┐\n│ engine: cache, outbox,         │\n│ sign-in, event stream          │\n├────────────────────────────────┤\n│ renderer: layout → pixels      │\n├────────────────────────────────┤\n│ desktop · Android · web ·      │\n│ simulator · previews           │\n└────────────────────────────────┘\n```",
       "heading": "The whole system",
       "key": "the-map/1",
       "lesson": "the-map",
@@ -99,21 +99,21 @@
       "position": 2
     },
     {
-      "body": "1. **The device opens a pod.** The user typed a pod code once; the engine traded it for a pod session\n   (`POST /v1/pods/open`) and keeps that session in the platform's secure store.\n2. **It asks for the root.** `GET /v1/construct` answers the hash of `home` as this device can draw it, given the\n   features it sent in `X-Construct-Features`.\n3. **It fetches what it lacks.** `POST /v1/objects {have, want}` answers the elements (layouts, components) home\n   reaches that the device doesn't already hold. Elements are immutable and named by hash, so anything already\n   cached is never fetched again.\n4. **It loads the data.** `GET /v1/construct/data/<element>` answers a **data bundle**: the entities the layout\n   binds, keyed by URI, and the queries (ordered lists of URIs) its lists draw. The pod asks each source for its\n   feeds.\n5. **It draws.** The renderer lays the layout out, binds each `$item.field` to the cached entities, and paints.\n6. **It stays live.** `GET /v1/construct/events` stays open: a `construct` event when any layout changes, a `data`\n   event when data changes, a `notification` event when something arrives.",
+      "body": "1. **The device opens a pod.** The user typed a pod code once; the engine traded it for a pod session (`POST /v1/pods/open`) and keeps that session in the platform's secure store.\n2. **It asks for the root.** `GET /v1/construct` answers the hash of `home` as this device can draw it, given the features it sent in `X-Construct-Features`.\n3. **It fetches what it lacks.** `POST /v1/objects {have, want}` answers the elements (layouts, components) home reaches that the device doesn't already hold. Elements are immutable and named by hash, so anything already cached is never fetched again.\n4. **It loads the data.** `GET /v1/construct/data/<element>` answers a **data bundle**: the entities the layout binds, keyed by URI, and the queries (ordered lists of URIs) its lists draw. The pod asks each source for its feeds.\n5. **It draws.** The renderer lays the layout out, binds each `$item.field` to the cached entities, and paints.\n6. **It stays live.** `GET /v1/construct/events` stays open: a `construct` event when any layout changes, a `data` event when data changes, a `notification` event when something arrives.",
       "heading": "Step by step",
       "key": "following-one-screen/1",
       "lesson": "following-one-screen",
       "position": 1
     },
     {
-      "body": "The renderer knew layouts and entities, never \"Pixelfed\". The engine knew URLs, hashes and JSON, never what a post\nis. The pod knew which source fills each feed; only the source knew how to talk to the outside service.",
+      "body": "The renderer knew layouts and entities, never \"Pixelfed\". The engine knew URLs, hashes and JSON, never what a post is. The pod knew which source fills each feed; only the source knew how to talk to the outside service.",
       "heading": "What each piece knew",
       "key": "following-one-screen/2",
       "lesson": "following-one-screen",
       "position": 2
     },
     {
-      "body": "1. **The tap.** The layout's heart button carries an intent:\n   ```json\n   {\"intent\": \"action.mutation.optimistic\", \"entity_uri\": \"$item.uri\", \"field\": \"is_liked\",\n    \"value_expr\": \"!entity.is_liked\", \"endpoint\": \"/v1/pixelfed/posts/like\", \"payload\": {\"id\": \"$item.id\"}}\n   ```\n   The renderer binds `$item` and hands the intent to the engine.\n2. **Optimistic change.** The engine flips `is_liked` in its cache and writes the request to its **outbox** in the\n   same database transaction. The screen redraws: the heart is red before any network call.\n3. **Sending.** A background worker sends outbox rows oldest first. A 2xx removes the row; a 4xx removes it and\n   rolls the change back; a 5xx, a timeout or no network keeps it and retries with backoff.\n4. **The pod.** The route `/v1/pixelfed/posts/like` belongs to the Pixelfed source, which the pod mounted. The\n   source calls Pixelfed's API with the token it keeps sealed in the pod.\n5. **Back to every device.** The source tells the pod its data changed; the pod sends a `data` event to every open\n   stream, and other devices reload just that data.",
+      "body": "1. **The tap.** The layout's heart button carries an intent:\n   ```json\n   {\"intent\": \"action.mutation.optimistic\", \"entity_uri\": \"$item.uri\", \"field\": \"is_liked\",\n    \"value_expr\": \"!entity.is_liked\", \"endpoint\": \"/v1/pixelfed/posts/like\", \"payload\": {\"id\": \"$item.id\"}}\n   ```\n   The renderer binds `$item` and hands the intent to the engine.\n2. **Optimistic change.** The engine flips `is_liked` in its cache and writes the request to its **outbox** in the same database transaction. The screen redraws: the heart is red before any network call.\n3. **Sending.** A background worker sends outbox rows oldest first. A 2xx removes the row; a 4xx removes it and rolls the change back; a 5xx, a timeout or no network keeps it and retries with backoff.\n4. **The pod.** The route `/v1/pixelfed/posts/like` belongs to the Pixelfed source, which the pod mounted. The source calls Pixelfed's API with the token it keeps sealed in the pod.\n5. **Back to every device.** The source tells the pod its data changed; the pod sends a `data` event to every open stream, and other devices reload just that data.",
       "heading": "Step by step",
       "key": "following-one-tap/1",
       "lesson": "following-one-tap",
@@ -127,63 +127,63 @@
       "position": 1
     },
     {
-      "body": "Each seam is a promise that lets one side change without the other. A source can change everything about how it\ntalks to Pixelfed without touching the pod. The pod can change how it stores layouts without touching the engine,\nas long as the construct API holds. A renderer can learn new tricks without the pod knowing, as long as it says so in\nits features.",
+      "body": "Each seam is a promise that lets one side change without the other. A source can change everything about how it talks to Pixelfed without touching the pod. The pod can change how it stores layouts without touching the engine, as long as the construct API holds. A renderer can learn new tricks without the pod knowing, as long as it says so in its features.",
       "heading": "Why narrow seams",
       "key": "the-seams-between-pieces/2",
       "lesson": "the-seams-between-pieces",
       "position": 2
     },
     {
-      "body": "The engine, the renderer and `pod-core` handle layouts, entities and intents in general (decisions D34, D35, D40).\nEverything specific to Pixelfed is in `crates/source-pixelfed`, and so on; a test (`the_core_names_no_source`)\nfails if the core names a source. That is what lets product changes ship without client releases.",
+      "body": "The engine, the renderer and `pod-core` handle layouts, entities and intents in general (decisions D34, D35, D40). Everything specific to Pixelfed is in `crates/source-pixelfed`, and so on; a test (`the_core_names_no_source`) fails if the core names a source. That is what lets product changes ship without client releases.",
       "heading": "The core knows no source",
       "key": "the-rules-everything-follows/1",
       "lesson": "the-rules-everything-follows",
       "position": 1
     },
     {
-      "body": "The vocabulary has two layers (decision `plumbing-and-porcelain`). **Plumbing** is what the renderer draws: nodes,\nintents and device data, each a named feature, and adding to it needs a client build. **Porcelain** is\n**components**: pieces of layout defined as data in terms of plumbing, expanded before drawing, so adding or\nchanging one needs no client build.",
+      "body": "The vocabulary has two layers (decision `plumbing-and-porcelain`). **Plumbing** is what the renderer draws: nodes, intents and device data, each a named feature, and adding to it needs a client build. **Porcelain** is **components**: pieces of layout defined as data in terms of plumbing, expanded before drawing, so adding or changing one needs no client build.",
       "heading": "Plumbing and porcelain",
       "key": "the-rules-everything-follows/2",
       "lesson": "the-rules-everything-follows",
       "position": 2
     },
     {
-      "body": "Core layouts and server components are append-only numbered files (`NNNN.json`): a deployed file is never edited,\nand the server refuses to start if one changed. The pod keeps every version of every layout behind its name.\nDatabase schemas change only by migrations that work on existing pods. Decisions are recorded, never rewritten.",
+      "body": "Core layouts and server components are append-only numbered files (`NNNN.json`): a deployed file is never edited, and the server refuses to start if one changed. The pod keeps every version of every layout behind its name. Database schemas change only by migrations that work on existing pods. Decisions are recorded, never rewritten.",
       "heading": "History is kept, not rewritten",
       "key": "the-rules-everything-follows/3",
       "lesson": "the-rules-everything-follows",
       "position": 3
     },
     {
-      "body": "Each pod is `pods/<id>/server.db`:\n\n- **The construct**: every layout and component element, and the names that point at them with their history.\n- **Sessions**: the pod sessions of devices and of the web client, and MCP credentials for agents.\n- **Sign-ins**: tokens for upstream services (a Pixelfed account, an agent runner), sealed with the server's key.\n- **Source data**: each source's own tables (`<source>_*`): a collection's rows, Pixelfed's cursors, the Agents\n  mirror.\n- **Notifications** and the devices registered for push.\n- **Jacks**: which abilities are plugged in, with sealed settings.",
+      "body": "Each pod is `pods/<id>/server.db`:\n\n- **The construct**: every layout and component element, and the names that point at them with their history.\n- **Sessions**: the pod sessions of devices and of the web client, and MCP credentials for agents.\n- **Sign-ins**: tokens for upstream services (a Pixelfed account, an agent runner), sealed with the server's key.\n- **Source data**: each source's own tables (`<source>_*`): a collection's rows, Pixelfed's cursors, the Agents mirror.\n- **Notifications** and the devices registered for push.\n- **Jacks**: which abilities are plugged in, with sealed settings.",
       "heading": "What a pod holds",
       "key": "the-pods-job/1",
       "lesson": "the-pods-job",
       "position": 1
     },
     {
-      "body": "- **To devices**: the construct API and event stream, the data bundles, the sources' action routes, uploads,\n  notifications.\n- **To the agent**: the MCP server at `/v1/mcp`.\n- **To nobody else**: a caller without a pod token sees only an \"Open your pod\" screen.",
+      "body": "- **To devices**: the construct API and event stream, the data bundles, the sources' action routes, uploads, notifications.\n- **To the agent**: the MCP server at `/v1/mcp`.\n- **To nobody else**: a caller without a pod token sees only an \"Open your pod\" screen.",
       "heading": "What a pod serves",
       "key": "the-pods-job/2",
       "lesson": "the-pods-job",
       "position": 2
     },
     {
-      "body": "The host's own database lists the pods and what crosses between them:\n\n- `pods`: each pod's id, name, kind (`admin` or `temporary`), expiry, and `next_wake_at`.\n- `credentials`: the SHA-256 of each pod token (`cpod_…`), MCP credential and web session. Tokens themselves are\n  never stored.\n- The **shelf**: handles, publications and their objects (what pods share with each other).\n- `public_copies` and `calendar_feeds`: public web links and `.ics` feeds.\n- OAuth clients and codes, for agents that connect with OAuth.",
+      "body": "The host's own database lists the pods and what crosses between them:\n\n- `pods`: each pod's id, name, kind (`admin` or `temporary`), expiry, and `next_wake_at`.\n- `credentials`: the SHA-256 of each pod token (`cpod_…`), MCP credential and web session. Tokens themselves are never stored.\n- The **shelf**: handles, publications and their objects (what pods share with each other).\n- `public_copies` and `calendar_feeds`: public web links and `.ics` feeds.\n- OAuth clients and codes, for agents that connect with OAuth.",
       "heading": "host.db",
       "key": "the-host-and-the-server-binary/1",
       "lesson": "the-host-and-the-server-binary",
       "position": 1
     },
     {
-      "body": "- **Routing**: a request's bearer token names its pod; the host opens that pod lazily on its first request.\n- **Temporary pods**: `POST /v1/pods/temporary` makes a 24-hour pod for trying a server, deleted afterwards, with\n  risky jacks locked off.\n- **The scheduler**: every 30 seconds it opens pods whose `next_wake_at` is due (notification polls, collection\n  fillers, reminders). A pod polls upstreams only while it has a device seen in the last 30 days, so idle pods cost\n  nothing.\n- **OAuth for agents**, connected apps, public media under `/v1/p/<pod>/…`, the web client at `/web`, and public\n  links at `/s/…` and `/<handle>/<slug>`.",
+      "body": "- **Routing**: a request's bearer token names its pod; the host opens that pod lazily on its first request.\n- **Temporary pods**: `POST /v1/pods/temporary` makes a 24-hour pod for trying a server, deleted afterwards, with risky jacks locked off.\n- **The scheduler**: every 30 seconds it opens pods whose `next_wake_at` is due (notification polls, collection fillers, reminders). A pod polls upstreams only while it has a device seen in the last 30 days, so idle pods cost nothing.\n- **OAuth for agents**, connected apps, public media under `/v1/p/<pod>/…`, the web client at `/web`, and public links at `/s/…` and `/<handle>/<slug>`.",
       "heading": "What the host does",
       "key": "the-host-and-the-server-binary/2",
       "lesson": "the-host-and-the-server-binary",
       "position": 2
     },
     {
-      "body": "`crates/server` compiles in the sources (`server::adapters()`: Pixelfed, Events, the shell layouts, Collections,\nMonitor, Agents, Dates) and runs `server serve`. Its other subcommands manage pods: `server pods create`, `rotate`,\n`delete`, `mcp` (an MCP credential), `monitoring on`, `gaps`, and `server backup <dir>`. Configuration is\n`CONSTRUCT_*` environment variables ([server.md](https://github.com/aidanwolter3/the-construct/blob/main/docs/server.md)).",
+      "body": "`crates/server` compiles in the sources (`server::adapters()`: Pixelfed, Events, the shell layouts, Collections, Monitor, Agents, Dates) and runs `server serve`. Its other subcommands manage pods: `server pods create`, `rotate`, `delete`, `mcp` (an MCP credential), `monitoring on`, `gaps`, and `server backup <dir>`. Configuration is `CONSTRUCT_*` environment variables ([server.md](https://github.com/aidanwolter3/the-construct/blob/main/docs/server.md)).",
       "heading": "The server binary",
       "key": "the-host-and-the-server-binary/3",
       "lesson": "the-host-and-the-server-binary",
@@ -197,56 +197,56 @@
       "position": 1
     },
     {
-      "body": "`pod_core::app` builds one axum router: the core routes (`/v1/construct…`, `/v1/objects`, `/v1/notifications…`,\n`/v1/devices…`, `/v1/uploads`, `/v1/jacks…`, `/v1/mcp`, `/v1/auth…`) plus each source's own router under\n`/v1/<source>/…`. Every handler gets the same state, `Pod` (an `Arc<AppState>`), which also gives a source its store,\nits catalog of sources, per-pod values, and `publish_data` to say its data changed.",
+      "body": "`pod_core::app` builds one axum router: the core routes (`/v1/construct…`, `/v1/objects`, `/v1/notifications…`, `/v1/devices…`, `/v1/uploads`, `/v1/jacks…`, `/v1/mcp`, `/v1/auth…`) plus each source's own router under `/v1/<source>/…`. Every handler gets the same state, `Pod` (an `Arc<AppState>`), which also gives a source its store, its catalog of sources, per-pod values, and `publish_data` to say its data changed.",
       "heading": "The router",
       "key": "inside-pod-core/2",
       "lesson": "inside-pod-core",
       "position": 2
     },
     {
-      "body": "A source that pulls from an upstream implements `Source::poll_interval` and `poll_notifications`. Pixelfed polls\nits notifications every two minutes; Collections uses the same poll to run scheduled fills and send due reminders;\nMonitor checks its health every five. After a poll the pod records when it next needs waking in `host.db`\n(`next_wake_at`). Failed polls back off from a minute to an hour.",
+      "body": "A source that pulls from an upstream implements `Source::poll_interval` and `poll_notifications`. Pixelfed polls its notifications every two minutes; Collections uses the same poll to run scheduled fills and send due reminders; Monitor checks its health every five. After a poll the pod records when it next needs waking in `host.db` (`next_wake_at`). Failed polls back off from a minute to an hour.",
       "heading": "Polls",
       "key": "background-work/1",
       "lesson": "background-work",
       "position": 1
     },
     {
-      "body": "`Source::resume` restarts background jobs when a pod opens (an upload that was still posting). `Source::keeps_open`\nasks the host to keep the pod open from server start: the Agents source does, to follow its runner's event stream\nwithout waiting for a request.",
+      "body": "`Source::resume` restarts background jobs when a pod opens (an upload that was still posting). `Source::keeps_open` asks the host to keep the pod open from server start: the Agents source does, to follow its runner's event stream without waiting for a request.",
       "heading": "Resuming and staying open",
       "key": "background-work/2",
       "lesson": "background-work",
       "position": 2
     },
     {
-      "body": "Pod tokens are stored as hashes. Upstream tokens and jack secrets are sealed at rest with the server's key\n(`CONSTRUCT_SECRETS_KEY`) and never sent to a device. A credential issued to an agent reaches only `/v1/mcp`.",
+      "body": "Pod tokens are stored as hashes. Upstream tokens and jack secrets are sealed at rest with the server's key (`CONSTRUCT_SECRETS_KEY`) and never sent to a device. A credential issued to an agent reaches only `/v1/mcp`.",
       "heading": "Secrets",
       "key": "security-by-construction/1",
       "lesson": "security-by-construction",
       "position": 1
     },
     {
-      "body": "Every request a pod makes to a host a user chose goes through `pod_core::net`'s outbound client, which resolves\nnames itself and refuses private and internal addresses; a lint (`clippy.toml`) forbids building another HTTP client.\nWeb pages are fetched through the web module, which adds per-host spacing, daily caps and backoff (Part 6).",
+      "body": "Every request a pod makes to a host a user chose goes through `pod_core::net`'s outbound client, which resolves names itself and refuses private and internal addresses; a lint (`clippy.toml`) forbids building another HTTP client. Web pages are fetched through the web module, which adds per-host spacing, daily caps and backoff (Part 6).",
       "heading": "Outbound requests",
       "key": "security-by-construction/2",
       "lesson": "security-by-construction",
       "position": 2
     },
     {
-      "body": "Text other people wrote (a web page, a shared layout, an MCP server's tool description) reaches the agent wrapped as\n`{\"untrusted\": {\"from\", \"content\"}}`, and the pod's instructions say it is data, never instructions (decision\n`untrusted-tool-content`). Sharing anything outward (a publication, a public link, a calendar feed) answers a\nreview of exactly what would go out, and nothing goes until it is confirmed.",
+      "body": "Text other people wrote (a web page, a shared layout, an MCP server's tool description) reaches the agent wrapped as `{\"untrusted\": {\"from\", \"content\"}}`, and the pod's instructions say it is data, never instructions (decision `untrusted-tool-content`). Sharing anything outward (a publication, a public link, a calendar feed) answers a review of exactly what would go out, and nothing goes until it is confirmed.",
       "heading": "Outside text is data",
       "key": "security-by-construction/3",
       "lesson": "security-by-construction",
       "position": 3
     },
     {
-      "body": "```json\n{\"type\": \"core://Page\", \"id\": \"c-groceries1\", \"title\": \"Groceries\",\n \"root\": {\"type\": \"core://Column\", \"padding_h_dp\": 20, \"children\": [\n   {\"type\": \"core://Text\", \"style\": \"Title\", \"value_expr\": \"Groceries\"},\n   {\"type\": \"core://List\", \"query_key\": \"collection:groceries\",\n    \"where\": {\"field\": \"deleted\", \"equals\": \"false\"},\n    \"item_template\": {\"type\": \"core://Row\", \"children\": [\n      {\"type\": \"core://Switch\", \"checked\": \"$item.done\",\n       \"on_click\": {\"intent\": \"action.mutation.optimistic\", \"entity_uri\": \"$item.uri\",\n                    \"field\": \"done\", \"value_expr\": \"!entity.done\",\n                    \"endpoint\": \"/v1/collections/groceries/update\",\n                    \"payload\": {\"id\": \"$item.id\", \"done\": \"$value\"}}},\n      {\"type\": \"core://Text\", \"value_expr\": \"$item.name\"}]}}]}}\n```\n\nThe list draws every entity of the query `collection:groceries`; each row binds `$item` to one entity; the switch's\nintent flips `done` at once and sends the change.",
+      "body": "```json\n{\"type\": \"core://Page\", \"id\": \"c-groceries1\", \"title\": \"Groceries\",\n \"root\": {\"type\": \"core://Column\", \"padding_h_dp\": 20, \"children\": [\n   {\"type\": \"core://Text\", \"style\": \"Title\", \"value_expr\": \"Groceries\"},\n   {\"type\": \"core://List\", \"query_key\": \"collection:groceries\",\n    \"where\": {\"field\": \"deleted\", \"equals\": \"false\"},\n    \"item_template\": {\"type\": \"core://Row\", \"children\": [\n      {\"type\": \"core://Switch\", \"checked\": \"$item.done\",\n       \"on_click\": {\"intent\": \"action.mutation.optimistic\", \"entity_uri\": \"$item.uri\",\n                    \"field\": \"done\", \"value_expr\": \"!entity.done\",\n                    \"endpoint\": \"/v1/collections/groceries/update\",\n                    \"payload\": {\"id\": \"$item.id\", \"done\": \"$value\"}}},\n      {\"type\": \"core://Text\", \"value_expr\": \"$item.name\"}]}}]}}\n```\n\nThe list draws every entity of the query `collection:groceries`; each row binds `$item` to one entity; the switch's intent flips `done` at once and sends the change.",
       "heading": "A small layout",
       "key": "a-layout-is-data/1",
       "lesson": "a-layout-is-data",
       "position": 1
     },
     {
-      "body": "A layout's root is a `core://Page`: any node, with nothing drawn around it by the app, so the layout draws its own\nheader and Back. A page can declare **screens**, opened by route: a tap with `target_uri:\n\"collections://groceries/r1\"` opens the screen whose `route` is `collections://groceries/{id}`, and `$route.id` is\n`r1` inside it. Older layouts may be a `core://Workspace`, which is porcelain the pod expands into a page.",
+      "body": "A layout's root is a `core://Page`: any node, with nothing drawn around it by the app, so the layout draws its own header and Back. A page can declare **screens**, opened by route: a tap with `target_uri: \"collections://groceries/r1\"` opens the screen whose `route` is `collections://groceries/{id}`, and `$route.id` is `r1` inside it. Older layouts may be a `core://Workspace`, which is porcelain the pod expands into a page.",
       "heading": "Pages and screens",
       "key": "a-layout-is-data/2",
       "lesson": "a-layout-is-data",
@@ -260,147 +260,147 @@
       "position": 1
     },
     {
-      "body": "`action.navigation.open` (a screen, or another layout pushed, as a sheet, panel or overlay), `.back`, `.pop_to`,\n`.pop_to_root`; `action.mutation.optimistic` and `action.mutation.create` (change or add data at once, sent through\nthe outbox); `action.local.set` (view state on this device only); `action.sequence`, `action.confirm`,\n`action.link.open`, `action.data.load`; `action.device` (something only the device does: sign in, sign out, mark\nnotifications read, leave the pod).",
+      "body": "`action.navigation.open` (a screen, or another layout pushed, as a sheet, panel or overlay), `.back`, `.pop_to`, `.pop_to_root`; `action.mutation.optimistic` and `action.mutation.create` (change or add data at once, sent through the outbox); `action.local.set` (view state on this device only); `action.sequence`, `action.confirm`, `action.link.open`, `action.data.load`; `action.device` (something only the device does: sign in, sign out, mark notifications read, leave the pod).",
       "heading": "Intents",
       "key": "plumbing-the-vocabulary/2",
       "lesson": "plumbing-the-vocabulary",
       "position": 2
     },
     {
-      "body": "`$item.<field>` reads the current row, `${<uri>#<field>}` any entity, `$route.<name>` a screen's route,\n`$form.<field>` a text field's value, `$nonce` a fresh id per tap. Mutations compute the new value with a tiny\nexpression language (`!entity.done`, `entity.count + 1`, `a ? b : c`). **Device data** is what the device knows\nitself, with no pod request: `local://connection` (online, pending changes), `local://inbox`, `local://theme` (the\npod's colours), `local://device` (window size), `local://nav` (where the layout is drawn).",
+      "body": "`$item.<field>` reads the current row, `${<uri>#<field>}` any entity, `$route.<name>` a screen's route, `$form.<field>` a text field's value, `$nonce` a fresh id per tap. Mutations compute the new value with a tiny expression language (`!entity.done`, `entity.count + 1`, `a ? b : c`). **Device data** is what the device knows itself, with no pod request: `local://connection` (online, pending changes), `local://inbox`, `local://theme` (the pod's colours), `local://device` (window size), `local://nav` (where the layout is drawn).",
       "heading": "Bindings and device data",
       "key": "plumbing-the-vocabulary/3",
       "lesson": "plumbing-the-vocabulary",
       "position": 3
     },
     {
-      "body": "```json\n{\"type\": \"core://Use\", \"ref\": \"@core/card\", \"args\": {\"spacing\": 6}, \"children\": [\n  {\"type\": \"core://Text\", \"style\": \"Label\", \"value_expr\": \"$item.title\"}]}\n```\n\nNames say where a component comes from:\n\n- `@core/<name>`: shipped with the server, in `crates/pod-core/components/<name>/NNNN.json` or a source's own\n  `components/` folder. Every core layout is one too (`@core/events`), and so is each of its parts\n  (`@core/pixelfed/screen:post`).\n- `@me/<name>`: the pod's own, defined by the agent (`define_component`) or copied from a core one\n  (`copy_component`).\n\nOlder layouts spell these `core:<name>` and `pod:<name>`; a write still accepts them.",
+      "body": "```json\n{\"type\": \"core://Use\", \"ref\": \"@core/card\", \"args\": {\"spacing\": 6}, \"children\": [\n  {\"type\": \"core://Text\", \"style\": \"Label\", \"value_expr\": \"$item.title\"}]}\n```\n\nNames say where a component comes from:\n\n- `@core/<name>`: shipped with the server, in `crates/pod-core/components/<name>/NNNN.json` or a source's own `components/` folder. Every core layout is one too (`@core/events`), and so is each of its parts (`@core/pixelfed/screen:post`).\n- `@me/<name>`: the pod's own, defined by the agent (`define_component`) or copied from a core one (`copy_component`).\n\nOlder layouts spell these `core:<name>` and `pod:<name>`; a write still accepts them.",
       "heading": "Using one",
       "key": "porcelain-components/1",
       "lesson": "porcelain-components",
       "position": 1
     },
     {
-      "body": "A definition is `{doc, params, children?, template, examples}`. In the template, `$arg.<name>` is an argument,\n`core://Children` is where the caller's children go (or a named slot), `core://IfArg` and `core://Match` choose a\nbranch, and `core://Each` repeats a piece per entry of a list argument. Every example must expand to valid plumbing,\nor the write is refused. `crates/construct-elements` does the expanding, for the pod and the engine alike.",
+      "body": "A definition is `{doc, params, children?, template, examples}`. In the template, `$arg.<name>` is an argument, `core://Children` is where the caller's children go (or a named slot), `core://IfArg` and `core://Match` choose a branch, and `core://Each` repeats a piece per entry of a list argument. Every example must expand to valid plumbing, or the write is refused. `crates/construct-elements` does the expanding, for the pod and the engine alike.",
       "heading": "Defining one",
       "key": "porcelain-components/2",
       "lesson": "porcelain-components",
       "position": 2
     },
     {
-      "body": "- An **element** is `e1-` and the base32 SHA-256 of its canonical JSON (keys sorted, no whitespace). It never\n  changes.\n- A **name** (`home`, `c-…` for the pod's layouts, `@me/…`, `@core/…`) points at an element and keeps every element\n  it pointed at before: that is the undo history (`restore_version`).\n- A **reference** sits at one of three sites: a `core://Use` (a component, expanded in place), a `core://Layout` (an\n  embed) and an `action.navigation.open` (a link). Written as a name, it is **sealed** to `{el, name, pin}`. An\n  unpinned reference follows its name: when the name moves, the pod seals every element that follows it again, up to\n  home.",
+      "body": "- An **element** is `e1-` and the base32 SHA-256 of its canonical JSON (keys sorted, no whitespace). It never changes.\n- A **name** (`home`, `c-…` for the pod's layouts, `@me/…`, `@core/…`) points at an element and keeps every element it pointed at before: that is the undo history (`restore_version`).\n- A **reference** sits at one of three sites: a `core://Use` (a component, expanded in place), a `core://Layout` (an embed) and an `action.navigation.open` (a link). Written as a name, it is **sealed** to `{el, name, pin}`. An unpinned reference follows its name: when the name moves, the pod seals every element that follows it again, up to home.",
       "heading": "Elements, names and references",
       "key": "the-construct/1",
       "lesson": "the-construct",
       "position": 1
     },
     {
-      "body": "Embeds and links are **edges**, keyed by their `as` or their name. From home, the edges say which layouts a user can\nreach and how (MCP `list_layouts` answers each layout's `reached` path). Writes that would make a layout reach\nitself are refused, so the graph only goes forward; Back and `pop_to` go the other way.",
+      "body": "Embeds and links are **edges**, keyed by their `as` or their name. From home, the edges say which layouts a user can reach and how (MCP `list_layouts` answers each layout's `reached` path). Writes that would make a layout reach itself are refused, so the graph only goes forward; Back and `pop_to` go the other way.",
       "heading": "Edges and reach",
       "key": "the-construct/2",
       "lesson": "the-construct",
       "position": 2
     },
     {
-      "body": "The engine asks for the root as a **manifest** of names and hashes, fetches the objects it lacks with `POST\n/v1/objects`, keeps them in its store (a restart with the same root fetches nothing), and expands components itself\nwith `construct-elements`. A layout home doesn't reach (one a notification opens) is fetched by name with `GET\n/v1/construct/names/<name>`.",
+      "body": "The engine asks for the root as a **manifest** of names and hashes, fetches the objects it lacks with `POST /v1/objects`, keeps them in its store (a restart with the same root fetches nothing), and expands components itself with `construct-elements`. A layout home doesn't reach (one a notification opens) is fetched by name with `GET /v1/construct/names/<name>`.",
       "heading": "How a device syncs",
       "key": "the-construct/3",
       "lesson": "the-construct",
       "position": 3
     },
     {
-      "body": "- Each feature is a file, `crates/protocol/features/<name>.md` (about a hundred), and `protocol::required_features`\n  works out which features a node tree uses.\n- A client sends every feature it draws in `X-Construct-Features`.\n- When the pod **seals** a root for that client, it picks, for every name, the newest entry of its history that uses\n  nothing the client lacks and nothing removed.",
+      "body": "- Each feature is a file, `crates/protocol/features/<name>.md` (about a hundred), and `protocol::required_features` works out which features a node tree uses.\n- A client sends every feature it draws in `X-Construct-Features`.\n- When the pod **seals** a root for that client, it picks, for every name, the newest entry of its history that uses nothing the client lacks and nothing removed.",
       "heading": "How it works",
       "key": "features-keeping-old-clients-working/1",
       "lesson": "features-keeping-old-clients-working",
       "position": 1
     },
     {
-      "body": "Adding a node type or field needs a client build: the type in `protocol`, a feature file, an arm in\n`required_features`, drawing it in `construct-render`, and tests (`crates/protocol/features/README.md`). Removing one\nnever edits layouts: its file moves to `features/removed/`, and only elements that use it are retired.",
+      "body": "Adding a node type or field needs a client build: the type in `protocol`, a feature file, an arm in `required_features`, drawing it in `construct-render`, and tests (`crates/protocol/features/README.md`). Removing one never edits layouts: its file moves to `features/removed/`, and only elements that use it are retired.",
       "heading": "Adding and removing vocabulary",
       "key": "features-keeping-old-clients-working/2",
       "lesson": "features-keeping-old-clients-working",
       "position": 2
     },
     {
-      "body": "Core layouts are the screens the server ships: `pixelfed`, `events`, `agents`, `server_health`, `shell` (the blank\nhome), `settings`, `inbox`, and the `checklist` kit. Each is a folder of append-only files in its source's crate,\n`crates/source-*/layouts/<id>/NNNN.json`; when a pod opens, each `@core/<id>` name moves to this build's newest\nfile. A pod's layout can use a core layout whole by reference (`{\"type\": \"core://Use\", \"ref\": \"@core/events\"}`), which\nthen follows every deploy, or copy it, which doesn't.",
+      "body": "Core layouts are the screens the server ships: `pixelfed`, `events`, `agents`, `server_health`, `shell` (the blank home), `settings`, `inbox`, and the `checklist` kit. Each is a folder of append-only files in its source's crate, `crates/source-*/layouts/<id>/NNNN.json`; when a pod opens, each `@core/<id>` name moves to this build's newest file. A pod's layout can use a core layout whole by reference (`{\"type\": \"core://Use\", \"ref\": \"@core/events\"}`), which then follows every deploy, or copy it, which doesn't.",
       "heading": "Core layouts",
       "key": "home-core-layouts-and-the-agents-layouts/1",
       "lesson": "home-core-layouts-and-the-agents-layouts",
       "position": 1
     },
     {
-      "body": "The agent's layouts are names `c-` plus ten characters, each with a title, an icon and a root node (at most 50\nlayouts, 256 KiB each). Home embeds a layout in place (`core://Layout` `Inline`), in a card, or as a sheet or panel\nwhile a condition holds, and opens others (`action.navigation.open` with a layout: pushed, a sheet, a panel, an\noverlay from any edge). **Home owns the feeds**: it lists the data feeds the pod's layouts may bind, and every write\nis validated against what those feeds' sources declare.",
+      "body": "The agent's layouts are names `c-` plus ten characters, each with a title, an icon and a root node (at most 50 layouts, 256 KiB each). Home embeds a layout in place (`core://Layout` `Inline`), in a card, or as a sheet or panel while a condition holds, and opens others (`action.navigation.open` with a layout: pushed, a sheet, a panel, an overlay from any edge). **Home owns the feeds**: it lists the data feeds the pod's layouts may bind, and every write is validated against what those feeds' sources declare.",
       "heading": "The pod's layouts",
       "key": "home-core-layouts-and-the-agents-layouts/2",
       "lesson": "home-core-layouts-and-the-agents-layouts",
       "position": 2
     },
     {
-      "body": "Because a copy doesn't follow its core layout, fixing a core layout may not reach a user who copied it. MCP\n`list_layouts` marks each layout's `copy_of` and `reached` (decision `trace-from-home`), so a change goes to the\nelement home actually reaches.",
+      "body": "Because a copy doesn't follow its core layout, fixing a core layout may not reach a user who copied it. MCP `list_layouts` marks each layout's `copy_of` and `reached` (decision `trace-from-home`), so a change goes to the element home actually reaches.",
       "heading": "Change what the user sees",
       "key": "home-core-layouts-and-the-agents-layouts/3",
       "lesson": "home-core-layouts-and-the-agents-layouts",
       "position": 3
     },
     {
-      "body": "`publish` copies a name's closure (everything it embeds, links and uses) to the host's **shelf**, turning each\ncollection it reads into an **input** with the fields it needs. Another pod `adopt`s the share link, binding each\ninput to one of its own collections. An adopted element reaches only the data it is bound to, and anything risky it\nwould do (start agent runs, plug jacks, delete, sign out) waits for the user's yes (decisions `sharing`,\n`adoption-capabilities`).",
+      "body": "`publish` copies a name's closure (everything it embeds, links and uses) to the host's **shelf**, turning each collection it reads into an **input** with the fields it needs. Another pod `adopt`s the share link, binding each input to one of its own collections. An adopted element reaches only the data it is bound to, and anything risky it would do (start agent runs, plug jacks, delete, sign out) waits for the user's yes (decisions `sharing`, `adoption-capabilities`).",
       "heading": "Publications and adoption",
       "key": "sharing-between-people/1",
       "lesson": "sharing-between-people",
       "position": 1
     },
     {
-      "body": "`share_publicly` makes a read-only copy of a layout, the layouts it opens, and only the Collections rows they show,\nserved as a web page at `/s/pub-…` or `/<handle>/<slug>` and drawn by the web client. Buttons that write are taken\nout. The copy is refreshed when its rows change; new rows wait for a new review unless the link says to publish them\n(decisions `public-web-links`, `public-links-share-the-closure`).",
+      "body": "`share_publicly` makes a read-only copy of a layout, the layouts it opens, and only the Collections rows they show, served as a web page at `/s/pub-…` or `/<handle>/<slug>` and drawn by the web client. Buttons that write are taken out. The copy is refreshed when its rows change; new rows wait for a new review unless the link says to publish them (decisions `public-web-links`, `public-links-share-the-closure`).",
       "heading": "Public links",
       "key": "sharing-between-people/2",
       "lesson": "sharing-between-people",
       "position": 2
     },
     {
-      "body": "`Source::manifest` answers a `SourceManifest`, the data source's contract with layouts:\n\n- **feeds**: named data a layout can bind through home (`[\"collections\", \"groceries\"]`), each with the query keys\n  it fills;\n- **data paths**: screen data a layout's screens load (`/v1/pixelfed/screens/post?id=`);\n- **actions**: endpoints intents may call (`/v1/pixelfed/posts/like`);\n- **entities**: the URI schemes and fields it serves, documented for the agent.\n\nLayouts may only bind and call what a manifest declares; the pod checks every write (decision\n`custom-apps-and-data-sources`).",
+      "body": "`Source::manifest` answers a `SourceManifest`, the data source's contract with layouts:\n\n- **feeds**: named data a layout can bind through home (`[\"collections\", \"groceries\"]`), each with the query keys it fills;\n- **data paths**: screen data a layout's screens load (`/v1/pixelfed/screens/post?id=`);\n- **actions**: endpoints intents may call (`/v1/pixelfed/posts/like`);\n- **entities**: the URI schemes and fields it serves, documented for the agent.\n\nLayouts may only bind and call what a manifest declares; the pod checks every write (decision `custom-apps-and-data-sources`).",
       "heading": "The manifest",
       "key": "what-a-source-is/1",
       "lesson": "what-a-source-is",
       "position": 1
     },
     {
-      "body": "| Group | Methods |\n|---|---|\n| Identity and data | `name` (also its table and route prefix), `manifest`, `feed` (answers a feed's data), `has_feed` |\n| Routes and storage | `router`, `public_paths`, `migrations` (its `<name>_*` tables), `on_open` |\n| Shipping layouts | `core_layouts`, `layout_files`, `component_files`, `element_catalog` |\n| Sign-in | `sign_ins`, `sign_in_start`, `sign_in_account`, `share_sign_in` |\n| Notifications | `notification_channels`, `poll_interval`, `poll_notifications`, `notification_store` |\n| Background | `resume`, `keeps_open` |\n| Jacks | `jacks`, `jack_status`, `unplug_jack` |\n| The agent | `mcp_tools`, `mcp_call`, `mcp_instructions`, `check_custom_layout` |\n| Sharing | `public_data`, `calendar_events`, `share_inputs`, `adopted_scope`, `data_sets` |\n\nAlmost every method has a default, so a small source implements only `name`, `manifest`, `feed`, `core_layouts` and\n`layout_files`.",
+      "body": "| Group | Methods |\n|---|---|\n| Identity and data | `name` (also its table and route prefix), `manifest`, `feed` (answers a feed's data), `has_feed` |\n| Routes and storage | `router`, `public_paths`, `migrations` (its `<name>_*` tables), `on_open` |\n| Shipping layouts | `core_layouts`, `layout_files`, `component_files`, `element_catalog` |\n| Sign-in | `sign_ins`, `sign_in_start`, `sign_in_account`, `share_sign_in` |\n| Notifications | `notification_channels`, `poll_interval`, `poll_notifications`, `notification_store` |\n| Background | `resume`, `keeps_open` |\n| Jacks | `jacks`, `jack_status`, `unplug_jack` |\n| The agent | `mcp_tools`, `mcp_call`, `mcp_instructions`, `check_custom_layout` |\n| Sharing | `public_data`, `calendar_events`, `share_inputs`, `adopted_scope`, `data_sets` |\n\nAlmost every method has a default, so a small source implements only `name`, `manifest`, `feed`, `core_layouts` and `layout_files`.",
       "heading": "The rest of the trait",
       "key": "what-a-source-is/2",
       "lesson": "what-a-source-is",
       "position": 2
     },
     {
-      "body": "```json\n{\"entities\": {\"collections://groceries/r1\": {\"id\": \"r1\", \"name\": \"Milk\", \"done\": false}},\n \"queries\":  {\"collection:groceries\": [\"collections://groceries/r1\"]}}\n```\n\nEntities are shared across screens: two lists showing the same post show the same cached entity, so a like on one\nshows on both. A feed's data, a screen's data path and a create's answer all have this shape (`protocol::DataBundle`).",
+      "body": "```json\n{\"entities\": {\"collections://groceries/r1\": {\"id\": \"r1\", \"name\": \"Milk\", \"done\": false}},\n \"queries\":  {\"collection:groceries\": [\"collections://groceries/r1\"]}}\n```\n\nEntities are shared across screens: two lists showing the same post show the same cached entity, so a like on one shows on both. A feed's data, a screen's data path and a create's answer all have this shape (`protocol::DataBundle`).",
       "heading": "The bundle",
       "key": "entities-feeds-and-the-data-bundle/1",
       "lesson": "entities-feeds-and-the-data-bundle",
       "position": 1
     },
     {
-      "body": "When a source's data changes it calls `publish_data` on the pod, which sends a `data` event on every open stream,\nusually naming what changed (a collection's rows, URI prefixes, query keys). The engine reloads only cached data that\nmatches, what's on screen first (decision `scoped-data-events`).",
+      "body": "When a source's data changes it calls `publish_data` on the pod, which sends a `data` event on every open stream, usually naming what changed (a collection's rows, URI prefixes, query keys). The engine reloads only cached data that matches, what's on screen first (decision `scoped-data-events`).",
       "heading": "Data events",
       "key": "entities-feeds-and-the-data-bundle/2",
       "lesson": "entities-feeds-and-the-data-bundle",
       "position": 2
     },
     {
-      "body": "A collection has typed fields: `text`, `number`, `bool`, `date`, `datetime`, `choice`, `ref` (a row of another\ncollection), `quantity` (\"1 1/2 cups\"). Rows are `collections://<c>/<id>` in the query `collection:<c>`, with\nroutes to create, update, delete and export them. Fields have permanent ids, so renames keep an alias, removals are\nrestorable for 30 days, and a write from an offline device made under an older definition still lands.",
+      "body": "A collection has typed fields: `text`, `number`, `bool`, `date`, `datetime`, `choice`, `ref` (a row of another collection), `quantity` (\"1 1/2 cups\"). Rows are `collections://<c>/<id>` in the query `collection:<c>`, with routes to create, update, delete and export them. Fields have permanent ids, so renames keep an alias, removals are restorable for 30 days, and a write from an offline device made under an older definition still lands.",
       "heading": "Fields and rows",
       "key": "collections/1",
       "lesson": "collections",
       "position": 1
     },
     {
-      "body": "- **Computed fields**: `expr` (a small expression), `lookup` (a value from another collection, kept as editable\n  rules), `count` and `rollup` (over rows that point here), `model` (a model's answer, in the background). Lookups\n  and counts are live: a change to the rows they read recomputes what it affects.\n- **Views**: small derived lists (`collection:<c>:view:<v>`), filtered, dated (\"upcoming\") and limited.\n- **Actions**: insert-from-query, update-all and delete-all actions a button can run (add a recipe to the grocery\n  list).\n- **Fillers**: keep rows current from the web: `fetch` (a URL, an extractor, a field map: no model per fill),\n  `agent` (a model with search researches the rows), `range` (one row per day of a moving window), `mcp` (a remote\n  MCP server's tool).\n- **Alerts and reminders**: notify once when a row matches, or when a date field is reached.",
+      "body": "- **Computed fields**: `expr` (a small expression), `lookup` (a value from another collection, kept as editable rules), `count` and `rollup` (over rows that point here), `model` (a model's answer, in the background). Lookups and counts are live: a change to the rows they read recomputes what it affects.\n- **Views**: small derived lists (`collection:<c>:view:<v>`), filtered, dated (\"upcoming\") and limited.\n- **Actions**: insert-from-query, update-all and delete-all actions a button can run (add a recipe to the grocery list).\n- **Fillers**: keep rows current from the web: `fetch` (a URL, an extractor, a field map: no model per fill), `agent` (a model with search researches the rows), `range` (one row per day of a moving window), `mcp` (a remote MCP server's tool).\n- **Alerts and reminders**: notify once when a row matches, or when a date field is reached.",
       "heading": "What else a collection can do",
       "key": "collections/2",
       "lesson": "collections",
       "position": 2
     },
     {
-      "body": "Every pod's notifications are rows of its `notifications` collection (decision `notifications-in-a-collection`), so\na layout lists them like any data and the agent can edit them. Collections provides the pod's notification store.",
+      "body": "Every pod's notifications are rows of its `notifications` collection (decision `notifications-in-a-collection`), so a layout lists them like any data and the agent can edit them. Collections provides the pod's notification store.",
       "heading": "Notifications live here",
       "key": "collections/3",
       "lesson": "collections",
@@ -414,49 +414,49 @@
       "position": 1
     },
     {
-      "body": "Posting photos crosses every piece: the device stages photos, the engine uploads them (`POST /v1/uploads`) and\nqueues the create, the pod claims the uploads, and the source posts them to Pixelfed, resuming after a restart\n([posting.md](https://github.com/aidanwolter3/the-construct/blob/main/docs/posting.md)).",
+      "body": "Posting photos crosses every piece: the device stages photos, the engine uploads them (`POST /v1/uploads`) and queues the create, the pod claims the uploads, and the source posts them to Pixelfed, resuming after a restart ([posting.md](https://github.com/aidanwolter3/the-construct/blob/main/docs/posting.md)).",
       "heading": "Posting",
       "key": "pixelfed/2",
       "lesson": "pixelfed",
       "position": 2
     },
     {
-      "body": "Events (`crates/source-events`) has no data of its own: it is the system collection `events`, each website the user\nwatches is a fetch filler, and each rule an alert. It ships the `events` core layout and the `matches` notification\nchannel.",
+      "body": "Events (`crates/source-events`) has no data of its own: it is the system collection `events`, each website the user watches is a fetch filler, and each rule an alert. It ships the `events` core layout and the `matches` notification channel.",
       "heading": "Events",
       "key": "events-agents-and-the-small-sources/1",
       "lesson": "events-agents-and-the-small-sources",
       "position": 1
     },
     {
-      "body": "Agents (`crates/source-agents`) mirrors an external **agent runner** that runs Claude Code on cloud sandboxes, over\nthe runner's protocol (CAP v3: a snapshot, a resumable event stream, actions). The pod owns the work (Tasks rows,\nschedules) and notifications; the runner owns the runs and their outcomes. It keeps its pod open to follow the\nstream ([agents.md](https://github.com/aidanwolter3/the-construct/blob/main/docs/agents.md)).",
+      "body": "Agents (`crates/source-agents`) mirrors an external **agent runner** that runs Claude Code on cloud sandboxes, over the runner's protocol (CAP v3: a snapshot, a resumable event stream, actions). The pod owns the work (Tasks rows, schedules) and notifications; the runner owns the runs and their outcomes. It keeps its pod open to follow the stream ([agents.md](https://github.com/aidanwolter3/the-construct/blob/main/docs/agents.md)).",
       "heading": "Agents",
       "key": "events-agents-and-the-small-sources/2",
       "lesson": "events-agents-and-the-small-sources",
       "position": 2
     },
     {
-      "body": "- **Shell** (`crates/source-shell`): layouts only. `shell`, the blank home; `settings`; and `inbox`.\n- **Monitor** (`crates/source-monitor`): the server's health counters and checks (feed `overview`, for pods the\n  operator turned it on for) and the user's devices with their builds (feed `devices`), with the `server_health`\n  core layout.\n- **Dates** (`crates/source-dates`): the days around today in the pod's time zone (`dates:today`,\n  `dates:this_week`, `dates:next_7`, …), so a layout that lists days needs no collection of dates. It tells devices\n  to reload at the pod's midnight.",
+      "body": "- **Shell** (`crates/source-shell`): layouts only. `shell`, the blank home; `settings`; and `inbox`.\n- **Monitor** (`crates/source-monitor`): the server's health counters and checks (feed `overview`, for pods the operator turned it on for) and the user's devices with their builds (feed `devices`), with the `server_health` core layout.\n- **Dates** (`crates/source-dates`): the days around today in the pod's time zone (`dates:today`, `dates:this_week`, `dates:next_7`, …), so a layout that lists days needs no collection of dates. It tells devices to reload at the pod's midnight.",
       "heading": "Shell, Monitor and Dates",
       "key": "events-agents-and-the-small-sources/3",
       "lesson": "events-agents-and-the-small-sources",
       "position": 3
     },
     {
-      "body": "```\n upstream ─poll─▶ source ── NewNotification{channel, title, body, target_uri}\n                                │\n        pod: store once (the notifications collection), channel on?\n                                ├─▶ `notification` event on open streams\n                                └─▶ Web Push to registered devices\n device: inbox, badge, OS notification ── tap ─▶ open its layout, then its target screen\n```",
+      "body": "```\nupstream\n   │ poll\n   ▼\nsource ── a notification:\n   │      channel, title,\n   │      body, target_uri\n   ▼\npod: stored once, in the\nnotifications collection\n   ├─▶ `notification` event\n   │   on open streams\n   └─▶ Web Push to devices\n          │\n          ▼\ndevice: inbox, badge, OS\nnotification ─ tap ─▶ its\nlayout, then its screen\n```",
       "heading": "The path",
       "key": "notifications-across-sources/1",
       "lesson": "notifications-across-sources",
       "position": 1
     },
     {
-      "body": "Only the source knows where a notification came from. The pod, the engine and the clients see a channel (\"Likes\"),\ntitle and body text, a `target_uri`, and the layout to present it in, which the pod picks: the first of the pod's\nlayouts with a screen whose route matches the target ([notifications.md](https://github.com/aidanwolter3/the-construct/blob/main/docs/notifications.md)).",
+      "body": "Only the source knows where a notification came from. The pod, the engine and the clients see a channel (\"Likes\"), title and body text, a `target_uri`, and the layout to present it in, which the pod picks: the first of the pod's layouts with a screen whose route matches the target ([notifications.md](https://github.com/aidanwolter3/the-construct/blob/main/docs/notifications.md)).",
       "heading": "Who knows what",
       "key": "notifications-across-sources/2",
       "lesson": "notifications-across-sources",
       "position": 2
     },
     {
-      "body": "`pod_core::jacks` defines `JackSpec {id, title, summary, kind}`, with `JackKind::Switch {default_on}`,\n`Config {fields}` and `Account {how}`. State is a row of the pod's `jacks` table; a host locks one with\n`jack.<id> = locked` in the pod's settings. Code asks `is_plugged(pod, id)` (or `config(store, id)` for a config\njack's values, secrets opened). Claude plugs jacks with MCP (`list_jacks`, `plug_jack`, `unplug_jack`); people do in\nSettings → Jacks.",
+      "body": "`pod_core::jacks` defines `JackSpec {id, title, summary, kind}`, with `JackKind::Switch {default_on}`, `Config {fields}` and `Account {how}`. State is a row of the pod's `jacks` table; a host locks one with `jack.<id> = locked` in the pod's settings. Code asks `is_plugged(pod, id)` (or `config(store, id)` for a config jack's values, secrets opened). Claude plugs jacks with MCP (`list_jacks`, `plug_jack`, `unplug_jack`); people do in Settings → Jacks.",
       "heading": "The interface",
       "key": "what-a-jack-is/1",
       "lesson": "what-a-jack-is",
@@ -470,14 +470,14 @@
       "position": 2
     },
     {
-      "body": "- `fetch`: a capped, conditional GET that skips unchanged pages.\n- `hosts::Hosts`: the host policy: spacing between requests, a daily cap per site, and a shared backoff after a site\n  blocks the pod.\n- Extractors (`items::extract`): `events` (iCalendar and schema.org events), `json`, `embedded-json`, `jsonld`,\n  `rss`, `ics`, `selectors` (CSS), with a small path language to map items to fields.\n- `render::Browser`: a headless Chromium for pages that only fill in with JavaScript.\n- `search`: the providers behind the `web_search` jack.\n- `tasks` and `tools`: model tasks over web content (extract rows, research a row, pick from results), built for the\n  agent module.",
+      "body": "- `fetch`: a capped, conditional GET that skips unchanged pages.\n- `hosts::Hosts`: the host policy: spacing between requests, a daily cap per site, and a shared backoff after a site blocks the pod.\n- Extractors (`items::extract`): `events` (iCalendar and schema.org events), `json`, `embedded-json`, `jsonld`, `rss`, `ics`, `selectors` (CSS), with a small path language to map items to fields.\n- `render::Browser`: a headless Chromium for pages that only fill in with JavaScript.\n- `search`: the providers behind the `web_search` jack.\n- `tasks` and `tools`: model tasks over web content (extract rows, research a row, pick from results), built for the agent module.",
       "heading": "Its parts",
       "key": "the-web-module/1",
       "lesson": "the-web-module",
       "position": 1
     },
     {
-      "body": "A feature builds a `Task::new(feature, tier, prompt)` with optional system text, a JSON schema for the answer, tools\nand a finishing tool, and calls `Agent::run(store, task)`. It gets an `Output {answer, finished, turns, …}` or an\n`AgentError` (`Unplugged`, `Budget`, `NoModel`, `Refused`, `CutOff`, `Failed`).",
+      "body": "A feature builds a `Task::new(feature, tier, prompt)` with optional system text, a JSON schema for the answer, tools and a finishing tool, and calls `Agent::run(store, task)`. It gets an `Output {answer, finished, turns, …}` or an `AgentError` (`Unplugged`, `Budget`, `NoModel`, `Refused`, `CutOff`, `Failed`).",
       "heading": "The interface",
       "key": "the-agent-module/1",
       "lesson": "the-agent-module",
@@ -491,42 +491,42 @@
       "position": 2
     },
     {
-      "body": "`mcp_connect {name, url}` connects a server: at once if it needs nothing, with a sealed token, or through an OAuth\nsign-in the user opens in a browser. The pod lists its tools and calls only those the server marks read-only (others\nonly when the user puts them on the server's allow list). A collection filler of kind `mcp` calls one on a schedule\nand maps its answer to rows. What a server answers is untrusted text.",
+      "body": "`mcp_connect {name, url}` connects a server: at once if it needs nothing, with a sealed token, or through an OAuth sign-in the user opens in a browser. The pod lists its tools and calls only those the server marks read-only (others only when the user puts them on the server's allow list). A collection filler of kind `mcp` calls one on a schedule and maps its answer to rows. What a server answers is untrusted text.",
       "heading": "How it works",
       "key": "the-pod-as-an-mcp-client/1",
       "lesson": "the-pod-as-an-mcp-client",
       "position": 1
     },
     {
-      "body": "- **In**: `dispatch(intent_json)` (what a tap does), `open_layout(id)`, `refresh`, `app_foregrounded`, sign-in\n  redirects, staged attachments, device and push registration.\n- **Out**: `subscribe(callback)` delivers immutable `StateSnapshot`s: the layout and every layout it reaches, entities\n  and queries, connectivity, pending count, sign-in state, notifications.\n- **Platform traits** a client implements: `SecureStore` (the keychain or keystore) and `UrlOpener` (the browser),\n  plus a notification listener.",
+      "body": "- **In**: `dispatch(intent_json)` (what a tap does), `open_layout(id)`, `refresh`, `app_foregrounded`, sign-in redirects, staged attachments, device and push registration.\n- **Out**: `subscribe(callback)` delivers immutable `StateSnapshot`s: the layout and every layout it reaches, entities and queries, connectivity, pending count, sign-in state, notifications.\n- **Platform traits** a client implements: `SecureStore` (the keychain or keystore) and `UrlOpener` (the browser), plus a notification listener.",
       "heading": "Its interface",
       "key": "the-engine/1",
       "lesson": "the-engine",
       "position": 1
     },
     {
-      "body": "- **The cache** (`cache.db`, SQLite): entities, data loads, construct objects, form values, notifications, so the\n  last screen shows at once on launch and offline.\n- **The outbox** (`action_outbox`): optimistic changes and their requests, written in one transaction, sent oldest\n  first, rolled back on a refusal, retried on failure. A refetch re-applies changes still pending, so nothing\n  flickers.\n- **The event stream**: `/v1/construct/events`, reconnecting with backoff and catching up on reconnect.\n- **Sign-in**: OAuth 2 with PKCE run by the engine itself, through a loopback port on desktop and an App Link on\n  Android. Upstream tokens stay on the pod; the device keeps only its pod session.",
+      "body": "- **The cache** (`cache.db`, SQLite): entities, data loads, construct objects, form values, notifications, so the last screen shows at once on launch and offline.\n- **The outbox** (`action_outbox`): optimistic changes and their requests, written in one transaction, sent oldest first, rolled back on a refusal, retried on failure. A refetch re-applies changes still pending, so nothing flickers.\n- **The event stream**: `/v1/construct/events`, reconnecting with backoff and catching up on reconnect.\n- **Sign-in**: OAuth 2 with PKCE run by the engine itself, through a loopback port on desktop and an App Link on Android. Upstream tokens stay on the pod; the device keeps only its pod session.",
       "heading": "Its parts",
       "key": "the-engine/2",
       "lesson": "the-engine",
       "position": 2
     },
     {
-      "body": "```\nlayout + entities + form, route, theme\n   │  layout: taffy flexbox; text shaped with cosmic-text (bundled fonts)\n   ▼\nScene { quads (rounded boxes), text runs, semantic tree }\n   │                              │\n   ▼                              ▼\ncpu: a signed-distance          gpu: wgpu, one instanced shader\nfunction per pixel              + glyphon text\n   ▼                              ▼\nPNG (simulator, previews)       a window, an Android surface, a canvas\n```",
+      "body": "```\nlayout + entities + form,\nroute, theme\n   │ layout: taffy flexbox,\n   │ text by cosmic-text\n   ▼\nScene: rounded quads, text\nruns, a semantic tree\n   │\n   ├─▶ cpu: a distance function\n   │   per pixel → PNG\n   └─▶ gpu: wgpu + glyphon →\n       window, surface, canvas\n```",
       "heading": "The pipeline",
       "key": "the-renderer/1",
       "lesson": "the-renderer",
       "position": 1
     },
     {
-      "body": "`Session` (in `interact`) holds what is open: the root layout (home), one back stack of presented layouts and\nscreens (pushed, sheets, panels, overlays, each animated), form values, scroll offsets and focus. It takes input\n(`tap`, `type_text`, `scroll_by`, gestures) and answers a scene. A new version of a layout replaces its tree where it\nis open, keeping open screens and scroll positions.",
+      "body": "`Session` (in `interact`) holds what is open: the root layout (home), one back stack of presented layouts and screens (pushed, sheets, panels, overlays, each animated), form values, scroll offsets and focus. It takes input (`tap`, `type_text`, `scroll_by`, gestures) and answers a scene. A new version of a layout replaces its tree where it is open, keeping open screens and scroll positions.",
       "heading": "The session",
       "key": "the-renderer/2",
       "lesson": "the-renderer",
       "position": 2
     },
     {
-      "body": "- **`Loader`**: how a session gets layouts and data and sends intents. `PodEngine` implements it over the engine; the\n  web client over `fetch`; the simulator over fixtures or a live pod.\n- **`Platform`**: what it asks of the operating system: the keyboard, safe-area insets, opening links, the clipboard,\n  picking photos, dark mode, notification permission. The desktop and Android apps implement it.",
+      "body": "- **`Loader`**: how a session gets layouts and data and sends intents. `PodEngine` implements it over the engine; the web client over `fetch`; the simulator over fixtures or a live pod.\n- **`Platform`**: what it asks of the operating system: the keyboard, safe-area insets, opening links, the clipboard, picking photos, dark mode, notification permission. The desktop and Android apps implement it.",
       "heading": "Its two interfaces",
       "key": "the-renderer/3",
       "lesson": "the-renderer",
@@ -540,35 +540,35 @@
       "position": 1
     },
     {
-      "body": "One layout serves every window: the pod never sends a different layout per size. A layout uses\n`${local://device#size_class}` (`compact`, `medium`, `expanded`), `max_width_dp` and grid columns to use the room.",
+      "body": "One layout serves every window: the pod never sends a different layout per size. A layout uses `${local://device#size_class}` (`compact`, `medium`, `expanded`), `max_width_dp` and grid columns to use the room.",
       "heading": "Screens of every size",
       "key": "the-clients/2",
       "lesson": "the-clients",
       "position": 2
     },
     {
-      "body": "| Job | Tools |\n|---|---|\n| Look around | `list_layouts`, `get_layout`, `find_elements`, `list_data_sources`, `sample_data`, `describe_vocabulary`, `guide` |\n| Build screens | `create_layout`, `update_layout` (whole or JSON Patch), `validate_layout`, `define_component`, `copy_component`, `set_theme`, `restore_version` |\n| Look at them | `render_layout_preview`, `dispatch_virtual_interaction`, `expand` |\n| Keep data | `define_collection`, `apply_change`, `edit_rows`, `add_row`, `describe_collection`, fillers (`collections_preview`, `collections_refresh`, `collections_status`), `undo_edit` |\n| Abilities | `list_jacks`, `plug_jack`, `mcp_connect`, `mcp_servers` |\n| Share | `publish`, `adopt`, `share_publicly`, `set_calendar_feed` |\n\nSources add their own (`agents_schedules`, `agents_link_tasks`). After the tool list changes, a Claude connector\nneeds \"Refresh tools list\".",
+      "body": "| Job | Tools |\n|---|---|\n| Look around | `list_layouts`, `get_layout`, `find_elements`, `list_data_sources`, `sample_data`, `describe_vocabulary`, `guide` |\n| Build screens | `create_layout`, `update_layout` (whole or JSON Patch), `validate_layout`, `define_component`, `copy_component`, `set_theme`, `restore_version` |\n| Look at them | `render_layout_preview`, `dispatch_virtual_interaction`, `expand` |\n| Keep data | `define_collection`, `apply_change`, `edit_rows`, `add_row`, `describe_collection`, fillers (`collections_preview`, `collections_refresh`, `collections_status`), `undo_edit` |\n| Abilities | `list_jacks`, `plug_jack`, `mcp_connect`, `mcp_servers` |\n| Share | `publish`, `adopt`, `share_publicly`, `set_calendar_feed` |\n\nSources add their own (`agents_schedules`, `agents_link_tasks`). After the tool list changes, a Claude connector needs \"Refresh tools list\".",
       "heading": "The tools by job",
       "key": "the-pods-mcp-server/1",
       "lesson": "the-pods-mcp-server",
       "position": 1
     },
     {
-      "body": "Validation (against home's feeds and the sources' manifests, with a JSON pointer to each error), history (every\nversion kept, `restore_version`), `warnings` (a hand-written piece a component already draws, fixed colours that won't\nfollow dark mode), and live delivery to every device.",
+      "body": "Validation (against home's feeds and the sources' manifests, with a JSON pointer to each error), history (every version kept, `restore_version`), `warnings` (a hand-written piece a component already draws, fixed colours that won't follow dark mode), and live delivery to every device.",
       "heading": "What every write gets",
       "key": "the-pods-mcp-server/2",
       "lesson": "the-pods-mcp-server",
       "position": 2
     },
     {
-      "body": "The MCP instructions (under 2,000 characters) give the procedure: see what exists (`list_layouts`,\n`find_elements`); use a core layout whole when one fits; otherwise compose components; make a component of anything\nwritten twice; look at the result with a preview; say what was missing with `note_gap`, which the server's operator\nreads. `guide {topic}` holds the detail per topic (navigation, pages, components, theme, actions, jacks, sharing,\nand one per source).",
+      "body": "The MCP instructions (under 2,000 characters) give the procedure: see what exists (`list_layouts`, `find_elements`); use a core layout whole when one fits; otherwise compose components; make a component of anything written twice; look at the result with a preview; say what was missing with `note_gap`, which the server's operator reads. `guide {topic}` holds the detail per topic (navigation, pages, components, theme, actions, jacks, sharing, and one per source).",
       "heading": "The procedure",
       "key": "how-an-agent-is-taught/1",
       "lesson": "how-an-agent-is-taught",
       "position": 1
     },
     {
-      "body": "A request about \"my groceries screen\" is about the element home reaches there, which may be the user's own copy of a\ncore layout. `reached` and `copy_of` on every layout make that visible (decision `trace-from-home`).",
+      "body": "A request about \"my groceries screen\" is about the element home reaches there, which may be the user's own copy of a core layout. `reached` and `copy_of` on every layout make that visible (decision `trace-from-home`).",
       "heading": "Trace from home",
       "key": "how-an-agent-is-taught/2",
       "lesson": "how-an-agent-is-taught",
@@ -582,7 +582,7 @@
       "position": 1
     },
     {
-      "body": "- **Unit and integration tests**: `cargo test --workspace`; each crate's integration tests are one binary,\n  `tests/integration/main.rs`, with a module per file.\n- **End to end** (`crates/e2e`): the pod and the engine in one process against the fake Pixelfed (or a real one),\n  through a proxy that can be cut to test offline behaviour.\n- **The simulator** (`construct-sim`): scripts like `click Like; assert-text Unlike; shot after` drive the real\n  renderer and write PNGs; CI runs the scenarios and pull requests embed the screenshots.\n- **Checks**: `cargo fmt`, `clippy -D warnings`, and scripts for decisions, test data (always made up) and old\n  names.",
+      "body": "- **Unit and integration tests**: `cargo test --workspace`; each crate's integration tests are one binary, `tests/integration/main.rs`, with a module per file.\n- **End to end** (`crates/e2e`): the pod and the engine in one process against the fake Pixelfed (or a real one), through a proxy that can be cut to test offline behaviour.\n- **The simulator** (`construct-sim`): scripts like `click Like; assert-text Unlike; shot after` drive the real renderer and write PNGs; CI runs the scenarios and pull requests embed the screenshots.\n- **Checks**: `cargo fmt`, `clippy -D warnings`, and scripts for decisions, test data (always made up) and old names.",
       "heading": "The layers",
       "key": "testing/1",
       "lesson": "testing",
@@ -596,7 +596,7 @@
       "position": 1
     },
     {
-      "body": "[CONTRIBUTING.md](https://github.com/aidanwolter3/the-construct/blob/main/CONTRIBUTING.md) for setup and checks, [layouts.md](https://github.com/aidanwolter3/the-construct/blob/main/docs/layouts.md) to write layouts,\n[testing.md](https://github.com/aidanwolter3/the-construct/blob/main/docs/testing.md) and [simulator.md](https://github.com/aidanwolter3/the-construct/blob/main/docs/simulator.md) to check a change, [server.md](https://github.com/aidanwolter3/the-construct/blob/main/docs/server.md) to run it.",
+      "body": "[CONTRIBUTING.md](https://github.com/aidanwolter3/the-construct/blob/main/CONTRIBUTING.md) for setup and checks, [layouts.md](https://github.com/aidanwolter3/the-construct/blob/main/docs/layouts.md) to write layouts, [testing.md](https://github.com/aidanwolter3/the-construct/blob/main/docs/testing.md) and [simulator.md](https://github.com/aidanwolter3/the-construct/blob/main/docs/simulator.md) to check a change, [server.md](https://github.com/aidanwolter3/the-construct/blob/main/docs/server.md) to run it.",
       "heading": "Where to go next",
       "key": "changing-things-safely/2",
       "lesson": "changing-things-safely",
@@ -1278,7 +1278,7 @@
       "key": "part-2",
       "number": 2,
       "position": 2,
-      "summary": "Five big pieces make up the system: the pod on its host, the sources and jacks inside it, the construct of layouts, the engine and renderer on each device, and the agent that builds.",
+      "summary": "A handful of big pieces make up the system: the pod on its host, the sources and jacks inside it, the construct of layouts, the engine and renderer on each device, and the agent that builds.",
       "title": "The big pieces",
       "url": "https://github.com/aidanwolter3/the-construct/blob/main/docs/design.md#part-2--the-big-pieces"
     },
