@@ -31,6 +31,25 @@ pub struct Viewport {
 
 /// When less stack than this is left, building or drawing a node moves to
 /// a fresh piece of [`STACK_GROWTH`] bytes.
+/// The deepest a node may sit once components are expanded. The pod caps
+/// each file and component nesting, but expanded trees can still run about
+/// a thousand deep; taffy's layout recurses per level, so a deeper node is
+/// left out rather than risk a stack overflow (a crash from one layout
+/// would repeat on every start).
+pub const MAX_BUILD_DEPTH: usize = 256;
+/// The most characters one `core://Text` draws (it is shaped on every
+/// layout pass): a page's text is far shorter, and the rest is cut.
+pub const MAX_TEXT_CHARS: usize = 20_000;
+
+/// `text` cut to [`MAX_TEXT_CHARS`] characters.
+pub fn cap_text(mut text: String) -> String {
+    if let Some((i, _)) = text.char_indices().nth(MAX_TEXT_CHARS) {
+        text.truncate(i);
+        text.push('…');
+    }
+    text
+}
+
 const STACK_RED_ZONE: usize = 256 * 1024;
 const STACK_GROWTH: usize = 4 * 1024 * 1024;
 
@@ -339,6 +358,8 @@ struct Build<'t, 'i> {
     reuse: Reuse,
     /// Each list item's element and its entity (scroll anchors).
     items: HashMap<usize, String>,
+    /// How deep the node being built sits ([`MAX_BUILD_DEPTH`]).
+    depth: usize,
 }
 
 /// What a frame was built against besides its entities and queries. A
@@ -490,6 +511,11 @@ impl SceneBuilder {
     /// they are (their nodes, bindings and measured layout), so a change to
     /// one row of a long list builds and measures that row only.
     pub fn relayout(&mut self, input: &Input, prev: Option<Laid>) -> Result<Laid, RenderError> {
+        if input.root.depth() > MAX_BUILD_DEPTH {
+            return Err(RenderError(format!(
+                "layout nested more than {MAX_BUILD_DEPTH} deep"
+            )));
+        }
         let now = self.clock.minute();
         let today = now.div_euclid(1_440);
         let env = Env::of(input, today);
@@ -523,6 +549,7 @@ impl SceneBuilder {
             adopted: HashSet::new(),
             reuse: Reuse::default(),
             items: HashMap::new(),
+            depth: 0,
         };
         let ctx = Ctx {
             entities: &input.data.entities,
@@ -1619,7 +1646,13 @@ impl<'i> Build<'_, 'i> {
         // One level of recursion per nested node, and `build_node` is one
         // large frame: components nest boxes in boxes, so a page 20 or 30
         // deep must not depend on how big its thread's stack happens to be.
-        let out = stacker::maybe_grow(STACK_RED_ZONE, STACK_GROWTH, || self.build_node(n, b))?;
+        if self.depth >= MAX_BUILD_DEPTH {
+            return None;
+        }
+        self.depth += 1;
+        let out = stacker::maybe_grow(STACK_RED_ZONE, STACK_GROWTH, || self.build_node(n, b));
+        self.depth -= 1;
+        let out = out?;
         let node = self.elems[out].node;
         let style = self.tree.style(node).cloned().unwrap_or_default();
         let _ = self
@@ -1809,6 +1842,7 @@ impl<'i> Build<'_, 'i> {
                         (None, _) => String::new(),
                     };
                 }
+                let mut text = cap_text(text);
                 let mut ty = type_for(*style);
                 if let Some(w) = weight {
                     ty.face = ty.face.with_weight(*w);
@@ -5036,6 +5070,16 @@ impl Laid {
 mod tests {
     use super::*;
     use crate::scene::{ImageRun, NO_CLIP};
+
+    #[test]
+    fn long_text_is_cut_on_a_character_boundary() {
+        let long = "é".repeat(MAX_TEXT_CHARS + 50);
+        let cut = cap_text(long);
+        assert_eq!(cut.chars().count(), MAX_TEXT_CHARS + 1);
+        assert!(cut.ends_with('…'));
+        let short = "a".repeat(MAX_TEXT_CHARS);
+        assert_eq!(cap_text(short.clone()), short);
+    }
 
     fn quad(rect: [f32; 4]) -> Draw {
         Draw::Quad(QuadInstance::fill(rect, Rgba::rgb(128, 128, 128), 0.0))

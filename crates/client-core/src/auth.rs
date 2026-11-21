@@ -16,7 +16,7 @@ use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::panic::{self, AssertUnwindSafe};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use base64::Engine;
@@ -181,57 +181,126 @@ impl SecureStore for MemoryStore {
     }
 }
 
-/// macOS login Keychain (generic password, service [`KeychainStore::SERVICE`],
-/// account = key) via the `keyring` crate.
-#[cfg(target_os = "macos")]
-pub struct KeychainStore;
+/// The OS credential store (macOS login Keychain, Windows Credential
+/// Manager, Linux Secret Service; generic password, service
+/// [`KeyringStore::SERVICE`], account = key) via the `keyring` crate.
+#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+pub struct KeyringStore;
 
-#[cfg(target_os = "macos")]
-impl KeychainStore {
+#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+impl KeyringStore {
     pub const SERVICE: &'static str = "org.theconstruct.client";
 
     fn entry(key: &str) -> Option<keyring::Entry> {
         keyring::Entry::new(Self::SERVICE, key)
-            .map_err(|e| eprintln!("[ConstructEngine] keychain: bad entry {key}: {e}"))
+            .map_err(|e| eprintln!("[ConstructEngine] keyring: bad entry {key}: {e}"))
             .ok()
+    }
+
+    /// The stored value; `Err` when the store itself can't be used (no
+    /// Secret Service running, locked, ...), `Ok(None)` when there is none.
+    pub fn read(key: &str) -> Result<Option<String>, String> {
+        let entry = Self::entry(key).ok_or("no entry")?;
+        match entry.get_password() {
+            Ok(v) => Ok(Some(v)),
+            Err(keyring::Error::NoEntry) => Ok(None),
+            Err(e) => Err(e.to_string()),
+        }
+    }
+
+    /// Stores `value`; whether the store took it.
+    pub fn write(key: &str, value: &str) -> bool {
+        match Self::entry(key).map(|e| e.set_password(value)) {
+            Some(Ok(())) => true,
+            Some(Err(e)) => {
+                eprintln!("[ConstructEngine] keyring: write {key} failed: {e}");
+                false
+            }
+            None => false,
+        }
+    }
+
+    /// Removes `key`; whether it is gone.
+    pub fn remove(key: &str) -> bool {
+        match Self::entry(key).map(|e| e.delete_credential()) {
+            Some(Ok(())) | Some(Err(keyring::Error::NoEntry)) => true,
+            Some(Err(e)) => {
+                eprintln!("[ConstructEngine] keyring: delete {key} failed: {e}");
+                false
+            }
+            None => false,
+        }
     }
 }
 
-#[cfg(target_os = "macos")]
-impl SecureStore for KeychainStore {
+#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+impl SecureStore for KeyringStore {
     fn get(&self, key: &str) -> Option<String> {
-        match Self::entry(key)?.get_password() {
-            Ok(v) => Some(v),
-            Err(keyring::Error::NoEntry) => None,
-            Err(e) => {
-                eprintln!("[ConstructEngine] keychain: read {key} failed: {e}");
-                None
+        Self::read(key)
+            .map_err(|e| eprintln!("[ConstructEngine] keyring: read {key} failed: {e}"))
+            .ok()
+            .flatten()
+    }
+    fn set(&self, key: &str, value: &str) {
+        Self::write(key, value);
+    }
+    fn delete(&self, key: &str) {
+        Self::remove(key);
+    }
+}
+
+/// The OS credential store, with a plainer store (a private file) behind
+/// it for machines that have none (a Linux box without a Secret Service).
+/// What the keyring takes never touches the fallback, and a value an
+/// earlier build left in the fallback moves into the keyring when it works.
+#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+pub struct KeyringOrFile {
+    fallback: Arc<dyn SecureStore>,
+}
+
+#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+impl KeyringOrFile {
+    pub fn new(fallback: Arc<dyn SecureStore>) -> Self {
+        Self { fallback }
+    }
+}
+
+#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+impl SecureStore for KeyringOrFile {
+    fn get(&self, key: &str) -> Option<String> {
+        match KeyringStore::read(key) {
+            Ok(Some(v)) => Some(v),
+            Ok(None) => {
+                // From before the keyring was used: move it in.
+                let old = self.fallback.get(key)?;
+                if KeyringStore::write(key, &old) {
+                    self.fallback.delete(key);
+                }
+                Some(old)
             }
+            Err(_) => self.fallback.get(key),
         }
     }
     fn set(&self, key: &str, value: &str) {
-        if let Some(entry) = Self::entry(key)
-            && let Err(e) = entry.set_password(value)
-        {
-            eprintln!("[ConstructEngine] keychain: write {key} failed: {e}");
+        if KeyringStore::write(key, value) {
+            self.fallback.delete(key);
+        } else {
+            self.fallback.set(key, value);
         }
     }
     fn delete(&self, key: &str) {
-        if let Some(entry) = Self::entry(key) {
-            match entry.delete_credential() {
-                Ok(()) | Err(keyring::Error::NoEntry) => {}
-                Err(e) => eprintln!("[ConstructEngine] keychain: delete {key} failed: {e}"),
-            }
-        }
+        KeyringStore::remove(key);
+        self.fallback.delete(key);
     }
 }
 
 /// The store used when the platform passes none: the Keychain on macOS,
-/// in-memory elsewhere (the session then lasts only for the process).
+/// in-memory elsewhere (the session then lasts only for the process). The
+/// desktop viewer picks its own ([`KeyringOrFile`] on Linux and Windows).
 pub fn default_secure_store() -> Box<dyn SecureStore> {
     #[cfg(target_os = "macos")]
     {
-        Box::new(KeychainStore)
+        Box::new(KeyringStore)
     }
     #[cfg(not(target_os = "macos"))]
     {

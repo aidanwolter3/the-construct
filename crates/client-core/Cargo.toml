@@ -22,9 +22,15 @@ tokio = { version = "1", features = ["rt", "time", "net"] }
 # rotation, scale it down and re-encode it as a JPEG without metadata.
 image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp", "gif"] }
 
-# Default SecureStore on macOS: the login Keychain. Never compiled for Android.
+# Default SecureStore on desktops: the macOS login Keychain, Windows
+# Credential Manager, or the Secret Service on Linux (GNOME Keyring, KWallet).
+# Never compiled for Android (its own Keystore bridge).
 [target.'cfg(target_os = "macos")'.dependencies]
 keyring = { version = "3.6", default-features = false, features = ["apple-native"] }
+[target.'cfg(target_os = "windows")'.dependencies]
+keyring = { version = "3.6", default-features = false, features = ["windows-native"] }
+[target.'cfg(target_os = "linux")'.dependencies]
+keyring = { version = "3.6", default-features = false, features = ["sync-secret-service", "crypto-rust", "vendored"] }
 
 [dev-dependencies]
 # tests/integration/outbox.rs runs the real server (in-process, random port).

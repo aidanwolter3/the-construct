@@ -60,7 +60,9 @@ the adopter's own reference.**
     publication's interface; the root's own bindings (home's feeds, its use site's `bind`) are dropped.
 - **Review.** Without `confirm` nothing is shared: the answer lists every element, the interface and each
   **flag**, literal text a person reads (titles, labels, `value_expr` once expressions are taken out) and every
-  URL, so personal words ("Dinner party · Sunday") or a private URL are seen before they go. The owner may leave
+  URL, so personal words ("Dinner party · Sunday") or a private URL are seen before they go. Every literal
+  string the owner's home binds into the root (`binding` flags) and every string of an input's suggested schema
+  (field defaults, options, titles: `schema` flags) is flagged too, wherever it sits. The owner may leave
   elements out (`leave_out`: the embed goes, or the node whose intent opened it). `confirm: <review_id>` (a hash
   of the copy's root, name and visibility) publishes exactly what was reviewed; anything changed since asks
   again.
