@@ -1500,6 +1500,8 @@ fn revoke_publication(pod: &Pod, args: &Value) -> Result<Value, Value> {
 
 /// `publish`: the review, or with `confirm` the publication.
 async fn publish(pod: &Pod, args: &Value) -> Result<Value, Value> {
+    // MAX_PUBLICATIONS is counted before the shelf write: one at a time.
+    let _one_at_a_time = pod.sharing.lock().await;
     let (p, a) = (pod.clone(), args.clone());
     tokio::task::spawn_blocking(move || publish_blocking(&p, &a))
         .await

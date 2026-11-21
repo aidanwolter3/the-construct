@@ -171,6 +171,11 @@ pub struct AppState {
     /// This pod's id on its host and the host's shelf of publications
     /// (decision `sharing`); unset: the pod can't share.
     shelf: std::sync::OnceLock<(String, Arc<dyn construct::share::Shelf>)>,
+    /// One change at a time to what the pod shares (calendar feeds,
+    /// publications): their caps are counted before the write, so two at
+    /// once could both pass, and a feed list saved by one would drop the
+    /// other's feed while its copy stays live.
+    pub(crate) sharing: tokio::sync::Mutex<()>,
 }
 
 /// Request header a pod host sets on a request whose bearer was an MCP
@@ -252,6 +257,7 @@ impl AppState {
                 util::hex(&buf)
             },
             shelf: std::sync::OnceLock::new(),
+            sharing: tokio::sync::Mutex::new(()),
         })
     }
 
