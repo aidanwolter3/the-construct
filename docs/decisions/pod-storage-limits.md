@@ -46,3 +46,12 @@ binds). A pod whose database is already larger keeps its size as the limit (SQLi
 need new pages are refused until something is deleted. The low-disk guard still covers only uploads and new temporary
 pods; with every pod capped, the 50 temporary pods together hold at most 800 MiB, which the 1 GB volume holds next to a
 few admin pods' everyday data.
+
+**Update (2026-11-21, issue #445): a total for temporary pods.** 800 MiB on a 1 GB volume left too little: about ten
+addresses could take every temporary slot, fill them, and push free space under `CONSTRUCT_MIN_FREE_DISK_BYTES`, which
+refuses uploads and OAuth registrations for everyone. Temporary pods now have a total
+(`CONSTRUCT_TEMP_POD_TOTAL_BYTES`, 400 MiB): a new one is made only while the live ones, each counted at its storage
+quota (the most it can grow to), stay under it, so the total holds however they grow. The quotas are smaller to keep 50
+slots: 8 MiB of database (a fresh pod with a tried layout and a few collections uses far less) and 6 MiB of uploads.
+Event streams got their cap too, at the host: per address, per pod, for temporary pods together and in total
+(`docs/server.md`, "Event streams").

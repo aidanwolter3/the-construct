@@ -404,7 +404,7 @@ async fn image_of(host: Arc<Host>, named: Named, q: Option<String>) -> Response 
             json!({ "error": "not_in_this_page" }),
         );
     }
-    pod_core::image_proxy::proxy(url).await
+    proxy_image(&host, &c.owner_pod, url).await
 }
 
 /// The cookie's token on a request the host may take it on: the web client
@@ -726,15 +726,37 @@ async fn image(State(host): State<Arc<Host>>, RawQuery(q): RawQuery, req: Reques
     let Some(token) = cookie_token(&host, req.headers()) else {
         return json_error(StatusCode::UNAUTHORIZED, json!({ "error": "unauthorized" }));
     };
-    if !matches!(
-        host.credential(&token).await,
-        Ok(Some((_, CredentialKind::Web)))
-    ) {
+    let Ok(Some((pod_id, CredentialKind::Web))) = host.credential(&token).await else {
         return json_error(StatusCode::UNAUTHORIZED, json!({ "error": "unauthorized" }));
-    }
+    };
     let Some(url) = pod_core::image_proxy::url_param(q) else {
         return json_error(StatusCode::BAD_REQUEST, json!({ "error": "invalid_url" }));
     };
+    proxy_image(&host, &pod_id, url).await
+}
+
+/// Images one pod's pages and clients may pass through the proxies per
+/// minute (`/web/image`, `/s/<link>/image` and the native clients'
+/// `/v1/image`, counted together).
+pub const IMAGES_PER_MINUTE: u32 = 120;
+
+/// Whether `pod` may pass one more image through a proxy now: every attempt
+/// counts, refused ones too.
+pub(crate) fn image_allowed(host: &Host, pod: &str) -> bool {
+    let ok = host.image_fetches.allow(pod);
+    if !ok {
+        pod_core::metrics::inc(pod_core::metrics::RATE_LIMITED, &[("limit", "web_image")]);
+    }
+    ok
+}
+
+/// A public `http(s)` image for `pod`'s page, passed on by
+/// [`pod_core::image_proxy::proxy`], at most [`IMAGES_PER_MINUTE`] tries per
+/// pod (429 `rate_limited`).
+async fn proxy_image(host: &Host, pod: &str, url: reqwest::Url) -> Response {
+    if !image_allowed(host, pod) {
+        return crate::rate_limited();
+    }
     pod_core::image_proxy::proxy(url).await
 }
 

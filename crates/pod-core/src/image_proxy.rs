@@ -5,7 +5,7 @@
 //! adopted layout; fetched here, the device never reaches its own network
 //! (LAN, loopback) for one, nor shows the site its address.
 //!
-//! Only `http(s)` to public hosts (names that resolve to private addresses
+//! Only `http(s)` to public hosts on their default port (names that resolve to private addresses
 //! are refused at connect time, [`crate::net::OutboundClient`]), only raster
 //! images, at most [`MAX_IMAGE_BYTES`].
 
@@ -65,15 +65,24 @@ pub fn url_param(q: Option<String>) -> Option<reqwest::Url> {
         .and_then(|u| reqwest::Url::parse(&u).ok())
 }
 
-/// A public `http(s)` image, passed on: public hosts only (names that
-/// resolve to private addresses are refused at connect time), images only,
-/// at most [`MAX_IMAGE_BYTES`].
+/// The proxies' one client (public websites, bodies capped at
+/// [`MAX_IMAGE_BYTES`]).
+fn client() -> &'static crate::net::OutboundClient {
+    static CLIENT: std::sync::OnceLock<crate::net::OutboundClient> = std::sync::OnceLock::new();
+    CLIENT.get_or_init(|| {
+        crate::net::OutboundClient::builder(Duration::from_secs(15))
+            .web()
+            .body_cap(MAX_IMAGE_BYTES)
+            .build()
+    })
+}
+
+/// A public `http(s)` image, passed on: public hosts on their default port
+/// only (names that resolve to private addresses are refused at connect
+/// time), images only, at most [`MAX_IMAGE_BYTES`].
 pub async fn proxy(url: reqwest::Url) -> Response {
-    let client = crate::net::OutboundClient::builder(Duration::from_secs(15))
-        .web()
-        .body_cap(MAX_IMAGE_BYTES)
-        .build();
-    if !client.allows(&url) {
+    let client = client();
+    if url.port().is_some() || !client.allows(&url) {
         return json_error(
             StatusCode::BAD_REQUEST,
             json!({ "error": "not_a_public_url" }),

@@ -10,7 +10,8 @@ use protocol::{ActionIntent, UiNode};
 use reqwest::{StatusCode, redirect};
 use serde_json::{Value, json};
 use server::PixelfedConfig;
-use server::host::{Host, HostConfig, PodKind, TemporaryPods};
+use server::host::streams::StreamLimits;
+use server::host::{Host, HostConfig, PodKind, StorageLimits, TemporaryPods};
 use sha2::{Digest, Sha256};
 use tokio::task::JoinHandle;
 
@@ -516,6 +517,104 @@ async fn temporary_pods_are_capped_and_swept() {
     assert_eq!(status, StatusCode::OK);
 }
 
+/// Issue #445: temporary pods together stay under a total size: each
+/// counts at its storage quota, so the live ones can never pass it.
+#[tokio::test]
+async fn temporary_pods_together_stay_under_a_total_size() {
+    const MIB: u64 = 1024 * 1024;
+    let env = env_with(HostConfig {
+        temporary: Some(TemporaryPods {
+            hours: 1,
+            max_live: 10,
+        }),
+        storage: StorageLimits {
+            min_free_disk_bytes: 0,
+            temporary_storage_quota_bytes: 4 * MIB,
+            temporary_total_bytes: 9 * MIB,
+            ..StorageLimits::default()
+        },
+        ..HostConfig::default()
+    })
+    .await;
+    for _ in 0..2 {
+        let (status, body) = post(&env.url("/v1/pods/temporary"), None, json!({})).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+    }
+    let (status, body) = post(&env.url("/v1/pods/temporary"), None, json!({})).await;
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{body}");
+    assert_eq!(body["error"], "temporary_pods_full");
+}
+
+/// Issue #445: a temporary pod can't sign in to an agent runner (the
+/// server would follow a host of the visitor's choosing).
+#[tokio::test]
+async fn a_temporary_pod_cannot_sign_in_to_an_agent_runner() {
+    let env = env_with(HostConfig {
+        temporary: Some(TemporaryPods {
+            hours: 1,
+            max_live: 2,
+        }),
+        ..HostConfig::default()
+    })
+    .await;
+    let (_, body) = post(&env.url("/v1/pods/temporary"), None, json!({})).await;
+    let token = body["session_token"].as_str().unwrap().to_owned();
+    let (status, body) = post(
+        &env.url(server::agents::SIGN_IN_PATH),
+        Some(&token),
+        json!({ "url": "https://runner.example", "token": "abc" }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+    assert_eq!(body["error"], "jack_locked", "{body}");
+    let jacks = tool(&env, &token, "list_jacks", json!({}))
+        .await
+        .to_string();
+    assert!(jacks.contains("agent_runner"), "{jacks}");
+}
+
+/// Issue #445: event streams are capped per client address (and per pod,
+/// for temporary pods together and in total), and a closed one frees its
+/// place.
+#[tokio::test]
+async fn event_streams_are_capped_per_address() {
+    let env = env_with(HostConfig {
+        streams: StreamLimits {
+            per_ip: 2,
+            ..StreamLimits::default()
+        },
+        ..HostConfig::default()
+    })
+    .await;
+    let token = env.create("streams").await;
+    let open = || {
+        client()
+            .get(env.url("/v1/construct/events"))
+            .bearer_auth(&token)
+            .send()
+    };
+    let a = open().await.unwrap();
+    assert_eq!(a.status(), StatusCode::OK);
+    let b = open().await.unwrap();
+    assert_eq!(b.status(), StatusCode::OK);
+    let refused = open().await.unwrap();
+    assert_eq!(refused.status(), StatusCode::TOO_MANY_REQUESTS);
+    let body: Value = refused.json().await.unwrap();
+    assert_eq!(body["error"], "too_many_streams");
+    drop(a);
+    // The server notices the closed stream on its next write.
+    let mut reopened = StatusCode::TOO_MANY_REQUESTS;
+    for _ in 0..50 {
+        reopened = open().await.unwrap().status();
+        if reopened == StatusCode::OK {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert_eq!(reopened, StatusCode::OK);
+    drop(b);
+}
+
 /// Who made a temporary pod is recorded (address, the caller's label, its
 /// User-Agent), and the pod can delete itself with its own token, freeing
 /// its slot and its files at once; an admin pod can't be deleted this way.
@@ -858,6 +957,8 @@ fn temporary_pods_fetch_nothing_and_ask_no_model() {
         pod_core::jacks::MODEL,
         pod_core::jacks::WEB,
         pod_core::jacks::WEB_SEARCH,
+        pod_core::jacks::MCP,
+        server::agents::JACK,
     ] {
         let key = format!("jack.{jack}");
         assert!(
@@ -1059,7 +1160,7 @@ async fn a_local_pod_keeps_the_codes_it_was_given() {
 }
 
 /// The native clients' image proxy (`GET /v1/image`, issue #443): a
-/// session only, and never the pod's own network.
+/// session only, never the pod's own network, and the per-pod limit.
 #[tokio::test]
 async fn the_native_image_proxy_needs_a_session_and_a_public_url() {
     let env = env().await;
@@ -1082,6 +1183,15 @@ async fn the_native_image_proxy_needs_a_session_and_a_public_url() {
     ] {
         assert_eq!(img(q, Some(&code)).await, StatusCode::BAD_REQUEST, "{q}");
     }
+    // It shares the web proxy's per-pod limit (issue #445): every try counts.
+    for _ in 3..server::host::web::IMAGES_PER_MINUTE {
+        let q = "http%3A%2F%2F127.0.0.1%2Fa.png";
+        assert_eq!(img(q, Some(&code)).await, StatusCode::BAD_REQUEST);
+    }
+    assert_eq!(
+        img("https%3A%2F%2Fexample.org%2Fa.png", Some(&code)).await,
+        StatusCode::TOO_MANY_REQUESTS
+    );
 }
 
 /// The web client's routes and cookie (decision `web-client`).
@@ -1460,6 +1570,11 @@ mod web {
             img("https%3A%2F%2Fexample.org%2Fa.png", None).await,
             StatusCode::UNAUTHORIZED
         );
+        // Only a host's default port.
+        assert_eq!(
+            img("https%3A%2F%2Fexample.org%3A25%2Fa.png", Some(&cookie)).await,
+            StatusCode::BAD_REQUEST
+        );
         // The pod's own network is out of reach.
         assert_eq!(
             img("http%3A%2F%2F127.0.0.1%3A8080%2Fhealthz", Some(&cookie)).await,
@@ -1469,6 +1584,26 @@ mod web {
             img("file%3A%2F%2F%2Fetc%2Fpasswd", Some(&cookie)).await,
             StatusCode::BAD_REQUEST
         );
+    }
+
+    /// Issue #445: the image proxy counts a pod's tries.
+    #[tokio::test]
+    async fn the_image_proxy_is_rate_limited_per_pod() {
+        let (env, _files) = web_env().await;
+        let code = env.create("many-images").await;
+        let cookie = open(&env, &code, true).await.1.unwrap();
+        let cookie = cookie.split(';').next().unwrap().to_owned();
+        let img = || {
+            client()
+                .get(env.url("/web/image?url=http%3A%2F%2F127.0.0.1%2Fa.png"))
+                .header("x-construct-client", "web")
+                .header("cookie", &cookie)
+                .send()
+        };
+        for _ in 0..server::host::web::IMAGES_PER_MINUTE {
+            assert_eq!(img().await.unwrap().status(), StatusCode::BAD_REQUEST);
+        }
+        assert_eq!(img().await.unwrap().status(), StatusCode::TOO_MANY_REQUESTS);
     }
 
     /// Calls a pod MCP tool with an MCP credential: its JSON answer.
@@ -2276,6 +2411,32 @@ mod web {
         let token = body["session_token"].as_str().unwrap().to_owned();
         let answer = tool(&env, &token, "share_publicly", json!({ "layout": "home" })).await;
         assert_eq!(answer["error"], "public_links_off", "{answer}");
+    }
+
+    /// Issue #445: a temporary pod can't claim a handle (`@claude`) or
+    /// publish under this server's name; an admin pod still can.
+    #[tokio::test]
+    async fn a_temporary_pod_cannot_take_a_handle_or_publish() {
+        let env = env_with(HostConfig {
+            temporary: Some(TemporaryPods {
+                hours: 1,
+                max_live: 2,
+            }),
+            ..HostConfig::default()
+        })
+        .await;
+        let (status, body) = post(&env.url("/v1/pods/temporary"), None, json!({})).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        let token = body["session_token"].as_str().unwrap().to_owned();
+        let answer = tool(&env, &token, "set_handle", json!({ "handle": "claude" })).await;
+        assert_eq!(answer["error"], "temporary_pod", "{answer}");
+        let answer = tool(&env, &token, "publish", json!({ "layout": "home" })).await;
+        assert_eq!(answer["error"], "temporary_pod", "{answer}");
+
+        env.create("admin").await;
+        let key = mcp_key(&env, "admin").await;
+        let answer = tool(&env, &key, "set_handle", json!({ "handle": "claude" })).await;
+        assert_eq!(answer["handle"], "@claude", "{answer}");
     }
 }
 

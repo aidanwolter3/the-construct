@@ -190,6 +190,9 @@ pub enum ShelfError {
     SlugTaken,
     /// The pod already keeps the most live public links it may.
     TooManyLinks,
+    /// A temporary pod (anyone can make one) may not claim a handle or
+    /// publish under this server's name.
+    TemporaryPod,
     Store(String),
 }
 
@@ -214,6 +217,10 @@ impl ShelfError {
                     "a pod keeps at most {} public links: unshare one first",
                     crate::public_copy::MAX_LIVE
                 ),
+            ),
+            ShelfError::TemporaryPod => refuse(
+                "temporary_pod",
+                "a temporary pod can't take a handle or publish: use a pod the server's admin made",
             ),
             ShelfError::Store(e) => refuse("shelf_error", e.clone()),
         }
@@ -243,6 +250,12 @@ pub trait Shelf: Send + Sync {
     /// Revoke the pod's live publication `name` (its objects leave the
     /// shelf); the revoked publication, if there was one.
     fn revoke(&self, pod: &str, name: &str) -> Result<Option<Publication>, ShelfError>;
+
+    /// Whether this pod may take a handle and publish (not a temporary pod,
+    /// which anyone can make).
+    fn may_publish(&self) -> bool {
+        true
+    }
 
     /// Whether the host serves public links (`CONSTRUCT_PUBLIC_WEB=1`,
     /// decision `public-web-links`).
@@ -1167,6 +1180,9 @@ fn set_handle(pod: &Pod, args: &Value) -> Result<Value, Value> {
         let h = shelf.handle(&me).map_err(|e| e.answer())?;
         return Ok(json!({ "handle": h.map(|h| format!("@{h}")) }));
     };
+    if !shelf.may_publish() {
+        return Err(ShelfError::TemporaryPod.answer());
+    }
     let h = h.trim_start_matches('@').to_ascii_lowercase();
     if !valid_handle(&h) {
         return Err(refuse(
@@ -1269,6 +1285,9 @@ async fn publish(pod: &Pod, args: &Value) -> Result<Value, Value> {
 
 fn publish_blocking(pod: &Pod, args: &Value) -> Result<Value, Value> {
     let (me, shelf) = shelf(pod)?;
+    if !shelf.may_publish() {
+        return Err(ShelfError::TemporaryPod.answer());
+    }
     let Some(handle) = shelf.handle(&me).map_err(|e| e.answer())? else {
         return Err(refuse(
             "no_handle",

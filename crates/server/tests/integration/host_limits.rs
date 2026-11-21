@@ -136,6 +136,7 @@ async fn each_pod_is_held_to_its_storage_quota() {
         min_free_disk_bytes: 0,
         pod_storage_quota_bytes: 16 * 1024 * KIB as u64,
         temporary_storage_quota_bytes: 2 * 1024 * KIB as u64,
+        ..StorageLimits::default()
     })
     .await;
     let (status, body) = env.temporary().await;

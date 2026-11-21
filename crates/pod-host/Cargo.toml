@@ -17,6 +17,8 @@ rusqlite.workspace = true
 axum = { version = "0.8", features = ["http2"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "sync", "time", "fs"] }
 tower = { version = "0.5", features = ["util"] }
+# streams.rs: an event stream holds its slot until its body ends.
+futures-util = { version = "0.3", default-features = false }
 tracing = "0.1"
 sha2 = "0.10"
 getrandom = "0.3"
