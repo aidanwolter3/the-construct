@@ -419,6 +419,13 @@ pub const STEPS: &[Step] = &[
              outcome    TEXT
          ) WITHOUT ROWID;",
     ),
+    // Issue #435: a device watch runs its action with the scope of the
+    // credential that made it; watches made before this are taken as an MCP
+    // credential's, the narrower scope.
+    Step::sql(
+        "device_watch_scope",
+        "ALTER TABLE device_watches ADD COLUMN scope TEXT NOT NULL DEFAULT 'mcp';",
+    ),
 ];
 
 /// Whether the old layout system's tables are still there (dropped by

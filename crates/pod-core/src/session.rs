@@ -32,6 +32,40 @@ pub const SESSION_HEADER: &str = "x-construct-session";
 /// ([`AppState::internal_caller`]).
 pub const INTERNAL_HEADER: &str = "x-construct-internal-as";
 
+/// What an internal request may do: it carries the scope of the credential
+/// that started it (issue #435), so a request an MCP credential started
+/// (a data sample, a preview's read, a device watch's action) can't do more
+/// than the credential could itself.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Scope {
+    /// Everything the session can do (started by the pod token's session).
+    Full,
+    /// What an MCP credential reaches: reads (`GET`), and only the actions
+    /// sources list in [`crate::SourceManifest::mcp_actions`] (ones its MCP
+    /// tools can already do). Nothing that acts upstream or changes jacks,
+    /// sign-ins or agents' runners.
+    Mcp,
+}
+
+impl Scope {
+    /// Its id in [`INTERNAL_HEADER`] and the store.
+    pub fn id(self) -> &'static str {
+        match self {
+            Scope::Full => "full",
+            Scope::Mcp => "mcp",
+        }
+    }
+
+    /// The scope `id` names; anything unknown is the narrower [`Scope::Mcp`].
+    pub fn parse(id: &str) -> Scope {
+        if id == "full" {
+            Scope::Full
+        } else {
+            Scope::Mcp
+        }
+    }
+}
+
 /// Default pod session lifetime (`CONSTRUCT_SESSION_TTL_DAYS`).
 pub const DEFAULT_SESSION_TTL_DAYS: i64 = 90;
 
@@ -204,7 +238,7 @@ impl AppState {
     pub async fn caller(self: &Pod, headers: &HeaderMap) -> Result<Caller, ApiError> {
         // An internal request on the owner's behalf (the MCP endpoint's data
         // samples): `<per-process secret>:<session hash>`, never from outside.
-        if let Some(hash) = self.internal_caller(headers) {
+        if let Some((hash, _)) = self.internal_caller(headers) {
             return self.caller_for_hash(hash).await;
         }
         let Some(token) = bearer(headers) else {

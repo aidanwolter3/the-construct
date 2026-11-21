@@ -225,6 +225,13 @@ pub const MANIFEST: SourceManifest = SourceManifest {
             doc: "Fill a collection's fillers now (a \"Refresh\" button): payload {} for every filler or {filler: id} for one; the rows update when the fill ends.",
         },
     ],
+    // What the MCP tools add_row, edit_rows and run_action already do.
+    mcp_actions: &[
+        "/v1/collections/{collection}/create",
+        "/v1/collections/{collection}/update",
+        "/v1/collections/{collection}/delete",
+        "/v1/collections/{collection}/actions/{action}",
+    ],
     entities: &[EntityDoc {
         uri: "collections://{collection}/{id}",
         doc: "A row of a collection: every field by name (see describe_collection), and the system fields; a ref field holds the id of the row it points at (read through it with ${collections://<target>/$item.<ref>#<field>}); a quantity field also as <name>_text (1 1/2 cups); a datetime field also as <name>_date (YYYY-MM-DD), <name>_time (7:30 PM) and <name>_text (Fri Nov 6 · 7:30 PM); with fillers filler_id and filler_title; with alerts alert_matched and alert_names. A filler is collections://{collection}/fillers/{id} (title, kind, url, state, detail, failing, alerts_text; refreshing: a fill of it is running, and clients are told when one starts and ends; can_check: false once an agent filled its fills_per_day times today, when POST /v1/collections/{collection}/refresh {filler} answers 429 checked_today), an alert collections://{collection}/alerts/{id} (name, summary, filler_id), listed under collection:{collection}:alerts.",
