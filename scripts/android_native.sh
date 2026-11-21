@@ -7,6 +7,10 @@
 #                                         # on the adb device (if one is connected) and started
 #   scripts/android_native.sh --release   # a release build (not debuggable), signed with the release key below;
 #                                         # built only, never installed
+#   scripts/android_native.sh --release --unsigned
+#                                         # the same, aligned but not signed (build/android-native/aligned.apk):
+#                                         # the release workflow signs it in a job that runs no cargo, with
+#                                         # scripts/android_sign.sh, which signs every build here too
 #
 # The app opens the pod it opened last (`pod.json` in the app's private files) with the engine (its cache there
 # too) and the saved sessions (the keystore), else the pod's sign-in screen (a pod code, or a temporary pod; the
@@ -29,13 +33,15 @@ cd "$(dirname "$0")/.."
 # The build id the client reports to the pod (decision `device-versions`).
 export CONSTRUCT_BUILD=${CONSTRUCT_BUILD:-$(scripts/build_id.sh 2>/dev/null || true)}
 
+usage() { echo "usage: $0 [--release [--unsigned]]" >&2; exit 2; }
 RELEASE=false
-case "${1:-}" in
+UNSIGNED=false
+case "$*" in
   "") ;;
   --release) RELEASE=true ;;
-  *) echo "usage: $0 [--release]" >&2; exit 2 ;;
+  "--release --unsigned") RELEASE=true; UNSIGNED=true ;;
+  *) usage ;;
 esac
-[[ $# -le 1 ]] || { echo "usage: $0 [--release]" >&2; exit 2; }
 PKG=org.theconstruct.android
 APP_LINK_HOST=$(tr '[:upper:]' '[:lower:]' <<<"${CONSTRUCT_APP_LINK_HOST:-the-construct-pod.fly.dev}" | tr -d '[:space:]')
 if ! [[ $APP_LINK_HOST =~ ^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$ ]]; then
@@ -151,29 +157,15 @@ KOTLIN_METADATA=$(grep -c 'has malformed kotlin.Metadata' "$D8LOG" || true)
 rm -f "$OUT"/apk/classes*.dex && cp "$OUT"/apk/dex/classes*.dex "$OUT/apk/"
 (cd "$OUT/apk" && zip -qr ../unsigned.apk lib classes*.dex)
 "$TOOLS/zipalign" -f -p 4 "$OUT/unsigned.apk" "$OUT/aligned.apk"
-KEY=$HOME/.android/debug.keystore
-if $RELEASE && [[ -n ${CONSTRUCT_ANDROID_KEYSTORE:-} ]]; then
-  : "${CONSTRUCT_ANDROID_KEYSTORE_PASSWORD:?the release keystore's password}"
-  : "${CONSTRUCT_ANDROID_KEY_ALIAS:?the release key's alias}"
-  # Passwords through the environment, so they never show in a process list.
-  KS_PASS=$CONSTRUCT_ANDROID_KEYSTORE_PASSWORD KEY_PASS=${CONSTRUCT_ANDROID_KEY_PASSWORD:-$CONSTRUCT_ANDROID_KEYSTORE_PASSWORD} \
-    "$TOOLS/apksigner" sign --ks "$CONSTRUCT_ANDROID_KEYSTORE" --ks-key-alias "$CONSTRUCT_ANDROID_KEY_ALIAS" \
-    --ks-pass env:KS_PASS --key-pass env:KEY_PASS --out "$OUT/construct-render.apk" "$OUT/aligned.apk"
-  echo "built $OUT/construct-render.apk (release, signed with $CONSTRUCT_ANDROID_KEY_ALIAS)"
-  "$TOOLS/apksigner" verify --print-certs "$OUT/construct-render.apk" | grep -i 'SHA-256 digest' || true
+if $UNSIGNED; then
+  echo "built $OUT/aligned.apk (release, unsigned: sign it with scripts/android_sign.sh --release)"
   exit 0
 fi
-if [[ ! -f $KEY ]]; then
-  mkdir -p "$(dirname "$KEY")"
-  keytool -genkeypair -keystore "$KEY" -storepass android -keypass android -alias androiddebugkey \
-    -dname "CN=Android Debug,O=Android,C=US" -keyalg RSA -validity 10000 >/dev/null
-fi
-"$TOOLS/apksigner" sign --ks "$KEY" --ks-pass pass:android --out "$OUT/construct-render.apk" "$OUT/aligned.apk"
 if $RELEASE; then
-  echo "WARNING: no CONSTRUCT_ANDROID_KEYSTORE: the release build is signed with the debug key" >&2
-  echo "built $OUT/construct-render.apk (release, debug key)"
+  scripts/android_sign.sh --release "$OUT/aligned.apk" "$OUT/construct-render.apk"
   exit 0
 fi
+scripts/android_sign.sh "$OUT/aligned.apk" "$OUT/construct-render.apk"
 echo "built $OUT/construct-render.apk"
 
 # adb from PATH, else the SDK's own (a shell alias doesn't reach this script).
