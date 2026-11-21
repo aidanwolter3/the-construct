@@ -157,8 +157,11 @@ a device on the server's build from one behind it or ahead of it. The web client
 `.github/workflows/release.yml` builds the release APK (`scripts/android_native.sh --release`: not debuggable) and the
 Mac app's `.dmg` on every tag `v<version>` and publishes them as a GitHub release (a manual run of the workflow
 uploads them as its artifacts). The version code is the workflow's run number, so each release installs over the
-previous one. The APK is signed with the release key from these repository secrets (without them, with a throwaway
-debug key and a warning):
+previous one. The APK is built unsigned (`scripts/android_native.sh --release --unsigned`) in a job that holds no
+signing secret, since it runs every dependency's build script and restores a cache; a second job that runs no cargo
+signs it with `scripts/android_sign.sh`, writing the keystore just before and deleting it right after. It is signed
+with the release key from these repository secrets (without them, and always on pull requests, with a throwaway debug
+key and a warning):
 
 | Secret | What |
 |---|---|
@@ -181,7 +184,8 @@ keytool -list -v -keystore construct-release.jks -alias construct | grep SHA256 
 `CONSTRUCT_ANDROID_CERT_SHA256` ([server.md](server.md)) so the release build's App Link sign-in redirect verifies;
 the workflow also prints it. To build a signed APK locally, set `CONSTRUCT_ANDROID_KEYSTORE` (the file),
 `CONSTRUCT_ANDROID_KEYSTORE_PASSWORD`, `CONSTRUCT_ANDROID_KEY_ALIAS` and `CONSTRUCT_ANDROID_KEY_PASSWORD` and run
-`scripts/android_native.sh --release`.
+`scripts/android_native.sh --release`, or sign an unsigned build apart with
+`scripts/android_sign.sh --release build/android-native/aligned.apk signed.apk`.
 
 ## Home and the layouts it shows
 
@@ -247,6 +251,19 @@ the upstream tokens. Clients hold only a pod session.
 - **Simulator:** an in-memory session and a scripted browser; see [simulator.md](simulator.md#live-mode).
 
 Signing out (or a 401 from the pod) removes cached private data from the device. More in [pixelfed.md](pixelfed.md).
+
+## What the engine checks itself
+
+The pod validates layouts (`validate.rs`), but an old layout, a component changed after it was checked, or a
+compromised pod would get past that alone, so the engine also refuses on its own (each refusal is logged):
+
+- **Requests stay on the pod.** A mutation's, create's or session's endpoint must be a path on the pod: one leading
+  `/`, no `//` or `\`, and `base URL + endpoint` keeps the pod's origin. Anything else (`.evil.example/x`,
+  `https://evil.example/x`) is not queued and changes nothing; a row already queued with such an endpoint is rolled
+  back without a request. The session and device headers go only to the pod.
+- **A new pod starts clean.** When `action.auth.session` (a pod code, a temporary pod) replaces a session the device
+  already has, the engine first deletes every queued action, the cached entities and screens and the construct, so
+  nothing queued for the first pod is sent with the second pod's session and nothing cached from it is shown there.
 
 ## App icon
 
