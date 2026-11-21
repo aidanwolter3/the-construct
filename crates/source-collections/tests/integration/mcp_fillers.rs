@@ -339,7 +339,14 @@ async fn an_oauth_mcp_server_fills_a_collection_and_refreshes_its_token() {
     assert_eq!(srv["server"]["state"], "connected", "{srv}");
     assert_eq!(srv["server"]["auth"], "oauth");
     assert_eq!(srv["server"]["tools"][0]["name"], "calendar_list_events");
-    assert!(srv["server"]["tools"][0]["input_schema"].is_object());
+    // The server's own text is marked as such (issue #439).
+    let schema = &srv["server"]["tools"][0]["input_schema"]["untrusted"];
+    assert!(schema["content"].is_object(), "{srv}");
+    assert_eq!(schema["from"], "127.0.0.1", "{srv}");
+    assert!(
+        srv["server"]["tools"][0]["description"]["untrusted"]["content"].is_string(),
+        "{srv}"
+    );
     assert!(
         !srv.to_string().contains("access-1") && !srv.to_string().contains("refresh-1"),
         "tokens are never shown back: {srv}"
@@ -352,8 +359,9 @@ async fn an_oauth_mcp_server_fills_a_collection_and_refreshes_its_token() {
         json!({"server": "cal", "tool": "calendar_list_events", "arguments": {"from": "2026-11-15"}}),
     )
     .await;
+    assert_eq!(r["result"]["untrusted"]["from"], "127.0.0.1", "{r}");
     assert_eq!(
-        r["result"]["events"][0]["title"], "Dinner at Juniper",
+        r["result"]["untrusted"]["content"]["events"][0]["title"], "Dinner at Juniper",
         "{r}"
     );
 
@@ -391,7 +399,11 @@ async fn an_oauth_mcp_server_fills_a_collection_and_refreshes_its_token() {
     assert_eq!(filler["arguments"]["to"], "{today+180}");
     let p = ok(&pod, "collections_preview", json!({"collection": "plans"})).await;
     assert_eq!(p["items"], 2, "{p}");
-    assert_eq!(p["rows"][1]["title"], "Hike with Robin");
+    assert_eq!(p["rows"]["untrusted"]["from"], "mcp:cal", "{p}");
+    assert_eq!(
+        p["rows"]["untrusted"]["content"][1]["title"],
+        "Hike with Robin"
+    );
 
     // The access token stops working: the pod refreshes it (rotating the
     // refresh token) and the call goes through.
@@ -402,7 +414,7 @@ async fn an_oauth_mcp_server_fills_a_collection_and_refreshes_its_token() {
         json!({"server": "cal", "tool": "calendar_list_events"}),
     )
     .await;
-    assert_eq!(r["result"]["count"], 2, "{r}");
+    assert_eq!(r["result"]["untrusted"]["content"]["count"], 2, "{r}");
     assert_eq!(*fake.refreshes.lock().unwrap(), 1);
     assert_eq!(*fake.refresh.lock().unwrap(), "refresh-2");
 
@@ -490,7 +502,7 @@ async fn a_token_server_connects_with_its_token() {
         json!({"server": "keyed", "tool": "calendar_list_events"}),
     )
     .await;
-    assert_eq!(r["result"]["count"], 2);
+    assert_eq!(r["result"]["untrusted"]["content"]["count"], 2);
     // A private URL is refused where private hosts aren't allowed.
     let strict: Pod = Arc::new(AppState::in_memory(vec![Arc::new(
         source_collections::CollectionsAdapter::new(),
