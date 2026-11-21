@@ -256,7 +256,7 @@ impl HostConfig {
             storage: StorageLimits::from_env(),
             streams: streams::StreamLimits::from_env(),
             hsts: var("FLY_APP_NAME").is_some(),
-            public_url: var("CONSTRUCT_PUBLIC_URL"),
+            public_url: pod_core::public_url_from_env(),
             android: app_links::AndroidAppLinks::from_env(),
             oauth_client: oauth::StaticClient::from_env(),
             web: web::WebConfig::from_env(),
@@ -845,6 +845,11 @@ impl Host {
             Ok(n) => tracing::info!(count = n, "idle MCP credentials deleted"),
             Err(e) => tracing::error!(error = %e, "sweep: cannot delete idle MCP credentials"),
         }
+        match self.store.delete_expired_web() {
+            Ok(0) => {}
+            Ok(n) => tracing::info!(count = n, "expired web credentials deleted"),
+            Err(e) => tracing::error!(error = %e, "sweep: cannot delete expired web credentials"),
+        }
         let expired = match self.store.expired_pods() {
             Ok(p) => p,
             Err(e) => {
@@ -1397,6 +1402,13 @@ fn set_prefix(headers: &mut HeaderMap, pod_id: &str) {
     }
 }
 
+/// Drops the headers only the host (or the pod itself) may set, from a
+/// request that came in from outside.
+fn strip_host_headers(headers: &mut axum::http::HeaderMap) {
+    headers.remove(pod_core::CREDENTIAL_HEADER);
+    headers.remove(pod_core::session::INTERNAL_HEADER);
+}
+
 /// Every request that is not the host's: to the bearer's pod (or the open
 /// pod), else the answer for a caller without a pod.
 async fn dispatch(State(host): State<Arc<Host>>, mut req: Request) -> Response {
@@ -1406,8 +1418,7 @@ async fn dispatch(State(host): State<Arc<Host>>, mut req: Request) -> Response {
         return r;
     }
     // Headers only the host (or the pod itself) may set.
-    req.headers_mut().remove(pod_core::CREDENTIAL_HEADER);
-    req.headers_mut().remove(pod_core::session::INTERNAL_HEADER);
+    strip_host_headers(req.headers_mut());
     let mut token = bearer(req.headers()).map(str::to_owned);
     // The web client's session cookie (decision `web-client`): taken only
     // with the web client on, from the web client, and only as a `web`
@@ -1823,7 +1834,7 @@ async fn public_route(
     // The host route's path parameters must not reach the pod's router.
     req.extensions_mut().clear();
     req.headers_mut().remove(header::AUTHORIZATION);
-    req.headers_mut().remove(pod_core::CREDENTIAL_HEADER);
+    strip_host_headers(req.headers_mut());
     set_prefix(req.headers_mut(), &pod_id);
     forward(&host, &open, &pod_id, keys, req).await
 }
@@ -1831,6 +1842,20 @@ async fn public_route(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn host_only_headers_are_stripped_from_outside_requests() {
+        let mut h = axum::http::HeaderMap::new();
+        h.insert(pod_core::CREDENTIAL_HEADER, "x".parse().unwrap());
+        h.insert(
+            pod_core::session::INTERNAL_HEADER,
+            "x:full:me".parse().unwrap(),
+        );
+        h.insert("x-other", "kept".parse().unwrap());
+        strip_host_headers(&mut h);
+        assert_eq!(h.len(), 1);
+        assert!(h.contains_key("x-other"));
+    }
 
     /// A route's own headers (an upload's `sandbox` CSP) are kept.
     #[tokio::test]
