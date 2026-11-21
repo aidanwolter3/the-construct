@@ -1465,9 +1465,15 @@ pub(crate) async fn mcp_rows(
         &today(pod.store(), now),
         &tz,
     );
-    let value = pod_core::mcp_servers::call_tool(pod, server, tool, &args)
-        .await
-        .map_err(|e| e.message)?;
+    let value = pod_core::mcp_servers::call_tool(
+        pod,
+        server,
+        tool,
+        &args,
+        pod_core::mcp_servers::Caller::Filler,
+    )
+    .await
+    .map_err(|e| e.message)?;
     let body = value.to_string();
     let hash = hash_of(body.as_bytes());
     let pairs: Vec<(String, String)> = map.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
