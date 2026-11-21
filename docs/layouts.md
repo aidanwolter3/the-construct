@@ -109,13 +109,17 @@ may still be written with it; prefer a `core://Page` for a new one.
 
 ## Screens of every size
 
-One layout serves every window (decision `screen-sizes`): the pod never sends a different layout per size, and the
-app never rearranges a layout on its own. A layout says how to use the room:
+One layout serves every window (decision `screen-sizes`): the pod never sends a different layout per size. A layout
+that doesn't adapt to the window draws at most 480 points wide, centred in the room it is given, so a phone layout
+stays phone-sized in a browser or a pane (decision `phone-width-layouts`). Using any of the following anywhere in a
+layout's own tree (not in the layouts it embeds) makes it adapt, and it gets the whole width to use as it says:
 
 - `max_width_dp` on a `core://Column` keeps a page readable on a desktop: at most that wide, centred.
 - `min_column_dp` on a `core://List` fills a grid with as many columns as fit.
 - `${local://device#size_class}` (`compact`, `medium`, `expanded`) with `core://Conditional` shows different
-  things by size; `width_dp` and `height_dp` are the window's size in points.
+  things by size; `width_dp` and `height_dp` are the window's size in points. A conditional on
+  `${local://device#platform}` (a fork for the `web`) counts too.
+- `panels: true` on an inline `core://Layout`.
 - `@core/two_pane` puts a list beside its detail on an `expanded` window.
 
 Check a layout at several sizes in the simulator (`--screen phone|tablet|desktop`, or `screen <size>` in a script)

@@ -139,6 +139,35 @@ const MAX_LIST_ITEMS: usize = 200;
 /// How deep inline layouts may nest.
 const MAX_EMBED_DEPTH: usize = 4;
 
+/// How wide a layout that doesn't adapt to the window draws at most
+/// (points): about a large phone's width, centred in the room it is given
+/// (decision `phone-width-layouts`).
+pub const PHONE_WIDTH_DP: f32 = 480.0;
+
+/// Whether a layout's own tree adapts to the window itself, so it may use
+/// all the width it is given: it tests `local://device` (its size, size
+/// class or platform), caps a column (`max_width_dp`), lays a list out in
+/// automatic columns (`min_column_dp`) or hosts panels. Layouts it embeds
+/// are not looked into: each answers for itself. Any other layout was
+/// written for a phone and draws at most [`PHONE_WIDTH_DP`] wide.
+pub fn adapts_to_window(root: &UiNode) -> bool {
+    let mut stack = vec![root];
+    while let Some(n) = stack.pop() {
+        let adapts = match n {
+            UiNode::Conditional { value, .. } => value.contains("local://device"),
+            UiNode::Column { max_width_dp, .. } => *max_width_dp > 0,
+            UiNode::List { min_column_dp, .. } => *min_column_dp > 0,
+            UiNode::Layout { panels, .. } => *panels,
+            _ => false,
+        };
+        if adapts {
+            return true;
+        }
+        stack.extend(n.children());
+    }
+    false
+}
+
 /// What a leaf measures.
 enum Leaf {
     Text {
@@ -324,10 +353,16 @@ pub struct SceneBuilder {
     /// The clock that `format` dates and `date` conditionals read (this
     /// device's, unless set).
     pub clock: crate::dates::Clock,
+    /// Draws the root at the whole width even when it doesn't adapt to the
+    /// window ([`adapts_to_window`]): for a bare node tree, not a layout
+    /// ([`SceneBuilder::build_from_spec`]).
+    pub whole_width: bool,
 }
 
 struct Build<'t, 'i> {
     today: i64,
+    /// [`SceneBuilder::whole_width`].
+    whole_width: bool,
     /// Now on the clock, in local minutes since the epoch.
     now: i64,
     /// The zone the clock reads in (`None`: this device's).
@@ -479,7 +514,11 @@ impl SceneBuilder {
             serde_json::from_value(spec.clone()).map_err(|e| RenderError(e.to_string()))?;
         let empty = BTreeMap::new();
         let data = DataBundle::default();
-        SceneBuilder::new().build(&Input {
+        SceneBuilder {
+            whole_width: true,
+            ..SceneBuilder::new()
+        }
+        .build(&Input {
             root: &root,
             data: &data,
             form: &empty,
@@ -533,6 +572,7 @@ impl SceneBuilder {
         let log = ReadLog::default();
         let mut b = Build {
             today,
+            whole_width: self.whole_width,
             now,
             zone: self.clock.zone.clone(),
             changes_at: None,
@@ -578,6 +618,11 @@ impl SceneBuilder {
             in_scroll: false,
         };
         let content = b.node(input.root, &state);
+        if let Some(c) = content
+            && !b.whole_width
+        {
+            b.phone_width(c, input.root);
+        }
         let [it, ir, ib, il] = input.insets.map(|v| length(v.max(0.0)));
         let root_style = Style {
             display: Display::Flex,
@@ -1480,6 +1525,21 @@ impl<'i> Build<'_, 'i> {
         }
     }
 
+    /// Draws layout element `i` at most [`PHONE_WIDTH_DP`] wide, centred,
+    /// unless the layout `l` adapts to the window itself.
+    fn phone_width(&mut self, i: usize, l: &UiNode) {
+        if adapts_to_window(l) {
+            return;
+        }
+        let node = self.elems[i].node;
+        let mut s = self.tree.style(node).cloned().unwrap_or_default();
+        s.max_size.width = length(PHONE_WIDTH_DP);
+        s.size.width = percent(1.0);
+        s.margin.left = auto();
+        s.margin.right = auto();
+        let _ = self.tree.set_style(node, s);
+    }
+
     /// An inline layout's content (`host`) with the panels open beside it
     /// ([`Panels`]): a row of the last [`PANEL_COLUMNS`] columns, a
     /// hairline between each two, each column as wide as the others.
@@ -1540,7 +1600,7 @@ impl<'i> Build<'_, 'i> {
                 in_scroll: false,
             };
             let col = match input.layouts.get(&p.layout) {
-                Some(l) => self.node(l, &pb),
+                Some(l) => self.node(l, &pb).inspect(|&c| self.phone_width(c, l)),
                 None => Some(self.placeholder(&format!("Layout {}", p.layout))),
             };
             if let Some(c) = col {
@@ -3341,7 +3401,7 @@ impl<'i> Build<'_, 'i> {
                             in_scroll: b.in_scroll && height_dp.is_none(),
                             ..b.child(format!("layout:{id}"), Axis::Column)
                         };
-                        self.node(l, &lb)
+                        self.node(l, &lb).inspect(|&k| self.phone_width(k, l))
                     }
                     None => Some(self.placeholder(&format!("Layout {id}"))),
                 };

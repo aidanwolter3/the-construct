@@ -34,7 +34,8 @@ Decision: **one layout serves every window and adapts when drawn, only as it ask
   component template isn't an edge of the construct (links are made references when a layout is written, before
   devices expand components).
 - No blueprint uses the new vocabulary yet; blueprints adopt it in new layout versions when we choose. Until
-  then nothing an existing pod draws changes, on any client.
+  then nothing an existing pod draws changes, on any client. (Since decision `phone-width-layouts`, a layout
+  that uses none of this draws at phone width on a wider window.)
 
 A row's narrow branch is a `core://Conditional` with `not: true` (feature `conditional_not`), so it needs no
 separate `compact` and `medium` branches.
