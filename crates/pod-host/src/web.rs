@@ -762,19 +762,17 @@ async fn image(State(host): State<Arc<Host>>, RawQuery(q): RawQuery, req: Reques
 /// resolve to private addresses are refused at connect time), images only,
 /// at most 10 MiB.
 async fn proxy_image(url: reqwest::Url) -> Response {
-    if !matches!(url.scheme(), "http" | "https")
-        || !pod_core::net::is_public_host(url.host_str().unwrap_or(""))
-    {
+    let client = pod_core::net::OutboundClient::builder(Duration::from_secs(15))
+        .web()
+        .body_cap(MAX_IMAGE_BYTES)
+        .build();
+    if !client.allows(&url) {
         return json_error(
             StatusCode::BAD_REQUEST,
             json!({ "error": "not_a_public_url" }),
         );
     }
-    let client = match pod_core::net::public_builder(Duration::from_secs(15)).build() {
-        Ok(c) => c,
-        Err(_) => return json_error(StatusCode::BAD_GATEWAY, json!({ "error": "fetch_failed" })),
-    };
-    let Ok(mut resp) = client.get(url).send().await else {
+    let Ok(resp) = client.get(url).send().await else {
         return json_error(StatusCode::BAD_GATEWAY, json!({ "error": "fetch_failed" }));
     };
     let kind = resp
@@ -786,14 +784,13 @@ async fn proxy_image(url: reqwest::Url) -> Response {
     if !resp.status().is_success() || !is_raster_image(&kind) {
         return json_error(StatusCode::BAD_GATEWAY, json!({ "error": "not_an_image" }));
     }
-    let mut bytes = Vec::new();
-    while let Ok(Some(chunk)) = resp.chunk().await {
-        if bytes.len() + chunk.len() > MAX_IMAGE_BYTES {
-            return json_error(StatusCode::BAD_GATEWAY, json!({ "error": "too_large" }));
+    match resp.bytes().await {
+        Ok(bytes) => image_response(&kind, bytes),
+        Err(e) if e.is_too_large() => {
+            json_error(StatusCode::BAD_GATEWAY, json!({ "error": "too_large" }))
         }
-        bytes.extend_from_slice(&chunk);
+        Err(_) => json_error(StatusCode::BAD_GATEWAY, json!({ "error": "fetch_failed" })),
     }
-    image_response(&kind, bytes)
 }
 
 /// An image type the proxy passes on: not SVG, a document that runs scripts

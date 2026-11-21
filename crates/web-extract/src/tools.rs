@@ -44,7 +44,7 @@ pub const MAX_FETCH_LINKS: usize = 40;
 pub struct Web {
     pub hosts: Arc<Hosts>,
     pub cache: Arc<SearchCache>,
-    pub client: reqwest::Client,
+    pub client: pod_core::net::OutboundClient,
     pub provider: Provider,
     pub allow_private: bool,
     /// What `web_fetch` may read: seed it with the request's text
