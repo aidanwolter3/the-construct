@@ -810,7 +810,9 @@ fn progress_round_trips_and_needs_its_feature() {
             size_dp: Some(20),
             value: None,
             max: None,
-            color: None
+            color: None,
+            shape: None,
+            label: None
         }
     );
     assert_eq!(serde_json::to_string(&parsed).unwrap(), wire);
@@ -822,7 +824,9 @@ fn progress_round_trips_and_needs_its_feature() {
             size_dp: None,
             value: None,
             max: None,
-            color: None
+            color: None,
+            shape: None,
+            label: None
         }
     );
     assert_eq!(

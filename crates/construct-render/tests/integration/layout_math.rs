@@ -448,3 +448,116 @@ fn a_progress_value_is_a_bar_filled_by_its_fraction() {
         ["progress", "progress_value"]
     );
 }
+
+/// Feature `progress_ring`: a `core://Progress` with `shape: Ring` is a
+/// circle `size_dp` across with its label in the middle, its arc running
+/// value / max of the way round from the top, read out with the label.
+#[test]
+fn a_progress_ring_is_a_circle_with_its_label_inside() {
+    let root: protocol::UiNode = serde_json::from_value(json!({
+    "type": "core://Row", "children": [
+        {"type": "core://Progress", "shape": "Ring", "value": "${x://w/1#done}", "max": 5,
+         "label": "${x://w/1#done}/5", "size_dp": 60}
+    ]}))
+    .unwrap();
+    let data: protocol::DataBundle = serde_json::from_value(json!({
+        "entities": {"x://w/1": {"done": 3}}, "queries": {}}))
+    .unwrap();
+    let vp = Viewport {
+        width: 390.0,
+        height: 200.0,
+        scale: 1.0,
+    };
+    let scene = build(&root, &data, &BTreeMap::new(), vp);
+    let ring = scene
+        .semantics
+        .iter()
+        .find(|n| n.node_type == "core://Progress" && n.text_content.as_deref() == Some("3/5, 60%"))
+        .expect("the ring reads its label and fraction");
+    let [rx, ry, rw, rh] = ring.bounds;
+    assert!(close(rw, 60.0) && close(rh, 60.0), "{:?}", ring.bounds);
+    let label = scene
+        .draws
+        .iter()
+        .find_map(|d| match d {
+            Draw::Text(t) => Some(t.rect),
+            _ => None,
+        })
+        .expect("the label");
+    let (lx, ly) = (label[0] + label[2] / 2.0, label[1] + label[3] / 2.0);
+    assert!(
+        (lx - (rx + 30.0)).abs() < 1.5 && (ly - (ry + 30.0)).abs() < 1.5,
+        "label centred: {label:?} in {:?}",
+        ring.bounds
+    );
+    // The arc: dots right of the centre (it starts at the top and runs
+    // clockwise past three o'clock at 60%), none at nine o'clock.
+    let dots: Vec<_> = scene
+        .draws
+        .iter()
+        .filter_map(|d| match d {
+            Draw::Quad(q) if q.rect[2] < 10.0 => Some(q.rect),
+            _ => None,
+        })
+        .collect();
+    assert!(dots.len() > 10, "{}", dots.len());
+    assert!(
+        dots.iter().any(|r| r[0] > rx + 50.0),
+        "reaches three o'clock"
+    );
+    assert!(
+        !dots
+            .iter()
+            .any(|r| r[0] < rx + 5.0 && (r[1] - (ry + 27.0)).abs() < 4.0),
+        "doesn't reach nine o'clock"
+    );
+    let mut feats = protocol::required_features(&root);
+    feats.retain(|f| f.starts_with("progress"));
+    assert_eq!(
+        feats.into_iter().collect::<Vec<_>>(),
+        ["progress", "progress_ring", "progress_value"]
+    );
+}
+
+/// Feature `count_sum`: a Text count with `sum` adds up a field over the
+/// counted entities, as a price and as a number; the count still counts.
+#[test]
+fn a_count_sum_totals_a_field_over_the_counted_entities() {
+    let text = |expr: &str| {
+        json!({"type": "core://Text", "style": "Body", "value_expr": expr,
+            "count": {"query_key": "bag", "where": [{"field": "in_bag", "equals": "true"}], "sum": "price"}})
+    };
+    let root: protocol::UiNode = serde_json::from_value(json!({
+    "type": "core://Column", "children": [
+        text("$count in bag · $sum_money"),
+        text("Total $sum"),
+    ]}))
+    .unwrap();
+    let data: protocol::DataBundle = serde_json::from_value(json!({
+        "entities": {
+            "x://o/1": {"in_bag": true, "price": 98},
+            "x://o/2": {"in_bag": true, "price": "1,200.5"},
+            "x://o/3": {"in_bag": true, "price": "ask"},
+            "x://o/4": {"in_bag": false, "price": 10}
+        },
+        "queries": {"bag": ["x://o/1", "x://o/2", "x://o/3", "x://o/4"]}}))
+    .unwrap();
+    let vp = Viewport {
+        width: 390.0,
+        height: 200.0,
+        scale: 1.0,
+    };
+    let scene = build(&root, &data, &BTreeMap::new(), vp);
+    let texts: Vec<_> = scene
+        .semantics
+        .iter()
+        .filter_map(|n| n.text_content.clone())
+        .collect();
+    assert!(
+        texts.contains(&"3 in bag · $1,298.50".to_owned()),
+        "{texts:?}"
+    );
+    assert!(texts.contains(&"Total 1298.5".to_owned()), "{texts:?}");
+    let feats = protocol::required_features(&root);
+    assert!(feats.contains(&"count_sum"), "{feats:?}");
+}
