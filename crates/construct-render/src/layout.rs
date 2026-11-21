@@ -176,6 +176,15 @@ enum Paint {
     Spinner {
         color: Rgba,
     },
+    /// A determinate ring (feature `progress_ring`): a quiet track round
+    /// the circle, `frac` of it in `color` clockwise from the top, `thick`
+    /// wide.
+    Ring {
+        frac: f32,
+        color: Rgba,
+        track: Rgba,
+        thick: f32,
+    },
     /// A placeholder in `placeholder`, the image over it once it has loaded.
     Image {
         url: String,
@@ -686,7 +695,10 @@ fn fills_width(n: &UiNode) -> bool {
         | UiNode::Page { .. }
         | UiNode::Dock { .. } => true,
         UiNode::Image { size_dp, .. } => size_dp.is_none(),
-        UiNode::Progress { value, .. } => value.is_some(),
+        // A bar takes the width; a ring is its own size.
+        UiNode::Progress { value, shape, .. } => {
+            value.is_some() && *shape != Some(protocol::ProgressShape::Ring)
+        }
         // Markdown's blocks (a code card, a table) span the width.
         UiNode::Text {
             markdown: true,
@@ -1784,7 +1796,16 @@ impl<'i> Build<'_, 'i> {
                     let n = self.count(c, &ctx);
                     text = match (n, &c.zero_text) {
                         (Some(0), Some(z)) => ctx.text(z),
-                        (Some(n), _) => text.replace("$count", &n.to_string()),
+                        (Some(n), _) => {
+                            // `$sum_money` before `$sum`, which it starts with.
+                            if let Some(field) = &c.sum {
+                                let total = self.sum_matching(c, field, &ctx);
+                                text = text
+                                    .replace("$sum_money", &money(total))
+                                    .replace("$sum", &plain_number(total));
+                            }
+                            text.replace("$count", &n.to_string())
+                        }
                         (None, _) => String::new(),
                     };
                 }
@@ -2967,6 +2988,8 @@ impl<'i> Build<'_, 'i> {
                 value: Some(value),
                 max,
                 color,
+                shape,
+                label,
             } => {
                 // A determinate bar (feature `progress_value`): the track as
                 // wide as it is given, the fill value / max of it.
@@ -2980,11 +3003,47 @@ impl<'i> Build<'_, 'i> {
                     Some(v) if max > 0.0 && v.is_finite() => (v / max).clamp(0.0, 1.0) as f32,
                     _ => 0.0,
                 };
-                let h = size_dp.map_or(6.0, f32::from);
                 let fill_color = color
                     .as_deref()
                     .and_then(|c| ctx.color(c))
                     .unwrap_or(theme.primary);
+                if *shape == Some(protocol::ProgressShape::Ring) {
+                    // A ring (feature `progress_ring`), its label centred.
+                    let d = size_dp.map_or(56.0, f32::from);
+                    let kids = match label.as_deref().map(|l| ctx.text(l)) {
+                        Some(t) if !t.is_empty() => {
+                            let ty = if d >= 48.0 {
+                                type_for(TextStyle::Label)
+                            } else {
+                                type_for(TextStyle::Caption)
+                            };
+                            vec![self.text_leaf(Style::default(), t, ty, self.fg(b), None)]
+                        }
+                        _ => Vec::new(),
+                    };
+                    let mut style = fixed(d, d);
+                    style.align_items = AlignItems::CENTER;
+                    style.justify_content = JustifyContent::CENTER;
+                    let i = self.push(
+                        style,
+                        kids,
+                        Paint::Ring {
+                            frac,
+                            color: fill_color,
+                            track: theme.surface_variant,
+                            thick: (d / 9.0).clamp(3.0, 10.0),
+                        },
+                        None,
+                        false,
+                    );
+                    let said = match label.as_deref().map(|l| ctx.text(l)) {
+                        Some(t) if !t.is_empty() => format!("{t}, {}%", (frac * 100.0).round()),
+                        _ => format!("{}%", (frac * 100.0).round()),
+                    };
+                    self.elems[i].sem = Some(self.sem(b, n, Some(said), None));
+                    return Some(i);
+                }
+                let h = size_dp.map_or(6.0, f32::from);
                 let fill = self.push(
                     Style {
                         size: Size {
@@ -3545,6 +3604,36 @@ impl<'i> Build<'_, 'i> {
         self.count_matching(&c.query_key, &c.where_, ctx)
     }
 
+    /// The total of `field` over the entities a count counts (feature
+    /// `count_sum`); values that aren't numbers count as 0.
+    fn sum_matching(&mut self, c: &protocol::TextCount, field: &str, ctx: &Ctx) -> f64 {
+        let Some(list) = ctx.query(&c.query_key) else {
+            return 0.0;
+        };
+        let wants = Where::of(&c.where_, ctx);
+        let (now, zone) = (self.now, self.zone.clone());
+        let mut next = None;
+        list.iter()
+            .filter_map(|u| ctx.entity(u))
+            .filter(|e| {
+                wants
+                    .iter()
+                    .all(|w| w.matches(e, now, zone.as_ref(), &mut next))
+            })
+            .filter_map(|e| match e.get(field)? {
+                Value::Number(n) => n.as_f64(),
+                Value::String(s) => s
+                    .trim()
+                    .trim_start_matches('$')
+                    .replace(',', "")
+                    .parse()
+                    .ok(),
+                _ => None,
+            })
+            .filter(|v: &f64| v.is_finite())
+            .sum()
+    }
+
     /// How many entities of `queries[query_key]` match every condition
     /// (`None` while the query is not loaded).
     fn count_matching(
@@ -3871,6 +3960,37 @@ impl<'a> Where<'a> {
 
 /// Whether a value reads as `want` (as [`render`] would write it), without
 /// writing it out for the common kinds.
+/// A number as a price (feature `count_sum`): `$98`, `$28.50`,
+/// `$1,299.95`, `-$4.20`, as the collections' `money()` writes it.
+fn money(v: f64) -> String {
+    let cents = (v.abs() * 100.0).round() as u64;
+    let (whole, part) = (cents / 100, cents % 100);
+    let digits = whole.to_string();
+    let mut grouped = String::new();
+    for (i, ch) in digits.chars().enumerate() {
+        if i > 0 && (digits.len() - i) % 3 == 0 {
+            grouped.push(',');
+        }
+        grouped.push(ch);
+    }
+    let sign = if v < 0.0 && cents > 0 { "-" } else { "" };
+    if part == 0 {
+        format!("{sign}${grouped}")
+    } else {
+        format!("{sign}${grouped}.{part:02}")
+    }
+}
+
+/// A number without a trailing `.0`, at most two decimals.
+fn plain_number(v: f64) -> String {
+    let r = (v * 100.0).round() / 100.0;
+    if r.fract() == 0.0 {
+        format!("{}", r as i64)
+    } else {
+        format!("{r}")
+    }
+}
+
 fn matches_text(v: &Value, want: &str) -> bool {
     match v {
         Value::String(s) => s == want,
@@ -4856,6 +4976,42 @@ impl Laid {
                     && y < clip[1] + clip[3]
                     && y + h > clip[1];
                 scene.spinning |= visible;
+            }
+            Paint::Ring {
+                frac,
+                color,
+                track,
+                thick,
+            } => {
+                // The track is a bordered circle; the arc is dots close
+                // enough to overlap, as for the spinner (quads can't draw an
+                // arc), with a round cap at each end.
+                let d = w.min(h);
+                let (cx, cy) = (x + w / 2.0, y + h / 2.0);
+                let mut t = QuadInstance::fill(
+                    [cx - d / 2.0, cy - d / 2.0, d, d],
+                    Rgba::TRANSPARENT,
+                    d / 2.0,
+                );
+                t = t.border(*track, *thick);
+                t.clip = clip;
+                scene.draws.push(Draw::Quad(t));
+                if *frac > 0.0 {
+                    let r = (d - thick) / 2.0;
+                    let around = std::f32::consts::TAU * r * frac;
+                    let dots = ((around / (thick / 3.0)).ceil() as usize).clamp(2, 720);
+                    for i in 0..dots {
+                        let a = (i as f32 / (dots - 1) as f32) * frac * std::f32::consts::TAU;
+                        let (px, py) = (cx + r * a.sin(), cy - r * a.cos());
+                        let mut q = QuadInstance::fill(
+                            [px - thick / 2.0, py - thick / 2.0, *thick, *thick],
+                            *color,
+                            thick / 2.0,
+                        );
+                        q.clip = clip;
+                        scene.draws.push(Draw::Quad(q));
+                    }
+                }
             }
             Paint::Switch { on, track, thumb } => {
                 // Material 3: off is an outlined track with a small grey

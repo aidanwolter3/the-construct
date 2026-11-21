@@ -23,8 +23,9 @@ pub const MAX_SIZE_DP: u16 = 512;
 pub const MIN_SWIPE_THRESHOLD_DP: u16 = 24;
 /// Most options in one `core://ChoiceChips`.
 pub const MAX_CHOICES: usize = 50;
-/// Most columns of a `core://List` grid.
-pub const MAX_COLUMNS: u16 = 6;
+/// Most columns of a `core://List` grid: 7, a week (decision
+/// `rings-sums-and-week-strips`).
+pub const MAX_COLUMNS: u16 = 7;
 /// A `core://List`'s narrowest and widest automatic column
 /// (`min_column_dp`, decision `screen-sizes`).
 pub const COLUMN_DP_RANGE: std::ops::RangeInclusive<u16> = 80..=1024;
@@ -591,8 +592,19 @@ fn check_values(node: &UiNode) -> Result<(), String> {
             )
         }
         UiNode::Progress {
-            size_dp: Some(s), ..
-        } => check_dp("progress size_dp", *s, MAX_SIZE_DP),
+            size_dp,
+            value,
+            shape,
+            ..
+        } => {
+            if *shape == Some(protocol::ProgressShape::Ring) && value.is_none() {
+                return Err("a progress ring needs a value (and usually a max)".into());
+            }
+            match size_dp {
+                Some(s) => check_dp("progress size_dp", *s, MAX_SIZE_DP),
+                None => Ok(()),
+            }
+        }
         UiNode::Text {
             value_expr,
             count,
@@ -856,6 +868,18 @@ fn check_values(node: &UiNode) -> Result<(), String> {
 /// fields, and is shown: the text has a `$count` (or a `zero_text`).
 fn check_count(value_expr: &str, count: &protocol::TextCount) -> Result<(), String> {
     check_where("text count", &count.query_key, &count.where_)?;
+    if let Some(field) = &count.sum {
+        if field.trim().is_empty() {
+            return Err("text count sum needs a field".into());
+        }
+        if !value_expr.contains("$sum") && count.zero_text.is_none() {
+            return Err(
+                "text count sum is set but value_expr has no $sum or $sum_money (e.g. \"Bag total $sum_money\")"
+                    .into(),
+            );
+        }
+        return Ok(());
+    }
     if !value_expr.contains("$count") && count.zero_text.is_none() {
         return Err("text count is set but value_expr has no $count (e.g. \"$count left\")".into());
     }
@@ -1671,6 +1695,15 @@ mod tests {
         assert!(check_values(&text(no_field, "$count")).is_err());
         let zero_only = json!({"query_key": "q", "zero_text": "All done"});
         assert_eq!(check_values(&text(zero_only, "Not done yet")), Ok(()));
+        // A total (feature `count_sum`) names a field and is written.
+        let total = json!({"query_key": "q", "sum": "price"});
+        assert_eq!(
+            check_values(&text(total.clone(), "Bag total $sum_money")),
+            Ok(())
+        );
+        assert!(check_values(&text(total, "Bag total")).is_err(), "no $sum");
+        let blank = json!({"query_key": "q", "sum": " "});
+        assert!(check_values(&text(blank, "$sum")).is_err());
         // A date format needs no check beyond its type.
         let dated = json!({"type": "core://Text", "style": "Body", "value_expr": "Due $item.due",
             "format": {"date": "Relative", "past": "Overdue"}});
@@ -1852,6 +1885,10 @@ mod tests {
         tall["height_dp"] = json!(9999);
         assert!(check_values(&p(tall)).is_err());
         assert_eq!(check_values(&p(json!({"type": "core://Progress"}))), Ok(()));
+        let ring = json!({"type": "core://Progress", "shape": "Ring", "value": "$count", "max": 5, "label": "$count/5"});
+        assert_eq!(check_values(&p(ring)), Ok(()));
+        let empty_ring = json!({"type": "core://Progress", "shape": "Ring"});
+        assert!(check_values(&p(empty_ring)).is_err());
         let sized = json!({"type": "core://Progress", "size_dp": 24});
         assert_eq!(check_values(&p(sized)), Ok(()));
         let huge = json!({"type": "core://Progress", "size_dp": 9999});
@@ -2025,7 +2062,10 @@ mod tests {
     fn list_grids_are_checked() {
         let ok = list(json!({"columns": 2, "spacing_dp": 12, "padding_h_dp": 12}));
         assert_eq!(check_values(&ok), Ok(()));
+        // A week fits one grid.
+        assert_eq!(check_values(&list(json!({"columns": 7}))), Ok(()));
         for bad in [
+            json!({"columns": 8}),
             json!({"columns": 40}),
             json!({"spacing_dp": 500}),
             json!({"padding_h_dp": 500}),

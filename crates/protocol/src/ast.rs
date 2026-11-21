@@ -591,6 +591,11 @@ pub enum UiNode {
     /// it is given, `size_dp` tall (default 6), filled `value / max` (max
     /// default 1, clamped to 0..1) in `color` (default the theme's primary)
     /// over a quiet track. `value` and `max` are numbers or bindings.
+    ///
+    /// With `shape: Ring` as well (feature `progress_ring`, decision
+    /// `rings-sums-and-week-strips`) the fraction is an arc round a circle
+    /// `size_dp` across (default 56), clockwise from the top, over a quiet
+    /// track, with `label` (bound text, e.g. `"5/5"`) in its middle.
     #[serde(rename = "core://Progress")]
     Progress {
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -601,6 +606,10 @@ pub enum UiNode {
         max: Option<serde_json::Value>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         color: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        shape: Option<ProgressShape>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        label: Option<String>,
     },
 
     // Feature `bars` (crates/protocol/features/bars.md)
@@ -1196,13 +1205,25 @@ pub enum DateTest {
     Future,
 }
 
+/// The shape of a determinate `core://Progress`: a bar (the default) or a
+/// ring (feature `progress_ring`).
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ProgressShape {
+    #[default]
+    Bar,
+    Ring,
+}
+
 /// `core://Text` `count` (feature `count`,
 /// docs/decisions/text-dates-and-counts.md): the number of entities of
 /// `queries[query_key]` that match every `where` (as a `core://List`'s
 /// [`ListWhere`]: `equals` may be `$form.<field>`, and a blank one matches
 /// everything) replaces each `$count` in `value_expr`. A count of 0 draws
 /// `zero_text` instead, when set. While the query is not loaded the text is
-/// empty.
+/// empty. With `sum` (a field name, feature `count_sum`) the same entities'
+/// values of that field are added up: `$sum_money` is the total as a price
+/// (`$518.84`, `$98`), `$sum` as a plain number; values that aren't numbers
+/// count as 0.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct TextCount {
     pub query_key: String,
@@ -1210,6 +1231,8 @@ pub struct TextCount {
     pub where_: Vec<ListWhere>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub zero_text: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sum: Option<String>,
 }
 
 /// `core://Conditional` `count` (feature `conditional_count`): the

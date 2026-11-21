@@ -12,8 +12,8 @@
 //!   `where.field` (or each `where[].field`); a list that also merges
 //!   `merge_query_keys` lists rows of each of their collections, so a
 //!   binding there need only name a field of one of them;
-//! - a `core://Text` or `core://Conditional` `count`'s `where[].field` when
-//!   its `query_key` is `collection:<c>`;
+//! - a `core://Text` or `core://Conditional` `count`'s `where[].field` (and
+//!   a Text count's `sum`) when its `query_key` is `collection:<c>`;
 //! - `${collections://<c>/<id>#<f>}` (`…/fillers/<id>#<f>` and
 //!   `…/alerts/<id>#<f>` name a filler's or an alert's own fields instead);
 //! - a mutation of `collections://<c>/...` (or of `$item.uri` in such a
@@ -260,6 +260,12 @@ impl<'a> Checker<'a> {
                         self.bindable(&format!("{at}/where/{i}/field"), def, f, "the count")?;
                     }
                 }
+            }
+            // A count's total (feature `count_sum`) names a field too.
+            if !map.contains_key("item_template")
+                && let Some(f) = map.get("sum").and_then(Value::as_str)
+            {
+                self.bindable(&format!("{at}/sum"), def, f, "the sum")?;
             }
         }
         let inner: Rows<'_, 'a> = if row_list {
@@ -662,6 +668,18 @@ mod tests {
         assert_eq!(check(&cond("done"), &[], &defs()), Ok(()));
         let e = check(&cond("finished"), &[], &defs()).unwrap_err();
         assert_eq!(e.pointer, "/count/where/0/field");
+    }
+
+    #[test]
+    fn a_count_sum_must_name_a_field() {
+        let total = |field: &str| {
+            json!({"type": "core://Text", "style": "Label", "value_expr": "Total $sum_money",
+                "count": {"query_key": "collection:todos", "sum": field}})
+        };
+        assert_eq!(check(&total("title"), &[], &defs()), Ok(()));
+        let e = check(&total("price"), &[], &defs()).unwrap_err();
+        assert_eq!(e.pointer, "/count/sum");
+        assert!(e.message.contains("the sum names 'price'"), "{}", e.message);
     }
 
     #[test]

@@ -19,8 +19,8 @@ pub use ast::{
     Align, BorderStyle, ButtonSize, ButtonStyle, CAPS_TRACKING, ChoiceOption, DateFormat, DateTest,
     DockTab, DrawerPage, EmbedPresentation, GroupBy, ICON_PATH_PREFIX, ICONS, ImageShape, Indent,
     Justify, ListBinding, ListFilter, ListFocus, ListWhere, MAX_ICON_PATH, MAX_TEXT_LINES,
-    NODE_TYPES, Orientation, PageScreen, QueryCount, Screen, SlotSpec, TextCount, TextFormat,
-    TextStyle, TextWeight, Tone, UiNode, WhereClause, icon_path,
+    NODE_TYPES, Orientation, PageScreen, ProgressShape, QueryCount, Screen, SlotSpec, TextCount,
+    TextFormat, TextStyle, TextWeight, Tone, UiNode, WhereClause, icon_path,
 };
 pub use build::{
     BUILD_HEADER, BuildId, DEVICE_NAME_HEADER, PLATFORMS, build, build_header, parse_build_header,

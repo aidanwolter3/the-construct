@@ -209,6 +209,9 @@ fn node_features(node: &UiNode, out: &mut BTreeSet<&'static str>) {
                 if c.where_.iter().any(ListWhere::uses_age) {
                     add(feature::LIST_WHERE_AGE);
                 }
+                if c.sum.is_some() {
+                    add(feature::COUNT_SUM);
+                }
             }
             // `weight`, `caps`, `max_lines`, `strike` and `markdown`
             // (feature::TEXT_WEIGHT, TEXT_CAPS, TEXT_MAX_LINES,
@@ -360,10 +363,13 @@ fn node_features(node: &UiNode, out: &mut BTreeSet<&'static str>) {
         }
         UiNode::MediaPicker { .. } => add(feature::MEDIA_PICKER),
         UiNode::Sticky { .. } => add(feature::STICKY),
-        UiNode::Progress { value, .. } => {
+        UiNode::Progress { value, shape, .. } => {
             add(feature::PROGRESS);
             if value.is_some() {
                 add(feature::PROGRESS_VALUE);
+                if *shape == Some(crate::ProgressShape::Ring) {
+                    add(feature::PROGRESS_RING);
+                }
             }
         }
         UiNode::Bars { where_, merge, .. } => {
