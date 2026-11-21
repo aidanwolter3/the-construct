@@ -45,6 +45,12 @@ pub fn is_public_host(host: &str) -> bool {
     )
 }
 
+/// Whether `port` (None: the scheme's default) is 80 or 443, the ports a
+/// user-chosen web host may be called on.
+fn is_web_port(_scheme: &str, port: Option<u16>) -> bool {
+    matches!(port, None | Some(80) | Some(443))
+}
+
 /// An `https://<public host>` URL (default port; no IP literal).
 pub fn is_public_https(url: &reqwest::Url) -> bool {
     url.scheme() == "https" && url.port().is_none() && url.host_str().is_some_and(is_public_host)
@@ -68,6 +74,8 @@ pub fn is_public_ip(ip: IpAddr) -> bool {
                 || (s[0] & 0xffc0) == 0xfec0 // site-local (deprecated)
                 || (s[0] == 0x2001 && s[1] == 0x0db8) // documentation
                 || (s[0] == 0x0064 && s[1] == 0xff9b) // NAT64: embeds an IPv4 address
+                || (s[0] == 0x0100 && s[1] == 0 && s[2] == 0 && s[3] == 0) // discard 100::/64
+                || (s[0] == 0x2001 && s[1] == 0) // Teredo 2001::/32: embeds an IPv4 address
                 || s[0] == 0 // ::/16 (IPv4-compatible and other reserved)
                 || s[0] == 0x2002) // 6to4: embeds an IPv4 address
         }
@@ -86,6 +94,7 @@ fn is_public_v4(ip: Ipv4Addr) -> bool {
         || a == 0
         || (a == 100 && (64..128).contains(&b)) // CGNAT 100.64/10
         || (a == 192 && b == 0 && c == 0) // 192.0.0/24
+        || (a == 192 && b == 88 && c == 99) // 6to4 relay 192.88.99/24
         || (a == 198 && (b == 18 || b == 19)) // benchmarking 198.18/15
         || a >= 240) // reserved
 }
@@ -198,7 +207,9 @@ impl OutboundBuilder {
         self
     }
 
-    /// Web pages: `http://` and any port too (still public names only).
+    /// Web pages: `http://` too, on ports 80 and 443 only (still public
+    /// names only; [`OutboundClient::allowing_origin`] adds one a jack's
+    /// config names).
     /// Without it a URL must be `https://` on the default port.
     pub fn web(mut self) -> Self {
         self.web = true;
@@ -269,6 +280,7 @@ impl OutboundBuilder {
             private,
             web: self.web,
             cap: self.cap,
+            origins: Vec::new(),
         }
     }
 }
@@ -286,6 +298,8 @@ pub struct OutboundClient {
     private: bool,
     web: bool,
     cap: usize,
+    /// `(host, port)` pairs a jack's config named, allowed on any port.
+    origins: Vec<(String, u16)>,
 }
 
 impl std::fmt::Debug for OutboundClient {
@@ -322,9 +336,30 @@ impl OutboundClient {
         }
         if self.web {
             url.host_str().is_some_and(is_public_host)
+                && (is_web_port(url.scheme(), url.port())
+                    || url
+                        .port_or_known_default()
+                        .zip(url.host_str())
+                        .is_some_and(|(p, h)| {
+                            self.origins
+                                .iter()
+                                .any(|(oh, op)| oh.eq_ignore_ascii_case(h) && *op == p)
+                        }))
         } else {
             is_public_https(url)
         }
+    }
+
+    /// A copy that also allows `base`'s port, for an address a jack's config
+    /// names (a SearXNG instance on its own port). Public names only still.
+    pub fn allowing_origin(&self, base: &str) -> Self {
+        let mut c = self.clone();
+        if let Ok(u) = reqwest::Url::parse(base.trim())
+            && let (Some(h), Some(p)) = (u.host_str(), u.port_or_known_default())
+        {
+            c.origins.push((h.to_owned(), p));
+        }
+        c
     }
 
     /// `url` parsed, if this client may call it.
@@ -578,7 +613,23 @@ mod tests {
         ] {
             assert!(!ok(&https, bad), "{bad}");
         }
-        assert!(ok(&web, "http://news.example:8080/a"));
+        assert!(ok(&web, "http://news.example/a"));
+        assert!(ok(&web, "http://news.example:80/a"));
+        assert!(ok(&web, "https://news.example:443/a"));
+        assert!(ok(&web, "http://news.example:443/a"));
+        for bad in [
+            "http://news.example:8080/a",
+            "https://news.example:8443/",
+            "http://news.example:22/",
+        ] {
+            assert!(!ok(&web, bad), "{bad}");
+        }
+        // A jack's configured address keeps its own port.
+        let searx = web.allowing_origin("https://s.example:8443/");
+        assert!(ok(&searx, "https://s.example:8443/search?q=x"));
+        assert!(!ok(&searx, "https://s.example:9000/search"));
+        assert!(!ok(&searx, "https://other.example:8443/"));
+        assert!(!ok(&web, "https://s.example:8443/search"));
         assert!(!ok(&web, "http://10.0.0.1/"));
         assert!(ok(&private, "http://127.0.0.1:9/x"));
         assert!(!ok(&private, "file:///etc/passwd"));
@@ -626,5 +677,16 @@ mod tests {
         assert!(!is_public_ip("10.1.2.3".parse().unwrap()));
         assert!(!is_public_ip("fdaa::1".parse().unwrap()));
         assert!(!is_public_ip("::ffff:127.0.0.1".parse().unwrap()));
+        for bad in [
+            "2001:0:4136:e378:8000:63bf:3fff:fdd2",
+            "192.88.99.1",
+            "100::1",
+            "100::ffff:1",
+        ] {
+            assert!(!is_public_ip(bad.parse().unwrap()), "{bad}");
+        }
+        for good in ["2001:4860:4860::8888", "100:0:0:1::1", "2606:4700::1111"] {
+            assert!(is_public_ip(good.parse().unwrap()), "{good}");
+        }
     }
 }

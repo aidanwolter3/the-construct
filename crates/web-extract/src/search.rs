@@ -137,6 +137,15 @@ impl Provider {
         }
     }
 
+    /// `client`, also allowed the port of a SearXNG `base_url` (the one
+    /// address a user's config may put on a port other than 80 or 443).
+    fn client(&self, client: &pod_core::net::OutboundClient) -> pod_core::net::OutboundClient {
+        match self {
+            Self::Searxng { base_url } => client.allowing_origin(base_url),
+            _ => client.clone(),
+        }
+    }
+
     /// The request URL and headers for `query`.
     fn request(
         &self,
@@ -513,6 +522,7 @@ pub async fn search(
         return Ok(hit.into_iter().take(count).collect());
     }
     let (url, headers) = provider.request(&q, count)?;
+    let client = &provider.client(client);
     let fetched = crate::hosts::fetch(hosts, client, &url, None, None, &headers)
         .await
         .map_err(|e| match provider {
@@ -548,6 +558,7 @@ pub async fn search_images(
         return Ok(hit.into_iter().take(count).collect());
     }
     let (url, headers) = provider.image_request(&q, MAX_RESULTS)?;
+    let client = &provider.client(client);
     let fetched = crate::hosts::fetch(hosts, client, &url, None, None, &headers)
         .await
         .map_err(|e| match provider {
