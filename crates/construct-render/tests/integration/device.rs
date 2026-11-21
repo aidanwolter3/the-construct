@@ -28,6 +28,10 @@ fn text(s: &str) -> Value {
 struct Pod {
     commands: Arc<Mutex<Vec<(String, Value)>>>,
     refuse: bool,
+    /// The platform's own servers: id, url, and whether it is open now.
+    servers: Vec<(&'static str, &'static str, bool)>,
+    /// The sign-ins it was asked to start.
+    signs_in: Arc<Mutex<Vec<Value>>>,
 }
 
 impl Loader for Pod {
@@ -59,6 +63,16 @@ impl Loader for Pod {
             result: Err("/v1/g/update: HTTP 400 Bad Request".into()),
             refreshed: Vec::new(),
         });
+        true
+    }
+    fn server(&self, id: &str) -> Option<(String, bool)> {
+        self.servers
+            .iter()
+            .find(|(i, _, _)| *i == id)
+            .map(|(_, url, current)| (url.to_string(), *current))
+    }
+    fn auth(&self, intent: &Value) -> bool {
+        self.signs_in.lock().unwrap().push(intent.clone());
         true
     }
 }
@@ -233,28 +247,172 @@ fn hiding_deleting_and_pinning_layouts_are_not_sent() {
     assert!(s.scene().unwrap().find_text("groceries latest").is_some());
 }
 
-#[test]
-fn set_server_asks_the_platform_for_another_server() {
-    let d = json!({ "entities": {
+fn servers_pod() -> Pod {
+    Pod {
+        servers: vec![
+            ("staging", "https://pod.example", true),
+            ("local", "http://127.0.0.1:8080", false),
+        ],
+        ..Pod::default()
+    }
+}
+
+/// The servers as the device shows them (`local:servers`).
+fn servers_data() -> Value {
+    json!({ "entities": {
         "local://servers/staging": { "id": "staging", "title": "Staging",
             "url": "https://pod.example", "selected": true },
         "local://servers/local": { "id": "local", "title": "Local",
             "url": "http://127.0.0.1:8080", "selected": false } },
-        "queries": { "local:servers": ["local://servers/staging", "local://servers/local"] } });
-    let mut s = session(text("Settings"), d, Pod::default());
+        "queries": { "local:servers": ["local://servers/staging", "local://servers/local"] } })
+}
+
+#[test]
+fn set_server_asks_the_platform_for_another_server() {
+    let mut s = session(text("Settings"), servers_data(), servers_pod());
     let out = s
         .dispatch(&device("set_server", json!({ "id": "local" })))
         .unwrap();
-    assert_eq!(
-        out.effects,
-        vec![Effect::SwitchServer {
+    // The app's own dialog first: nothing switches until the user says so.
+    assert!(
+        !out.effects
+            .iter()
+            .any(|e| matches!(e, Effect::SwitchServer { .. })),
+        "{:?}",
+        out.effects
+    );
+    assert!(s.scene().unwrap().find_text("Switch server?").is_some());
+    let out = s.tap(&Target::Id("confirm:ok".into())).unwrap();
+    assert!(
+        out.effects.contains(&Effect::SwitchServer {
             url: "http://127.0.0.1:8080".into()
-        }]
+        }),
+        "{:?}",
+        out.effects
     );
     let out = s
         .dispatch(&device("set_server", json!({ "id": "staging" })))
         .unwrap();
     assert_eq!(out.effects, vec![Effect::Nothing], "already in use");
+}
+
+#[test]
+fn set_server_cancelled_switches_nothing() {
+    let mut s = session(text("Settings"), servers_data(), servers_pod());
+    s.dispatch(&device("set_server", json!({ "id": "local" })))
+        .unwrap();
+    let out = s.tap(&Target::Id("confirm:cancel".into())).unwrap();
+    assert_eq!(out.effects, vec![Effect::Back]);
+    // A stale answer afterwards does nothing either.
+    let out = s
+        .dispatch(&device("answer_asked", json!({ "id": "" })))
+        .unwrap();
+    assert_eq!(out.effects, vec![Effect::Nothing]);
+}
+
+#[test]
+fn a_layout_cant_write_the_devices_own_data() {
+    let mut s = session(text("Home"), servers_data(), servers_pod());
+    for (uri, field) in [
+        ("local://servers/x", "url"),
+        ("local://servers/staging", "url"),
+        ("local://session", "signed_in"),
+        ("local://providers/pixelfed", "custom_server"),
+        ("local://sign_ins/pixelfed", "signed_in"),
+        ("local://theme", "accent"),
+        ("local://inbox", "unread"),
+        ("local://notifications/1", "title"),
+        ("local://channels/a/b", "enabled"),
+        ("local://connection", "online"),
+        ("local://device", "platform"),
+    ] {
+        let set = json!({ "intent": "action.local.set", "entity_uri": uri, "field": field,
+            "value_expr": "\"https://evil.example\"" });
+        let out = s.dispatch(&set).unwrap();
+        assert_eq!(out.effects, vec![Effect::Nothing], "{uri}");
+        let now = s.data.entities.get(uri).and_then(|e| e.get_str(field));
+        assert_ne!(now, Some("https://evil.example"), "{uri}");
+    }
+    assert_eq!(
+        s.data.entities["local://servers/staging"].get_str("url"),
+        Some("https://pod.example")
+    );
+    // The layouts' own view state is theirs to set.
+    let set = json!({ "intent": "action.local.set", "entity_uri": "local://shell",
+        "field": "tab", "value_expr": "\"inbox\"" });
+    let out = s.dispatch(&set).unwrap();
+    assert!(
+        matches!(out.effects[..], [Effect::LocalSet { .. }]),
+        "{out:?}"
+    );
+    assert_eq!(
+        s.data.entities["local://shell"].get_str("tab"),
+        Some("inbox")
+    );
+}
+
+#[test]
+fn a_layout_cant_send_the_app_to_another_server() {
+    // The attack of issue 434: one tap writes a server and switches to it.
+    let like = json!({ "type": "core://Button", "label": "Like", "on_click": {
+        "intent": "action.sequence", "steps": [
+            { "intent": "action.local.set", "entity_uri": "local://servers/x", "field": "url",
+              "value_expr": "\"https://evil.example\"", "also": [{ "field": "id", "value_expr": "\"x\"" }] },
+            { "intent": "action.device", "command": "set_server", "id": "x" },
+            // Nor can it answer the dialog for the user.
+            { "intent": "action.device", "command": "set_server", "id": "local" },
+            { "intent": "action.device", "command": "answer_asked", "id": "" } ] } });
+    let mut s = session(like, servers_data(), servers_pod());
+    let out = s.tap(&Target::Text("Like".into())).unwrap();
+    assert!(
+        !out.effects
+            .iter()
+            .any(|e| matches!(e, Effect::SwitchServer { .. })),
+        "{:?}",
+        out.effects
+    );
+    assert!(!s.data.entities.contains_key("local://servers/x"));
+}
+
+#[test]
+fn sign_in_elsewhere_takes_only_a_server_the_user_typed_and_shows_its_host() {
+    let d = json!({ "entities": { "local://providers/pixelfed": { "id": "pixelfed",
+        "title": "Pixelfed", "custom_server": true } },
+        "queries": { "local:providers": ["local://providers/pixelfed"] } });
+    let pod = Pod::default();
+    let signs_in = pod.signs_in.clone();
+    let root = json!({ "type": "core://Column", "children": [
+        { "type": "core://TextField", "field": "server", "placeholder": "Server" },
+        { "type": "core://Button", "label": "Sneaky", "on_click": { "intent": "action.device",
+            "command": "sign_in", "id": "pixelfed", "value": "https://evil.example" } },
+        { "type": "core://Button", "label": "Sign in", "on_click": { "intent": "action.device",
+            "command": "sign_in", "id": "pixelfed", "value": "$form?.server" } } ] });
+    let mut s = session(root, d, pod);
+    // A server written into the layout: refused.
+    let out = s.tap(&Target::Text("Sneaky".into())).unwrap();
+    assert_eq!(out.effects, vec![Effect::Nothing]);
+    assert!(signs_in.lock().unwrap().is_empty());
+    // One the user typed: its host first, then the sign-in.
+    s.type_text("server", "https://pix.example/");
+    s.tap(&Target::Text("Sign in".into())).unwrap();
+    assert!(signs_in.lock().unwrap().is_empty(), "not before the OK");
+    assert!(
+        s.scene()
+            .unwrap()
+            .find_text("Sign in on pix.example?")
+            .is_some()
+    );
+    let out = s.tap(&Target::Id("confirm:ok".into())).unwrap();
+    assert!(
+        out.effects.contains(&Effect::Device {
+            command: "sign_in".into()
+        }),
+        "{:?}",
+        out.effects
+    );
+    let asked = signs_in.lock().unwrap().clone();
+    assert_eq!(asked.len(), 1);
+    assert_eq!(asked[0]["value"], "https://pix.example/");
 }
 
 #[test]

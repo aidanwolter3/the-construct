@@ -57,6 +57,8 @@ pub fn default_bundle(workspace: &str) -> Option<&'static str> {
         "server_health" => "server_health_bundle.json",
         "server_health_off" => "server_health_off_bundle.json",
         "list_trailing" => "list_trailing_bundle.json",
+        // A layout that tries to move the app to another server (issue 434).
+        "server_hijack" => "server_hijack_bundle.json",
         // A home on the construct, before its first `construct` step
         // (decision `content-addressed-construct`).
         "home" => "construct_home_bundle.json",
@@ -410,6 +412,11 @@ fn app_title(id: &str) -> String {
 }
 
 impl Loader for FixturePod {
+    /// The fixture pod is the platform's only server.
+    fn server(&self, id: &str) -> Option<(String, bool)> {
+        (id == "current").then(|| ("fixture".to_owned(), true))
+    }
+
     fn changes(&self) -> Option<Changes> {
         self.lock().news.take()
     }

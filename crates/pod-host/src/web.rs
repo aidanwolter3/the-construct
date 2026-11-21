@@ -412,7 +412,7 @@ async fn image_of(host: Arc<Host>, named: Named, q: Option<String>) -> Response 
             json!({ "error": "not_in_this_page" }),
         );
     }
-    proxy_image(url).await
+    proxy_image(&host, &c.owner_pod, url).await
 }
 
 /// The `url` parameter of a query, parsed.
@@ -746,27 +746,41 @@ async fn image(State(host): State<Arc<Host>>, RawQuery(q): RawQuery, req: Reques
     let Some(token) = cookie_token(&host, req.headers()) else {
         return json_error(StatusCode::UNAUTHORIZED, json!({ "error": "unauthorized" }));
     };
-    if !matches!(
-        host.credential(&token).await,
-        Ok(Some((_, CredentialKind::Web)))
-    ) {
+    let Ok(Some((pod_id, CredentialKind::Web))) = host.credential(&token).await else {
         return json_error(StatusCode::UNAUTHORIZED, json!({ "error": "unauthorized" }));
-    }
+    };
     let Some(url) = url_param(q) else {
         return json_error(StatusCode::BAD_REQUEST, json!({ "error": "invalid_url" }));
     };
-    proxy_image(url).await
+    proxy_image(&host, &pod_id, url).await
 }
 
-/// A public `http(s)` image, passed on: public hosts only (names that
-/// resolve to private addresses are refused at connect time), images only,
-/// at most 10 MiB.
-async fn proxy_image(url: reqwest::Url) -> Response {
-    let client = pod_core::net::OutboundClient::builder(Duration::from_secs(15))
-        .web()
-        .body_cap(MAX_IMAGE_BYTES)
-        .build();
-    if !client.allows(&url) {
+/// Images one pod's pages may pass through the proxy per minute.
+pub const IMAGES_PER_MINUTE: u32 = 120;
+
+/// The proxy's one client (public websites, bodies capped at 10 MiB).
+fn image_client() -> &'static pod_core::net::OutboundClient {
+    static CLIENT: std::sync::OnceLock<pod_core::net::OutboundClient> = std::sync::OnceLock::new();
+    CLIENT.get_or_init(|| {
+        pod_core::net::OutboundClient::builder(Duration::from_secs(15))
+            .web()
+            .body_cap(MAX_IMAGE_BYTES)
+            .build()
+    })
+}
+
+/// A public `http(s)` image for `pod`'s page, passed on: public hosts on
+/// their default port only (names that resolve to private addresses are
+/// refused at connect time), images only, at most 10 MiB, at most
+/// [`IMAGES_PER_MINUTE`] tries per pod (429 `rate_limited`).
+async fn proxy_image(host: &Host, pod: &str, url: reqwest::Url) -> Response {
+    // Every attempt counts, refused ones too.
+    if !host.image_fetches.allow(pod) {
+        pod_core::metrics::inc(pod_core::metrics::RATE_LIMITED, &[("limit", "web_image")]);
+        return crate::rate_limited();
+    }
+    let client = image_client();
+    if url.port().is_some() || !client.allows(&url) {
         return json_error(
             StatusCode::BAD_REQUEST,
             json!({ "error": "not_a_public_url" }),

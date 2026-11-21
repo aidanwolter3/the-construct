@@ -25,6 +25,7 @@ pub mod limits;
 pub mod oauth;
 pub mod screen;
 pub mod shelf;
+pub mod streams;
 pub mod web;
 
 use std::collections::HashMap;
@@ -100,7 +101,7 @@ pub struct StorageLimits {
     /// (`CONSTRUCT_POD_UPLOAD_QUOTA_BYTES`, default 500 MiB).
     pub pod_upload_quota_bytes: u64,
     /// The same for a temporary pod (`CONSTRUCT_TEMP_POD_UPLOAD_QUOTA_BYTES`,
-    /// default 25 MiB): anyone can make one.
+    /// default 6 MiB): anyone can make one.
     pub temporary_upload_quota_bytes: u64,
     /// Uploads, new temporary pods and OAuth registrations are refused when the data volume has
     /// less free (`CONSTRUCT_MIN_FREE_DISK_BYTES`, default 100 MiB).
@@ -110,8 +111,14 @@ pub struct StorageLimits {
     /// `CONSTRUCT_POD_STORAGE_QUOTA_BYTES`, default 768 MiB.
     pub pod_storage_quota_bytes: u64,
     /// The same for a temporary pod (`CONSTRUCT_TEMP_POD_STORAGE_QUOTA_BYTES`,
-    /// default 16 MiB; its upload quota then rarely binds).
+    /// default 8 MiB; its upload quota then rarely binds).
     pub temporary_storage_quota_bytes: u64,
+    /// What all temporary pods may hold together
+    /// (`CONSTRUCT_TEMP_POD_TOTAL_BYTES`, default 400 MiB): a new one is
+    /// refused (`temporary_pods_full`) when the live ones, each at its
+    /// storage quota, would pass it. Anyone can make one, so their total
+    /// must stay below the volume's headroom.
+    pub temporary_total_bytes: u64,
 }
 
 impl Default for StorageLimits {
@@ -119,15 +126,23 @@ impl Default for StorageLimits {
         const MIB: u64 = 1024 * 1024;
         Self {
             pod_upload_quota_bytes: 500 * MIB,
-            temporary_upload_quota_bytes: 25 * MIB,
+            temporary_upload_quota_bytes: 6 * MIB,
             min_free_disk_bytes: pod_core::disk::DEFAULT_MIN_FREE_BYTES,
             pod_storage_quota_bytes: 768 * MIB,
-            temporary_storage_quota_bytes: 16 * MIB,
+            temporary_storage_quota_bytes: 8 * MIB,
+            temporary_total_bytes: 400 * MIB,
         }
     }
 }
 
 impl StorageLimits {
+    /// Live temporary pods the total allows: each counts at its storage
+    /// quota, the most it can grow to.
+    pub fn temporary_pods_that_fit(&self) -> i64 {
+        let each = self.temporary_storage_quota_bytes.max(1);
+        i64::try_from(self.temporary_total_bytes / each).unwrap_or(i64::MAX)
+    }
+
     /// The defaults, overridden by the `CONSTRUCT_*` variables above.
     pub fn from_env() -> Self {
         let bytes = |k: &str, default: u64| {
@@ -155,6 +170,7 @@ impl StorageLimits {
                 "CONSTRUCT_TEMP_POD_STORAGE_QUOTA_BYTES",
                 d.temporary_storage_quota_bytes,
             ),
+            temporary_total_bytes: bytes("CONSTRUCT_TEMP_POD_TOTAL_BYTES", d.temporary_total_bytes),
         }
     }
 }
@@ -175,6 +191,8 @@ pub struct HostConfig {
     pub trust_fly_client_ip: bool,
     /// Upload quotas and the low-disk guard.
     pub storage: StorageLimits,
+    /// Open event streams, host-wide ([`streams::StreamLimits`]).
+    pub streams: streams::StreamLimits,
     /// Send `Strict-Transport-Security` on every response. Only behind an
     /// HTTPS proxy (Fly, `FLY_APP_NAME`): on plain HTTP it would be ignored,
     /// and on `localhost` it would pin the name to HTTPS for other servers.
@@ -236,6 +254,7 @@ impl HostConfig {
             temporary_pod_settings: Vec::new(),
             trust_fly_client_ip: var("FLY_APP_NAME").is_some(),
             storage: StorageLimits::from_env(),
+            streams: streams::StreamLimits::from_env(),
             hsts: var("FLY_APP_NAME").is_some(),
             public_url: var("CONSTRUCT_PUBLIC_URL"),
             android: app_links::AndroidAppLinks::from_env(),
@@ -299,6 +318,7 @@ fn valid_pod_id(id: &str) -> bool {
 struct OpenPod {
     pod: Pod,
     router: Router,
+    kind: PodKind,
 }
 
 /// The pods of this server.
@@ -317,6 +337,10 @@ pub struct Host {
     temp_creates: TwoLevel,
     /// Makes the temporary-pod cap check and the creation one step.
     temp_lock: Mutex<()>,
+    /// Open event streams ([`streams::Streams`]).
+    streams: Arc<streams::Streams>,
+    /// Images passed through `/web/image` and public links, per pod.
+    image_fetches: limits::RateLimit,
     /// The next wake last written to `host.db` per pod (skips rewrites).
     wakes: Mutex<HashMap<String, Option<i64>>>,
 }
@@ -332,7 +356,9 @@ impl Host {
         }
         let store = HostStore::open(&dir.join("host.db"))
             .map_err(|e| format!("opening {}: {e}", dir.join("host.db").display()))?;
+        let streams = streams::Streams::new(config.streams);
         let host = Self {
+            streams,
             dir: dir.to_owned(),
             store: Arc::new(store),
             factory,
@@ -344,6 +370,7 @@ impl Host {
             registrations: TwoLevel::registrations(),
             temp_creates: TwoLevel::temp_creates(),
             temp_lock: Mutex::new(()),
+            image_fetches: limits::RateLimit::new(web::IMAGES_PER_MINUTE, Duration::from_secs(60)),
             wakes: Mutex::new(HashMap::new()),
         };
         if let Some(name) = host.config.open_pod.clone() {
@@ -1072,13 +1099,15 @@ impl Host {
                 // under this server's name must come from a pod someone
                 // was given (decision `public-web-links`).
                 shelf::HostShelf::new(self.store.clone())
-                    .with_public_links(self.config.public_links() && kind == PodKind::Admin),
+                    .with_public_links(self.config.public_links() && kind == PodKind::Admin)
+                    .temporary(kind == PodKind::Temporary),
             ),
         );
         let pod: Pod = Arc::new(state);
         let open = Arc::new(OpenPod {
             router: pod_core::app(pod.clone()),
             pod,
+            kind,
         });
         self.cache().insert(id.to_owned(), open.clone());
         Ok(open)
@@ -1371,6 +1400,7 @@ fn set_prefix(headers: &mut HeaderMap, pod_id: &str) {
 /// Every request that is not the host's: to the bearer's pod (or the open
 /// pod), else the answer for a caller without a pod.
 async fn dispatch(State(host): State<Arc<Host>>, mut req: Request) -> Response {
+    let keys = client_keys(req.headers(), peer(&req), host.config.trust_fly_client_ip);
     // A public link's short path (`/<handle>/<slug>`) is the host's own.
     if let Some(r) = web::short_path(&host, req.method(), req.uri(), req.headers()).await {
         return r;
@@ -1466,10 +1496,57 @@ async fn dispatch(State(host): State<Arc<Host>>, mut req: Request) -> Response {
         Err(r) => return *r,
     };
     set_prefix(req.headers_mut(), &pod_id);
-    match open.router.clone().oneshot(req).await {
+    forward(&host, &open, &pod_id, keys, req).await
+}
+
+/// Send `req` to `open`'s router. An event stream it answers with holds a
+/// host-wide slot ([`streams::Streams`]) until it closes; without one it is
+/// dropped for 429 `too_many_streams` (this caller or pod) or 503
+/// `too_many_streams` (the server).
+async fn forward(
+    host: &Host,
+    open: &OpenPod,
+    pod_id: &str,
+    keys: ClientKeys,
+    req: Request,
+) -> Response {
+    let r = match open.router.clone().oneshot(req).await {
         Ok(r) => r,
         Err(never) => match never {},
+    };
+    let is_stream = r
+        .headers()
+        .get(header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(|t| t.starts_with("text/event-stream"));
+    if !is_stream {
+        return r;
     }
+    let slot = match host
+        .streams
+        .take(&keys.narrow, pod_id, open.kind == PodKind::Temporary)
+    {
+        Ok(slot) => slot,
+        Err(refused) => {
+            tracing::warn!(
+                pod = pod_id,
+                ?refused,
+                "event stream refused: too many open"
+            );
+            metrics::inc(metrics::RATE_LIMITED, &[("limit", "streams")]);
+            let status = match refused {
+                streams::Refused::Caller => StatusCode::TOO_MANY_REQUESTS,
+                streams::Refused::Server => StatusCode::SERVICE_UNAVAILABLE,
+            };
+            return json_error(status, json!({ "error": "too_many_streams" }));
+        }
+    };
+    let (parts, body) = r.into_parts();
+    let body = futures_util::StreamExt::map(body.into_data_stream(), move |chunk| {
+        let _held = &slot;
+        chunk
+    });
+    Response::from_parts(parts, axum::body::Body::from_stream(body))
 }
 
 /// A caller without a valid pod token: a construct of one element, the
@@ -1597,7 +1674,8 @@ async fn temporary_pod(State(host): State<Arc<Host>>, req: Request) -> Response 
             // The cap check and the creation are one step, so a burst can't
             // overshoot the cap.
             let _one_at_a_time = h.temp_lock.lock().unwrap_or_else(|e| e.into_inner());
-            if h.store.live_temporary_count().map_err(|e| e.to_string())? >= temp.max_live {
+            let live = h.store.live_temporary_count().map_err(|e| e.to_string())?;
+            if live >= temp.max_live || live >= h.config.storage.temporary_pods_that_fit() {
                 return Ok::<_, String>(None);
             }
             let mut suffix = [0u8; 4];
@@ -1736,15 +1814,13 @@ async fn public_route(
         return not_found();
     };
     *req.uri_mut() = uri;
+    let keys = client_keys(req.headers(), peer(&req), host.config.trust_fly_client_ip);
     // The host route's path parameters must not reach the pod's router.
     req.extensions_mut().clear();
     req.headers_mut().remove(header::AUTHORIZATION);
     req.headers_mut().remove(pod_core::CREDENTIAL_HEADER);
     set_prefix(req.headers_mut(), &pod_id);
-    match open.router.clone().oneshot(req).await {
-        Ok(r) => r,
-        Err(never) => match never {},
-    }
+    forward(&host, &open, &pod_id, keys, req).await
 }
 
 #[cfg(test)]

@@ -27,7 +27,9 @@ declared by the core (`model`, `web`, `web_search`) and by adapters (`Source::ja
   out from Settings).
 
 State is the `jacks` table (no row: the default). The host **locks** a jack off for a pod with `jack.<id> =
-locked` in `pod_settings`: temporary pods get `model`, `web` and `web_search` locked, replacing
+locked` in `pod_settings`: temporary pods get `model`, `web`, `web_search`, `mcp` and `agent_runner` locked
+(`agent_runner` since issue #445: its sign-in made the server follow any public host, and its sign-in route refuses
+with 403 `jack_locked`), replacing
 `collections.model` and `collections.fill` (a Collections migration turns those old settings into locks). A
 locked jack reads as unplugged and can't be plugged. Features check their jack: the agent module refuses model
 calls with `model` unplugged, fillers record "the pod's web jack is unplugged", `query_field` fillers name

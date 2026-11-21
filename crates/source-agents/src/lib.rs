@@ -978,6 +978,18 @@ async fn sign_in_route(State(pod): State<Pod>, headers: HeaderMap, body: Bytes) 
     let Some(a) = pod.adapter::<AgentsAdapter>() else {
         return refuse(StatusCode::NOT_FOUND, "not_found", "no agents source");
     };
+    // A temporary pod (anyone can make one) has the jack locked: it would
+    // make the server follow a host of the visitor's choosing.
+    let locked = pod
+        .blocking(|s| s.with_conn(|c| pod_core::jacks::locked_on(c, JACK)))
+        .await;
+    if !matches!(locked, Ok(false)) {
+        return refuse(
+            StatusCode::FORBIDDEN,
+            "jack_locked",
+            "this server keeps the agent_runner jack unplugged on this pod",
+        );
+    }
     let url = match field(&body, "url", 500) {
         Ok(u) => u,
         Err(r) => return r,
