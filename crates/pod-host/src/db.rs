@@ -187,6 +187,12 @@ const MIGRATIONS: &[Step] = &[
      );
      CREATE INDEX calendar_feeds_owner ON calendar_feeds(owner_pod);",
     ),
+    // 10 (issue #446): a revoked public copy keeps neither its title nor
+    // the rows it asked for, only that it was revoked.
+    Step::sql(
+        "public_copies_revoked_forget",
+        "UPDATE public_copies SET title = '', rows = '[]' WHERE revoked_at IS NOT NULL;",
+    ),
 ];
 
 /// What a credential is for (`credentials.kind`).

@@ -165,7 +165,8 @@ read-only. The tools are listed only on such a server, and only for an
 admin pod: a temporary pod can't share a public page (decision [`web-on-staging`](decisions/web-on-staging.md)).
 
 - `share_publicly {layout}` answers a review and shares nothing: every text and value a visitor would read, every
-  URL, the rows and fields that go (only the rows each list's `where` shows, with only the fields read), per
+  URL, the rows and fields that go (only the rows each list's `where` and conditions show, with only the fields
+  read where they show; a condition that can't be decided then, such as a date test, keeps its rows home), per
   layout, and what was taken out (controls that write, opens and embeds of layouts it doesn't carry, screens, and
   the layouts left out with why). A list whose rows push a screen carries that screen once, with the rows it shows
   for each listed row; `leave_out: [<layout>]` keeps one out (its openers go). `params: {id: <meal id>}` draws a
@@ -173,8 +174,9 @@ admin pod: a temporary pod can't share a public page (decision [`web-on-staging`
   the root's lists. `share_publicly {layout, confirm: <review_id>}` shares it and answers its `url` (`/s/pub-…`);
   with `slug` (and the pod's handle, `set_handle`) also a `short_url`, `/<handle>/<slug>`; each row a list's tap opens is at `/<handle>/<slug>/<row name>` (decision `public-row-links`). Sharing the same layout,
   rows, item and params again updates the same link; other params are another link.
-- The copy is made again when the pod's Collections data changes, so new rows the layouts show appear on the
-  page. Only rows go out without a review: once a carried layout is edited (a field it now shows, a screen it now
+- The copy is made again when the pod's Collections data changes: edits and removals of its rows go out, but new
+  rows wait until it is shared again with a new review (`list_public_links` counts them, `new_rows_waiting`);
+  `new_rows: "publish"` lets a link's new rows out without one. Only rows go out without a review: once a carried layout is edited (a field it now shows, a screen it now
   opens), the page keeps its last copy until the layout is shared again with a new review. A root that draws anything but Collections data (Pixelfed, Events) is refused; a layout it reaches that
   does is left out, and so are built-in layouts (Settings, the inbox). A copy holds at most 16 layouts and 2 MiB.
 - `list_public_links` lists them; `unshare_publicly {link}` stops one at once and its copy leaves the server.

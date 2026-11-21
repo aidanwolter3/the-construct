@@ -38,9 +38,17 @@ served to anyone with the link by the web client. Only where the host allows it 
     only the fields the layout reads (`$item.<f>`, `${<uri>#<f>}`, and the names under a list's or count's
     `where`, `filter`, `group_by`, `indent` and a carousel's `aspect_field`; a plumbing key such as `label` is
     not a field read); a field the page doesn't show never leaves the pod;
+  - **only what the owner's screen shows** (issue #446): a `core://Conditional` and an embed's `show_when` filter
+    too. A row whose template (through its conditions) is under a condition false for it stays home, and so
+    does it through a count of the same list; a field read only under such a condition stays home; what a
+    condition tests goes, so the page decides it the same way. A condition that can't be decided when the copy is
+    made (a `date` test, a `where` `older_than`, a name left unbound) fails closed: its rows and fields stay home.
+    A condition on what the visitor picks (`$form`, a `local://` entity such as the device's size, a row field the
+    copy's own `action.local.set` changes) shows, as it does on the owner's screen a tap away; a `where` on a form
+    value starts blank and matches every row, as on the owner's screen;
   - at most 512 KiB (2 MiB since decision [public-link-size](public-link-size.md)); at most 20 live links per pod (the shelf counts and inserts in one transaction, so shares at once can't pass it).
 - **Review**: `share_publicly` without `confirm` answers every text and value a visitor would read, every URL, the
-  rows and fields, and what was taken out, and says the copy follows new data. `confirm` must repeat the review's id
+  rows and fields, and what was taken out, and says how the copy follows new data. `confirm` must repeat the review's id
   (a hash of the copy): anything that changed asks again.
 - **The host** keeps copies in `host.db` `public_copies` (migration `public_copies`) under an unguessable link
   (`pub-` and 32 base32 characters). `GET /s/<link>` is the web client's page titled with the copy's title (for link
@@ -48,9 +56,15 @@ served to anyone with the link by the web client. Only where the host allows it 
   A visitor never reaches a pod and gets no cookie.
 - **Refresh**: each pod watches the data events of the sources that let data out and, two seconds after they settle, copies its
   live links again. A copy that can't be made (the layout was deleted, now draws other data) keeps the last one.
-  New rows the layout shows go out without a new review: the review says so.
+  Edits and removals of the copy's rows go out; new rows (and fields no row of the copy had) wait until the owner
+  shares it again, with a new review (issue #446: a private row added later went public on its own).
+  `list_public_links` says how many wait (`new_rows_waiting`). `share_publicly {new_rows: "publish"}` lets a link's
+  new rows out without a review (kept in its key as `new_rows:publish`, not part of what makes the link); the
+  review says which one applies.
 - **Revoke**: `unshare_publicly` takes the copy off the host at once (the row stays, marked revoked, for the
-  owner's list; a pod keeps its newest 20 revoked rows, older ones are deleted); a deleted pod takes its copies.
+  owner's list, without its title or the rows it asked for: migration `public_copies_revoked_forget` cleared the
+  ones revoked before; a pod keeps its newest 20 revoked rows, older ones are deleted); a deleted pod takes its
+  copies.
 - **The page**: `start_public` draws the copy with no loader (nothing it draws can write), images through its own
   proxy; a link it opens goes to a new tab.
 
