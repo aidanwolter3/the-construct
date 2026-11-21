@@ -9,9 +9,10 @@ scripts/android_native.sh                    # Android build check (needs an And
 
 CI's Rust job runs in a container image, `.github/ci/Dockerfile` (Debian, as uid 1001), that has everything it
 needs (the pinned Rust, cargo-nextest, lavapipe, the simulator's fonts), so a run installs nothing from package
-mirrors. CI builds and pushes it to `ghcr.io/aidanwolter3/the-construct-ci` only when that file or
-`rust-toolchain.toml` changes (decision `ci-container-image`); to try a change locally, build it from a directory
-holding only `rust-toolchain.toml`. CI runs `scripts/check_decisions.sh`, `scripts/check_test_data.sh` (no test data in the pod binary, decision
+mirrors. Only main's CI runs build and push it to `ghcr.io/aidanwolter3/the-construct-ci`, when that file or
+`rust-toolchain.toml` changes, and run it by the digest they recorded (decision `ci-container-image`); a pull request
+that changes it builds it without pushing, and its tests run in main's image until it merges. To try a change
+locally, build it from a directory holding only `rust-toolchain.toml`. CI runs `scripts/check_decisions.sh`, `scripts/check_test_data.sh` (no test data in the pod binary, decision
 `data-next-to-its-code`), clippy with warnings denied, the Rust tests (with
 [cargo-nextest](https://nexte.st), which runs tests from different binaries in parallel, plus `cargo test --doc`,
 which nextest skips), a dependency advisory check (`cargo-deny`), the simulator's scenarios
