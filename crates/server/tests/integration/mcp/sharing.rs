@@ -520,6 +520,45 @@ async fn layout(env: &Env, access: &str, title: &str, root: Value) -> String {
         .to_owned()
 }
 
+/// A collection's field defaults and options travel in the suggested schema:
+/// the owner sees them in the review.
+#[tokio::test]
+async fn schema_strings_are_in_the_publish_review() {
+    let env = env().await;
+    let ann = env.pod("ann").await;
+    let a = env.connect(&ann).await;
+    ok(
+        &env,
+        &a,
+        "define_collection",
+        json!({"name": "chores", "fields": [
+        {"name": "title", "type": "text"},
+        {"name": "who", "type": "choice", "options": ["Sasha Example", "Rex Example"],
+         "default": "Sasha Example"},
+        {"name": "done", "type": "bool", "optional": true}]}),
+    )
+    .await;
+    ok(&env, &a, "set_handle", json!({"handle": "ann"})).await;
+    let id = ok(
+        &env,
+        &a,
+        "create_layout",
+        json!({"title": "Chores", "feeds": [["collections", "chores"]],
+        "layout": chores(8)}),
+    )
+    .await["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let review = ok(&env, &a, "publish", json!({"name": id})).await;
+    let flags = review["flags"].to_string();
+    assert!(
+        flags.contains("Rex Example"),
+        "options are flagged: {review}"
+    );
+    assert!(flags.contains("\"schema\""), "{review}");
+}
+
 /// The shelf is the host's, outside every pod's storage quota: a pod keeps
 /// at most 20 live publications, each of at most 1 MiB of elements.
 #[tokio::test]
