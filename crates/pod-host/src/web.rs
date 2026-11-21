@@ -674,7 +674,10 @@ async fn open_session(State(host): State<Arc<Host>>, req: Request) -> Response {
         Err(e) => tracing::warn!(status = %e.0, "the browser's session got no sign-ins"),
     }
     let added = host
-        .blocking(move |h| h.store.insert_web_credential(&pod_id, &hash))
+        .blocking(move |h| {
+            h.store
+                .insert_web_credential(&pod_id, &hash, session_ttl_from_env())
+        })
         .await;
     match added {
         Ok(Ok(())) => {}

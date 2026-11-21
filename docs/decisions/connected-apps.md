@@ -26,6 +26,10 @@ Decision:
 - **Idle expiry:** host.db migration 11 (`mcp_credential_use`) adds `credentials.last_used_at` (existing MCP
   credentials count as used at the migration) and `redirect_host`. A use records the time at most once an hour; an MCP
   credential unused for 90 days (`MCP_IDLE_SECS`) is no credential and the sweeper deletes it. No refresh token.
+- **Strict kinds and web expiry:** a `credentials.kind` this build doesn't know is no credential (it never parses as a
+  pod token). Migration 12 (`web_credential_expiry`) adds `credentials.expires_at`: a browser's `web` credential stops
+  working at its session's end (`CONSTRUCT_SESSION_TTL_DAYS`; a web row with no expiry is refused), which also bounds
+  `/web/image`, and the sweeper deletes expired rows.
 - **Settings → Connected apps** (layout `settings` 0010, no new vocabulary): a screen over
   `GET /v1/connected-apps/screen[?id=]` (entities `connected_apps://<id>`, query `connected_apps`; `id` is the first 16
   hex characters of the credential's hash) with a Disconnect per app, an `action.confirm` then
