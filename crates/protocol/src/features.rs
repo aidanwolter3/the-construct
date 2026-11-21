@@ -355,7 +355,12 @@ fn node_features(node: &UiNode, out: &mut BTreeSet<&'static str>) {
         }
         UiNode::MediaPicker { .. } => add(feature::MEDIA_PICKER),
         UiNode::Sticky { .. } => add(feature::STICKY),
-        UiNode::Progress { .. } => add(feature::PROGRESS),
+        UiNode::Progress { value, .. } => {
+            add(feature::PROGRESS);
+            if value.is_some() {
+                add(feature::PROGRESS_VALUE);
+            }
+        }
         UiNode::Bars { where_, merge, .. } => {
             add(feature::BARS);
             if merge.is_some() {

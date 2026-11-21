@@ -800,11 +800,27 @@ fn confirm_round_trips_and_its_then_counts_as_an_intent() {
 fn progress_round_trips_and_needs_its_feature() {
     let wire = r#"{"type":"core://Progress","size_dp":20}"#;
     let parsed: UiNode = serde_json::from_str(wire).unwrap();
-    assert_eq!(parsed, UiNode::Progress { size_dp: Some(20) });
+    assert_eq!(
+        parsed,
+        UiNode::Progress {
+            size_dp: Some(20),
+            value: None,
+            max: None,
+            color: None
+        }
+    );
     assert_eq!(serde_json::to_string(&parsed).unwrap(), wire);
     // The size is optional and omitted when unset.
     let bare: UiNode = serde_json::from_str(r#"{"type":"core://Progress"}"#).unwrap();
-    assert_eq!(bare, UiNode::Progress { size_dp: None });
+    assert_eq!(
+        bare,
+        UiNode::Progress {
+            size_dp: None,
+            value: None,
+            max: None,
+            color: None
+        }
+    );
     assert_eq!(
         serde_json::to_string(&bare).unwrap(),
         r#"{"type":"core://Progress"}"#
