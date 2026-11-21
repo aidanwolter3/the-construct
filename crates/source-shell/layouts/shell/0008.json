@@ -1,0 +1,134 @@
+{
+  "note": "Centred, labelled Notifications and Settings buttons and three ideas to ask the agent for (the icons sat at the left edge under centred text)",
+  "layout": {
+    "type": "core://Workspace",
+    "id": "shell",
+    "title": "The Construct",
+    "slots": [
+      {
+        "slot_id": "home",
+        "provider_uri": "local://home",
+        "content": {
+          "type": "core://Box",
+          "fill": true,
+          "background": "${local://theme#page}",
+          "align": "Center",
+          "padding_h_dp": 24,
+          "content": {
+            "type": "core://Column",
+            "align": "Center",
+            "spacing_dp": 14,
+            "max_width_dp": 420,
+            "children": [
+              {
+                "type": "core://Text",
+                "value_expr": "The Construct",
+                "style": "Display"
+              },
+              {
+                "type": "core://Text",
+                "value_expr": "Ask your agent to build anything. A few ideas to start:",
+                "style": "Secondary"
+              },
+              {
+                "type": "core://Use",
+                "component": "core:grouped_list",
+                "children": [
+                  {
+                    "type": "core://Column",
+                    "spacing_dp": 1,
+                    "children": [
+                      {
+                        "type": "core://Use",
+                        "component": "core:item_row",
+                        "args": {
+                          "title": "“Plan my meals for the week”"
+                        },
+                        "children": [
+                          {
+                            "type": "core://Use",
+                            "component": "core:tinted_icon",
+                            "args": {
+                              "icon": "path:M11 9H9V2H7v7H5V2H3v7c0 2.12 1.66 3.84 3.75 3.97V22h2.5v-9.03C11.34 12.84 13 11.12 13 9V2h-2v7zm5-3v8h2.5v8H21V2c-2.76 0-5 2.24-5 4z",
+                              "tone": "success",
+                              "size": 30
+                            }
+                          }
+                        ]
+                      },
+                      {
+                        "type": "core://Use",
+                        "component": "core:item_row",
+                        "args": {
+                          "title": "“Track my workouts”"
+                        },
+                        "children": [
+                          {
+                            "type": "core://Use",
+                            "component": "core:tinted_icon",
+                            "args": {
+                              "icon": "check_box",
+                              "tone": "accent",
+                              "size": 30
+                            }
+                          }
+                        ]
+                      },
+                      {
+                        "type": "core://Use",
+                        "component": "core:item_row",
+                        "args": {
+                          "title": "“Show my photo feed”"
+                        },
+                        "children": [
+                          {
+                            "type": "core://Use",
+                            "component": "core:tinted_icon",
+                            "args": {
+                              "icon": "path:M21 19V5c0-1.1-.9-2-2-2H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2zM8.5 13.5l2.5 3.01L14.5 12l4.5 6H5l3.5-4.5z",
+                              "tone": "muted",
+                              "size": 30
+                            }
+                          }
+                        ]
+                      }
+                    ]
+                  }
+                ]
+              },
+              {
+                "type": "core://Row",
+                "justify": "center",
+                "spacing_dp": 8,
+                "children": [
+                  {
+                    "type": "core://Button",
+                    "label": "Notifications",
+                    "style": "Secondary",
+                    "size": "Small",
+                    "on_click": {
+                      "intent": "action.navigation.open",
+                      "layout": "inbox",
+                      "presentation": "Sheet"
+                    }
+                  },
+                  {
+                    "type": "core://Button",
+                    "label": "Settings",
+                    "style": "Secondary",
+                    "size": "Small",
+                    "on_click": {
+                      "intent": "action.navigation.open",
+                      "layout": "settings",
+                      "presentation": "Panel"
+                    }
+                  }
+                ]
+              }
+            ]
+          }
+        }
+      }
+    ]
+  }
+}

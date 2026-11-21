@@ -241,7 +241,9 @@ never writes code: it declares typed fields (`text`, `number`, `bool`, `date`, `
   field and keeps its data 30 days (`restore_field`); a type change converts row by row and keeps what doesn't
   convert aside. A write made under an older definition (an offline device) still lands.
 - **Computed fields.** A field's `compute` is one kind or a list tried in order: `expr` (a small expression over
-  the row: `+`, `-`, `*`, `!`, `<` `<=` `>` `>=` (numbers, or texts in order, so dates compare), `c ? a : b`;
+  the row: `+`, `-`, `*`, `!`, `<` `<=` `>` `>=` (numbers, or texts in order, so dates compare), `c ? a : b`,
+  `money(x)` for a price (`$98`, `$28.50`, `$1,299.95`; decision [`expr-money`](decisions/expr-money.md)); a number
+  joined to text is written `98`, never `98.0`;
   `entity.id` reads the row's own id, and an expression may read its own field's last value, for a running lowest
   price; decision [`research-per-row`](decisions/research-per-row.md)), `lookup` (the value of the best-matching row of another
   collection, kept as editable rules: the longest key wins, then the oldest row; deleted rows never match), `count`
