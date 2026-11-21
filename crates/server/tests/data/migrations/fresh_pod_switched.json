@@ -440,37 +440,228 @@
                 {
                   "style": "Secondary",
                   "type": "core://Text",
-                  "value_expr": "Ask your agent to build anything"
+                  "value_expr": "Ask your agent to build anything. A few ideas to start:"
                 },
                 {
-                  "align": "Center",
+                  "background": "${local://theme#card}",
+                  "border_color": "${local://theme#card_border}",
+                  "content": {
+                    "background": "${local://theme#card_border}",
+                    "content": {
+                      "children": [
+                        {
+                          "children": [
+                            {
+                              "background": "${local://theme#card}",
+                              "content": {
+                                "align": "Center",
+                                "children": [
+                                  {
+                                    "align": "Center",
+                                    "background": "${local://theme#success_surface}",
+                                    "content": {
+                                      "icon": "path:M11 9H9V2H7v7H5V2H3v7c0 2.12 1.66 3.84 3.75 3.97V22h2.5v-9.03C11.34 12.84 13 11.12 13 9V2h-2v7zm5-3v8h2.5v8H21V2c-2.76 0-5 2.24-5 4z",
+                                      "text": "",
+                                      "type": "core://Badge"
+                                    },
+                                    "content_color": "${local://theme#success}",
+                                    "corner_dp": 512,
+                                    "height_dp": 30,
+                                    "type": "core://Box",
+                                    "width_dp": 30
+                                  },
+                                  {
+                                    "children": [
+                                      {
+                                        "style": "Label",
+                                        "type": "core://Text",
+                                        "value_expr": "“Plan my meals for the week”"
+                                      },
+                                      {
+                                        "content": {
+                                          "content": {
+                                            "max_lines": 2,
+                                            "style": "Secondary",
+                                            "type": "core://Text",
+                                            "value_expr": ""
+                                          },
+                                          "content_color": "${local://theme#muted_text}",
+                                          "type": "core://Box"
+                                        },
+                                        "type": "core://Conditional",
+                                        "value": ""
+                                      }
+                                    ],
+                                    "spacing_dp": 2,
+                                    "type": "core://Column"
+                                  },
+                                  {
+                                    "type": "core://Spacer"
+                                  }
+                                ],
+                                "padding_h_dp": 11,
+                                "padding_v_dp": 12,
+                                "spacing_dp": 12,
+                                "type": "core://Row"
+                              },
+                              "type": "core://Box"
+                            },
+                            {
+                              "background": "${local://theme#card}",
+                              "content": {
+                                "align": "Center",
+                                "children": [
+                                  {
+                                    "align": "Center",
+                                    "background": "${local://theme#accent_surface}",
+                                    "content": {
+                                      "icon": "check_box",
+                                      "text": "",
+                                      "type": "core://Badge"
+                                    },
+                                    "content_color": "${local://theme#accent}",
+                                    "corner_dp": 512,
+                                    "height_dp": 30,
+                                    "type": "core://Box",
+                                    "width_dp": 30
+                                  },
+                                  {
+                                    "children": [
+                                      {
+                                        "style": "Label",
+                                        "type": "core://Text",
+                                        "value_expr": "“Track my workouts”"
+                                      },
+                                      {
+                                        "content": {
+                                          "content": {
+                                            "max_lines": 2,
+                                            "style": "Secondary",
+                                            "type": "core://Text",
+                                            "value_expr": ""
+                                          },
+                                          "content_color": "${local://theme#muted_text}",
+                                          "type": "core://Box"
+                                        },
+                                        "type": "core://Conditional",
+                                        "value": ""
+                                      }
+                                    ],
+                                    "spacing_dp": 2,
+                                    "type": "core://Column"
+                                  },
+                                  {
+                                    "type": "core://Spacer"
+                                  }
+                                ],
+                                "padding_h_dp": 11,
+                                "padding_v_dp": 12,
+                                "spacing_dp": 12,
+                                "type": "core://Row"
+                              },
+                              "type": "core://Box"
+                            },
+                            {
+                              "background": "${local://theme#card}",
+                              "content": {
+                                "align": "Center",
+                                "children": [
+                                  {
+                                    "align": "Center",
+                                    "background": "${local://theme#muted_surface}",
+                                    "content": {
+                                      "icon": "path:M21 19V5c0-1.1-.9-2-2-2H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2zM8.5 13.5l2.5 3.01L14.5 12l4.5 6H5l3.5-4.5z",
+                                      "text": "",
+                                      "type": "core://Badge"
+                                    },
+                                    "content_color": "${local://theme#muted_text}",
+                                    "corner_dp": 512,
+                                    "height_dp": 30,
+                                    "type": "core://Box",
+                                    "width_dp": 30
+                                  },
+                                  {
+                                    "children": [
+                                      {
+                                        "style": "Label",
+                                        "type": "core://Text",
+                                        "value_expr": "“Show my photo feed”"
+                                      },
+                                      {
+                                        "content": {
+                                          "content": {
+                                            "max_lines": 2,
+                                            "style": "Secondary",
+                                            "type": "core://Text",
+                                            "value_expr": ""
+                                          },
+                                          "content_color": "${local://theme#muted_text}",
+                                          "type": "core://Box"
+                                        },
+                                        "type": "core://Conditional",
+                                        "value": ""
+                                      }
+                                    ],
+                                    "spacing_dp": 2,
+                                    "type": "core://Column"
+                                  },
+                                  {
+                                    "type": "core://Spacer"
+                                  }
+                                ],
+                                "padding_h_dp": 11,
+                                "padding_v_dp": 12,
+                                "spacing_dp": 12,
+                                "type": "core://Row"
+                              },
+                              "type": "core://Box"
+                            }
+                          ],
+                          "spacing_dp": 1,
+                          "type": "core://Column"
+                        }
+                      ],
+                      "type": "core://Column"
+                    },
+                    "type": "core://Box"
+                  },
+                  "corner_dp": 18,
+                  "padding_h_dp": 5,
+                  "padding_v_dp": 6,
+                  "type": "core://Box"
+                },
+                {
                   "children": [
                     {
-                      "content_description": "Notifications",
-                      "icon": "notifications",
+                      "label": "Notifications",
                       "on_click": {
                         "intent": "action.navigation.open",
                         "layout": "inbox",
                         "presentation": "Sheet"
                       },
-                      "type": "core://IconButton"
+                      "size": "Small",
+                      "style": "Secondary",
+                      "type": "core://Button"
                     },
                     {
-                      "content_description": "Settings",
-                      "icon": "settings",
+                      "label": "Settings",
                       "on_click": {
                         "intent": "action.navigation.open",
                         "layout": "settings",
                         "presentation": "Panel"
                       },
-                      "type": "core://IconButton"
+                      "size": "Small",
+                      "style": "Secondary",
+                      "type": "core://Button"
                     }
                   ],
+                  "justify": "center",
                   "spacing_dp": 8,
                   "type": "core://Row"
                 }
               ],
-              "spacing_dp": 8,
+              "max_width_dp": 420,
+              "spacing_dp": 14,
               "type": "core://Column"
             },
             "fill": true,
