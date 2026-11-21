@@ -349,6 +349,21 @@ fn slugify(s: &str) -> String {
     out.trim_end_matches('-').to_owned()
 }
 
+/// What a host keeps of a share, public or calendar token: its SHA-256 in
+/// hex (decision `link-tokens-hashed`), so a copy of the host's database
+/// holds no working link.
+pub fn token_id(token: &str) -> String {
+    crate::session::session_hash(token)
+}
+
+/// Whether `s` is a [`token_id`] (64 lowercase hex characters) and not a
+/// token: tokens carry a prefix and a `-`.
+pub fn is_token_id(s: &str) -> bool {
+    s.len() == 64
+        && s.bytes()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+}
+
 /// A new share link.
 pub fn new_link() -> String {
     let mut buf = [0u8; 20];
@@ -1353,12 +1368,18 @@ fn set_handle(pod: &Pod, args: &Value) -> Result<Value, Value> {
 fn publication_row(p: &Publication, owner: bool) -> Value {
     let mut v = json!({
         "name": p.name,
-        "link": p.link,
         "version": p.version,
         "visibility": p.visibility,
         "revoked": p.revoked_at.is_some(),
         "updated_at": p.updated_at,
     });
+    // The host keeps only a hash of the link: the link itself is shown when
+    // the publication is made (decision `link-tokens-hashed`).
+    if is_token_id(&p.link) {
+        v["id"] = json!(p.link);
+    } else {
+        v["link"] = json!(p.link);
+    }
     if owner {
         v["publishes"] = json!(p.source);
         v["keep_shared"] = json!(p.keep_shared);
@@ -1580,14 +1601,23 @@ fn publish_blocking(pod: &Pod, args: &Value) -> Result<Value, Value> {
             keep_shared,
         })
         .map_err(|e| e.answer())?;
-    Ok(json!({
+    let mut out = json!({
         "published": true,
         "name": p.name,
-        "link": p.link,
         "version": p.version,
         "keep_shared": p.keep_shared,
-        "detail": "Give the user the share link: anyone on this server they send it to can adopt it.",
-    }))
+    });
+    if is_token_id(&p.link) {
+        out["detail"] = json!(
+            "A new version of a publication that is already shared: its link is the one the user was given when it was first published (the server keeps only a hash of it, so it can't be shown again). To get a new link, unpublish it and publish again."
+        );
+    } else {
+        out["link"] = json!(p.link);
+        out["detail"] = json!(
+            "Give the user the share link now, it is shown only this once: anyone on this server they send it to can adopt it."
+        );
+    }
+    Ok(out)
 }
 
 /// After a write on the owner's pod: publications kept shared get the new

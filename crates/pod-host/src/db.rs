@@ -204,7 +204,40 @@ const MIGRATIONS: &[Step] = &[
      UPDATE credentials SET last_used_at = CAST(strftime('%s', 'now') AS INTEGER)
          WHERE kind = 'mcp';",
     ),
+    // 12 (decision `link-tokens-hashed`): share, public and calendar tokens
+    // are kept as their SHA-256, so a backup holds no working link. The
+    // links already given out keep working: lookups hash what they are
+    // given.
+    Step::rust("hash_link_tokens", hash_link_tokens),
 ];
+
+pub(crate) fn hash_link_tokens(tx: &rusqlite::Transaction<'_>) -> rusqlite::Result<()> {
+    use pod_core::construct::share::{is_token_id, token_id};
+    // `publication_objects` points at `publications(link)`: both change in
+    // this transaction.
+    tx.pragma_update(None, "defer_foreign_keys", true)?;
+    for (table, column) in [
+        ("publications", "link"),
+        ("publication_objects", "link"),
+        ("public_copies", "link"),
+        ("calendar_feeds", "token"),
+    ] {
+        let mut ids = std::collections::BTreeSet::new();
+        {
+            let mut stmt = tx.prepare(&format!("SELECT DISTINCT {column} FROM {table}"))?;
+            for r in stmt.query_map([], |r| r.get::<_, String>(0))? {
+                ids.insert(r?);
+            }
+        }
+        for old in ids.into_iter().filter(|t| !is_token_id(t)) {
+            tx.execute(
+                &format!("UPDATE {table} SET {column} = ?2 WHERE {column} = ?1"),
+                params![old, token_id(&old)],
+            )?;
+        }
+    }
+    Ok(())
+}
 
 /// An MCP credential unused this long stops working (decision
 /// `connected-apps`): 90 days.
