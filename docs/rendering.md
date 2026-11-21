@@ -118,8 +118,9 @@ and a GameActivity, and the app is a NativeActivity with no Java (issue #172).
 ## Coverage
 
 A layout that doesn't adapt to the window (`adapts_to_window`: no `local://device` conditional, `max_width_dp`,
-`min_column_dp` or `panels`) is drawn at most `PHONE_WIDTH_DP` (480 points) wide, centred in the room it is given:
-the root screen, a pushed screen, a sheet's content, an inline embed and a panel (decision `phone-width-layouts`).
+`min_column_dp` or `panels`) is drawn at most `PHONE_WIDTH_DP` (480 points) wide: centred as a screen of its own (the root, a push, a
+sheet's content), at the start of its room as an inline embed or a panel, whose column is then phone wide beside
+the one before it instead of an equal share (decision `phone-width-layouts`).
 `SceneBuilder::build_from_spec` draws a bare node tree at the whole width (`whole_width`).
 
 Drawn like the app: Page, Workspace (title and slots), Column, Row, Container, Box (a filled box at a corner of the rounded box around it, such as a selected row's background in a card of rows, is rounded there as that box is, concentric with it, so it stays inside the corner), Text (styles, `count`), Button,

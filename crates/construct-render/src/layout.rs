@@ -621,7 +621,7 @@ impl SceneBuilder {
         if let Some(c) = content
             && !b.whole_width
         {
-            b.phone_width(c, input.root);
+            b.phone_width(c, input.root, true);
         }
         let [it, ir, ib, il] = input.insets.map(|v| length(v.max(0.0)));
         let root_style = Style {
@@ -1525,19 +1525,24 @@ impl<'i> Build<'_, 'i> {
         }
     }
 
-    /// Draws layout element `i` at most [`PHONE_WIDTH_DP`] wide, centred,
-    /// unless the layout `l` adapts to the window itself.
-    fn phone_width(&mut self, i: usize, l: &UiNode) {
+    /// Draws layout element `i` at most [`PHONE_WIDTH_DP`] wide, unless the
+    /// layout `l` adapts to the window itself: centred on a whole screen,
+    /// at the start (beside what is left of it) in an embed or a panel.
+    /// Whether it was capped.
+    fn phone_width(&mut self, i: usize, l: &UiNode, centred: bool) -> bool {
         if adapts_to_window(l) {
-            return;
+            return false;
         }
         let node = self.elems[i].node;
         let mut s = self.tree.style(node).cloned().unwrap_or_default();
         s.max_size.width = length(PHONE_WIDTH_DP);
         s.size.width = percent(1.0);
-        s.margin.left = auto();
+        if centred {
+            s.margin.left = auto();
+        }
         s.margin.right = auto();
         let _ = self.tree.set_style(node, s);
+        true
     }
 
     /// An inline layout's content (`host`) with the panels open beside it
@@ -1547,6 +1552,7 @@ impl<'i> Build<'_, 'i> {
         &mut self,
         host: &str,
         content: Option<usize>,
+        capped: bool,
         b: &B,
         ctx: Ctx,
     ) -> Option<usize> {
@@ -1583,9 +1589,10 @@ impl<'i> Build<'_, 'i> {
         }
         // Column 0 is the embed's own content, column k + 1 panel k.
         let first = (open.len() + 1).saturating_sub(PANEL_COLUMNS);
-        let mut cols = Vec::new();
+        // Each column, and whether its layout is drawn at phone width.
+        let mut cols: Vec<(usize, bool)> = Vec::new();
         if first == 0 {
-            cols.extend(content);
+            cols.extend(content.map(|c| (c, capped)));
         }
         for (k, p) in open.iter().enumerate().skip(first.saturating_sub(1)) {
             let pb = B {
@@ -1599,8 +1606,15 @@ impl<'i> Build<'_, 'i> {
                 depth: b.depth + 1,
                 in_scroll: false,
             };
+            let mut capped = false;
             let col = match input.layouts.get(&p.layout) {
-                Some(l) => self.node(l, &pb).inspect(|&c| self.phone_width(c, l)),
+                Some(l) => {
+                    let c = self.node(l, &pb);
+                    if let Some(c) = c {
+                        capped = self.phone_width(c, l, false);
+                    }
+                    c
+                }
                 None => Some(self.placeholder(&format!("Layout {}", p.layout))),
             };
             if let Some(c) = col {
@@ -1610,11 +1624,14 @@ impl<'i> Build<'_, 'i> {
                 let _ = self.tree.set_style(node, cs);
                 let style = column(0, pad(0, 0), AlignItems::STRETCH);
                 let sem = column_sem(panel_id(host, k));
-                cols.push(self.push(style, vec![c], Paint::None, Some(sem), false));
+                cols.push((
+                    self.push(style, vec![c], Paint::None, Some(sem), false),
+                    capped,
+                ));
             }
         }
         let mut kids = Vec::new();
-        for (i, c) in cols.into_iter().enumerate() {
+        for (i, (c, capped)) in cols.into_iter().enumerate() {
             if i > 0 {
                 let line = Style {
                     size: Size {
@@ -1637,12 +1654,21 @@ impl<'i> Build<'_, 'i> {
                     false,
                 ));
             }
-            // Each column takes an equal share of the width and the
-            // whole height.
+            // Each column takes the whole height. A phone-width layout's
+            // column is phone wide, next to the column before it, so the
+            // columns build up from the left; the others share what is
+            // left equally (decision `phone-width-layouts`). Short of room,
+            // the phone-wide ones shrink too.
             let node = self.elems[c].node;
             let mut cs = self.tree.style(node).cloned().unwrap_or_default();
-            cs.flex_grow = 1.0;
-            cs.flex_basis = length(0.0);
+            if capped {
+                cs.flex_grow = 0.0;
+                cs.flex_shrink = 1.0;
+                cs.flex_basis = length(PHONE_WIDTH_DP);
+            } else {
+                cs.flex_grow = 1.0;
+                cs.flex_basis = length(0.0);
+            }
             cs.min_size.width = length(0.0);
             let _ = self.tree.set_style(node, cs);
             kids.push(c);
@@ -3393,6 +3419,7 @@ impl<'i> Build<'_, 'i> {
                     }
                 };
                 let host = format!("{}/layout:{id}", b.path);
+                let mut capped = false;
                 let kid = match inner {
                     Some(l) => {
                         let lb = B {
@@ -3401,14 +3428,18 @@ impl<'i> Build<'_, 'i> {
                             in_scroll: b.in_scroll && height_dp.is_none(),
                             ..b.child(format!("layout:{id}"), Axis::Column)
                         };
-                        self.node(l, &lb).inspect(|&k| self.phone_width(k, l))
+                        let k = self.node(l, &lb);
+                        if let Some(k) = k {
+                            capped = self.phone_width(k, l, false);
+                        }
+                        k
                     }
                     None => Some(self.placeholder(&format!("Layout {id}"))),
                 };
                 let wide = crate::interact::size_class(self.input.viewport.width) == "expanded";
                 let kid = if *panels && wide && b.depth < MAX_EMBED_DEPTH {
                     self.panel_hosts.push(host.clone());
-                    self.with_panels(&host, kid, b, ctx)
+                    self.with_panels(&host, kid, capped, b, ctx)
                 } else {
                     kid
                 };

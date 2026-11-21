@@ -17,17 +17,22 @@ Considered:
 - **The renderer caps a layout that doesn't adapt.** Taken. This reverses the part of `screen-sizes` that said the
   app never rearranges a layout on its own, for this one rule.
 
-Decision: **a layout that doesn't adapt to the window draws at most 480 points wide (`PHONE_WIDTH_DP`), centred
-in the room it is given.**
+Decision: **a layout that doesn't adapt to the window draws at most 480 points wide (`PHONE_WIDTH_DP`): centred
+on a whole screen, and at the start of its room in an embed or a panel, so panes build up from the left.**
 
 - A layout **adapts** (`adapts_to_window`) when its own tree, not the layouts it embeds, has a
   `core://Conditional` on `local://device` (`size_class`, `width_dp`, `height_dp` or `platform`: a fork for the
   web), a `core://Column` with `max_width_dp`, a `core://List` with `min_column_dp`, or a `core://Layout` with
   `panels: true`. Such a layout gets the whole width as before.
 - The cap applies wherever a layout is drawn: the root screen, a pushed screen, a sheet or side panel's content,
-  an inline `core://Layout` embed and a panel beside one. A home laid out for wide windows (it tests
-  `size_class`) keeps its sidebar and detail; the layouts its detail embeds draw at phone width in the middle of
-  the detail.
+  an inline `core://Layout` embed and a panel beside one. A screen of its own (the root, a push, a sheet) is
+  centred. An embed sits at the start of its room, against what is drawn before it: a home laid out for wide
+  windows (it tests `size_class`) keeps its sidebar, and the layout its detail embeds draws at phone width right
+  beside it, the rest of the window left empty.
+- Panels (`panels: true`, decision `wide-screen-panels`) no longer share the width equally when their layouts are
+  phone layouts: each such column is phone wide, next to the one before it with the hairline between, so opening a
+  panel adds a column to the right of the last. Columns whose layouts adapt share what is left; short of room, the
+  phone-wide columns shrink too.
 - A window or pane narrower than 480 points changes nothing, so phones draw as before. A phone in landscape or a
   tablet shows a phone layout as a centred column too.
 - The room beside the column is the window's background. A tap there ends typing, as a tap anywhere outside a
