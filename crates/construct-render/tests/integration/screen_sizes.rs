@@ -156,3 +156,30 @@ fn the_window_size_doesnt_lay_a_still_screen_out_again() {
     assert_eq!(s.take_work().laid_out, 0);
     assert_eq!(s.scenes_built(), built, "nothing changed: no new scene");
 }
+
+/// `headers_only` draws one header per distinct value of the field, wherever
+/// its items come in the list (docs/layouts.md), so a settings list of apps
+/// names each app once even when its channels aren't next to each other.
+#[test]
+fn headers_only_gives_one_header_per_distinct_value() {
+    let (root, mut data) = cards(
+        5,
+        json!({ "group_by": { "field": "group", "headers_only": true,
+            "header": { "type": "core://Text", "style": "Label", "value_expr": "Group $item.group" } } }),
+    );
+    for (i, e) in data.entities.values_mut().enumerate() {
+        e.set("group", ["A", "B", "A", "C", "B"][i]);
+    }
+    let scene = build(&root, &data, &BTreeMap::new(), at(390.0));
+    let headers: Vec<&str> = scene
+        .semantics
+        .iter()
+        .filter_map(|n| n.text_content.as_deref())
+        .filter(|t| t.starts_with("Group "))
+        .collect();
+    assert_eq!(headers, ["Group A", "Group B", "Group C"]);
+    assert!(
+        scene.find_text("Card 0").is_none(),
+        "headers only, no items"
+    );
+}
