@@ -503,17 +503,17 @@ mod tests {
         assert_eq!(dangerous_endpoint("/v1/agents/tasks/start"), Some("agents"));
         assert_eq!(dangerous_endpoint("/v1/jacks/plug"), Some("jacks"));
         assert_eq!(
-            dangerous_endpoint("/v1/collections/chores/delete"),
+            dangerous_endpoint("/v1/notes/chores/delete"),
             Some("delete")
         );
-        assert_eq!(dangerous_endpoint("/v1/collections/chores/update"), None);
+        assert_eq!(dangerous_endpoint("/v1/notes/chores/update"), None);
     }
 
     #[test]
     fn reaches_finds_endpoints_keys_commands_and_entities() {
         let node = json!({"type": "core://Column", "children": [
             {"type": "core://List", "query_key": "collection:secret:view:all", "item_template":
-                {"type": "core://Text", "value_expr": "${collections://other/$item.id#title}"}},
+                {"type": "core://Text", "value_expr": "${notes://other/$item.id#title}"}},
             {"type": "core://Button", "label": "Go", "on_click": {"intent": "action.sequence",
                 "steps": [
                     {"intent": "action.mutation.create", "endpoint": "/v1/agents/tasks/start",
@@ -524,7 +524,7 @@ mod tests {
         let got: BTreeSet<(&str, &str)> = out.iter().map(|r| (r.kind, r.value.as_str())).collect();
         for want in [
             ("reads", "collection:secret:view:all"),
-            ("reads", "collections://other/$item.id"),
+            ("reads", "notes://other/$item.id"),
             ("endpoint", "/v1/agents/tasks/start"),
             ("device", "leave_pod"),
         ] {
