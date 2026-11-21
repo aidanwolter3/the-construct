@@ -1,5 +1,7 @@
 # Server monitoring: in-memory counters, a Prometheus page and a pod data source
 
+Superseded in part by [browser-network-fence](browser-network-fence.md): staging binds the metrics to `fly-local-6pn:9091`, the machine's 6PN address only.
+
 Date: 2026-11-04. Related: D46, [custom-apps-and-data-sources](custom-apps-and-data-sources.md),
 [mcp-connector](mcp-connector.md), [pod-storage-limits](pod-storage-limits.md).
 

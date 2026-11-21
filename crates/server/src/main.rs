@@ -51,7 +51,7 @@
 //!   keep their default).
 //! - `CONSTRUCT_METRICS_ADDR`: serve `GET /metrics` (Prometheus text) on
 //!   this address, apart from the public one (decision `server-monitoring`). Unset:
-//!   off. On Fly, `[::]:9091`, which only Fly's private network reaches.
+//!   off. On Fly, `fly-local-6pn:9091`: the machine's private (6PN) address only.
 //! - `PIXELFED_*`: see `PixelfedConfig::from_env` and docs/server.md.
 //!
 //! A pod's layout files are synced into its database when the pod is first
@@ -408,8 +408,9 @@ async fn serve_on(local: LocalPod) -> Result<(), String> {
     if let Some(aside) = server::host::backup::restore_pending(&dir)? {
         tracing::warn!(replaced = %aside.display(), "restored the data from a backup");
     }
-    // Before any render: keep the headless browser off Fly's private network
-    // (decision `browser-private-network`); logs and serves on if it can't.
+    // Before any render: fence the headless browser's network, so its user
+    // reaches only its proxy (decision `browser-network-fence`); logs and
+    // serves on if it can't.
     if web_extract::render::Browser::from_env(false).is_some() {
         web_extract::render::block_private_network().await;
     }
