@@ -150,7 +150,8 @@ share screen.
 - `publish {name}` answers a review and shares nothing: every element of the closure, the interface (each
   collection the layout uses becomes an input, with the fields it reads and writes and a suggested schema) and
   each literal text or URL that would go out. A reference to one row is refused. `publish {name, confirm:
-  <review_id>}` shares exactly what was reviewed and answers the share link (`share-…`); `leave_out` leaves
+  <review_id>}` shares exactly what was reviewed (the id covers the closure's root and the interface, so a
+  collection's title, options or defaults changed since need a new review) and answers the share link (`share-…`); `leave_out` leaves
   elements out, `keep_shared: true` sends later versions without asking while they bring no new text or URLs.
   Only `visibility: link` (unlisted) for now. The shelf is the server's, outside the pod's storage quota, so a pod
   keeps at most 20 live publications (`too_many_publications`: revoke one first), each of at most 1 MiB of
@@ -192,6 +193,8 @@ admin pod: a temporary pod can't share a public page (decision [`web-on-staging`
   for each listed row; `leave_out: [<layout>]` keeps one out (its openers go). `params: {id: <meal id>}` draws a
   screen that reads `$route.id`; `item` draws the layout with one row as `$item`; `rows: [<entity URI>]` limits
   the root's lists. `share_publicly {layout, confirm: <review_id>}` shares it and answers its `url` (`/s/pub-…`);
+  the review id covers the copy and how it was asked for (`rows`, `item`, `params`, `leave_out`, `new_rows`, `slug`),
+  so the confirm must repeat the review's arguments;
   with `slug` (and the pod's handle, `set_handle`) also a `short_url`, `/<handle>/<slug>`; each row a list's tap opens is at `/<handle>/<slug>/<row name>` (decision `public-row-links`). Sharing the same layout,
   rows, item and params again updates the same link; other params are another link.
 - The copy is made again when the pod's Collections data changes: edits and removals of its rows go out, but new
