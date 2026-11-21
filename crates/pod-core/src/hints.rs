@@ -14,6 +14,10 @@
 //! - **a row written into a binding**: a source's entity
 //!   (`<scheme>://<kind>/<id>`) with a literal, generated id.
 //!
+//!
+//! And [`route_text`]: a layout whose own text shows a `$route` value, which
+//! stays as written when the layout is opened without it.
+//!
 //! Hints are advice: the write has already succeeded. At most
 //! [`MAX_HINTS`], the largest saving first, within [`BUDGET`].
 
@@ -624,4 +628,63 @@ pub fn gaps(store: &crate::store::Store) -> Vec<Value> {
         .flatten()
         .and_then(|v| serde_json::from_str::<Vec<Value>>(&v).ok())
         .unwrap_or_default()
+}
+
+/// Text of a layout's own page (not its screens, which have routes) that
+/// shows a `$route.<name>` value: opened without `params.<name>` (from a
+/// notification, a link, another path) the device draws the binding as
+/// written. One hint per name, at its first place.
+pub fn route_text(doc: &Value) -> Vec<String> {
+    fn scan(v: &Value, at: &str, out: &mut BTreeMap<String, String>) {
+        match v {
+            Value::Object(m) => {
+                for (k, x) in m {
+                    if k == "screens" {
+                        continue;
+                    }
+                    let here = format!("{at}/{}", escape(k));
+                    match (k.as_str(), x) {
+                        ("value_expr" | "title" | "text" | "label", Value::String(s)) => {
+                            for name in route_names(s) {
+                                out.entry(name).or_insert_with(|| here.clone());
+                            }
+                        }
+                        _ => scan(x, &here, out),
+                    }
+                }
+            }
+            Value::Array(a) => {
+                for (i, x) in a.iter().enumerate() {
+                    scan(x, &format!("{at}/{i}"), out);
+                }
+            }
+            _ => {}
+        }
+    }
+    let mut found = BTreeMap::new();
+    if let Some(root) = doc.get("root") {
+        scan(root, "/root", &mut found);
+    }
+    found
+        .into_iter()
+        .map(|(name, at)| {
+            format!(
+                "{}: this text shows $route.{name}, which is drawn as written when the layout is opened without params.{name} (from a notification, a link or another path): write the text out, or show it in a core://Conditional on $route.{name} with fixed text beside it for the other case",
+                pointer(&at)
+            )
+        })
+        .collect()
+}
+
+/// The `$route.<name>` names in `s`.
+fn route_names(s: &str) -> Vec<String> {
+    s.match_indices("$route.")
+        .map(|(i, m)| {
+            s[i + m.len()..]
+                .chars()
+                .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
+                .collect::<String>()
+        })
+        .filter(|n| !n.is_empty())
+        .collect()
 }
