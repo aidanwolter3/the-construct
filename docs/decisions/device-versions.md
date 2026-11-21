@@ -44,6 +44,13 @@ Decision:
   and waits for a feature or a build at least as new as one; when a ping meets it the pod runs, once, a source
   action as the owner (e.g. the Agents source's reopen of a run, with a message) or sends a notification on the
   "Device updates" channel of the layout that shows the `devices` feed.
+- **A watch keeps its maker's scope** (issue #435): the watch stores the scope of the credential that made it
+  (`device_watches.scope`, `list_devices` shows it as `created_by`), and the action runs through the pod's router
+  with that scope in the internal header. An MCP credential's watch may run only the actions sources list as
+  `mcp_actions` (collections' row writes and actions, and the Agents source's reopen: what its MCP tools already
+  do); anything else (posting to Pixelfed, starting or stopping agents, signing in, plugging jacks) is refused when
+  the watch is made and again, by the router, when it fires. The pod token's watches may run any source action.
+  Watches made before this are taken as an MCP credential's.
 
 Limits: an old app shows as "Version unknown" (it sends its device id but no build) until it is updated; its row
 updates in place then. A browser's private window or cleared storage is a new device. Device names are hints

@@ -4,7 +4,8 @@
 //! - Layouts: `core_layout_<id>_page.json` (the shell's Settings and inbox, as
 //!   a pod serves them), else the layout's default bundle ([`default_bundle`]).
 //! - Data paths (a screen's `data`, `action.data.load`): from
-//!   `pixelfed_screen_data.json` and `events_screen_data.json`.
+//!   `pixelfed_screen_data.json`, `events_screen_data.json` and
+//!   `settings_screen_data.json` (Settings' Connected apps).
 //! - Writes are accepted and change nothing on the pod: the device keeps its
 //!   optimistic change. Offline, loads and writes fail as an unreachable pod
 //!   does (the Rust clients have no outbox), so a write is undone.
@@ -56,6 +57,8 @@ pub fn default_bundle(workspace: &str) -> Option<&'static str> {
         "server_health" => "server_health_bundle.json",
         "server_health_off" => "server_health_off_bundle.json",
         "list_trailing" => "list_trailing_bundle.json",
+        // A layout that tries to move the app to another server (issue 434).
+        "server_hijack" => "server_hijack_bundle.json",
         // A home on the construct, before its first `construct` step
         // (decision `content-addressed-construct`).
         "home" => "construct_home_bundle.json",
@@ -125,7 +128,11 @@ impl FixturePod {
     pub fn new(root: &Path) -> Result<FixturePod, String> {
         let data = root.join(DATA_DIR);
         let mut screen_data = BTreeMap::new();
-        for name in ["pixelfed_screen_data.json", "events_screen_data.json"] {
+        for name in [
+            "pixelfed_screen_data.json",
+            "events_screen_data.json",
+            "settings_screen_data.json",
+        ] {
             let v = read_json(&data.join(name))?;
             let paths: BTreeMap<String, DataBundle> =
                 serde_json::from_value(v).map_err(|e| format!("{name}: {e}"))?;
@@ -405,6 +412,11 @@ fn app_title(id: &str) -> String {
 }
 
 impl Loader for FixturePod {
+    /// The fixture pod is the platform's only server.
+    fn server(&self, id: &str) -> Option<(String, bool)> {
+        (id == "current").then(|| ("fixture".to_owned(), true))
+    }
+
     fn changes(&self) -> Option<Changes> {
         self.lock().news.take()
     }

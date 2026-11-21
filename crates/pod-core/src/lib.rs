@@ -18,6 +18,7 @@ pub mod devices;
 pub mod disk;
 pub mod hints;
 pub mod ical;
+pub mod image_proxy;
 pub mod jacks;
 pub mod layouts;
 pub mod mcp;
@@ -498,23 +499,43 @@ impl AppState {
             .map(str::to_owned)
     }
 
-    /// The `[`session::INTERNAL_HEADER`]` value that makes an internal request
-    /// act as session `token_hash`.
-    pub(crate) fn internal_as(&self, token_hash: &str) -> String {
-        format!("{}:{token_hash}", self.internal_secret)
+    /// The [`session::INTERNAL_HEADER`] value that makes an internal request
+    /// act as session `token_hash`, limited to `scope` ([`scope_layer`]).
+    pub(crate) fn internal_as(&self, token_hash: &str, scope: session::Scope) -> String {
+        format!("{}:{}:{token_hash}", self.internal_secret, scope.id())
     }
 
-    /// The session hash of an internal request ([`Self::internal_as`]).
-    pub(crate) fn internal_caller(&self, headers: &HeaderMap) -> Option<String> {
+    /// The session hash and scope of an internal request
+    /// ([`Self::internal_as`]).
+    pub(crate) fn internal_caller(&self, headers: &HeaderMap) -> Option<(String, session::Scope)> {
         let v = headers.get(session::INTERNAL_HEADER)?.to_str().ok()?;
-        let (secret, hash) = v.split_once(':')?;
+        let (secret, rest) = v.split_once(':')?;
+        let (scope, hash) = rest.split_once(':')?;
         let ok = secret.len() == self.internal_secret.len()
             && secret
                 .bytes()
                 .zip(self.internal_secret.bytes())
                 .fold(0u8, |acc, (a, b)| acc | (a ^ b))
                 == 0;
-        ok.then(|| hash.to_owned())
+        ok.then(|| (hash.to_owned(), session::Scope::parse(scope)))
+    }
+
+    /// Whether a request of `scope` may make a `method` request of `path`:
+    /// [`session::Scope::Mcp`] reads, and runs only the actions sources list
+    /// as [`SourceManifest::mcp_actions`].
+    pub fn scope_allows(&self, scope: session::Scope, method: &Method, path: &str) -> bool {
+        match scope {
+            session::Scope::Full => true,
+            session::Scope::Mcp => {
+                method == Method::GET
+                    || method == Method::HEAD
+                    || (method == Method::POST
+                        && !path.contains('$')
+                        && self.catalog.sources().any(|(_, m)| {
+                            m.mcp_actions.iter().any(|p| source::path_matches(p, path))
+                        }))
+            }
+        }
     }
 
     /// Limits on the pod's layouts ([`layouts::Caps`]).
@@ -620,6 +641,7 @@ pub fn app(state: Pod) -> Router {
         .merge(notify::router())
         .merge(construct::http::router())
         .merge(mcp::router())
+        .merge(image_proxy::router())
         .route("/v1/jacks", get(get_jacks))
         .route("/v1/jacks/screen", get(get_jacks_screen))
         .route("/v1/jacks/plug", post(post_jack_plug))
@@ -634,11 +656,29 @@ pub fn app(state: Pod) -> Router {
     }
     router
         .route_layer(middleware::from_fn_with_state(state.clone(), fault_layer))
+        .route_layer(middleware::from_fn_with_state(state.clone(), scope_layer))
         .route_layer(middleware::from_fn_with_state(
             state.clone(),
             devices::note_layer,
         ))
         .with_state(state)
+}
+
+/// Refuses an internal request its scope doesn't allow
+/// ([`AppState::scope_allows`]): one an MCP credential started can't act
+/// upstream or change jacks, sign-ins or agents (issue #435).
+async fn scope_layer(State(pod): State<Pod>, req: Request, next: Next) -> Response {
+    if let Some((_, scope)) = pod.internal_caller(req.headers())
+        && !pod.scope_allows(scope, req.method(), req.uri().path())
+    {
+        metrics::inc(metrics::AUTH_FAILURES, &[("kind", "mcp_scope")]);
+        return json_error(
+            StatusCode::FORBIDDEN,
+            json!({ "error": "mcp_credential_scope",
+                    "detail": "started by an MCP credential, which reads and runs only the actions sources list for it, never one that acts for the user upstream" }),
+        );
+    }
+    next.run(req).await
 }
 
 /// `None` for a session of the pod (jacks are its owner's: any device
@@ -1007,4 +1047,55 @@ pub fn parse_json_body(headers: &HeaderMap, body: &Bytes) -> Result<Value, ApiEr
             json!({ "error": "invalid_json", "detail": e.to_string() }),
         )
     })
+}
+
+#[cfg(test)]
+mod scope_tests {
+    use super::*;
+    use tower::ServiceExt;
+
+    async fn status(pod: &Pod, method: Method, path: &str, scope: session::Scope) -> StatusCode {
+        let req = Request::builder()
+            .method(method)
+            .uri(path)
+            .header(session::INTERNAL_HEADER, pod.internal_as("nobody", scope))
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(axum::body::Body::from("{}"))
+            .unwrap();
+        app(pod.clone()).oneshot(req).await.unwrap().status()
+    }
+
+    /// Issue #435: an internal request an MCP credential started reads, but
+    /// can't change jacks (or act upstream); the pod token's still can.
+    #[tokio::test]
+    async fn an_mcp_scoped_internal_request_only_reads() {
+        let pod: Pod = Arc::new(AppState::new(Store::open_in_memory().unwrap(), vec![]));
+        let mcp = session::Scope::Mcp;
+        assert_eq!(
+            status(&pod, Method::POST, "/v1/jacks/plug", mcp).await,
+            StatusCode::FORBIDDEN
+        );
+        assert_eq!(
+            status(&pod, Method::POST, "/v1/auth/logout", mcp).await,
+            StatusCode::FORBIDDEN
+        );
+        assert_ne!(
+            status(&pod, Method::GET, "/v1/jacks", mcp).await,
+            StatusCode::FORBIDDEN
+        );
+        let full = session::Scope::Full;
+        assert_ne!(
+            status(&pod, Method::POST, "/v1/jacks/plug", full).await,
+            StatusCode::FORBIDDEN
+        );
+        // A header a client forged (no secret) is no internal request at all.
+        assert!(
+            pod.internal_caller(&{
+                let mut h = HeaderMap::new();
+                h.insert(session::INTERNAL_HEADER, "x:full:nobody".parse().unwrap());
+                h
+            })
+            .is_none()
+        );
+    }
 }

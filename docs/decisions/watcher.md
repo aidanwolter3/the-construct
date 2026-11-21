@@ -29,7 +29,7 @@ declarative.
   zones had names; the name wins), and the poll state (next
   check, `ETag`/`Last-Modified`, body hash, failures, empty runs, last error).
 - **Fetch:** plain `GET` with conditional headers, 3 MiB cap, 30 s timeout. Only public addresses
-  (`pod_core::net::public_builder`) unless the server sets `CONSTRUCT_WATCHER_PRIVATE_HOSTS=1`. A 304 or an
+  (`pod_core::net::OutboundClient`) unless the server sets `CONSTRUCT_WATCHER_PRIVATE_HOSTS=1`. A 304 or an
   unchanged body hash ends the check: no extraction, so no model call. Errors back off from the interval doubling
   to a day, at least `Retry-After`. Temporary pods get the pod setting `watcher.fetch = 0` (anyone can make one, so
   it must not make the server fetch URLs of their choosing).

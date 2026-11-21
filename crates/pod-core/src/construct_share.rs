@@ -190,6 +190,9 @@ pub enum ShelfError {
     SlugTaken,
     /// The pod already keeps the most live public links it may.
     TooManyLinks,
+    /// A temporary pod (anyone can make one) may not claim a handle or
+    /// publish under this server's name.
+    TemporaryPod,
     Store(String),
 }
 
@@ -214,6 +217,10 @@ impl ShelfError {
                     "a pod keeps at most {} public links: unshare one first",
                     crate::public_copy::MAX_LIVE
                 ),
+            ),
+            ShelfError::TemporaryPod => refuse(
+                "temporary_pod",
+                "a temporary pod can't take a handle or publish: use a pod the server's admin made",
             ),
             ShelfError::Store(e) => refuse("shelf_error", e.clone()),
         }
@@ -243,6 +250,12 @@ pub trait Shelf: Send + Sync {
     /// Revoke the pod's live publication `name` (its objects leave the
     /// shelf); the revoked publication, if there was one.
     fn revoke(&self, pod: &str, name: &str) -> Result<Option<Publication>, ShelfError>;
+
+    /// Whether this pod may take a handle and publish (not a temporary pod,
+    /// which anyone can make).
+    fn may_publish(&self) -> bool {
+        true
+    }
 
     /// Whether the host serves public links (`CONSTRUCT_PUBLIC_WEB=1`,
     /// decision `public-web-links`).
@@ -1320,6 +1333,9 @@ fn set_handle(pod: &Pod, args: &Value) -> Result<Value, Value> {
         let h = shelf.handle(&me).map_err(|e| e.answer())?;
         return Ok(json!({ "handle": h.map(|h| format!("@{h}")) }));
     };
+    if !shelf.may_publish() {
+        return Err(ShelfError::TemporaryPod.answer());
+    }
     let h = h.trim_start_matches('@').to_ascii_lowercase();
     if !valid_handle(&h) {
         return Err(refuse(
@@ -1374,8 +1390,14 @@ fn describe_publication(pod: &Pod, args: &Value) -> Result<Value, Value> {
     let (me, shelf) = shelf(pod)?;
     let link = link_arg(args)?;
     let p = live_by_link(shelf.as_ref(), &link)?;
-    let mut out = publication_row(&p, p.owner_pod == me);
-    out["interface"] = p.interface.clone();
+    let mine = p.owner_pod == me;
+    let mut out = publication_row(&p, mine);
+    // Another pod's interface is its publisher's text (issue #439).
+    out["interface"] = if mine {
+        p.interface.clone()
+    } else {
+        crate::mcp::untrusted(&p.name, p.interface.clone())
+    };
     Ok(out)
 }
 
@@ -1416,6 +1438,9 @@ async fn publish(pod: &Pod, args: &Value) -> Result<Value, Value> {
 
 fn publish_blocking(pod: &Pod, args: &Value) -> Result<Value, Value> {
     let (me, shelf) = shelf(pod)?;
+    if !shelf.may_publish() {
+        return Err(ShelfError::TemporaryPod.answer());
+    }
     let Some(handle) = shelf.handle(&me).map_err(|e| e.answer())? else {
         return Err(refuse(
             "no_handle",
@@ -1700,12 +1725,15 @@ fn consent(
     let urls = c.unaccepted_urls(urls);
     if !urls.is_empty() {
         let mut r = data_urls_refusal(name, &urls);
-        r["data_url_flags"] = json!(
-            c.data_urls
-                .iter()
-                .filter(|(_, f)| f["value"].as_str().is_some_and(|v| urls.contains(v)))
-                .map(|(_, f)| f.clone())
-                .collect::<Vec<_>>()
+        r["data_url_flags"] = crate::mcp::untrusted(
+            name,
+            json!(
+                c.data_urls
+                    .iter()
+                    .filter(|(_, f)| f["value"].as_str().is_some_and(|v| urls.contains(v)))
+                    .map(|(_, f)| f.clone())
+                    .collect::<Vec<_>>()
+            ),
         );
         return Err(r);
     }
@@ -2053,12 +2081,13 @@ async fn adopt(pod: &Pod, args: &Value) -> Result<Value, Value> {
             "ready": ready,
             "name": fetched.publication.name,
             "version": fetched.publication.version,
-            "interface": fetched.publication.interface,
+            // The publisher's text (issue #439).
+            "interface": crate::mcp::untrusted(&fetched.publication.name, fetched.publication.interface.clone()),
             "bind": plan.bind,
             "create": plan.create.iter().map(|(t, a)| json!({"tool": t, "args": a})).collect::<Vec<_>>(),
             "problems": plan.problems,
             "proposed": plan.proposed,
-            "flags": fetched.flags,
+            "flags": crate::mcp::untrusted(&fetched.publication.name, json!(fetched.flags)),
         })
     };
     if !plan.problems.is_empty() {
@@ -2090,12 +2119,12 @@ async fn adopt(pod: &Pod, args: &Value) -> Result<Value, Value> {
             "ready": ready,
             "name": fetched.publication.name,
             "version": fetched.publication.version,
-            "interface": fetched.publication.interface,
+            "interface": crate::mcp::untrusted(&fetched.publication.name, fetched.publication.interface.clone()),
             "bind": plan.bind,
             "create": plan.create.iter().map(|(t, a)| json!({"tool": t, "args": a})).collect::<Vec<_>>(),
             "problems": plan.problems,
             "proposed": plan.proposed,
-            "flags": fetched.flags,
+            "flags": crate::mcp::untrusted(&fetched.publication.name, json!(fetched.flags)),
         });
         r["accepted_actions"] = json!(checked.needed());
         r
@@ -2304,7 +2333,7 @@ async fn update_adoption(pod: &Pod, args: &Value) -> Result<Value, Value> {
         let urls = &ad.accepted | &checked.url_keys(&strings_arg(&a, "accept_data_urls"));
         if let Err(mut e) = consent(&f.publication.name, &checked, &actions, &urls) {
             e["version"] = json!(f.publication.version);
-            e["flags"] = json!(f.flags);
+            e["flags"] = crate::mcp::untrusted(&f.publication.name, json!(f.flags));
             return Err(e);
         }
         check_bound(&p, f, &plan.bind, &plan.feeds)?;

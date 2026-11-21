@@ -1373,6 +1373,17 @@ impl<'a> Caps<'a> {
             "action.local.set" => {
                 if let Some(u) = field("entity_uri") {
                     self.entity(&format!("{at}/entity_uri"), u)?;
+                    // The device's own data is read-only to layouts
+                    // (decision `device-owned-local-state`).
+                    if protocol::is_device_owned(u) {
+                        return Err(LayoutError::new(
+                            &format!("{at}/entity_uri"),
+                            format!(
+                                "'{u}' is the device's own data: layouts read it but can't set it"
+                            ),
+                        )
+                        .allowing(["local://<your own name>, e.g. local://shell".to_owned()]));
+                    }
                 }
             }
             "action.link.open" => {
@@ -1973,6 +1984,34 @@ mod tests {
         assert!(check_values(&chips(json!([]))).is_err());
         assert!(check_values(&chips(json!([{"label": "A"}, {"label": "B"}]))).is_err());
         assert!(check_values(&chips(json!([{"label": " ", "value": "a"}]))).is_err());
+    }
+
+    #[test]
+    fn a_layout_cant_set_the_devices_own_data() {
+        let layout = |uri: &str| {
+            json!({"type": "core://Page", "id": "home", "root": {"type": "core://Button",
+                "label": "Like", "on_click": {"intent": "action.local.set", "entity_uri": uri,
+                "field": "url", "value_expr": "\"https://evil.example\""}}})
+        };
+        for uri in [
+            "local://servers/x",
+            "local://servers/$item.id",
+            "local://session",
+            "local://theme",
+            "local://providers/photos",
+            "local://inbox",
+        ] {
+            let err = custom_layout("home", &layout(uri), &[]).unwrap_err();
+            assert!(err.message.contains("device's own data"), "{uri}: {err:?}");
+            assert_eq!(err.pointer, "/root/on_click/entity_uri", "{uri}");
+        }
+        for uri in [
+            "local://shell",
+            "local://collapsible/older",
+            "local://$arg.state",
+        ] {
+            assert!(custom_layout("home", &layout(uri), &[]).is_ok(), "{uri}");
+        }
     }
 
     #[test]

@@ -7,6 +7,7 @@ mod construct;
 mod guide;
 mod previews;
 mod sharing;
+mod watches;
 
 use std::sync::Arc;
 
@@ -344,7 +345,8 @@ async fn claude_connects_with_oauth_and_the_pod_code() {
     // The client's name is self-chosen: the page also names where the code
     // goes (security audit: consent phishing with a look-alike name).
     assert!(
-        html.contains("gives access to <b>claude.example</b>"),
+        html.contains("<p class=\"dest\">claude.example</p>")
+            && html.contains("claude.example is not a site Claude uses"),
         "{html}"
     );
     // An unregistered redirect gets no redirect.
@@ -518,7 +520,7 @@ async fn claude_connects_with_oauth_and_the_pod_code() {
 
     // Rotating the pod code keeps Claude connected; revoking disconnects it.
     let host = env.host.clone();
-    let new_code = tokio::task::spawn_blocking(move || host.rotate("mine").unwrap())
+    let new_code = tokio::task::spawn_blocking(move || host.rotate("mine", false).unwrap())
         .await
         .unwrap();
     let (status, _) = env.rpc(Some(&access), "ping", json!({})).await;
@@ -540,6 +542,203 @@ async fn claude_connects_with_oauth_and_the_pod_code() {
         .unwrap();
     assert_eq!(revoked, 1);
     let (status, _) = env.rpc(Some(&access), "ping", json!({})).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+}
+
+/// Security audit (#440): registration refuses userinfo redirects, request
+/// errors of a client that isn't Claude's are a page (no open redirect),
+/// and Settings' Connected apps lists and revokes one credential.
+#[tokio::test]
+async fn connected_apps_are_listed_and_revoked_and_odd_clients_get_no_redirects() {
+    let env = env().await;
+    let pod_code = env.pod("mine").await;
+    let register = |uri: &'static str| {
+        let url = env.url.clone();
+        async move {
+            client()
+                .post(format!("{url}/oauth/register"))
+                .json(&json!({"client_name": "Claude", "redirect_uris": [uri]}))
+                .send()
+                .await
+                .unwrap()
+        }
+    };
+    for bad in [
+        "https://claude.ai@evil.example/cb",
+        "https://claude.ai\\@evil.example/cb",
+    ] {
+        let resp = register(bad).await;
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST, "{bad}");
+    }
+
+    // A bad request from a self-registered client elsewhere: a page here.
+    let odd: Value = register("https://evil.example/cb")
+        .await
+        .json()
+        .await
+        .unwrap();
+    let resp = client()
+        .get(format!("{}/oauth/authorize", env.url))
+        .query(&[
+            ("client_id", odd["client_id"].as_str().unwrap()),
+            ("response_type", "bad"),
+        ])
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    assert!(resp.headers().get("location").is_none());
+    assert!(resp.text().await.unwrap().contains("not valid"));
+    // Claude's own callback still gets the error back.
+    let claude: Value = register("https://claude.ai/api/mcp/auth_callback")
+        .await
+        .json()
+        .await
+        .unwrap();
+    let resp = client()
+        .get(format!("{}/oauth/authorize", env.url))
+        .query(&[
+            ("client_id", claude["client_id"].as_str().unwrap()),
+            ("response_type", "bad"),
+        ])
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::FOUND);
+    let location = resp.headers()["location"].to_str().unwrap().to_owned();
+    assert!(
+        location
+            .starts_with("https://claude.ai/api/mcp/auth_callback?error=unsupported_response_type"),
+        "{location}"
+    );
+
+    // Connect through OAuth: the credential remembers where it went.
+    let verifier = "v".repeat(60);
+    let challenge = URL_SAFE_NO_PAD.encode(Sha256::digest(verifier.as_bytes()));
+    let client_id = claude["client_id"].as_str().unwrap();
+    let redirect = "https://claude.ai/api/mcp/auth_callback";
+    let resp = client()
+        .get(format!("{}/oauth/authorize", env.url))
+        .query(&[
+            ("client_id", client_id),
+            ("redirect_uri", redirect),
+            ("response_type", "code"),
+            ("code_challenge", challenge.as_str()),
+            ("code_challenge_method", "S256"),
+        ])
+        .send()
+        .await
+        .unwrap();
+    let html = resp.text().await.unwrap();
+    assert!(
+        html.contains("<p class=\"dest\">claude.ai</p>") && !html.contains("class=\"warn\""),
+        "{html}"
+    );
+    let resp = client()
+        .post(format!("{}/oauth/authorize", env.url))
+        .form(&[
+            ("client_id", client_id),
+            ("redirect_uri", redirect),
+            ("response_type", "code"),
+            ("code_challenge", challenge.as_str()),
+            ("code_challenge_method", "S256"),
+            ("pod_code", pod_code.as_str()),
+            ("decision", "allow"),
+        ])
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::FOUND);
+    let location = resp.headers()["location"].to_str().unwrap().to_owned();
+    let code = location
+        .split(['?', '&'])
+        .find_map(|kv| kv.strip_prefix("code="))
+        .unwrap()
+        .to_owned();
+    let tok: Value = client()
+        .post(format!("{}/oauth/token", env.url))
+        .form(&[
+            ("grant_type", "authorization_code"),
+            ("code", code.as_str()),
+            ("client_id", client_id),
+            ("code_verifier", verifier.as_str()),
+        ])
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let access = tok["access_token"].as_str().unwrap().to_owned();
+    let host = env.host.clone();
+    let cli = tokio::task::spawn_blocking(move || host.issue_mcp("mine", "Claude Code").unwrap())
+        .await
+        .unwrap();
+
+    // Settings' list, for the pod's own sessions only.
+    let (status, screen) = env.get("/v1/connected-apps/screen", &pod_code).await;
+    assert_eq!(status, StatusCode::OK, "{screen}");
+    let uris = screen["queries"]["connected_apps"].as_array().unwrap();
+    assert_eq!(uris.len(), 2, "{screen}");
+    let (uri, app) = screen["entities"]
+        .as_object()
+        .unwrap()
+        .iter()
+        .find(|(_, e)| e["host"] == "claude.ai")
+        .unwrap();
+    assert_eq!(app["title"], "Claude");
+    assert!(
+        app["detail"]
+            .as_str()
+            .unwrap()
+            .starts_with("claude.ai · connected today"),
+        "{app}"
+    );
+    let id = app["id"].as_str().unwrap().to_owned();
+    assert_eq!(*uri, format!("connected_apps://{id}"));
+    let (status, one) = env
+        .get(&format!("/v1/connected-apps/screen?id={id}"), &pod_code)
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(one["entities"].as_object().unwrap().len(), 1);
+    let (status, body) = env.get("/v1/connected-apps/screen", &access).await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    assert_eq!(body["error"], "mcp_credential_scope");
+
+    // Revoking it from Settings stops it at once; the other stays.
+    let revoke = |bearer: String, id: String| {
+        let url = env.url.clone();
+        async move {
+            client()
+                .post(format!("{url}/v1/connected-apps/revoke"))
+                .bearer_auth(bearer)
+                .json(&json!({ "id": id }))
+                .send()
+                .await
+                .unwrap()
+                .status()
+        }
+    };
+    assert_eq!(
+        revoke(access.clone(), id.clone()).await,
+        StatusCode::FORBIDDEN,
+        "an MCP credential can't revoke"
+    );
+    let (status, _) = env.rpc(Some(&access), "ping", json!({})).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(revoke(pod_code.clone(), id.clone()).await, StatusCode::OK);
+    let (status, _) = env.rpc(Some(&access), "ping", json!({})).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    assert_eq!(revoke(pod_code.clone(), id).await, StatusCode::NOT_FOUND);
+    let (status, _) = env.rpc(Some(&cli), "ping", json!({})).await;
+    assert_eq!(status, StatusCode::OK);
+
+    // Rotating with --revoke-mcp disconnects the rest.
+    let host = env.host.clone();
+    tokio::task::spawn_blocking(move || host.rotate("mine", true).unwrap())
+        .await
+        .unwrap();
+    let (status, _) = env.rpc(Some(&cli), "ping", json!({})).await;
     assert_eq!(status, StatusCode::UNAUTHORIZED);
 }
 
@@ -639,6 +838,17 @@ async fn claude_builds_and_edits_a_custom_app_with_the_tools() {
         )
         .await;
     assert!(!err, "{sample}");
+    // The entities are data, marked as such (issue #439).
+    assert_eq!(
+        sample["entities"]["untrusted"]["from"], "collections",
+        "{sample}"
+    );
+    assert!(
+        sample["entities"]["untrusted"]["content"]
+            .as_object()
+            .is_some_and(|e| !e.is_empty()),
+        "{sample}"
+    );
     let listed = sample["queries"]["collection:dishes"].as_array().unwrap();
     assert_eq!(listed.len(), 3);
     let first = listed[0]

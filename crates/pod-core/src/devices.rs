@@ -19,7 +19,11 @@
 //! Agents watch for a device to update ([`watch_tool`]): when the device
 //! draws a feature or runs a build at least as new as one named, the pod runs
 //! a source action as its owner (e.g. reopens the agent's run with a message)
-//! or sends a notification on the "Device updates" channel, once.
+//! or sends a notification on the "Device updates" channel, once. The action
+//! runs with the scope of the credential that made the watch
+//! ([`crate::session::Scope`]): one an MCP credential made may run only the
+//! actions an MCP credential reaches, checked when it is made and again
+//! when it fires.
 
 use std::collections::HashMap;
 use std::sync::Mutex;
@@ -27,6 +31,8 @@ use std::sync::Mutex;
 use axum::extract::{Request, State};
 use axum::http::{HeaderMap, HeaderValue, Method};
 use axum::middleware::Next;
+
+use crate::session::Scope;
 use axum::response::Response;
 use rusqlite::{Connection, OptionalExtension, params};
 use serde_json::{Value, json};
@@ -554,7 +560,7 @@ pub fn tool_specs() -> Vec<Value> {
         ),
         crate::mcp::tool(
             "watch_device",
-            "Wait for a device to update without polling: when the device (or any device of a kind) draws a feature or runs a build at least as new as one, the pod does `then` once. then: {action: {path, body}} runs a source action as the user (list_data_sources lists actions; e.g. {path: \"/v1/agents/tasks/reopen\", body: {run_id, message}} reopens an agent run with a message, so a run can register a watch, end, and carry on later), or {notify: \"text\"} sends a notification on the Device updates channel. until: {feature: \"bars\"} or {build_at_least: \"server\" (the server's build now) or a build id}. Answers the watch, or already_met when the device already qualifies (nothing is registered). {cancel: id} removes a watch. Watches last expires_in_days (default 30, at most 90).",
+            "Wait for a device to update without polling: when the device (or any device of a kind) draws a feature or runs a build at least as new as one, the pod does `then` once. then: {action: {path, body}} runs a source action as the user, with your credential's reach: a collection's row writes and actions, or {path: \"/v1/agents/tasks/reopen\", body: {run_id, message}}, which reopens an agent run with a message, so a run can register a watch, end, and carry on later (an action that acts upstream or changes jacks, sign-ins or agents is refused), or {notify: \"text\"} sends a notification on the Device updates channel. until: {feature: \"bars\"} or {build_at_least: \"server\" (the server's build now) or a build id}. Answers the watch, or already_met when the device already qualifies (nothing is registered). {cancel: id} removes a watch. Watches last expires_in_days (default 30, at most 90).",
             json!({
                 "device": device, "kind": kind,
                 "until": { "type": "object", "description": "{feature} or {build_at_least}" },
@@ -575,10 +581,16 @@ pub fn tool_specs() -> Vec<Value> {
 }
 
 /// A device tool's answer, when `name` is one.
-pub async fn tool(pod: &Pod, name: &str, args: &Value) -> Option<Result<Value, Value>> {
+/// `scope` is the calling credential's ([`crate::mcp::credential_scope`]).
+pub async fn tool(
+    pod: &Pod,
+    scope: Scope,
+    name: &str,
+    args: &Value,
+) -> Option<Result<Value, Value>> {
     Some(match name {
         "list_devices" => list_tool(pod, args).await,
-        "watch_device" => watch_tool(pod, args).await,
+        "watch_device" => watch_tool(pod, scope, args).await,
         "rename_device" => rename_tool(pod, args).await,
         _ => return None,
     })
@@ -719,8 +731,9 @@ impl Until {
     }
 }
 
-/// What a watch does: a source action's path and body, or a notification.
-fn parse_then(pod: &Pod, v: &Value) -> Result<Value, Value> {
+/// What a watch does: a source action's path and body, or a notification;
+/// an action `scope` allows ([`crate::AppState::scope_allows`]).
+fn parse_then(pod: &Pod, scope: Scope, v: &Value) -> Result<Value, Value> {
     if let Some(text) = v["notify"].as_str() {
         let text = text.trim();
         if text.is_empty() || text.len() > 500 {
@@ -743,13 +756,24 @@ fn parse_then(pod: &Pod, v: &Value) -> Result<Value, Value> {
         return Err(json!({ "error": "unknown_action", "path": path,
             "detail": "then.action.path is an action of a source (see list_data_sources), with real values" }));
     }
+    if !pod.scope_allows(scope, &Method::POST, path) {
+        let allowed: Vec<&str> = pod
+            .catalog()
+            .sources()
+            .flat_map(|(_, m)| m.mcp_actions.iter().copied())
+            .collect();
+        return Err(
+            json!({ "error": "mcp_credential_scope", "path": path, "allowed": allowed,
+            "detail": "an MCP credential's watch can run only these actions (not ones that act for the user upstream or change jacks, sign-ins or agents); {notify} works for anything else" }),
+        );
+    }
     if !(a["body"].is_null() || a["body"].is_object()) {
         return Err(bad("then.action.body is an object"));
     }
     Ok(json!({ "action": { "path": path, "body": a["body"] } }))
 }
 
-async fn watch_tool(pod: &Pod, args: &Value) -> Result<Value, Value> {
+async fn watch_tool(pod: &Pod, scope: Scope, args: &Value) -> Result<Value, Value> {
     let now = now_secs();
     if let Some(id) = args["cancel"].as_str() {
         let id = id.to_owned();
@@ -768,7 +792,7 @@ async fn watch_tool(pod: &Pod, args: &Value) -> Result<Value, Value> {
     }
     let server = protocol::build();
     let until = Until::parse(&args["until"], server)?;
-    let then = parse_then(pod, &args["then"])?;
+    let then = parse_then(pod, scope, &args["then"])?;
     let which = args["device"].as_str().map(str::to_owned);
     let kind = args["kind"].as_str().map(str::to_owned);
     if which.is_none() == kind.is_none() {
@@ -827,7 +851,7 @@ async fn watch_tool(pod: &Pod, args: &Value) -> Result<Value, Value> {
             s.with_conn(|c| {
                 c.execute(
                     "INSERT INTO device_watches (id, device, platform, until_do, then_do, note,
-                     created_at, expires_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                     created_at, expires_at, scope) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
                     params![
                         id,
                         device_id,
@@ -836,7 +860,8 @@ async fn watch_tool(pod: &Pod, args: &Value) -> Result<Value, Value> {
                         then.to_string(),
                         note,
                         now,
-                        now + days * 86_400
+                        now + days * 86_400,
+                        scope.id()
                     ],
                 )
             })?;
@@ -844,6 +869,7 @@ async fn watch_tool(pod: &Pod, args: &Value) -> Result<Value, Value> {
                 "id": id,
                 "device": device.as_ref().map(|d| json!({"id": d.id, "name": d.name})),
                 "kind": kind, "until": until.to_json(), "then": then,
+                "created_by": created_by(scope),
                 "expires_at": iso(now + days * 86_400),
             } })))
         })
@@ -851,11 +877,19 @@ async fn watch_tool(pod: &Pod, args: &Value) -> Result<Value, Value> {
         .map_err(store_err)?
 }
 
+/// Who made a watch, by its scope (shown in `list_devices`).
+fn created_by(scope: Scope) -> &'static str {
+    match scope {
+        Scope::Full => "pod token",
+        Scope::Mcp => "MCP credential",
+    }
+}
+
 /// The watches that haven't fired or expired.
 fn open_watches(store: &Store, now: i64) -> rusqlite::Result<Vec<Value>> {
     store.with_conn(|c| {
         let mut st = c.prepare_cached(
-            "SELECT id, device, platform, until_do, then_do, note, expires_at
+            "SELECT id, device, platform, until_do, then_do, note, expires_at, scope
              FROM device_watches WHERE fired_at IS NULL AND expires_at > ?1 ORDER BY created_at",
         )?;
         st.query_map([now], |r| {
@@ -869,6 +903,7 @@ fn open_watches(store: &Store, now: i64) -> rusqlite::Result<Vec<Value>> {
                 "then": serde_json::from_str::<Value>(&then).unwrap_or(Value::Null),
                 "note": r.get::<_, Option<String>>(5)?,
                 "expires_at": iso(r.get(6)?),
+                "created_by": created_by(Scope::parse(&r.get::<_, String>(7)?)),
             }))
         })?
         .collect()
@@ -885,19 +920,19 @@ pub async fn check_watches(pod: &Pod, device: &str) {
             let Some(d) = all.into_iter().find(|d| d.id == device) else {
                 return Ok(Vec::new());
             };
-            let watches: Vec<(String, String, String)> = s.with_conn(|c| {
+            let watches: Vec<(String, String, String, String)> = s.with_conn(|c| {
                 let mut st = c.prepare_cached(
-                    "SELECT id, until_do, then_do FROM device_watches
+                    "SELECT id, until_do, then_do, scope FROM device_watches
                      WHERE fired_at IS NULL AND expires_at > ?1
                        AND (device = ?2 OR (device IS NULL AND platform = ?3))",
                 )?;
                 st.query_map(params![now, d.id, d.platform], |r| {
-                    Ok((r.get(0)?, r.get(1)?, r.get(2)?))
+                    Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?))
                 })?
                 .collect::<rusqlite::Result<_>>()
             })?;
             let mut due = Vec::new();
-            for (id, until, then) in watches {
+            for (id, until, then, scope) in watches {
                 let until = serde_json::from_str::<Value>(&until).unwrap_or(Value::Null);
                 let Ok(until) = Until::parse(&until, "") else {
                     continue;
@@ -914,7 +949,7 @@ pub async fn check_watches(pod: &Pod, device: &str) {
                 })?;
                 if claimed == 1 {
                     let then = serde_json::from_str::<Value>(&then).unwrap_or(Value::Null);
-                    due.push((id, then, d.clone()));
+                    due.push((id, then, Scope::parse(&scope), d.clone()));
                 }
             }
             Ok(due)
@@ -924,8 +959,8 @@ pub async fn check_watches(pod: &Pod, device: &str) {
         tracing::warn!("device watches could not be read");
         return;
     };
-    for (id, then, d) in due {
-        let outcome = fire(pod, &then, &d, now).await;
+    for (id, then, scope, d) in due {
+        let outcome = fire(pod, &then, scope, &d, now).await;
         let _ = pod
             .blocking(move |s| {
                 s.with_conn(|c| {
@@ -939,8 +974,9 @@ pub async fn check_watches(pod: &Pod, device: &str) {
     }
 }
 
-/// Do a watch's `then` for device `d`; answers what happened.
-async fn fire(pod: &Pod, then: &Value, d: &Device, now: i64) -> String {
+/// Do a watch's `then` for device `d`, an action with the scope of the
+/// credential that made the watch; answers what happened.
+async fn fire(pod: &Pod, then: &Value, scope: Scope, d: &Device, now: i64) -> String {
     if let Some(text) = then["notify"].as_str() {
         let Some(ch) = pod
             .notification_channels()
@@ -984,7 +1020,7 @@ async fn fire(pod: &Pod, then: &Value, d: &Device, now: i64) -> String {
         .header(axum::http::header::CONTENT_TYPE, "application/json")
         .body(axum::body::Body::from(body.to_string()))
         .expect("a valid request");
-    if let Ok(v) = HeaderValue::from_str(&pod.internal_as(&owner.token_hash)) {
+    if let Ok(v) = HeaderValue::from_str(&pod.internal_as(&owner.token_hash, scope)) {
         req.headers_mut().insert(crate::session::INTERNAL_HEADER, v);
     }
     let resp = crate::app(pod.clone())

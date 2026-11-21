@@ -81,6 +81,7 @@ pub const MANIFEST: SourceManifest = SourceManifest {
             doc: "Drop a post that failed on its way: {client_id}.",
         },
     ],
+    mcp_actions: &[],
     entities: &[
         EntityDoc {
             uri: "pixelfed://posts/{id}",

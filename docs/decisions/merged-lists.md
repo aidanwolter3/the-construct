@@ -20,4 +20,8 @@ view, and an edit in one collection would refetch the merged list); a numeric or
 yet; text order covers dates).
 
 Consequences: a new desktop, Android and web build draws it; a layout that uses it is served to older builds as its
-previous version. The pod counts the merged queries' feeds as bound, as it does `query_key`'s.
+previous version. The pod counts the merged queries' feeds as bound, as it does `query_key`'s. When a collection's definition changes, the
+pod checks a merged list's bindings (`$item.<f>`, `where`, a mutation of `$item.uri`) against all its collections: a
+field of any of them passes, since the template tells their rows apart (`source-collections` `bindings.rs`). Before
+that the check read every row as `query_key`'s, which refused any change to that collection while such a list
+used a field only another had.

@@ -94,7 +94,11 @@ Writes are validated and appear in each name's history as written by Claude.
   claude mcp add --transport http construct https://<server>/v1/mcp --header "Authorization: Bearer cmcp_…"
   ```
 
-- **Disconnect:** `server pods revoke-mcp <name>`. Rotating the pod code keeps Claude connected.
+- **Disconnect:** in the app, Settings → Connected apps lists each connection (its name, where it signed in, when it
+  was last used) with a Disconnect button (`GET /v1/connected-apps/screen`, `POST /v1/connected-apps/revoke`, answered
+  by the host; decision [`connected-apps`](decisions/connected-apps.md)); or `server pods revoke-mcp <name>` for all.
+  Rotating the pod code keeps them connected unless `server pods rotate <name> --revoke-mcp`. A connection unused for
+  90 days ends by itself.
 
 Tools: `list_layouts`, `list_data_sources`, `describe_vocabulary`, `get_layout`, `sample_data`, `validate_layout`,
 `create_layout`, `update_layout` (a whole layout or a JSON Patch, with `base_version`), `restore_version`,
@@ -107,6 +111,12 @@ node's bounds, then tap, scroll or type into it (nothing is written; `target_uri
 and `entities` try a row with made-up data, `full_height` draws a long screen whole:
 [rendering.md](rendering.md#agent-previews-mcp)). `get_layout` takes `expanded: true`. Layouts are named `id` (`app` is still accepted).
 After a change to the tools, the Claude connector needs "Refresh tools list" in its settings.
+
+**Outside text is marked** (decision [`untrusted-tool-content`](decisions/untrusted-tool-content.md)): text other
+people wrote comes back as `{"untrusted": {"from", "content"}}`, and the instructions say it is data, never
+instructions. That covers `sample_data`'s entities, `mcp_servers`' tool descriptions, schemas and last error,
+`mcp_call_tool`'s result and error, `collections_preview`'s rows and sample items, `export_collection` values a
+filler or a model wrote, and another pod's publication in `describe_publication` and `adopt` (interface, flags).
 
 **How an agent is taught to reuse** (decision [`element-roles-and-reuse`](decisions/element-roles-and-reuse.md)):
 
@@ -175,7 +185,8 @@ read-only. The tools are listed only on such a server, and only for an
 admin pod: a temporary pod can't share a public page (decision [`web-on-staging`](decisions/web-on-staging.md)).
 
 - `share_publicly {layout}` answers a review and shares nothing: every text and value a visitor would read, every
-  URL, the rows and fields that go (only the rows each list's `where` shows, with only the fields read), per
+  URL, the rows and fields that go (only the rows each list's `where` and conditions show, with only the fields
+  read where they show; a condition that can't be decided then, such as a date test, keeps its rows home), per
   layout, and what was taken out (controls that write, opens and embeds of layouts it doesn't carry, screens, and
   the layouts left out with why). A list whose rows push a screen carries that screen once, with the rows it shows
   for each listed row; `leave_out: [<layout>]` keeps one out (its openers go). `params: {id: <meal id>}` draws a
@@ -183,8 +194,9 @@ admin pod: a temporary pod can't share a public page (decision [`web-on-staging`
   the root's lists. `share_publicly {layout, confirm: <review_id>}` shares it and answers its `url` (`/s/pub-…`);
   with `slug` (and the pod's handle, `set_handle`) also a `short_url`, `/<handle>/<slug>`; each row a list's tap opens is at `/<handle>/<slug>/<row name>` (decision `public-row-links`). Sharing the same layout,
   rows, item and params again updates the same link; other params are another link.
-- The copy is made again when the pod's Collections data changes, so new rows the layouts show appear on the
-  page. Only rows go out without a review: once a carried layout is edited (a field it now shows, a screen it now
+- The copy is made again when the pod's Collections data changes: edits and removals of its rows go out, but new
+  rows wait until it is shared again with a new review (`list_public_links` counts them, `new_rows_waiting`);
+  `new_rows: "publish"` lets a link's new rows out without one. Only rows go out without a review: once a carried layout is edited (a field it now shows, a screen it now
   opens), the page keeps its last copy until the layout is shared again with a new review. A root that draws anything but Collections data (Pixelfed, Events) is refused; a layout it reaches that
   does is left out, and so are built-in layouts (Settings, the inbox). A copy holds at most 16 layouts and 2 MiB.
 - `list_public_links` lists them; `unshare_publicly {link}` stops one at once and its copy leaves the server.

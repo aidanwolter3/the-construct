@@ -108,10 +108,11 @@ pub fn check_open_pod(addr: &str, on_fly: bool, insecure_opt_in: bool) -> Result
 }
 
 /// Extra settings of temporary pods (anyone can make one, D46): Pixelfed
-/// only on the default instance, and the `model`, `web` and `web_search`
-/// jacks locked unplugged (decision `jacks`), so a visitor can't make the
-/// server contact hosts of their choosing (fetch URLs, search, register
-/// OAuth apps) or spend its model key.
+/// only on the default instance, and the `model`, `web`, `web_search`, `mcp`
+/// and `agent_runner` jacks locked unplugged (decision `jacks`), so a
+/// visitor can't make the server contact hosts of their choosing (fetch
+/// URLs, search, register OAuth apps, call MCP servers, follow an agent
+/// runner) or spend its model key.
 pub fn temporary_pod_settings() -> Vec<(String, String)> {
     let mut out = vec![(
         source_pixelfed::OTHER_INSTANCES_SETTING.to_owned(),
@@ -122,6 +123,7 @@ pub fn temporary_pod_settings() -> Vec<(String, String)> {
         pod_core::jacks::WEB,
         pod_core::jacks::WEB_SEARCH,
         pod_core::jacks::MCP,
+        source_agents::JACK,
     ]));
     out
 }

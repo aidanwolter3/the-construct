@@ -21,7 +21,6 @@
 
 use std::path::{Path as FsPath, PathBuf};
 use std::sync::Arc;
-use std::time::Duration;
 
 use axum::{
     Router,
@@ -51,13 +50,6 @@ pub const CLIENT_WEB: &str = "web";
 const PAGE_CSP: &str = "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; \
     style-src 'self'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; \
     base-uri 'none'; form-action 'self'";
-
-/// A proxied image's policy: opened on its own (not drawn by the client), it
-/// loads and runs nothing.
-const IMAGE_CSP: &str = "default-src 'none'; sandbox";
-
-/// Largest image the proxy passes on.
-const MAX_IMAGE_BYTES: usize = 10 << 20;
 
 /// `CONSTRUCT_WEB=1`: the web client is served from `dir`
 /// (`CONSTRUCT_WEB_DIR`, default `target/web`).
@@ -402,7 +394,7 @@ async fn image_of(host: Arc<Host>, named: Named, q: Option<String>) -> Response 
     let Some(c) = public_copy(&host, named).await else {
         return not_found();
     };
-    let Some(url) = url_param(q) else {
+    let Some(url) = pod_core::image_proxy::url_param(q) else {
         return json_error(StatusCode::BAD_REQUEST, json!({ "error": "invalid_url" }));
     };
     let quoted = Value::String(url.to_string()).to_string();
@@ -412,19 +404,7 @@ async fn image_of(host: Arc<Host>, named: Named, q: Option<String>) -> Response 
             json!({ "error": "not_in_this_page" }),
         );
     }
-    proxy_image(url).await
-}
-
-/// The `url` parameter of a query, parsed.
-fn url_param(q: Option<String>) -> Option<reqwest::Url> {
-    reqwest::Url::parse(&format!("http://q/?{}", q.unwrap_or_default()))
-        .ok()
-        .and_then(|u| {
-            u.query_pairs()
-                .find(|(k, _)| k == "url")
-                .map(|(_, v)| v.into_owned())
-        })
-        .and_then(|u| reqwest::Url::parse(&u).ok())
+    proxy_image(&host, &c.owner_pod, url).await
 }
 
 /// The cookie's token on a request the host may take it on: the web client
@@ -746,105 +726,43 @@ async fn image(State(host): State<Arc<Host>>, RawQuery(q): RawQuery, req: Reques
     let Some(token) = cookie_token(&host, req.headers()) else {
         return json_error(StatusCode::UNAUTHORIZED, json!({ "error": "unauthorized" }));
     };
-    if !matches!(
-        host.credential(&token).await,
-        Ok(Some((_, CredentialKind::Web)))
-    ) {
+    let Ok(Some((pod_id, CredentialKind::Web))) = host.credential(&token).await else {
         return json_error(StatusCode::UNAUTHORIZED, json!({ "error": "unauthorized" }));
-    }
-    let Some(url) = url_param(q) else {
+    };
+    let Some(url) = pod_core::image_proxy::url_param(q) else {
         return json_error(StatusCode::BAD_REQUEST, json!({ "error": "invalid_url" }));
     };
-    proxy_image(url).await
+    proxy_image(&host, &pod_id, url).await
 }
 
-/// A public `http(s)` image, passed on: public hosts only (names that
-/// resolve to private addresses are refused at connect time), images only,
-/// at most 10 MiB.
-async fn proxy_image(url: reqwest::Url) -> Response {
-    if !matches!(url.scheme(), "http" | "https")
-        || !pod_core::net::is_public_host(url.host_str().unwrap_or(""))
-    {
-        return json_error(
-            StatusCode::BAD_REQUEST,
-            json!({ "error": "not_a_public_url" }),
-        );
+/// Images one pod's pages and clients may pass through the proxies per
+/// minute (`/web/image`, `/s/<link>/image` and the native clients'
+/// `/v1/image`, counted together).
+pub const IMAGES_PER_MINUTE: u32 = 120;
+
+/// Whether `pod` may pass one more image through a proxy now: every attempt
+/// counts, refused ones too.
+pub(crate) fn image_allowed(host: &Host, pod: &str) -> bool {
+    let ok = host.image_fetches.allow(pod);
+    if !ok {
+        pod_core::metrics::inc(pod_core::metrics::RATE_LIMITED, &[("limit", "web_image")]);
     }
-    let client = match pod_core::net::public_builder(Duration::from_secs(15)).build() {
-        Ok(c) => c,
-        Err(_) => return json_error(StatusCode::BAD_GATEWAY, json!({ "error": "fetch_failed" })),
-    };
-    let Ok(mut resp) = client.get(url).send().await else {
-        return json_error(StatusCode::BAD_GATEWAY, json!({ "error": "fetch_failed" }));
-    };
-    let kind = resp
-        .headers()
-        .get(header::CONTENT_TYPE)
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("")
-        .to_owned();
-    if !resp.status().is_success() || !is_raster_image(&kind) {
-        return json_error(StatusCode::BAD_GATEWAY, json!({ "error": "not_an_image" }));
-    }
-    let mut bytes = Vec::new();
-    while let Ok(Some(chunk)) = resp.chunk().await {
-        if bytes.len() + chunk.len() > MAX_IMAGE_BYTES {
-            return json_error(StatusCode::BAD_GATEWAY, json!({ "error": "too_large" }));
-        }
-        bytes.extend_from_slice(&chunk);
-    }
-    image_response(&kind, bytes)
+    ok
 }
 
-/// An image type the proxy passes on: not SVG, a document that runs scripts
-/// when opened on this site (and the client's decoder can't draw it).
-fn is_raster_image(kind: &str) -> bool {
-    let kind = kind.trim().to_ascii_lowercase();
-    kind.starts_with("image/") && !kind.starts_with("image/svg")
-}
-
-/// Another site's image as this site serves it: never read as anything but
-/// its type, and opened on its own it runs nothing.
-fn image_response(kind: &str, bytes: Vec<u8>) -> Response {
-    let mut r = Response::new(Body::from(bytes));
-    let h = r.headers_mut();
-    if let Ok(v) = HeaderValue::from_str(kind) {
-        h.insert(header::CONTENT_TYPE, v);
+/// A public `http(s)` image for `pod`'s page, passed on by
+/// [`pod_core::image_proxy::proxy`], at most [`IMAGES_PER_MINUTE`] tries per
+/// pod (429 `rate_limited`).
+async fn proxy_image(host: &Host, pod: &str, url: reqwest::Url) -> Response {
+    if !image_allowed(host, pod) {
+        return crate::rate_limited();
     }
-    h.insert(
-        header::CACHE_CONTROL,
-        HeaderValue::from_static("private, max-age=3600"),
-    );
-    h.insert(
-        header::X_CONTENT_TYPE_OPTIONS,
-        HeaderValue::from_static("nosniff"),
-    );
-    h.insert(
-        header::CONTENT_SECURITY_POLICY,
-        HeaderValue::from_static(IMAGE_CSP),
-    );
-    r
+    pod_core::image_proxy::proxy(url).await
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn the_proxy_passes_raster_images_only() {
-        for kind in ["image/png", "image/jpeg", "image/webp", "image/gif"] {
-            assert!(is_raster_image(kind), "{kind}");
-        }
-        for kind in [
-            "image/svg+xml",
-            "Image/SVG+XML; charset=utf-8",
-            " image/svg+xml",
-            "text/html",
-            "",
-        ] {
-            assert!(!is_raster_image(kind), "{kind}");
-        }
-    }
 
     #[test]
     fn hashed_names_are_the_builds() {
@@ -879,16 +797,5 @@ mod tests {
         let r = served(b"page".to_vec(), "text/html", Cache::Revalidate, &h);
         assert_eq!(r.status(), StatusCode::NOT_MODIFIED);
         assert_eq!(r.headers()[header::ETAG], tag.as_str());
-    }
-
-    #[test]
-    fn a_proxied_image_runs_nothing_opened_on_its_own() {
-        let r = image_response("image/png", vec![1, 2, 3]);
-        let h = r.headers();
-        assert_eq!(h[header::CONTENT_TYPE], "image/png");
-        assert_eq!(h[header::X_CONTENT_TYPE_OPTIONS], "nosniff");
-        let csp = h[header::CONTENT_SECURITY_POLICY].to_str().unwrap();
-        assert!(csp.contains("default-src 'none'"), "{csp}");
-        assert!(csp.contains("sandbox"), "{csp}");
     }
 }

@@ -589,6 +589,15 @@ fn signs_in_on_a_phone_with_a_link_back_into_the_app() {
     s.form
         .insert("server".into(), "https://pixels.example".into());
     s.tap(&Target::Text("Sign in to Pixelfed".into())).unwrap();
+    // The app shows the host first (decision `device-owned-local-state`).
+    assert!(opened.try_recv().is_err(), "not before the OK");
+    assert!(
+        s.scene()
+            .unwrap()
+            .find_text("Sign in on pixels.example?")
+            .is_some()
+    );
+    s.tap(&Target::Id("confirm:ok".into())).unwrap();
     let page = opened.recv_timeout(TIMEOUT).expect("the browser opened");
     assert_eq!(param(&page, "redirect_uri"), "construct://oauth");
     let registered = stub.pod.registered.lock().unwrap()[0].clone();

@@ -53,10 +53,24 @@ settings are logged at startup.
 |---|---|---|
 | `CONSTRUCT_UPLOAD_MAX_BYTES` | 20 MB | Largest single upload (`POST /v1/uploads`). |
 | `CONSTRUCT_POD_UPLOAD_QUOTA_BYTES` | 500 MiB | All of an admin pod's uploads together. |
-| `CONSTRUCT_TEMP_POD_UPLOAD_QUOTA_BYTES` | 25 MiB | The same for a temporary pod. |
+| `CONSTRUCT_TEMP_POD_UPLOAD_QUOTA_BYTES` | 6 MiB | The same for a temporary pod. |
 | `CONSTRUCT_POD_STORAGE_QUOTA_BYTES` | 768 MiB | An admin pod's whole database: uploads, layouts and their versions, components, collections. Past it, writes get 507 `pod_storage_full`. |
-| `CONSTRUCT_TEMP_POD_STORAGE_QUOTA_BYTES` | 16 MiB | The same for a temporary pod (below its upload quota, so this one binds first). |
+| `CONSTRUCT_TEMP_POD_STORAGE_QUOTA_BYTES` | 8 MiB | The same for a temporary pod. |
+| `CONSTRUCT_TEMP_POD_TOTAL_BYTES` | 400 MiB | All temporary pods together: a new one is refused (503 `temporary_pods_full`) when the live ones, each counted at its storage quota, would pass it. With the defaults, 50 fit. |
 | `CONSTRUCT_MIN_FREE_DISK_BYTES` | 100 MiB | Below this free space, uploads, new temporary pods and OAuth client registrations are refused, so other writes keep working. |
+
+### Event streams
+
+Open event streams (`GET /v1/construct/events` and any other `text/event-stream` answer) are capped by the host, on
+top of each pod's 8 per session token. Past a cap the stream is refused: 429 `too_many_streams` for the caller's
+address or pod, 503 `too_many_streams` when the server (or its temporary pods together) is full.
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `CONSTRUCT_SSE_MAX_PER_IP` | `24` | Per client address (an IPv4 address, an IPv6 /64). |
+| `CONSTRUCT_SSE_MAX_PER_POD` | `32` | Per pod. |
+| `CONSTRUCT_SSE_MAX_TEMPORARY` | `80` | All temporary pods together, so visitors can't take every stream from admin pods. |
+| `CONSTRUCT_SSE_MAX_TOTAL` | `200` | All pods together (Fly's `hard_limit` is 250 connections). |
 
 ### Pixelfed
 
@@ -124,11 +138,12 @@ Run on the server machine (on Fly: `fly ssh console -a <app> -C "/server pods â€
 ```bash
 server pods create <name>                      # prints the pod code once
 server pods list
-server pods rotate <name>                      # new code; the old one stops working and app sign-ins end
+server pods rotate <name> [--revoke-mcp]       # new code; the old one stops working and app sign-ins end
+                                               # (--revoke-mcp: connected apps are disconnected too)
 server pods delete <name>                      # stops now; files deleted within 5 minutes
 server pods notify-test <name>                 # a test notification to the inbox and the pod's devices
 server pods mcp <name> [label]                 # a credential for Claude Code that reaches only /v1/mcp
-server pods revoke-mcp <name>                  # disconnect every Claude credential of the pod
+server pods revoke-mcp <name>                  # disconnect every connected app (MCP credential) of the pod
 server pods monitoring <name> on|off           # let this pod's apps read server-wide monitoring data
 server pods gaps [name]                        # what agents said was missing while building (MCP note_gap)
 server pods adopt <name> <path/to/server.db>   # turn a pre-pods single-user database into a pod
@@ -168,9 +183,11 @@ machine only.
 
 With `CONSTRUCT_TEMP_PODS=1`, `POST /v1/pods/temporary` makes a pod that is deleted with everything in it after
 `CONSTRUCT_TEMP_POD_HOURS`. Temporary pods have every source, but Pixelfed only on the default instance (no typed-in
-servers), the `model`, `web`, `web_search` and `mcp` jacks locked (no model calls, no fetch fillers, no searches, no
-MCP servers; decision `jacks`), and a smaller upload quota. At most 5 are made per client address an
-hour. They are how visitors and automated sessions try a deployed server:
+servers), the `model`, `web`, `web_search`, `mcp` and `agent_runner` jacks locked (no model calls, no fetch fillers,
+no searches, no MCP servers, no agent runner sign-in: 403 `jack_locked`; decision `jacks`), no handle and no
+publishing (`set_handle` and `publish` answer `temporary_pod`), no public links, and smaller storage and upload
+quotas, with a cap on all of them together (`CONSTRUCT_TEMP_POD_TOTAL_BYTES`) and on their event streams together
+(`CONSTRUCT_SSE_MAX_TEMPORARY`). At most 5 are made per client address an hour. They are how visitors and automated sessions try a deployed server:
 
 ```bash
 pod=https://the-construct-pod.fly.dev
@@ -193,8 +210,19 @@ does when it finishes.
   and `Content-Security-Policy: default-src 'none'; frame-ancestors 'none'` unless the route sets its own; behind Fly
   also `Strict-Transport-Security`.
 - Opening a pod by code is limited to 10 tries a minute per client address (behind Fly, `Fly-Client-IP`).
-- Outbound requests to user-chosen hosts (typed Pixelfed servers, push endpoints, filler URLs) resolve only public
-  addresses and follow no redirects into private space (`pod_core::net`).
+- Outbound requests to user-chosen hosts (typed Pixelfed servers, push endpoints, MCP servers, agent runners, filler
+  URLs, the image proxies `/web/image` and `/v1/image`) all go through `pod_core::net::OutboundClient` (decision
+  [`outbound-client`](decisions/outbound-client.md)): the URL is checked first (scheme, a public host name, no IP
+  literal, the port), names resolve only to public addresses, redirects never lead into private space, and a body is
+  read only up to a cap (4 MiB unless the caller sets another; Pixelfed API answers 4 MiB). `clippy.toml` refuses
+  any other `reqwest` client outside `net.rs`.
+- OAuth for MCP apps (decision [`connected-apps`](decisions/connected-apps.md)): a registered redirect URI may not
+  carry userinfo (`https://claude.ai@evil.example/`), a backslash or a percent sign in its host; the connect page
+  shows the host the pod code's grant goes to, in large type, and warns when it isn't Claude's (`claude.ai`,
+  `claude.com`) or the local machine; request errors redirect only to those hosts or the pre-registered client's,
+  else they are a page (no open redirect). An MCP credential unused for 90 days stops working and is deleted.
+  Users see and disconnect their connected apps in Settings â†’ Connected apps; `rotate` keeps them unless
+  `--revoke-mcp`.
 
 ## Monitoring
 
@@ -223,7 +251,8 @@ Counts live in memory and restart from zero.
   Pixelfed image, the OAuth callback), which anyone with the pod's id can reach, is no device of the pod. The `monitor` source's `devices` feed shows them in any pod (no operator switch): how
   each device's build stands against the server's (latest, behind, ahead) and devices per day by build for a
   `core://Bars` chart. Over MCP, `list_devices`, `rename_device` and `watch_device` (run a source action or send a
-  "Device updates" notification once a device draws a feature or runs a newer build).
+  "Device updates" notification once a device draws a feature or runs a newer build; an MCP credential's watch runs
+  only actions an MCP credential reaches, such as a collection's row writes or reopening an agent's run).
 - **Prometheus:** with `CONSTRUCT_METRICS_ADDR`, `GET /metrics` on that address serves the same counters as
   `construct_*` metrics.
 

@@ -461,7 +461,12 @@ impl PodEngine {
         }
         *lock(&self.shared.images) = Some(s.images.clone());
         s.loader = Some(Box::new(self.clone()));
-        remote::fetch_images(&s.images, Some(self.engine.attachments_dir()));
+        let engine = Arc::downgrade(&self.engine);
+        let pod = remote::ImagePod {
+            base: self.base.clone(),
+            bearer: Arc::new(move || engine.upgrade().and_then(|e| e.session_bearer())),
+        };
+        remote::fetch_images(&s.images, Some(self.engine.attachments_dir()), Some(pod));
         self.reload_device();
         s
     }
@@ -970,6 +975,15 @@ impl Loader for PodEngine {
         };
         self.engine.dispatch(&login.to_string());
         true
+    }
+
+    /// The platform's own list (`set_servers`), never `local://servers`
+    /// entities: a layout can't add a server to switch to.
+    fn server(&self, id: &str) -> Option<(String, bool)> {
+        lock(&self.shared.servers)
+            .iter()
+            .find(|(i, _, _)| i == id)
+            .map(|(_, _, url)| (url.clone(), url.trim_end_matches('/') == self.base))
     }
 
     fn redirect(&self, url: &str) -> bool {

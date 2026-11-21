@@ -86,10 +86,12 @@ fn empty() -> WorkspaceSpec {
 
 /// What Settings reads and writes on the pod: the jacks (decision
 /// `jacks-in-settings`), served by `pod_core` (`GET /v1/jacks/screen`,
-/// `POST /v1/jacks/plug`, `POST /v1/jacks/unplug`).
+/// `POST /v1/jacks/plug`, `POST /v1/jacks/unplug`), and the connected apps
+/// (decision `connected-apps`), which the pod host answers itself (`GET
+/// /v1/connected-apps/screen`, `POST /v1/connected-apps/revoke`).
 pub const SETTINGS_MANIFEST: SourceManifest = SourceManifest {
     feeds: pod_core::static_app::FEEDS,
-    entity_schemes: &["jacks"],
+    entity_schemes: &["jacks", "connected_apps"],
     data_paths: &[
         PathSpec {
             pattern: "/v1/jacks/screen",
@@ -100,6 +102,16 @@ pub const SETTINGS_MANIFEST: SourceManifest = SourceManifest {
             pattern: "/v1/jacks/screen?id={id}",
             query_keys: &[],
             doc: "One jack (jacks://<id>).",
+        },
+        PathSpec {
+            pattern: "/v1/connected-apps/screen",
+            query_keys: &["connected_apps"],
+            doc: "Every app connected through MCP (connected_apps://<id>) and the connected_apps query.",
+        },
+        PathSpec {
+            pattern: "/v1/connected-apps/screen?id={id}",
+            query_keys: &[],
+            doc: "One connected app (connected_apps://<id>).",
         },
     ],
     actions: &[
@@ -113,36 +125,57 @@ pub const SETTINGS_MANIFEST: SourceManifest = SourceManifest {
             query_keys: &[],
             doc: "{id}: unplug a switch or config jack (a config jack forgets its values).",
         },
+        PathSpec {
+            pattern: "/v1/connected-apps/revoke",
+            query_keys: &[],
+            doc: "{id}: disconnect that app (its MCP credential stops working at once).",
+        },
     ],
-    entities: &[EntityDoc {
-        uri: "jacks://{id}",
-        doc: "A jack as Settings shows it; a secret shows only whether it is set.",
-        fields: &[
-            ("title", "its name"),
-            ("summary", "what plugging it lets the pod do"),
-            ("kind", "switch, config or account"),
-            ("state", "plugged, unplugged or locked"),
-            (
-                "state_label",
-                "the state in words, with its provider or account",
-            ),
-            ("plugged, locked, is_switch, is_config, is_account", "flags"),
-            (
-                "can_plug, can_unplug",
-                "whether Settings offers Plug in / Unplug",
-            ),
-            ("how", "an account jack: where it is signed in"),
-            (
-                "has_<field>",
-                "a config jack takes that field (provider, api_key, base_url)",
-            ),
-            ("<field>", "a config value now set (not a secret)"),
-            (
-                "<field>_set, <field>_hint",
-                "a secret: whether it is set, in words",
-            ),
-        ],
-    }],
+    entities: &[
+        EntityDoc {
+            uri: "connected_apps://{id}",
+            doc: "An app connected to the pod through MCP (OAuth or `server pods mcp`).",
+            fields: &[
+                ("title", "the name the app gave itself"),
+                ("host", "where its OAuth sign-in sent the code"),
+                (
+                    "detail",
+                    "host, when it connected and when it was last used, in words",
+                ),
+                ("expiry", "when it ends by itself if unused, in words"),
+                ("connected", "true until it is disconnected"),
+            ],
+        },
+        EntityDoc {
+            uri: "jacks://{id}",
+            doc: "A jack as Settings shows it; a secret shows only whether it is set.",
+            fields: &[
+                ("title", "its name"),
+                ("summary", "what plugging it lets the pod do"),
+                ("kind", "switch, config or account"),
+                ("state", "plugged, unplugged or locked"),
+                (
+                    "state_label",
+                    "the state in words, with its provider or account",
+                ),
+                ("plugged, locked, is_switch, is_config, is_account", "flags"),
+                (
+                    "can_plug, can_unplug",
+                    "whether Settings offers Plug in / Unplug",
+                ),
+                ("how", "an account jack: where it is signed in"),
+                (
+                    "has_<field>",
+                    "a config jack takes that field (provider, api_key, base_url)",
+                ),
+                ("<field>", "a config value now set (not a secret)"),
+                (
+                    "<field>_set, <field>_hint",
+                    "a secret: whether it is set, in words",
+                ),
+            ],
+        },
+    ],
     ..SourceManifest::new("Settings")
 };
 

@@ -1,5 +1,7 @@
 # Claude edits custom apps through an MCP endpoint on each pod, with a host-issued, pod-scoped credential
 
+Lifetime, redirect URIs and revoking partly superseded by [connected-apps](connected-apps.md).
+
 Date: 2026-11-03. Related: D46, [custom-apps-and-data-sources](custom-apps-and-data-sources.md), issue #45 (P2).
 
 Custom apps are written through `/v1/custom-apps` with the pod token. Users should be able to ask Claude for an app
@@ -29,7 +31,11 @@ Decision:
   (`at`, `allowed`), so Claude can fix them.
 - **Samples act as the owner:** the pod's pinned (pod token) session. A feed runs with that session; a data path runs
   through the pod's own router with an internal header, `<per-process random secret>:<session hash>`, which nothing
-  outside the process can make. Nothing else in MCP acts as the user.
+  outside the process can make. Nothing else in MCP acts as the user. The internal header also carries the scope
+  of the credential that started the request (issue #435): `<secret>:<scope>:<session hash>`. Samples and previews
+  always use `mcp`, a device watch its maker's; an `mcp`-scoped request may read (`GET`) and run only the actions
+  sources list as `mcp_actions` (what MCP tools already do); the pod's router answers anything else 403
+  `mcp_credential_scope`.
 - **OAuth on the host** (`pod_host::oauth`): `/.well-known/oauth-protected-resource[/v1/mcp]`,
   `/.well-known/oauth-authorization-server` (with `authorization_response_iss_parameter_supported`), `POST
   /oauth/register` (public clients; 1-5 redirect URIs, `https://…` or `http://localhost|127.0.0.1|[::1]`; 20 a
@@ -50,7 +56,7 @@ Decision:
 
 Security: an MCP credential can't reach app routes, so a prompt injection in sampled data can at most write a
 visible, versioned, reversible layout, which can only use what the app's sources declare. Sampled data is the user's
-own, sent to their own Claude account.
+own, sent to their own Claude account. (Since then, outside text in answers is marked: [untrusted-tool-content](untrusted-tool-content.md).)
 
 Not done yet: Client ID Metadata Documents (the 2026-07-28 spec's preferred registration; the host would have to
 fetch client URLs); short-lived tokens with refresh-token rotation (the spec's SHOULD); disconnecting Claude from the

@@ -1,5 +1,8 @@
 # One operator-configured OAuth client with a secret, for MCP apps that can't register
 
+Revoking partly superseded by [connected-apps](connected-apps.md): its credentials are listed and disconnected in
+Settings too, and end after 90 days unused; its redirect hosts count as trusted on the connect page.
+
 Date: 2026-11-04. Related: [mcp-connector](mcp-connector.md).
 
 The pod's OAuth server only knows clients that register themselves (RFC 7591), as Claude does. Some MCP apps

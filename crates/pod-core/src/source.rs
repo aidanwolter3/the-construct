@@ -37,6 +37,11 @@ pub struct SourceManifest {
     pub data_paths: &'static [PathSpec],
     /// `POST` endpoints a layout's mutations and creates may call.
     pub actions: &'static [PathSpec],
+    /// Patterns of the [`Self::actions`] a request an MCP credential started
+    /// may run too ([`crate::session::Scope::Mcp`], e.g. a device watch's
+    /// `then.action`): only ones its MCP tools can already do, never one
+    /// that acts upstream or changes jacks, sign-ins or agents' runners.
+    pub mcp_actions: &'static [&'static str],
     /// The entities it serves, with their fields.
     pub entities: &'static [EntityDoc],
     /// A dev source (fixture data): custom apps may use it only where dev
@@ -55,6 +60,7 @@ impl SourceManifest {
             feeds: &[],
             data_paths: &[],
             actions: &[],
+            mcp_actions: &[],
             entities: &[],
             dev: false,
         }

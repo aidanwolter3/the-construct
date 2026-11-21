@@ -225,6 +225,13 @@ pub const MANIFEST: SourceManifest = SourceManifest {
             doc: "Fill a collection's fillers now (a \"Refresh\" button): payload {} for every filler or {filler: id} for one; the rows update when the fill ends.",
         },
     ],
+    // What the MCP tools add_row, edit_rows and run_action already do.
+    mcp_actions: &[
+        "/v1/collections/{collection}/create",
+        "/v1/collections/{collection}/update",
+        "/v1/collections/{collection}/delete",
+        "/v1/collections/{collection}/actions/{action}",
+    ],
     entities: &[EntityDoc {
         uri: "collections://{collection}/{id}",
         doc: "A row of a collection: every field by name (see describe_collection), and the system fields; a ref field holds the id of the row it points at (read through it with ${collections://<target>/$item.<ref>#<field>}); a quantity field also as <name>_text (1 1/2 cups); a datetime field also as <name>_date (YYYY-MM-DD), <name>_time (7:30 PM) and <name>_text (Fri Nov 6 · 7:30 PM); with fillers filler_id and filler_title; with alerts alert_matched and alert_names. A filler is collections://{collection}/fillers/{id} (title, kind, url, state, detail, failing, alerts_text; refreshing: a fill of it is running, and clients are told when one starts and ends; can_check: false once an agent filled its fills_per_day times today, when POST /v1/collections/{collection}/refresh {filler} answers 429 checked_today), an alert collections://{collection}/alerts/{id} (name, summary, filler_id), listed under collection:{collection}:alerts.",
@@ -261,10 +268,10 @@ pub struct CollectionsAdapter {
     /// Fetch fillers may read private hosts (tests; the server sets it from
     /// `CONSTRUCT_FILL_PRIVATE_HOSTS=1`).
     allow_private_hosts: bool,
-    fetch_client: reqwest::Client,
+    fetch_client: pod_core::net::OutboundClient,
     /// For fetches that carry a secret: redirects stay on the same host,
     /// since a custom header (unlike `Authorization`) would follow them.
-    secret_fetch_client: reqwest::Client,
+    secret_fetch_client: pod_core::net::OutboundClient,
     /// The server's headless browser for rendered fillers (none: they
     /// report it).
     browser: Option<Arc<web_extract::render::Browser>>,
@@ -287,32 +294,26 @@ impl Default for CollectionsAdapter {
 /// The HTTP client of fetch fillers: public hosts only unless allowed.
 /// `same_host`: follow redirects only on the first request's host (for
 /// requests that carry a secret header).
-fn fetch_client(allow_private: bool, same_host: bool) -> reqwest::Client {
-    let b = if allow_private {
-        pod_core::net::builder(web_extract::fetch::FETCH_TIMEOUT)
-    } else {
-        pod_core::net::public_builder(web_extract::fetch::FETCH_TIMEOUT)
-    };
+fn fetch_client(allow_private: bool, same_host: bool) -> pod_core::net::OutboundClient {
+    let b = pod_core::net::OutboundClient::builder(web_extract::fetch::FETCH_TIMEOUT)
+        .private(allow_private)
+        .web()
+        .body_cap(web_extract::fetch::MAX_BODY);
     let b = if same_host {
-        b.redirect(reqwest::redirect::Policy::custom(move |attempt| {
-            let first = attempt.previous().first().and_then(|u| u.host_str());
-            if attempt.previous().len() >= 5 {
-                attempt.error("too many redirects")
-            } else if first != attempt.url().host_str() {
+        b.redirect_if(|target, previous| {
+            let first = previous.first().and_then(|u| u.host_str());
+            if first != target.host_str() {
                 tracing::warn!(
                     "a redirect to another host was not followed: the request carries a secret"
                 );
-                attempt.stop()
-            } else if allow_private || pod_core::net::is_public_https(attempt.url()) {
-                attempt.follow()
-            } else {
-                attempt.stop()
+                return false;
             }
-        }))
+            true
+        })
     } else {
         b
     };
-    b.build().expect("an HTTP client")
+    b.build()
 }
 
 impl CollectionsAdapter {
@@ -351,13 +352,13 @@ impl CollectionsAdapter {
         self.allow_private_hosts
     }
 
-    pub fn fetch_client(&self) -> &reqwest::Client {
+    pub fn fetch_client(&self) -> &pod_core::net::OutboundClient {
         &self.fetch_client
     }
 
     /// The client for a request that carries a secret header: redirects
     /// stay on the host the secret is bound to.
-    pub fn secret_fetch_client(&self) -> &reqwest::Client {
+    pub fn secret_fetch_client(&self) -> &pod_core::net::OutboundClient {
         &self.secret_fetch_client
     }
 
