@@ -1,0 +1,98 @@
+{
+  "note": "An optional when: given a binding, the text shows only while it is set (a row's notes, a venue), instead of a core://Conditional around the use",
+  "component": {
+    "doc": "A text in the muted colour, with no padding of its own: a row's second line or trailing detail (a date, a count, a status), a caption beside a heading, a sentence in a card. Secondary text by default; max_lines cuts it short. Given when (a binding such as $item.notes), the text shows only while that value is set, so an optional field's line is one use. For a muted line inset 4 dp to line up with a card's edge (an empty state, a hint under a heading) use core:muted_note.",
+    "params": [
+      {
+        "name": "text",
+        "type": "text",
+        "doc": "The text (bindings allowed, such as $item.updated_text).",
+        "required": true
+      },
+      {
+        "name": "style",
+        "type": "text",
+        "doc": "A core://Text style (Caption for a smaller detail, Label for a quiet heading).",
+        "default": "Secondary"
+      },
+      {
+        "name": "max_lines",
+        "type": "number",
+        "doc": "The most lines it takes; 0 for no limit.",
+        "default": 0
+      },
+      {
+        "name": "when",
+        "type": "binding",
+        "doc": "A binding (such as $item.notes, often the field the text shows): the text shows only while it is set, as a core://Conditional's value. Left out, the text always shows.",
+        "default": ""
+      }
+    ],
+    "template": {
+      "type": "core://IfArg",
+      "arg": "when",
+      "then": {
+        "type": "core://Conditional",
+        "value": "$arg.when",
+        "content": {
+          "type": "core://Box",
+          "content_color": "${local://theme#muted_text}",
+          "content": {
+            "type": "core://Text",
+            "value_expr": "$arg.text",
+            "style": "$arg.style",
+            "max_lines": {
+              "type": "core://IfArg",
+              "arg": "max_lines",
+              "then": "$arg.max_lines"
+            }
+          }
+        }
+      },
+      "else": {
+        "type": "core://Box",
+        "content_color": "${local://theme#muted_text}",
+        "content": {
+          "type": "core://Text",
+          "value_expr": "$arg.text",
+          "style": "$arg.style",
+          "max_lines": {
+            "type": "core://IfArg",
+            "arg": "max_lines",
+            "then": "$arg.max_lines"
+          }
+        }
+      }
+    },
+    "examples": [
+      {
+        "args": {
+          "text": "Updated 2 hours ago · 3 replies"
+        },
+        "note": "the details under an item's title on its screen"
+      },
+      {
+        "args": {
+          "text": "last 14 days",
+          "style": "Caption"
+        },
+        "note": "a small caption at the end of a card's heading row"
+      },
+      {
+        "args": {
+          "text": "$item.notes",
+          "max_lines": 2,
+          "when": "$item.notes"
+        },
+        "note": "a row's notes, cut at two lines and left out while the row has none"
+      },
+      {
+        "args": {
+          "text": "At $item.venue",
+          "when": "$item.venue"
+        },
+        "note": "where an event is, shown only while the event names a venue"
+      }
+    ]
+  }
+}
