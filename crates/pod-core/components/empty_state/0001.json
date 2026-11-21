@@ -1,0 +1,124 @@
+{
+ "note": "One look for a list or a screen with nothing in it yet (decision element-roles-and-reuse; the UX audit found four)",
+ "component": {
+  "doc": "What a list or a screen shows while it has nothing yet: a tinted icon, a short title, one sentence on why it is empty or when it fills, then its children (usually one core://Button that adds the first thing or opens where it comes from), centred in a card whose corners follow the theme's scale (corner_m). Bookmarks before the first save, a week that fills in on Saturday, a deck already swiped through. Show it in a core://Conditional on a count of the list, or as a list's neighbour.",
+  "params": [
+   {
+    "name": "title",
+    "type": "text",
+    "required": true,
+    "doc": "What is missing, in a few words (bindings allowed)."
+   },
+   {
+    "name": "text",
+    "type": "text",
+    "default": "",
+    "doc": "One sentence: why it's empty, when it fills, or what to do (left out while empty)."
+   },
+   {
+    "name": "icon",
+    "type": "text",
+    "default": "check",
+    "doc": "An icon name or path:<svg path>."
+   },
+   {
+    "name": "tone",
+    "type": "text",
+    "default": "accent",
+    "doc": "The icon's tone: accent, success, error or muted."
+   },
+   {
+    "name": "corner",
+    "type": "number",
+    "default": 0,
+    "doc": "Corner radius in dp; 0 for the theme's corner_m (14 unless the pod set it)."
+   }
+  ],
+  "children": true,
+  "template": {
+   "type": "core://Box",
+   "background": "${local://theme#card}",
+   "border_color": "${local://theme#card_border}",
+   "corner_dp": {
+    "type": "core://IfArg",
+    "arg": "corner",
+    "then": "$arg.corner",
+    "else": "$theme.corner_m"
+   },
+   "padding_h_dp": 20,
+   "padding_v_dp": 24,
+   "content": {
+    "type": "core://Column",
+    "align": "Center",
+    "spacing_dp": 8,
+    "children": [
+     {
+      "type": "core://Use",
+      "component": "core:tinted_icon",
+      "args": {
+       "icon": "$arg.icon",
+       "tone": "$arg.tone",
+       "size": 44
+      }
+     },
+     {
+      "type": "core://Text",
+      "style": "Label",
+      "value_expr": "$arg.title"
+     },
+     {
+      "type": "core://IfArg",
+      "arg": "text",
+      "then": {
+       "type": "core://Box",
+       "content_color": "${local://theme#muted_text}",
+       "content": {
+        "type": "core://Text",
+        "style": "Secondary",
+        "value_expr": "$arg.text"
+       }
+      }
+     },
+     {
+      "type": "core://Row",
+      "justify": "center",
+      "spacing_dp": 8,
+      "children": [
+       {
+        "type": "core://Children"
+       }
+      ]
+     }
+    ]
+   }
+  },
+  "examples": [
+   {
+    "args": {
+     "title": "Next week fills in Saturday morning",
+     "text": "Your agent pulls in the calendar, workouts and meal ideas overnight.",
+     "icon": "timer"
+    },
+    "children": [
+     {
+      "type": "core://Button",
+      "label": "See this week",
+      "size": "Small",
+      "on_click": {
+       "intent": "action.navigation.back"
+      }
+     }
+    ],
+    "note": "a screen that fills on a schedule"
+   },
+   {
+    "args": {
+     "title": "Nothing saved yet",
+     "icon": "bookmark_border",
+     "tone": "muted"
+    },
+    "note": "an empty list, no action"
+   }
+  ]
+ }
+}

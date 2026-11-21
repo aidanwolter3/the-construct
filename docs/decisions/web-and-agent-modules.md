@@ -29,8 +29,8 @@ Decision: two modules, one direction:
   - `tools`: the pod's own `web_search` and `web_fetch` for research loops.
 - **Agent module** (`crates/agent`, `construct-agent`): runs every model call and knows nothing about pages. A
   task names a feature and a tier (cheap: computed fields, `CONSTRUCT_INFER_MODEL`; capable: everything else,
-  `CONSTRUCT_FILL_MODEL`). It refuses with the `model` jack unplugged, counts calls toward daily budgets per
-  feature and per pod (`agent_usage`; computed fields included now), retries 408/429/5xx/529 and timeouts with
+  `CONSTRUCT_FILL_MODEL`). It refuses with the `model` jack unplugged, counts calls (each retry too) toward daily budgets per
+  feature and per pod and the pod's tokens (`agent_usage`; computed fields included now), and tokens toward a server-wide daily cap, retries 408/429/5xx/529 and timeouts with
   jittered backoff, runs the tool loop (`pause_turn`, client tools, a finish tool), and records the metrics.
 
 Fillers change accordingly (Collections, no new layout features):
