@@ -401,7 +401,8 @@ A collection can keep itself current from the web (decision
   when the fill runs (e.g. `{"from": "{today}", "to": "{today+180}"}`), or `{midnight}` / `{midnight±N}`, the moment
   that day starts in the pod's zone with the offset in effect on that date (`2026-11-15T00:00:00-07:00`). Prefer
   `{midnight±N}` when the tool reads a bare date as UTC: `{"from": "{midnight}", "to": "{midnight+15}"}` is today
-  and the next 14 days, whole days. The default title is `<server> · <tool>`.
+  and the next 14 days, whole days. The default title is `<server> · <tool>`. The tool must be one the server marks
+  read-only (`readOnlyHint: true`); a filler is refused any other, allow list or not.
   An answer like the last one writes nothing. `collections_preview {collection, filler}` calls the tool and shows
   the rows; `mcp_call_tool` shows a tool's raw answer to write `items` and `map` from.
 - **`range`** (no web, no model): one row per step of a window of dates that moves with today in the pod's zone
@@ -497,7 +498,12 @@ client and signs in with PKCE; the browser comes back to the pod's public callba
 their own; when a refresh is refused the server reads `needs_sign_in` and `mcp_connect {name}` gives a new link.
 The server must accept the pod's redirect URI (proton-mcp: add the pod's host to `ALLOWED_REDIRECT_HOSTS`).
 `mcp_servers` lists the servers with their state and tools (with `name`: each tool's input schema),
-`mcp_call_tool` calls one now, `mcp_disconnect` forgets one. At most 20 servers a pod; each call opens its own
+`mcp_call_tool` calls one now, `mcp_disconnect` forgets one. The pod calls only the tools a server marks read-only
+(`readOnlyHint: true`, recorded when it lists its tools): an `mcp` filler calls nothing else, and `mcp_call_tool`
+calls another only when it is on the server's allow list, `mcp_connect {name, allow_tools: [...]}` (the user's
+choice; `[]` clears it; `mcp_servers` shows `allow_tools` and each tool's `read_only`, `destructive` and
+`callable`). A sign-in asks for no OAuth scopes unless the server's 401 names some or `mcp_connect {scopes}` gives
+them, and answers `sign_in_host`, the host it signs in at, for Claude to tell the user. At most 20 servers a pod; each call opens its own
 session over Streamable HTTP, with no redirects, a minute per request and 8 MB per answer. What a server lists is kept
 capped: tool names of at most 128 characters (longer ones are skipped), descriptions of 600, an input schema of
 16 KB (a larger one reads as a bare object schema), 200 tools and 1 MB in all.
