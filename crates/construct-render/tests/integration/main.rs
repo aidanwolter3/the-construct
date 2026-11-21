@@ -15,6 +15,7 @@ mod engine;
 mod golden;
 #[cfg(feature = "gpu")]
 mod gpu;
+mod hardening;
 mod interaction;
 mod kept;
 mod layout_math;

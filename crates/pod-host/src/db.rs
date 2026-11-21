@@ -204,6 +204,14 @@ const MIGRATIONS: &[Step] = &[
      UPDATE credentials SET last_used_at = CAST(strftime('%s', 'now') AS INTEGER)
          WHERE kind = 'mcp';",
     ),
+    // 12: a browser's (`web`) credential expires with its session; rows
+    // from before get the default lifetime from their creation.
+    Step::sql(
+        "web_credential_expiry",
+        "ALTER TABLE credentials ADD COLUMN expires_at INTEGER;
+     UPDATE credentials SET expires_at = created_at + 30 * 24 * 3600
+         WHERE kind = 'web';",
+    ),
 ];
 
 /// An MCP credential unused this long stops working (decision
@@ -242,11 +250,14 @@ pub enum CredentialKind {
 }
 
 impl CredentialKind {
-    fn parse(s: &str) -> Self {
+    /// `None` for a kind this build doesn't know: it is no credential, never
+    /// the most privileged one.
+    fn parse(s: &str) -> Option<Self> {
         match s {
-            "mcp" => CredentialKind::Mcp,
-            "web" => CredentialKind::Web,
-            _ => CredentialKind::PodToken,
+            "pod_token" => Some(CredentialKind::PodToken),
+            "mcp" => Some(CredentialKind::Mcp),
+            "web" => Some(CredentialKind::Web),
+            _ => None,
         }
     }
 }
@@ -391,7 +402,7 @@ impl HostStore {
         let conn = self.conn();
         let found = conn
             .query_row(
-                "SELECT p.id, c.kind, COALESCE(c.last_used_at, c.created_at)
+                "SELECT p.id, c.kind, COALESCE(c.last_used_at, c.created_at), c.expires_at
                  FROM credentials c JOIN pods p ON p.id = c.pod_id
                  WHERE c.token_hash = ?1 AND (p.expires_at IS NULL OR p.expires_at > ?2)",
                 params![token_hash, now],
@@ -400,13 +411,19 @@ impl HostStore {
                         r.get::<_, String>(0)?,
                         CredentialKind::parse(&r.get::<_, String>(1)?),
                         r.get::<_, i64>(2)?,
+                        r.get::<_, Option<i64>>(3)?,
                     ))
                 },
             )
             .optional()?;
-        let Some((pod, kind, used)) = found else {
+        let Some((pod, Some(kind), used, expires)) = found else {
             return Ok(None);
         };
+        // A browser's credential lives as long as its session; one with no
+        // expiry recorded is not trusted.
+        if kind == CredentialKind::Web && expires.is_none_or(|e| e <= now) {
+            return Ok(None);
+        }
         if kind == CredentialKind::Mcp {
             if used <= now - MCP_IDLE_SECS {
                 return Ok(None);
@@ -442,13 +459,29 @@ impl HostStore {
     }
 
     /// Adds a browser's credential (decision `web-client`).
-    pub fn insert_web_credential(&self, pod_id: &str, token_hash: &str) -> rusqlite::Result<()> {
+    /// It stops working `ttl_secs` from now and the sweeper then deletes it.
+    pub fn insert_web_credential(
+        &self,
+        pod_id: &str,
+        token_hash: &str,
+        ttl_secs: i64,
+    ) -> rusqlite::Result<()> {
+        let now = now_secs();
         self.conn().execute(
-            "INSERT INTO credentials (token_hash, pod_id, kind, created_at)
-             VALUES (?1, ?2, 'web', ?3)",
-            params![token_hash, pod_id, now_secs()],
+            "INSERT INTO credentials (token_hash, pod_id, kind, created_at, expires_at)
+             VALUES (?1, ?2, 'web', ?3, ?4)",
+            params![token_hash, pod_id, now, now.saturating_add(ttl_secs)],
         )?;
         Ok(())
+    }
+
+    /// Delete browser credentials past their expiry; how many went.
+    pub fn delete_expired_web(&self) -> rusqlite::Result<usize> {
+        self.conn().execute(
+            "DELETE FROM credentials WHERE kind = 'web'
+             AND (expires_at IS NULL OR expires_at <= ?1)",
+            [now_secs()],
+        )
     }
 
     /// Forgets a browser's credential (it logged out); true if there was one.
@@ -969,5 +1002,44 @@ mod tests {
         assert!(store.credential("m1").unwrap().is_some());
         assert_eq!(store.revoke_mcp("p1").unwrap(), 1);
         assert!(store.credential("m1").unwrap().is_none());
+    }
+
+    #[test]
+    fn an_unknown_credential_kind_is_no_kind() {
+        assert_eq!(
+            CredentialKind::parse("pod_token"),
+            Some(CredentialKind::PodToken)
+        );
+        assert_eq!(CredentialKind::parse("mcp"), Some(CredentialKind::Mcp));
+        assert_eq!(CredentialKind::parse("web"), Some(CredentialKind::Web));
+        assert_eq!(CredentialKind::parse("superuser"), None);
+        assert_eq!(CredentialKind::parse(""), None);
+    }
+
+    #[test]
+    fn web_credentials_expire_and_are_swept() {
+        let store = HostStore::init(Connection::open_in_memory().unwrap()).unwrap();
+        store
+            .insert_pod(
+                &PodRow {
+                    id: "p1".into(),
+                    name: "mine".into(),
+                    kind: PodKind::Admin,
+                    created_at: 1,
+                    expires_at: None,
+                },
+                "tok",
+            )
+            .unwrap();
+        store.insert_web_credential("p1", "live", 3600).unwrap();
+        store.insert_web_credential("p1", "old", -1).unwrap();
+        assert_eq!(
+            store.credential("live").unwrap(),
+            Some(("p1".to_owned(), CredentialKind::Web))
+        );
+        assert_eq!(store.credential("old").unwrap(), None);
+        assert_eq!(store.delete_expired_web().unwrap(), 1);
+        assert!(store.credential("live").unwrap().is_some());
+        assert_eq!(store.delete_expired_web().unwrap(), 0);
     }
 }
