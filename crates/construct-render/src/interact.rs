@@ -25,7 +25,7 @@ use crate::cpu::CpuRenderer;
 use crate::layout::{
     Input, Laid, NO_PANELS, Panel, Panels, Pressed, RenderError, SceneBuilder, Viewport, panel_id,
 };
-use crate::scene::{Draw, QuadInstance, Scene, SemanticNode, Tap};
+use crate::scene::{COVER, Draw, QuadInstance, Scene, SemanticNode, Tap};
 use crate::style::Rgba;
 
 mod media;
@@ -2938,6 +2938,20 @@ impl Session {
                 let mut q = QuadInstance::fill(r, theme.background, 0.0);
                 q.clip = frame_now;
                 scene.draws.push(Draw::Quad(q));
+                // It covers the frame's own content, which stays laid out
+                // under it: a tap on the screen must not reach that.
+                scene.semantics.push(SemanticNode {
+                    id: "frame_cover".into(),
+                    node_type: COVER.into(),
+                    bounds: r,
+                    text_content: None,
+                    interactive: false,
+                    tap: None,
+                    selected: false,
+                    parent: None,
+                    gestures: BTreeMap::new(),
+                    hint: None,
+                });
                 laid.emit_into(&mut scene, &e.scroll, (r[0], r[1]), frame_now, pressed);
                 continue;
             }
