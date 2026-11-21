@@ -102,6 +102,13 @@ async fn mutate(State(c): State<Arc<Counter>>, UrlPath(op): UrlPath<String>) -> 
     Json(json!({ "ok": true, "count": *count })).into_response()
 }
 
+/// `POST /v1/pods/open {token}`: a session for pod `token` (any code opens
+/// one), for the tests that switch pods.
+async fn open_pod(Json(body): Json<Value>) -> Response {
+    let pod = body["token"].as_str().unwrap_or_default();
+    Json(json!({ "session_token": format!("session_{pod}") })).into_response()
+}
+
 /// While a fault is pending, every POST answers its status unapplied.
 async fn faults(State(c): State<Arc<Counter>>, req: Request, next: Next) -> Response {
     if req.method() == axum::http::Method::POST {
@@ -176,6 +183,7 @@ impl TestServer {
             .route("/healthz", get(|| async { "ok" }))
             .route("/v1/counters/home/{op}", post(mutate))
             .route_layer(middleware::from_fn_with_state(Arc::clone(&counter), faults))
+            .route("/v1/pods/open", post(open_pod))
             .fallback(workspace)
             .with_state(Arc::clone(&counter))
             .layer(middleware::from_fn(move |req: Request, next: Next| {
@@ -926,4 +934,138 @@ fn row_due_beyond_the_backoff_cap_is_sent_anyway() {
     wait_flushed(&b, &server, 1);
     assert_eq!(server.hit_list(), vec![(INC.into(), 200)]);
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A mutation intent with `endpoint`.
+fn increment_to(endpoint: &str) -> String {
+    json!({ "intent": "action.mutation.optimistic", "entity_uri": URI, "field": "count",
+            "value_expr": "entity.count + 1", "rollback_value": 0, "endpoint": endpoint,
+            "payload": { "secret": "for the pod only" } })
+    .to_string()
+}
+
+/// Endpoints that would leave the pod (`base + endpoint` on another host)
+/// or are not a pod path at all.
+const OFF_POD: [&str; 6] = [
+    ".evil.example/x",
+    "https://evil.example/x",
+    "//evil.example/x",
+    "@evil.example/x",
+    "/\\evil.example/x",
+    "v1/counters/home/increment",
+];
+
+#[test]
+fn mutations_and_creates_off_the_pod_are_refused() {
+    let server = TestServer::start();
+    let dir = temp_dir("off-pod");
+    let engine = engine(&dir, &server.url(), fast_config());
+    wait_online(&engine);
+    for endpoint in OFF_POD {
+        engine.dispatch(&increment_to(endpoint));
+        engine.dispatch(
+            &json!({ "intent": "action.mutation.create", "query_key": "q",
+                     "entity_uri": "x://new/1", "entity": { "a": 1 },
+                     "endpoint": endpoint, "payload": { "a": 1 } })
+            .to_string(),
+        );
+    }
+    let snap = engine.snapshot();
+    assert_eq!(snap.pending_actions, 0, "nothing queued");
+    assert_eq!(count(&snap), 0, "no optimistic change");
+    assert!(rows(&dir).is_empty());
+    assert!(!snap.entities_json.contains("x://new/1"));
+    // A pod path still works, and only it reached the server.
+    engine.dispatch(INCREMENT);
+    wait_flushed(&engine, &server, 1);
+    assert_eq!(server.hit_list(), vec![(INC.to_owned(), 200)]);
+}
+
+#[test]
+fn a_stored_row_off_the_pod_is_rolled_back_unsent() {
+    // A row from before the engine checked endpoints (or written by another
+    // engine on this cache) is rejected without a request.
+    let dir = temp_dir("off-pod-row");
+    seed_cache(&dir);
+    {
+        let store = Store::open(&dir.join("cache.db")).unwrap();
+        for endpoint in [".evil.example/x", "https://evil.example/x"] {
+            store
+                .insert_outbox(&client_core::store::NewOutboxRow {
+                    entity_uri: URI.into(),
+                    endpoint: endpoint.into(),
+                    payload_json: r#"{"secret":"for the pod only"}"#.into(),
+                    created_at: 1,
+                    field: "count".into(),
+                    value_expr: "entity.count + 1".into(),
+                    prev_value_json: "0".into(),
+                    rollback_value_json: "0".into(),
+                    also: Vec::new(),
+                    create: None,
+                    session_bound: false,
+                })
+                .unwrap();
+        }
+    }
+    let server = TestServer::start();
+    let engine = engine(&dir, &server.url(), fast_config());
+    wait_until("the off-pod rows are dropped", || {
+        rows(&dir).is_empty() && engine.snapshot().pending_actions == 0
+    });
+    wait_online(&engine);
+    assert_eq!(count(&engine.snapshot()), 0, "rolled back");
+    assert!(server.hit_list().is_empty(), "{:?}", server.hit_list());
+}
+
+#[test]
+fn another_pods_session_starts_without_the_first_pods_outbox_or_cache() {
+    let server = TestServer::start();
+    let dir = temp_dir("pod-switch");
+    let engine = engine(&dir, &server.url(), fast_config());
+    wait_online(&engine);
+    let open = |pod: &str| {
+        json!({ "intent": "action.auth.session", "path": "/v1/pods/open",
+                "payload": { "token": pod } })
+        .to_string()
+    };
+    let session = |e: &ConstructEngine| {
+        serde_json::from_str::<Value>(&e.snapshot().auth_json).unwrap()["session"] == true
+    };
+
+    // Pod A: a mutation its server keeps failing stays queued, its
+    // optimistic value cached.
+    engine.dispatch(&open("a"));
+    wait_until("pod A's session", || session(&engine));
+    server.fault(503, 1_000);
+    engine.dispatch(INCREMENT);
+    wait_until("the row is queued for pod A", || rows(&dir).len() == 1);
+    assert_eq!(count(&engine.snapshot()), 1);
+    let cached = |dir: &Path| -> Vec<String> {
+        let db = rusqlite::Connection::open(dir.join("cache.db")).unwrap();
+        let mut q = db.prepare("SELECT uri FROM entities").unwrap();
+        q.query_map([], |r| r.get(0))
+            .unwrap()
+            .map(Result::unwrap)
+            .collect()
+    };
+    assert!(cached(&dir).contains(&URI.to_owned()));
+
+    // Pod B: nothing of pod A's is left to send or show.
+    engine.dispatch(&open("b"));
+    wait_until("pod A's outbox is gone", || {
+        rows(&dir).is_empty() && engine.snapshot().pending_actions == 0
+    });
+    server.fault(503, 0);
+    wait_online(&engine);
+    wait_until("pod B's own count", || {
+        let s = engine.snapshot();
+        serde_json::from_str::<Value>(&s.entities_json).unwrap()[URI]["count"] == 0
+    });
+    // Only pod A's failed attempts reached the server; none with pod B.
+    assert!(
+        server.hit_list().iter().all(|(p, s)| p != INC || *s == 503),
+        "{:?}",
+        server.hit_list()
+    );
+    assert_eq!(server.count(), 0);
 }

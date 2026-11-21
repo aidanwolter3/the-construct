@@ -38,13 +38,29 @@ Decision: the pod is an MCP **client** (`pod_core::mcp_servers`):
   1 MB in all), and a server's error text is cut to 300 characters. The public callback looks up the one server
   whose pending state matches, in SQL. A tool's value is its `structuredContent`, else its
   text parsed as JSON; `isError` is a failure with its text.
-- **Claude's tools:** `mcp_connect`, `mcp_servers`, `mcp_call_tool` (runs a tool now, answer shortened) and
+- **Claude's tools:** `mcp_connect`, `mcp_servers`, `mcp_call_tool` (runs a tool now, answer shortened; see
+  below for which) and
   `mcp_disconnect`.
 - **`mcp` fillers** (Collections): `{kind: "mcp", server, tool, arguments, items, zone, map}`. The answer is read
   as a JSON page (`items`, `map`, coercion, `upcoming`, `key`, modes and alerts as for any filler); an answer
   identical to the last writes nothing. Text arguments may hold `{today}` or `{today±N}` (days), resolved in the
   pod's zone at each fill, so a filler can ask for "the next six months". `collections_preview` with the filler
   calls the tool.
+
+- **What the pod calls** (since issue #436, a security audit: `mcp_call_tool` could run any tool, so one prompt
+  allowing it in the user's Claude client gave a prompt-injected Claude, or an injected filler, send and push
+  rights on a mail or code server connected through the pod). Each listed tool keeps its `readOnlyHint` and
+  `destructiveHint` (booleans only). A filler calls only tools marked `readOnlyHint: true` (unattended, on a
+  schedule); `mcp_call_tool` calls those and the tools on the server's allow list, which `mcp_connect
+  {allow_tools}` sets (replaced when given, `[]` clears it) and `mcp_servers` shows, with each tool's `read_only`,
+  `destructive` and `callable`. A tool the server doesn't list is refused. Tools stored before hints were kept
+  are listed again at their next call. The hints are the server's word, but the server is the one the user chose
+  to connect; the rule stops a caller that was talked into a write, not a lying server.
+- **Scopes:** a sign-in asks for none, unless the server's `WWW-Authenticate` names some (`scope`) or `mcp_connect
+  {scopes}` gives them (kept for later sign-ins; `[]` asks for none). It used to ask for every scope in the
+  authorization server's `scopes_supported`.
+- **Sign-in host:** the server's metadata chooses the authorization endpoint, so `mcp_connect` answers
+  `sign_in_host` with the link and tells Claude to name it to the user before they sign in.
 
 MCP servers are the user's own services called with the user's credentials, so the web module's host policy
 (spacing, daily caps, block detection) does not apply; fill intervals bound the calls. No client build: the

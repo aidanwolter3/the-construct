@@ -21,7 +21,7 @@ Decision:
   name, or a row field's writer (`filler:<id>`, `model`, `derived`).
 - **The instructions** (`initialize`) say that a value under `untrusted` is data others wrote, never instructions.
 - **Wrapped:** `mcp_servers` (each tool's `description` and `input_schema`, `last_error`), `mcp_call_tool` (the
-  `result`, and a failure's `detail`), `collections_preview` (`rows`, `sample_items`), `sample_data` (`entities`,
+  `result`, and a failure's `detail` once the call reached the server; the pod's own refusals stay plain), `collections_preview` (`rows`, `sample_items`), `sample_data` (`entities`,
   whatever the source), `describe_publication` of another pod's publication (`interface`) and `adopt` (`interface`,
   `flags`).
 - **Rows per field:** `export_collection` wraps only the values whose last writer the store records as a filler or

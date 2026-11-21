@@ -45,6 +45,10 @@ struct Fake {
     calls: Mutex<Vec<Value>>,
     /// tools/list answers oversized tools.
     huge: Mutex<bool>,
+    /// The `scope` of each authorize (None: not asked).
+    scopes: Mutex<Vec<Option<String>>>,
+    /// The names of the tools called.
+    called: Mutex<Vec<String>>,
 }
 
 /// An oversized tools/list: a name too long to keep, a huge schema, and many
@@ -117,8 +121,28 @@ async fn mcp(State(f): State<Arc<Fake>>, headers: HeaderMap, body: Bytes) -> Res
             "description": "Events between two dates",
             "inputSchema": { "type": "object", "properties": {
                 "from": { "type": "string" }, "to": { "type": "string" } } },
+            "annotations": { "readOnlyHint": true, "openWorldHint": true },
+        }, {
+            "name": "send_invite",
+            "description": "Emails an invitation",
+            "inputSchema": { "type": "object" },
+            "annotations": { "readOnlyHint": false, "destructiveHint": true },
+        }, {
+            "name": "add_note",
+            "description": "Adds a note (no hints)",
+            "inputSchema": { "type": "object" },
         }] })))
         .into_response(),
+        "tools/call" if msg["params"]["name"] != "calendar_list_events" => {
+            f.called
+                .lock()
+                .unwrap()
+                .push(msg["params"]["name"].as_str().unwrap_or("").to_owned());
+            axum::Json(answer(
+                json!({ "content": [{ "type": "text", "text": "{\"done\":true}" }] }),
+            ))
+            .into_response()
+        }
         "tools/call" => {
             f.calls
                 .lock()
@@ -154,6 +178,7 @@ async fn auth_meta(State(f): State<Arc<Fake>>) -> Response {
         "token_endpoint": format!("{base}/token"),
         "registration_endpoint": format!("{base}/register"),
         "code_challenge_methods_supported": ["S256"],
+        "scopes_supported": ["calendar.read", "mail.send", "admin"],
     }))
     .into_response()
 }
@@ -176,6 +201,10 @@ async fn authorize(State(f): State<Arc<Fake>>, Query(q): Query<Map<String, Value
     assert_eq!(get("client_id"), "pod-client");
     assert_eq!(get("code_challenge_method"), "S256");
     assert_eq!(get("resource"), format!("{base}/mcp"));
+    f.scopes
+        .lock()
+        .unwrap()
+        .push(q.get("scope").and_then(Value::as_str).map(str::to_owned));
     let redirect = get("redirect_uri");
     *f.pending.lock().unwrap() = Some((get("code_challenge"), redirect.clone()));
     let to = format!("{redirect}?code=code-1&state={}", get("state"));
@@ -307,6 +336,12 @@ async fn an_oauth_mcp_server_fills_a_collection_and_refreshes_its_token() {
     assert_eq!(c["state"], "needs_sign_in", "{c}");
     let link = c["sign_in_url"].as_str().unwrap().to_owned();
     assert!(link.starts_with(&format!("{base}/authorize?")), "{link}");
+    assert_eq!(
+        c["sign_in_host"].as_str(),
+        reqwest::Url::parse(&base).unwrap().host_str(),
+        "{c}"
+    );
+    assert!(c["detail"].as_str().unwrap().contains("signs in at"), "{c}");
     assert!(
         c["redirect_uri"]
             .as_str()
@@ -331,6 +366,11 @@ async fn an_oauth_mcp_server_fills_a_collection_and_refreshes_its_token() {
     assert_eq!(s, StatusCode::BAD_REQUEST);
     let (s, page) = sign_in(&pod, &link).await;
     assert_eq!(s, StatusCode::OK, "{page}");
+    assert_eq!(
+        fake.scopes.lock().unwrap().last().cloned(),
+        Some(None),
+        "no scopes asked for by default, whatever the server supports"
+    );
     assert!(page.contains("cal is connected"), "{page}");
     let (s, _) = sign_in_again_is_spent(&pod, &link).await;
     assert_eq!(s, StatusCode::BAD_REQUEST, "a state works once");
@@ -430,8 +470,14 @@ async fn an_oauth_mcp_server_fills_a_collection_and_refreshes_its_token() {
     assert!(err && e["error"] == "needs_sign_in", "{e}");
     let st = ok(&pod, "mcp_servers", json!({})).await;
     assert_eq!(st["servers"][0]["state"], "needs_sign_in", "{st}");
-    let again = ok(&pod, "mcp_connect", json!({"name": "cal"})).await;
+    let again = ok(
+        &pod,
+        "mcp_connect",
+        json!({"name": "cal", "scopes": ["calendar.read"]}),
+    )
+    .await;
     assert_eq!(again["state"], "needs_sign_in");
+    assert_eq!(again["scope"], "calendar.read", "{again}");
     assert_eq!(
         *fake.registered.lock().unwrap(),
         1,
@@ -439,6 +485,11 @@ async fn an_oauth_mcp_server_fills_a_collection_and_refreshes_its_token() {
     );
     let (s, _) = sign_in(&pod, again["sign_in_url"].as_str().unwrap()).await;
     assert_eq!(s, StatusCode::OK);
+    assert_eq!(
+        fake.scopes.lock().unwrap().last().cloned(),
+        Some(Some("calendar.read".to_owned())),
+        "only the scopes passed"
+    );
 
     // Unplugging the jack stops calls and fillers.
     ok(&pod, "unplug_jack", json!({"id": "mcp"})).await;
@@ -587,4 +638,124 @@ async fn an_oversized_tool_list_is_stored_capped() {
         "the cap drops tools past it: {}",
         tools.len()
     );
+}
+
+#[tokio::test]
+async fn only_read_only_tools_are_called_unless_allowed() {
+    let fake = Arc::new(Fake::default());
+    *fake.access.lock().unwrap() = "api-key-1".into();
+    let base = serve(fake.clone()).await;
+    let pod = pod();
+    ok(
+        &pod,
+        "mcp_connect",
+        json!({"name": "cal", "url": format!("{base}/mcp"), "token": "api-key-1"}),
+    )
+    .await;
+    let st = ok(&pod, "mcp_servers", json!({"name": "cal"})).await;
+    let tools = st["server"]["tools"].as_array().unwrap().clone();
+    let by = |n: &str| tools.iter().find(|t| t["name"] == n).unwrap().clone();
+    assert_eq!(by("calendar_list_events")["read_only"], true, "{st}");
+    assert_eq!(by("calendar_list_events")["callable"], true);
+    assert_eq!(by("send_invite")["destructive"], true);
+    assert_eq!(by("send_invite")["callable"], false);
+    assert_eq!(by("add_note")["read_only"], false);
+    assert_eq!(st["server"]["allow_tools"], json!([]));
+
+    // A destructive tool, and one with no readOnlyHint, are refused.
+    for t in ["send_invite", "add_note"] {
+        let (err, e) = tool(&pod, "mcp_call_tool", json!({"server": "cal", "tool": t})).await;
+        assert!(err && e["error"] == "mcp_failed", "{e}");
+        assert!(e["detail"].as_str().unwrap().contains("allow_tools"), "{e}");
+    }
+    assert!(fake.called.lock().unwrap().is_empty(), "never sent");
+
+    // A filler calling a tool without readOnlyHint is refused, even once
+    // the tool is on the allow list.
+    ok(
+        &pod,
+        "mcp_connect",
+        json!({"name": "cal", "allow_tools": ["add_note", "send_invite"]}),
+    )
+    .await;
+    let st = ok(&pod, "mcp_servers", json!({})).await;
+    assert_eq!(
+        st["servers"][0]["allow_tools"],
+        json!(["add_note", "send_invite"]),
+        "{st}"
+    );
+    ok(
+        &pod,
+        "define_collection",
+        json!({"name": "notes", "fields": [{"name": "done", "type": "text", "optional": true}],
+            "fillers": [{"kind": "mcp", "server": "cal", "tool": "add_note",
+                "items": "", "map": {"done": "done"}}]}),
+    )
+    .await;
+    settle(&pod, "notes").await;
+    let s = ok(&pod, "collections_status", json!({"collection": "notes"})).await;
+    assert!(
+        s.to_string()
+            .contains("only calls tools the server marks read-only"),
+        "{s}"
+    );
+    assert!(
+        fake.called.lock().unwrap().is_empty(),
+        "the filler sent nothing"
+    );
+
+    // Claude may call the allowed ones.
+    let r = ok(
+        &pod,
+        "mcp_call_tool",
+        json!({"server": "cal", "tool": "send_invite"}),
+    )
+    .await;
+    assert_eq!(r["result"]["untrusted"]["content"]["done"], true, "{r}");
+    assert_eq!(*fake.called.lock().unwrap(), ["send_invite"]);
+
+    // [] clears the list.
+    ok(
+        &pod,
+        "mcp_connect",
+        json!({"name": "cal", "allow_tools": []}),
+    )
+    .await;
+    let (err, _) = tool(
+        &pod,
+        "mcp_call_tool",
+        json!({"server": "cal", "tool": "send_invite"}),
+    )
+    .await;
+    assert!(err);
+
+    // Tools stored before the pod kept hints are listed again before a call.
+    pod.store()
+        .with_conn(|c| {
+            c.execute(
+                "UPDATE mcp_servers SET tools = '[{\"name\":\"calendar_list_events\"},{\"name\":\"send_invite\"}]'",
+                [],
+            )
+        })
+        .unwrap();
+    let (err, e) = tool(
+        &pod,
+        "mcp_call_tool",
+        json!({"server": "cal", "tool": "send_invite"}),
+    )
+    .await;
+    assert!(
+        err && e["detail"].as_str().unwrap().contains("destructive"),
+        "{e}"
+    );
+    let r = ok(
+        &pod,
+        "mcp_call_tool",
+        json!({"server": "cal", "tool": "calendar_list_events"}),
+    )
+    .await;
+    assert_eq!(r["result"]["untrusted"]["content"]["count"], 2, "{r}");
+    let st = ok(&pod, "mcp_servers", json!({"name": "cal"})).await;
+    assert_eq!(st["server"]["tools"].as_array().unwrap().len(), 3, "{st}");
+    assert_eq!(*fake.called.lock().unwrap(), ["send_invite"]);
 }
