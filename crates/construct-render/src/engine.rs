@@ -972,6 +972,15 @@ impl Loader for PodEngine {
         true
     }
 
+    /// The platform's own list (`set_servers`), never `local://servers`
+    /// entities: a layout can't add a server to switch to.
+    fn server(&self, id: &str) -> Option<(String, bool)> {
+        lock(&self.shared.servers)
+            .iter()
+            .find(|(i, _, _)| i == id)
+            .map(|(_, _, url)| (url.clone(), url.trim_end_matches('/') == self.base))
+    }
+
     fn redirect(&self, url: &str) -> bool {
         self.engine.handle_auth_redirect(url)
     }
