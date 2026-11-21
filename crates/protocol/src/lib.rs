@@ -33,7 +33,7 @@ pub use features::{
 };
 pub use intent::{
     ActionIntent, Animation, DEVICE_COMMANDS, DEVICE_COMMANDS_WITH_APP, DEVICE_COMMANDS_WITH_ID,
-    Edge, FieldUpdate, Position, PresentationMode,
+    DEVICE_OWNED_LOCAL, Edge, FieldUpdate, Position, PresentationMode, is_device_owned,
 };
 pub use notify::{
     DEVICE_HEADER, Importance, Notification, NotificationChannel, NotificationEvent,
