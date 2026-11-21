@@ -320,8 +320,25 @@ pub fn element_feeds(pod: &Pod, id: &str) -> Vec<(String, String)> {
 /// needs: a core layout's element (`@core/pixelfed`, opened by its key when
 /// home doesn't reach it) is sealed with the build, before any pod's home
 /// binds a feed, so its `needs.feeds` is empty (issue #306). Only home's
-/// feeds are ever loaded: a binding reaches no other data.
+/// feeds are ever loaded: a binding reaches no other data. An adopted
+/// element loads only the feeds its adoption binds (decision
+/// `adoption-capabilities`).
 pub fn bound_element_feeds(
+    pod: &Pod,
+    id: &str,
+    inputs: &Map<String, Value>,
+) -> Vec<(String, String)> {
+    let feeds = any_bound_element_feeds(pod, id, inputs);
+    match pod
+        .store()
+        .with_conn(|c| super::adopted::scope_of(c, &super::write::ConnObjects::new(c), id))
+    {
+        Some(scope) => feeds.into_iter().filter(|f| scope.contains(f)).collect(),
+        None => feeds,
+    }
+}
+
+fn any_bound_element_feeds(
     pod: &Pod,
     id: &str,
     inputs: &Map<String, Value>,

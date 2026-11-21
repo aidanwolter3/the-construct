@@ -151,7 +151,16 @@ share screen.
   for the user to see. A URL that would put the user's own data into a request to another server when it draws
   (an image URL with `$item.…` or `$in.…`, flagged `reads_data`) is refused (`sends_data`) unless the user agrees
   and Claude passes it in `accept_data_urls`; `update_adoption` asks the same for a new version that adds one
-  (decision [`adopt-shows-urls`](decisions/adopt-shows-urls.md)).
+  (decision [`adopt-shows-urls`](decisions/adopt-shows-urls.md)). URLs are judged as they draw (components and
+  `${}` expanded), and consent is kept per URL, element, place and binding.
+- An adopted element reaches only what its bindings give it (decision
+  [`adoption-capabilities`](decisions/adoption-capabilities.md)): data of a collection it isn't bound to is
+  refused (`reaches_unbound`), and its data requests load only its bound collections. Anything else it reaches,
+  another source's data or actions, and the dangerous classes even within the bind (agent runs, jacks,
+  sign-ins, deletes, the device commands that sign out, leave the pod, change the server or remove a layout), is
+  refused (`needs_acceptance`, each with its class) unless the user agrees and Claude passes it in
+  `accept_actions`. The publish review flags every endpoint, payload text and device command too. A literal
+  `${…}` naming no field (`${}`) is refused in every layout write.
 - `list_adoptions` and `update_adoption` follow new versions while they fit the bindings; `list_publications` and
   `revoke_publication` manage the pod's own. A revoked publication keeps drawing where it was adopted.
 

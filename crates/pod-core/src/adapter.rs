@@ -372,6 +372,17 @@ pub trait Source: Any + Send + Sync {
         Ok(Vec::new())
     }
 
+    /// Whether `value` (a query key, data path, endpoint or entity URI of
+    /// this source) reaches only the data sets `feeds` (this source's feeds
+    /// an adoption binds), for an adopted element (decision
+    /// `adoption-capabilities`). `None`: this source binds no data sets, so
+    /// an adopted element reaches its data or actions only when the adopter
+    /// accepts them. Default: `None`.
+    fn adopted_scope(&self, feeds: &[String], value: &str) -> Option<bool> {
+        let _ = (feeds, value);
+        None
+    }
+
     /// The data sets of this source an adopter could bind a shared input to
     /// (decision `sharing`), read on `conn`. Default: none.
     fn data_sets(&self, conn: &rusqlite::Connection) -> Vec<crate::construct::share::DataSet> {

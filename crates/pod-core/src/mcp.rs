@@ -259,8 +259,10 @@ needs rather than working around it.",
         summary: "publish, adopt",
         text: "The user can share with other users of this server: publish answers a review first (show it: elements, \
 inputs, and flagged text and URLs) and shares only with confirm; adopt binds a share link to the user's own \
-data (propose, show the user its flags and confirm, then put its \"use\" in home); a revoked share keeps \
-drawing where it was adopted.",
+data (propose, show the user its flags and confirm, then put its \"use\" in home); an adopted element reaches \
+only what it is bound to, and what else it calls (agent runs, jacks, deletes, sign-outs, another source) \
+waits for the user's yes (needs_acceptance: show each, pass the agreed ones in accept_actions); a revoked \
+share keeps drawing where it was adopted.",
     },
 ];
 

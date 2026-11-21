@@ -617,6 +617,12 @@ impl Source for CollectionsAdapter {
         Some(Box::pin(calendar::events(pod, sources)))
     }
 
+    /// An adopted element reaches a collection only when its adoption
+    /// binds it (decision `adoption-capabilities`).
+    fn adopted_scope(&self, feeds: &[String], value: &str) -> Option<bool> {
+        Some(share::named_collection(value).is_some_and(|c| feeds.iter().any(|f| f == c)))
+    }
+
     fn share_inputs(
         &self,
         conn: &rusqlite::Connection,
