@@ -944,6 +944,10 @@ impl Loader for PodEngine {
     /// provider's (`local:providers`), on another server when it takes one
     /// and the layout passes it (`value`); `sign_out` signs out through
     /// the pod.
+    fn signs_in(&self) -> bool {
+        self.signs_in
+    }
+
     fn auth(&self, intent: &Value) -> bool {
         if !self.signs_in {
             return false;

@@ -607,6 +607,11 @@ pub trait Loader: Send {
     fn auth(&self, _intent: &Value) -> bool {
         false
     }
+    /// Whether [`Loader::auth`] can start a sign-in at all (so a tap that
+    /// can't isn't asked about first).
+    fn signs_in(&self) -> bool {
+        false
+    }
     /// One of the platform's own servers (`set_server`, `local:servers`)
     /// by id: its url, and whether it is the one open now. `None` when the
     /// platform offers no such server.
@@ -3845,17 +3850,7 @@ impl Session {
             }
             "action.mutation.optimistic" => self.optimistic(intent, out),
             "action.auth.session" => self.open_session(intent, out),
-            "action.auth.login" => {
-                if self.loader.as_ref().is_some_and(|l| l.auth(intent)) {
-                    out.push(Effect::Device {
-                        command: "sign_in".into(),
-                    });
-                } else {
-                    out.push(Effect::NotSent {
-                        intent: intent.clone(),
-                    });
-                }
-            }
+            "action.auth.login" => self.login(intent, out),
             "action.mutation.create" => self.create(intent, out),
             "action.link.open" => {
                 let url = intent["url"].as_str().unwrap_or("").trim();
@@ -4429,6 +4424,44 @@ impl Session {
             return;
         }
         let host = host_of(&server);
+        let message = format!("Your browser opens {host} to sign in.");
+        self.ask_device(
+            &format!("Sign in on {host}?"),
+            &message,
+            "Continue",
+            Asked::SignIn(intent.clone()),
+            out,
+        );
+    }
+
+    /// `action.auth.login`: on the pod's own server for a sign-in (its
+    /// provider's, `local://providers`) at once; on any other server only
+    /// once the user has seen its host in the app's own dialog, as for
+    /// `sign_in` elsewhere, so a layout can't send the browser to a sign-in
+    /// page of its choosing by sending this intent itself.
+    fn login(&mut self, intent: &Value, out: &mut Vec<Effect>) {
+        let server = intent["instance_url"].as_str().unwrap_or("").trim();
+        let own = server.is_empty()
+            || self
+                .data
+                .entities
+                .range("local://providers/".to_owned()..)
+                .take_while(|(uri, _)| uri.starts_with("local://providers/"))
+                .filter_map(|(_, p)| p.get_str("server"))
+                .any(|s| same_server(s, server));
+        if own || !self.loader.as_ref().is_some_and(|l| l.signs_in()) {
+            if self.loader.as_ref().is_some_and(|l| l.auth(intent)) {
+                out.push(Effect::Device {
+                    command: "sign_in".into(),
+                });
+            } else {
+                out.push(Effect::NotSent {
+                    intent: intent.clone(),
+                });
+            }
+            return;
+        }
+        let host = host_of(server);
         let message = format!("Your browser opens {host} to sign in.");
         self.ask_device(
             &format!("Sign in on {host}?"),
@@ -5098,6 +5131,14 @@ enum Asked {
 
 /// The host of a server the user typed (`https://pix.example/x` →
 /// `pix.example`), for the dialog before signing in there.
+/// Whether two server URLs name one server: ignoring case and a trailing
+/// `/`.
+fn same_server(a: &str, b: &str) -> bool {
+    a.trim()
+        .trim_end_matches('/')
+        .eq_ignore_ascii_case(b.trim().trim_end_matches('/'))
+}
+
 fn host_of(server: &str) -> String {
     let rest = server.split_once("://").map_or(server, |(_, rest)| rest);
     let host = rest.split(['/', '?', '#']).next().unwrap_or(rest);
