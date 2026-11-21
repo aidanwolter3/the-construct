@@ -195,6 +195,8 @@ pub(crate) fn events_thread(
             return;
         }
     };
+    // The engine talks to its own pod, not a host a user picked.
+    #[allow(clippy::disallowed_methods)]
     let client = match reqwest::Client::builder()
         .connect_timeout(CONNECT_TIMEOUT)
         .build()
@@ -548,6 +550,7 @@ mod tests {
             .enable_all()
             .build()
             .unwrap();
+        #[allow(clippy::disallowed_methods)] // a test's own local server
         let error = rt.block_on(async {
             let mut resp = reqwest::Client::new()
                 .get(format!("http://127.0.0.1:{port}/"))

@@ -54,7 +54,7 @@ Decision:
 
 Security: an MCP credential can't reach app routes, so a prompt injection in sampled data can at most write a
 visible, versioned, reversible layout, which can only use what the app's sources declare. Sampled data is the user's
-own, sent to their own Claude account.
+own, sent to their own Claude account. (Since then, outside text in answers is marked: [untrusted-tool-content](untrusted-tool-content.md).)
 
 Not done yet: Client ID Metadata Documents (the 2026-07-28 spec's preferred registration; the host would have to
 fetch client URLs); short-lived tokens with refresh-token rotation (the spec's SHOULD); disconnecting Claude from the

@@ -90,6 +90,8 @@ pub struct Runner {
     opts: Options,
     /// Links `action.link.open` opened (`assert-link`).
     pub links: Vec<String>,
+    /// Servers a `set_server` switched the app to, as the platform would.
+    pub switched: Vec<String>,
     /// Files `pick` queued for the next media picker tap.
     picks: Vec<std::path::PathBuf>,
     /// The swipe card `drag-card` holds, until `release`.
@@ -122,6 +124,7 @@ impl Runner {
             source,
             opts,
             links: Vec::new(),
+            switched: Vec::new(),
             picks: Vec::new(),
             held_card: None,
         };
@@ -695,6 +698,7 @@ impl Runner {
         for e in &o.effects {
             match e {
                 Effect::OpenLink { url } => self.links.push(url.clone()),
+                Effect::SwitchServer { url } => self.switched.push(url.clone()),
                 Effect::LoadFailed { what, error } => {
                     return Err(format!("{what} failed: {error}"));
                 }

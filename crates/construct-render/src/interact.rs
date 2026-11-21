@@ -602,10 +602,16 @@ pub trait Loader: Send {
     }
     /// Starts a sign-in to an upstream or signs out of it, where the loader
     /// runs the engine's sign-in (`crate::signin`): `action.auth.login`, or
-    /// `action.device` `sign_in`, `sign_out` and `set_server`. True when
-    /// taken; its progress shows in `local://session`.
+    /// `action.device` `sign_in` and `sign_out`. True when taken; its
+    /// progress shows in `local://session`.
     fn auth(&self, _intent: &Value) -> bool {
         false
+    }
+    /// One of the platform's own servers (`set_server`, `local:servers`)
+    /// by id: its url, and whether it is the one open now. `None` when the
+    /// platform offers no such server.
+    fn server(&self, _id: &str) -> Option<(String, bool)> {
+        None
     }
     /// Hands a link that opened the app to a sign-in waiting for its
     /// redirect; false when it isn't one, or nothing waits for it.
@@ -759,6 +765,9 @@ struct Prepared {
 /// A live layout.
 pub struct Session {
     stack: Vec<Entry>,
+    /// The device command waiting for the user's OK in the app's own
+    /// dialog ([`Session::ask_device`]), with the nonce its OK carries.
+    asked: Option<(String, Asked)>,
     /// What building frames cost since the window last asked.
     work: Work,
     pub data: DataBundle,
@@ -971,6 +980,7 @@ impl Session {
     pub fn new(id: &str, root: UiNode, data: DataBundle, viewport: Viewport) -> Session {
         Session {
             stack: vec![Entry::layout(id, root, BTreeMap::new())],
+            asked: None,
             work: Work::default(),
             data,
             form: BTreeMap::new(),
@@ -2727,8 +2737,11 @@ impl Session {
         if kept.is_empty() {
             return;
         }
+        // Kept before device-owned data was read-only: not put back.
         for (uri, field, value) in kept {
-            self.data.entities.entry(uri).or_default().set(field, value);
+            if !protocol::is_device_owned(&uri) {
+                self.data.entities.entry(uri).or_default().set(field, value);
+            }
         }
         self.invalidate();
     }
@@ -3715,6 +3728,15 @@ impl Session {
             "action.confirm" => self.confirm(intent, out),
             "action.local.set" => {
                 let uri = intent["entity_uri"].as_str().unwrap_or("").to_owned();
+                // The device's own data (`local://servers`, `session`,
+                // `theme`...) is read-only to layouts (decision
+                // `device-owned-local-state`): a layout can't choose the
+                // server the app opens or fake a sign-in.
+                if protocol::is_device_owned(&uri) {
+                    eprintln!("construct-render: local.set {uri}: the device's own data; not set");
+                    out.push(Effect::Nothing);
+                    return;
+                }
                 let updates: Vec<(String, String)> = std::iter::once(intent)
                     .chain(intent["also"].as_array().into_iter().flatten())
                     .filter_map(|a| {
@@ -3896,6 +3918,9 @@ impl Session {
                         out.push(Effect::Device { command });
                         return;
                     }
+                    "sign_in" if !intent["value"].as_str().unwrap_or("").trim().is_empty() => {
+                        return self.sign_in_elsewhere(intent, out);
+                    }
                     "sign_in" | "sign_out"
                         if self.loader.as_ref().is_some_and(|l| l.auth(intent)) =>
                     {
@@ -3928,6 +3953,7 @@ impl Session {
                         return;
                     }
                     "set_server" => return self.set_server(&id, out),
+                    ANSWER_ASKED => return self.answer_asked(&id, out),
                     "toggle_channel" => return self.toggle_channel(&layout, &id, out),
                     "load_older_notifications" => return self.load_older(out),
                     _ => {}
@@ -4314,19 +4340,116 @@ impl Session {
         }
     }
 
-    /// `set_server`: another of the platform's servers (`local:servers`),
-    /// which the platform opens (`Effect::SwitchServer`).
+    /// `set_server`: another of the platform's own servers
+    /// ([`Loader::server`], never an entity a layout could have written),
+    /// which the platform opens (`Effect::SwitchServer`) once the user says
+    /// so in the app's own dialog (decision `device-owned-local-state`).
     fn set_server(&mut self, id: &str, out: &mut Vec<Effect>) {
-        let Some(server) = self.data.entities.get(&format!("local://servers/{id}")) else {
+        let Some((url, current)) = self.loader.as_ref().and_then(|l| l.server(id)) else {
             out.push(Effect::Nothing);
             return;
         };
-        let url = server.get_str("url").unwrap_or("").trim().to_owned();
-        if url.is_empty() || server.get("selected").is_some_and(crate::bind::truthy) {
+        let url = url.trim().to_owned();
+        if url.is_empty() || current {
             out.push(Effect::Nothing);
             return;
         }
-        out.push(Effect::SwitchServer { url });
+        let message = format!("The app opens {url} from now on, here and at every start.");
+        self.ask_device(
+            "Switch server?",
+            &message,
+            "Switch",
+            Asked::Switch(url),
+            out,
+        );
+    }
+
+    /// `sign_in` on another server (`value`): only a server the user typed
+    /// into a field of this screen (a literal or any other binding is
+    /// refused), and only once the user has seen its host in the app's own
+    /// dialog.
+    fn sign_in_elsewhere(&mut self, intent: &Value, out: &mut Vec<Effect>) {
+        let server = intent["value"].as_str().unwrap_or("").trim().to_owned();
+        let id = intent["id"].as_str().unwrap_or("");
+        let custom = self
+            .data
+            .entities
+            .get(&format!("local://providers/{id}"))
+            .and_then(|p| p.get("custom_server"))
+            .is_some_and(crate::bind::truthy);
+        if !custom {
+            // The provider's own server: the value means nothing.
+            let mut plain = intent.clone();
+            if let Some(m) = plain.as_object_mut() {
+                m.remove("value");
+            }
+            if self.loader.as_ref().is_some_and(|l| l.auth(&plain)) {
+                out.push(Effect::Device {
+                    command: "sign_in".into(),
+                });
+            } else {
+                out.push(Effect::NotSent { intent: plain });
+            }
+            return;
+        }
+        if !self.form.values().any(|v| v.trim() == server) {
+            eprintln!("construct-render: sign_in: {server:?} is not a server the user typed");
+            out.push(Effect::Nothing);
+            return;
+        }
+        let host = host_of(&server);
+        let message = format!("Your browser opens {host} to sign in.");
+        self.ask_device(
+            &format!("Sign in on {host}?"),
+            &message,
+            "Continue",
+            Asked::SignIn(intent.clone()),
+            out,
+        );
+    }
+
+    /// The app's own dialog before a device command a layout can't be
+    /// trusted to choose alone: its OK runs [`ANSWER_ASKED`] with a
+    /// nonce only this dialog holds, so a layout (an `action.sequence`
+    /// after the command) can't answer it.
+    fn ask_device(
+        &mut self,
+        title: &str,
+        message: &str,
+        label: &str,
+        asked: Asked,
+        out: &mut Vec<Effect>,
+    ) {
+        let nonce = new_nonce();
+        self.asked = Some((nonce.clone(), asked));
+        let confirm = json!({ "intent": "action.confirm", "title": title, "message": message,
+            "confirm_label": label,
+            "then": { "intent": "action.device", "command": ANSWER_ASKED, "id": nonce } });
+        self.confirm(&confirm, out);
+    }
+
+    /// The user's OK in [`Session::ask_device`]'s dialog.
+    fn answer_asked(&mut self, nonce: &str, out: &mut Vec<Effect>) {
+        let asked = match self.asked.take() {
+            Some((held, asked)) if !nonce.is_empty() && held == nonce => asked,
+            other => {
+                self.asked = other;
+                out.push(Effect::Nothing);
+                return;
+            }
+        };
+        match asked {
+            Asked::Switch(url) => out.push(Effect::SwitchServer { url }),
+            Asked::SignIn(intent) => {
+                if self.loader.as_ref().is_some_and(|l| l.auth(&intent)) {
+                    out.push(Effect::Device {
+                        command: "sign_in".into(),
+                    });
+                } else {
+                    out.push(Effect::NotSent { intent });
+                }
+            }
+        }
     }
 
     /// `toggle_channel`: the switch flips at once, then the pod is told; a
@@ -4925,6 +5048,34 @@ fn substitute_value(v: &mut Value, value: &Value) {
         Value::Array(a) => a.iter_mut().for_each(|x| substitute_value(x, value)),
         Value::Object(m) => m.values_mut().for_each(|x| substitute_value(x, value)),
         _ => {}
+    }
+}
+
+/// The `action.device` command of the OK in [`Session::ask_device`]'s
+/// dialog (`id`: its nonce): the session's own, not in `DEVICE_COMMANDS`,
+/// so the pod refuses it in a layout.
+const ANSWER_ASKED: &str = "answer_asked";
+
+/// A device command [`Session::ask_device`] holds until the user's OK.
+#[derive(Debug, Clone)]
+enum Asked {
+    /// `set_server`: the platform's server to open.
+    Switch(String),
+    /// `sign_in` on a server the user typed: the bound intent.
+    SignIn(Value),
+}
+
+/// The host of a server the user typed (`https://pix.example/x` →
+/// `pix.example`), for the dialog before signing in there.
+fn host_of(server: &str) -> String {
+    let rest = server.split_once("://").map_or(server, |(_, rest)| rest);
+    let host = rest.split(['/', '?', '#']).next().unwrap_or(rest);
+    // Credentials before an `@` are not the host.
+    let host = host.rsplit_once('@').map_or(host, |(_, h)| h);
+    if host.is_empty() {
+        server.to_owned()
+    } else {
+        host.to_owned()
     }
 }
 

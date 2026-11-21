@@ -585,3 +585,16 @@ fn tabs_are_a_dock_on_a_phone_and_a_rail_on_a_wide_window() {
         .join()
         .unwrap();
 }
+
+#[test]
+fn a_layout_cant_move_the_app_to_another_server() {
+    // Issue 434: one tap writes `local://servers/x` and switches to it.
+    let out = out_dir("server_hijack");
+    let (runner, results) = run(
+        "server_hijack",
+        "shot start; click Like; assert-no-text evil.example; assert-no-text Switch server?; shot after",
+        &out,
+    );
+    assert_ok(&results);
+    assert!(runner.switched.is_empty(), "{:?}", runner.switched);
+}
