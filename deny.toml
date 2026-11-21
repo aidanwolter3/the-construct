@@ -1,14 +1,20 @@
-# cargo-deny configuration. CI runs `cargo deny check advisories` (the `audit` job in
+# cargo-deny configuration. CI runs `cargo deny check advisories sources` (the `audit` job in
 # .github/workflows/ci.yml), which fails on any RustSec advisory against Cargo.lock that is
-# not ignored below. Run it locally with:
+# not ignored below, and on any crate from a registry other than crates.io or from a git
+# repository. The deploy job waits for it. Run it locally with:
 #
-#   cargo install cargo-deny --locked && cargo deny --all-features check advisories
+#   cargo install cargo-deny --locked && cargo deny --all-features check advisories sources
 #
 # Every ignore needs a written reason, and should be removed as soon as an upgrade exists
 # (security audit #31, M3 and L13).
 
 [graph]
 all-features = true
+
+[sources]
+# Only crates.io (the default allowed registry); no git dependencies today.
+unknown-registry = "deny"
+unknown-git = "deny"
 
 [advisories]
 version = 2
