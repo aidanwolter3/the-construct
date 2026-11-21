@@ -37,6 +37,7 @@ use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
 
 use crate::adapter::Pod;
+use crate::net::{OutboundClient, OutboundResponse};
 use crate::store::Store;
 use crate::util::now_secs;
 
@@ -304,17 +305,14 @@ fn describe(s: &Server, schemas: bool) -> Value {
 
 // ---------- HTTP ----------
 
-fn client(pod: &Pod) -> reqwest::Client {
-    let b = if pod.mcp_private_hosts() {
-        crate::net::builder(REQUEST_TIMEOUT)
-    } else {
-        crate::net::public_builder(REQUEST_TIMEOUT)
-    };
+fn client(pod: &Pod) -> OutboundClient {
     // A redirected POST would turn into a GET, and a token must not follow a
     // redirect to another host: neither is followed.
-    b.redirect(reqwest::redirect::Policy::none())
+    OutboundClient::builder(REQUEST_TIMEOUT)
+        .private(pod.mcp_private_hosts())
+        .no_redirects()
+        .body_cap(MAX_BODY)
         .build()
-        .expect("an HTTP client")
 }
 
 /// `s` as a URL the pod may call: https on a public host name, or any
@@ -333,19 +331,14 @@ fn check_url(pod: &Pod, s: &str) -> Result<reqwest::Url, String> {
 }
 
 /// Read a response's body, at most [`MAX_BODY`].
-async fn body_of(mut resp: reqwest::Response) -> Result<Vec<u8>, String> {
-    let mut out = Vec::new();
-    while let Some(chunk) = resp
-        .chunk()
-        .await
-        .map_err(|e| format!("reading the answer failed: {e}"))?
-    {
-        if out.len() + chunk.len() > MAX_BODY {
-            return Err("the answer is too large".into());
+async fn body_of(resp: OutboundResponse) -> Result<Vec<u8>, String> {
+    resp.body_cap(MAX_BODY).bytes().await.map_err(|e| {
+        if e.is_too_large() {
+            "the answer is too large".into()
+        } else {
+            format!("reading the answer failed: {e}")
         }
-        out.extend_from_slice(&chunk);
-    }
-    Ok(out)
+    })
 }
 
 fn short(s: &str, max: usize) -> String {
@@ -379,7 +372,7 @@ impl RpcError {
 
 /// One MCP session over Streamable HTTP.
 struct Conn {
-    client: reqwest::Client,
+    client: OutboundClient,
     url: reqwest::Url,
     bearer: Option<String>,
     session: Option<String>,
@@ -419,7 +412,7 @@ fn from_event_stream(text: &str, id: i64) -> Option<Value> {
 
 impl Conn {
     async fn open(
-        client: reqwest::Client,
+        client: OutboundClient,
         url: reqwest::Url,
         bearer: Option<String>,
     ) -> Result<Self, RpcError> {
@@ -653,7 +646,7 @@ fn auth_param(www: &str, key: &str) -> Option<String> {
     None
 }
 
-async fn get_json(pod: &Pod, client: &reqwest::Client, url: &str) -> Result<Value, String> {
+async fn get_json(pod: &Pod, client: &OutboundClient, url: &str) -> Result<Value, String> {
     let u = check_url(pod, url)?;
     let resp = client
         .get(u)
@@ -684,7 +677,7 @@ fn well_known(base: &reqwest::Url, suffix: &str) -> Vec<String> {
 /// Find where users of the MCP server at `url` sign in.
 async fn discover(
     pod: &Pod,
-    client: &reqwest::Client,
+    client: &OutboundClient,
     url: &reqwest::Url,
     www: Option<&str>,
 ) -> Result<AuthServer, String> {
@@ -768,7 +761,7 @@ fn challenge(verifier: &str) -> String {
 /// Register the pod as a client of `a` (RFC 7591): `(client_id,
 /// client_secret, how the secret is sent)`.
 async fn register(
-    client: &reqwest::Client,
+    client: &OutboundClient,
     a: &AuthServer,
     redirect_uri: &str,
 ) -> Result<(String, Option<String>, String), String> {
@@ -836,7 +829,7 @@ struct TokenError {
 }
 
 async fn token_request(
-    client: &reqwest::Client,
+    client: &OutboundClient,
     s: &Server,
     store: &Store,
     form: Vec<(&str, String)>,
@@ -920,7 +913,7 @@ fn base_url(pod: &Pod, headers: &HeaderMap) -> String {
 /// per redirect URI), and answer the URL to open.
 async fn start_sign_in(
     pod: &Pod,
-    client: &reqwest::Client,
+    client: &OutboundClient,
     s: &mut Server,
     www: Option<&str>,
     redirect_uri: &str,

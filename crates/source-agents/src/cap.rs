@@ -21,6 +21,7 @@
 
 use std::time::Duration;
 
+use pod_core::net::{OutboundClient, OutboundError, OutboundResponse};
 use serde_json::{Value, json};
 
 /// The kind of record an [`Event`] carries.
@@ -288,8 +289,8 @@ pub fn check_url(url: &str, allow_private: bool) -> Result<String, String> {
 /// (no overall timeout; a quiet stream is dropped after [`STREAM_IDLE`]).
 #[derive(Debug, Clone)]
 pub struct Clients {
-    pub request: reqwest::Client,
-    pub stream: reqwest::Client,
+    pub request: OutboundClient,
+    pub stream: OutboundClient,
 }
 
 /// How long a stream may stay silent before the pod reconnects.
@@ -302,20 +303,20 @@ impl Clients {
     /// public addresses only. Neither follows redirects: the token must go
     /// to the runner and nowhere else.
     pub fn new(allow_private: bool) -> Self {
-        let make = |timeout: Option<Duration>| {
-            let b = if allow_private {
-                pod_core::net::builder(timeout.unwrap_or(Duration::from_secs(24 * 3600)))
-            } else {
-                pod_core::net::public_builder(timeout.unwrap_or(Duration::from_secs(24 * 3600)))
-            };
-            b.redirect(reqwest::redirect::Policy::none())
+        let make = |timeout: Duration| {
+            OutboundClient::builder(timeout)
+                .private(allow_private)
+                .no_redirects()
                 .read_timeout(STREAM_IDLE)
-                .build()
-                .expect("an HTTP client")
+                .body_cap(MAX_BODY)
         };
         Self {
-            request: make(Some(REQUEST_TIMEOUT)),
-            stream: make(None),
+            request: make(REQUEST_TIMEOUT).build(),
+            // The stream is read for as long as it lasts; the SSE parser
+            // bounds each message.
+            stream: make(Duration::from_secs(24 * 3600))
+                .body_cap(usize::MAX)
+                .build(),
         }
     }
 }
@@ -328,26 +329,18 @@ pub const MAX_BODY: usize = 4 * 1024 * 1024;
 const MAX_ERROR_BODY: usize = 16 * 1024;
 
 /// The answer's body as JSON, read up to `max` bytes; `Invalid` past that.
-async fn json_capped(mut resp: reqwest::Response, max: usize) -> Result<Value, CapError> {
-    let too_long = || CapError::Invalid("the answer is too long".into());
-    if resp.content_length().is_some_and(|n| n > max as u64) {
-        return Err(too_long());
-    }
-    let mut bytes = Vec::new();
-    while let Some(chunk) = resp
-        .chunk()
-        .await
-        .map_err(|e| CapError::Invalid(short(&e)))?
-    {
-        if bytes.len() + chunk.len() > max {
-            return Err(too_long());
-        }
-        bytes.extend_from_slice(&chunk);
-    }
+async fn json_capped(resp: OutboundResponse, max: usize) -> Result<Value, CapError> {
+    let bytes = resp.body_cap(max).bytes().await.map_err(|e| {
+        CapError::Invalid(if e.is_too_large() {
+            "the answer is too long".into()
+        } else {
+            short(&e)
+        })
+    })?;
     serde_json::from_slice(&bytes).map_err(|_| CapError::Invalid("unreadable answer".into()))
 }
 
-async fn error_of(resp: reqwest::Response) -> CapError {
+async fn error_of(resp: OutboundResponse) -> CapError {
     let status = resp.status().as_u16();
     if status == 401 {
         return CapError::Unauthorized;
@@ -476,7 +469,7 @@ pub async fn open_stream(
     clients: &Clients,
     runner: &Runner,
     since: i64,
-) -> Result<reqwest::Response, CapError> {
+) -> Result<OutboundResponse, CapError> {
     let resp = clients
         .stream
         .get(format!("{}/v3/stream", runner.url))
@@ -494,8 +487,10 @@ pub async fn open_stream(
 }
 
 /// An error without the request URL (which names the runner).
-fn short(e: &reqwest::Error) -> String {
-    let kind = if e.is_timeout() {
+fn short(e: &OutboundError) -> String {
+    let kind = if let OutboundError::Refused(_) = e {
+        "the runner's URL is not allowed"
+    } else if e.is_timeout() {
         "timed out"
     } else if e.is_connect() {
         "no connection"

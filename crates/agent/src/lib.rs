@@ -391,7 +391,9 @@ pub struct HttpTransport {
 
 impl HttpTransport {
     pub fn new(url: String, key: String) -> Self {
-        let client = pod_core::net::builder(Duration::from_secs(600))
+        // A fixed host the operator configured, not one a user picked.
+        #[allow(clippy::disallowed_methods)]
+        let client = pod_core::net::fixed_host_builder(Duration::from_secs(600))
             .build()
             .expect("an HTTP client");
         Self { client, url, key }

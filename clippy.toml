@@ -1,0 +1,12 @@
+# Outbound HTTP from the pod goes through `pod_core::net::OutboundClient`
+# (decision `outbound-client`): it checks each URL, pins the public-only
+# resolver and caps the body. A client that talks to the pod (the engine,
+# tests) or to a fixed host the operator configured allows the lint where it
+# builds one, saying why.
+disallowed-methods = [
+    { path = "reqwest::Client::builder", reason = "use pod_core::net::OutboundClient (a host a user picked must not reach the pod's network)" },
+    { path = "reqwest::Client::new", reason = "use pod_core::net::OutboundClient (a host a user picked must not reach the pod's network)" },
+    { path = "reqwest::ClientBuilder::new", reason = "use pod_core::net::OutboundClient (a host a user picked must not reach the pod's network)" },
+    { path = "reqwest::get", reason = "use pod_core::net::OutboundClient (a host a user picked must not reach the pod's network)" },
+    { path = "pod_core::net::fixed_host_builder", reason = "only for a fixed host the operator configured: allow it at that call site" },
+]
