@@ -370,8 +370,53 @@ struct Shows<'a> {
     /// Row fields a visitor's own page sets (a kept `action.local.set` of
     /// a row): a condition on them is the visitor's to change.
     visitor_fields: BTreeSet<String>,
+    /// The pod's clock when the copy is made: its zone and the minute it is
+    /// there (decision `public-links-decide-ages`). `None`: an age can't be
+    /// decided, and its rows stay out.
+    clock: Option<Clock>,
     seen: BTreeSet<(String, Use)>,
     todo: Vec<(String, Use)>,
+}
+
+/// A moment on the pod's wall clock, as the renderer reads a list's ages.
+struct Clock {
+    zone: jiff::tz::TimeZone,
+    /// Local minutes since the epoch.
+    now: i64,
+}
+
+impl Clock {
+    /// Now, in `zone`.
+    fn now(zone: jiff::tz::TimeZone) -> Option<Clock> {
+        let local = jiff::Timestamp::now().to_zoned(zone.clone()).datetime();
+        let text = format!(
+            "{:04}-{:02}-{:02}T{:02}:{:02}",
+            local.year(),
+            local.month(),
+            local.day(),
+            local.hour(),
+            local.minute()
+        );
+        let m = construct_render::dates::moment(&text, "", Some(&zone))?;
+        Some(Clock {
+            now: m.day * 1_440 + m.minute.unwrap_or(0),
+            zone,
+        })
+    }
+
+    /// Whether `value` is more than `older_than` ago, as the renderer's
+    /// `Where` tests it: an empty or unreadable value, or a duration that
+    /// doesn't read, never is.
+    fn older(&self, value: Option<&Value>, older_than: &str) -> bool {
+        let Some(secs) = protocol::ast::duration_secs(older_than) else {
+            return false;
+        };
+        value
+            .and_then(Value::as_str)
+            .and_then(|t| construct_render::dates::moment(t, "", Some(&self.zone)))
+            .map(|m| m.day * 1_440 + m.minute.unwrap_or(0))
+            .is_some_and(|at| at + (secs + 59) / 60 <= self.now)
+    }
 }
 
 /// What a condition comes to for a copy.
@@ -428,6 +473,7 @@ impl<'a> Shows<'a> {
                 visitor_set(n, &mut out);
                 out
             }),
+            clock: None,
             seen: BTreeSet::new(),
             todo: Vec::new(),
         }
@@ -581,10 +627,15 @@ impl<'a> Shows<'a> {
     }
 
     /// Whether a `where` condition holds for a row, as the renderer tests
-    /// it (`layout.rs` `Where`). `None`: it can't be decided here (an age,
-    /// an unbound name), and the row stays out. An `equals` on what the
-    /// visitor picks (`$form`, `local://`) holds: their page starts blank,
-    /// which matches every row, as the owner's does.
+    /// it (`layout.rs` `Where`). `None`: it can't be decided here (an
+    /// unbound name, or an age without the pod's clock), and the row stays
+    /// out. An age is decided on the pod's clock as the copy is made
+    /// (decision `public-links-decide-ages`): time only moves one way, so a
+    /// row an age hides now never shows later, and one it shows now that
+    /// ages out is hidden by the visitor's page as by the owner's. An
+    /// `equals` on what the visitor picks (`$form`, `local://`) holds:
+    /// their page starts blank, which matches every row, as the owner's
+    /// does.
     fn holds(
         &self,
         c: &Value,
@@ -592,8 +643,11 @@ impl<'a> Shows<'a> {
         u: &Use,
         item: Option<&str>,
     ) -> Option<bool> {
-        if c.get("older_than").is_some_and(|v| !v.is_null()) {
-            return None;
+        if let Some(age) = c.get("older_than").filter(|v| !v.is_null()) {
+            let clock = self.clock.as_ref()?;
+            let field = c["field"].as_str().unwrap_or("");
+            let older = clock.older(e.and_then(|e| e.get(field)), age.as_str().unwrap_or(""));
+            return Some(older != (c["not"] == true));
         }
         let raw = c["equals"].as_str().unwrap_or("");
         if self.visitor(raw) {
@@ -1269,7 +1323,14 @@ pub async fn make(pod: &Pod, ask: &Ask) -> Result<Made, Value> {
         }
     }
     let only: BTreeSet<String> = ask.rows.iter().cloned().collect();
+    // Ages read as the owner's devices read them: in the pod's zone.
+    let zone = crate::blocking(pod, |s| Ok(crate::tz::time_zone(s)))
+        .await
+        .ok()
+        .and_then(Result::ok)
+        .unwrap_or(jiff::tz::TimeZone::UTC);
     let mut shows = Shows::new(&pool, &nodes, &ask.layout, &only);
+    shows.clock = Clock::now(zone);
     let first = Use {
         route: ask.params.clone(),
         item: ask.item.clone(),
@@ -1447,7 +1508,7 @@ pub fn is_slug(s: &str) -> bool {
 pub fn tool_specs() -> Vec<Value> {
     vec![
         json!({ "name": "share_publicly",
-            "description": "Make a page anyone can open in a browser, without a pod: a copy of one of the pod's layouts, the layouts it opens and embeds (a list's rows push their screen: those come too, each with the rows it shows for each row), and only the rows they show, read-only (decisions public-web-links, public-links-share-the-closure). Without confirm nothing is shared: the answer is a review of everything a visitor would read (every text and value, every URL, per layout) and what was taken out (buttons that write, links to layouts not carried, screens); show it to the user and ask before confirming. With confirm (the review_id) it goes out and answers the page's url. It carries only rows and fields the owner's screen shows: a row or field under a condition that is false for it (core://Conditional, an embed's show_when) or can't be decided (a date, an age) stays out. The copy is refreshed when the data changes: edits and removals of its rows go out, but new rows wait until it is shared again (a new review), unless new_rows is \"publish\"; say so. An edit to its layouts holds the page at its last copy until it is shared again (a new review). params draws a screen that reads $route.<name> (a recipe screen: {\"id\": \"<meal id>\"}); item draws the layout with that row as $item; rows limits the root's lists to some rows; leave_out keeps layouts out (their links go). slug also answers it at /<handle>/<slug> (the pod needs a handle: set_handle). Sharing the same layout, rows, item and params again updates the same link.",
+            "description": "Make a page anyone can open in a browser, without a pod: a copy of one of the pod's layouts, the layouts it opens and embeds (a list's rows push their screen: those come too, each with the rows it shows for each row), and only the rows they show, read-only (decisions public-web-links, public-links-share-the-closure). Without confirm nothing is shared: the answer is a review of everything a visitor would read (every text and value, every URL, per layout) and what was taken out (buttons that write, links to layouts not carried, screens); show it to the user and ask before confirming. With confirm (the review_id) it goes out and answers the page's url. It carries only rows and fields the owner's screen shows: a row or field under a condition that is false for it (core://Conditional, an embed's show_when) or can't be decided (a Conditional's date test) stays out; a list's age (older_than) is decided on the pod's clock as the copy is made (decision public-links-decide-ages). The copy is refreshed when the data changes: edits and removals of its rows go out, but new rows wait until it is shared again (a new review), unless new_rows is \"publish\"; say so. An edit to its layouts holds the page at its last copy until it is shared again (a new review). params draws a screen that reads $route.<name> (a recipe screen: {\"id\": \"<meal id>\"}); item draws the layout with that row as $item; rows limits the root's lists to some rows; leave_out keeps layouts out (their links go). slug also answers it at /<handle>/<slug> (the pod needs a handle: set_handle). Sharing the same layout, rows, item and params again updates the same link.",
             "inputSchema": { "type": "object", "properties": {
                 "layout": { "type": "string", "description": "A layout id: home or a c-... id from list_layouts" },
                 "params": { "type": "object", "description": "{name: value} for $route.<name> of the layout (as render_layout_preview)" },
@@ -2183,6 +2244,57 @@ mod tests {
             "item_template": { "type": "core::Text", "value_expr": "$item.text" } });
         let d = minimize(&kitchen(), &age, &[], Use::default());
         assert!(d.queries["note:recipe_steps"].is_empty() && rows_of(&d).is_empty());
+    }
+
+    /// Decision `public-links-decide-ages`: with the pod's clock, a list's
+    /// age keeps the rows it shows now (upcoming events, an unreadable
+    /// date) and leaves out the ones it hides, both ways round.
+    #[test]
+    fn ages_are_decided_on_the_pods_clock() {
+        let at = |hours: i64| {
+            let t = jiff::Timestamp::now() + jiff::SignedDuration::from_hours(hours);
+            let d = t.to_zoned(jiff::tz::TimeZone::UTC).datetime();
+            format!(
+                "{:04}-{:02}-{:02}T{:02}:{:02}",
+                d.year(),
+                d.month(),
+                d.day(),
+                d.hour(),
+                d.minute()
+            )
+        };
+        let data: DataBundle = serde_json::from_value(json!({
+            "entities": {
+                "c://events/past": { "id": "past", "title": "Last week", "start": at(-24 * 7) },
+                "c://events/today": { "id": "today", "title": "An hour ago", "start": at(-1) },
+                "c://events/soon": { "id": "soon", "title": "Tomorrow", "start": at(24) },
+                "c://events/tbd": { "id": "tbd", "title": "Date to come", "start": "" } },
+            "queries": { "c:events": ["c://events/past", "c://events/today", "c://events/soon", "c://events/tbd"] } }))
+        .unwrap();
+        let kept = |cond: Value, clock: bool| {
+            let node = json!({ "type": "core://List", "query_key": "c:events", "where": [cond],
+                "item_template": { "type": "core://Text", "value_expr": "$item.title" } });
+            let nodes = BTreeMap::from([("root".to_owned(), node)]);
+            let only = BTreeSet::new();
+            let mut s = Shows::new(&data, &nodes, "root", &only);
+            if clock {
+                s.clock = Clock::now(jiff::tz::TimeZone::UTC);
+            }
+            s.run(Use::default());
+            let d = s.data();
+            let mut ids: Vec<String> = d.queries["c:events"]
+                .iter()
+                .map(|u| u.rsplit('/').next().unwrap().to_owned())
+                .collect();
+            ids.sort();
+            ids
+        };
+        let upcoming = json!({ "field": "start", "older_than": "6h", "not": true });
+        assert_eq!(kept(upcoming.clone(), true), ["soon", "tbd", "today"]);
+        let old = json!({ "field": "start", "older_than": "2d" });
+        assert_eq!(kept(old, true), ["past"]);
+        // Without the clock it fails closed, as before.
+        assert!(kept(upcoming, false).is_empty());
     }
 
     fn diary() -> DataBundle {
