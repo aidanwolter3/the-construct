@@ -256,7 +256,7 @@ impl HostConfig {
             storage: StorageLimits::from_env(),
             streams: streams::StreamLimits::from_env(),
             hsts: var("FLY_APP_NAME").is_some(),
-            public_url: var("CONSTRUCT_PUBLIC_URL"),
+            public_url: pod_core::public_url_from_env(),
             android: app_links::AndroidAppLinks::from_env(),
             oauth_client: oauth::StaticClient::from_env(),
             web: web::WebConfig::from_env(),

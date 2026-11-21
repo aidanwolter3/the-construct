@@ -1459,10 +1459,8 @@ pub fn tool_specs() -> Vec<Value> {
 /// The base URL visitors use: the host's chosen one (`CONSTRUCT_PUBLIC_URL`),
 /// else the MCP request's.
 pub fn base_url(headers: &HeaderMap) -> Option<String> {
-    if let Ok(u) = std::env::var("CONSTRUCT_PUBLIC_URL")
-        && !u.trim().is_empty()
-    {
-        return Some(u.trim().to_owned());
+    if let Some(u) = crate::public_url_from_env() {
+        return Some(u);
     }
     let host = headers.get("host")?.to_str().ok()?;
     let https = headers
