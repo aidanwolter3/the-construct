@@ -999,20 +999,22 @@ impl State {
     /// cached `active_workspace` row of `workspace_id`. The engine knows no
     /// app, so it cannot tell private from public data; the refetch that
     /// follows a sign-out reloads what is public (docs/DECISIONS.md D36).
-    /// `drop_session_rows` (explicit logout) first deletes the PENDING rows
-    /// queued while signed in: nobody could send them any more. The in-memory
-    /// layout stays until the refetch replaces it.
-    fn purge_private(&mut self, workspace_id: &str, drop_session_rows: bool) {
+    /// `outbox` says which PENDING rows go first: none (a 401: they resume
+    /// after the next sign-in), those queued while signed in (explicit
+    /// logout: nobody could send them any more), or all of them (another
+    /// pod's session replaces this one: they were meant for this pod). The
+    /// in-memory layout stays until the refetch replaces it.
+    fn purge_private(&mut self, workspace_id: &str, outbox: PurgeOutbox) {
         let mut keep: std::collections::HashSet<String> = Default::default();
         // The other layouts this engine opened are the pod's too
         // (`open_layout`): cached under their own ids.
         let others: Vec<String> = self.layouts.keys().cloned().collect();
         if let Some(store) = self.store.as_mut() {
             let result = store.transaction(|tx| {
-                let dropped = if drop_session_rows {
-                    tx.delete_pending_session_rows()?
-                } else {
-                    0
+                let dropped = match outbox {
+                    PurgeOutbox::Keep => 0,
+                    PurgeOutbox::SessionRows => tx.delete_pending_session_rows()?,
+                    PurgeOutbox::All => tx.delete_all_outbox_rows()?,
                 };
                 let entities = tx.delete_unreferenced_entities()?;
                 tx.delete_all_data_loads()?;
@@ -1352,6 +1354,24 @@ impl WorkerSignal {
 }
 
 /// Result of one outbox POST.
+/// Where a session [`Inner::complete_sign_in`] installs came from.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum NewSession {
+    /// An app sign-in (`action.auth.login`): the same pod's account.
+    SignIn,
+    /// `action.auth.session`: a pod code or a temporary pod, possibly
+    /// another pod than the current session's.
+    Pod,
+}
+
+/// Which outbox rows a purge ([`State::purge_private`]) deletes.
+#[derive(Clone, Copy)]
+enum PurgeOutbox {
+    Keep,
+    SessionRows,
+    All,
+}
+
 enum FlushResult {
     Accepted(u16),
     /// 401: the pod wants a (new) session; retried after sign-in.
@@ -2317,7 +2337,7 @@ impl Inner {
             st.session = None;
             st.auth_json = SIGNED_OUT_AUTH_JSON.to_string();
             // Pending rows are kept (they resume after the next sign-in).
-            st.purge_private(&self.workspace_id, false);
+            st.purge_private(&self.workspace_id, PurgeOutbox::Keep);
             st.seq += 1;
             st.snapshot()
         };
@@ -2536,16 +2556,26 @@ impl Inner {
                 return None;
             }
             let url = format!("{}{}", self.base_url, row.endpoint);
-            // The pod session is only ever sent to the pod itself: an
-            // endpoint such as `@evil.example/x` or `.evil.example/x` would
-            // otherwise move the request (and the bearer) to another host.
-            let sent = token
-                .as_deref()
-                .filter(|_| same_origin(&self.base_url, &url));
-            let device = same_origin(&self.base_url, &url).then_some(self.device_id.as_str());
-            let result = match self.upload_attachments(client, &row, sent) {
-                Ok(body) => post_json(client, &url, &body, sent, device),
-                Err(r) => r,
+            // Nothing is sent off the pod: an endpoint such as
+            // `@evil.example/x` or `.evil.example/x` (a row stored before the
+            // engine checked endpoints, or by another engine on this cache)
+            // would move the request, payload and all, to another host. It is
+            // rejected (rolled back) without a request.
+            let on_pod = pod_endpoint(&self.base_url, &row.endpoint);
+            let sent = token.as_deref().filter(|_| on_pod);
+            let device = on_pod.then_some(self.device_id.as_str());
+            let result = if !on_pod {
+                eprintln!(
+                    "[ConstructEngine] outbox #{}: refused: endpoint {:?} is not a path on this \
+                     pod; not sent",
+                    row.id, row.endpoint
+                );
+                FlushResult::Rejected(400, "the endpoint is not a path on this pod".into())
+            } else {
+                match self.upload_attachments(client, &row, sent) {
+                    Ok(body) => post_json(client, &url, &body, sent, device),
+                    Err(r) => r,
+                }
             };
             if let FlushResult::Unauthorized = result {
                 let (snap, blocked) = self.outbox_unauthorized(&row, &url, sent, token.as_deref());
@@ -2863,6 +2893,13 @@ impl Inner {
         payload: Value,
         also: Vec<FieldUpdate>,
     ) {
+        if !pod_endpoint(&self.base_url, &endpoint) {
+            eprintln!(
+                "[ConstructEngine] mutate {entity_uri}#{field}: refused: endpoint {endpoint:?} is \
+                 not a path on this pod; no change"
+            );
+            return;
+        }
         let (snap, value, outbox_id) = {
             let mut guard = lock(&self.state);
             let st = &mut *guard;
@@ -3045,7 +3082,8 @@ impl Inner {
                 return;
             }
         };
-        if query_key.is_empty() || entity_uri.is_empty() || !endpoint.starts_with('/') {
+        if query_key.is_empty() || entity_uri.is_empty() || !pod_endpoint(&self.base_url, &endpoint)
+        {
             eprintln!(
                 "[ConstructEngine] create: query_key, entity_uri and a pod endpoint are required; \
                  ignored"
@@ -3351,10 +3389,7 @@ impl Inner {
     /// `path` on an auth thread; the answer's `session_token` becomes the
     /// session (no account yet) and the workspace is fetched again.
     fn open_session(self: &Arc<Self>, path: String, payload: Value) {
-        let valid = path.starts_with('/')
-            && !path.starts_with("//")
-            && same_origin(&self.base_url, &format!("{}{path}", self.base_url));
-        if !valid {
+        if !pod_endpoint(&self.base_url, &path) {
             eprintln!("[ConstructEngine] open session {path:?}: not a pod path; ignored");
             return;
         }
@@ -3394,6 +3429,7 @@ impl Inner {
                     display_name: None,
                     avatar_url: None,
                 },
+                NewSession::Pod,
             )
         });
     }
@@ -3409,7 +3445,7 @@ impl Inner {
             let token = st.session.take().map(|s| s.token);
             st.auth_json = SIGNED_OUT_AUTH_JSON.to_string();
             st.auth_blocked = false;
-            st.purge_private(&self.workspace_id, true);
+            st.purge_private(&self.workspace_id, PurgeOutbox::SessionRows);
             // So are the construct's objects (decision content-addressed-construct).
             if let Some(Err(e)) = st
                 .store
@@ -3449,11 +3485,7 @@ impl Inner {
     /// sign-in endpoints come from the intent (`app_path`, `token_path`), so
     /// the engine knows no app (docs/DECISIONS.md D36).
     fn start_login(self: &Arc<Self>, instance_url: String, app_path: String, token_path: String) {
-        let valid = |p: &str| {
-            p.starts_with('/')
-                && !p.starts_with("//")
-                && same_origin(&self.base_url, &format!("{}{p}", self.base_url))
-        };
+        let valid = |p: &str| pod_endpoint(&self.base_url, p);
         if !valid(&app_path) || !valid(&token_path) {
             eprintln!(
                 "[ConstructEngine] sign-in ignored: the button has no pod sign-in paths \
@@ -3703,10 +3735,21 @@ impl Inner {
     /// once that fetch is done (fetched or failed) go `signed_in`. The flow
     /// stays current until then, so a new `AuthLogin` is ignored and a
     /// `logout` cancels it.
-    fn complete_sign_in(&self, flow: &Arc<Flow>, session: Session) -> Result<(), LoginError> {
+    ///
+    /// A [`NewSession::Pod`] (`action.auth.session`) that replaces a session
+    /// may be another pod's: everything kept for the old one goes first, as
+    /// on [`Inner::forget_session`] and with every outbox row too, so no
+    /// row queued for pod A is sent with pod B's token and no entity cached
+    /// from pod A is shown under pod B.
+    fn complete_sign_in(
+        &self,
+        flow: &Arc<Flow>,
+        session: Session,
+        kind: NewSession,
+    ) -> Result<(), LoginError> {
         let username = session.username.clone();
         let token = session.token.clone();
-        let snap = {
+        let (snap, replaced) = {
             // Held across the check and the update (lock order: flow, then
             // state) so a concurrent `logout` either cancels this flow
             // first or runs after the session is in place and removes it
@@ -3720,12 +3763,40 @@ impl Inner {
                 return Err(LoginError::Cancelled);
             }
             let mut st = lock(&self.state);
+            let replaced = match (kind, &st.session) {
+                (NewSession::Pod, Some(old)) if old.token != session.token => {
+                    Some(old.token.clone())
+                }
+                _ => None,
+            };
+            if replaced.is_some() {
+                println!(
+                    "[ConstructEngine] a session replaces the current one: forgetting the \
+                     previous pod's outbox, cache and construct first"
+                );
+                st.purge_private(&self.workspace_id, PurgeOutbox::All);
+                if let Some(Err(e)) = st
+                    .store
+                    .as_ref()
+                    .map(|s| s.clear_construct_objects(&self.workspace_id))
+                {
+                    eprintln!("[ConstructEngine] forgetting the construct's objects: {e}");
+                }
+            }
             st.auth_json = loading_feed_auth_json();
             st.session = Some(session);
             st.auth_blocked = false;
             st.seq += 1;
-            st.snapshot()
+            (st.snapshot(), replaced)
         };
+        if let Some(old) = &replaced {
+            // Another pod has another construct and its own device record.
+            *lock(&self.construct) = construct::Construct::default();
+            lock(&self.device).registered_for = None;
+            // The old session stays valid on its pod: take this device off
+            // it so that pod pushes nothing here (on this auth thread).
+            notify::delete_device(&self.base_url, &self.device_id, old);
+        }
         println!(
             "[ConstructEngine] signed in as {}; fetching the feed",
             username.as_deref().unwrap_or("?")
@@ -3769,7 +3840,7 @@ impl Inner {
             let token = st.session.take().map(|s| s.token);
             st.auth_json = SIGNED_OUT_AUTH_JSON.to_string();
             st.auth_blocked = false;
-            st.purge_private(&self.workspace_id, true);
+            st.purge_private(&self.workspace_id, PurgeOutbox::SessionRows);
             st.seq += 1;
             (st.snapshot(), token)
         };
@@ -4186,7 +4257,7 @@ fn finish_sign_in(
         avatar_url: json_str(&account, "avatar_url"),
     };
     let inner = weak.upgrade().ok_or(LoginError::Cancelled)?;
-    inner.complete_sign_in(flow, session)
+    inner.complete_sign_in(flow, session, NewSession::SignIn)
 }
 
 /// Complete a custom-scheme sign-in whose redirect reached an engine with
@@ -4281,6 +4352,19 @@ pub fn is_cleartext_remote(base_url: &str) -> bool {
         Ok(std::net::IpAddr::V6(ip)) => !ip.is_loopback(),
         Err(_) => !host.eq_ignore_ascii_case("localhost"),
     }
+}
+
+/// Whether `endpoint` is a path on the pod at `base`: it starts with one
+/// `/` and `base + endpoint` keeps the pod's origin. The engine checks this
+/// itself before it stores or sends a mutation, a create or a session
+/// request (the pod's `validate.rs` checks layouts too, but an old layout, a
+/// component changed after it was checked or a compromised pod would get
+/// past that alone).
+fn pod_endpoint(base: &str, endpoint: &str) -> bool {
+    endpoint.starts_with('/')
+        && !endpoint.starts_with("//")
+        && !endpoint.contains('\\')
+        && same_origin(base, &format!("{base}{endpoint}"))
 }
 
 fn same_origin(base: &str, url: &str) -> bool {

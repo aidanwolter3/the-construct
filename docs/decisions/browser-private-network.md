@@ -1,5 +1,7 @@
 # The headless browser's user is kept off Fly's private network with nftables
 
+Superseded by [browser-network-fence](browser-network-fence.md).
+
 Date: 2026-11-19. Related: [browser-sandbox](browser-sandbox.md), [rendered-fetches](rendered-fetches.md), issue #318.
 
 Rendered fillers run Chromium inside the server's own Fly machine, as `nobody` (uid 65534) with an empty
