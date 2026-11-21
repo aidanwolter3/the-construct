@@ -461,7 +461,12 @@ impl PodEngine {
         }
         *lock(&self.shared.images) = Some(s.images.clone());
         s.loader = Some(Box::new(self.clone()));
-        remote::fetch_images(&s.images, Some(self.engine.attachments_dir()));
+        let engine = Arc::downgrade(&self.engine);
+        let pod = remote::ImagePod {
+            base: self.base.clone(),
+            bearer: Arc::new(move || engine.upgrade().and_then(|e| e.session_bearer())),
+        };
+        remote::fetch_images(&s.images, Some(self.engine.attachments_dir()), Some(pod));
         self.reload_device();
         s
     }

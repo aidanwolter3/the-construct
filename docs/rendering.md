@@ -327,8 +327,16 @@ pod that isn't switched scroll offsets are kept in points, as before. Each new f
 data path, and the layouts drawn inline in them), so an `event: data` reloads what's on screen first and leaves the
 rest stale until it's shown again (decision `scoped-data-events`). A query key several cached answers list (each layout binding a feed carries its keys) is the newest answer's; answers restored at launch are stale and older than any fetched since, and the cached answers of layouts the construct no longer reaches are dropped after a sync (decision `newest-query-answer-wins`). The simulator's live mode (`construct-sim --base-url`) still fetches straight from the pod (`PodClient`). `local://nav` and
 `local://screen` are set as the Compose UI set them. Images (`core://Image`) download on four background threads, newest request first,
-without the session (the pod serves media from public paths), are cut to their box (cropped to fill, corners
-rounded) and drawn over their placeholder once they arrive; the window redraws then.
+and only from the pod (issue #443): the pod's own without the session (it serves media from public paths, redirects
+followed only within its origin), every other site's through its image proxy, `GET /v1/image?url=<url>` with the
+session's bearer (nothing when signed out). A layout can name any URL (rows filled from scraped pages, adopted
+layouts), so the device never reaches its own network (LAN, loopback) for one, nor shows a site its address; the
+pod fetches public hosts only, raster images only, at most 10 MiB. The client reads at most 10 MiB too, and decodes
+within limits (`image::Limits`: 12,000 px a side, 128 MiB allocated), so a decompression bomb fails and keeps its
+placeholder; what decodes is scaled to 1600 px a side. Images are cut to their box (cropped to fill, corners
+rounded) and drawn over their placeholder once they arrive; the window redraws then. The store keeps at most
+160 MiB of decoded images (`images::BUDGET_BYTES`): the least recently drawn goes first and downloads again when it
+is next shown, and at most 1,024 failed URLs are remembered.
 
 `action.local.set` changes the session's entity and the engine's (`Loader::local_set`), so the engine's next snapshot doesn't put the old value back. Writes go to the engine's outbox, as the Compose UI sent them (`Loader::take`): `$form.<f>`, `$form?.<f>` and one
 `$nonce` per tap are bound when the tap runs (a blank `$form.<f>` sends nothing). `action.mutation.optimistic`

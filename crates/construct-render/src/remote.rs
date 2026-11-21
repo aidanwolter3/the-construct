@@ -296,7 +296,12 @@ impl PodClient {
         data.queries.extend(device.queries);
         let mut s = Session::new(layout, spec.workspace, data, viewport);
         s.loader = Some(Box::new(self.clone()));
-        fetch_images(&s.images, None);
+        let token = self.token.clone();
+        let pod = ImagePod {
+            base: self.base.clone(),
+            bearer: Arc::new(move || (!token.is_empty()).then(|| token.clone())),
+        };
+        fetch_images(&s.images, None, Some(pod));
         Ok(s)
     }
 }
@@ -370,12 +375,130 @@ impl Loader for PodClient {
 const MAX_IMAGE_SIDE: u32 = 1600;
 /// Downloads at once.
 const IMAGE_WORKERS: usize = 4;
+/// Largest image downloaded (the pod's image proxy passes on no more).
+pub const MAX_IMAGE_BYTES: usize = 10 << 20;
+/// Largest side an image may claim before it is decoded.
+const MAX_DECODE_SIDE: u32 = 12_000;
+/// Most memory one decode may take (a decompression bomb fails cleanly).
+const MAX_DECODE_ALLOC: u64 = 128 << 20;
+/// The pod's image proxy (`pod_core::image_proxy`).
+const IMAGE_PROXY_PATH: &str = "/v1/image";
 
-/// Makes `store` download what it is asked for, on background threads.
-/// Images are fetched without the session (the pod serves media from public
-/// paths); one that fails keeps its placeholder. A `file://` image is read
-/// only from `staged`, the engine's staged attachments.
-pub fn fetch_images(store: &ImageStore, staged: Option<&std::path::Path>) {
+/// The pod images come from: its own are fetched from it directly, every
+/// other site's through its image proxy with the session's bearer.
+#[derive(Clone)]
+pub struct ImagePod {
+    pub base: String,
+    /// The session's bearer now (it changes with sign-ins).
+    pub bearer: Arc<dyn Fn() -> Option<String> + Send + Sync>,
+}
+
+/// How an image url is loaded.
+#[derive(Debug, PartialEq, Eq)]
+enum Route {
+    /// A staged photo, read from the engine's attachments.
+    Staged(reqwest::Url),
+    /// The pod's own (its media paths are public): fetched without a token.
+    Pod(String),
+    /// Another site's, through the pod's image proxy.
+    Proxy(String),
+    /// Not loaded: no pod to ask, or not `http(s)`.
+    Refused,
+}
+
+/// A layout can name any image url (rows filled from scraped pages, adopted
+/// layouts): the device fetches only its pod, never another host, so it
+/// never reaches its own network (LAN, loopback) for one, nor shows a site
+/// its address (issue #443).
+fn route(url: &str, pod: Option<&ImagePod>) -> Route {
+    let Ok(u) = reqwest::Url::parse(url) else {
+        return Route::Refused;
+    };
+    match (u.scheme(), pod) {
+        ("file", _) => Route::Staged(u),
+        ("http" | "https", Some(p)) if same_origin(&p.base, url) => Route::Pod(url.to_owned()),
+        ("http" | "https", Some(p)) => {
+            let mut proxy = match reqwest::Url::parse(&format!(
+                "{}{IMAGE_PROXY_PATH}",
+                p.base.trim_end_matches('/')
+            )) {
+                Ok(proxy) => proxy,
+                Err(_) => return Route::Refused,
+            };
+            proxy.query_pairs_mut().append_pair("url", u.as_str());
+            Route::Proxy(proxy.into())
+        }
+        _ => Route::Refused,
+    }
+}
+
+/// The HTTP client for images: redirects only within the pod's origin (the
+/// proxy already followed the other site's), at most a few.
+fn image_client(base: Option<&str>) -> reqwest::blocking::Client {
+    let base = base.map(str::to_owned);
+    reqwest::blocking::Client::builder()
+        .timeout(Duration::from_secs(20))
+        .user_agent(concat!("construct-render/", env!("CARGO_PKG_VERSION")))
+        .redirect(reqwest::redirect::Policy::custom(move |attempt| {
+            let ok = attempt.previous().len() < 3
+                && base
+                    .as_deref()
+                    .is_some_and(|b| same_origin(b, attempt.url().as_str()));
+            if ok { attempt.follow() } else { attempt.stop() }
+        }))
+        .build()
+        .expect("an HTTP client")
+}
+
+/// GET `url`, at most [`MAX_IMAGE_BYTES`] (a longer answer fails).
+fn download(http: &reqwest::blocking::Client, url: &str, bearer: Option<&str>) -> Option<Vec<u8>> {
+    use std::io::Read;
+    let mut req = http.get(url);
+    if let Some(t) = bearer {
+        req = req.bearer_auth(t);
+    }
+    let resp = req.send().and_then(|r| r.error_for_status()).ok()?;
+    if resp
+        .content_length()
+        .is_some_and(|n| n > MAX_IMAGE_BYTES as u64)
+    {
+        return None;
+    }
+    let mut bytes = Vec::new();
+    resp.take(MAX_IMAGE_BYTES as u64 + 1)
+        .read_to_end(&mut bytes)
+        .ok()?;
+    (bytes.len() <= MAX_IMAGE_BYTES).then_some(bytes)
+}
+
+/// Decodes an image within limits (side, allocation), scaled down to
+/// [`MAX_IMAGE_SIDE`]. `None` for what isn't an image or is too large.
+pub fn decode_image(bytes: &[u8]) -> Option<image::RgbaImage> {
+    decode(bytes).ok()
+}
+
+fn decode(bytes: &[u8]) -> image::ImageResult<image::RgbaImage> {
+    let mut reader = image::ImageReader::new(std::io::Cursor::new(bytes)).with_guessed_format()?;
+    let mut limits = image::Limits::default();
+    limits.max_image_width = Some(MAX_DECODE_SIDE);
+    limits.max_image_height = Some(MAX_DECODE_SIDE);
+    limits.max_alloc = Some(MAX_DECODE_ALLOC);
+    reader.limits(limits);
+    let i = reader.decode()?;
+    Ok(if i.width().max(i.height()) > MAX_IMAGE_SIDE {
+        i.thumbnail(MAX_IMAGE_SIDE, MAX_IMAGE_SIDE)
+    } else {
+        i
+    }
+    .to_rgba8())
+}
+
+/// Makes `store` download what it is asked for, on background threads:
+/// the pod's own images from it, other sites' through its image proxy
+/// ([`route`]); without a pod, only staged photos. One that fails keeps its
+/// placeholder. A `file://` image is read only from `staged`, the engine's
+/// staged attachments.
+pub fn fetch_images(store: &ImageStore, staged: Option<&std::path::Path>, pod: Option<ImagePod>) {
     // Newest first: what is on screen now goes before what scrolled past.
     let queue: Arc<(Mutex<Vec<String>>, std::sync::Condvar)> = Arc::default();
     let staged = staged.map(std::path::Path::to_path_buf);
@@ -383,8 +506,9 @@ pub fn fetch_images(store: &ImageStore, staged: Option<&std::path::Path>) {
         let queue = queue.clone();
         let store = store.clone();
         let staged = staged.clone();
+        let pod = pod.clone();
         std::thread::spawn(move || {
-            let http = client();
+            let http = image_client(pod.as_ref().map(|p| p.base.as_str()));
             loop {
                 let url = {
                     let (lock, ready) = &*queue;
@@ -396,28 +520,17 @@ pub fn fetch_images(store: &ImageStore, staged: Option<&std::path::Path>) {
                         q = ready.wait(q).unwrap_or_else(|p| p.into_inner());
                     }
                 };
-                // A staged photo (`construct://attachments/<id>`) is a local file.
-                let bytes = match reqwest::Url::parse(&url) {
-                    Ok(u) if u.scheme() == "file" => read_staged(&u, staged.as_deref()),
-                    _ => http
-                        .get(&url)
-                        .send()
-                        .and_then(|r| r.error_for_status())
-                        .and_then(|r| r.bytes())
-                        .ok()
-                        .map(|b| b.to_vec()),
+                let bytes = match route(&url, pod.as_ref()) {
+                    // A staged photo (`construct://attachments/<id>`) is a local file.
+                    Route::Staged(u) => read_staged(&u, staged.as_deref()),
+                    Route::Pod(u) => download(&http, &u, None),
+                    Route::Proxy(u) => pod
+                        .as_ref()
+                        .and_then(|p| (p.bearer)())
+                        .and_then(|t| download(&http, &u, Some(&t))),
+                    Route::Refused => None,
                 };
-                let img = bytes
-                    .and_then(|b| image::load_from_memory(&b).ok())
-                    .map(|i| {
-                        if i.width().max(i.height()) > MAX_IMAGE_SIDE {
-                            i.thumbnail(MAX_IMAGE_SIDE, MAX_IMAGE_SIDE)
-                        } else {
-                            i
-                        }
-                        .to_rgba8()
-                    });
-                store.insert(&url, img);
+                store.insert(&url, bytes.and_then(|b| decode_image(&b)));
             }
         });
     }
@@ -506,6 +619,177 @@ mod tests {
         let req = seen.join().unwrap();
         assert!(!req.contains("authorization"), "{req}");
         assert!(!req.contains("session-secret"), "{req}");
+    }
+
+    /// A server on 127.0.0.1 that answers each connection with `answer`
+    /// and reports the requests it saw.
+    fn server(answer: Vec<u8>) -> (String, std::sync::mpsc::Receiver<String>) {
+        use std::io::{Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            for s in listener.incoming() {
+                let Ok(mut s) = s else { return };
+                let mut buf = vec![0; 8192];
+                let n = s.read(&mut buf).unwrap_or(0);
+                let _ = tx.send(String::from_utf8_lossy(&buf[..n]).into_owned());
+                let _ = s.write_all(&answer);
+            }
+        });
+        (base, rx)
+    }
+
+    fn png_answer(body: &[u8]) -> Vec<u8> {
+        let mut a = format!(
+            "HTTP/1.1 200 OK\r\ncontent-type: image/png\r\ncontent-length: {}\r\nconnection: close\r\n\r\n",
+            body.len()
+        )
+        .into_bytes();
+        a.extend_from_slice(body);
+        a
+    }
+
+    fn png(w: u32, h: u32) -> Vec<u8> {
+        let mut out = std::io::Cursor::new(Vec::new());
+        image::RgbaImage::new(w, h)
+            .write_to(&mut out, image::ImageFormat::Png)
+            .unwrap();
+        out.into_inner()
+    }
+
+    fn pod_at(base: &str, token: Option<&str>) -> ImagePod {
+        let token = token.map(str::to_owned);
+        ImagePod {
+            base: base.to_owned(),
+            bearer: Arc::new(move || token.clone()),
+        }
+    }
+
+    fn load(store: &ImageStore, url: &str) -> &'static str {
+        store.request(url);
+        for _ in 0..200 {
+            match store.status(url) {
+                "loading" => std::thread::sleep(Duration::from_millis(25)),
+                s => return s,
+            }
+        }
+        "loading"
+    }
+
+    #[test]
+    fn images_off_the_pod_go_through_its_proxy() {
+        let pod = pod_at("https://pod.example", Some("t"));
+        assert_eq!(
+            route("https://pod.example/v1/p/a/media/1.jpg", Some(&pod)),
+            Route::Pod("https://pod.example/v1/p/a/media/1.jpg".into())
+        );
+        assert_eq!(
+            route("http://192.168.1.1/cam.jpg?a=b&c", Some(&pod)),
+            Route::Proxy(
+                "https://pod.example/v1/image?url=http%3A%2F%2F192.168.1.1%2Fcam.jpg%3Fa%3Db%26c"
+                    .into()
+            )
+        );
+        for url in [
+            "http://192.168.1.1/cam.jpg",
+            "ftp://img.example/a.png",
+            "not a url",
+        ] {
+            assert!(matches!(route(url, None), Route::Refused), "{url}");
+        }
+        assert!(matches!(
+            route("ftp://img.example/a.png", Some(&pod)),
+            Route::Refused
+        ));
+    }
+
+    /// An image on the device's network (another port of loopback here) is
+    /// never fetched: the pod's proxy is asked, with the session.
+    #[test]
+    fn a_private_image_url_is_not_fetched() {
+        let (lan, lan_seen) = server(png_answer(&png(2, 2)));
+        let (base, pod_seen) = server(png_answer(&png(2, 2)));
+        let store = ImageStore::new();
+        fetch_images(&store, None, Some(pod_at(&base, Some("session-secret"))));
+        let url = format!("{lan}/router.png");
+        assert_eq!(load(&store, &url), "ready");
+        let req = pod_seen.recv_timeout(Duration::from_secs(5)).unwrap();
+        assert!(
+            req.starts_with("GET /v1/image?url=http%3A%2F%2F127.0.0.1"),
+            "{req}"
+        );
+        assert!(
+            req.to_ascii_lowercase()
+                .contains("authorization: bearer session-secret"),
+            "{req}"
+        );
+        assert!(lan_seen.try_recv().is_err());
+        // Signed out: nothing is fetched at all.
+        let store = ImageStore::new();
+        fetch_images(&store, None, Some(pod_at(&base, None)));
+        assert_eq!(load(&store, &format!("{lan}/other.png")), "failed");
+        assert!(pod_seen.try_recv().is_err());
+        assert!(lan_seen.try_recv().is_err());
+    }
+
+    #[test]
+    fn an_oversized_image_fails_cleanly() {
+        let mut big = png(2, 2);
+        big.resize(MAX_IMAGE_BYTES + 10, 0);
+        // A length that says so, and one that doesn't (read until closed).
+        let (base, _) = server(png_answer(&big));
+        let mut unsized_answer =
+            b"HTTP/1.1 200 OK\r\ncontent-type: image/png\r\nconnection: close\r\n\r\n".to_vec();
+        unsized_answer.extend_from_slice(&big);
+        let (base2, _) = server(unsized_answer);
+        for base in [base, base2] {
+            let store = ImageStore::new();
+            fetch_images(&store, None, Some(pod_at(&base, None)));
+            assert_eq!(load(&store, &format!("{base}/media/big.png")), "failed");
+        }
+    }
+
+    /// A PNG that claims `w` × `h` (its IHDR patched, CRC redone).
+    fn claims(w: u32, h: u32) -> Vec<u8> {
+        fn crc(bytes: &[u8]) -> u32 {
+            let mut c = !0u32;
+            for b in bytes {
+                c ^= u32::from(*b);
+                for _ in 0..8 {
+                    c = if c & 1 != 0 {
+                        0xedb8_8320 ^ (c >> 1)
+                    } else {
+                        c >> 1
+                    };
+                }
+            }
+            !c
+        }
+        let mut p = png(1, 1);
+        // Signature (8), length (4), "IHDR" (4), then width and height.
+        p[16..20].copy_from_slice(&w.to_be_bytes());
+        p[20..24].copy_from_slice(&h.to_be_bytes());
+        let sum = crc(&p[12..29]);
+        p[29..33].copy_from_slice(&sum.to_be_bytes());
+        p
+    }
+
+    #[test]
+    fn a_decompression_bomb_fails_cleanly() {
+        assert!(decode_image(&png(3, 2)).is_some());
+        let big = decode_image(&png(2000, 10)).unwrap();
+        assert_eq!(big.width(), MAX_IMAGE_SIDE);
+        // Too wide, and within the sides but past the allocation limit.
+        // Refused by the limits, before any pixel is allocated.
+        for (w, h) in [(50_000, 50_000), (11_000, 11_000)] {
+            let e = decode(&claims(w, h)).unwrap_err();
+            assert!(matches!(e, image::ImageError::Limits(_)), "{w}×{h}: {e}");
+        }
+        // Within them, the same file fails only on its missing pixels.
+        let e = decode(&claims(100, 100)).unwrap_err();
+        assert!(!matches!(e, image::ImageError::Limits(_)), "{e}");
+        assert!(decode_image(b"not an image").is_none());
     }
 
     #[test]
