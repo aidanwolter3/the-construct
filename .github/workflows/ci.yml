@@ -35,45 +35,120 @@ env:
   # version comes from rust-toolchain.toml, the same as local and cloud builds.
 
 jobs:
-  # The image the Rust job runs in (.github/ci/Dockerfile, decision `ci-container-image`): its tag is a hash of the
-  # Dockerfile and rust-toolchain.toml, so it is built and pushed to ghcr.io only when one of them changes; any
-  # other run finds it and moves on. A pull request from a fork can't push, so it can't change either file.
+  # The image the Rust job runs in (.github/ci/Dockerfile, decision `ci-container-image`), tagged with a hash of the
+  # Dockerfile and rust-toolchain.toml. Only main publishes it (issue #441): `image` runs on main's pushes, scheduled
+  # and manual runs, the only job with `packages: write`. It runs main's Rust job by the digest it recorded in an
+  # Actions cache entry, which only main's runs can write (a pull request's cache entries are scoped to its own
+  # ref). With no entry for the hash it builds the image, pushes it as `main-<hash>` and records its digest; any
+  # other run finds the entry and moves on.
   image:
     name: CI image
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
       contents: read
       packages: write
     outputs:
-      ref: ${{ steps.tag.outputs.ref }}
+      ref: ${{ steps.ref.outputs.ref }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - name: Which image
         id: tag
-        run: |
-          tag=$(cat .github/ci/Dockerfile rust-toolchain.toml | sha256sum | cut -c1-16)
-          echo "ref=ghcr.io/${GITHUB_REPOSITORY,,}-ci:$tag" >> "$GITHUB_OUTPUT"
-      - name: Build and push it, unless it exists
+        run: echo "hash=$(cat .github/ci/Dockerfile rust-toolchain.toml | sha256sum | cut -c1-16)" >> "$GITHUB_OUTPUT"
+      - name: The digest main recorded for it
+        id: recorded
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .ci-image-digest
+          key: ci-image-digest-${{ steps.tag.outputs.hash }}
+      - name: Build and push it, unless main recorded it
+        if: steps.recorded.outputs.cache-hit != 'true'
         env:
-          REF: ${{ steps.tag.outputs.ref }}
+          TAG: ghcr.io/${{ github.repository }}-ci:main-${{ steps.tag.outputs.hash }}
           TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          TAG=${TAG,,}
           echo "$TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
-          if docker manifest inspect "$REF" >/dev/null 2>&1; then
-            echo "$REF exists"
-            exit 0
-          fi
           ctx=$(mktemp -d)
           cp rust-toolchain.toml "$ctx/"
-          docker build -f .github/ci/Dockerfile -t "$REF" "$ctx"
-          docker push "$REF"
+          docker build --pull -f .github/ci/Dockerfile -t "$TAG" "$ctx"
+          docker push "$TAG"
+          docker inspect --format '{{index .RepoDigests 0}}' "$TAG" | cut -d@ -f2 > .ci-image-digest
+      - name: Record its digest
+        if: steps.recorded.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .ci-image-digest
+          key: ci-image-digest-${{ steps.tag.outputs.hash }}
+      - name: Run it by digest
+        id: ref
+        run: |
+          digest=$(cat .ci-image-digest)
+          [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "bad recorded digest: $digest"; exit 1; }
+          echo "ref=ghcr.io/${GITHUB_REPOSITORY,,}-ci@$digest" >> "$GITHUB_OUTPUT"
+
+  # Every other run (pull requests, manual runs off main) reads the registry and never writes it. When main has
+  # published this hash, the Rust job runs in that image; otherwise the pull request changes the image, so this job
+  # builds it, without pushing, to show it builds, and the Rust job runs in the image of the pull request's base.
+  image-check:
+    name: CI image (check)
+    if: github.event_name == 'pull_request' || github.ref != 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: read
+    outputs:
+      ref: ${{ steps.ref.outputs.ref }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Which image
+        id: ref
+        env:
+          TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          BASE: ${{ github.event.pull_request.base.sha || 'main' }}
+        run: |
+          echo "$TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+          repo="ghcr.io/${GITHUB_REPOSITORY,,}-ci"
+          files=(.github/ci/Dockerfile rust-toolchain.toml)
+          # main-<hash> by digest; `legacy` also takes the tag CI pushed before main-only publishing (issue #441).
+          find_image() {
+            local tag digest
+            for tag in "main-$1" ${2:+"$1"}; do
+              digest=$(docker buildx imagetools inspect "$repo:$tag" --format '{{json .Manifest}}' 2>/dev/null \
+                | jq -r '.digest // empty') || true
+              [ -n "$digest" ] && { echo "$repo@$digest"; return 0; }
+            done
+            return 0
+          }
+          hash=$(cat "${files[@]}" | sha256sum | cut -c1-16)
+          ref=$(find_image "$hash")
+          if [ -z "$ref" ]; then
+            echo "build=true" >> "$GITHUB_OUTPUT"
+            git fetch -q --no-tags --depth=1 origin "$BASE"
+            base=$(for f in "${files[@]}"; do git show "FETCH_HEAD:$f"; done | sha256sum | cut -c1-16)
+            ref=$(find_image "$base" legacy)
+            [ -n "$ref" ] || { echo "::error::No CI image for $hash or the base's $base; main's run may still be building it."; exit 1; }
+            echo "::notice::This change builds a new CI image; its tests run in the base's ($ref)."
+          fi
+          echo "ref=$ref" >> "$GITHUB_OUTPUT"
+      - name: Build the changed image (not pushed)
+        if: steps.ref.outputs.build == 'true'
+        run: |
+          ctx=$(mktemp -d)
+          cp rust-toolchain.toml "$ctx/"
+          docker build --pull -f .github/ci/Dockerfile "$ctx"
 
   rust:
     name: Rust (clippy + tests)
-    needs: image
+    needs: [image, image-check]
+    # One of the two image jobs runs; the other is skipped.
+    if: ${{ !cancelled() && (needs.image.result == 'success' || needs.image-check.result == 'success') }}
     runs-on: ubuntu-latest
     timeout-minutes: 45
     permissions:
@@ -82,7 +157,7 @@ jobs:
     # Everything the job installs is in the image (lavapipe for the GPU tests, cargo-nextest, the pinned Rust).
     # uid 1001 is the runner's user: the workspace is its, and tests that need a non-root user run.
     container:
-      image: ${{ needs.image.outputs.ref }}
+      image: ${{ needs.image.outputs.ref || needs.image-check.outputs.ref }}
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
@@ -207,7 +282,10 @@ jobs:
 
   deploy:
     name: Deploy to Fly.io staging
-    if: (github.event_name == 'push' || github.event_name == 'workflow_dispatch' || github.event_name == 'schedule') && github.ref == 'refs/heads/main'
+    # needs.rust.result: the skipped image job would otherwise skip this one too.
+    if: >-
+      !cancelled() && needs.rust.result == 'success' && github.ref == 'refs/heads/main'
+      && (github.event_name == 'push' || github.event_name == 'workflow_dispatch' || github.event_name == 'schedule')
     needs: rust
     runs-on: ubuntu-latest
     timeout-minutes: 30
