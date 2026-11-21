@@ -14,6 +14,8 @@
 //!   URIs (so the public staging fake is not an open redirector), plus the exact ones in
 //! - `FAKE_PIXELFED_EXTRA_REDIRECTS` (comma-separated), e.g. the staging pod's Android App Link
 //!   `https://the-construct-pod.fly.dev/oauth/android`.
+//! - `FAKE_PIXELFED_MAX_UPLOAD_MIB`: largest media upload in MiB (default 20). Uploads are kept
+//!   in memory, at most 200 or 64 MiB in all, the oldest dropped first.
 
 use std::io::IsTerminal;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
@@ -79,6 +81,17 @@ async fn main() -> std::io::Result<()> {
         .filter(|s| !s.is_empty())
         .map(str::to_owned)
         .collect();
+    let max_upload_bytes = match env_nonempty("FAKE_PIXELFED_MAX_UPLOAD_MIB") {
+        None => fake_pixelfed::MAX_MEDIA_BYTES,
+        Some(v) => v
+            .parse::<usize>()
+            .map(|mib| mib * 1024 * 1024)
+            .map_err(|_| {
+                std::io::Error::other(format!(
+                    "FAKE_PIXELFED_MAX_UPLOAD_MIB={v:?}: expected a whole number"
+                ))
+            })?,
+    };
     let has_seed = seed_token.is_some();
     let state = fake_pixelfed::AppState::new(fake_pixelfed::Config {
         fixtures_dir: fixtures_dir.clone().unwrap_or_default(),
@@ -88,7 +101,8 @@ async fn main() -> std::io::Result<()> {
     })?
     .with_admin(admin)
     .with_mastodon_threads(mastodon_threads)
-    .with_extra_redirects(extra_redirects.clone());
+    .with_extra_redirects(extra_redirects.clone())
+    .with_max_upload_bytes(max_upload_bytes);
     match &fixtures_dir {
         Some(dir) => tracing::info!(fixtures = %dir.display(), public_url, "fixtures loaded"),
         None => tracing::info!(public_url, "embedded fixtures loaded"),

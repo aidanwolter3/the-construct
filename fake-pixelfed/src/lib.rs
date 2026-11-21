@@ -61,8 +61,12 @@ pub const CONTEXT_REPLY_LIMIT: usize = 100;
 const IDEMPOTENCY_CAP: usize = 1000;
 /// Most media attachments on one post (Pixelfed's default album size).
 pub const MAX_MEDIA_PER_POST: usize = 4;
-/// Largest media upload the fake takes.
+/// Largest media upload the fake takes by default (see [`AppState::with_max_upload_bytes`]).
 pub const MAX_MEDIA_BYTES: usize = 20 * 1024 * 1024;
+/// Most uploads kept in memory; past it the oldest is dropped.
+pub const MEDIA_CAP_ITEMS: usize = 200;
+/// Most upload bytes kept in memory; past it the oldest uploads are dropped.
+pub const MEDIA_CAP_BYTES: usize = 64 * 1024 * 1024;
 
 /// Notifications kept (the oldest go first).
 const NOTIFICATION_CAP: usize = 1000;
@@ -247,7 +251,7 @@ struct AuthCode {
 /// A media attachment uploaded through `POST /api/v{1,2}/media`.
 #[derive(Debug, Clone)]
 struct Media {
-    bytes: Vec<u8>,
+    bytes: Bytes,
     content_type: String,
     ext: &'static str,
     width: u32,
@@ -263,6 +267,10 @@ struct Media {
 struct Inner {
     /// Uploaded media by id.
     media: HashMap<String, Media>,
+    /// Upload ids, oldest first (eviction order).
+    media_order: VecDeque<String>,
+    /// Sum of the uploads' sizes.
+    media_bytes: usize,
     next_media_id: u64,
     /// How many polls new v2 uploads stay "processing" (`/_admin/media`).
     media_processing_polls: u32,
@@ -501,6 +509,8 @@ pub struct AppState {
     /// Exact redirect URIs accepted with admin off besides
     /// [`client_redirect_uri`] ones (`FAKE_PIXELFED_EXTRA_REDIRECTS`).
     extra_redirects: Vec<String>,
+    /// Largest upload accepted (at most [`MEDIA_CAP_BYTES`]).
+    max_upload_bytes: usize,
 }
 
 impl AppState {
@@ -645,6 +655,7 @@ impl AppState {
             accounts,
             mastodon_threads: false,
             extra_redirects: Vec::new(),
+            max_upload_bytes: MAX_MEDIA_BYTES,
         };
         state.reset(false);
         Ok(state)
@@ -678,6 +689,13 @@ impl AppState {
         self
     }
 
+    /// Largest media upload accepted (default [`MAX_MEDIA_BYTES`], capped at
+    /// [`MEDIA_CAP_BYTES`]); `FAKE_PIXELFED_MAX_UPLOAD_MIB` in the binary.
+    pub fn with_max_upload_bytes(mut self, bytes: usize) -> Self {
+        self.max_upload_bytes = bytes.min(MEDIA_CAP_BYTES);
+        self
+    }
+
     fn lock(&self) -> MutexGuard<'_, Inner> {
         self.inner.lock().unwrap_or_else(|e| e.into_inner())
     }
@@ -703,6 +721,8 @@ impl AppState {
         inner.created.clear();
         inner.idempotency.clear();
         inner.media.clear();
+        inner.media_order.clear();
+        inner.media_bytes = 0;
         inner.next_media_id = 1;
         inner.media_processing_polls = 1;
         inner.defer_reply_counts = false;
@@ -971,6 +991,7 @@ impl AppState {
             },
             "created": inner.created,
             "media": inner.media.len(),
+            "media_bytes": inner.media_bytes,
             "grants": {
                 "authorization_code": inner.authorization_code_grants,
                 "refresh_token": inner.refresh_token_grants,
@@ -1226,6 +1247,8 @@ fn status_id(status: &Value) -> std::io::Result<String> {
 }
 
 pub fn app(state: Arc<AppState>) -> Router {
+    // The file plus room for the multipart framing and a description.
+    let body_limit = state.max_upload_bytes + 64 * 1024;
     let mut router = Router::new()
         .route("/api/v1/apps", post(create_app))
         .route(
@@ -1242,11 +1265,11 @@ pub fn app(state: Arc<AppState>) -> Router {
         .route("/api/v1/statuses", post(create_status))
         .route(
             "/api/v2/media",
-            post(upload_media_v2).layer(axum::extract::DefaultBodyLimit::max(MAX_MEDIA_BYTES)),
+            post(upload_media_v2).layer(axum::extract::DefaultBodyLimit::max(body_limit)),
         )
         .route(
             "/api/v1/media",
-            post(upload_media_v1).layer(axum::extract::DefaultBodyLimit::max(MAX_MEDIA_BYTES)),
+            post(upload_media_v1).layer(axum::extract::DefaultBodyLimit::max(body_limit)),
         )
         .route("/api/v1/media/{id}", get(get_media))
         .route(
@@ -1274,11 +1297,22 @@ pub fn app(state: Arc<AppState>) -> Router {
             .route("/_admin/notifications", post(admin_add_notification));
     }
     router
+        .layer(middleware::map_response(nosniff))
         .layer(middleware::from_fn_with_state(
             Arc::clone(&state),
             log_requests,
         ))
         .with_state(state)
+}
+
+/// `X-Content-Type-Options: nosniff` on every response, so uploaded bytes are never
+/// sniffed into HTML or script.
+async fn nosniff(mut res: Response) -> Response {
+    res.headers_mut().insert(
+        header::X_CONTENT_TYPE_OPTIONS,
+        HeaderValue::from_static("nosniff"),
+    );
+    res
 }
 
 /// In-flight request bookkeeping: logged when the response is ready, or as 499 (like
@@ -2237,6 +2271,15 @@ fn media_json(public_url: &str, id: &str, m: &Media) -> Value {
     })
 }
 
+/// 413 for an upload over [`AppState::with_max_upload_bytes`].
+fn too_big() -> Response {
+    (
+        StatusCode::PAYLOAD_TOO_LARGE,
+        Json(json!({"error": "Validation failed: File is too big"})),
+    )
+        .into_response()
+}
+
 /// `POST /api/v{1,2}/media` (multipart `file`, optional `description`).
 async fn upload_media(
     state: Arc<AppState>,
@@ -2254,7 +2297,11 @@ async fn upload_media(
                 Some("file") => {
                     let ct = field.content_type().unwrap_or("").to_ascii_lowercase();
                     match field.bytes().await {
-                        Ok(b) => file = Some((ct, b.to_vec())),
+                        Ok(b) if b.len() > state.max_upload_bytes => return too_big(),
+                        Ok(b) => file = Some((ct, b)),
+                        Err(e) if e.status() == StatusCode::PAYLOAD_TOO_LARGE => {
+                            return too_big();
+                        }
                         Err(_) => return unprocessable("Validation failed: File is invalid"),
                     }
                 }
@@ -2262,7 +2309,11 @@ async fn upload_media(
                 _ => {}
             },
             Ok(None) => break,
-            Err(_) => return unprocessable("Validation failed: invalid multipart body"),
+            Err(e) if e.status() == StatusCode::PAYLOAD_TOO_LARGE => return too_big(),
+            Err(e) => {
+                tracing::debug!(error = %e, status = %e.status(), "bad multipart body");
+                return unprocessable("Validation failed: invalid multipart body");
+            }
         }
     }
     let Some((ct, bytes)) = file else {
@@ -2291,6 +2342,19 @@ async fn upload_media(
     };
     let body = media_json(&state.public_url, &id, &media);
     tracing::info!(media_id = %id, v2, processing = polls_left > 0, "media uploaded");
+    // Bounded memory: drop the oldest uploads (attached or not) to make room.
+    let size = media.bytes.len();
+    while inner.media.len() >= MEDIA_CAP_ITEMS || inner.media_bytes + size > MEDIA_CAP_BYTES {
+        let Some(old) = inner.media_order.pop_front() else {
+            break;
+        };
+        if let Some(m) = inner.media.remove(&old) {
+            inner.media_bytes -= m.bytes.len();
+            tracing::info!(media_id = %old, "oldest upload evicted");
+        }
+    }
+    inner.media_bytes += size;
+    inner.media_order.push_back(id.clone());
     inner.media.insert(id, media);
     let status = if polls_left > 0 {
         StatusCode::ACCEPTED

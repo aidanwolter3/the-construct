@@ -151,7 +151,7 @@ impl Hosts {
 /// recorded after.
 pub async fn fetch(
     hosts: &Hosts,
-    client: &reqwest::Client,
+    client: &pod_core::net::OutboundClient,
     url: &str,
     etag: Option<&str>,
     last_modified: Option<&str>,

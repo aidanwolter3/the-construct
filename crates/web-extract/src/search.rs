@@ -500,7 +500,7 @@ pub fn normalize_query(q: &str) -> String {
 pub async fn search(
     hosts: &crate::hosts::Hosts,
     cache: &SearchCache,
-    client: &reqwest::Client,
+    client: &pod_core::net::OutboundClient,
     provider: &Provider,
     query: &str,
     count: usize,
@@ -535,7 +535,7 @@ pub async fn search(
 pub async fn search_images(
     hosts: &crate::hosts::Hosts,
     cache: &SearchCache,
-    client: &reqwest::Client,
+    client: &pod_core::net::OutboundClient,
     provider: &Provider,
     query: &str,
     count: usize,
@@ -571,8 +571,12 @@ pub const IMAGE_CHECK_TIMEOUT: Duration = Duration::from_secs(10);
 /// through the host policy, or a `GET` of its first byte where the host
 /// doesn't answer `HEAD`. A search index keeps pictures a shop has since
 /// removed; a row shouldn't get one.
-pub async fn image_loads(hosts: &crate::hosts::Hosts, client: &reqwest::Client, url: &str) -> bool {
-    let is_image = |r: &reqwest::Response| {
+pub async fn image_loads(
+    hosts: &crate::hosts::Hosts,
+    client: &pod_core::net::OutboundClient,
+    url: &str,
+) -> bool {
+    let is_image = |r: &pod_core::net::OutboundResponse| {
         r.status().is_success()
             && r.headers()
                 .get(reqwest::header::CONTENT_TYPE)

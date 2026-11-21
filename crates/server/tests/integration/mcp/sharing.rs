@@ -268,7 +268,10 @@ async fn a_second_pod_adopts_a_published_layout_and_keeps_it_after_a_revoke() {
     .await;
     assert_eq!(e["error"], "unknown_link", "{e}");
     let d = ok(&env, &b, "describe_publication", json!({"link": link})).await;
-    assert_eq!(d["interface"]["inputs"][0]["name"], "chores", "{d}");
+    // Another pod's publication is its publisher's text (issue #439).
+    let theirs = &d["interface"]["untrusted"];
+    assert_eq!(theirs["from"], d["name"], "{d}");
+    assert_eq!(theirs["content"]["inputs"][0]["name"], "chores", "{d}");
     assert!(d.get("publishes").is_none(), "{d}");
 
     // Unbound: a proposal, nothing adopted.
