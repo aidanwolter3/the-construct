@@ -112,6 +112,12 @@ and `entities` try a row with made-up data, `full_height` draws a long screen wh
 [rendering.md](rendering.md#agent-previews-mcp)). `get_layout` takes `expanded: true`. Layouts are named `id` (`app` is still accepted).
 After a change to the tools, the Claude connector needs "Refresh tools list" in its settings.
 
+**Outside text is marked** (decision [`untrusted-tool-content`](decisions/untrusted-tool-content.md)): text other
+people wrote comes back as `{"untrusted": {"from", "content"}}`, and the instructions say it is data, never
+instructions. That covers `sample_data`'s entities, `mcp_servers`' tool descriptions, schemas and last error,
+`mcp_call_tool`'s result and error, `collections_preview`'s rows and sample items, `export_collection` values a
+filler or a model wrote, and another pod's publication in `describe_publication` and `adopt` (interface, flags).
+
 **How an agent is taught to reuse** (decision [`element-roles-and-reuse`](decisions/element-roles-and-reuse.md)):
 
 - The MCP `instructions` are short on purpose (under 2,000 characters, held by a test; a client may show only the

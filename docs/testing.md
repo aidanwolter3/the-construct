@@ -82,12 +82,18 @@ curl -s -H 'Authorization: Bearer dev' http://127.0.0.1:8081/api/v1/timelines/ho
 | `FAKE_PIXELFED_FIXTURES` | embedded | A fixture directory to load instead (e.g. `fake-pixelfed/fixtures` while editing). |
 | `FAKE_PIXELFED_THREADS` | `pixelfed` | `mastodon`: `/context` returns whole threads instead of one level each way. |
 | `FAKE_PIXELFED_ADMIN` | loopback only | `1` serves `/_admin` on any address, `0` never. |
+| `FAKE_PIXELFED_MAX_UPLOAD_MIB` | `20` | Largest media upload (413 past it); staging uses `4`. |
 
 **What it serves.** OAuth app registration, authorization code with PKCE (`S256` only, single-use codes), tokens with
 refresh, `verify_credentials`, the home timeline with paging (five posts: a carousel, a boost, a landscape image, a
 text-only post and a content-warning post), favourite and bookmark, statuses and threaded comments
 (`fixtures/comments.json`), notifications, and media under `/storage/<file>`. Media are small PNGs with a digit or
 letter, so screenshots show which image is visible.
+
+**Uploads** (`POST /api/v{1,2}/media`, then posts with `media_ids`) are kept in memory and served at
+`/storage/uploads/<id>.<ext>`: at most 200 of them and 64 MiB in all, the oldest dropped first (a post whose photo
+was dropped shows a 404 image). Only JPEG, PNG and WebP are taken, and every response carries
+`X-Content-Type-Options: nosniff`, so the staging fake can't be used to serve pages or scripts.
 
 **Admin endpoints** (test controls; in-memory state resets on restart):
 

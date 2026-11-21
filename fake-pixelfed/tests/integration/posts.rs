@@ -175,3 +175,116 @@ async fn photos_are_processed_then_posted_to_the_top_of_the_timeline() {
     state.reset(true);
     assert!(state.media_ids().is_empty());
 }
+
+/// A PNG header padded to `len` bytes.
+fn png_of(len: usize) -> Vec<u8> {
+    let mut b = png();
+    b.resize(len, 0);
+    b
+}
+
+#[tokio::test]
+async fn uploads_past_the_count_cap_evict_the_oldest() {
+    let (state, router) = setup();
+    state.set_media_processing_polls(0);
+    for _ in 0..fake_pixelfed::MEDIA_CAP_ITEMS + 5 {
+        let (s, m, _) = send(&router, multipart("/api/v1/media", "image/png", &png())).await;
+        assert_eq!(s, StatusCode::OK, "{m}");
+    }
+    let ids = state.media_ids();
+    assert_eq!(ids.len(), fake_pixelfed::MEDIA_CAP_ITEMS);
+    // Ids 1..=5 went first.
+    for gone in 1..=5 {
+        assert!(!ids.contains(&gone.to_string()), "{gone} kept");
+    }
+    let (s, _, _) = send(
+        &router,
+        json_req(Method::GET, "/storage/uploads/1.png", None, None),
+    )
+    .await;
+    assert_eq!(s, StatusCode::NOT_FOUND);
+    let (s, _, _) = send(
+        &router,
+        json_req(Method::GET, "/storage/uploads/6.png", None, None),
+    )
+    .await;
+    assert_eq!(s, StatusCode::OK);
+}
+
+#[tokio::test]
+async fn total_upload_bytes_stay_bounded() {
+    let (state, router) = setup();
+    state.set_media_processing_polls(0);
+    let big = png_of(fake_pixelfed::MAX_MEDIA_BYTES - 1024);
+    for _ in 0..5 {
+        let (s, m, _) = send(&router, multipart("/api/v1/media", "image/png", &big)).await;
+        assert_eq!(s, StatusCode::OK, "{m}");
+        let held = state.report(0)["media_bytes"].as_u64().unwrap() as usize;
+        assert!(held <= fake_pixelfed::MEDIA_CAP_BYTES, "{held}");
+    }
+    // 64 MiB holds three of the ~20 MiB uploads: the two oldest went.
+    assert_eq!(state.media_ids(), vec!["3", "4", "5"]);
+    assert_eq!(state.report(0)["media"], 3);
+}
+
+#[tokio::test]
+async fn uploads_over_the_configured_size_are_refused() {
+    let state = Arc::new(
+        AppState::new(Config {
+            fixtures_dir: default_fixtures_dir(),
+            public_url: BASE.to_owned(),
+            auto_approve: false,
+            seed_token: Some(SEED.to_owned()),
+        })
+        .expect("fixtures load")
+        .with_max_upload_bytes(4096),
+    );
+    let router = app(Arc::clone(&state));
+    let (s, _, _) = send(
+        &router,
+        multipart("/api/v1/media", "image/png", &png_of(4096)),
+    )
+    .await;
+    assert_eq!(s, StatusCode::OK);
+    let (s, _, _) = send(
+        &router,
+        multipart("/api/v1/media", "image/png", &png_of(4097)),
+    )
+    .await;
+    assert_eq!(s, StatusCode::PAYLOAD_TOO_LARGE);
+    // Far past it: the body limit stops the request before it is read.
+    let (s, _, _) = send(
+        &router,
+        multipart("/api/v1/media", "image/png", &png_of(1 << 20)),
+    )
+    .await;
+    assert_eq!(s, StatusCode::PAYLOAD_TOO_LARGE);
+    assert_eq!(state.media_ids(), vec!["1"]);
+}
+
+#[tokio::test]
+async fn every_response_says_nosniff() {
+    let (state, router) = setup();
+    state.set_media_processing_polls(0);
+    let (_, m, _) = send(&router, multipart("/api/v1/media", "image/png", &png())).await;
+    let upload = format!("/storage/uploads/{}.png", m["id"].as_str().unwrap());
+    for path in [
+        upload.as_str(),
+        "/storage/carousel-1.png",
+        "/api/v1/timelines/home",
+        "/no-such-route",
+    ] {
+        let resp = router
+            .clone()
+            .oneshot(json_req(Method::GET, path, None, None))
+            .await
+            .unwrap();
+        assert_eq!(
+            resp.headers()
+                .get(header::X_CONTENT_TYPE_OPTIONS)
+                .map(|v| v.to_str().unwrap()),
+            Some("nosniff"),
+            "{path}"
+        );
+    }
+}

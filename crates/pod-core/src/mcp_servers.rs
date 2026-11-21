@@ -44,6 +44,7 @@ use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
 
 use crate::adapter::Pod;
+use crate::net::{OutboundClient, OutboundResponse};
 use crate::store::Store;
 use crate::util::now_secs;
 
@@ -273,8 +274,24 @@ pub fn summaries(c: &Connection) -> rusqlite::Result<Vec<Value>> {
         .collect())
 }
 
+/// Where server `s`'s own text comes from, for [`crate::mcp::untrusted`]:
+/// its URL's host.
+fn origin(s: &Server) -> String {
+    host_of(&s.url)
+}
+
+fn host_of(url: &str) -> String {
+    reqwest::Url::parse(url)
+        .ok()
+        .and_then(|u| u.host_str().map(str::to_owned))
+        .unwrap_or_else(|| url.to_owned())
+}
+
 /// A server as Claude sees it. `schemas`: each tool's input schema too.
+/// The server's own text (each tool's description and schema, its last
+/// error) is marked untrusted: another party wrote it (issue #439).
 fn describe(s: &Server, schemas: bool) -> Value {
+    let from = origin(s);
     let allowed = allow_list(s);
     let tools: Vec<Value> = s
         .tools
@@ -285,7 +302,7 @@ fn describe(s: &Server, schemas: bool) -> Value {
                     let tool = t["name"].as_str().unwrap_or("");
                     let mut v = json!({
                         "name": t["name"],
-                        "description": t["description"],
+                        "description": crate::mcp::untrusted(&from, t["description"].clone()),
                         "read_only": read_only(t),
                         "callable": read_only(t) || allowed.iter().any(|a| a == tool),
                     });
@@ -293,7 +310,7 @@ fn describe(s: &Server, schemas: bool) -> Value {
                         v["destructive"] = json!(true);
                     }
                     if schemas {
-                        v["input_schema"] = t["inputSchema"].clone();
+                        v["input_schema"] = crate::mcp::untrusted(&from, t["inputSchema"].clone());
                     }
                     v
                 })
@@ -309,7 +326,7 @@ fn describe(s: &Server, schemas: bool) -> Value {
         "tools": tools,
     });
     if let Some(e) = &s.last_error {
-        v["last_error"] = json!(e);
+        v["last_error"] = crate::mcp::untrusted(&from, json!(e));
     }
     if s.auth == "token" {
         v["token_set"] = json!(s.secrets.contains_key("token"));
@@ -319,17 +336,14 @@ fn describe(s: &Server, schemas: bool) -> Value {
 
 // ---------- HTTP ----------
 
-fn client(pod: &Pod) -> reqwest::Client {
-    let b = if pod.mcp_private_hosts() {
-        crate::net::builder(REQUEST_TIMEOUT)
-    } else {
-        crate::net::public_builder(REQUEST_TIMEOUT)
-    };
+fn client(pod: &Pod) -> OutboundClient {
     // A redirected POST would turn into a GET, and a token must not follow a
     // redirect to another host: neither is followed.
-    b.redirect(reqwest::redirect::Policy::none())
+    OutboundClient::builder(REQUEST_TIMEOUT)
+        .private(pod.mcp_private_hosts())
+        .no_redirects()
+        .body_cap(MAX_BODY)
         .build()
-        .expect("an HTTP client")
 }
 
 /// `s` as a URL the pod may call: https on a public host name, or any
@@ -348,19 +362,14 @@ fn check_url(pod: &Pod, s: &str) -> Result<reqwest::Url, String> {
 }
 
 /// Read a response's body, at most [`MAX_BODY`].
-async fn body_of(mut resp: reqwest::Response) -> Result<Vec<u8>, String> {
-    let mut out = Vec::new();
-    while let Some(chunk) = resp
-        .chunk()
-        .await
-        .map_err(|e| format!("reading the answer failed: {e}"))?
-    {
-        if out.len() + chunk.len() > MAX_BODY {
-            return Err("the answer is too large".into());
+async fn body_of(resp: OutboundResponse) -> Result<Vec<u8>, String> {
+    resp.body_cap(MAX_BODY).bytes().await.map_err(|e| {
+        if e.is_too_large() {
+            "the answer is too large".into()
+        } else {
+            format!("reading the answer failed: {e}")
         }
-        out.extend_from_slice(&chunk);
-    }
-    Ok(out)
+    })
 }
 
 fn short(s: &str, max: usize) -> String {
@@ -394,7 +403,7 @@ impl RpcError {
 
 /// One MCP session over Streamable HTTP.
 struct Conn {
-    client: reqwest::Client,
+    client: OutboundClient,
     url: reqwest::Url,
     bearer: Option<String>,
     session: Option<String>,
@@ -434,7 +443,7 @@ fn from_event_stream(text: &str, id: i64) -> Option<Value> {
 
 impl Conn {
     async fn open(
-        client: reqwest::Client,
+        client: OutboundClient,
         url: reqwest::Url,
         bearer: Option<String>,
     ) -> Result<Self, RpcError> {
@@ -747,7 +756,7 @@ fn auth_param(www: &str, key: &str) -> Option<String> {
     None
 }
 
-async fn get_json(pod: &Pod, client: &reqwest::Client, url: &str) -> Result<Value, String> {
+async fn get_json(pod: &Pod, client: &OutboundClient, url: &str) -> Result<Value, String> {
     let u = check_url(pod, url)?;
     let resp = client
         .get(u)
@@ -778,7 +787,7 @@ fn well_known(base: &reqwest::Url, suffix: &str) -> Vec<String> {
 /// Find where users of the MCP server at `url` sign in.
 async fn discover(
     pod: &Pod,
-    client: &reqwest::Client,
+    client: &OutboundClient,
     url: &reqwest::Url,
     www: Option<&str>,
 ) -> Result<AuthServer, String> {
@@ -856,7 +865,7 @@ fn challenge(verifier: &str) -> String {
 /// Register the pod as a client of `a` (RFC 7591): `(client_id,
 /// client_secret, how the secret is sent)`.
 async fn register(
-    client: &reqwest::Client,
+    client: &OutboundClient,
     a: &AuthServer,
     redirect_uri: &str,
 ) -> Result<(String, Option<String>, String), String> {
@@ -924,7 +933,7 @@ struct TokenError {
 }
 
 async fn token_request(
-    client: &reqwest::Client,
+    client: &OutboundClient,
     s: &Server,
     store: &Store,
     form: Vec<(&str, String)>,
@@ -1027,7 +1036,7 @@ struct SignIn {
 /// per redirect URI), and answer the URL to open.
 async fn start_sign_in(
     pod: &Pod,
-    client: &reqwest::Client,
+    client: &OutboundClient,
     s: &mut Server,
     www: Option<&str>,
     redirect_uri: &str,
@@ -1682,10 +1691,34 @@ pub async fn call(
                         ));
                     }
                 };
+                // The server's answer is its own text (issue #439); the
+                // pod's own refusals (jack unplugged, no such server or
+                // tool, a tool not allowed) stay plain.
+                let from = if plugged(pod) {
+                    load(pod, s)
+                        .await
+                        .filter(|x| {
+                            permitted(&x.name, &x.tools, &allow_list(x), t, Caller::Claude).is_ok()
+                        })
+                        .map(|x| origin(&x))
+                } else {
+                    None
+                };
                 call_tool(pod, s, t, &a, Caller::Claude)
                     .await
-                    .map(|v| json!({ "ok": true, "result": shorten(v, 0) }))
-                    .map_err(|e| json!({ "error": if e.sign_in { "needs_sign_in" } else { "mcp_failed" }, "detail": e.message }))
+                    .map(|v| {
+                        let from = from.clone().unwrap_or_else(|| s.to_owned());
+                        json!({ "ok": true, "result": crate::mcp::untrusted(&from, shorten(v, 0)) })
+                    })
+                    .map_err(|e| {
+                        if e.sign_in {
+                            json!({ "error": "needs_sign_in", "detail": e.message })
+                        } else if let Some(from) = &from {
+                            json!({ "error": "mcp_failed", "detail": crate::mcp::untrusted(from, json!(e.message)) })
+                        } else {
+                            json!({ "error": "mcp_failed", "detail": e.message })
+                        }
+                    })
             }
             (None, _) => Err(missing("server")),
             (_, None) => Err(missing("tool")),
