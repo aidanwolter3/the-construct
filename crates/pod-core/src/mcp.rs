@@ -1344,7 +1344,7 @@ fn vocabulary_with(components: Vec<Value>) -> Value {
             "local:notifications": "query of the newest notifications: id, channel_layout, layout, app_title (its layout's title), title, body, when (\"5 min\"), day (\"Today\"), unread",
             "local:channels": "query of the notification channels: layout, app_title (its layout's title), id, title, description, enabled",
             "local:sign_ins": "query of the pod's sign-ins: id, title, detail (\"@dana · photos.example\")",
-            "local:providers": "query of the sign-ins the pod offers that aren't signed in: id, title, custom_server (another server may be typed), server_placeholder",
+            "local:providers": "query of the sign-ins the pod offers that aren't signed in: id, title, server (the provider's own server), custom_server (another server may be typed), server_placeholder",
             "local:servers": "query of the servers this device can use: id, title, url, selected",
             "local://device": "platform (android|desktop|simulator), notification_permission (granted|denied on Android; \"\" where it doesn't apply): pair \"denied\" with an action.device request_notification_permission button",
             "local://session": "open, server, error, message: the pod sign-in",

@@ -516,6 +516,11 @@ fn signs_in_on_the_desktop_through_a_loopback_redirect_and_signs_out() {
     let pod = PodEngine::open_signing_in(&stub.base, None, store.clone(), config(), Some(&sign_in));
     let mut s = pod.session(construct_render::Viewport::PHONE);
     wait_until("home", || shows(&mut s, "Home v1"));
+    // The pod's own server (its provider's) signs in without a dialog.
+    wait_until("the providers", || {
+        s.poll();
+        shows(&mut s, "Sign in to Pixelfed")
+    });
 
     let out = s
         .tap(&Target::Text("Sign in with Pixelfed".into()))
