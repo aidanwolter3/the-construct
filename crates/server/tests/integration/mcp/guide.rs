@@ -286,6 +286,30 @@ async fn a_write_points_at_what_could_be_reused() {
     assert!(!has(&["/root/children/6"]), "{warnings:#?}");
     assert!(warnings.len() <= 12, "{warnings:#?}");
 
+    // A page title shown from the route: drawn as written when opened
+    // without it. A screen's route text is its own and says nothing.
+    let (err, routed) = env
+        .tool(
+            &access,
+            "validate_layout",
+            json!({"layout": {"type": "core://Page", "title": "Area", "root": {"type": "core://Column", "children": [
+                {"type": "core://Text", "style": "Headline", "value_expr": "$route.area"},
+                {"type": "core://Text", "style": "Body", "value_expr": "More about $route.area"}]},
+                "screens": [{"id": "s", "route": "x://things/{id}", "title": "Thing",
+                    "root": {"type": "core://Text", "style": "Body", "value_expr": "$route.id"}}]}}),
+        )
+        .await;
+    assert!(!err, "{routed}");
+    let w = routed["warnings"]
+        .as_array()
+        .unwrap_or_else(|| panic!("{routed}"));
+    assert_eq!(w.len(), 1, "{routed}");
+    let w = w[0].as_str().unwrap();
+    assert!(
+        w.starts_with("/root/children/0/value_expr:") && w.contains("params.area"),
+        "{w}"
+    );
+
     // Nothing to say about a layout made of components.
     let (err, clean) = env
         .tool(

@@ -385,3 +385,66 @@ fn an_icon_only_badge_centres_its_icon_in_a_centred_box() {
     // Nothing but the icon: no empty text run beside it.
     assert!(!scene.draws.iter().any(|d| matches!(d, Draw::Text(_))));
 }
+
+/// Feature `progress_value`: a `core://Progress` with a value is a bar as
+/// wide as its column, filled value / max (bindings resolved, clamped), and
+/// read out as a percentage.
+#[test]
+fn a_progress_value_is_a_bar_filled_by_its_fraction() {
+    let root: protocol::UiNode = serde_json::from_value(json!({
+    "type": "core://Column", "padding_h_dp": 20, "spacing_dp": 8, "children": [
+        {"type": "core://Progress", "value": "${x://l/1#card}", "max": "${x://l/1#cards}"},
+        {"type": "core://Progress", "value": 9, "max": 4, "size_dp": 10, "color": "#336699"},
+        {"type": "core://Progress"}
+    ]}))
+    .unwrap();
+    let data: protocol::DataBundle = serde_json::from_value(json!({
+        "entities": {"x://l/1": {"card": 7, "cards": "12"}}, "queries": {}}))
+    .unwrap();
+    let vp = Viewport {
+        width: 390.0,
+        height: 400.0,
+        scale: 1.0,
+    };
+    let scene = build(&root, &data, &BTreeMap::new(), vp);
+    let bars: Vec<_> = scene
+        .semantics
+        .iter()
+        .filter(|n| n.text_content.as_deref().is_some_and(|t| t.ends_with('%')))
+        .collect();
+    assert_eq!(bars.len(), 2, "the spinner isn't a bar");
+    assert_eq!(bars[0].text_content.as_deref(), Some("58%"));
+    assert_eq!(bars[1].text_content.as_deref(), Some("100%"), "clamped");
+    let [x, _, w, h] = bars[0].bounds;
+    assert!(
+        close(x, 20.0) && close(w, 350.0) && close(h, 6.0),
+        "{:?}",
+        bars[0].bounds
+    );
+    assert!(close(bars[1].bounds[3], 10.0));
+    // The fill of the first bar: a quad at its left, 7/12 of its width.
+    let fill = scene
+        .draws
+        .iter()
+        .find_map(|d| match d {
+            Draw::Quad(q)
+                if close(q.rect[1], bars[0].bounds[1])
+                    && close(q.rect[3], 6.0)
+                    && q.rect[2] < 349.0 =>
+            {
+                Some(q.rect)
+            }
+            _ => None,
+        })
+        .expect("a fill");
+    assert!(
+        close(fill[0], 20.0) && (fill[2] - 350.0 * 7.0 / 12.0).abs() < 1.0,
+        "{fill:?}"
+    );
+    let mut feats = protocol::required_features(&root);
+    feats.retain(|f| f.starts_with("progress"));
+    assert_eq!(
+        feats.into_iter().collect::<Vec<_>>(),
+        ["progress", "progress_value"]
+    );
+}

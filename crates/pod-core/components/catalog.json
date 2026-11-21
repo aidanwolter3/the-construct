@@ -51,6 +51,10 @@
     "category": "primitive",
     "use_when": "A small coloured dot: unread, online, a legend or a status."
   },
+  "empty_state": {
+    "category": "pattern",
+    "use_when": "A list or screen with nothing in it yet: an icon, a title, why it's empty or when it fills, and one action. Use it instead of a lone muted line."
+  },
   "filled_card": {
     "category": "container",
     "use_when": "A filled card whose text takes one colour: an item's heading, a status at a glance."
