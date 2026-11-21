@@ -113,7 +113,7 @@ async fn the_operator_turns_monitoring_on_for_a_pod() {
 
     let (err, data) = overview(&url, &token).await;
     assert!(!err, "{data}");
-    let entities = &data["entities"];
+    let entities = &data["entities"]["untrusted"]["content"];
     let summary = &entities["monitor://summary/server"];
     assert!(summary["headline"].is_string(), "{data}");
     let checks = data["queries"]["monitor:checks"].as_array().unwrap();

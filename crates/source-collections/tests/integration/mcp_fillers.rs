@@ -558,13 +558,19 @@ async fn an_oversized_tool_list_is_stored_capped() {
             .all(|t| t["name"].as_str().unwrap().len() <= 128)
     );
     assert_eq!(tools[0]["name"], "big_schema");
-    assert_eq!(tools[0]["input_schema"], json!({ "type": "object" }));
-    // Descriptions are cut, and the whole list stays near a megabyte.
-    assert!(
-        tools
-            .iter()
-            .all(|t| t["description"].as_str().unwrap().chars().count() <= 601)
+    assert_eq!(
+        tools[0]["input_schema"]["untrusted"]["content"],
+        json!({ "type": "object" })
     );
+    // Descriptions are cut, and the whole list stays near a megabyte.
+    assert!(tools.iter().all(|t| {
+        t["description"]["untrusted"]["content"]
+            .as_str()
+            .unwrap()
+            .chars()
+            .count()
+            <= 601
+    }));
     let stored: String = pod
         .store()
         .with_conn(|c| {

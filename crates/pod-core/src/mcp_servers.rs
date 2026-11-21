@@ -1518,18 +1518,27 @@ pub async fn call(
                         ));
                     }
                 };
-                // The server's answer is its own text (issue #439).
-                let from = load(pod, s)
-                    .await
-                    .map_or_else(|| s.to_owned(), |x| origin(&x));
+                // The server's answer is its own text (issue #439); the
+                // pod's own refusals (jack unplugged, no such server) stay
+                // plain.
+                let from = if plugged(pod) {
+                    load(pod, s).await.map(|x| origin(&x))
+                } else {
+                    None
+                };
                 call_tool(pod, s, t, &a)
                     .await
-                    .map(|v| json!({ "ok": true, "result": crate::mcp::untrusted(&from, shorten(v, 0)) }))
+                    .map(|v| {
+                        let from = from.clone().unwrap_or_else(|| s.to_owned());
+                        json!({ "ok": true, "result": crate::mcp::untrusted(&from, shorten(v, 0)) })
+                    })
                     .map_err(|e| {
                         if e.sign_in {
                             json!({ "error": "needs_sign_in", "detail": e.message })
+                        } else if let Some(from) = &from {
+                            json!({ "error": "mcp_failed", "detail": crate::mcp::untrusted(from, json!(e.message)) })
                         } else {
-                            json!({ "error": "mcp_failed", "detail": crate::mcp::untrusted(&from, json!(e.message)) })
+                            json!({ "error": "mcp_failed", "detail": e.message })
                         }
                     })
             }
