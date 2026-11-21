@@ -26,7 +26,7 @@ settings are logged at startup.
 |---|---|---|
 | `CONSTRUCT_ADDR` | `127.0.0.1:8080` | Listen address. `0.0.0.0:8080` accepts LAN connections. |
 | `CONSTRUCT_DATA_DIR` | `~/.construct-server` | `host.db` (pods, token hashes, the shelf of shared publications) and `pods/<id>/server.db` (each pod's data). Created with mode 0700, databases 0600. |
-| `CONSTRUCT_PUBLIC_URL` | from each request's `Host` | The base URL clients reach the server at, for the OAuth metadata Claude reads and the redirect URI of a pod's MCP server sign-ins. `https` is assumed behind Fly or with `X-Forwarded-Proto: https`. |
+| `CONSTRUCT_PUBLIC_URL` | from each request's `Host` (on Fly: `https://$FLY_APP_NAME.fly.dev`, never `Host`) | The base URL clients reach the server at, for the OAuth metadata Claude reads and the redirect URI of a pod's MCP server sign-ins. `https` is assumed behind Fly or with `X-Forwarded-Proto: https`. Behind Fly, set it to the custom domain if the app has one: the `Host` header is never trusted there (OAuth metadata, `iss`, sign-in redirects and share links stay the same whatever `Host` is sent). |
 | `CONSTRUCT_OAUTH_CLIENT_ID` | unset | A pre-registered OAuth client for MCP apps that ask for a client ID and secret instead of registering (e.g. Gemini), decision [`oauth-preregistered-client`](decisions/oauth-preregistered-client.md). Any value you choose; set with `_SECRET`. |
 | `CONSTRUCT_OAUTH_CLIENT_SECRET` | unset | That client's secret (a Fly secret, e.g. `openssl rand -hex 32`). The connect page still asks for the pod code. |
 | `CONSTRUCT_OAUTH_CLIENT_REDIRECT_URIS` | empty | That app's OAuth callback URL(s), comma-separated. An unknown one is shown on the connect page so you can add it. |

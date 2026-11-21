@@ -866,8 +866,7 @@ mod tests {
         let before = MIGRATIONS
             .iter()
             .position(|m| m.name == "pixelfed_clients")
-            .unwrap()
-            + 1;
+            .unwrap();
         s.migrate_adapter("pixelfed", &MIGRATIONS[..before])
             .unwrap();
         s.with_conn(|c| {

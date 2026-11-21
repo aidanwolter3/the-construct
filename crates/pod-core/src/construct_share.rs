@@ -631,6 +631,31 @@ fn entity_literal(v: &Value, at: &str) -> Option<(String, String)> {
     }
 }
 
+/// Every literal string in `v` that says something, flagged as `kind`:
+/// values the owner's home binds and the strings of an interface schema
+/// (defaults, options, titles) sit where [`flags_at`] sees no text key, so
+/// the owner reviews them all.
+fn flag_strings(v: &Value, kind: &str, element: &str, at: &str, out: &mut Vec<Value>) {
+    match v {
+        Value::String(s) => {
+            if literal_text(s).chars().any(char::is_alphanumeric) {
+                out.push(flag(kind, element, at, s));
+            }
+        }
+        Value::Array(a) => {
+            for (i, c) in a.iter().enumerate() {
+                flag_strings(c, kind, element, &format!("{at}/{i}"), out);
+            }
+        }
+        Value::Object(o) => {
+            for (k, c) in o {
+                flag_strings(c, kind, element, &format!("{at}/{}", escape(k)), out);
+            }
+        }
+        _ => {}
+    }
+}
+
 /// A closure being copied for publishing.
 struct Copier<'a> {
     pod: &'a Pod,
@@ -892,7 +917,18 @@ pub fn prepare(
     // The root's own bindings become its interface: its data is bound
     // literally, then the sources turn it into inputs.
     let bound = owner_binding(conn, &c.objects, name);
+    let mut binding_flags = Vec::new();
+    for (k, v) in &bound {
+        flag_strings(
+            v,
+            "binding",
+            name,
+            &format!("/inputs/{}", escape(k)),
+            &mut binding_flags,
+        );
+    }
     let root = c.copy(&el, name, &bound, component)?;
+    c.flags.extend(binding_flags);
     let Some((root_el, _)) = c.out.get(&root).cloned() else {
         return Err(refuse("internal", "the copy has no root"));
     };
@@ -906,6 +942,13 @@ pub fn prepare(
                 described.insert(field_input(&d.name, &f.name));
             }
             inputs.push(serde_json::to_value(d).unwrap_or(Value::Null));
+            flag_strings(
+                &d.schema,
+                "schema",
+                name,
+                &format!("/interface/inputs/{}/schema", escape(&d.name)),
+                &mut c.flags,
+            );
         }
     }
     for r in &reads {
@@ -2608,6 +2651,22 @@ mod tests {
         assert!(valid_slug("dinner-party"));
         assert!(!valid_slug("-x"));
         assert_eq!(slugify("Dinner party · Sunday!"), "dinner-party-sunday");
+    }
+
+    #[test]
+    fn flag_strings_lists_personal_values() {
+        let mut out = Vec::new();
+        flag_strings(
+            &json!({"where": {"equals": "Dana Example"}, "n": 3, "e": "$in.x",
+                "options": ["Rex", "Fido"]}),
+            "binding",
+            "home",
+            "/inputs/a",
+            &mut out,
+        );
+        let vals: BTreeSet<&str> = out.iter().filter_map(|f| f["value"].as_str()).collect();
+        assert_eq!(vals, BTreeSet::from(["Dana Example", "Rex", "Fido"]));
+        assert!(out.iter().all(|f| f["kind"] == "binding"));
     }
 
     #[test]
