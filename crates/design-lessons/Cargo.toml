@@ -1,0 +1,15 @@
+[package]
+name = "design-lessons"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+# The lessons of docs/design.md as data (decision `design-doc-and-lessons`):
+# its parts, lessons, cards and glossary read into docs/design-lessons.json,
+# which a pod's collection fillers fetch to show the design as a course. The
+# integration test fails when the JSON doesn't match the Markdown;
+# `UPDATE_DESIGN_LESSONS=1 cargo test -p design-lessons` writes it again.
+# No I/O in the library.
+
+[dependencies]
+serde_json.workspace = true
