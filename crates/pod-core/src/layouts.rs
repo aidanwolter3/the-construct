@@ -574,6 +574,9 @@ pub fn feed_bindings(
                 for (k, c) in m {
                     match (k.as_str(), c) {
                         ("query_key", Value::String(q)) => out.push(q),
+                        ("merge_query_keys", Value::Array(qs)) => {
+                            out.extend(qs.iter().filter_map(Value::as_str))
+                        }
                         _ => keys(c, out),
                     }
                 }
