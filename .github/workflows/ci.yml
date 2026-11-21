@@ -199,17 +199,18 @@ jobs:
           retention-days: 14
 
   audit:
-    name: Dependency advisories (cargo-deny)
+    name: Dependency advisories and sources (cargo-deny)
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false # no job pushes; keep GITHUB_TOKEN out of .git/config
-      # Checks Cargo.lock against the RustSec advisory database; ignores (with reasons) live in deny.toml.
+      # Checks Cargo.lock against the RustSec advisory database and the allowed sources (crates.io only); ignores
+      # (with reasons) live in deny.toml.
       - uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2.1.1
         with:
-          command: check advisories
+          command: check advisories sources
 
   android:
     name: Android APK (cargo-ndk)
@@ -282,11 +283,12 @@ jobs:
 
   deploy:
     name: Deploy to Fly.io staging
-    # needs.rust.result: the skipped image job would otherwise skip this one too.
+    # needs.rust.result: the skipped image job would otherwise skip this one too. A failing audit (a new
+    # RustSec advisory, an unknown source) blocks the deploy: fix or ignore it in deny.toml first.
     if: >-
-      !cancelled() && needs.rust.result == 'success' && github.ref == 'refs/heads/main'
+      !cancelled() && needs.rust.result == 'success' && needs.audit.result == 'success' && github.ref == 'refs/heads/main'
       && (github.event_name == 'push' || github.event_name == 'workflow_dispatch' || github.event_name == 'schedule')
-    needs: rust
+    needs: [rust, audit]
     runs-on: ubuntu-latest
     timeout-minutes: 30
     concurrency:
@@ -348,5 +350,5 @@ jobs:
           curl -fsS -H "Authorization: Bearer $token" "$pod/v1/construct/data/$root" \
             | jq -e '(.entities | length) > 0'
       - name: Note skipped deploy
-        if: steps.secrets.outputs.pod != 'true' || steps.secrets.outputs.fake != 'true'
-        run: echo "::warning::FLY_API_TOKEN_POD / FLY_API_TOKEN_FAKE secrets missing; some deploy steps were skipped."
+        if: steps.secrets.outputs.pod != 'true'
+        run: echo "::warning::FLY_API_TOKEN_POD secret missing; the deploy and smoke test were skipped."
