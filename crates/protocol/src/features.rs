@@ -232,9 +232,14 @@ fn node_features(node: &UiNode, out: &mut BTreeSet<&'static str>) {
             stack,
             min_column_dp,
             trailing,
+            merge_query_keys,
+            sort_by,
             ..
         } => {
             add(feature::LIST);
+            if !merge_query_keys.is_empty() || sort_by.is_some() {
+                add(feature::LIST_MERGE);
+            }
             if trailing.is_some() {
                 add(feature::LIST_TRAILING);
             }
@@ -355,7 +360,12 @@ fn node_features(node: &UiNode, out: &mut BTreeSet<&'static str>) {
         }
         UiNode::MediaPicker { .. } => add(feature::MEDIA_PICKER),
         UiNode::Sticky { .. } => add(feature::STICKY),
-        UiNode::Progress { .. } => add(feature::PROGRESS),
+        UiNode::Progress { value, .. } => {
+            add(feature::PROGRESS);
+            if value.is_some() {
+                add(feature::PROGRESS_VALUE);
+            }
+        }
         UiNode::Bars { where_, merge, .. } => {
             add(feature::BARS);
             if merge.is_some() {
