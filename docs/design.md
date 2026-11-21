@@ -489,9 +489,9 @@ All are `core://<Name>`. A node type a client doesn't know is skipped and kept, 
 
 `action.navigation.open` (a screen, or another layout pushed, as a sheet, panel or overlay), `.back`, `.pop_to`,
 `.pop_to_root`; `action.mutation.optimistic` and `action.mutation.create` (change or add data at once, sent through
-the outbox); `action.local.set` (view state on this device only); `action.sequence`, `action.confirm`,
-`action.link.open`, `action.data.load`; `action.device` (something only the device does: sign in, sign out, mark
-notifications read, leave the pod).
+the outbox); `action.local.set` (view state on this device only); `action.form.clear` (empty form boxes after an
+Add, typing going on); `action.sequence`, `action.confirm`, `action.link.open`, `action.data.load`; `action.device`
+(something only the device does: sign in, sign out, mark notifications read, leave the pod).
 
 #### Bindings and device data
 

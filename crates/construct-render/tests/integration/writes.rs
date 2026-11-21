@@ -783,3 +783,35 @@ fn a_local_set_evaluates_a_ternary() {
         Some(&json!(11))
     );
 }
+
+#[test]
+fn an_add_then_form_clear_sends_the_typed_values_and_empties_the_boxes() {
+    let create = json!({ "intent": "action.mutation.create", "query_key": "g",
+        "entity_uri": "x://g/pending-$nonce", "endpoint": "/v1/g/create",
+        "entity": { "id": "pending-$nonce", "name": "$form.name", "done": false },
+        "payload": { "client_id": "$nonce", "name": "$form.name", "quantity": "$form?.qty" } });
+    let root = json!({ "type": "core://Column", "children": [
+        { "type": "core://TextField", "field": "name", "placeholder": "Add an item" },
+        { "type": "core://TextField", "field": "qty", "placeholder": "Qty" },
+        { "type": "core://IconButton", "icon": "add", "content_description": "Add item", "tag": "add",
+          "on_click": { "intent": "action.sequence", "steps": [ create,
+            { "intent": "action.form.clear", "fields": ["name", "qty"], "focus": "name" } ] } }
+    ] });
+    let (mut s, writes) = session(root, grocery_data(), false);
+    s.tap(&Target::Id("field:name".into())).unwrap();
+    s.type_text("name", "Milk");
+    s.tap(&Target::Id("field:qty".into())).unwrap();
+    s.type_text("qty", "2");
+    let out = s.tap(&Target::Id("add".into())).unwrap();
+    // The write carries what was typed: the values are bound before the
+    // boxes empty.
+    let w = writes.lock().unwrap()[0].clone();
+    assert_eq!(w.body["name"], "Milk");
+    assert_eq!(w.body["quantity"], "2");
+    // Both boxes are empty and typing goes on in the name box.
+    assert!(!s.form.contains_key("name") && !s.form.contains_key("qty"));
+    assert_eq!(s.focused.as_deref(), Some("name"));
+    assert_eq!(Session::focused_field(&out), Some("name"));
+    s.type_text("name", "Bread");
+    assert_eq!(s.form["name"], "Bread");
+}
