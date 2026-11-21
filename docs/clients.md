@@ -246,6 +246,19 @@ the upstream tokens. Clients hold only a pod session.
 
 Signing out (or a 401 from the pod) removes cached private data from the device. More in [pixelfed.md](pixelfed.md).
 
+## What the engine checks itself
+
+The pod validates layouts (`validate.rs`), but an old layout, a component changed after it was checked, or a
+compromised pod would get past that alone, so the engine also refuses on its own (each refusal is logged):
+
+- **Requests stay on the pod.** A mutation's, create's or session's endpoint must be a path on the pod: one leading
+  `/`, no `//` or `\`, and `base URL + endpoint` keeps the pod's origin. Anything else (`.evil.example/x`,
+  `https://evil.example/x`) is not queued and changes nothing; a row already queued with such an endpoint is rolled
+  back without a request. The session and device headers go only to the pod.
+- **A new pod starts clean.** When `action.auth.session` (a pod code, a temporary pod) replaces a session the device
+  already has, the engine first deletes every queued action, the cached entities and screens and the construct, so
+  nothing queued for the first pod is sent with the second pod's session and nothing cached from it is shown there.
+
 ## App icon
 
 A white space with a grey perspective grid and one cube. Every asset is generated from one geometry definition in

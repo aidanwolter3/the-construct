@@ -91,7 +91,7 @@ settings are logged at startup.
 | `CONSTRUCT_INFER_MAX_TOKENS_PER_DAY` | `5000000` | The server's daily model token cap across all its pods (they share the one key), counted the same way. Over it, every model jack answers "server budget reached" until the next UTC day. Counted in memory: a restart counts the day afresh. |
 | `CONSTRUCT_FILL_AGENT_DAILY` | `20` | Agent filler runs per pod per day. |
 | `CONSTRUCT_FILL_PRIVATE_HOSTS` | unset | `1`: fetch fillers may read private addresses, and MCP servers may be on them (local development only). |
-| `CONSTRUCT_BROWSER` | the first `chromium`, `chromium-browser`, `headless_shell`, `chrome-headless-shell` or `google-chrome` on `PATH` | The headless browser of rendered fillers (`render`, decision `rendered-fetches`); `off`: none, and rendered fillers say so. The image sets `/usr/bin/chromium`. It starts with none of the server's environment, and as `nobody` (uid 65534) when the server is root, so a page that takes over a renderer can read neither the keys nor the pods' data. It runs with Chromium's sandbox and site isolation where they work: the first render after the server starts tries them and logs `browser sandbox: on`, or falls back to `--no-sandbox` and logs a `browser sandbox: off` warning with the reason (decision `browser-sandbox`). At startup a root server also keeps that user off Fly's private network (`fdaa::/16`) with an nftables rule and logs `browser private network block: on`, or a `browser private network block: off` warning with the reason (no `nft`, no netfilter) and serves anyway (decision `browser-private-network`). |
+| `CONSTRUCT_BROWSER` | the first `chromium`, `chromium-browser`, `headless_shell`, `chrome-headless-shell` or `google-chrome` on `PATH` | The headless browser of rendered fillers (`render`, decision `rendered-fetches`); `off`: none, and rendered fillers say so. The image sets `/usr/bin/chromium`. It starts with none of the server's environment, and as `nobody` (uid 65534) when the server is root, so a page that takes over a renderer can read neither the keys nor the pods' data. It runs with Chromium's sandbox and site isolation where they work: the first render after the server starts tries them and logs `browser sandbox: on`, or falls back to `--no-sandbox` and logs a `browser sandbox: off` warning with the reason (decision `browser-sandbox`). At startup a root server also fences that user's network with an nftables rule, so the only connection it may open is to the browser's proxy on `127.0.0.1:1009` (not the server's port, its metrics, Fly's private network or any private address), and logs `browser private network block: on`, or a `browser private network block: off` warning with the reason (no `nft`, no netfilter) and serves anyway; on Fly, a server with neither the rule nor the sandbox then renders no pages. It also closes Fly's `/.fly/api` socket to other users if it was open (decision `browser-network-fence`). |
 
 ### Monitoring and development
 
@@ -293,14 +293,15 @@ no `.git` to make it from). Without it they report `<version>+dev`, which can't 
 
 Whether staging's browser runs sandboxed shows in its log after the first render since the deploy (a fetch filler
 or `collections_preview` with `render`): `fly logs -a the-construct-pod | grep "browser sandbox"`. Whether its user
-is kept off Fly's private network shows at every start: `grep "browser private network"` (decision
-`browser-private-network`). To check the block itself, `fly ssh console -a the-construct-pod`, then
-`nft list table inet construct_browser` shows the rule, and connecting to the machine's own 6PN address (from
-`fly ips private`) on the metrics port is refused as the browser's user but works as root:
+is fenced shows at every start: `grep "browser private network"` (decision `browser-network-fence`). To check the
+fence itself, `fly ssh console -a the-construct-pod`, then `nft list table inet construct_browser` shows the rule,
+and as the browser's user the server's port and the metrics port are refused, while root connects:
 
 ```bash
-setpriv --reuid=65534 --regid=65534 --clear-groups bash -c 'echo > /dev/tcp/<fdaa address>/9091'   # refused
-bash -c 'echo > /dev/tcp/<fdaa address>/9091'                                                      # connects
+# The image has no curl; bash's /dev/tcp opens the connection.
+setpriv --reuid=65534 --regid=65534 --clear-groups bash -c 'echo > /dev/tcp/127.0.0.1/8080'      # refused
+setpriv --reuid=65534 --regid=65534 --clear-groups bash -c 'echo > /dev/tcp/127.0.0.1/9091'       # refused
+bash -c 'echo > /dev/tcp/127.0.0.1/8080 && echo > /dev/tcp/127.0.0.1/9091'                       # connects
 ```
 
 Set secrets with `flyctl secrets set`, never in the file: at least `CONSTRUCT_SECRETS_KEY`, and
