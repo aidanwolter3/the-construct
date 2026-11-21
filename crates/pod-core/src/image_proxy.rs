@@ -6,7 +6,7 @@
 //! (LAN, loopback) for one, nor shows the site its address.
 //!
 //! Only `http(s)` to public hosts (names that resolve to private addresses
-//! are refused at connect time, [`crate::net::public_builder`]), only raster
+//! are refused at connect time, [`crate::net::OutboundClient`]), only raster
 //! images, at most [`MAX_IMAGE_BYTES`].
 
 use std::time::Duration;
@@ -69,19 +69,17 @@ pub fn url_param(q: Option<String>) -> Option<reqwest::Url> {
 /// resolve to private addresses are refused at connect time), images only,
 /// at most [`MAX_IMAGE_BYTES`].
 pub async fn proxy(url: reqwest::Url) -> Response {
-    if !matches!(url.scheme(), "http" | "https")
-        || !crate::net::is_public_host(url.host_str().unwrap_or(""))
-    {
+    let client = crate::net::OutboundClient::builder(Duration::from_secs(15))
+        .web()
+        .body_cap(MAX_IMAGE_BYTES)
+        .build();
+    if !client.allows(&url) {
         return json_error(
             StatusCode::BAD_REQUEST,
             json!({ "error": "not_a_public_url" }),
         );
     }
-    let client = match crate::net::public_builder(Duration::from_secs(15)).build() {
-        Ok(c) => c,
-        Err(_) => return json_error(StatusCode::BAD_GATEWAY, json!({ "error": "fetch_failed" })),
-    };
-    let Ok(mut resp) = client.get(url).send().await else {
+    let Ok(resp) = client.get(url).send().await else {
         return json_error(StatusCode::BAD_GATEWAY, json!({ "error": "fetch_failed" }));
     };
     let kind = resp
@@ -93,14 +91,13 @@ pub async fn proxy(url: reqwest::Url) -> Response {
     if !resp.status().is_success() || !is_raster_image(&kind) {
         return json_error(StatusCode::BAD_GATEWAY, json!({ "error": "not_an_image" }));
     }
-    let mut bytes = Vec::new();
-    while let Ok(Some(chunk)) = resp.chunk().await {
-        if bytes.len() + chunk.len() > MAX_IMAGE_BYTES {
-            return json_error(StatusCode::BAD_GATEWAY, json!({ "error": "too_large" }));
+    match resp.bytes().await {
+        Ok(bytes) => image_response(&kind, bytes),
+        Err(e) if e.is_too_large() => {
+            json_error(StatusCode::BAD_GATEWAY, json!({ "error": "too_large" }))
         }
-        bytes.extend_from_slice(&chunk);
+        Err(_) => json_error(StatusCode::BAD_GATEWAY, json!({ "error": "fetch_failed" })),
     }
-    image_response(&kind, bytes)
 }
 
 /// An image type the proxy passes on: not SVG, a document that runs scripts

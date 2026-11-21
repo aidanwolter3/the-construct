@@ -1,9 +1,8 @@
 //! HTTP clients for Pixelfed (Mastodon API) instances and their media.
 
-use std::sync::Arc;
 use std::time::Duration;
 
-use reqwest::{StatusCode, redirect};
+use reqwest::StatusCode;
 use serde::Deserialize;
 use serde_json::Value;
 
@@ -82,22 +81,16 @@ fn lenient_secs<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<i64>, D
 /// follow them only within their route.
 #[derive(Debug, Clone)]
 pub struct Clients {
-    trusted_api: reqwest::Client,
-    trusted_media: reqwest::Client,
-    public_api: reqwest::Client,
-    public_media: reqwest::Client,
+    trusted_api: OutboundClient,
+    trusted_media: OutboundClient,
+    public_api: OutboundClient,
+    public_media: OutboundClient,
     policy: MediaPolicy,
 }
 
-const USER_AGENT: &str = concat!("construct-pod/", env!("CARGO_PKG_VERSION"));
-const MAX_REDIRECTS: usize = 5;
-
-fn builder(timeout: Duration) -> reqwest::ClientBuilder {
-    reqwest::Client::builder()
-        .connect_timeout(Duration::from_secs(5))
-        .timeout(timeout)
-        .user_agent(USER_AGENT)
-}
+/// The most of one API answer read: an instance a user typed may stream
+/// without end into the VM that holds every pod.
+pub const MAX_API_BODY: usize = 4 * 1024 * 1024;
 
 impl Clients {
     pub fn new(policy: MediaPolicy) -> Self {
@@ -105,54 +98,35 @@ impl Clients {
         // form bodies holding client_secret, code, code_verifier or
         // refresh_token (and bearer tokens) to wherever the instance points.
         // A Mastodon API answers directly; a 3xx comes back as a `Status`.
-        let trusted_api = builder(API_TIMEOUT)
-            .redirect(redirect::Policy::none())
-            .build()
-            .expect("reqwest client");
+        let api = |private: bool| {
+            OutboundClient::builder(API_TIMEOUT)
+                .private(private)
+                .no_redirects()
+                .body_cap(MAX_API_BODY)
+                .build()
+        };
         let p = policy.clone();
-        let trusted_media = builder(MEDIA_TIMEOUT)
-            .redirect(redirect::Policy::custom(move |attempt| {
-                if attempt.previous().len() >= MAX_REDIRECTS {
-                    attempt.error("too many media redirects")
-                } else if p.route_url(attempt.url()) == Some(MediaRoute::Trusted) {
-                    attempt.follow()
-                } else {
-                    // A public target is fetched again with the public client.
-                    attempt.stop()
-                }
-            }))
-            .build()
-            .expect("reqwest client");
-        // The public clients never use a proxy (HTTPS_PROXY & co.): a proxy
-        // resolves names itself, past `PublicOnlyResolver`.
-        let public_api = builder(API_TIMEOUT)
-            .no_proxy()
-            .dns_resolver(Arc::new(PublicOnlyResolver))
-            .redirect(redirect::Policy::none())
-            .build()
-            .expect("reqwest client");
+        // A public target is fetched again with the public client.
+        let trusted_media = OutboundClient::builder(MEDIA_TIMEOUT)
+            .private(true)
+            .redirect_if(move |url, _| p.route_url(url) == Some(MediaRoute::Trusted))
+            .build();
         let p = policy.clone();
-        let public_media = builder(MEDIA_TIMEOUT)
-            .no_proxy()
-            .dns_resolver(Arc::new(PublicOnlyResolver))
-            .redirect(redirect::Policy::custom(move |attempt| {
-                // Only to other public URLs: a trusted origin may be private
-                // (or an IP literal, which skips the resolver).
-                if attempt.previous().len() >= MAX_REDIRECTS {
-                    attempt.error("too many media redirects")
-                } else if p.route_url(attempt.url()) == Some(MediaRoute::Public) {
-                    attempt.follow()
-                } else {
-                    tracing::warn!(host = ?attempt.url().host_str(), "media redirect to a host outside the allowlist refused");
-                    attempt.stop()
+        // Only to other public URLs: a trusted origin may be private (or an
+        // IP literal, which skips the resolver).
+        let public_media = OutboundClient::builder(MEDIA_TIMEOUT)
+            .redirect_if(move |url, _| {
+                let ok = p.route_url(url) == Some(MediaRoute::Public);
+                if !ok {
+                    tracing::warn!(host = ?url.host_str(), "media redirect to a host outside the allowlist refused");
                 }
-            }))
-            .build()
-            .expect("reqwest client");
+                ok
+            })
+            .build();
         Self {
-            trusted_api,
+            trusted_api: api(true),
             trusted_media,
-            public_api,
+            public_api: api(false),
             public_media,
             policy,
         }
@@ -179,7 +153,7 @@ impl Clients {
         &self,
         url: &str,
         route: MediaRoute,
-    ) -> Result<reqwest::Response, UpstreamError> {
+    ) -> Result<OutboundResponse, UpstreamError> {
         let client = match route {
             MediaRoute::Trusted => &self.trusted_media,
             MediaRoute::Public => &self.public_media,
@@ -212,13 +186,13 @@ impl Clients {
     }
 }
 
-use pod_core::net::PublicOnlyResolver;
 pub use pod_core::net::is_public_ip;
+use pod_core::net::{OutboundClient, OutboundRequest, OutboundResponse};
 
 /// API client for one instance ([`Clients::api`]).
 #[derive(Debug, Clone)]
 pub struct Upstream {
-    http: reqwest::Client,
+    http: OutboundClient,
     instance_url: String,
 }
 
@@ -228,7 +202,7 @@ impl Upstream {
     }
 
     async fn send_json<T: serde::de::DeserializeOwned>(
-        req: reqwest::RequestBuilder,
+        req: OutboundRequest,
     ) -> Result<T, UpstreamError> {
         let resp = req
             .send()
@@ -458,13 +432,14 @@ impl Upstream {
                 .map_err(|e| UpstreamError::Unreachable(e.to_string()))?;
             Ok(reqwest::multipart::Form::new().part("file", part))
         };
-        let send = |path: &str, bytes: Vec<u8>| -> Result<reqwest::RequestBuilder, UpstreamError> {
+        let send = |path: &str, bytes: Vec<u8>| -> Result<OutboundRequest, UpstreamError> {
+            let form = form(bytes)?;
             Ok(self
                 .http
                 .post(self.url(path))
                 .timeout(UPLOAD_TIMEOUT)
                 .bearer_auth(token)
-                .multipart(form(bytes)?))
+                .with(|r| r.multipart(form)))
         };
         match Self::send_json(send("/api/v2/media", bytes.clone())?).await {
             Err(UpstreamError::Status(StatusCode::NOT_FOUND, _)) => {
@@ -640,8 +615,55 @@ mod tests {
             trusted: false,
         });
         match api.verify_credentials("t").await {
-            Err(UpstreamError::Unreachable(e)) => assert!(e.contains("error"), "{e}"),
+            Err(UpstreamError::Unreachable(e)) => assert!(e.contains("public"), "{e}"),
             other => panic!("expected a refused connection, got {other:?}"),
         }
+        // An IP literal skips the resolver: the URL check refuses it.
+        let api = clients.api(&Instance {
+            url: "https://127.0.0.1".into(),
+            trusted: false,
+        });
+        match api.verify_credentials("t").await {
+            Err(UpstreamError::Unreachable(e)) => assert!(e.contains("public"), "{e}"),
+            other => panic!("expected a refused URL, got {other:?}"),
+        }
+    }
+
+    /// #447: an instance that streams an endless answer is cut off at the
+    /// cap, not read into the shared server's memory.
+    #[tokio::test]
+    async fn api_answers_over_the_cap_are_refused() {
+        use futures_util::StreamExt;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        static SENT: AtomicUsize = AtomicUsize::new(0);
+        let app = axum::Router::new().route(
+            "/api/v1/accounts/verify_credentials",
+            axum::routing::get(|| async {
+                // No Content-Length: chunks until the reader stops.
+                let chunk = axum::body::Bytes::from(vec![b' '; 64 * 1024]);
+                let body = futures_util::stream::repeat_with(move || {
+                    SENT.fetch_add(chunk.len(), Ordering::SeqCst);
+                    Ok::<_, std::io::Error>(chunk.clone())
+                })
+                .take(16 * MAX_API_BODY / (64 * 1024));
+                axum::body::Body::from_stream(body)
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, app).await });
+        let clients = Clients::new(MediaPolicy::default());
+        let api = clients.api(&Instance {
+            url: format!("http://{addr}"),
+            trusted: true,
+        });
+        match api.verify_credentials("t").await {
+            Err(UpstreamError::Unreachable(e)) => assert!(e.contains("cap"), "{e}"),
+            other => panic!("expected the answer refused, got {other:?}"),
+        }
+        assert!(
+            SENT.load(Ordering::SeqCst) < 16 * MAX_API_BODY,
+            "read to the end"
+        );
     }
 }

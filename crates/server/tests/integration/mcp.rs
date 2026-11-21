@@ -639,6 +639,17 @@ async fn claude_builds_and_edits_a_custom_app_with_the_tools() {
         )
         .await;
     assert!(!err, "{sample}");
+    // The entities are data, marked as such (issue #439).
+    assert_eq!(
+        sample["entities"]["untrusted"]["from"], "collections",
+        "{sample}"
+    );
+    assert!(
+        sample["entities"]["untrusted"]["content"]
+            .as_object()
+            .is_some_and(|e| !e.is_empty()),
+        "{sample}"
+    );
     let listed = sample["queries"]["collection:dishes"].as_array().unwrap();
     assert_eq!(listed.len(), 3);
     let first = listed[0]

@@ -1207,28 +1207,20 @@ async fn media(State(state): State<Pod>, Path(key): Path<String>) -> Response {
 /// response) once more than `max` bytes have arrived, for upstreams that
 /// send no or a wrong Content-Length.
 fn capped_stream(
-    resp: reqwest::Response,
+    resp: pod_core::net::OutboundResponse,
     max: u64,
 ) -> impl futures_util::Stream<Item = Result<Bytes, std::io::Error>> + Send + 'static {
-    futures_util::stream::unfold((Some(resp), 0u64), move |(resp, seen)| async move {
-        let mut resp = resp?;
-        match resp.chunk().await {
-            Ok(Some(chunk)) => {
-                let seen = seen.saturating_add(chunk.len() as u64);
-                if seen > max {
-                    tracing::warn!(max, "media body exceeded the proxy cap; aborted");
-                    Some((
-                        Err(std::io::Error::other("media exceeds the size cap")),
-                        (None, seen),
-                    ))
-                } else {
-                    Some((Ok(chunk), (Some(resp), seen)))
+    use futures_util::StreamExt;
+    resp.body_cap(usize::try_from(max).unwrap_or(usize::MAX))
+        .into_stream()
+        .map(|r| {
+            r.map_err(|e| {
+                if e.is_too_large() {
+                    tracing::warn!("media body exceeded the proxy cap; aborted");
                 }
-            }
-            Ok(None) => None,
-            Err(e) => Some((Err(std::io::Error::other(e)), (None, seen))),
-        }
-    })
+                std::io::Error::other(e)
+            })
+        })
 }
 
 #[cfg(test)]

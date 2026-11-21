@@ -16,6 +16,8 @@ primary_region = "dfw"
   # the staging pod's Android App Link (decision android-app-link-sign-in-redirect) and its web client's page
   # (decision web-upstream-sign-in).
   FAKE_PIXELFED_EXTRA_REDIRECTS = "https://the-construct-pod.fly.dev/oauth/android,https://the-construct-pod.fly.dev/web"
+  # Uploads live in memory on a 256 MB VM (at most 200 / 64 MiB, oldest dropped): keep each small.
+  FAKE_PIXELFED_MAX_UPLOAD_MIB = "4"
   RUST_LOG = "info"
 
 [http_service]

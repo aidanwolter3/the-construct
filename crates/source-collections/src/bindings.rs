@@ -9,7 +9,9 @@
 //! - `$item.<f>` inside a `core://List` whose `query_key` is
 //!   `collection:<c>` or one of its views, `collection:<c>:view:<v>` (the
 //!   view must exist), and its `filter.fields`, `group_by.field`,
-//!   `where.field` (or each `where[].field`);
+//!   `where.field` (or each `where[].field`); a list that also merges
+//!   `merge_query_keys` lists rows of each of their collections, so a
+//!   binding there need only name a field of one of them;
 //! - a `core://Text` or `core://Conditional` `count`'s `where[].field` when
 //!   its `query_key` is `collection:<c>`;
 //! - `${collections://<c>/<id>#<f>}` (`…/fillers/<id>#<f>` and
@@ -102,6 +104,10 @@ fn names_after<'a>(s: &'a str, marker: &str) -> Vec<&'a str> {
         .collect()
 }
 
+/// What `$item` is: a row of one of these collections (more than one in a
+/// list that merges several queries). `None`: not a row.
+type Rows<'r, 'a> = Option<&'r [&'a Definition]>;
+
 struct Checker<'a> {
     defs: &'a HashMap<String, Definition>,
 }
@@ -147,6 +153,23 @@ impl<'a> Checker<'a> {
         Err(err(at, why, def.bindable()))
     }
 
+    /// `check` passes for one of `defs` (the first one's error otherwise).
+    fn any(
+        defs: &[&'a Definition],
+        check: impl Fn(&'a Definition) -> Result<(), LayoutError>,
+    ) -> Result<(), LayoutError> {
+        let mut first = None;
+        for def in defs {
+            match check(def) {
+                Ok(()) => return Ok(()),
+                Err(e) => {
+                    first.get_or_insert(e);
+                }
+            }
+        }
+        first.map_or(Ok(()), Err)
+    }
+
     /// A writable field: a live field, or `deleted`.
     fn writable(
         &self,
@@ -174,7 +197,7 @@ impl<'a> Checker<'a> {
         Err(err(at, why, allowed))
     }
 
-    fn walk(&self, v: &Value, at: &str, item: Option<&'a Definition>) -> Result<(), LayoutError> {
+    fn walk(&self, v: &Value, at: &str, item: Rows<'_, 'a>) -> Result<(), LayoutError> {
         match v {
             Value::Object(map) => self.object(map, at, item),
             Value::Array(items) => items
@@ -190,12 +213,13 @@ impl<'a> Checker<'a> {
         &self,
         map: &Map<String, Value>,
         at: &str,
-        item: Option<&'a Definition>,
+        item: Rows<'_, 'a>,
     ) -> Result<(), LayoutError> {
         if map.get("intent").is_some_and(Value::is_string) {
             self.intent(map, at, item)?;
         }
-        let mut inner = item;
+        let mut rows: Vec<&'a Definition> = Vec::new();
+        let mut row_list = false;
         if let Some(q) = map.get("query_key").and_then(Value::as_str)
             && let Some((c, view)) = list_of_key(q)
         {
@@ -215,8 +239,19 @@ impl<'a> Checker<'a> {
                 ));
             }
             if map.contains_key("item_template") {
-                inner = Some(def);
-                self.list_fields(map, at, def)?;
+                row_list = true;
+                rows.push(def);
+                let merged = map.get("merge_query_keys").and_then(Value::as_array);
+                for (i, k) in merged.into_iter().flatten().enumerate() {
+                    let here = format!("{at}/merge_query_keys/{i}");
+                    if let Some((c, _)) = k.as_str().and_then(list_of_key) {
+                        let def = self.def(&here, c)?;
+                        if !rows.iter().any(|d| d.name == def.name) {
+                            rows.push(def);
+                        }
+                    }
+                }
+                self.list_fields(map, at, &rows)?;
             } else if let Some(conds) = map.get("where").and_then(Value::as_array) {
                 // A core://Text or core://Conditional count: every
                 // condition names a field.
@@ -226,10 +261,15 @@ impl<'a> Checker<'a> {
                     }
                 }
             }
+        }
+        let inner: Rows<'_, 'a> = if row_list {
+            Some(&rows)
         } else if map.contains_key("item_template") {
             // A list or carousel of something else: its items aren't rows.
-            inner = None;
-        }
+            None
+        } else {
+            item
+        };
         for (k, child) in map {
             let here = format!("{at}/{}", escape(k));
             let ctx = if k == "item_template" || k == "group_by" {
@@ -247,30 +287,32 @@ impl<'a> Checker<'a> {
         &self,
         map: &Map<String, Value>,
         at: &str,
-        def: &Definition,
+        defs: &[&'a Definition],
     ) -> Result<(), LayoutError> {
+        let bindable =
+            |at: &str, f: &str, what: &str| Self::any(defs, |def| self.bindable(at, def, f, what));
         if let Some(fields) = map.get("filter").and_then(|f| f["fields"].as_array()) {
             for (i, f) in fields.iter().enumerate() {
                 if let Some(f) = f.as_str() {
-                    self.bindable(&format!("{at}/filter/fields/{i}"), def, f, "the filter")?;
+                    bindable(&format!("{at}/filter/fields/{i}"), f, "the filter")?;
                 }
             }
         }
         if let Some(f) = map.get("group_by").and_then(|g| g["field"].as_str()) {
-            self.bindable(&format!("{at}/group_by/field"), def, f, "group_by")?;
+            bindable(&format!("{at}/group_by/field"), f, "group_by")?;
         }
         // `where` is one condition or a list that must all match.
         match map.get("where") {
             Some(Value::Array(conds)) => {
                 for (i, w) in conds.iter().enumerate() {
                     if let Some(f) = w["field"].as_str() {
-                        self.bindable(&format!("{at}/where/{i}/field"), def, f, "where")?;
+                        bindable(&format!("{at}/where/{i}/field"), f, "where")?;
                     }
                 }
             }
             Some(w) => {
                 if let Some(f) = w["field"].as_str() {
-                    self.bindable(&format!("{at}/where/field"), def, f, "where")?;
+                    bindable(&format!("{at}/where/field"), f, "where")?;
                 }
             }
             None => {}
@@ -282,7 +324,7 @@ impl<'a> Checker<'a> {
         &self,
         map: &Map<String, Value>,
         at: &str,
-        item: Option<&'a Definition>,
+        item: Rows<'_, 'a>,
     ) -> Result<(), LayoutError> {
         let s = |k: &str| map.get(k).and_then(Value::as_str);
         // An action's endpoint: the mutation's field is only a view flag.
@@ -314,35 +356,40 @@ impl<'a> Checker<'a> {
             }
             return Ok(());
         }
-        let target = match s("entity_uri") {
-            Some(u) if collection_of_uri(u).is_some() => Some(self.def(
-                &format!("{at}/entity_uri"),
-                collection_of_uri(u).unwrap_or(""),
-            )?),
+        let named;
+        let target: Rows<'_, 'a> = match s("entity_uri") {
+            Some(u) if collection_of_uri(u).is_some() => {
+                named = [self.def(
+                    &format!("{at}/entity_uri"),
+                    collection_of_uri(u).unwrap_or(""),
+                )?];
+                Some(&named)
+            }
             Some(u) if u.trim() == "$item.uri" => item,
             _ => None,
+        };
+        let writable = |defs: &[&'a Definition], at: &str, f: &str, what: &str| {
+            Self::any(defs, |def| self.writable(at, def, f, what))
+        };
+        let bindable = |defs: &[&'a Definition], at: &str, f: &str, what: &str| {
+            Self::any(defs, |def| self.bindable(at, def, f, what))
         };
         match s("intent").unwrap_or("") {
             "action.mutation.optimistic" => {
                 if let Some(def) = target {
                     if let Some(f) = s("field") {
-                        self.writable(&format!("{at}/field"), def, f, "the mutation")?;
+                        writable(def, &format!("{at}/field"), f, "the mutation")?;
                     }
                     if let Some(also) = map.get("also").and_then(Value::as_array) {
                         for (i, a) in also.iter().enumerate() {
                             if let Some(f) = a["field"].as_str() {
-                                self.writable(
-                                    &format!("{at}/also/{i}/field"),
-                                    def,
-                                    f,
-                                    "the mutation",
-                                )?;
+                                writable(def, &format!("{at}/also/{i}/field"), f, "the mutation")?;
                             }
                             for n in names_after(a["value_expr"].as_str().unwrap_or(""), "entity.")
                             {
-                                self.bindable(
-                                    &format!("{at}/also/{i}/value_expr"),
+                                bindable(
                                     def,
+                                    &format!("{at}/also/{i}/value_expr"),
                                     n,
                                     "the expression",
                                 )?;
@@ -350,7 +397,7 @@ impl<'a> Checker<'a> {
                         }
                     }
                     for n in names_after(s("value_expr").unwrap_or(""), "entity.") {
-                        self.bindable(&format!("{at}/value_expr"), def, n, "the expression")?;
+                        bindable(def, &format!("{at}/value_expr"), n, "the expression")?;
                     }
                 }
             }
@@ -359,9 +406,9 @@ impl<'a> Checker<'a> {
                     (target, map.get("entity").and_then(Value::as_object))
                 {
                     for k in entity.keys() {
-                        self.bindable(
-                            &format!("{at}/entity/{}", escape(k)),
+                        bindable(
                             def,
+                            &format!("{at}/entity/{}", escape(k)),
                             k,
                             "the new item",
                         )?;
@@ -404,11 +451,12 @@ impl<'a> Checker<'a> {
         Ok(())
     }
 
-    fn string(&self, s: &str, at: &str, item: Option<&Definition>) -> Result<(), LayoutError> {
-        if let Some(def) = item {
+    fn string(&self, s: &str, at: &str, item: Rows<'_, 'a>) -> Result<(), LayoutError> {
+        if let Some(defs) = item {
             for marker in ["$item.", "$item?."] {
                 for n in names_after(s, marker) {
-                    self.bindable(at, def, n, &format!("the binding '{marker}{n}'"))?;
+                    let what = format!("the binding '{marker}{n}'");
+                    Self::any(defs, |def| self.bindable(at, def, n, &what))?;
                 }
             }
         }
@@ -626,6 +674,40 @@ mod tests {
         assert_eq!(check(&list("done"), &[], &defs()), Ok(()));
         let e = check(&list("finished"), &[], &defs()).unwrap_err();
         assert_eq!(e.pointer, "/where/1/field");
+    }
+
+    #[test]
+    fn a_merged_list_binds_fields_of_any_of_its_collections() {
+        let mut d = defs();
+        let mut events = d["todos"].clone();
+        events.name = "events".into();
+        events.fields = vec![
+            model::parse_field(&json!({"name": "seen", "type": "bool"}), "f1".into(), 99).unwrap(),
+        ];
+        d.insert("events".into(), events);
+        let list = |template: Value, field: &str| {
+            json!({"type": "core://List", "query_key": "collection:todos",
+                "merge_query_keys": ["collection:events"], "sort_by": "title",
+                "where": [{"field": field, "equals": "false"}], "item_template": template})
+        };
+        let mark = |field: &str| {
+            json!({"type": "core://Tappable", "content": {"type": "core://Divider"},
+                "on_click": {"intent": "action.mutation.optimistic", "entity_uri": "$item.uri",
+                    "field": field, "value_expr": "!entity.seen"}})
+        };
+        let text = json!({"type": "core://Text", "value_expr": "$item.title $item.seen"});
+        assert_eq!(check(&list(text.clone(), "seen"), &[], &d), Ok(()));
+        assert_eq!(check(&list(mark("seen"), "done"), &[], &d), Ok(()));
+        let bad = json!({"type": "core://Text", "value_expr": "$item.colour"});
+        let e = check(&list(bad, "done"), &[], &d).unwrap_err();
+        assert!(e.message.contains("'$item.colour'"), "{}", e.message);
+        assert!(check(&list(mark("colour"), "done"), &[], &d).is_err());
+        assert!(check(&list(text.clone(), "colour"), &[], &d).is_err());
+        // A merged key must name a collection there is.
+        let mut missing = list(text, "done");
+        missing["merge_query_keys"] = json!(["collection:notes"]);
+        let e = check(&missing, &[], &d).unwrap_err();
+        assert_eq!(e.pointer, "/merge_query_keys/0");
     }
 
     #[test]
