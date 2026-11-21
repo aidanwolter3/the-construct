@@ -15,7 +15,7 @@ that changes it builds it without pushing, and its tests run in main's image unt
 locally, build it from a directory holding only `rust-toolchain.toml`. CI runs `scripts/check_decisions.sh`, `scripts/check_test_data.sh` (no test data in the pod binary, decision
 `data-next-to-its-code`), clippy with warnings denied, the Rust tests (with
 [cargo-nextest](https://nexte.st), which runs tests from different binaries in parallel, plus `cargo test --doc`,
-which nextest skips), a dependency advisory check (`cargo-deny`), the simulator's scenarios
+which nextest skips), a dependency advisory and sources check (`cargo-deny`; a failure also blocks the staging deploy), the simulator's scenarios
 (`scripts/sim_scenarios.sh`, screenshots uploaded as the `simulator` artifact), and a build of the Android APK
 (`scripts/android_native.sh`, uploaded as the `android-apk` artifact). The release workflow (`release.yml`) also
 builds the release APK and the Mac app on pull requests that change their build scripts.
