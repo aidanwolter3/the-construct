@@ -236,7 +236,11 @@ pieces written out several times, and row ids written into bindings.",
         summary: "colours",
         text: "Use ${local://theme#<token>} for colours, never a fixed #RRGGBB (it stays the same in dark mode; a write \
 warns about each). set_theme without arguments lists the tokens; with them it sets a token's light and dark \
-value, or adds a token of the pod's own.",
+value, or adds a token of the pod's own. A pod with areas (meals, workouts, a house) gives each one a pair, \
+<area> for its icons, tags and progress and <area>_soft for their tinted backgrounds (eat / eat_soft, move / \
+move_soft), and uses that pair on the area's screens and its tile or row on home, so an area looks the same \
+everywhere; accent stays the colour of buttons, so actions match. set_theme {scale} sets corners, paddings and \
+the title's weight.",
     },
     Topic {
         id: "actions",
