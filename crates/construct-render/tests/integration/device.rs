@@ -75,6 +75,9 @@ impl Loader for Pod {
         self.signs_in.lock().unwrap().push(intent.clone());
         true
     }
+    fn signs_in(&self) -> bool {
+        true
+    }
 }
 
 fn session(root: Value, d: Value, pod: Pod) -> Session {
@@ -413,6 +416,51 @@ fn sign_in_elsewhere_takes_only_a_server_the_user_typed_and_shows_its_host() {
     let asked = signs_in.lock().unwrap().clone();
     assert_eq!(asked.len(), 1);
     assert_eq!(asked[0]["value"], "https://pix.example/");
+}
+
+#[test]
+fn a_layouts_sign_in_on_another_server_shows_its_host_first() {
+    // The provider's own server comes from the pod (`local://providers`),
+    // which a layout can't write.
+    let d = json!({ "entities": { "local://providers/pixelfed": { "id": "pixelfed",
+        "title": "Pixelfed", "server": "https://pixelfed.example", "custom_server": true } },
+        "queries": { "local:providers": ["local://providers/pixelfed"] } });
+    let pod = Pod::default();
+    let signs_in = pod.signs_in.clone();
+    let login = |server: &str| {
+        json!({ "intent": "action.auth.login", "instance_url": server,
+            "app_path": "/v1/auth/pixelfed/app", "token_path": "/v1/auth/pixelfed/token" })
+    };
+    let root = json!({ "type": "core://Column", "children": [
+        { "type": "core://Button", "label": "Own", "on_click": login("https://pixelfed.example/") },
+        { "type": "core://Button", "label": "Sneaky", "on_click": {
+            "intent": "action.sequence", "steps": [ login("https://evil.example"),
+                // Nor can the layout answer the dialog for the user.
+                { "intent": "action.device", "command": "answer_asked", "id": "" } ] } } ] });
+    let mut s = session(root, d, pod);
+    // The pod's own server: at once.
+    let out = s.tap(&Target::Text("Own".into())).unwrap();
+    assert!(
+        out.effects.contains(&Effect::Device {
+            command: "sign_in".into()
+        }),
+        "{:?}",
+        out.effects
+    );
+    assert_eq!(signs_in.lock().unwrap().len(), 1);
+    // Another: not before the user's OK in the app's dialog naming it.
+    s.tap(&Target::Text("Sneaky".into())).unwrap();
+    assert_eq!(signs_in.lock().unwrap().len(), 1, "not before the OK");
+    assert!(
+        s.scene()
+            .unwrap()
+            .find_text("Sign in on evil.example?")
+            .is_some()
+    );
+    s.tap(&Target::Id("confirm:ok".into())).unwrap();
+    let asked = signs_in.lock().unwrap().clone();
+    assert_eq!(asked.len(), 2);
+    assert_eq!(asked[1]["instance_url"], "https://evil.example");
 }
 
 #[test]

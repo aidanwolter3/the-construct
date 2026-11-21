@@ -132,7 +132,7 @@ async fn feed_fixture_is_the_pods_feed() {
     )
     .await;
     let allow = MediaAllowlist::new([FAKE_URL], []);
-    let mut media = MediaUrls::new(PROXY, &allow);
+    let mut media = MediaUrls::new(PROXY, &allow, "test-secret");
     let normalized = normalize_timeline(timeline.as_array().unwrap(), &mut media);
     let mut data = server::pixelfed::layout::home_feed(normalized.entities, normalized.order);
     for e in data.entities.values_mut() {
@@ -202,12 +202,12 @@ async fn screen_data_fixture_is_the_pods_comments_data() {
         let allow = MediaAllowlist::new([FAKE_URL], []);
         // The post screen's data; the comments screen shows the post too.
         let raw = get(format!("/api/v1/statuses/{id}")).await;
-        let mut media = MediaUrls::new(PROXY, &allow);
+        let mut media = MediaUrls::new(PROXY, &allow, "test-secret");
         let mut post = normalize_post_screen(id, &raw, &mut media).unwrap();
         for e in post.entities.values_mut() {
             unproxy(e, &media);
         }
-        let mut media = MediaUrls::new(PROXY, &allow);
+        let mut media = MediaUrls::new(PROXY, &allow, "test-secret");
         let comments = normalize_comments(id, &context, OWN_ACCOUNT, NOW, &mut media);
         let mut bundle = post.clone();
         let mut order = Vec::new();

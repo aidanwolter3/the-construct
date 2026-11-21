@@ -16,3 +16,8 @@ field, only client drawing (it needs a new desktop and Android build).
 
 Screens of pushed layouts and of home, and a screen of another layout opened from inside a frame (home's, as the
 fallback), still cover the whole screen.
+
+Update (2026-11-21): the frame's own content stays laid out under a screen opened inside it, so a tap on the
+screen where it drew nothing tappable reached the row underneath (in Settings, a tap on a device row opened
+Appearance). The screen now lays a `cover` semantic node over its area: a hit test stops there, and the
+accessibility tree leaves out what lies under it, as it does under a scrim. Needs a new desktop and Android build.

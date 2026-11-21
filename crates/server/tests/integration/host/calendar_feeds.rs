@@ -515,3 +515,58 @@ async fn a_calendar_feed_carries_only_what_its_sources_map_and_follows_edits() {
         StatusCode::NOT_FOUND
     );
 }
+
+/// Feeds confirmed at once still stop at five, and every feed that went
+/// live is one the pod lists (so it can be revoked): the feed list isn't
+/// read by one confirm while another is saving it.
+#[tokio::test]
+async fn feeds_confirmed_at_once_keep_the_cap_and_stay_listed() {
+    let (env, _files) = public_env().await;
+    env.create("rush").await;
+    let key = mcp_key(&env, "rush").await;
+    define(
+        &env,
+        &key,
+        "focus_days",
+        json!([{ "name": "date", "type": "date" }, { "name": "area", "type": "text" }]),
+    )
+    .await;
+    add(
+        &env,
+        &key,
+        "focus_days",
+        json!({ "date": "2026-03-02", "area": "Writing" }),
+    )
+    .await;
+    let s = json!([{ "collection": "focus_days", "start": "date", "title": "{area}" }]);
+    let mut asks = Vec::new();
+    for n in 0..8 {
+        let name = format!("feed_{n}");
+        let r = tool(
+            &env,
+            &key,
+            "set_calendar_feed",
+            json!({ "name": name, "sources": s }),
+        )
+        .await;
+        asks.push(json!({ "name": name, "sources": s, "confirm": r["review_id"] }));
+    }
+    let answers = futures_util::future::join_all(
+        asks.iter()
+            .map(|a| tool(&env, &key, "set_calendar_feed", a.clone())),
+    )
+    .await;
+    let live: Vec<&Value> = answers.iter().filter(|r| r["url"].is_string()).collect();
+    assert_eq!(live.len(), 5, "{answers:?}");
+    let listed = tool(&env, &key, "list_calendar_feeds", json!({})).await;
+    let urls: Vec<&Value> = listed["feeds"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|f| &f["url"])
+        .collect();
+    assert_eq!(urls.len(), 5, "{listed}");
+    for r in live {
+        assert!(urls.contains(&&r["url"]), "{r} isn't listed: {listed}");
+    }
+}

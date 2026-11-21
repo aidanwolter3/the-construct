@@ -247,11 +247,10 @@ impl FillAgent for PodAgent {
                     web.seen.add_read(&prompt);
                     seen = Some(web.seen.clone());
                     if req.max_searches > 0 {
-                        task.tools
-                            .push(Arc::new(web_extract::tools::SearchTool::new(
-                                web.clone(),
-                                req.max_searches,
-                            )));
+                        task.tools.push(Arc::new(
+                            web_extract::tools::SearchTool::new(web.clone(), req.max_searches)
+                                .with_rows(req.current),
+                        ));
                     }
                     if req.max_fetches > 0 {
                         task.tools.push(Arc::new(web_extract::tools::FetchTool::new(

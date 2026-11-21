@@ -82,7 +82,7 @@ fn client() -> &'static crate::net::OutboundClient {
 /// time), images only, at most [`MAX_IMAGE_BYTES`].
 pub async fn proxy(url: reqwest::Url) -> Response {
     let client = client();
-    if url.port().is_some() || !client.allows(&url) {
+    if !client.allows(&url) {
         return json_error(
             StatusCode::BAD_REQUEST,
             json!({ "error": "not_a_public_url" }),

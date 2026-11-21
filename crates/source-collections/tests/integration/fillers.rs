@@ -49,6 +49,17 @@ async fn echo(State(site): State<Arc<Site>>, headers: HeaderMap) -> Response {
     r#"{"data":[{"title":"Echo"}]}"#.into_response()
 }
 
+/// Answers the request's headers back, as a debug endpoint does.
+async fn headers_page(headers: HeaderMap) -> Response {
+    let h: Map<String, Value> = headers
+        .iter()
+        .map(|(k, v)| (k.to_string(), json!(v.to_str().unwrap_or(""))))
+        .collect();
+    json!({"data": [{"title": Value::Object(h).to_string()}]})
+        .to_string()
+        .into_response()
+}
+
 /// Redirects to `/echo` on another host name for this same server.
 async fn hop(headers: HeaderMap) -> Response {
     let host = headers
@@ -147,6 +158,7 @@ async fn serve(site: Arc<Site>) -> String {
         .route("/shows/{id}", get(show_page))
         .route("/plain", get(plain_page))
         .route("/echo", get(echo))
+        .route("/headers", get(headers_page))
         .route("/hop", get(hop))
         .with_state(site);
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -684,6 +696,89 @@ async fn secrets_go_only_to_their_host() {
     plain["headers"] = json!({});
     let p = ok(&pod, "collections_preview", plain).await;
     assert_eq!(p["items"], 1, "{p}");
+}
+
+/// A host that echoes the request's headers doesn't put the secret into a
+/// preview (issue #460), nor its base64 or URL-encoded forms.
+#[tokio::test]
+async fn preview_redacts_an_echoed_secret() {
+    let site = Arc::new(Site::default());
+    let base = serve(site).await;
+    let pod = pod_with(None);
+    ok(
+        &pod,
+        "collections_set_secret",
+        json!({"name": "api_key", "value": "k3y/s3cret+value", "host": "127.0.0.1"}),
+    )
+    .await;
+    let recipe = json!({"url": format!("{base}/headers"), "extract": "json", "items": "data",
+                        "map": {"title": "title"},
+                        "headers": {"Authorization": "Bearer {secret:api_key}"}});
+    let p = ok(&pod, "collections_preview", recipe).await;
+    let text = p.to_string();
+    assert!(text.contains("authorization"), "{p}");
+    assert!(text.contains("[redacted secret]"), "{p}");
+    assert!(!text.contains("k3y/s3cret"), "{p}");
+    // Without map, the sample items are scrubbed too.
+    let sample = ok(
+        &pod,
+        "collections_preview",
+        json!({"url": format!("{base}/headers"),
+        "extract": "json", "items": "data",
+        "headers": {"Authorization": "Bearer {secret:api_key}"}}),
+    )
+    .await;
+    assert!(!sample.to_string().contains("s3cret"), "{sample}");
+}
+
+/// A filler's fills scrub an echoed secret too, not only the preview: on
+/// its one URL and on each row's own page (issue #460).
+#[tokio::test]
+async fn fills_redact_an_echoed_secret() {
+    let site = Arc::new(Site::default());
+    let base = serve(site).await;
+    let pod = pod_with(None);
+    ok(
+        &pod,
+        "collections_set_secret",
+        json!({"name": "api_key", "value": "k3y/s3cret+value", "host": "127.0.0.1"}),
+    )
+    .await;
+    let headers = json!({"Authorization": "Bearer {secret:api_key}"});
+    ok(&pod, "define_collection", json!({"name": "echoed", "fields": [{"name": "title", "type": "text", "optional": true}],
+        "fillers": [{"kind": "fetch", "url": format!("{base}/headers"), "extract": "json", "items": "data",
+                     "map": {"title": "title"}, "headers": headers}]})).await;
+    settle(&pod, "echoed").await;
+    ok(&pod, "collections_refresh", json!({"collection": "echoed"})).await;
+    let got = rows(&pod, "echoed").await;
+    let text = got[0]["title"].as_str().unwrap();
+    assert!(text.contains("authorization"), "{got:?}");
+    assert!(text.contains("[redacted secret]"), "{got:?}");
+    assert!(!text.contains("s3cret"), "{got:?}");
+
+    ok(
+        &pod,
+        "define_collection",
+        json!({"name": "per_row", "fields": [
+            {"name": "page", "type": "text"}, {"name": "title", "type": "text", "optional": true}],
+        "fillers": [{"kind": "fetch", "url_field": "page", "extract": "json", "items": "data",
+                     "map": {"title": "title"}, "headers": headers}]}),
+    )
+    .await;
+    ok(
+        &pod,
+        "add_row",
+        json!({"collection": "per_row", "values": {"page": format!("{base}/headers")}}),
+    )
+    .await;
+    settle(&pod, "per_row").await;
+    let filler = filler_ids(&pod, "per_row").await.remove(0);
+    let out = fill::fill(&pod, "per_row", &filler, true).await;
+    assert!(matches!(out, Outcome::Filled { .. }), "{out:?}");
+    let got = rows(&pod, "per_row").await;
+    let text = got[0]["title"].as_str().unwrap_or_default();
+    assert!(text.contains("[redacted secret]"), "{got:?}");
+    assert!(!text.contains("s3cret"), "{got:?}");
 }
 
 /// A secret is sent only over https: a recipe can't send it in the clear,

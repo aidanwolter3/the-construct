@@ -25,7 +25,7 @@ use crate::cpu::CpuRenderer;
 use crate::layout::{
     Input, Laid, NO_PANELS, Panel, Panels, Pressed, RenderError, SceneBuilder, Viewport, panel_id,
 };
-use crate::scene::{Draw, QuadInstance, Scene, SemanticNode, Tap};
+use crate::scene::{COVER, Draw, QuadInstance, Scene, SemanticNode, Tap};
 use crate::style::Rgba;
 
 mod media;
@@ -607,6 +607,11 @@ pub trait Loader: Send {
     fn auth(&self, _intent: &Value) -> bool {
         false
     }
+    /// Whether [`Loader::auth`] can start a sign-in at all (so a tap that
+    /// can't isn't asked about first).
+    fn signs_in(&self) -> bool {
+        false
+    }
     /// One of the platform's own servers (`set_server`, `local:servers`)
     /// by id: its url, and whether it is the one open now. `None` when the
     /// platform offers no such server.
@@ -765,6 +770,10 @@ struct Prepared {
 /// A live layout.
 pub struct Session {
     stack: Vec<Entry>,
+    /// Whether the intent being run came from the user's own gesture on the
+    /// edit menu (or the platform keyboard), not from a layout: only then may
+    /// it read or write the clipboard (`edit.paste`, `edit.copy`, `edit.cut`).
+    clipboard_ok: bool,
     /// The device command waiting for the user's OK in the app's own
     /// dialog ([`Session::ask_device`]), with the nonce its OK carries.
     asked: Option<(String, Asked)>,
@@ -1010,6 +1019,7 @@ impl Session {
             pressed: None,
             hovered: None,
             prepared: None,
+            clipboard_ok: false,
             merges: 0,
             scenes_built: 0,
             spin_from: Instant::now(),
@@ -1893,6 +1903,7 @@ impl Session {
                 // Back in its place, where the next card of a deck shows.
                 let ti = self.top_index();
                 self.stack[ti].scroll.remove(&format!("card:{id}"));
+                self.clipboard_ok = false;
                 let mut effects = Vec::new();
                 match self.bind_form(&intent) {
                     Some(bound) => self.run(&bound, &mut effects),
@@ -2932,6 +2943,20 @@ impl Session {
                 let mut q = QuadInstance::fill(r, theme.background, 0.0);
                 q.clip = frame_now;
                 scene.draws.push(Draw::Quad(q));
+                // It covers the frame's own content, which stays laid out
+                // under it: a tap on the screen must not reach that.
+                scene.semantics.push(SemanticNode {
+                    id: "frame_cover".into(),
+                    node_type: COVER.into(),
+                    bounds: r,
+                    text_content: None,
+                    interactive: false,
+                    tap: None,
+                    selected: false,
+                    parent: None,
+                    gestures: BTreeMap::new(),
+                    hint: None,
+                });
                 laid.emit_into(&mut scene, &e.scroll, (r[0], r[1]), frame_now, pressed);
                 continue;
             }
@@ -3439,6 +3464,7 @@ impl Session {
         // Only opened or closed a layout or screen: what is laid out stays.
         let mut moved_only = false;
         let menu = node.node_type == "menu";
+        self.clipboard_ok = menu;
         if !menu {
             self.focused = None;
         }
@@ -3545,6 +3571,9 @@ impl Session {
         let mut effects = Vec::new();
         let (focused, merges) = (self.focused.clone(), self.merges);
         let mut moved_only = false;
+        // Callers of `dispatch` are the platform (keyboard, notifications),
+        // never a layout's tap.
+        self.clipboard_ok = true;
         match self.bind_form(intent) {
             Some(bound) => {
                 self.run(&bound, &mut effects);
@@ -3552,6 +3581,7 @@ impl Session {
             }
             None => effects.push(Effect::Nothing),
         }
+        self.clipboard_ok = false;
         // System Back closing a screen: what is under it stays laid out.
         self.relay_unless(moved_only && self.focused == focused);
         Ok(Outcome {
@@ -3694,6 +3724,7 @@ impl Session {
             });
         };
         let mut effects = Vec::new();
+        self.clipboard_ok = false;
         match self.bind_form(&node.gestures[kind]) {
             Some(bound) => self.run(&bound, &mut effects),
             None => effects.push(Effect::Nothing),
@@ -3772,6 +3803,11 @@ impl Session {
                     fields,
                 });
             }
+            // The clipboard is the user's: a layout's button can't read it
+            // into a field or overwrite it (security audit, #459).
+            "edit.paste" | "edit.copy" | "edit.cut" if !self.clipboard_ok => {
+                out.push(Effect::Nothing);
+            }
             "edit.paste" => {
                 if let Some(f) = self.edit.as_ref().map(|e| e.field.clone()) {
                     self.focused = Some(f.clone());
@@ -3814,17 +3850,7 @@ impl Session {
             }
             "action.mutation.optimistic" => self.optimistic(intent, out),
             "action.auth.session" => self.open_session(intent, out),
-            "action.auth.login" => {
-                if self.loader.as_ref().is_some_and(|l| l.auth(intent)) {
-                    out.push(Effect::Device {
-                        command: "sign_in".into(),
-                    });
-                } else {
-                    out.push(Effect::NotSent {
-                        intent: intent.clone(),
-                    });
-                }
-            }
+            "action.auth.login" => self.login(intent, out),
             "action.mutation.create" => self.create(intent, out),
             "action.link.open" => {
                 let url = intent["url"].as_str().unwrap_or("").trim();
@@ -4398,6 +4424,44 @@ impl Session {
             return;
         }
         let host = host_of(&server);
+        let message = format!("Your browser opens {host} to sign in.");
+        self.ask_device(
+            &format!("Sign in on {host}?"),
+            &message,
+            "Continue",
+            Asked::SignIn(intent.clone()),
+            out,
+        );
+    }
+
+    /// `action.auth.login`: on the pod's own server for a sign-in (its
+    /// provider's, `local://providers`) at once; on any other server only
+    /// once the user has seen its host in the app's own dialog, as for
+    /// `sign_in` elsewhere, so a layout can't send the browser to a sign-in
+    /// page of its choosing by sending this intent itself.
+    fn login(&mut self, intent: &Value, out: &mut Vec<Effect>) {
+        let server = intent["instance_url"].as_str().unwrap_or("").trim();
+        let own = server.is_empty()
+            || self
+                .data
+                .entities
+                .range("local://providers/".to_owned()..)
+                .take_while(|(uri, _)| uri.starts_with("local://providers/"))
+                .filter_map(|(_, p)| p.get_str("server"))
+                .any(|s| same_server(s, server));
+        if own || !self.loader.as_ref().is_some_and(|l| l.signs_in()) {
+            if self.loader.as_ref().is_some_and(|l| l.auth(intent)) {
+                out.push(Effect::Device {
+                    command: "sign_in".into(),
+                });
+            } else {
+                out.push(Effect::NotSent {
+                    intent: intent.clone(),
+                });
+            }
+            return;
+        }
+        let host = host_of(server);
         let message = format!("Your browser opens {host} to sign in.");
         self.ask_device(
             &format!("Sign in on {host}?"),
@@ -5067,6 +5131,14 @@ enum Asked {
 
 /// The host of a server the user typed (`https://pix.example/x` →
 /// `pix.example`), for the dialog before signing in there.
+/// Whether two server URLs name one server: ignoring case and a trailing
+/// `/`.
+fn same_server(a: &str, b: &str) -> bool {
+    a.trim()
+        .trim_end_matches('/')
+        .eq_ignore_ascii_case(b.trim().trim_end_matches('/'))
+}
+
 fn host_of(server: &str) -> String {
     let rest = server.split_once("://").map_or(server, |(_, rest)| rest);
     let host = rest.split(['/', '?', '#']).next().unwrap_or(rest);
@@ -5332,6 +5404,28 @@ mod tests {
         assert!(shown.contains(&"Sage".to_owned()));
         assert_eq!(s.take_work().data_changes, 1);
         assert!(!s.animating());
+    }
+
+    #[test]
+    fn the_clipboard_is_the_users_not_a_layouts() {
+        let root: UiNode = serde_json::from_value(json!({ "type": "core://Column", "children": [
+            { "type": "core://TextField", "field": "f", "placeholder": "F" } ] }))
+        .unwrap();
+        let mut s = Session::new("home", root, DataBundle::default(), Viewport::PHONE);
+        s.focus_at("f", 20.0, 20.0, false);
+        let paste = json!({ "intent": "edit.paste" });
+        let copy = json!({ "intent": "edit.copy" });
+        // Run as a layout's tap or gesture would: nothing is read or written.
+        for intent in [&paste, &copy] {
+            let mut out = Vec::new();
+            s.run(intent, &mut out);
+            assert_eq!(out, vec![Effect::Nothing], "{intent}");
+        }
+        // The edit menu's own tap, or the platform keyboard's, may.
+        s.clipboard_ok = true;
+        let mut out = Vec::new();
+        s.run(&paste, &mut out);
+        assert_eq!(out, vec![Effect::Paste { field: "f".into() }]);
     }
 
     #[test]

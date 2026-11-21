@@ -181,6 +181,9 @@ pub struct HostConfig {
     /// `CONSTRUCT_OPEN_POD=<name>`: callers without a valid token use this
     /// pod (created if missing). Development and tests only.
     pub open_pod: Option<String>,
+    /// The open pod also answers any IP-literal `Host`, not only loopback
+    /// and the emulator's alias: `CONSTRUCT_INSECURE_OPEN_POD_ON_NETWORK=1`.
+    pub open_pod_any_ip: bool,
     pub temporary: Option<TemporaryPods>,
     /// Extra settings for temporary pods (anyone can make one), e.g. keeping
     /// an adapter from contacting hosts the visitor picks.
@@ -248,6 +251,7 @@ impl HostConfig {
                     .unwrap_or(50),
             });
         Self {
+            open_pod_any_ip: false,
             // `off` locks even a loopback server (see the binary's default).
             open_pod: var("CONSTRUCT_OPEN_POD").filter(|v| v != "off"),
             temporary,
@@ -256,7 +260,7 @@ impl HostConfig {
             storage: StorageLimits::from_env(),
             streams: streams::StreamLimits::from_env(),
             hsts: var("FLY_APP_NAME").is_some(),
-            public_url: var("CONSTRUCT_PUBLIC_URL"),
+            public_url: pod_core::public_url_from_env(),
             android: app_links::AndroidAppLinks::from_env(),
             oauth_client: oauth::StaticClient::from_env(),
             web: web::WebConfig::from_env(),
@@ -845,6 +849,11 @@ impl Host {
             Ok(n) => tracing::info!(count = n, "idle MCP credentials deleted"),
             Err(e) => tracing::error!(error = %e, "sweep: cannot delete idle MCP credentials"),
         }
+        match self.store.delete_expired_web() {
+            Ok(0) => {}
+            Ok(n) => tracing::info!(count = n, "expired web credentials deleted"),
+            Err(e) => tracing::error!(error = %e, "sweep: cannot delete expired web credentials"),
+        }
         let expired = match self.store.expired_pods() {
             Ok(p) => p,
             Err(e) => {
@@ -1253,13 +1262,17 @@ async fn security_headers(State(hsts): State<bool>, mut resp: Response) -> Respo
     resp
 }
 
+/// The Android emulator's alias for the machine running it.
+const EMULATOR_ALIAS: std::net::Ipv4Addr = std::net::Ipv4Addr::new(10, 0, 2, 2);
+
 /// Whether a request may use the open pod: its `Host` (or HTTP/2
-/// authority) must be `localhost`, a `*.localhost` name or an IP literal
-/// (`127.0.0.1`, `[::1]`, the emulator's `10.0.2.2`, a LAN address), any
-/// port. A DNS-rebinding page always sends its own domain name, so it never
-/// passes; a request without a Host (HTTP/1.0, in-process tests) does not
-/// come from a browser and passes.
-pub fn open_pod_host_allowed(headers: &HeaderMap, uri: &Uri) -> bool {
+/// authority) must be loopback (`localhost`, a `*.localhost` name,
+/// `127.0.0.0/8`, `[::1]`) or the emulator's `10.0.2.2`, any port; with
+/// `any_ip` (the explicit network opt-in) any IP literal. A DNS-rebinding
+/// page always sends its own domain name, so it never passes; a request
+/// without a Host (HTTP/1.0, in-process tests) does not come from a browser
+/// and passes.
+pub fn open_pod_host_allowed(headers: &HeaderMap, uri: &Uri, any_ip: bool) -> bool {
     let host = match headers.get(header::HOST) {
         Some(v) => match v.to_str() {
             Ok(v) => v.trim().to_owned(),
@@ -1278,7 +1291,9 @@ pub fn open_pod_host_allowed(headers: &HeaderMap, uri: &Uri) -> bool {
         if !(port.is_empty() || port.strip_prefix(':').is_some_and(valid_port)) {
             return false;
         }
-        return v6.parse::<std::net::Ipv6Addr>().is_ok();
+        return v6
+            .parse::<std::net::Ipv6Addr>()
+            .is_ok_and(|a| any_ip || a.is_loopback());
     } else {
         match host.rsplit_once(':') {
             Some((name, port)) if valid_port(port) => name,
@@ -1289,7 +1304,37 @@ pub fn open_pod_host_allowed(headers: &HeaderMap, uri: &Uri) -> bool {
     let name = name.strip_suffix('.').unwrap_or(name).to_ascii_lowercase();
     name == "localhost"
         || name.ends_with(".localhost")
-        || name.parse::<std::net::Ipv4Addr>().is_ok()
+        || name
+            .parse::<std::net::Ipv4Addr>()
+            .is_ok_and(|a| any_ip || a.is_loopback() || a == EMULATOR_ALIAS)
+}
+
+/// Whether a write to the open pod comes from another site: a browser tells
+/// us with `Sec-Fetch-Site` (anything but `same-origin` or `none`) or with
+/// an `Origin` that is not the `Host` it asked. Native clients and curl send
+/// neither. Reads are not checked (a cross-site page can't read the answer).
+fn cross_site_write(headers: &HeaderMap, method: &Method) -> bool {
+    if matches!(*method, Method::GET | Method::HEAD | Method::OPTIONS) {
+        return false;
+    }
+    if let Some(site) = headers.get("sec-fetch-site").and_then(|v| v.to_str().ok())
+        && !matches!(site, "same-origin" | "none")
+    {
+        return true;
+    }
+    let Some(origin) = headers.get(header::ORIGIN) else {
+        return false;
+    };
+    let origin_host = origin
+        .to_str()
+        .ok()
+        .and_then(|o| o.split_once("://"))
+        .map(|(_, h)| h.trim_end_matches('/'));
+    let host = headers.get(header::HOST).and_then(|v| v.to_str().ok());
+    match (origin_host, host) {
+        (Some(o), Some(h)) => !o.eq_ignore_ascii_case(h.trim()),
+        _ => true,
+    }
 }
 
 fn valid_port(p: &str) -> bool {
@@ -1397,6 +1442,13 @@ fn set_prefix(headers: &mut HeaderMap, pod_id: &str) {
     }
 }
 
+/// Drops the headers only the host (or the pod itself) may set, from a
+/// request that came in from outside.
+fn strip_host_headers(headers: &mut axum::http::HeaderMap) {
+    headers.remove(pod_core::CREDENTIAL_HEADER);
+    headers.remove(pod_core::session::INTERNAL_HEADER);
+}
+
 /// Every request that is not the host's: to the bearer's pod (or the open
 /// pod), else the answer for a caller without a pod.
 async fn dispatch(State(host): State<Arc<Host>>, mut req: Request) -> Response {
@@ -1406,8 +1458,7 @@ async fn dispatch(State(host): State<Arc<Host>>, mut req: Request) -> Response {
         return r;
     }
     // Headers only the host (or the pod itself) may set.
-    req.headers_mut().remove(pod_core::CREDENTIAL_HEADER);
-    req.headers_mut().remove(pod_core::session::INTERNAL_HEADER);
+    strip_host_headers(req.headers_mut());
     let mut token = bearer(req.headers()).map(str::to_owned);
     // The web client's session cookie (decision `web-client`): taken only
     // with the web client on, from the web client, and only as a `web`
@@ -1469,14 +1520,38 @@ async fn dispatch(State(host): State<Arc<Host>>, mut req: Request) -> Response {
         None if is_mcp => return oauth::mcp_unauthorized(&host, req.headers()),
         None => None,
     };
+    // A bearer that opens nothing is refused, not quietly given the open
+    // pod (a stale cookie still falls back: the web client has no other way
+    // to sign out).
+    if found.is_none() && token.is_some() && !from_cookie && host.open_pod_id.get().is_some() {
+        metrics::inc(metrics::AUTH_FAILURES, &[("kind", "unknown_token")]);
+        let mut r = json_error(
+            StatusCode::UNAUTHORIZED,
+            json!({ "error": "invalid_token" }),
+        );
+        r.headers_mut()
+            .insert(SESSION_HEADER, HeaderValue::from_static("invalid"));
+        return r;
+    }
     let pod_id = match (found, host.open_pod_id.get()) {
         (Some(id), _) => id,
-        (None, Some(open)) if open_pod_host_allowed(req.headers(), req.uri()) => open.clone(),
+        (None, Some(_)) if cross_site_write(req.headers(), req.method()) => {
+            metrics::inc(metrics::AUTH_FAILURES, &[("kind", "open_pod_cross_site")]);
+            return json_error(
+                StatusCode::FORBIDDEN,
+                json!({ "error": "cross_site_not_allowed" }),
+            );
+        }
+        (None, Some(open))
+            if open_pod_host_allowed(req.headers(), req.uri(), host.config.open_pod_any_ip) =>
+        {
+            open.clone()
+        }
         (None, Some(_)) => {
             // A DNS-rebinding page names its own domain: no open pod for it.
             tracing::warn!(
                 host = ?req.headers().get(header::HOST),
-                "open pod refused for a Host that is not localhost or an IP address"
+                "open pod refused for a Host that is not loopback"
             );
             metrics::inc(metrics::AUTH_FAILURES, &[("kind", "open_pod_host")]);
             return json_error(
@@ -1823,7 +1898,7 @@ async fn public_route(
     // The host route's path parameters must not reach the pod's router.
     req.extensions_mut().clear();
     req.headers_mut().remove(header::AUTHORIZATION);
-    req.headers_mut().remove(pod_core::CREDENTIAL_HEADER);
+    strip_host_headers(req.headers_mut());
     set_prefix(req.headers_mut(), &pod_id);
     forward(&host, &open, &pod_id, keys, req).await
 }
@@ -1831,6 +1906,20 @@ async fn public_route(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn host_only_headers_are_stripped_from_outside_requests() {
+        let mut h = axum::http::HeaderMap::new();
+        h.insert(pod_core::CREDENTIAL_HEADER, "x".parse().unwrap());
+        h.insert(
+            pod_core::session::INTERNAL_HEADER,
+            "x:full:me".parse().unwrap(),
+        );
+        h.insert("x-other", "kept".parse().unwrap());
+        strip_host_headers(&mut h);
+        assert_eq!(h.len(), 1);
+        assert!(h.contains_key("x-other"));
+    }
 
     /// A route's own headers (an upload's `sandbox` CSP) are kept.
     #[tokio::test]
@@ -1848,6 +1937,57 @@ mod tests {
         assert_eq!(h.get_all(header::CONTENT_SECURITY_POLICY).iter().count(), 1);
     }
 
+    /// The network opt-in lets any IP literal through, still not names.
+    #[test]
+    fn open_pod_hosts_any_ip() {
+        let check = |host: &str| {
+            let mut h = HeaderMap::new();
+            h.insert(header::HOST, HeaderValue::from_str(host).unwrap());
+            open_pod_host_allowed(&h, &"/".parse().unwrap(), true)
+        };
+        assert!(check("192.168.1.20:8080"));
+        assert!(check("[2001:db8::1]:8080"));
+        assert!(!check("evil.example"));
+    }
+
+    /// A browser's cross-site write is refused; native clients send neither header.
+    #[test]
+    fn cross_site_writes() {
+        let check = |method: Method, pairs: &[(&str, &str)]| {
+            let mut h = HeaderMap::new();
+            for (k, v) in pairs {
+                h.insert(
+                    axum::http::HeaderName::from_bytes(k.as_bytes()).unwrap(),
+                    HeaderValue::from_str(v).unwrap(),
+                );
+            }
+            cross_site_write(&h, &method)
+        };
+        let host = ("host", "127.0.0.1:8080");
+        assert!(!check(Method::POST, &[host]));
+        assert!(!check(
+            Method::POST,
+            &[host, ("sec-fetch-site", "same-origin")]
+        ));
+        assert!(!check(
+            Method::POST,
+            &[host, ("origin", "http://127.0.0.1:8080")]
+        ));
+        assert!(check(
+            Method::POST,
+            &[host, ("sec-fetch-site", "cross-site")]
+        ));
+        assert!(check(
+            Method::PUT,
+            &[host, ("origin", "https://evil.example")]
+        ));
+        assert!(check(Method::POST, &[host, ("origin", "null")]));
+        assert!(!check(
+            Method::GET,
+            &[host, ("sec-fetch-site", "cross-site")]
+        ));
+    }
+
     /// Security audit #31 (L1): only names a DNS-rebinding page can't send.
     #[test]
     fn open_pod_hosts() {
@@ -1856,7 +1996,7 @@ mod tests {
             if let Some(v) = host {
                 h.insert(header::HOST, HeaderValue::from_str(v).unwrap());
             }
-            open_pod_host_allowed(&h, &uri.parse().unwrap())
+            open_pod_host_allowed(&h, &uri.parse().unwrap(), false)
         };
         for ok in [
             "localhost",
@@ -1866,7 +2006,7 @@ mod tests {
             "127.0.0.1",
             "127.0.0.1:8080",
             "10.0.2.2:8080",
-            "192.168.1.20:8080",
+            "127.1.2.3:8080",
             "[::1]",
             "[::1]:8080",
         ] {
@@ -1877,6 +2017,9 @@ mod tests {
             "evil.example:8080",
             "localhost.evil.example",
             "127.0.0.1.nip.io:8080",
+            "192.168.1.20:8080",
+            "8.8.8.8",
+            "[2001:db8::1]:8080",
             "localhost:80x",
             "[::1]x",
             "[nope]:8080",

@@ -1072,9 +1072,13 @@ fn review_texts(copy: &Value) -> (Vec<String>, Vec<String>) {
     (texts.into_iter().collect(), urls.into_iter().collect())
 }
 
-/// The review id of a copy: what `confirm` must repeat.
-fn review_id(copy: &Value) -> String {
-    let h = Sha256::digest(copy.to_string().as_bytes());
+/// The review id of a copy and how it is shared: what `confirm` must
+/// repeat. It covers the ask (rows, item, params, leave_out and
+/// `new_rows`) and the slug as well as the copy, so a confirm can't change
+/// what the review said, e.g. let new rows out without a review.
+fn review_id(copy: &Value, ask: &Ask, slug: Option<&str>) -> String {
+    let all = json!({ "copy": copy, "key": ask.key(), "slug": slug });
+    let h = Sha256::digest(all.to_string().as_bytes());
     format!("review-{}", crate::util::hex(&h[..8]))
 }
 
@@ -1390,13 +1394,21 @@ fn answer(c: &PublicCopy, base: Option<&str>, handle: Option<&str>) -> Value {
     let ask = Ask::from_key(&c.layout, &c.rows);
     let mut out = json!({
         "link": c.link,
-        "url": url(format!("/s/{}", c.link)),
         "layout": c.layout,
         "rows": ask.rows,
         "title": c.title,
         "updated_at": c.updated_at,
         "revoked": c.revoked_at.is_some(),
     });
+    // The host keeps only a hash of a link (decision `link-tokens-hashed`):
+    // its url is known when the link is made, not afterwards.
+    if is_link(&c.link) {
+        out["url"] = json!(url(format!("/s/{}", c.link)));
+    } else if c.revoked_at.is_none() {
+        out["url_note"] = json!(
+            "the url was shown when this link was made and the server doesn't keep it; unshare_publicly takes this link id, and sharing again makes a new url"
+        );
+    }
     if let Some(i) = ask.item {
         out["item"] = json!(i);
     }
@@ -1459,10 +1471,8 @@ pub fn tool_specs() -> Vec<Value> {
 /// The base URL visitors use: the host's chosen one (`CONSTRUCT_PUBLIC_URL`),
 /// else the MCP request's.
 pub fn base_url(headers: &HeaderMap) -> Option<String> {
-    if let Ok(u) = std::env::var("CONSTRUCT_PUBLIC_URL")
-        && !u.trim().is_empty()
-    {
-        return Some(u.trim().to_owned());
+    if let Some(u) = crate::public_url_from_env() {
+        return Some(u);
     }
     let host = headers.get("host")?.to_str().ok()?;
     let https = headers
@@ -1599,7 +1609,7 @@ async fn share(
         }
     }
     let made = make(pod, &ask).await?;
-    let id = review_id(&made.copy);
+    let id = review_id(&made.copy, &ask, slug);
     if args["confirm"].as_str() != Some(id.as_str()) {
         let entities = made.copy["data"]["entities"].as_object();
         let real = |u: &&String| !u.starts_with("core://");
@@ -2005,7 +2015,25 @@ mod tests {
         );
         assert!(texts.contains(&"Lentil soup".to_owned()) && !texts.contains(&"Body".to_owned()));
         assert_eq!(urls, vec!["https://img.example/a.png".to_owned()]);
-        assert_eq!(review_id(&copy), review_id(&copy.clone()));
+        let ask = Ask::default();
+        assert_eq!(
+            review_id(&copy, &ask, None),
+            review_id(&copy.clone(), &ask, None)
+        );
+        let publish = Ask {
+            publish_new_rows: true,
+            ..Ask::default()
+        };
+        assert_ne!(
+            review_id(&copy, &ask, None),
+            review_id(&copy, &publish, None),
+            "new_rows is part of the review"
+        );
+        assert_ne!(
+            review_id(&copy, &ask, None),
+            review_id(&copy, &ask, Some("recipes")),
+            "so is the slug"
+        );
     }
 
     /// The made-up recipe screen of the issue: it reads `$route.id`, its

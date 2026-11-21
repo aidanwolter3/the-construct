@@ -291,6 +291,71 @@ pub struct Resolved {
     /// A secret is in them: send with
     /// [`crate::CollectionsAdapter::secret_fetch_client`].
     pub has_secret: bool,
+    /// What to scrub from an answer: each secret's value and each header
+    /// value it went into (see [`redact`]).
+    pub sensitive: Vec<String>,
+}
+
+const REDACTED: &str = "[redacted secret]";
+
+fn b64(bytes: &[u8], alphabet: &[u8; 64], pad: bool) -> String {
+    let mut out = String::new();
+    for c in bytes.chunks(3) {
+        let n = (u32::from(c[0]) << 16)
+            | (u32::from(*c.get(1).unwrap_or(&0)) << 8)
+            | u32::from(*c.get(2).unwrap_or(&0));
+        for i in 0..=c.len() {
+            out.push(alphabet[((n >> (18 - 6 * i)) & 63) as usize] as char);
+        }
+        if pad {
+            for _ in c.len()..3 {
+                out.push('=');
+            }
+        }
+    }
+    out
+}
+
+fn forms(v: &str) -> Vec<String> {
+    const STD: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    const URL: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+    let mut pct = String::new();
+    for b in v.bytes() {
+        if b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.' | b'~') {
+            pct.push(b as char);
+        } else {
+            pct.push_str(&format!("%{b:02X}"));
+        }
+    }
+    let json = serde_json::to_string(v).unwrap_or_default();
+    let mut out = vec![
+        v.to_owned(),
+        pct,
+        json.trim_matches('"').to_owned(),
+        b64(v.as_bytes(), STD, true),
+        b64(v.as_bytes(), STD, false),
+        b64(v.as_bytes(), URL, true),
+        b64(v.as_bytes(), URL, false),
+    ];
+    out.retain(|f| !f.is_empty());
+    out.dedup();
+    out
+}
+
+/// `text` with every secret the request carried, and its common encodings
+/// (base64, URL-encoded, JSON-escaped), replaced by a marker: a host that
+/// echoes the request's headers must not put the key in Claude's context
+/// (issue #460). Longest first, so a header value goes before the secret
+/// inside it.
+pub fn redact(text: &str, sensitive: &[String]) -> String {
+    let mut all: Vec<String> = sensitive.iter().flat_map(|v| forms(v)).collect();
+    all.sort_by_key(|f| std::cmp::Reverse(f.len()));
+    all.dedup();
+    let mut out = text.to_owned();
+    for f in all {
+        out = out.replace(&f, REDACTED);
+    }
+    out
 }
 
 /// `headers` for a request to `url`, with each `{secret:<name>}` replaced
@@ -356,6 +421,12 @@ fn resolve_headers(
                 })?;
             value = value.replace(&format!("{{secret:{name}}}"), &plain);
             out.has_secret = true;
+            if !plain.is_empty() {
+                out.sensitive.push(plain);
+            }
+        }
+        if value != *v {
+            out.sensitive.push(value.clone());
         }
         out.headers.push((k.clone(), value));
     }
@@ -1592,7 +1663,7 @@ async fn run_fetch(
         } else {
             adapter.fetch_client()
         };
-        web_extract::hosts::fetch(
+        let fetched = web_extract::hosts::fetch(
             &hosts(pod),
             client,
             &u,
@@ -1600,7 +1671,22 @@ async fn run_fetch(
             lm.as_deref(),
             &resolved.headers,
         )
-        .await
+        .await?;
+        // A host that echoes the request's headers would put the secret
+        // into the rows (and a model's prompt): scrub it before anything is
+        // extracted, as the preview does (issue #460).
+        Ok(match fetched {
+            web_extract::fetch::Fetched::Body {
+                bytes,
+                etag,
+                last_modified,
+            } if !resolved.sensitive.is_empty() => web_extract::fetch::Fetched::Body {
+                bytes: redact(&String::from_utf8_lossy(&bytes), &resolved.sensitive).into_bytes(),
+                etag,
+                last_modified,
+            },
+            other => other,
+        })
     };
     // One page's rows (by field id).
     let read = |body: String, page: String, day: String| {

@@ -171,6 +171,11 @@ pub struct AppState {
     /// This pod's id on its host and the host's shelf of publications
     /// (decision `sharing`); unset: the pod can't share.
     shelf: std::sync::OnceLock<(String, Arc<dyn construct::share::Shelf>)>,
+    /// One change at a time to what the pod shares (calendar feeds,
+    /// publications): their caps are counted before the write, so two at
+    /// once could both pass, and a feed list saved by one would drop the
+    /// other's feed while its copy stays live.
+    pub(crate) sharing: tokio::sync::Mutex<()>,
 }
 
 /// Request header a pod host sets on a request whose bearer was an MCP
@@ -252,6 +257,7 @@ impl AppState {
                 util::hex(&buf)
             },
             shelf: std::sync::OnceLock::new(),
+            sharing: tokio::sync::Mutex::new(()),
         })
     }
 
@@ -1097,5 +1103,46 @@ mod scope_tests {
             })
             .is_none()
         );
+    }
+}
+
+/// The server's public base URL from the environment: `CONSTRUCT_PUBLIC_URL`
+/// (trailing `/` dropped), else on Fly (`FLY_APP_NAME`) `https://<app>.fly.dev`.
+/// Behind Fly the request's `Host` is never trusted for a URL the server
+/// hands out (OAuth metadata, redirect URIs, share links). `None` off Fly
+/// with no variable: callers fall back to the request, for development.
+pub fn public_url_from_env() -> Option<String> {
+    public_url_from(
+        std::env::var("CONSTRUCT_PUBLIC_URL").ok().as_deref(),
+        std::env::var("FLY_APP_NAME").ok().as_deref(),
+    )
+}
+
+fn public_url_from(public_url: Option<&str>, fly_app: Option<&str>) -> Option<String> {
+    fn set(v: Option<&str>) -> Option<&str> {
+        v.map(str::trim).filter(|v| !v.is_empty())
+    }
+    if let Some(u) = set(public_url) {
+        return Some(u.trim_end_matches('/').to_owned());
+    }
+    set(fly_app).map(|app| format!("https://{app}.fly.dev"))
+}
+
+#[cfg(test)]
+mod public_url_tests {
+    use super::public_url_from;
+
+    #[test]
+    fn explicit_url_wins_then_fly_then_none() {
+        assert_eq!(
+            public_url_from(Some("https://a.example/"), Some("app")).as_deref(),
+            Some("https://a.example")
+        );
+        assert_eq!(
+            public_url_from(None, Some("app")).as_deref(),
+            Some("https://app.fly.dev")
+        );
+        assert_eq!(public_url_from(Some(" "), Some("")), None);
+        assert_eq!(public_url_from(None, None), None);
     }
 }

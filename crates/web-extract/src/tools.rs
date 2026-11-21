@@ -339,10 +339,21 @@ fn page_links(html: &str, base: &str, max: usize) -> Vec<(String, String)> {
     out
 }
 
+/// The longest `web_search` query, in characters: real queries are a few
+/// words, and a long one can carry rows out to the search provider.
+pub const MAX_QUERY_CHARS: usize = 300;
+
+/// A query holding a run of this many characters of a row's text is
+/// refused: it quotes the row rather than searching for it.
+const ROW_RUN_CHARS: usize = 40;
+
 /// `web_search {query}`: at most `max` uses.
 pub struct SearchTool {
     web: Web,
     left: AtomicU32,
+    /// The text of the request's current rows (decision
+    /// `web-fetch-provenance`): a query can't repeat a long run of it.
+    rows: Vec<String>,
 }
 
 impl SearchTool {
@@ -350,8 +361,59 @@ impl SearchTool {
         Self {
             web,
             left: AtomicU32::new(max),
+            rows: Vec::new(),
         }
     }
+
+    /// Refuse queries that repeat a long run of `rows`' text (every string
+    /// value of each row).
+    pub fn with_rows(mut self, rows: &[serde_json::Map<String, Value>]) -> Self {
+        self.rows = row_texts(rows);
+        self
+    }
+}
+
+/// The long string values of `rows`, normalized.
+fn row_texts(rows: &[serde_json::Map<String, Value>]) -> Vec<String> {
+    rows.iter()
+        .flat_map(|r| r.values())
+        .filter_map(Value::as_str)
+        .map(normalize)
+        .filter(|t| t.chars().count() >= ROW_RUN_CHARS)
+        .collect()
+}
+
+/// Lowercase text with its whitespace collapsed, to compare a query with
+/// a row's values.
+fn normalize(s: &str) -> String {
+    s.split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_lowercase()
+}
+
+/// Why `query` may not be sent to the search provider, if it may not: too
+/// long, or it repeats a long run of a current row's text.
+fn refuse_query(query: &str, rows: &[String]) -> Option<String> {
+    if query.chars().count() > MAX_QUERY_CHARS {
+        return Some(format!(
+            "that query is too long (at most {MAX_QUERY_CHARS} characters): search with a few key words"
+        ));
+    }
+    let q = normalize(query);
+    for row in rows {
+        let chars: Vec<char> = row.chars().collect();
+        let hit = chars
+            .windows(ROW_RUN_CHARS)
+            .any(|w| q.contains(&w.iter().collect::<String>()));
+        if hit {
+            return Some(
+                "that query repeats the text of a current row: search with a few key words, not the row's contents"
+                    .into(),
+            );
+        }
+    }
+    None
 }
 
 /// Take one use, if any is left.
@@ -382,10 +444,14 @@ impl Tool for SearchTool {
 
     fn call<'a>(&'a self, input: &'a Value) -> BoxFuture<'a, Result<String, String>> {
         Box::pin(async move {
+            let q = input["query"].as_str().unwrap_or("");
+            // A refused query doesn't use up one of the task's searches.
+            if let Some(why) = refuse_query(q, &self.rows) {
+                return Err(why);
+            }
             if !take(&self.left) {
                 return Err("no searches left for this task: answer with what you have".into());
             }
-            let q = input["query"].as_str().unwrap_or("");
             let w = &self.web;
             let results =
                 crate::search::search(&w.hosts, &w.cache, &w.client, &w.provider, q, 8).await?;
@@ -498,6 +564,28 @@ fn page_answer(seen: &Seen, html: &str, url: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn long_queries_and_row_text_are_refused() {
+        let row = json!({
+            "name": "Gig",
+            "notes": "Door code 4417, ask for Dana at the side entrance after nine",
+        });
+        let tool_rows = row_texts(&[row.as_object().unwrap().clone()]);
+        assert_eq!(tool_rows.len(), 1);
+        // Real queries pass, even one naming a row.
+        assert!(refuse_query("Gig tickets Venue Hall 2026 reviews", &tool_rows).is_none());
+        let long = "concert listings ".repeat(20);
+        assert!(
+            refuse_query(&long, &tool_rows)
+                .unwrap()
+                .contains("too long")
+        );
+        assert!(refuse_query(&"a".repeat(MAX_QUERY_CHARS), &[]).is_none());
+        // A run of a row's private field, in any case or spacing.
+        let q = "site:x.example DOOR CODE 4417, ask for  Dana at the side entrance";
+        assert!(refuse_query(q, &tool_rows).unwrap().contains("current row"));
+    }
 
     #[test]
     fn only_seen_urls_can_be_fetched() {

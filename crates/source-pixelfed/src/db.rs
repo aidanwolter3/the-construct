@@ -56,6 +56,17 @@ pub static MIGRATIONS: &[Step] = &[
         "pixelfed_clients",
         "ALTER TABLE pixelfed_apps RENAME TO pixelfed_clients;",
     ),
+    // 6 (decision `link-tokens-hashed`): proxy keys are keyed by a per-pod
+    // secret, so one anyone could compute from a URL is forgotten; the next
+    // feed or notification poll makes the keys again.
+    Step::sql(
+        "media_secret",
+        "CREATE TABLE pixelfed_media_secret (
+             id     INTEGER PRIMARY KEY CHECK (id = 1),
+             secret TEXT NOT NULL
+         );
+         DELETE FROM pixelfed_media;",
+    ),
 ];
 
 fn rename_apps(tx: &rusqlite::Transaction<'_>) -> rusqlite::Result<()> {
@@ -220,6 +231,9 @@ pub trait PixelfedStore {
         keys: impl IntoIterator<Item = (&'a String, &'a String)>,
     ) -> rusqlite::Result<()>;
     fn media_url(&self, key: &str) -> rusqlite::Result<Option<String>>;
+    /// The pod's secret for media keys (decision `link-tokens-hashed`),
+    /// made on first use.
+    fn media_secret(&self) -> rusqlite::Result<String>;
     /// Every stored upstream account, by instance (D52 polls each).
     fn pixelfed_accounts(&self) -> rusqlite::Result<Vec<(String, PixelfedAccount)>>;
     /// The notification cursor of `instance`: `None` before its first poll,
@@ -560,6 +574,21 @@ impl PixelfedStore for Store {
         })
     }
 
+    fn media_secret(&self) -> rusqlite::Result<String> {
+        self.transaction(|tx| {
+            let fresh = pod_core::session::new_session_token();
+            tx.execute(
+                "INSERT OR IGNORE INTO pixelfed_media_secret (id, secret) VALUES (1, ?1)",
+                [fresh],
+            )?;
+            tx.query_row(
+                "SELECT secret FROM pixelfed_media_secret WHERE id = 1",
+                [],
+                |r| r.get(0),
+            )
+        })
+    }
+
     fn media_url(&self, key: &str) -> rusqlite::Result<Option<String>> {
         self.with_conn(|c| {
             c.query_row(
@@ -834,8 +863,10 @@ mod tests {
         let s = Store::open_in_memory()
             .unwrap()
             .with_secrets(secrets.clone());
-        let before = MIGRATIONS.len() - 1;
-        assert_eq!(MIGRATIONS[before].name, "pixelfed_clients");
+        let before = MIGRATIONS
+            .iter()
+            .position(|m| m.name == "pixelfed_clients")
+            .unwrap();
         s.migrate_adapter("pixelfed", &MIGRATIONS[..before])
             .unwrap();
         s.with_conn(|c| {

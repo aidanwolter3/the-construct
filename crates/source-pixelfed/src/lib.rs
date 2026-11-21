@@ -258,9 +258,26 @@ impl Status {
 
 // ---------- media URL rewriting ----------
 
-/// Opaque, stable proxy key for an upstream URL (first 128 bits of SHA-256, hex).
-pub fn media_key(url: &str) -> String {
-    hex(&Sha256::digest(url.as_bytes())[..16])
+/// Opaque, stable proxy key for an upstream URL: the first 128 bits of
+/// HMAC-SHA256 of the URL under the pod's media secret, hex (decision
+/// `link-tokens-hashed`). Without the secret a key can't be computed from a
+/// URL, so the unauthenticated media route can't confirm that a URL is in a
+/// pod's feed.
+pub fn media_key(secret: &str, url: &str) -> String {
+    const BLOCK: usize = 64;
+    let mut k = [0u8; BLOCK];
+    if secret.len() > BLOCK {
+        k[..32].copy_from_slice(&Sha256::digest(secret.as_bytes()));
+    } else {
+        k[..secret.len()].copy_from_slice(secret.as_bytes());
+    }
+    let mut inner = Sha256::new();
+    inner.update(k.map(|b| b ^ 0x36));
+    inner.update(url.as_bytes());
+    let mut outer = Sha256::new();
+    outer.update(k.map(|b| b ^ 0x5c));
+    outer.update(inner.finalize());
+    hex(&outer.finalize()[..16])
 }
 
 pub use pod_core::util::hex;
@@ -417,15 +434,18 @@ fn log_dropped_media_host(url: &str) {
 pub struct MediaUrls {
     proxy_base: String,
     allow: MediaPolicy,
+    secret: String,
     pub keys: BTreeMap<String, String>,
 }
 
 impl MediaUrls {
     /// `proxy_base` like `http://10.0.2.2:8080/v1/pixelfed/media` (no trailing slash).
-    pub fn new(proxy_base: &str, policy: impl Into<MediaPolicy>) -> Self {
+    /// `secret` is the pod's media secret ([`PixelfedStore::media_secret`]).
+    pub fn new(proxy_base: &str, policy: impl Into<MediaPolicy>, secret: &str) -> Self {
         Self {
             proxy_base: proxy_base.trim_end_matches('/').to_owned(),
             allow: policy.into(),
+            secret: secret.to_owned(),
             keys: BTreeMap::new(),
         }
     }
@@ -436,7 +456,7 @@ impl MediaUrls {
             log_dropped_media_host(url);
             return None;
         }
-        let key = media_key(url);
+        let key = media_key(&self.secret, url);
         let out = format!("{}/{key}", self.proxy_base);
         self.keys.insert(key, url.to_owned());
         Some(out)
@@ -1262,7 +1282,7 @@ mod tests {
                 "preview_url": "https://evil.example/p.png"
             }]
         })];
-        let mut media = MediaUrls::new(PROXY, &allow());
+        let mut media = MediaUrls::new(PROXY, &allow(), "test-secret");
         let tl = normalize_timeline(&raw, &mut media);
         assert_eq!(
             tl.entities["pixelfed://users/2"].get("avatar_url"),
@@ -1276,7 +1296,7 @@ mod tests {
 
     fn fixture_timeline() -> (Timeline, MediaUrls) {
         let raw: Vec<Value> = serde_json::from_str(&FIXTURE.replace("{{BASE}}", BASE)).unwrap();
-        let mut media = MediaUrls::new(PROXY, &allow());
+        let mut media = MediaUrls::new(PROXY, &allow(), "test-secret");
         let tl = normalize_timeline(&raw, &mut media);
         (tl, media)
     }
@@ -1450,7 +1470,7 @@ mod tests {
 
     fn normalize_recorded(json: &str) -> (Timeline, MediaUrls) {
         let raw: Vec<Value> = serde_json::from_str(json).unwrap();
-        let mut media = MediaUrls::new(PROXY, &allow());
+        let mut media = MediaUrls::new(PROXY, &allow(), "test-secret");
         let tl = normalize_timeline(&raw, &mut media);
         assert_eq!(tl.order.len(), raw.len(), "no recorded status was skipped");
         (tl, media)
@@ -1580,7 +1600,7 @@ mod tests {
                 {"id": "10", "meta": "bad"}
             ]
         })];
-        let mut media = MediaUrls::new(PROXY, &allow());
+        let mut media = MediaUrls::new(PROXY, &allow(), "test-secret");
         let tl = normalize_timeline(&raw, &mut media);
         let p = &tl.entities["pixelfed://posts/1"];
         assert_eq!(p.get_bool("sensitive"), Some(false));
@@ -1621,7 +1641,7 @@ mod tests {
             json!({"id": "8", "account": {"id": "1", "acct": "x@remote", "avatar": ""},
                    "media_attachments": [{"id": "9", "meta": {"original": {"width": 1280, "height": 720}}}]}),
         ];
-        let mut media = MediaUrls::new(PROXY, &allow());
+        let mut media = MediaUrls::new(PROXY, &allow(), "test-secret");
         let tl = normalize_timeline(&raw, &mut media);
         assert_eq!(tl.order, ["pixelfed://posts/7", "pixelfed://posts/8"]);
         let p = &tl.entities["pixelfed://posts/7"];
@@ -1671,8 +1691,11 @@ mod tests {
             Some(951_784_200)
         );
         assert_eq!(parse_rfc3339("yesterday"), None);
-        assert_eq!(media_key("x"), media_key("x"));
-        assert_eq!(media_key("x").len(), 32);
+        assert_eq!(media_key("s", "x"), media_key("s", "x"));
+        assert_eq!(media_key("s", "x").len(), 32);
+        // The key depends on the pod's secret: it can't be computed from the URL alone.
+        assert_ne!(media_key("s", "x"), media_key("t", "x"));
+        assert_ne!(media_key("s", "x"), hex(&Sha256::digest(b"x")[..16]));
     }
 }
 

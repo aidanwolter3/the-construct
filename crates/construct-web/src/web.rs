@@ -625,6 +625,10 @@ impl Loader for WebLoader {
     /// Settings' Sign in (and a layout's `action.auth.login`) goes to the
     /// upstream's authorize page and comes back to this page; Sign out ends
     /// this browser's session as it does a native client's unpinned one.
+    fn signs_in(&self) -> bool {
+        true
+    }
+
     fn auth(&self, intent: &Value) -> bool {
         if intent["command"] == "sign_out" {
             spawn_local(async {

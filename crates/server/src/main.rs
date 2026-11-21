@@ -46,7 +46,7 @@
 //!   pod databases (`pod_core::secrets`). Unset: stored unsealed, with a
 //!   warning; a malformed value stops the server.
 //! - `CONSTRUCT_PUBLIC_URL`: the base URL clients use (OAuth metadata for
-//!   Claude); default: from each request's `Host`, `https` behind Fly.
+//!   Claude); default: from each request's `Host` off Fly; on Fly `https://$FLY_APP_NAME.fly.dev`.
 //! - `CONSTRUCT_INFER_API_KEY`, `CONSTRUCT_INFER_MODEL`, `CONSTRUCT_INFER_URL`:
 //!   the model Collections asks for `model`-computed fields (unset: they
 //!   keep their default).
@@ -456,6 +456,7 @@ async fn serve_on(local: LocalPod) -> Result<(), String> {
     if config.open_pod.is_some() {
         let opt_in = std::env::var(server::INSECURE_OPEN_POD_VAR).is_ok_and(|v| v == "1");
         server::check_open_pod(&addr, on_fly, opt_in)?;
+        config.open_pod_any_ip = opt_in;
         if opt_in && !server::is_loopback_addr(&addr) {
             tracing::warn!(
                 %addr,

@@ -349,6 +349,21 @@ fn slugify(s: &str) -> String {
     out.trim_end_matches('-').to_owned()
 }
 
+/// What a host keeps of a share, public or calendar token: its SHA-256 in
+/// hex (decision `link-tokens-hashed`), so a copy of the host's database
+/// holds no working link.
+pub fn token_id(token: &str) -> String {
+    crate::session::session_hash(token)
+}
+
+/// Whether `s` is a [`token_id`] (64 lowercase hex characters) and not a
+/// token: tokens carry a prefix and a `-`.
+pub fn is_token_id(s: &str) -> bool {
+    s.len() == 64
+        && s.bytes()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+}
+
 /// A new share link.
 pub fn new_link() -> String {
     let mut buf = [0u8; 20];
@@ -616,6 +631,31 @@ fn entity_literal(v: &Value, at: &str) -> Option<(String, String)> {
     }
 }
 
+/// Every literal string in `v` that says something, flagged as `kind`:
+/// values the owner's home binds and the strings of an interface schema
+/// (defaults, options, titles) sit where [`flags_at`] sees no text key, so
+/// the owner reviews them all.
+fn flag_strings(v: &Value, kind: &str, element: &str, at: &str, out: &mut Vec<Value>) {
+    match v {
+        Value::String(s) => {
+            if literal_text(s).chars().any(char::is_alphanumeric) {
+                out.push(flag(kind, element, at, s));
+            }
+        }
+        Value::Array(a) => {
+            for (i, c) in a.iter().enumerate() {
+                flag_strings(c, kind, element, &format!("{at}/{i}"), out);
+            }
+        }
+        Value::Object(o) => {
+            for (k, c) in o {
+                flag_strings(c, kind, element, &format!("{at}/{}", escape(k)), out);
+            }
+        }
+        _ => {}
+    }
+}
+
 /// A closure being copied for publishing.
 struct Copier<'a> {
     pod: &'a Pod,
@@ -877,7 +917,18 @@ pub fn prepare(
     // The root's own bindings become its interface: its data is bound
     // literally, then the sources turn it into inputs.
     let bound = owner_binding(conn, &c.objects, name);
+    let mut binding_flags = Vec::new();
+    for (k, v) in &bound {
+        flag_strings(
+            v,
+            "binding",
+            name,
+            &format!("/inputs/{}", escape(k)),
+            &mut binding_flags,
+        );
+    }
     let root = c.copy(&el, name, &bound, component)?;
+    c.flags.extend(binding_flags);
     let Some((root_el, _)) = c.out.get(&root).cloned() else {
         return Err(refuse("internal", "the copy has no root"));
     };
@@ -891,6 +942,13 @@ pub fn prepare(
                 described.insert(field_input(&d.name, &f.name));
             }
             inputs.push(serde_json::to_value(d).unwrap_or(Value::Null));
+            flag_strings(
+                &d.schema,
+                "schema",
+                name,
+                &format!("/interface/inputs/{}/schema", escape(&d.name)),
+                &mut c.flags,
+            );
         }
     }
     for r in &reads {
@@ -944,10 +1002,16 @@ pub fn prepare(
     })
 }
 
-/// The review id of a prepared copy: what `confirm` repeats.
+/// The review id of a prepared copy: what `confirm` repeats. It covers
+/// everything the review shows that goes to the shelf: the root and the
+/// interface (its input schemas carry a collection's title, options and
+/// defaults), so a change to either after the review needs a new one.
 fn review_id(name: &str, p: &Prepared, visibility: &str) -> String {
-    construct_elements::canonical::id_of_text(&format!("{name}\n{visibility}\n{}", p.root))
-        .replacen("e1-", "r-", 1)
+    construct_elements::canonical::id_of_text(&format!(
+        "{name}\n{visibility}\n{}\n{}",
+        p.root, p.interface
+    ))
+    .replacen("e1-", "r-", 1)
 }
 
 /// Whether every flag of `new` is among `approved` (by kind and value).
@@ -1353,12 +1417,18 @@ fn set_handle(pod: &Pod, args: &Value) -> Result<Value, Value> {
 fn publication_row(p: &Publication, owner: bool) -> Value {
     let mut v = json!({
         "name": p.name,
-        "link": p.link,
         "version": p.version,
         "visibility": p.visibility,
         "revoked": p.revoked_at.is_some(),
         "updated_at": p.updated_at,
     });
+    // The host keeps only a hash of the link: the link itself is shown when
+    // the publication is made (decision `link-tokens-hashed`).
+    if is_token_id(&p.link) {
+        v["id"] = json!(p.link);
+    } else {
+        v["link"] = json!(p.link);
+    }
     if owner {
         v["publishes"] = json!(p.source);
         v["keep_shared"] = json!(p.keep_shared);
@@ -1430,6 +1500,8 @@ fn revoke_publication(pod: &Pod, args: &Value) -> Result<Value, Value> {
 
 /// `publish`: the review, or with `confirm` the publication.
 async fn publish(pod: &Pod, args: &Value) -> Result<Value, Value> {
+    // MAX_PUBLICATIONS is counted before the shelf write: one at a time.
+    let _one_at_a_time = pod.sharing.lock().await;
     let (p, a) = (pod.clone(), args.clone());
     tokio::task::spawn_blocking(move || publish_blocking(&p, &a))
         .await
@@ -1580,14 +1652,23 @@ fn publish_blocking(pod: &Pod, args: &Value) -> Result<Value, Value> {
             keep_shared,
         })
         .map_err(|e| e.answer())?;
-    Ok(json!({
+    let mut out = json!({
         "published": true,
         "name": p.name,
-        "link": p.link,
         "version": p.version,
         "keep_shared": p.keep_shared,
-        "detail": "Give the user the share link: anyone on this server they send it to can adopt it.",
-    }))
+    });
+    if is_token_id(&p.link) {
+        out["detail"] = json!(
+            "A new version of a publication that is already shared: its link is the one the user was given when it was first published (the server keeps only a hash of it, so it can't be shown again). To get a new link, unpublish it and publish again."
+        );
+    } else {
+        out["link"] = json!(p.link);
+        out["detail"] = json!(
+            "Give the user the share link now, it is shown only this once: anyone on this server they send it to can adopt it."
+        );
+    }
+    Ok(out)
 }
 
 /// After a write on the owner's pod: publications kept shared get the new
@@ -2562,6 +2643,31 @@ fn find_edges(v: &Value, name: &str, f: &mut dyn FnMut(&Map<String, Value>)) {
 mod tests {
     use super::*;
 
+    /// A review covers the interface too: a collection's options changed
+    /// after the review need a new one.
+    #[test]
+    fn a_review_covers_the_interface() {
+        let prepared = |interface: Value| Prepared {
+            root: "e1-root".into(),
+            objects: Vec::new(),
+            interface,
+            flags: Vec::new(),
+            elements: Vec::new(),
+            left_out: Vec::new(),
+        };
+        let a = prepared(json!({ "list": { "options": ["a"] } }));
+        let b = prepared(json!({ "list": { "options": ["a", "secret plan"] } }));
+        assert_eq!(
+            review_id("@a/x", &a, "link"),
+            review_id(
+                "@a/x",
+                &prepared(json!({ "list": { "options": ["a"] } })),
+                "link"
+            )
+        );
+        assert_ne!(review_id("@a/x", &a, "link"), review_id("@a/x", &b, "link"));
+    }
+
     #[test]
     fn handles_and_slugs() {
         assert!(valid_handle("aidan"));
@@ -2578,6 +2684,22 @@ mod tests {
         assert!(valid_slug("dinner-party"));
         assert!(!valid_slug("-x"));
         assert_eq!(slugify("Dinner party · Sunday!"), "dinner-party-sunday");
+    }
+
+    #[test]
+    fn flag_strings_lists_personal_values() {
+        let mut out = Vec::new();
+        flag_strings(
+            &json!({"where": {"equals": "Dana Example"}, "n": 3, "e": "$in.x",
+                "options": ["Rex", "Fido"]}),
+            "binding",
+            "home",
+            "/inputs/a",
+            &mut out,
+        );
+        let vals: BTreeSet<&str> = out.iter().filter_map(|f| f["value"].as_str()).collect();
+        assert_eq!(vals, BTreeSet::from(["Dana Example", "Rex", "Fido"]));
+        assert!(out.iter().all(|f| f["kind"] == "binding"));
     }
 
     #[test]

@@ -944,6 +944,10 @@ impl Loader for PodEngine {
     /// provider's (`local:providers`), on another server when it takes one
     /// and the layout passes it (`value`); `sign_out` signs out through
     /// the pod.
+    fn signs_in(&self) -> bool {
+        self.signs_in
+    }
+
     fn auth(&self, intent: &Value) -> bool {
         if !self.signs_in {
             return false;
@@ -1081,16 +1085,23 @@ impl SecureStore for FileStore {
     }
 }
 
-/// The desktop's secure store: the login Keychain on macOS, else a private
-/// file in `dir` (`secure.json`), else memory.
+/// The desktop's secure store: the login Keychain on macOS; on Linux and
+/// Windows the OS credential store (Secret Service, Credential Manager)
+/// with a private file in `dir` (`secure.json`) behind it for a machine
+/// that has none; else memory.
 pub fn desktop_store(dir: Option<&Path>) -> Arc<dyn SecureStore> {
     if cfg!(target_os = "macos") {
         return Arc::from(client_core::auth::default_secure_store());
     }
-    match dir {
+    let file: Arc<dyn SecureStore> = match dir {
         Some(d) => Arc::new(FileStore::new(d.join("secure.json"))),
         None => Arc::new(client_core::MemoryStore::new()),
+    };
+    #[cfg(any(target_os = "windows", target_os = "linux"))]
+    if dir.is_some() && !cfg!(test) {
+        return Arc::new(client_core::auth::KeyringOrFile::new(file));
     }
+    file
 }
 
 #[cfg(test)]

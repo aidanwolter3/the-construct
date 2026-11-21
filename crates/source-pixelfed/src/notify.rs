@@ -402,9 +402,14 @@ pub async fn poll(pf: &PixelfedAdapter, pod: &Pod, ctx: &PollCtx) -> PollOutcome
         Ok(a) => a,
         Err(e) => return transient(format!("pod store: {e:?}")),
     };
+    let secret = match blocking(pod, |s| s.media_secret()).await {
+        Ok(s) => s,
+        Err(e) => return transient(format!("pod store: {e:?}")),
+    };
     let mut media = MediaUrls::new(
         &format!("{}{MEDIA_PATH}", ctx.public_prefix),
         rt.media_for(others),
+        &secret,
     );
     let mut out = PollOutcome::default();
     let (mut ok, mut failure) = (0, None);
@@ -610,6 +615,7 @@ mod tests {
         MediaUrls::new(
             &format!("/pods/p1{MEDIA_PATH}"),
             &crate::MediaAllowlist::new([BASE], []),
+            "test-secret",
         )
     }
 

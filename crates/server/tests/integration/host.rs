@@ -1835,7 +1835,13 @@ mod web {
         let mut confirm = ask.clone();
         confirm["confirm"] = review["review_id"].clone();
         let again = tool(&env, &key, "share_publicly", confirm).await;
-        assert_eq!(again["link"], link.as_str(), "{again}");
+        // The host kept only a hash of the link: the same link, by its id.
+        assert_eq!(
+            again["link"],
+            server::construct::share::token_id(&link).as_str(),
+            "{again}"
+        );
+        assert!(again.get("url").is_none(), "{again}");
         assert!(view().await.contains("Pho"));
         add("Soba").await;
         let mut shown = false;
@@ -1877,7 +1883,8 @@ mod web {
             json!({ "layout": layout, "confirm": review["review_id"] }),
         )
         .await;
-        assert_eq!(again["link"], link.as_str(), "{again}");
+        let id = server::construct::share::token_id(&link);
+        assert_eq!(again["link"], id.as_str(), "{again}");
         assert!(view().await.contains("birthday"));
 
         // Revoked: gone at once.
@@ -2459,3 +2466,43 @@ mod web {
 
 /// Decision `ical-feeds`.
 mod calendar_feeds;
+
+/// Security audit #461: the open pod refuses cross-site writes and an
+/// invalid bearer, and only answers loopback (or the emulator) by IP.
+#[tokio::test]
+async fn open_pod_refuses_cross_site_bad_bearer_and_lan_hosts() {
+    let env = env_with(HostConfig {
+        open_pod: Some("dev".to_owned()),
+        ..HostConfig::default()
+    })
+    .await;
+    let client = reqwest::Client::new();
+    let port = env.server.url.rsplit(':').next().unwrap().to_owned();
+    let get = |host: String| {
+        client
+            .get(env.url("/v1/construct"))
+            .header("host", host)
+            .send()
+    };
+    let resp = get(format!("192.168.1.20:{port}")).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+
+    let resp = client
+        .post(env.url("/v1/objects"))
+        .header("sec-fetch-site", "cross-site")
+        .json(&json!({}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+    let body: Value = resp.json().await.unwrap();
+    assert_eq!(body["error"], "cross_site_not_allowed");
+
+    let resp = client
+        .get(env.url("/v1/construct"))
+        .bearer_auth("not-a-real-token")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+}
