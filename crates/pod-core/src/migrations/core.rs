@@ -419,6 +419,12 @@ pub const STEPS: &[Step] = &[
              outcome    TEXT
          ) WITHOUT ROWID;",
     ),
+    // The model tokens each day's calls of a feature spent (the agent
+    // module's daily token budget).
+    Step::sql(
+        "agent_usage_tokens",
+        "ALTER TABLE agent_usage ADD COLUMN tokens INTEGER NOT NULL DEFAULT 0;",
+    ),
     // Issue #435: a device watch runs its action with the scope of the
     // credential that made it; watches made before this are taken as an MCP
     // credential's, the narrower scope.
