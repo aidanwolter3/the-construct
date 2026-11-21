@@ -145,6 +145,29 @@ the next reload picks up, a phone-sized window and logging out.
   On the GPU a scroll redraws in a frame; on the CPU fallback a whole 1280 × 800 window takes about 50 ms (90 ms at
   twice the density).
 
+### On your own site
+
+A static site of the owner's (decision [`site-origins`](decisions/site-origins.md)), listed in the server's
+`CONSTRUCT_SITE_ORIGINS`, can draw the pod or public links in its own pages by loading the client from the server:
+
+```html
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' https://pod.example
+  'wasm-unsafe-eval'; connect-src https://pod.example; style-src 'self'; img-src 'self' data:">
+<div id="construct-root" data-mode="app"></div>          <!-- or data-mode="public" data-handle="ann" -->
+<script type="module" src="https://pod.example/web/mount.js"></script>
+```
+
+- `data-mode="app"` shows "Open my pod"; the pod code is typed on the server's page (`/web/site`), which sends the
+  browser back with a single-use code that `mount.js` trades for a browser session, kept in the site's
+  `localStorage` and sent as a bearer. Log out ends it. For a Pixelfed sign-in from the page, add its address
+  (`https://www.example.com/construct/`) to `PIXELFED_EXTRA_REDIRECTS`.
+- `data-mode="public"` draws the public link `/<handle>/<slug>` at the site's `/<slug>`, and a row's screen at
+  `/<slug>/<row>`. A host without rewrites serves `/<slug>/<row>` from its 404 page with the same markup.
+- The page styles `canvas#construct` (full window, `touch-action: none`), hides `#construct-input` off screen, and
+  may style `#construct-status` and `#construct-sign-in`, which `mount.js` adds to `#construct-root`.
+- The client and its fonts always come from the server, so a deploy of the server updates every site at once.
+- `scripts/web_e2e.sh` checks it (`crates/construct-web/tests/site_e2e.js`) with a made-up site on another port.
+
 ## Releases
 
 Every client reports which build it runs (decision `device-versions`): `x-construct-build: <platform> <build id>`

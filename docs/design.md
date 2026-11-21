@@ -349,8 +349,8 @@ The host's own database lists the pods and what crosses between them:
 - **The scheduler**: every 30 seconds it opens pods whose `next_wake_at` is due (notification polls, collection
   fillers, reminders). A pod polls upstreams only while it has a device seen in the last 30 days, so idle pods cost
   nothing.
-- **OAuth for agents**, connected apps, public media under `/v1/p/<pod>/…`, the web client at `/web`, and public
-  links at `/s/…` and `/<handle>/<slug>`.
+- **OAuth for agents**, connected apps, public media under `/v1/p/<pod>/…`, the web client at `/web` (also loaded
+  by the owner's own sites, decision `site-origins`), and public links at `/s/…` and `/<handle>/<slug>`.
 
 #### The server binary
 
@@ -628,8 +628,8 @@ would do (start agent runs, plug jacks, delete, sign out) waits for the user's y
 #### Public links
 
 `share_publicly` makes a read-only copy of a layout, the layouts it opens, and only the Collections rows they show,
-served as a web page at `/s/pub-…` or `/<handle>/<slug>` and drawn by the web client. Buttons that write are taken
-out. The copy is refreshed when its rows change; new rows wait for a new review unless the link says to publish them
+served as a web page at `/s/pub-…` or `/<handle>/<slug>` and drawn by the web client, also on the owner's own site
+(decision `site-origins`). Buttons that write are taken out. The copy is refreshed when its rows change; new rows wait for a new review unless the link says to publish them
 (decisions `public-web-links`, `public-links-share-the-closure`).
 
 ## Part 5 · Data sources

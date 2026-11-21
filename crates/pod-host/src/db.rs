@@ -517,6 +517,20 @@ impl HostStore {
         )
     }
 
+    /// The hash of a pod's code (its `pod_token` credential, which is also
+    /// the hash of the code's pinned session), if it has one.
+    pub fn pod_token_hash(&self, pod_id: &str) -> rusqlite::Result<Option<String>> {
+        use rusqlite::OptionalExtension;
+        self.conn()
+            .query_row(
+                "SELECT token_hash FROM credentials WHERE pod_id = ?1 AND kind = 'pod_token'
+                 ORDER BY created_at DESC LIMIT 1",
+                [pod_id],
+                |r| r.get(0),
+            )
+            .optional()
+    }
+
     /// Forgets a browser's credential (it logged out); true if there was one.
     pub fn delete_web_credential(&self, token_hash: &str) -> rusqlite::Result<bool> {
         Ok(self.conn().execute(

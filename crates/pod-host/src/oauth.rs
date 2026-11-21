@@ -828,6 +828,16 @@ pub(crate) async fn token(State(host): State<Arc<Host>>, req: Request) -> Respon
             "code, code_verifier and client_id are required",
         );
     };
+    // A site's sign-in code (decision `site-origins`) shares the codes'
+    // table: it opens a browser session at its own endpoint, never an MCP
+    // credential here.
+    if client_id.starts_with(crate::site::CLIENT_PREFIX) {
+        return oauth_error(
+            StatusCode::BAD_REQUEST,
+            "invalid_grant",
+            "the code is unknown, used, expired or not yours",
+        );
+    }
     if let Some(sc) = &host.config.oauth_client
         && sc.client_id == *client_id
     {
@@ -915,7 +925,7 @@ pub(crate) async fn token(State(host): State<Arc<Host>>, req: Request) -> Respon
 }
 
 /// `Form` from a whole request (the handlers also need its headers).
-trait FormFromRequest: Sized {
+pub(crate) trait FormFromRequest: Sized {
     async fn from_request_parts_and_body(req: Request) -> Result<Self, Response>;
 }
 

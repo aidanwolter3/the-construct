@@ -88,6 +88,16 @@ pub fn merge(into: &mut DataBundle, from: DataBundle) {
     into.queries.extend(from.queries);
 }
 
+/// A page on the owner's own site (decision `site-origins`, `mount.js`)
+/// calls this before [`start`] or [`start_public`]: the pod is at `server`
+/// (an origin), reached with the site's browser session `token` (none for
+/// a public link); `page` is the page's own path on the site.
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen::prelude::wasm_bindgen]
+pub fn connect(server: String, token: Option<String>, page: String) {
+    web::connect(&server, token, &page);
+}
+
 /// The page calls this once its canvas is there.
 #[cfg(target_arch = "wasm32")]
 #[wasm_bindgen::prelude::wasm_bindgen]

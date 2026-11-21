@@ -35,7 +35,7 @@ primary_region = "dfw"
   # The Android app's sign-in redirect is a verified App Link on this host (decision
   # android-app-link-sign-in-redirect); construct://oauth stays accepted for older builds. The web client's
   # redirect is its own page, /web (decision web-upstream-sign-in).
-  PIXELFED_EXTRA_REDIRECTS = "https://the-construct-pod.fly.dev/oauth/android,https://the-construct-pod.fly.dev/web"
+  PIXELFED_EXTRA_REDIRECTS = "https://the-construct-pod.fly.dev/oauth/android,https://the-construct-pod.fly.dev/web,https://www.aidanwolter.com/construct/"
   # Signing certs whose Android builds may open that link, served in /.well-known/assetlinks.json.
   # Not secret (every APK carries its cert), so they can live here; unset, the endpoint is 404 and
   # Android 12+ builds keep construct://oauth. Get a fingerprint with
@@ -52,6 +52,9 @@ primary_region = "dfw"
   # links at /s/<link> (decision `public-web-links`). Temporary pods can't share public links.
   CONSTRUCT_WEB = "1"
   CONSTRUCT_PUBLIC_WEB = "1"
+  # The developer's own site (GitHub Pages) loads the web client from here and draws their pod at /construct/ and
+  # their public links at /<slug> (decision `site-origins`); its /construct/ is also a Pixelfed redirect above.
+  CONSTRUCT_SITE_ORIGINS = "https://www.aidanwolter.com,https://aidanwolter.com"
   # Storage on the 1 GB volume below (decision `pod-storage-limits`; these are
   # the defaults, spelled out). Each temporary pod's uploads stay under 6 MiB
   # and an admin pod's under 500 MiB; whatever the total, uploads and new

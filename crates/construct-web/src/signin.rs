@@ -31,9 +31,11 @@ pub const DENIED: &str = "Sign-in was cancelled.";
 pub const EXPIRED: &str = "That sign-in took too long. Please try again.";
 pub const FAILED: &str = "Something went wrong. Please try again.";
 
-/// The redirect the web client registers: its own page.
-pub fn redirect_uri(origin: &str) -> String {
-    format!("{}{PAGE_PATH}", origin.trim_end_matches('/'))
+/// The redirect the web client registers: its own page, `page` on
+/// `origin` ([`PAGE_PATH`] on the server, or a page of the owner's site,
+/// decision `site-origins`).
+pub fn redirect_uri(origin: &str, page: &str) -> String {
+    format!("{}{page}", origin.trim_end_matches('/'))
 }
 
 /// The status line for a failed pod call: `status` is `None` when the pod
@@ -267,12 +269,16 @@ mod tests {
     #[test]
     fn the_redirect_is_the_page() {
         assert_eq!(
-            redirect_uri("https://pod.example"),
+            redirect_uri("https://pod.example", PAGE_PATH),
             "https://pod.example/web"
         );
         assert_eq!(
-            redirect_uri("http://127.0.0.1:8080/"),
+            redirect_uri("http://127.0.0.1:8080/", PAGE_PATH),
             "http://127.0.0.1:8080/web"
+        );
+        assert_eq!(
+            redirect_uri("https://www.example.com", "/construct/"),
+            "https://www.example.com/construct/"
         );
     }
 

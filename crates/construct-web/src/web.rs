@@ -3,10 +3,16 @@
 //! from a `fetch` body, images, and a `<canvas>` the CPU rasterizer draws
 //! into, with pointer, wheel and keyboard input.
 //!
-//! The page and the API share an origin, and the session is an `HttpOnly`
-//! cookie the server set when the pod code was typed: this code never sees
-//! a token. Every request carries `x-construct-client: web`, which a page
-//! of another site can't send without a preflight the server never answers.
+//! On the server's own page (`/web`) the page and the API share an origin,
+//! and the session is an `HttpOnly` cookie the server set when the pod code
+//! was typed: this code never sees a token. Every request carries
+//! `x-construct-client: web`, which a page of another site can't send
+//! without a preflight the server never answers.
+//!
+//! On the owner's own site (decision `site-origins`, `mount.js`), [`connect`]
+//! names the server first: every pod path goes there, with the site's
+//! browser session as a bearer (or none, for a public link), and the page's
+//! own path is where it returns (signed out, back from an upstream).
 
 use std::cell::RefCell;
 use std::collections::{BTreeSet, HashMap};
@@ -33,6 +39,74 @@ use web_sys::{
 
 use crate::construct::{Construct, HOME, features_header, take_events};
 use crate::signin;
+
+/// Where the pod is when the page isn't the server's own (decision
+/// `site-origins`): set once by [`connect`], before anything is fetched.
+struct Remote {
+    /// The server's origin: `https://pod.example`.
+    server: String,
+    /// The site's browser session; none for a public link.
+    token: Option<String>,
+    /// The page's own path on the site (`/construct/`, `/recipes`).
+    page: String,
+}
+
+thread_local! {
+    static REMOTE: RefCell<Option<Remote>> = const { RefCell::new(None) };
+}
+
+/// Draws this page's client from `server` (decision `site-origins`): pod
+/// paths go there with `token` as the bearer; `page` is the page's path.
+pub fn connect(server: &str, token: Option<String>, page: &str) {
+    REMOTE.with(|r| {
+        *r.borrow_mut() = Some(Remote {
+            server: server.trim_end_matches('/').to_owned(),
+            token: token.filter(|t| !t.is_empty()),
+            page: page.to_owned(),
+        })
+    });
+}
+
+/// A pod path as this page fetches it: on the server when it is elsewhere.
+fn url(path: &str) -> String {
+    REMOTE.with(|r| match r.borrow().as_ref() {
+        Some(rm) if path.starts_with('/') => format!("{}{path}", rm.server),
+        _ => path.to_owned(),
+    })
+}
+
+/// The site's session as a bearer, on a page elsewhere.
+fn authorize(h: &web_sys::Headers) {
+    REMOTE.with(|r| {
+        if let Some(t) = r.borrow().as_ref().and_then(|rm| rm.token.as_deref()) {
+            let _ = h.set("authorization", &format!("Bearer {t}"));
+        }
+    });
+}
+
+/// The page's own path: `/web`, or the site's page.
+fn page_path() -> String {
+    REMOTE.with(|r| {
+        r.borrow()
+            .as_ref()
+            .map_or_else(|| signin::PAGE_PATH.to_owned(), |rm| rm.page.clone())
+    })
+}
+
+/// The site's page path, when the page is elsewhere.
+fn remote_page() -> Option<String> {
+    REMOTE.with(|r| r.borrow().as_ref().map(|rm| rm.page.clone()))
+}
+
+/// The server's origin: the page's own, or where [`connect`] points.
+fn server_origin() -> String {
+    REMOTE.with(|r| {
+        r.borrow().as_ref().map_or_else(
+            || window().location().origin().unwrap_or_default(),
+            |rm| rm.server.clone(),
+        )
+    })
+}
 
 /// The frame must be drawn again (something arrived).
 static DIRTY: AtomicBool = AtomicBool::new(true);
@@ -99,11 +173,12 @@ async fn request(method: &str, path: &str, body: Option<&Value>) -> Result<(u16,
     if let Some(b) = body {
         init.set_body(&JsValue::from_str(&b.to_string()));
     }
-    let req = Request::new_with_str_and_init(path, &init).map_err(|e| format!("{e:?}"))?;
+    let req = Request::new_with_str_and_init(&url(path), &init).map_err(|e| format!("{e:?}"))?;
     let h = req.headers();
     let _ = h.set(protocol::FEATURES_HEADER, &features_header());
     let _ = h.set("x-construct-client", "web");
     identify(&h);
+    authorize(&h);
     if body.is_some() {
         let _ = h.set("content-type", "application/json");
     }
@@ -125,7 +200,7 @@ async fn get_json(path: &str) -> Result<Value, String> {
     match request("GET", path, None).await? {
         (401, _) => {
             // The session ended: back to the page that asks for the code.
-            let _ = window().location().set_href("/web");
+            let _ = window().location().set_href(&page_path());
             Err("signed out".into())
         }
         (s, v) if (200..300).contains(&s) => Ok(v),
@@ -176,7 +251,7 @@ impl State {
 
     /// The device data a layout gets (`needs`: its JSON).
     fn device(&self, needs: &str) -> DataBundle {
-        let base = window().location().origin().unwrap_or_default();
+        let base = server_origin();
         let titles = self.construct.titles();
         let mut out = device_data::device(&base, needs, &titles, |p| {
             self.device
@@ -290,7 +365,7 @@ impl WebLoader {
             return fail(Some(400), &login);
         };
         let origin = window().location().origin().unwrap_or_default();
-        let redirect = signin::redirect_uri(&origin);
+        let redirect = signin::redirect_uri(&origin, &page_path());
         let body = json!({ "instance_url": instance, "redirect_uri": redirect });
         let app = match request("POST", app_path, Some(&body)).await {
             Ok((s, v)) if (200..300).contains(&s) => v,
@@ -347,7 +422,7 @@ impl WebLoader {
             return;
         };
         if let Ok(h) = window().history() {
-            let _ = h.replace_state_with_url(&JsValue::NULL, "", Some(signin::PAGE_PATH));
+            let _ = h.replace_state_with_url(&JsValue::NULL, "", Some(&page_path()));
         }
         let storage = window().session_storage().ok().flatten();
         let pending = storage
@@ -455,13 +530,14 @@ impl WebLoader {
 
     async fn stream_once(&self) -> Result<(), String> {
         let init = RequestInit::new();
-        let req = Request::new_with_str_and_init("/v1/construct/events", &init)
+        let req = Request::new_with_str_and_init(&url("/v1/construct/events"), &init)
             .map_err(|e| format!("{e:?}"))?;
         let _ = req
             .headers()
             .set(protocol::FEATURES_HEADER, &features_header());
         let _ = req.headers().set("x-construct-client", "web");
         identify(&req.headers());
+        authorize(&req.headers());
         let resp: Response = JsFuture::from(window().fetch_with_request(&req))
             .await
             .map_err(|e| format!("{e:?}"))?
@@ -666,7 +742,7 @@ fn random(bytes: usize) -> Option<String> {
 /// without CORS, decision `web-client`).
 fn fetch_images(store: &construct_render::images::ImageStore, proxy: &str) {
     let proxy = proxy.to_owned();
-    let origin = window().location().origin().unwrap_or_default();
+    let origin = server_origin();
     let s = store.clone();
     store.set_fetcher(move |url| {
         let s = s.clone();
@@ -697,8 +773,9 @@ fn fetch_images(store: &construct_render::images::ImageStore, proxy: &str) {
 /// `x-construct-client: web`, without which the pod doesn't read the session
 /// cookie and answers 401 (decision `web-client`).
 async fn image_bytes(path: &str) -> Option<Vec<u8>> {
-    let req = Request::new_with_str(path).ok()?;
+    let req = Request::new_with_str(&url(path)).ok()?;
     let _ = req.headers().set("x-construct-client", "web");
+    authorize(&req.headers());
     let resp: Response = JsFuture::from(window().fetch_with_request(&req))
         .await
         .ok()?
@@ -1192,8 +1269,10 @@ pub async fn start_public(base: &str, row: Option<&str>) -> Result<(), JsValue> 
     let mut session = construct_render::public::session(&copy, Viewport::PHONE)
         .map_err(|e| JsValue::from_str(&e))?;
     fetch_images(&session.images, &format!("{base}/image"));
+    // On a site (decision `site-origins`) the addresses are the site's page.
+    let address = remote_page().unwrap_or_else(|| base.to_owned());
     let public = Public {
-        base: base.to_owned(),
+        base: address.clone(),
         rows: protocol::public_rows::rows(&copy),
     };
     if let Some(name) = row {
@@ -1202,7 +1281,7 @@ pub async fn start_public(base: &str, row: Option<&str>) -> Result<(), JsValue> 
         if history_at() == 0
             && let Ok(h) = window().history()
         {
-            let _ = h.replace_state_with_url(&JsValue::from_f64(0.0), "", Some(base));
+            let _ = h.replace_state_with_url(&JsValue::from_f64(0.0), "", Some(&address));
         }
         // A name no row has (renamed, gone): the list.
         if let Some(r) = public.rows.iter().find(|r| r.name == name) {
