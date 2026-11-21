@@ -24,14 +24,15 @@
 //!   decision `browser-sandbox`): the server's first render tries the
 //!   sandbox; if the browser can't start or draw a page with it, that render
 //!   and the ones after it run without it, with a warning in the log.
-//! - **Off Fly's private network** ([`block_private_network`], decision
-//!   `browser-private-network`): at startup a root server keeps the
-//!   browser's user off `fdaa::/16` with an nftables rule, or warns.
+//! - **A fenced network** ([`block_private_network`], decision
+//!   `browser-network-fence`): at startup a root server lets the browser's
+//!   user connect only to its proxy, with an nftables rule, or warns; on Fly
+//!   it then renders only with Chromium's sandbox.
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU8, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 use futures_util::{SinkExt, StreamExt};
@@ -226,6 +227,14 @@ impl Drop for TempDir {
     }
 }
 
+/// A render refused because neither Chromium's sandbox nor the nftables
+/// rule is in place ([`needs_sandbox`]).
+fn unfenced() -> FetchError {
+    fail(
+        "the server's browser is off: neither its sandbox nor its network fence works on this machine",
+    )
+}
+
 fn fail(message: impl Into<String>) -> FetchError {
     FetchError::new(message)
 }
@@ -239,11 +248,12 @@ impl Browser {
                 fail("the server's browser is busy with other pages; the next fill tries again")
             })?
             .map_err(|_| fail("the server's browser is closed"))?;
-        let proxy = proxy::Proxy::start(self.allow_private)
+        let proxy = proxy::Proxy::start(proxy_port(), self.allow_private)
             .await
             .map_err(|e| fail(format!("the browser's proxy could not start: {e}")))?;
         let running = match SANDBOX.load(Ordering::Relaxed) {
             SANDBOXED => self.start(proxy.addr, true).await?,
+            UNSANDBOXED if needs_sandbox() => return Err(unfenced()),
             UNSANDBOXED => self.start(proxy.addr, false).await?,
             _ => self.first_start(proxy.addr).await?,
         };
@@ -278,6 +288,14 @@ impl Browser {
             },
             Err(e) => e.message,
         };
+        if needs_sandbox() {
+            SANDBOX.store(UNSANDBOXED, Ordering::Relaxed);
+            tracing::warn!(
+                target: "browser",
+                "browser sandbox: off; Chromium's sandbox did not work here ({why}) and the browser's network isn't fenced, so the server renders no pages"
+            );
+            return Err(unfenced());
+        }
         let running = self.start(proxy, false).await?;
         SANDBOX.store(UNSANDBOXED, Ordering::Relaxed);
         tracing::warn!(
@@ -390,20 +408,32 @@ async fn probe(cdp: &Cdp) -> Result<(), FetchError> {
 /// `nobody` and `nogroup`).
 const BROWSER_ID: u32 = 65534;
 
-/// Fly's private network (6PN): other apps' machines, the server's own
-/// metrics port and Fly's internal DNS, all on `fdaa::/16`.
-const PRIVATE_NETWORK: &str = "fdaa::/16";
+/// The port the browser's proxy listens on, on `127.0.0.1`, while the
+/// browser's network is fenced ([`FENCED`]): the one place the nftables rule
+/// lets [`BROWSER_ID`] connect to. Below 1024, so only root (the server) can
+/// listen there, never the browser's own user. One proxy at a time
+/// ([`SLOT`]), so one port is enough.
+pub const PROXY_PORT: u16 = 1009;
 /// The `nft` binary the image carries (`deploy/pod.Dockerfile`).
 pub const NFT: &str = "/usr/sbin/nft";
 /// How long `nft` may take before the server gives up on it and serves.
 const NFT_WAIT: Duration = Duration::from_secs(10);
+/// Fly's API socket inside the machine (machine metadata, OIDC tokens).
+const FLY_API: &str = "/.fly/api";
 
-/// The nftables ruleset that keeps [`BROWSER_ID`] off [`PRIVATE_NETWORK`]
-/// (decision `browser-private-network`): one table of its own, replaced
-/// whole each time (`add` then `delete` makes the delete safe on a fresh
-/// machine), refusing the browser's connections there at once rather than
-/// letting them hang. Every other user, and the browser's loopback
-/// connection to its proxy, is untouched.
+/// Whether the nftables rule is in place, so the proxy listens on
+/// [`PROXY_PORT`] (set once at startup by [`block_private_network`]).
+static FENCED: AtomicBool = AtomicBool::new(false);
+
+/// The nftables ruleset that fences [`BROWSER_ID`]'s network (decision
+/// `browser-network-fence`): the browser needs nothing but its proxy on
+/// `127.0.0.1:`[`PROXY_PORT`], so that is the one connection its user may
+/// open. It may still answer on connections opened to it over loopback (the
+/// server's DevTools connection: TCP without a lone SYN). Everything else it
+/// sends is refused at once: the server's own port and metrics, Fly's
+/// private network (`fdaa::/16`), the VM's private and link-local addresses,
+/// UDP. One table of its own, replaced whole each time (`add` then `delete`
+/// makes the delete safe on a fresh machine); every other user is untouched.
 pub fn private_network_rules() -> String {
     format!(
         "add table inet construct_browser\n\
@@ -411,19 +441,31 @@ pub fn private_network_rules() -> String {
          table inet construct_browser {{\n\
          \tchain output {{\n\
          \t\ttype filter hook output priority 0; policy accept;\n\
-         \t\tmeta skuid {BROWSER_ID} ip6 daddr {PRIVATE_NETWORK} reject with icmpx admin-prohibited\n\
+         \t\tmeta skuid {BROWSER_ID} jump browser\n\
+         \t}}\n\
+         \tchain browser {{\n\
+         \t\tip daddr 127.0.0.1 tcp dport {PROXY_PORT} accept\n\
+         \t\toifname \"lo\" tcp flags & (syn | ack) != syn accept\n\
+         \t\treject with icmpx admin-prohibited\n\
          \t}}\n\
          }}\n"
     )
 }
 
-/// Keep the browser off Fly's private network, once at startup (decision
-/// `browser-private-network`): the browser only needs loopback (its proxy),
-/// but a page that escapes the renderer would otherwise reach other
-/// machines on `fdaa::/16`. Only when the server is root, so the browser
-/// runs as [`BROWSER_ID`]; elsewhere there is no separate user to fence.
-/// Never fails the server: without `nft` or netfilter it logs a
-/// `browser private network: open` warning and the server serves as before.
+/// Whether this server runs on a Fly machine.
+fn on_fly() -> bool {
+    std::env::var_os("FLY_APP_NAME").is_some_and(|v| !v.is_empty())
+}
+
+/// Fence the browser's network, once at startup (decision
+/// `browser-network-fence`): the browser only needs loopback to its proxy,
+/// but a page that escapes the renderer would otherwise reach the server's
+/// own port, its metrics and other machines on Fly's private network. Only
+/// when the server is root, so the browser runs as [`BROWSER_ID`]; elsewhere
+/// there is no separate user to fence. Never fails the server: without
+/// `nft` or netfilter it logs a `browser private network block: off`
+/// warning and serves as before (and, on Fly, renders need the sandbox:
+/// [`Browser::first_start`]). Also checks Fly's API socket.
 pub async fn block_private_network() {
     // SAFETY: geteuid has no preconditions and can't fail.
     if unsafe { libc::geteuid() } != 0 {
@@ -434,14 +476,65 @@ pub async fn block_private_network() {
         return;
     }
     match apply_rules(Path::new(NFT), &private_network_rules()).await {
-        Ok(()) => tracing::info!(
-            target: "browser",
-            "browser private network block: on (uid {BROWSER_ID} can't connect to {PRIVATE_NETWORK})"
-        ),
+        Ok(()) => {
+            FENCED.store(true, Ordering::Relaxed);
+            tracing::info!(
+                target: "browser",
+                "browser private network block: on (uid {BROWSER_ID} can connect only to its proxy, 127.0.0.1:{PROXY_PORT})"
+            );
+        }
         Err(why) => tracing::warn!(
             target: "browser",
-            "browser private network block: off; nftables did not take the rule ({why}), so the browser could reach {PRIVATE_NETWORK} if a page escaped it"
+            "browser private network block: off; nftables did not take the rule ({why}), so the browser could reach loopback and private networks if a page escaped it"
         ),
+    }
+    fence_fly_api(Path::new(FLY_API));
+}
+
+/// Keep [`BROWSER_ID`] away from Fly's API socket: if others may connect to
+/// it (write permission on the socket), take that away; root, the server,
+/// keeps it. Logs what it found; never fails the server.
+fn fence_fly_api(socket: &Path) {
+    use std::os::unix::fs::PermissionsExt;
+    let Ok(meta) = std::fs::metadata(socket) else {
+        return;
+    };
+    let mode = meta.permissions().mode();
+    if mode & 0o022 == 0 && std::os::unix::fs::MetadataExt::uid(&meta) == 0 {
+        tracing::info!(target: "browser", "{}: the browser's user can't connect to it", socket.display());
+        return;
+    }
+    match std::fs::set_permissions(socket, std::fs::Permissions::from_mode(mode & 0o700)) {
+        Ok(()) => tracing::info!(
+            target: "browser",
+            "{}: was open to other users ({:o}); now only its owner may connect",
+            socket.display(),
+            mode & 0o777
+        ),
+        Err(e) => tracing::warn!(
+            target: "browser",
+            "{}: open to other users ({:o}) and could not be closed ({e}), so a page that escaped the browser could reach Fly's API",
+            socket.display(),
+            mode & 0o777
+        ),
+    }
+}
+
+/// Whether a render must not start without Chromium's sandbox: on Fly as
+/// root, the browser's network is unfenced (no nftables rule), so the
+/// sandbox is the last wall left.
+fn needs_sandbox() -> bool {
+    // SAFETY: geteuid has no preconditions and can't fail.
+    on_fly() && unsafe { libc::geteuid() } == 0 && !FENCED.load(Ordering::Relaxed)
+}
+
+/// The port the browser's proxy listens on: [`PROXY_PORT`] while fenced,
+/// else any free one.
+fn proxy_port() -> u16 {
+    if FENCED.load(Ordering::Relaxed) {
+        PROXY_PORT
+    } else {
+        0
     }
 }
 
@@ -923,8 +1016,9 @@ mod proxy {
     }
 
     impl Proxy {
-        pub async fn start(allow_private: bool) -> std::io::Result<Self> {
-            let listener = TcpListener::bind("127.0.0.1:0").await?;
+        /// On `127.0.0.1:port` (`0`: any free port).
+        pub async fn start(port: u16, allow_private: bool) -> std::io::Result<Self> {
+            let listener = TcpListener::bind(("127.0.0.1", port)).await?;
             let addr = listener.local_addr()?;
             let traffic = Arc::new(AtomicU64::new(0));
             let task = tokio::spawn(async move {
@@ -1140,13 +1234,33 @@ mod tests {
     }
 
     #[test]
-    fn the_block_names_the_browsers_user_and_fly_private_network() {
+    fn the_block_lets_the_browsers_user_reach_only_its_proxy() {
         let rules = private_network_rules();
+        assert!(rules.contains("meta skuid 65534 jump browser"), "{rules}");
         assert!(
-            rules.contains("meta skuid 65534 ip6 daddr fdaa::/16 reject"),
+            rules.contains("ip daddr 127.0.0.1 tcp dport 1009 accept"),
+            "{rules}"
+        );
+        // Everything else it opens is refused, the last rule of its chain.
+        assert!(
+            rules.contains("reject with icmpx admin-prohibited\n\t}\n}\n"),
             "{rules}"
         );
         assert!(rules.starts_with("add table inet construct_browser\n"));
+    }
+
+    #[test]
+    fn fly_api_socket_open_to_others_is_closed() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = TempDir::new().unwrap();
+        let socket = dir.0.join("api");
+        let _l = std::os::unix::net::UnixListener::bind(&socket).unwrap();
+        std::fs::set_permissions(&socket, std::fs::Permissions::from_mode(0o777)).unwrap();
+        fence_fly_api(&socket);
+        let mode = std::fs::metadata(&socket).unwrap().permissions().mode();
+        assert_eq!(mode & 0o077, 0, "{mode:o}");
+        // A missing socket (not on Fly) is fine.
+        fence_fly_api(&dir.0.join("missing"));
     }
 
     /// Where `nft` is installed and may check rules, the ruleset parses.
