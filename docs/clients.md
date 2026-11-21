@@ -155,8 +155,11 @@ a device on the server's build from one behind it or ahead of it. The web client
 `.github/workflows/release.yml` builds the release APK (`scripts/android_native.sh --release`: not debuggable) and the
 Mac app's `.dmg` on every tag `v<version>` and publishes them as a GitHub release (a manual run of the workflow
 uploads them as its artifacts). The version code is the workflow's run number, so each release installs over the
-previous one. The APK is signed with the release key from these repository secrets (without them, with a throwaway
-debug key and a warning):
+previous one. The APK is built unsigned (`scripts/android_native.sh --release --unsigned`) in a job that holds no
+signing secret, since it runs every dependency's build script and restores a cache; a second job that runs no cargo
+signs it with `scripts/android_sign.sh`, writing the keystore just before and deleting it right after. It is signed
+with the release key from these repository secrets (without them, and always on pull requests, with a throwaway debug
+key and a warning):
 
 | Secret | What |
 |---|---|
@@ -179,7 +182,8 @@ keytool -list -v -keystore construct-release.jks -alias construct | grep SHA256 
 `CONSTRUCT_ANDROID_CERT_SHA256` ([server.md](server.md)) so the release build's App Link sign-in redirect verifies;
 the workflow also prints it. To build a signed APK locally, set `CONSTRUCT_ANDROID_KEYSTORE` (the file),
 `CONSTRUCT_ANDROID_KEYSTORE_PASSWORD`, `CONSTRUCT_ANDROID_KEY_ALIAS` and `CONSTRUCT_ANDROID_KEY_PASSWORD` and run
-`scripts/android_native.sh --release`.
+`scripts/android_native.sh --release`, or sign an unsigned build apart with
+`scripts/android_sign.sh --release build/android-native/aligned.apk signed.apk`.
 
 ## Home and the layouts it shows
 
