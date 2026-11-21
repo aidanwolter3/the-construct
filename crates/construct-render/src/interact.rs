@@ -3848,6 +3848,22 @@ impl Session {
                     }
                 }
             }
+            "action.form.clear" => {
+                // Feature `form_clear`: the boxes empty after an Add, and
+                // typing goes on in `focus` (the keyboard stays up).
+                for f in intent["fields"].as_array().into_iter().flatten() {
+                    if let Some(f) = f.as_str() {
+                        self.form.remove(f);
+                    }
+                }
+                if let Some(f) = intent["focus"].as_str().filter(|f| !f.is_empty()) {
+                    self.focused = Some(f.to_owned());
+                    self.edit = None;
+                    out.push(Effect::Focused {
+                        field: f.to_owned(),
+                    });
+                }
+            }
             "action.mutation.optimistic" => self.optimistic(intent, out),
             "action.auth.session" => self.open_session(intent, out),
             "action.auth.login" => self.login(intent, out),
