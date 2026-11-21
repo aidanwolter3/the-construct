@@ -485,6 +485,38 @@ fn panels_draw_over_their_layout_and_a_scrim_tap_closes_them() {
     assert!(s.scene().unwrap().find_text("Home underneath").is_some());
 }
 
+/// A screen opened inside a panel covers the panel's own rows: a tap on
+/// the screen where a row sits underneath must not reach that row.
+#[test]
+fn a_screen_inside_a_panel_keeps_taps_from_the_rows_under_it() {
+    let home: protocol::UiNode = serde_json::from_value(json!({
+        "type": "core://Page", "id": "home", "root": { "type": "core://Button", "label": "Settings",
+            "on_click": { "intent": "action.navigation.open", "layout": "c-tasks", "presentation": "Panel" } } }))
+    .unwrap();
+    let mut s = Session::new("home", home, Default::default(), Viewport::PHONE);
+    s.loader = Some(Box::new(FakePod));
+    s.tap(&Target::Text("Settings".into())).unwrap();
+    let row = s.scene().unwrap().find_node("open_7").unwrap().bounds;
+    let (x, y) = (row[0] + row[2] / 2.0, row[1] + row[3] / 2.0);
+    s.tap(&Target::Id("open_7".into())).unwrap();
+    let scene = s.scene().unwrap();
+    assert!(scene.find_text("The latch sticks.").is_some());
+    let hit = scene.hit_test(x, y).map(|n| n.id.clone());
+    assert_ne!(hit.as_deref(), Some("open_7"), "the covered row");
+    // Screen readers don't find it either.
+    let tree = construct_render::accessibility::tree(scene, &Default::default(), None, "t");
+    assert!(
+        !tree.nodes.values().any(|e| e.id == "open_7"),
+        "the covered row is not exposed"
+    );
+    // The tap does nothing: one Back returns to the panel's rows.
+    s.tap(&Target::Point(x, y)).unwrap();
+    s.dispatch(&json!({ "intent": "action.navigation.back" }))
+        .unwrap();
+    assert!(s.scene().unwrap().find_node("open_7").is_some());
+    assert!(s.scene().unwrap().find_text("The latch sticks.").is_none());
+}
+
 #[test]
 fn a_pressed_tappable_is_drawn_pressed_until_let_go() {
     let mut s = tasks();

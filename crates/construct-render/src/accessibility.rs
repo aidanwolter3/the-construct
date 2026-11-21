@@ -68,9 +68,19 @@ pub fn tree(
         .iter()
         .rposition(|n| n.node_type == "scrim")
         .unwrap_or(0);
+    // Nodes drawn before the last cover (a screen inside its layout's
+    // sheet or panel) and inside it are under that screen.
+    let cover = sem.iter().rposition(|n| n.node_type == crate::scene::COVER);
+    let covered = |i: usize| {
+        cover.is_some_and(|c| {
+            let [cx, cy, cw, ch] = sem[c].bounds;
+            let [x, y, w, h] = sem[i].bounds;
+            i <= c && x >= cx && y >= cy && x + w <= cx + cw && y + h <= cy + ch
+        })
+    };
     let shown = |i: usize| {
         let [_, _, w, h] = sem[i].bounds;
-        i >= first && w > 0.0 && h > 0.0
+        i >= first && w > 0.0 && h > 0.0 && !covered(i)
     };
     // Each node's nearest listed ancestor; an interactive node's
     // descendants fold into it.
