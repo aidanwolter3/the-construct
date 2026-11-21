@@ -1002,10 +1002,16 @@ pub fn prepare(
     })
 }
 
-/// The review id of a prepared copy: what `confirm` repeats.
+/// The review id of a prepared copy: what `confirm` repeats. It covers
+/// everything the review shows that goes to the shelf: the root and the
+/// interface (its input schemas carry a collection's title, options and
+/// defaults), so a change to either after the review needs a new one.
 fn review_id(name: &str, p: &Prepared, visibility: &str) -> String {
-    construct_elements::canonical::id_of_text(&format!("{name}\n{visibility}\n{}", p.root))
-        .replacen("e1-", "r-", 1)
+    construct_elements::canonical::id_of_text(&format!(
+        "{name}\n{visibility}\n{}\n{}",
+        p.root, p.interface
+    ))
+    .replacen("e1-", "r-", 1)
 }
 
 /// Whether every flag of `new` is among `approved` (by kind and value).
@@ -2636,6 +2642,31 @@ fn find_edges(v: &Value, name: &str, f: &mut dyn FnMut(&Map<String, Value>)) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A review covers the interface too: a collection's options changed
+    /// after the review need a new one.
+    #[test]
+    fn a_review_covers_the_interface() {
+        let prepared = |interface: Value| Prepared {
+            root: "e1-root".into(),
+            objects: Vec::new(),
+            interface,
+            flags: Vec::new(),
+            elements: Vec::new(),
+            left_out: Vec::new(),
+        };
+        let a = prepared(json!({ "list": { "options": ["a"] } }));
+        let b = prepared(json!({ "list": { "options": ["a", "secret plan"] } }));
+        assert_eq!(
+            review_id("@a/x", &a, "link"),
+            review_id(
+                "@a/x",
+                &prepared(json!({ "list": { "options": ["a"] } })),
+                "link"
+            )
+        );
+        assert_ne!(review_id("@a/x", &a, "link"), review_id("@a/x", &b, "link"));
+    }
 
     #[test]
     fn handles_and_slugs() {
