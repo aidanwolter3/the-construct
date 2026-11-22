@@ -93,7 +93,9 @@ details: {link: \"url\", extract: \"events\", map: {description: \"description\"
 page has it. A page without structured events: extract \"llm\" with fields [title, start, end, venue, \
 description, url] and a hint (a model reads each changed page). Then a rule: apply_change {op: \
 add_alert, filler: <the site's id>, any: [phrases], none?: [phrases], days?, within_days?}; each site has \
-its own alerts. The events fields can't be renamed or removed.";
+its own alerts. To change how a site is read, set_filler with its id; removing a site and adding it again remakes its
+events (remove_filler deletes a site's rows). Two sites listing the same event (two pages of one listing) store it
+once. The events fields can't be renamed or removed.";
 
 impl Source for EventsAdapter {
     fn element_catalog(&self) -> &'static str {
