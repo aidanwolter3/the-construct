@@ -3,6 +3,8 @@
 Extended by [public-links-share-the-closure](public-links-share-the-closure.md): a copy carries the layouts its
 root opens and embeds, takes `params`, keeps only the rows each list's `where` shows, and is versioned. Amended by
 [public-links-decide-ages](public-links-decide-ages.md): a list's `older_than` is decided on the pod's clock.
+Amended by [public-links-visitor-sets](public-links-visitor-sets.md): a row field the copy's own
+`action.local.set` changes is the visitor's only for the rows and values that set reaches.
 
 Date: 2026-11-17. Related: [sharing](sharing.md), [web-client](web-client.md), [screen-sizes](screen-sizes.md),
 [collections](collections.md).
