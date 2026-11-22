@@ -45,7 +45,8 @@ Both are data in the definition: Claude declares them over MCP, the pod runs the
 `definition.fillers`, at most 50 per collection, each `{id, title, kind, …, mode, key?, every_minutes?,
 on_open_minutes?, upcoming?}` (`crates/source-collections/src/filler.rs`; run by `fill.rs`). Each row remembers the
 filler that wrote it (`collections_rows.filler`), and a filler only touches its own rows, so several sites fill one
-collection side by side.
+collection side by side. A keyed filler leaves out an item whose key another filler's row already holds (decision
+[fillers-dont-repeat-rows](fillers-dont-repeat-rows.md)).
 
 - **`fetch`** (no model call per fill): `url`, or `url_field` (each row's own page fills that row), `extract`,
   `items`, `types`, `script`, `zone`, `map` (field → path, or CSS selector), `headers` (a value may name a sealed
@@ -118,7 +119,8 @@ alerts use its built-in app's channel. Rows are served with `alert_matched` and 
   `alerts_text`) and `collection:<c>:alerted`. New data paths: `/v1/collections/<c>/fillers/<f>` (the filler, its
   rows, its alerts) and `/v1/collections/<c>/row?id=<id>` (one row's screen).
 - MCP: `define_collection` takes `fillers` and `alerts`; `apply_change` ops `set_filler` (add, or change by id),
-  `remove_filler` (its rows stay, unlocked; its alerts go), `add_alert`, `update_alert`, `remove_alert`; new tools
+  `remove_filler` (its alerts go; a `replace` filler's rows are deleted, restorable, unless `keep_rows: true`,
+  which leaves them unlocked: decision [fillers-dont-repeat-rows](fillers-dont-repeat-rows.md)), `add_alert`, `update_alert`, `remove_alert`; new tools
   `collections_preview` (try a recipe, nothing stored; without a map, sample items to write paths from),
   `collections_status`, `collections_refresh`, `collections_set_secret` (sealed with the server key, never shown
   back, sent only to the host it was stored for: [collection-secret-hosts](collection-secret-hosts.md)).

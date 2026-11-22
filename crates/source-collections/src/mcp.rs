@@ -200,7 +200,7 @@ pub fn tools() -> Vec<Value> {
         ),
         tool(
             "apply_change",
-            "Change a collection's definition and the layouts that show it in one step. changes: [{op: add_field, name, type, options?, collection?, unique?, optional?, default?, compute?} | {op: rename_field, field, to} | {op: remove_field, field} | {op: restore_field, field} | {op: update_field, field, type?, options?, collection?, unique?, optional?, default?, compute?} | {op: set_action, action} | {op: remove_action, action: name} | {op: set_view, view} | {op: remove_view, view: name} | {op: recompute_field, field} | {op: set_order, field?: name or [names], descending?} | {op: set_title, title} | {op: add_reminder, field, title, body?, at?, unless?, label?, app?} | {op: update_reminder, reminder: id, ...} | {op: remove_reminder, reminder: id} | {op: set_filler, filler} | {op: remove_filler, filler: id} | {op: add_alert, ...} | {op: update_alert, alert: id, ...} | {op: remove_alert, alert: id}]. set_filler adds a filler (as define_collection's fillers), or changes the one filler.id names, and starts its fill; remove_filler stops one (its rows stay, no longer locked; its alerts go). add_alert notifies once per row when a row matches (as define_collection's alerts). describe_collection lists fillers and alerts with their ids. A reminder notifies the user once per row when its date field is reached: on that date at at (HH:MM, default 09:00) in the pod's time zone (set_time_zone), unless the row then has unless {field, equals} (e.g. {field: \"done\", equals: true}); dates before the day it was added never notify, and a reminder more than 7 days late is dropped. title and body are the notification's text with {field} replaced by the row's value; label names it in the user's notification settings (default \"<Title>: <field>\"); app (a layout id) is the layout it comes from and opens, default the oldest layout that shows the collection (with none, nothing is sent). describe_collection lists reminders with their ids. compute (one kind or a list tried in order: {kind: \"expr\", expr}, {kind: \"lookup\", from, collection, key, value, match?, learn?}, {kind: \"count\", from, collection, key, where?} or {kind: \"model\", from, prompt}, as in define_collection) is computed for existing rows too (a model only fills empty ones); null stops computing and keeps the values. Lookups and counts are live: a change to the rows of the collection they read recomputes the rows it affects at once, cascading. recompute_field computes the field again for every row (a row only the model could answer keeps its value), e.g. after changing a lookup's match. Fields and actions are as in define_collection. update_field {type: \"ref\", collection} turns a text field into a ref: each value becomes the id of the row of that collection whose id or unique text field equals it (ignoring case and spacing; make the target's name field unique first); values that match no row are kept aside and reported in conversions (set_aside, samples). unique: true fails while live rows share a value (the error lists them). set_action adds an action or replaces the one of that name; remove_action removes it. set_view adds a view (as define_collection's views) or replaces the one of that name; remove_view removes it; a layout listing a view that would be gone, or a field a view reads being removed, refuses the change. A collection can't be deleted while another collection's ref, lookup, count, rollup or action names it. Every layout using Collections is checked, as devices draw it, against the new definition; if any would break, nothing applies and the error names the layout and the binding. apps: [{app, layout | json_patch, base_version?}] edits layouts in the same step (app is a layout id; base_version is the version get_layout shows). Renamed fields keep their old name as an alias; removed fields are hidden and restorable for 30 days; type changes convert row by row and keep values that don't convert aside.",
+            "Change a collection's definition and the layouts that show it in one step. changes: [{op: add_field, name, type, options?, collection?, unique?, optional?, default?, compute?} | {op: rename_field, field, to} | {op: remove_field, field} | {op: restore_field, field} | {op: update_field, field, type?, options?, collection?, unique?, optional?, default?, compute?} | {op: set_action, action} | {op: remove_action, action: name} | {op: set_view, view} | {op: remove_view, view: name} | {op: recompute_field, field} | {op: set_order, field?: name or [names], descending?} | {op: set_title, title} | {op: add_reminder, field, title, body?, at?, unless?, label?, app?} | {op: update_reminder, reminder: id, ...} | {op: remove_reminder, reminder: id} | {op: set_filler, filler} | {op: remove_filler, filler: id, keep_rows?} | {op: add_alert, ...} | {op: update_alert, alert: id, ...} | {op: remove_alert, alert: id}]. set_filler adds a filler (as define_collection's fillers), or changes the one filler.id names, and starts its fill; remove_filler stops one (its alerts go; a replace filler's rows are deleted, restorable, unless keep_rows: true hands them to people, no longer locked; an upsert or per-row filler's rows stay). To change how a site is read, set_filler with its id: removing it and adding a new one remakes its rows. A keyed filler leaves out an item whose key another filler's row already holds (the oldest row keeps it). add_alert notifies once per row when a row matches (as define_collection's alerts). describe_collection lists fillers and alerts with their ids. A reminder notifies the user once per row when its date field is reached: on that date at at (HH:MM, default 09:00) in the pod's time zone (set_time_zone), unless the row then has unless {field, equals} (e.g. {field: \"done\", equals: true}); dates before the day it was added never notify, and a reminder more than 7 days late is dropped. title and body are the notification's text with {field} replaced by the row's value; label names it in the user's notification settings (default \"<Title>: <field>\"); app (a layout id) is the layout it comes from and opens, default the oldest layout that shows the collection (with none, nothing is sent). describe_collection lists reminders with their ids. compute (one kind or a list tried in order: {kind: \"expr\", expr}, {kind: \"lookup\", from, collection, key, value, match?, learn?}, {kind: \"count\", from, collection, key, where?} or {kind: \"model\", from, prompt}, as in define_collection) is computed for existing rows too (a model only fills empty ones); null stops computing and keeps the values. Lookups and counts are live: a change to the rows of the collection they read recomputes the rows it affects at once, cascading. recompute_field computes the field again for every row (a row only the model could answer keeps its value), e.g. after changing a lookup's match. Fields and actions are as in define_collection. update_field {type: \"ref\", collection} turns a text field into a ref: each value becomes the id of the row of that collection whose id or unique text field equals it (ignoring case and spacing; make the target's name field unique first); values that match no row are kept aside and reported in conversions (set_aside, samples). unique: true fails while live rows share a value (the error lists them). set_action adds an action or replaces the one of that name; remove_action removes it. set_view adds a view (as define_collection's views) or replaces the one of that name; remove_view removes it; a layout listing a view that would be gone, or a field a view reads being removed, refuses the change. A collection can't be deleted while another collection's ref, lookup, count, rollup or action names it. Every layout using Collections is checked, as devices draw it, against the new definition; if any would break, nothing applies and the error names the layout and the binding. apps: [{app, layout | json_patch, base_version?}] edits layouts in the same step (app is a layout id; base_version is the version get_layout shows). Renamed fields keep their old name as an alias; removed fields are hidden and restorable for 30 days; type changes convert row by row and keep values that don't convert aside.",
             json!({ "collection": collection, "base_version": { "type": "integer", "description": "The definition version you read" },
                     "changes": { "type": "array", "items": { "type": "object" } }, "note": note }),
             &["collection", "changes"],
@@ -1594,6 +1594,19 @@ async fn apply_change(
     let changed_fillers = planned.fillers_changed(&def);
     let warnings = crate::filler::toggle_warnings(&planned.def);
     let keep: Vec<String> = planned.def.fillers.iter().map(|f| f.id.clone()).collect();
+    // Removed fillers whose rows go with them (`remove_filler` without
+    // `keep_rows`).
+    let kept_rows: Vec<&str> = ops
+        .iter()
+        .filter(|o| o["op"] == "remove_filler" && o["keep_rows"] == true)
+        .filter_map(|o| o["filler"].as_str())
+        .collect();
+    let dropped: Vec<crate::filler::Filler> = def
+        .fillers
+        .iter()
+        .filter(|f| !keep.contains(&f.id) && !kept_rows.contains(&f.id.as_str()))
+        .cloned()
+        .collect();
     for r in &planned.def.reminders {
         if let Some(app) = r.app.clone() {
             let exists = pod
@@ -1610,9 +1623,24 @@ async fn apply_change(
     let note = note_arg(args, "Changed");
     let mut out = commit(pod, caps, &name, version, planned, args, note).await?;
     let n = name.clone();
-    let _ = pod
-        .blocking(move |s| s.transaction(|tx| crate::fill::forget_removed(tx, &n, &keep)))
-        .await;
+    let now = pod_core::util::now_secs();
+    let removed_rows = pod
+        .blocking(move |s| {
+            s.transaction(|tx| {
+                let mut gone = 0;
+                for f in &dropped {
+                    gone += crate::fill::drop_rows_of(tx, &def, f, now)?;
+                }
+                crate::fill::forget_removed(tx, &n, &keep)?;
+                Ok(gone)
+            })
+        })
+        .await
+        .unwrap_or(0);
+    if removed_rows > 0 {
+        out["removed_rows"] = json!({ "rows": removed_rows,
+            "detail": "the removed filler's rows were deleted (restorable with edit_rows restore for 30 days)" });
+    }
     for f in &changed_fillers {
         crate::fill::spawn(pod, &name, Some(f), true);
     }

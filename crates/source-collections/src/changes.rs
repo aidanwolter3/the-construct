@@ -16,7 +16,7 @@
 //! | `{op: update_reminder, reminder, ...}` | change what it names |
 //! | `{op: remove_reminder, reminder}` | stop it |
 //! | `{op: set_filler, filler}` | add a filler, or change the one `filler.id` names (decision `collection-fillers`; [`crate::filler::parse`]) |
-//! | `{op: remove_filler, filler}` | stop that filler (its rows stay, no longer locked) |
+//! | `{op: remove_filler, filler, keep_rows?}` | stop that filler; a `replace` filler's rows are deleted (restorable) unless `keep_rows: true`, which hands them to people, no longer locked; an `upsert` or per-row filler's rows stay |
 //! | `{op: add_alert, ...}`, `{op: update_alert, alert, ...}`, `{op: remove_alert, alert}` | notify when a row matches ([`crate::alerts`]) |
 //! | `{op: set_action, action}` | add an insert-from-query action, or replace the one of that name ([`crate::actions`]) |
 //! | `{op: remove_action, action}` | remove the action of that name |
@@ -329,6 +329,9 @@ fn apply_op(
         }
         "remove_filler" => {
             let id = arg("filler").to_owned();
+            if op.get("keep_rows").is_some_and(|v| !v.is_boolean()) {
+                return Err("remove_filler.keep_rows is true or false".into());
+            }
             let before = def.fillers.len();
             def.fillers.retain(|f| f.id != id);
             if def.fillers.len() == before {

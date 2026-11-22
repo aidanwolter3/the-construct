@@ -380,7 +380,11 @@ MCP tools: `list_collections`, `define_collection`, `describe_collection`, `appl
 A collection can keep itself current from the web (decision
 [`collection-fillers`](decisions/collection-fillers.md)). Each **filler** writes its own rows: on a schedule
 (`every_minutes`), when a layout showing it opens with stale data (`on_open_minutes`), from Claude
-(`collections_refresh`), or from a layout's refresh action. A filler is data in the definition, not code.
+(`collections_refresh`), or from a layout's refresh action. A filler is data in the definition, not code. A keyed
+filler leaves out an item whose key another filler's row already holds, so two pages or feeds of one site store an
+event once, and `remove_filler` deletes a `replace` filler's rows (restorable; `keep_rows: true` keeps them, unlocked),
+so change a site with `set_filler` and its id rather than removing and adding it (decision
+[`fillers-dont-repeat-rows`](decisions/fillers-dont-repeat-rows.md)).
 
 - **`fetch`** (no model call per fill): a URL (or each row's own URL), an extractor and a map from fields to paths in
   each item. Extractors: `events` (an iCalendar feed or a page's schema.org events), `json`, `embedded-json`,

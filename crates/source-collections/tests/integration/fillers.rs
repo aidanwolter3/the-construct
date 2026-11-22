@@ -119,6 +119,15 @@ END:VCALENDAR\r\n"
         .into_response()
 }
 
+/// Another listing of the club: the Friday show again, and a Saturday one.
+async fn club_more_ics() -> Response {
+    "BEGIN:VCALENDAR\r\n\
+BEGIN:VEVENT\r\nUID:bc1\r\nSUMMARY:Friday Improv\r\nDTSTART;TZID=America/Denver:20991106T193000\r\nEND:VEVENT\r\n\
+BEGIN:VEVENT\r\nUID:sat1\r\nSUMMARY:Saturday Improv\r\nDTSTART;TZID=America/Denver:20991107T193000\r\nEND:VEVENT\r\n\
+END:VCALENDAR\r\n"
+        .into_response()
+}
+
 /// A long calendar: 300 past events listed before an upcoming one.
 async fn long_ics() -> Response {
     let mut feed = String::from("BEGIN:VCALENDAR\r\n");
@@ -155,6 +164,7 @@ async fn serve(site: Arc<Site>) -> String {
         .route("/private.json", get(private_feed))
         .route("/club.ics", get(club_ics))
         .route("/long.ics", get(long_ics))
+        .route("/club-more.ics", get(club_more_ics))
         .route("/shows/{id}", get(show_page))
         .route("/plain", get(plain_page))
         .route("/echo", get(echo))
@@ -501,11 +511,12 @@ async fn a_fetch_recipe_keeps_results_current() {
     .await;
     assert_eq!((s, b["refreshing"].clone()), (StatusCode::OK, json!(true)));
     settle(&pod, "results").await;
-    // Removing the filler keeps the rows and frees them.
+    // Removing the filler with keep_rows keeps the rows and frees them.
     ok(
         &pod,
         "apply_change",
-        json!({"collection": "results", "changes": [{"op": "remove_filler", "filler": filler}]}),
+        json!({"collection": "results", "changes": [
+            {"op": "remove_filler", "filler": filler, "keep_rows": true}]}),
     )
     .await;
     assert_eq!(rows(&pod, "results").await.len(), 2);
@@ -1637,4 +1648,115 @@ async fn a_notification_follows_whether_its_alert_still_matches() {
     assert_eq!(note(pod.clone()).await["subject_alert_matched"], true);
     let (_, list) = call(&pod, "GET", "/v1/notifications", None).await;
     assert_eq!(list["unread_total"], 1, "{list}");
+}
+
+#[tokio::test]
+async fn two_fillers_dont_store_one_event_twice_and_removed_ones_take_their_rows() {
+    // Decision `fillers-dont-repeat-rows`: a second listing of the same
+    // events (a site's page two, a second feed) leaves out the ones the first
+    // already stores, a younger copy a filler already holds goes at its next
+    // fill, and removing a filler takes its rows with it (restorable) unless
+    // keep_rows says otherwise.
+    let base = serve(Arc::new(Site::default())).await;
+    let pod = pod_with(None);
+    let filler = |title: &str, path: &str| {
+        json!({"kind": "fetch", "title": title, "url": format!("{base}{path}"), "extract": "events",
+            "key": "source_id", "upcoming": "start", "zone": "America/Denver",
+            "map": {"source_id": "id", "title": "title", "start": "start"}})
+    };
+    ok(
+        &pod,
+        "define_collection",
+        json!({"name": "events", "fields": [
+            {"name": "source_id", "type": "text", "optional": true},
+            {"name": "title", "type": "text", "optional": true},
+            {"name": "start", "type": "datetime", "optional": true}],
+        "fillers": [filler("Club", "/club.ics")]}),
+    )
+    .await;
+    settle(&pod, "events").await;
+    ok(
+        &pod,
+        "apply_change",
+        json!({"collection": "events", "changes": [
+            {"op": "set_filler", "filler": filler("Club, more", "/club-more.ics")}]}),
+    )
+    .await;
+    settle(&pod, "events").await;
+    let ids = filler_ids(&pod, "events").await;
+    let titles = |r: &[Value]| {
+        let mut t: Vec<String> = r
+            .iter()
+            .map(|r| r["title"].as_str().unwrap().to_owned())
+            .collect();
+        t.sort();
+        t
+    };
+    let r = rows(&pod, "events").await;
+    assert_eq!(
+        titles(&r),
+        [
+            "Friday Improv",
+            "Improv class (Brass Lanterns teach)",
+            "Saturday Improv"
+        ],
+        "the Friday show once: {r:?}"
+    );
+    // A copy made before this (the second filler's own, younger) goes at its
+    // next fill.
+    pod.store()
+        .with_conn(|c| {
+            let mut copy = source_collections::db::all_rows(c, "events", false)?
+                .into_iter()
+                .find(|r| r.values.values().any(|v| v == "bc1"))
+                .unwrap();
+            copy.id = source_collections::db::new_id("r");
+            copy.created_at += 10;
+            copy.filler = Some(ids[1].clone());
+            source_collections::db::insert_row(c, "events", &copy)
+        })
+        .unwrap();
+    assert_eq!(rows(&pod, "events").await.len(), 4);
+    fill::fill(&pod, "events", &ids[1], true).await;
+    let r = rows(&pod, "events").await;
+    assert_eq!(titles(&r).len(), 3, "the younger copy went: {r:?}");
+    // Removing the second filler deletes its Saturday row, restorably.
+    let out = ok(
+        &pod,
+        "apply_change",
+        json!({"collection": "events", "changes": [{"op": "remove_filler", "filler": ids[1]}]}),
+    )
+    .await;
+    assert_eq!(out["removed_rows"]["rows"], 1, "{out}");
+    let r = rows(&pod, "events").await;
+    assert_eq!(
+        titles(&r),
+        ["Friday Improv", "Improv class (Brass Lanterns teach)"]
+    );
+    let all = ok(&pod, "export_collection", json!({"collection": "events"})).await;
+    assert_eq!(
+        all["rows"].as_array().unwrap().len(),
+        3,
+        "kept deleted: {all}"
+    );
+    // With keep_rows the rows stay, handed to people.
+    ok(
+        &pod,
+        "apply_change",
+        json!({"collection": "events", "changes": [
+            {"op": "remove_filler", "filler": ids[0], "keep_rows": true}]}),
+    )
+    .await;
+    assert_eq!(rows(&pod, "events").await.len(), 2);
+    let (err, e) = tool(
+        &pod,
+        "apply_change",
+        json!({"collection": "events", "changes": [
+            {"op": "remove_filler", "filler": "nope", "keep_rows": "yes"}]}),
+    )
+    .await;
+    assert!(
+        err && e["detail"].as_str().unwrap().contains("keep_rows"),
+        "{e}"
+    );
 }

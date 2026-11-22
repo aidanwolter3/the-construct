@@ -195,6 +195,34 @@ pub fn save_state(
     Ok(())
 }
 
+/// Delete the rows filler `f` of `def` wrote, as `remove_filler` does for a
+/// filler that owned them (`replace`): the same as a fill that lists
+/// nothing, so a site set up again under a new filler doesn't leave the old
+/// setup's copies beside the new ones. Rows its `keep` keeps stay. They go as
+/// a person's delete does (restorable for the purge window), not for good.
+/// How many went.
+pub fn drop_rows_of(
+    tx: &Connection,
+    def: &Definition,
+    f: &Filler,
+    now: i64,
+) -> rusqlite::Result<usize> {
+    if !f.owns_rows() {
+        return Ok(0);
+    }
+    let mut n = 0;
+    for mut r in db::all_rows(tx, &def.name, false)? {
+        if r.filler.as_deref() != Some(f.id.as_str()) || f.keeps(def, &r.values) {
+            continue;
+        }
+        r.deleted_at = Some(now);
+        r.updated_at = now;
+        db::save_row(tx, &def.name, &r)?;
+        n += 1;
+    }
+    Ok(n)
+}
+
 /// Forget the state of fillers of `collection` no longer in `keep`, and
 /// hand their rows to people (they stay, no longer locked).
 pub fn forget_removed(tx: &Connection, collection: &str, keep: &[String]) -> rusqlite::Result<()> {
@@ -679,6 +707,11 @@ impl Stored {
     }
 }
 
+/// Whether row `a` was made before row `b` (ties by id, so two fillers agree).
+fn older(a: &Row, b: &Row) -> bool {
+    (a.created_at, &a.id) < (b.created_at, &b.id)
+}
+
 fn hard_delete(tx: &Connection, collection: &str, id: &str) -> rusqlite::Result<()> {
     db::note_change(tx, collection, id)?;
     tx.execute(
@@ -879,6 +912,32 @@ pub fn store_scoped(
         .filter(|r| r.filler.as_deref() == Some(filler.id.as_str()) && in_scope(r))
         .collect();
     if let Some(key) = &filler.key {
+        // The same item another filler already stores (two pages or feeds of
+        // one site listing it) isn't stored twice: the oldest row has it,
+        // and a younger copy is left out, or deleted if it is this filler's
+        // own (decision `fillers-dont-repeat-rows`). Scoped (`for_each`)
+        // answers are each their own parent's, so only an unscoped fill
+        // looks; rows a person added (no filler) aren't another filler's.
+        let mut others: HashMap<String, Row> = HashMap::new();
+        if scope.is_none() {
+            let live: HashSet<&str> = def
+                .fillers
+                .iter()
+                .map(|f| f.id.as_str())
+                .filter(|f| *f != filler.id)
+                .collect();
+            for r in db::all_rows(tx, name, false)? {
+                if !r.filler.as_deref().is_some_and(|f| live.contains(f)) {
+                    continue;
+                }
+                let Some(k) = r.values.get(key).and_then(key_text) else {
+                    continue;
+                };
+                if others.get(&k).is_none_or(|o| older(&r, o)) {
+                    others.insert(k, r);
+                }
+            }
+        }
         let mut by_key: HashMap<String, Row> = HashMap::new();
         let mut unkeyed: Vec<Row> = Vec::new();
         for r in existing {
@@ -896,6 +955,15 @@ pub fn store_scoped(
                 continue;
             };
             if !seen.insert(k.clone()) {
+                out.dropped += 1;
+                continue;
+            }
+            if let Some(o) = others.get(&k)
+                && by_key.get(&k).is_none_or(|r| older(o, r))
+            {
+                // Another filler's row has it: this filler's own copy (if
+                // any) goes with the rows the answer left out.
+                seen.remove(&k);
                 out.dropped += 1;
                 continue;
             }
