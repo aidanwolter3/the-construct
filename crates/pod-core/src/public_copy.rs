@@ -368,8 +368,9 @@ struct Shows<'a> {
     /// list is walked, unless a list of that key hides them.
     counted: BTreeMap<String, BTreeMap<String, (String, BTreeSet<String>)>>,
     /// Row fields a visitor's own page sets (a kept `action.local.set` of
-    /// a row): a condition on them is the visitor's to change.
-    visitor_fields: BTreeSet<String>,
+    /// a row), each with the sets that write it: a condition on them is the
+    /// visitor's to change, as far as those sets reach.
+    visitor_fields: BTreeMap<String, Vec<VisitorSet>>,
     /// The pod's clock when the copy is made: its zone and the minute it is
     /// there (decision `public-links-decide-ages`). `None`: an age can't be
     /// decided, and its rows stay out.
@@ -416,6 +417,23 @@ impl Clock {
             .and_then(|t| construct_render::dates::moment(t, "", Some(&self.zone)))
             .map(|m| m.day * 1_440 + m.minute.unwrap_or(0))
             .is_some_and(|at| at + (secs + 59) / 60 <= self.now)
+    }
+}
+
+/// One kept `action.local.set` of a field: which row it writes and what.
+#[derive(Debug, Clone, PartialEq)]
+struct VisitorSet {
+    /// The one row it writes (an `entity_uri` without bindings); `None`:
+    /// whichever row it is bound to, so any.
+    target: Option<String>,
+    /// The values it writes (a JSON literal `value_expr`); `None`: one
+    /// computed from the row (`!entity.open`) or a binding, so any.
+    values: Option<Value>,
+}
+
+impl VisitorSet {
+    fn reaches(&self, item: Option<&str>) -> bool {
+        self.target.as_deref().is_none_or(|t| item == Some(t))
     }
 }
 
@@ -469,7 +487,7 @@ impl<'a> Shows<'a> {
             drawn: BTreeMap::new(),
             hidden: BTreeMap::new(),
             counted: BTreeMap::new(),
-            visitor_fields: nodes.values().fold(BTreeSet::new(), |mut out, n| {
+            visitor_fields: nodes.values().fold(BTreeMap::new(), |mut out, n| {
                 visitor_set(n, &mut out);
                 out
             }),
@@ -650,7 +668,7 @@ impl<'a> Shows<'a> {
             return Some(older != (c["not"] == true));
         }
         let raw = c["equals"].as_str().unwrap_or("");
-        if self.visitor(raw) {
+        if self.visitor(raw, item) {
             return Some(true);
         }
         let want = self.bind(raw, u, item);
@@ -670,20 +688,47 @@ impl<'a> Shows<'a> {
     }
 
     /// Whether `expr` reads what the visitor's own page decides: a form
-    /// value, a `local://` entity, a row field their page sets.
-    fn visitor(&self, expr: &str) -> bool {
+    /// value, a `local://` entity, a field of row `item` their page sets.
+    fn visitor(&self, expr: &str, item: Option<&str>) -> bool {
         expr.contains("$form.")
             || expr.contains("local://")
             || expr.match_indices("$item.").any(|(i, _)| {
                 self.visitor_fields
-                    .contains(word(&expr[i + "$item.".len()..]))
+                    .get(word(&expr[i + "$item.".len()..]))
+                    .is_some_and(|sets| sets.iter().any(|s| s.reaches(item)))
             })
+    }
+
+    /// The values `$item.<field>` of row `item` can have on the visitor's
+    /// page when `expr` is that and only fixed values are set on it: the
+    /// row's own, then each a set writes. `None`: it isn't such a read
+    /// (it is the row's alone, or a set computes what it writes).
+    fn visitor_values(&self, expr: &str, item: Option<&str>) -> Option<Vec<Value>> {
+        let f = expr.trim().strip_prefix("$item.")?;
+        if f.is_empty() || word(f) != f {
+            return None;
+        }
+        let sets: Vec<&VisitorSet> = self
+            .visitor_fields
+            .get(f)?
+            .iter()
+            .filter(|s| s.reaches(item))
+            .collect();
+        if sets.is_empty() {
+            return None;
+        }
+        let row = item.and_then(|i| self.pool.entities.get(i));
+        let mut out = vec![row.and_then(|r| r.get(f)).cloned().unwrap_or(Value::Null)];
+        for s in sets {
+            out.push(s.values.clone()?);
+        }
+        Some(out)
     }
 
     /// A condition's value (`core://Conditional` `value`, an embed's
     /// `show_when`), as the renderer reads it (`bind.rs` `value`).
     fn read(&self, expr: &str, u: &Use, item: Option<&str>) -> Read {
-        if self.visitor(expr) {
+        if self.visitor(expr, item) {
             return Read::Visitor;
         }
         let e = expr.trim();
@@ -775,17 +820,34 @@ impl<'a> Shows<'a> {
     }
 
     /// A value tested against `equals`, or for truthiness.
+    /// A row field the visitor's page sets only to fixed values is decided
+    /// for each value it can have: the visitor decides only when they
+    /// differ (a "Hide" that sets `private` to true never shows what
+    /// `private` hides).
     fn compare(&self, value: &str, o: &Map<String, Value>, u: &Use, item: Option<&str>) -> Test {
-        let v = match self.read(value, u, item) {
-            Read::Known(v) => v,
-            Read::Visitor => return Test::Visitor,
-            Read::Unknown => return Test::Unknown,
-        };
+        if let Some(values) = self.visitor_values(value, item) {
+            let mut tests = values.iter().map(|v| self.against(v, o, u, item));
+            let first = tests.next().unwrap_or(Test::Unknown);
+            return if tests.all(|t| t == first) {
+                first
+            } else {
+                Test::Visitor
+            };
+        }
+        match self.read(value, u, item) {
+            Read::Known(v) => self.against(&v, o, u, item),
+            Read::Visitor => Test::Visitor,
+            Read::Unknown => Test::Unknown,
+        }
+    }
+
+    /// `v` tested against `o`'s `equals`, or for truthiness.
+    fn against(&self, v: &Value, o: &Map<String, Value>, u: &Use, item: Option<&str>) -> Test {
         match o.get("equals").and_then(Value::as_str) {
-            None => Test::Known(truthy(&v)),
-            Some(e) if self.visitor(e) => Test::Visitor,
+            None => Test::Known(truthy(v)),
+            Some(e) if self.visitor(e, item) => Test::Visitor,
             Some(e) => match self.text(e, u, item) {
-                Some(want) => Test::Known(render(&v) == want),
+                Some(want) => Test::Known(render(v) == want),
                 None => Test::Unknown,
             },
         }
@@ -989,25 +1051,31 @@ impl<'a> Shows<'a> {
 }
 
 /// The row fields a copy's own `action.local.set` sets on the visitor's
-/// device (a row's "expanded"): what the visitor's page decides.
-fn visitor_set(v: &Value, out: &mut BTreeSet<String>) {
+/// device (a row's "expanded"), with the row and value each set writes:
+/// what the visitor's page decides.
+fn visitor_set(v: &Value, out: &mut BTreeMap<String, Vec<VisitorSet>>) {
     match v {
         Value::Array(a) => a.iter().for_each(|x| visitor_set(x, out)),
         Value::Object(o) => {
+            let uri = o.get("entity_uri").and_then(Value::as_str).unwrap_or("");
             if o.get("intent").and_then(Value::as_str) == Some("action.local.set")
-                && !o
-                    .get("entity_uri")
-                    .and_then(Value::as_str)
-                    .is_some_and(|u| u.starts_with("local://"))
+                && !uri.starts_with("local://")
             {
-                names(&o["field"], out);
-                for f in o
-                    .get("also")
-                    .and_then(Value::as_array)
-                    .into_iter()
-                    .flatten()
-                {
-                    names(&f["field"], out);
+                let target = (!uri.contains('$')).then(|| uri.to_owned());
+                let also = o.get("also").and_then(Value::as_array);
+                for w in std::iter::once(v).chain(also.into_iter().flatten()) {
+                    let mut fields = BTreeSet::new();
+                    names(&w["field"], &mut fields);
+                    let values = w["value_expr"]
+                        .as_str()
+                        .filter(|e| !e.contains('$'))
+                        .and_then(|e| serde_json::from_str::<Value>(e.trim()).ok());
+                    for f in fields {
+                        out.entry(f).or_default().push(VisitorSet {
+                            target: target.clone(),
+                            values: values.clone(),
+                        });
+                    }
                 }
             }
             o.values().for_each(|x| visitor_set(x, out));
@@ -2369,6 +2437,50 @@ mod tests {
                 "content": { "type": "core://Text", "value_expr": "$item.body" } } ] } });
         let d = minimize(&diary(), &node, &[], Use::default());
         assert_eq!(rows_of(&d)["notes://diary/1"]["body"], "sunny");
+    }
+
+    /// A local.set the visitor can tap reaches only the row it writes and
+    /// the value it writes: a "Hide" that sets `private` to true never
+    /// shows what `private` hides, and a set of one fixed row leaves the
+    /// others' `private` theirs.
+    #[test]
+    fn a_visitor_set_shows_only_what_its_value_reaches() {
+        let list = |set: Value| {
+            json!({ "type": "core://List", "query_key": "note:diary", "item_template":
+                { "type": "core://Column", "children": [
+                  { "type": "core://Tappable", "content": { "type": "core://Text", "value_expr": "$item.title" },
+                    "on_click": set },
+                  { "type": "core://Conditional", "value": "$item.private", "not": true,
+                    "content": { "type": "core://Text", "value_expr": "$item.body" } } ] } })
+        };
+        let hide = list(
+            json!({ "intent": "action.local.set", "entity_uri": "notes://diary/$item.id",
+            "field": "private", "value_expr": "true" }),
+        );
+        let d = minimize(&diary(), &hide, &[], Use::default());
+        let rows = rows_of(&d);
+        assert_eq!(rows["notes://diary/1"]["body"], "sunny");
+        assert!(rows["notes://diary/2"].get("body").is_none(), "{rows:?}");
+        // A set that can write false (a toggle, or a "Show") is the visitor's.
+        let show = list(
+            json!({ "intent": "action.local.set", "entity_uri": "notes://diary/$item.id",
+            "field": "private", "value_expr": "false" }),
+        );
+        let d = minimize(&diary(), &show, &[], Use::default());
+        assert_eq!(rows_of(&d)["notes://diary/2"]["body"], "hard day");
+        let toggle = list(
+            json!({ "intent": "action.local.set", "entity_uri": "notes://diary/$item.id",
+            "field": "private", "value_expr": "!entity.private" }),
+        );
+        let d = minimize(&diary(), &toggle, &[], Use::default());
+        assert_eq!(rows_of(&d)["notes://diary/2"]["body"], "hard day");
+        // One fixed row's set: only that row is the visitor's.
+        let one = list(
+            json!({ "intent": "action.local.set", "entity_uri": "notes://diary/9",
+            "field": "private", "value_expr": "false" }),
+        );
+        let d = minimize(&diary(), &one, &[], Use::default());
+        assert!(rows_of(&d)["notes://diary/2"].get("body").is_none());
     }
 
     /// Issue #446: a refresh lets out edits and removals of the rows the
