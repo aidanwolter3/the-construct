@@ -1,0 +1,52 @@
+{
+  "note": "First version: the small capitals label over a heading that sheets, lessons and cards repeat",
+  "component": {
+    "doc": "An eyebrow: a small label in capitals over a heading, in one colour (what a sheet is about, a lesson's course, a card's kind): Caption text, SemiBold, in capitals (core://Text caps), in the accent colour unless color is given. For a quiet heading over a grouped card use core:section_label.",
+    "params": [
+      {
+        "name": "text",
+        "type": "text",
+        "doc": "The label, written as it should read (the app draws it in capitals); bindings allowed, such as $item.day evening.",
+        "required": true
+      },
+      {
+        "name": "color",
+        "type": "text",
+        "doc": "Its colour, such as ${local://theme#error} for something that needs fixing.",
+        "default": "${local://theme#accent}"
+      }
+    ],
+    "template": {
+      "type": "core://Box",
+      "content_color": "$arg.color",
+      "content": {
+        "type": "core://Text",
+        "value_expr": "$arg.text",
+        "style": "Caption",
+        "caps": true,
+        "weight": "SemiBold"
+      }
+    },
+    "examples": [
+      {
+        "args": {
+          "text": "$item.day evening"
+        },
+        "note": "over a sheet's title: which evening is being planned"
+      },
+      {
+        "args": {
+          "text": "$item.day · clash",
+          "color": "${local://theme#error}"
+        },
+        "note": "over the title of something that needs fixing, in the error colour"
+      },
+      {
+        "args": {
+          "text": "Lesson 3 of 8"
+        },
+        "note": "over a lesson's title: where it sits in its course"
+      }
+    ]
+  }
+}
