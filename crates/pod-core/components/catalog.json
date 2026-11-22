@@ -55,6 +55,10 @@
     "category": "pattern",
     "use_when": "A list or screen with nothing in it yet: an icon, a title, why it's empty or when it fills, and one action. Use it instead of a lone muted line."
   },
+  "eyebrow": {
+    "category": "primitive",
+    "use_when": "A small label in capitals over a heading: what a sheet is about, a lesson's course, a card's kind."
+  },
   "filled_card": {
     "category": "container",
     "use_when": "A filled card whose text takes one colour: an item's heading, a status at a glance."
