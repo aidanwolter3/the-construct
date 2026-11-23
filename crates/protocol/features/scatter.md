@@ -2,6 +2,9 @@
 aspect_ratio?, fill?, tag?, content_description?}` (decision `scatter-and-tap-paging`): a scatter plot of
 thousands of points, zoomed and panned in place.
 
+Fields: points, colors?, none_color?, highlight_color?, muted_color?, select?, on_tap?, on_select?,
+aspect_ratio?, fill?, tag?, content_description?.
+
 `points` (a binding) is one string: the base64 of 6 bytes per point, x and y as little-endian u16 (0..65535
 across the 0..1 square, y down), a value byte (0..250 along the colour ramp, 255 none) and a mark byte (0 plain,
 1 highlighted, 2 muted) (`protocol::scatter`). `colors` is the ramp (low, middle, high, `#RRGGBB`), `none_color`

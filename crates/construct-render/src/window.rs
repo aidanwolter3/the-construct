@@ -589,8 +589,12 @@ impl App {
                     match g.ended(&mut self.controller.session, pointer, p, cancelled) {
                         GestureEnd::Continues => self.scatter = Some(g),
                         GestureEnd::Tap(x, y) => self.apply(Event::Tap { x, y }),
-                        GestureEnd::Selected(Ok(out)) => self.after(Some(out), false),
-                        GestureEnd::Selected(Err(_)) | GestureEnd::Done => {}
+                        GestureEnd::Selected(r) => {
+                            if let Ok(out) = *r {
+                                self.after(Some(out), false);
+                            }
+                        }
+                        GestureEnd::Done => {}
                     }
                     true
                 }
@@ -1178,7 +1182,12 @@ impl ApplicationHandler for App {
                     dx
                 };
                 // Over a scatter, the wheel zooms it.
-                if dy != 0.0 && self.controller.session.scatter_wheel(self.cursor.0, self.cursor.1, dy) {
+                if dy != 0.0
+                    && self
+                        .controller
+                        .session
+                        .scatter_wheel(self.cursor.0, self.cursor.1, dy)
+                {
                     if let Some(s) = &self.surface {
                         s.window.request_redraw();
                     }

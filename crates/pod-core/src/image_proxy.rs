@@ -205,10 +205,12 @@ pub async fn proxy(url: reqwest::Url) -> Response {
     match resp.bytes().await {
         Ok(bytes) => {
             let bytes = Bytes::from(bytes);
-            cache()
-                .lock()
-                .unwrap_or_else(|p| p.into_inner())
-                .put(&key, &kind, bytes.clone(), Instant::now());
+            cache().lock().unwrap_or_else(|p| p.into_inner()).put(
+                &key,
+                &kind,
+                bytes.clone(),
+                Instant::now(),
+            );
             image_response(&kind, bytes)
         }
         Err(e) if e.is_too_large() => {
@@ -272,23 +274,41 @@ mod tests {
     fn the_cache_keeps_fresh_images_within_its_budget() {
         let now = Instant::now();
         let mut c = ImageCache::default();
-        c.put("https://a.example/1.jpg", "image/jpeg", Bytes::from(vec![1; 1000]), now);
+        c.put(
+            "https://a.example/1.jpg",
+            "image/jpeg",
+            Bytes::from(vec![1; 1000]),
+            now,
+        );
         let (kind, b) = c.get("https://a.example/1.jpg", now).unwrap();
         assert_eq!((kind.as_str(), b.len()), ("image/jpeg", 1000));
         // Stale: gone.
         assert!(c.get("https://a.example/1.jpg", now + CACHE_TTL).is_none());
         assert_eq!(c.bytes(), 0);
         // Too large to keep.
-        c.put("https://a.example/big.jpg", "image/jpeg", Bytes::from(vec![0; CACHE_ONE_MAX + 1]), now);
+        c.put(
+            "https://a.example/big.jpg",
+            "image/jpeg",
+            Bytes::from(vec![0; CACHE_ONE_MAX + 1]),
+            now,
+        );
         assert!(c.get("https://a.example/big.jpg", now).is_none());
         // Over the budget, the least recently served go first.
         let n = CACHE_BYTES / (3 << 20) + 2;
         for i in 0..n {
-            c.put(&format!("https://a.example/{i}"), "image/png", Bytes::from(vec![0; 3 << 20]), now);
+            c.put(
+                &format!("https://a.example/{i}"),
+                "image/png",
+                Bytes::from(vec![0; 3 << 20]),
+                now,
+            );
         }
         assert!(c.bytes() <= CACHE_BYTES);
         assert!(c.get("https://a.example/0", now).is_none());
-        assert!(c.get(&format!("https://a.example/{}", n - 1), now).is_some());
+        assert!(
+            c.get(&format!("https://a.example/{}", n - 1), now)
+                .is_some()
+        );
     }
 
     #[test]

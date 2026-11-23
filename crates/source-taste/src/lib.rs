@@ -1119,7 +1119,11 @@ impl MapCache {
 
 /// The map: kept, or asked for (falling back on an old one when the
 /// service doesn't answer).
-async fn the_map(pod: &Pod, a: &TasteAdapter, service: &Service) -> Result<Arc<api::MapData>, ApiError> {
+async fn the_map(
+    pod: &Pod,
+    a: &TasteAdapter,
+    service: &Service,
+) -> Result<Arc<api::MapData>, ApiError> {
     let cache = pod.local::<MapCache>();
     if let Some(m) = cache.fresh() {
         return Ok(m);

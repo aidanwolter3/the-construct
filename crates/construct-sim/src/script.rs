@@ -315,7 +315,11 @@ pub fn parse(script: &str) -> Result<Vec<Line>, String> {
                 };
                 let a = need("numbers and a target")?;
                 let mut parts = a.splitn(n + 1, ' ');
-                let nums: Vec<f32> = parts.by_ref().take(n).filter_map(|v| v.parse().ok()).collect();
+                let nums: Vec<f32> = parts
+                    .by_ref()
+                    .take(n)
+                    .filter_map(|v| v.parse().ok())
+                    .collect();
                 let t = parts.next().unwrap_or("").trim().to_owned();
                 let unit = |v: &f32| (0.0..=1.0).contains(v);
                 let ok = nums.len() == n

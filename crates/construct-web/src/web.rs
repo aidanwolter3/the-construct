@@ -1084,11 +1084,19 @@ impl App {
             return;
         };
         let p = (e.offset_x() as f32, e.offset_y() as f32);
-        match g.ended(&mut self.controller.session, e.pointer_id() as u64, p, cancelled) {
+        match g.ended(
+            &mut self.controller.session,
+            e.pointer_id() as u64,
+            p,
+            cancelled,
+        ) {
             GestureEnd::Continues => self.scatter = Some(g),
             GestureEnd::Tap(x, y) => self.event(Event::Tap { x, y }),
-            GestureEnd::Selected(Ok(out)) => self.outcome(Some(out)),
-            GestureEnd::Selected(Err(_)) | GestureEnd::Done => wake(),
+            GestureEnd::Selected(r) => match *r {
+                Ok(out) => self.outcome(Some(out)),
+                Err(_) => wake(),
+            },
+            GestureEnd::Done => wake(),
         }
     }
 
@@ -1554,9 +1562,11 @@ async fn mount(session: Session, public: Option<Public>) -> Result<(), JsValue> 
             // Over a scatter, the wheel (or a trackpad's pinch, which a
             // browser sends as a wheel with Control) zooms it.
             if e.delta_y() != 0.0
-                && a.controller
-                    .session
-                    .scatter_wheel(x, y, e.delta_y() as f32 * k * if e.ctrl_key() { 4.0 } else { 1.0 })
+                && a.controller.session.scatter_wheel(
+                    x,
+                    y,
+                    e.delta_y() as f32 * k * if e.ctrl_key() { 4.0 } else { 1.0 },
+                )
             {
                 wake();
                 return;

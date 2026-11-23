@@ -359,7 +359,12 @@ pub const SCATTER_MAX_ZOOM: f32 = 40.0;
 impl ScatterView {
     /// The view kept under a scatter's id in a screen's offsets.
     pub fn of(scroll: &BTreeMap<String, f32>, id: &str) -> ScatterView {
-        let get = |k: &str, d: f32| scroll.get(&format!("scatter:{id}:{k}")).copied().unwrap_or(d);
+        let get = |k: &str, d: f32| {
+            scroll
+                .get(&format!("scatter:{id}:{k}"))
+                .copied()
+                .unwrap_or(d)
+        };
         ScatterView {
             zoom: get("z", 1.0).clamp(1.0, SCATTER_MAX_ZOOM),
             x: get("x", 0.0),
@@ -3382,7 +3387,9 @@ impl<'i> Build<'_, 'i> {
                     None => b.path.clone(),
                 };
                 let pts = protocol::scatter::decode(&ctx.text(points)).unwrap_or_default();
-                let col = |c: &Option<String>, d: Rgba| c.as_deref().and_then(|c| ctx.color(c)).unwrap_or(d);
+                let col = |c: &Option<String>, d: Rgba| {
+                    c.as_deref().and_then(|c| ctx.color(c)).unwrap_or(d)
+                };
                 let ramp_default = [
                     Rgba::hex("#7FA3C7").unwrap_or(self.theme.muted_text),
                     Rgba::hex("#D9CFC0").unwrap_or(self.theme.muted_text),
@@ -3401,7 +3408,10 @@ impl<'i> Build<'_, 'i> {
                     points: pts,
                     ramp,
                     none: col(none_color, self.theme.muted_text),
-                    highlight: col(highlight_color, Rgba::hex("#E8554A").unwrap_or(self.theme.on_background)),
+                    highlight: col(
+                        highlight_color,
+                        Rgba::hex("#E8554A").unwrap_or(self.theme.on_background),
+                    ),
                     muted: col(muted_color, self.theme.on_background),
                     selecting: select.as_deref().is_some_and(|s| ctx.shows(s, None)),
                     on_tap: on_tap.as_ref().map(|i| bind_intent(i, ctx)),
@@ -5036,7 +5046,10 @@ impl Laid {
         let clip = intersect(clip, [a[0] - 6.0, a[1] - 6.0, a[2] + 12.0, a[3] + 12.0]);
         let r = view.dot();
         let inside = |x: f32, y: f32, m: f32| {
-            x >= clip[0] - m && x <= clip[0] + clip[2] + m && y >= clip[1] - m && y <= clip[1] + clip[3] + m
+            x >= clip[0] - m
+                && x <= clip[0] + clip[2] + m
+                && y >= clip[1] - m
+                && y <= clip[1] + clip[3] + m
         };
         for pass in [Mark::Plain, Mark::Muted, Mark::Highlight] {
             for p in plot.points.iter().filter(|p| p.mark == pass) {
@@ -5071,12 +5084,19 @@ impl Laid {
         }
         // The box being selected, in data coordinates.
         let sel = |k: &str| scroll.get(&format!("scattersel:{}:{k}", plot.id)).copied();
-        if let (Some(x0), Some(y0), Some(x1), Some(y1)) = (sel("x0"), sel("y0"), sel("x1"), sel("y1")) {
+        if let (Some(x0), Some(y0), Some(x1), Some(y1)) =
+            (sel("x0"), sel("y0"), sel("x1"), sel("y1"))
+        {
             let (ax, ay) = view.to_screen(a, x0.min(x1), y0.min(y1));
             let (bx, by) = view.to_screen(a, x0.max(x1), y0.max(y1));
             let mut q = QuadInstance::fill(
                 [ax, ay, (bx - ax).max(1.0), (by - ay).max(1.0)],
-                Rgba([plot.highlight.0[0], plot.highlight.0[1], plot.highlight.0[2], 0.14]),
+                Rgba([
+                    plot.highlight.0[0],
+                    plot.highlight.0[1],
+                    plot.highlight.0[2],
+                    0.14,
+                ]),
                 4.0,
             )
             .border(plot.highlight, 2.0)

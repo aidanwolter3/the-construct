@@ -27,8 +27,18 @@ impl Session {
     /// The tap-paged carousel under a point and which third of it the point
     /// is in (-1 left, 0 middle, 1 right).
     pub fn tap_pager_at(&mut self, x: f32, y: f32) -> Option<(String, i8)> {
+        // Laid out again first: a page just turned drops the layout, and a
+        // second tap before the next frame must still find the carousel.
+        self.scene().ok()?;
         let ti = self.top_index();
-        let pagers = self.stack[ti].laid.as_ref()?.0.tap_pagers.keys().cloned().collect::<Vec<_>>();
+        let pagers = self.stack[ti]
+            .laid
+            .as_ref()?
+            .0
+            .tap_pagers
+            .keys()
+            .cloned()
+            .collect::<Vec<_>>();
         if pagers.is_empty() {
             return None;
         }
@@ -116,7 +126,10 @@ impl Session {
         let ti = self.top_index();
         let mut done = Vec::new();
         for (id, (page, since)) in &self.tap_pages {
-            if self.page_ready(id, *page) || now.duration_since(*since) >= PAGE_WAIT || !self.animate {
+            if self.page_ready(id, *page)
+                || now.duration_since(*since) >= PAGE_WAIT
+                || !self.animate
+            {
                 done.push((id.clone(), *page));
             }
         }
@@ -175,8 +188,16 @@ impl Session {
 
     /// The scatter under a point.
     pub fn scatter_at(&mut self, x: f32, y: f32) -> Option<String> {
+        self.scene().ok()?;
         let ti = self.top_index();
-        let ids: Vec<String> = self.stack[ti].laid.as_ref()?.0.scatters.keys().cloned().collect();
+        let ids: Vec<String> = self.stack[ti]
+            .laid
+            .as_ref()?
+            .0
+            .scatters
+            .keys()
+            .cloned()
+            .collect();
         if ids.is_empty() {
             return None;
         }
@@ -228,7 +249,9 @@ impl Session {
         let Some(rect) = self.scatter_rect(id) else {
             return;
         };
-        let v = self.scatter_view(id).panned(ScatterView::area(rect), dx, dy);
+        let v = self
+            .scatter_view(id)
+            .panned(ScatterView::area(rect), dx, dy);
         self.set_scatter_view(id, v);
     }
 
@@ -237,7 +260,9 @@ impl Session {
         let Some(rect) = self.scatter_rect(id) else {
             return;
         };
-        let v = self.scatter_view(id).zoomed(ScatterView::area(rect), factor, x, y);
+        let v = self
+            .scatter_view(id)
+            .zoomed(ScatterView::area(rect), factor, x, y);
         self.set_scatter_view(id, v);
     }
 
@@ -311,7 +336,10 @@ impl Session {
             ("$select.y0", format!("{y0:.6}")),
             ("$select.x1", format!("{x1:.6}")),
             ("$select.y1", format!("{y1:.6}")),
-            ("$select.box", format!("{}-{}-{}-{}", m(x0), m(y0), m(x1), m(y1))),
+            (
+                "$select.box",
+                format!("{}-{}-{}-{}", m(x0), m(y0), m(x1), m(y1)),
+            ),
         ];
         self.dispatch(&bind_vars(&intent, &vars))
     }
@@ -390,14 +418,19 @@ pub enum GestureEnd {
     /// It didn't move: a tap at that point (the front end taps there).
     Tap(f32, f32),
     /// A box was selected: what its `on_select` did.
-    Selected(Result<Outcome, String>),
+    Selected(Box<Result<Outcome, String>>),
     /// It panned or pinched.
     Done,
 }
 
 impl ScatterGesture {
     /// A pointer going down: a gesture when it is on a scatter.
-    pub fn begin(session: &mut Session, pointer: u64, p: (f32, f32), select: bool) -> Option<ScatterGesture> {
+    pub fn begin(
+        session: &mut Session,
+        pointer: u64,
+        p: (f32, f32),
+        select: bool,
+    ) -> Option<ScatterGesture> {
         let id = session.scatter_at(p.0, p.1)?;
         let selecting = select || session.scatter_selects(&id);
         Some(ScatterGesture {
@@ -451,7 +484,8 @@ impl ScatterGesture {
             return true;
         }
         if !self.moved {
-            let far = (p.0 - self.start.0).abs().max((p.1 - self.start.1).abs()) > crate::scroll::TOUCH_SLOP;
+            let far = (p.0 - self.start.0).abs().max((p.1 - self.start.1).abs())
+                > crate::scroll::TOUCH_SLOP;
             if !far {
                 return false;
             }
@@ -470,7 +504,13 @@ impl ScatterGesture {
     }
 
     /// A pointer went up (or was cancelled: no tap, no selection).
-    pub fn ended(&mut self, session: &mut Session, pointer: u64, p: (f32, f32), cancelled: bool) -> GestureEnd {
+    pub fn ended(
+        &mut self,
+        session: &mut Session,
+        pointer: u64,
+        p: (f32, f32),
+        cancelled: bool,
+    ) -> GestureEnd {
         self.pointers.retain(|(id, _)| *id != pointer);
         if !self.pointers.is_empty() {
             // Down to one finger: it pans on from where it is.
@@ -487,7 +527,7 @@ impl ScatterGesture {
             return GestureEnd::Tap(p.0, p.1);
         }
         if self.selecting {
-            return GestureEnd::Selected(session.scatter_select_end(&self.id));
+            return GestureEnd::Selected(Box::new(session.scatter_select_end(&self.id)));
         }
         GestureEnd::Done
     }
@@ -514,5 +554,316 @@ impl Session {
         };
         self.scatter_zoom(&id, (-dy * 0.004).exp(), x, y);
         true
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeMap;
+    use std::sync::{Arc, Mutex};
+
+    use image::RgbaImage;
+    use protocol::scatter::{Mark, Point, encode};
+    use protocol::{DataBundle, EntityRecord, UiNode};
+    use serde_json::json;
+
+    use super::super::{Effect, Session, Target, Viewport};
+
+    fn entity(fields: serde_json::Value) -> EntityRecord {
+        match fields {
+            serde_json::Value::Object(m) => EntityRecord(m),
+            _ => unreachable!(),
+        }
+    }
+
+    /// A piece with three photos, in a deck of two such pieces (the second
+    /// card is laid out behind the first), each card a tap-paged carousel.
+    fn deck() -> (UiNode, DataBundle) {
+        let root: UiNode = serde_json::from_value(json!({
+            "type": "core://List", "query_key": "q:deck", "stack": true,
+            "item_template": {
+                "type": "core://SwipeCard", "on_swipe_left": {"intent": "action.navigation.back"},
+                "content": {
+                    "type": "core://Carousel", "items": "$item.photos", "tap_paging": true,
+                    "aspect_ratio": 0.8,
+                    "on_tap": {"intent": "action.local.set", "entity_uri": "x://flags/tap",
+                               "field": "middle", "value_expr": "true"},
+                    "item_template": {"type": "core://Image", "url": "$item.url"}
+                }
+            }
+        }))
+        .unwrap();
+        let mut data = DataBundle::default();
+        for piece in ["a", "b"] {
+            let photos: Vec<String> = (0..3).map(|k| format!("x://photos/{piece}{k}")).collect();
+            for (k, uri) in photos.iter().enumerate() {
+                data.entities.insert(
+                    uri.clone(),
+                    entity(json!({"url": format!("https://img.example/{piece}{k}.jpg")})),
+                );
+            }
+            data.entities.insert(
+                format!("x://pieces/{piece}"),
+                entity(json!({"photos": photos})),
+            );
+        }
+        data.queries.insert(
+            "q:deck".into(),
+            vec!["x://pieces/a".into(), "x://pieces/b".into()],
+        );
+        (root, data)
+    }
+
+    /// A session whose image store records what it is asked for (nothing
+    /// arrives unless a test puts it there).
+    fn session(root: UiNode, data: DataBundle) -> (Session, Arc<Mutex<Vec<String>>>) {
+        let s = Session::new("home", root, data, Viewport::PHONE);
+        let asked = Arc::new(Mutex::new(Vec::new()));
+        let log = asked.clone();
+        s.images.set_fetcher(move |u| log.lock().unwrap().push(u));
+        (s, asked)
+    }
+
+    /// The top card's carousel: the tap-paged one under the middle of the
+    /// screen's top half (the card behind is drawn under it).
+    fn pager_id(s: &mut Session) -> String {
+        s.scene().unwrap();
+        s.tap_pager_at(195.0, 200.0).expect("a carousel there").0
+    }
+
+    fn bounds(s: &mut Session, id: &str) -> [f32; 4] {
+        s.scene().unwrap().find_node(id).unwrap().bounds
+    }
+
+    #[test]
+    fn every_photo_of_the_deck_is_asked_for_up_front() {
+        let (root, data) = deck();
+        let (mut s, asked) = session(root, data);
+        s.scene().unwrap();
+        let asked = asked.lock().unwrap().clone();
+        // The top card's photos and the card behind it, all three pages each.
+        for want in ["a0", "a1", "a2", "b0", "b1", "b2"] {
+            let url = format!("https://img.example/{want}.jpg");
+            assert!(asked.contains(&url), "{url} not asked for: {asked:?}");
+        }
+        // The page showing is asked for last of the top card's: it is the
+        // one drawn, so it goes to the front of the queue.
+        assert!(s.prefetched().len() >= 6);
+    }
+
+    #[test]
+    fn taps_on_the_outer_thirds_turn_the_pages_and_wrap() {
+        let (root, data) = deck();
+        let (mut s, _) = session(root, data);
+        s.animate = false; // no waiting for photos
+        let id = pager_id(&mut s);
+        let [x, y, w, h] = bounds(&mut s, &id);
+        let (left, right, mid) = (x + w * 0.1, x + w * 0.9, x + w * 0.5);
+        let cy = y + h / 2.0;
+        assert_eq!(s.tap_page(&id), 0);
+        s.tap(&Target::Point(right, cy)).unwrap();
+        s.scene().unwrap();
+        assert_eq!(s.tap_page(&id), 1);
+        // Two quick taps, no frame between them: both turn.
+        s.tap(&Target::Point(right, cy)).unwrap();
+        s.tap(&Target::Point(right, cy)).unwrap();
+        assert_eq!(s.tap_page(&id), 0, "wraps after the last photo");
+        s.tap(&Target::Point(left, cy)).unwrap();
+        s.scene().unwrap();
+        assert_eq!(s.tap_page(&id), 2, "back from the first wraps to the last");
+        // The middle third runs on_tap and turns nothing.
+        let out = s.tap(&Target::Point(mid, cy)).unwrap();
+        assert!(
+            out.effects
+                .iter()
+                .any(|e| matches!(e, Effect::LocalSet { .. })),
+            "{:?}",
+            out.effects
+        );
+        assert_eq!(s.tap_page(&id), 2);
+    }
+
+    #[test]
+    fn a_page_waits_for_its_photo_with_the_current_one_showing() {
+        let (root, data) = deck();
+        let (mut s, _) = session(root, data);
+        s.animate = true;
+        let id = pager_id(&mut s);
+        let shown = |s: &mut Session| {
+            let ti = s.top_index();
+            s.scene().unwrap();
+            s.stack[ti]
+                .scroll
+                .get(&format!("page:{id}"))
+                .copied()
+                .unwrap_or(0.0)
+        };
+        let [x, y, w, h] = bounds(&mut s, &id);
+        s.tap(&Target::Point(x + w * 0.9, y + h / 2.0)).unwrap();
+        // The second photo hasn't arrived: the first still shows.
+        assert_eq!(shown(&mut s), 0.0);
+        assert_eq!(s.tap_page(&id), 1, "the turn is under way");
+        s.images
+            .insert("https://img.example/a1.jpg", Some(RgbaImage::new(8, 10)));
+        // It is cut to size on another thread, then shows.
+        let mut page = 0.0;
+        for _ in 0..200 {
+            page = shown(&mut s);
+            if page == 1.0 {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        assert_eq!(page, 1.0, "shows once its photo is in");
+    }
+
+    fn plot() -> (UiNode, DataBundle) {
+        let points = [
+            Point {
+                x: 0.1,
+                y: 0.1,
+                value: Some(0.9),
+                mark: Mark::Highlight,
+            },
+            Point {
+                x: 0.5,
+                y: 0.5,
+                value: None,
+                mark: Mark::Plain,
+            },
+            Point {
+                x: 0.9,
+                y: 0.8,
+                value: Some(0.1),
+                mark: Mark::Muted,
+            },
+        ];
+        let root: UiNode = serde_json::from_value(json!({
+            "type": "core://Scatter", "points": "${x://maps/m#points}", "tag": "plot",
+            "select": "${x://maps/m#selecting}",
+            "on_tap": {"intent": "action.local.set", "entity_uri": "x://flags/t",
+                       "field": "point", "value_expr": "\"$point.index\""},
+            "on_select": {"intent": "action.local.set", "entity_uri": "x://flags/t",
+                          "field": "box", "value_expr": "\"$select.box\""}
+        }))
+        .unwrap();
+        let mut data = DataBundle::default();
+        data.entities.insert(
+            "x://maps/m".into(),
+            entity(json!({"points": encode(&points), "selecting": true})),
+        );
+        (root, data)
+    }
+
+    fn set_fields(out: &super::super::Outcome) -> BTreeMap<String, serde_json::Value> {
+        out.effects
+            .iter()
+            .find_map(|e| match e {
+                Effect::LocalSet { fields, .. } => Some(fields.clone()),
+                _ => None,
+            })
+            .unwrap_or_default()
+    }
+
+    #[test]
+    fn a_tap_near_a_point_runs_on_tap_with_its_index() {
+        let (root, data) = plot();
+        let (mut s, _) = session(root, data);
+        s.scene().unwrap();
+        let ti = s.top_index();
+        let id = s.stack[ti]
+            .laid
+            .as_ref()
+            .unwrap()
+            .0
+            .scatters
+            .keys()
+            .next()
+            .unwrap()
+            .clone();
+        let rect = bounds(&mut s, &id);
+        let a = crate::layout::ScatterView::area(rect);
+        let v = s.scatter_view(&id);
+        let (px, py) = v.to_screen(a, 0.9, 0.8);
+        let out = s.tap(&Target::Point(px + 4.0, py - 3.0)).unwrap();
+        assert_eq!(set_fields(&out).get("point"), Some(&json!("2")));
+        // Zoomed in on the middle, the same screen spot is another place.
+        s.scatter_zoom(&id, 4.0, a[0] + a[2] / 2.0, a[1] + a[3] / 2.0);
+        let v = s.scatter_view(&id);
+        assert!((v.zoom - 4.0).abs() < 1e-3);
+        let (mx, my) = v.to_screen(a, 0.5, 0.5);
+        let out = s.tap(&Target::Point(mx, my)).unwrap();
+        assert_eq!(set_fields(&out).get("point"), Some(&json!("1")));
+    }
+
+    #[test]
+    fn a_dragged_box_runs_on_select_with_its_bounds() {
+        let (root, data) = plot();
+        let (mut s, _) = session(root, data);
+        s.scene().unwrap();
+        let ti = s.top_index();
+        let id = s.stack[ti]
+            .laid
+            .as_ref()
+            .unwrap()
+            .0
+            .scatters
+            .keys()
+            .next()
+            .unwrap()
+            .clone();
+        assert!(s.scatter_selects(&id));
+        let a = crate::layout::ScatterView::area(bounds(&mut s, &id));
+        let v = s.scatter_view(&id);
+        let from = v.to_screen(a, 0.25, 0.75);
+        let to = v.to_screen(a, 0.5, 0.25);
+        s.scatter_select(&id, from, to);
+        let sel = s.scatter_selection(&id).unwrap();
+        assert!((sel[0] - 0.25).abs() < 1e-3 && (sel[1] - 0.25).abs() < 1e-3);
+        assert!((sel[2] - 0.5).abs() < 1e-3 && (sel[3] - 0.75).abs() < 1e-3);
+        let out = s.scatter_select_end(&id).unwrap();
+        assert_eq!(
+            set_fields(&out).get("box"),
+            Some(&json!("250000-250000-500000-750000"))
+        );
+        assert!(
+            s.scatter_selection(&id).is_none(),
+            "the box goes on release"
+        );
+        // A box too small to mean anything runs nothing.
+        let p = v.to_screen(a, 0.5, 0.5);
+        s.scatter_select(&id, p, (p.0 + 0.5, p.1 + 0.5));
+        assert!(s.scatter_select_end(&id).is_err());
+    }
+
+    #[test]
+    fn the_view_stays_inside_the_square() {
+        let (root, data) = plot();
+        let (mut s, _) = session(root, data);
+        s.scene().unwrap();
+        let ti = s.top_index();
+        let id = s.stack[ti]
+            .laid
+            .as_ref()
+            .unwrap()
+            .0
+            .scatters
+            .keys()
+            .next()
+            .unwrap()
+            .clone();
+        s.scatter_pan(&id, 500.0, 500.0);
+        assert_eq!(
+            s.scatter_view(&id).x,
+            0.0,
+            "at zoom 1 there's nowhere to pan"
+        );
+        s.scatter_zoom(&id, 100.0, 0.0, 0.0);
+        assert!(s.scatter_view(&id).zoom <= crate::layout::SCATTER_MAX_ZOOM);
+        s.scatter_pan(&id, -1.0e6, -1.0e6);
+        let v = s.scatter_view(&id);
+        assert!(v.x + 1.0 / v.zoom <= 1.0 + 1e-4 && v.y + 1.0 / v.zoom <= 1.0 + 1e-4);
+        s.scatter_reset(&id);
+        assert_eq!(s.scatter_view(&id).zoom, 1.0);
     }
 }
