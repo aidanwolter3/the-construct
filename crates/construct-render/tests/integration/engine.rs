@@ -2,7 +2,8 @@
 //! `remote`) against a small stub of a pod (its construct served from
 //! bundles, `construct_stub`): home comes from the engine's cache offline, a
 //! tap's write waits in the outbox until the pod is back, a new root on the
-//! construct's events redraws the open session, a layout opens
+//! construct's events redraws the open session and leaves an open screen
+//! scrolled where it was, a layout opens
 //! again after leaving the pod and opening it again, and signing
 //! in to an upstream runs the engine's flow (a loopback redirect on the
 //! desktop, a link that opens the app on a phone).
@@ -109,6 +110,79 @@ fn staples_home(added: i64) -> Value {
     })
 }
 
+/// Home with a button that opens the lesson; from version 2 a line above
+/// it (an edit of home that moves what follows it).
+fn lesson_home(version: u64) -> Value {
+    let mut children = vec![
+        json!({ "type": "core://Text", "value_expr": format!("Home v{version}"), "style": "Title" }),
+        json!({ "type": "core://Button", "label": "Open lesson", "on_click": {
+            "intent": "action.navigation.open", "layout": "lesson", "presentation": "Push" } }),
+    ];
+    if version >= 2 {
+        children.insert(
+            0,
+            json!({ "type": "core://Text", "value_expr": "A new line", "style": "Body" }),
+        );
+    }
+    let mut cards = lesson_cards(version);
+    if version < 2 {
+        cards = (json!({}), json!({}));
+    }
+    json!({ "version": "1.0.0", "workspace": { "type": "core://Column", "children": children },
+        "entities": cards.0, "queries": cards.1 })
+}
+
+/// Forty cards and their query, each row stamped with `version`.
+fn lesson_cards(version: u64) -> (Value, Value) {
+    let uris: Vec<String> = (1..=40).map(|n| format!("x://cards/{n}")).collect();
+    let entities: serde_json::Map<String, Value> = (1..=40)
+        .map(|n| {
+            let preview = if n <= 3 { "yes" } else { "no" };
+            let card =
+                json!({ "title": format!("Card {n}"), "updated": version, "preview": preview });
+            (format!("x://cards/{n}"), card)
+        })
+        .collect();
+    (Value::Object(entities), json!({ "cards": uris }))
+}
+
+/// A school: a page whose lesson opens as a page screen (by its route),
+/// a title over forty cards, scrolling, with a footer pinned below.
+fn lesson() -> Value {
+    let (entities, queries) = lesson_cards(1);
+    let mut entities = entities;
+    entities["x://lessons/1"] = json!({ "title": "Lesson 2.1" });
+    json!({
+        "version": "1.0.0",
+        "workspace": { "type": "core://Page", "id": "lesson", "title": "School",
+            "root": { "type": "core://Column", "children": [
+                { "type": "core://Text", "value_expr": "School", "style": "Title" },
+                { "type": "core://Button", "label": "Start lesson", "on_click": {
+                    "intent": "action.navigation.open", "presentation": "Push",
+                    "target_uri": "x://lessons/1" } }
+            ] },
+            "screens": [{ "id": "lesson-detail", "route": "x://lessons/{id}",
+                "item": "x://lessons/$route.id", "title": "$item.title",
+                "root": { "type": "core://Column", "children": [
+                    { "type": "core://Text", "value_expr": "$item.title", "style": "Title" },
+                    { "type": "core://Scroll", "content": { "type": "core://Column", "children": [
+                        { "type": "core://Text", "value_expr": "In this lesson", "style": "Body" },
+                        { "type": "core://List", "query_key": "cards",
+                          "where": [{ "field": "preview", "equals": "yes" }],
+                          "item_template": { "type": "core://Text",
+                            "value_expr": "Preview $item.title", "style": "Body" } },
+                        { "type": "core://List", "query_key": "cards", "item_template": {
+                            "type": "core://Column", "padding_v_dp": 12,
+                            "children": [{ "type": "core://Text", "value_expr": "$item.title",
+                                "style": "Body" }] } }
+                    ] } },
+                    { "type": "core://Text", "value_expr": "Footer", "style": "Body" }
+                ] } }] },
+        "entities": entities,
+        "queries": queries
+    })
+}
+
 #[derive(Default)]
 struct Pod {
     version: AtomicU64,
@@ -135,6 +209,9 @@ struct Pod {
     /// As a pod host: a request without a session gets the "Open your pod"
     /// screen as home; with one, home and the layout `garden`.
     pod_code: AtomicBool,
+    /// Home has a button that opens `lesson`, a long scrolling page, and
+    /// from version 2 a line above it.
+    lesson: AtomicBool,
     construct: crate::construct_stub::Construct,
 }
 
@@ -167,6 +244,13 @@ impl Pod {
                 (_, false) => Some((401, r#"{"error":"pod_required"}"#.to_owned())),
                 ("home", true) => Some((200, screen("Home", vec![]))),
                 ("garden", true) => Some((200, screen("Garden", vec![]))),
+                _ => None,
+            };
+        }
+        if self.lesson.load(Ordering::SeqCst) {
+            return match id {
+                "home" => Some((200, lesson_home(version).to_string())),
+                "lesson" => Some((200, lesson().to_string())),
                 _ => None,
             };
         }
@@ -757,5 +841,79 @@ fn a_tap_shown_at_once_stays_while_its_write_goes_to_the_pod() {
     pod.refresh();
     thread::sleep(Duration::from_millis(300));
     assert!(shows(&mut s, "Garlic added"), "drew {:?}", texts(&mut s));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Polls for a while: slides end, loads settle.
+fn settle(s: &mut Session) {
+    let until = Instant::now() + Duration::from_millis(800);
+    while Instant::now() < until {
+        s.poll();
+        thread::sleep(Duration::from_millis(20));
+    }
+}
+
+/// The texts drawn and where (points from the top, rounded).
+fn drawn(s: &mut Session) -> Vec<(String, i32)> {
+    s.scene()
+        .unwrap()
+        .semantics
+        .iter()
+        .filter_map(|n| Some((n.text_content.clone()?, n.bounds[1].round() as i32)))
+        .collect()
+}
+
+/// A page screen open over a layout (a lesson) keeps its place when home
+/// changes underneath (another session edits it, and home now answers the
+/// lesson's cards too). The lesson draws some cards twice (a preview above
+/// the full list): scrolled into the full list, it stays there rather than
+/// jumping to the preview of the same card.
+#[test]
+fn an_open_screen_keeps_its_scroll_when_home_changes() {
+    let stub = Stub::start();
+    stub.pod.lesson.store(true, Ordering::SeqCst);
+    let dir = storage("lesson-scroll");
+    let pod = PodEngine::open_with(&stub.base, Some(&dir), store(&stub.base), config());
+    let mut s = pod.session(construct_render::Viewport::PHONE);
+    wait_until("home", || shows(&mut s, "Home v1"));
+    wait_until("the event stream", || {
+        !stub.pod.streams.lock().unwrap().is_empty()
+    });
+    s.tap(&Target::Text("Open lesson".into())).unwrap();
+    wait_until("the school", || {
+        s.poll();
+        shows(&mut s, "Start lesson")
+    });
+    settle(&mut s);
+    s.tap(&Target::Text("Start lesson".into())).unwrap();
+    wait_until("the lesson", || {
+        s.poll();
+        shows(&mut s, "Card 1")
+    });
+    settle(&mut s);
+    // Into the full list's first cards, past their previews (the same rows).
+    s.scroll_by(None, 160.0).unwrap();
+    let before = drawn(&mut s);
+    assert!(
+        !before.iter().any(|(t, _)| t == "Preview Card 1"),
+        "scrolled past the previews: {before:?}"
+    );
+
+    // Home changes (another session edits it) while the lesson is open.
+    stub.publish(2);
+    let until = Instant::now() + Duration::from_millis(1500);
+    while Instant::now() < until {
+        s.poll();
+        let now = drawn(&mut s);
+        assert_eq!(now, before, "the lesson moved");
+        thread::sleep(Duration::from_millis(20));
+    }
+    // Home did change underneath.
+    let back = json!({ "intent": "action.navigation.pop_to_root" });
+    s.dispatch(&back).unwrap();
+    wait_until("home v2", || {
+        s.poll();
+        shows(&mut s, "A new line")
+    });
     let _ = std::fs::remove_dir_all(&dir);
 }

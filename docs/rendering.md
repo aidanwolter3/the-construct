@@ -329,7 +329,12 @@ closes, back to the deepest entry that still resolves, each with its own transit
 `pop_to_root` close entries the same way. There a vertical scroll also keeps its first visible row in place: before an
 entry is laid out again it notes, per scroll, the entity of the first row showing and how far the view is past
 its top, and after the new layout it scrolls so that row sits where it was (rows added above don't move it); if the
-row is gone, the next one still there (else the one before) keeps its place, and with none the offset stays. On a
+row is gone, the next one still there (else the one before) keeps its place, and with none the offset stays. A row
+drawn more than once in a view (a preview list above the full one) is told apart by which time it is drawn there,
+so the view stays on the copy it was on (if it is drawn fewer times now, its last copy before that). A
+view's state (scroll offsets, carousel pages, panels) is kept by its path, which runs through the layouts embedding
+it: when an edit of an embedding layout moves an inline layout to a new path (a node put above it), what was kept
+under its old path moves with it, as long as that layout is drawn there once (`Laid::embeds`). On a
 pod that isn't switched scroll offsets are kept in points, as before. Each new frame tells the engine what it draws, topmost first (`Loader::visible`: every drawn entry's layout and
 data path, and the layouts drawn inline in them), so an `event: data` reloads what's on screen first and leaves the
 rest stale until it's shown again (decision `scoped-data-events`). A query key several cached answers list (each layout binding a feed carries its keys) is the newest answer's; answers restored at launch are stale and older than any fetched since, and the cached answers of layouts the construct no longer reaches are dropped after a sync (decision `newest-query-answer-wins`). The simulator's live mode (`construct-sim --base-url`) still fetches straight from the pod (`PodClient`). `local://nav` and

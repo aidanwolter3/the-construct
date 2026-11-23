@@ -87,6 +87,30 @@ pub struct Panel {
 /// inline `core://Layout`'s content), leftmost first.
 pub type Panels = BTreeMap<String, Vec<Panel>>;
 
+/// The inline embeds a semantic path runs through: for each `layout:<id>`
+/// segment, the chain of embedded layouts up to it and the path up to it.
+/// Ids that aren't paths (`field:…`, `layout:<id>` itself) have none.
+pub fn embed_prefixes(id: &str) -> Vec<(String, String)> {
+    let mut out = Vec::new();
+    if !id.starts_with("root") || !id.contains("/layout:") {
+        return out;
+    }
+    let mut chain = String::new();
+    let mut end = 0;
+    for seg in id.split('/') {
+        end += seg.len();
+        if seg.starts_with("layout:") {
+            if !chain.is_empty() {
+                chain.push('/');
+            }
+            chain.push_str(seg);
+            out.push((chain.clone(), id[..end].to_owned()));
+        }
+        end += 1;
+    }
+    out
+}
+
 /// No panels open (an [`Input`] that draws none).
 pub static NO_PANELS: Panels = BTreeMap::new();
 
@@ -4421,6 +4445,21 @@ pub struct Laid {
 unsafe impl Send for Laid {}
 
 impl Laid {
+    /// Where each inline layout is drawn in this frame: by its chain of
+    /// embedded layouts (`layout:a/layout:b`), the paths of the embeds
+    /// (`root/…/layout:a/…/layout:b`) whose content carries a semantic id.
+    /// A view's state (scroll offsets, panels) is keyed by paths, so when
+    /// the embedding layout changes around an embed this is how it follows.
+    pub fn embeds(&self) -> BTreeMap<String, std::collections::BTreeSet<String>> {
+        let mut out: BTreeMap<String, std::collections::BTreeSet<String>> = BTreeMap::new();
+        for s in self.elems.iter().filter_map(|e| e.sem.as_ref()) {
+            for (chain, path) in embed_prefixes(&s.id) {
+                out.entry(chain).or_default().insert(path);
+            }
+        }
+        out
+    }
+
     /// The list items in scrolling view `id`, in order: each one's entity,
     /// its top in the view's content and its height (points). Items of a
     /// view scrolling inside it are its own (decision

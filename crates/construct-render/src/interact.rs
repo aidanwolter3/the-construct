@@ -432,54 +432,141 @@ pub struct Changes {
 /// Where a scrolling view was, by its items (decision
 /// `content-addressed-construct`): the first item showing, how far the view
 /// was scrolled past its top, and the items in order with their tops, for
-/// when that one is gone.
+/// when that one is gone. An entity can be drawn more than once in a view (a
+/// preview list above the full one): an item is its entity and which time
+/// it is drawn there (`nth`, from 0).
 #[derive(Debug, Clone, PartialEq)]
 pub struct Anchor {
     pub uri: String,
+    pub nth: usize,
     pub offset_dp: f32,
-    pub items: Vec<(String, f32)>,
+    pub items: Vec<(String, usize, f32)>,
+}
+
+/// Items (entity, top, height) as (entity, which time it is drawn, top).
+fn numbered(items: &[(String, f32, f32)]) -> Vec<(String, usize, f32)> {
+    let mut seen: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
+    items
+        .iter()
+        .map(|(u, top, _)| {
+            let n = seen.entry(u.as_str()).or_default();
+            let nth = *n;
+            *n += 1;
+            (u.clone(), nth, *top)
+        })
+        .collect()
 }
 
 impl Anchor {
     /// The anchor of a view scrolled to `offset` over `items` (entity, top,
     /// height); `None` without items.
     pub fn at(offset: f32, items: &[(String, f32, f32)]) -> Option<Anchor> {
-        let first = items
+        let i = items
             .iter()
-            .find(|(_, top, h)| top + h > offset)
-            .or(items.last())?;
+            .position(|(_, top, h)| top + h > offset)
+            .or(items.len().checked_sub(1))?;
+        let numbered = numbered(items);
+        let (uri, nth, top) = numbered[i].clone();
         Some(Anchor {
-            uri: first.0.clone(),
-            offset_dp: offset - first.1,
-            items: items.iter().map(|(u, t, _)| (u.clone(), *t)).collect(),
+            uri,
+            nth,
+            offset_dp: offset - top,
+            items: numbered,
         })
     }
 
     /// The offset that shows the anchored item where it was, over the
-    /// view's new `items`; if it is gone, the nearest one still there (the
-    /// next, else the one before) where that one was; `None` if none is.
+    /// view's new `items`; if it is drawn fewer times now, its last time
+    /// before that; if it is gone, the nearest one still there (the next,
+    /// else the one before) where that one was; `None` if none is.
     pub fn offset_in(&self, items: &[(String, f32, f32)]) -> Option<f32> {
-        let now = |uri: &str| items.iter().find(|(u, _, _)| u == uri).map(|i| i.1);
-        if let Some(top) = now(&self.uri) {
+        let numbered = numbered(items);
+        let now = |uri: &str, nth: usize| {
+            numbered
+                .iter()
+                .find(|(u, n, _)| u == uri && *n == nth)
+                .map(|i| i.2)
+        };
+        if let Some(top) = now(&self.uri, self.nth) {
             return Some(top + self.offset_dp);
         }
-        let at = self.items.iter().position(|(u, _)| *u == self.uri)?;
-        let scrolled = self.items[at].1 + self.offset_dp;
+        if let Some(top) = (0..self.nth).rev().find_map(|n| now(&self.uri, n)) {
+            return Some(top + self.offset_dp);
+        }
+        let at = self
+            .items
+            .iter()
+            .position(|(u, n, _)| *u == self.uri && *n == self.nth)?;
+        let scrolled = self.items[at].2 + self.offset_dp;
         let after = self.items[at + 1..].iter();
         let before = self.items[..at].iter().rev();
         after
             .chain(before)
-            .find_map(|(u, old)| now(u).map(|top| top + scrolled - old))
+            .find_map(|(u, n, old)| now(u, *n).map(|top| top + scrolled - old))
     }
 }
 
-/// The anchors of an entry's vertical scrolls laid out in `laid`.
+/// The anchors of an entry's vertical scrolls laid out in `laid` (its
+/// scrolling views, not the `stretch:`, `pager:` … offsets beside them).
 fn anchors_of(laid: &Laid, scroll: &BTreeMap<String, f32>) -> BTreeMap<String, Anchor> {
     scroll
         .iter()
-        .filter(|(id, _)| !id.contains(':'))
+        .filter(|(id, _)| laid.scroll_max.contains_key(*id))
         .filter_map(|(id, &offset)| Some((id.clone(), Anchor::at(offset, &laid.scroll_items(id))?)))
         .collect()
+}
+
+/// The inline embeds that moved between two frames ([`Laid::embeds`]):
+/// each one's old path and new path, for a chain of layouts drawn once in
+/// both (the embedding layout changed around it; a layout drawn twice
+/// can't be told apart, and keeps nothing).
+fn moved_embeds(
+    before: &BTreeMap<String, std::collections::BTreeSet<String>>,
+    after: &BTreeMap<String, std::collections::BTreeSet<String>>,
+) -> Vec<(String, String)> {
+    before
+        .iter()
+        .filter_map(|(chain, olds)| {
+            let news = after.get(chain)?;
+            if olds.len() != 1 || news.len() != 1 {
+                return None;
+            }
+            let (old, new) = (olds.first()?, news.first()?);
+            (old != new).then(|| (old.clone(), new.clone()))
+        })
+        .collect()
+}
+
+/// A state key (a path, or `stretch:`, `pager:` … and a path) under a moved
+/// embed, at its new path; the innermost embed that moved decides.
+fn moved_key(key: &str, moves: &[(String, String)]) -> Option<String> {
+    let (pre, path) = if key.starts_with("root") {
+        ("", key)
+    } else {
+        let i = key.find(':')?;
+        key.split_at(i + 1)
+    };
+    let (old, new) = moves
+        .iter()
+        .filter(|(old, _)| {
+            path.strip_prefix(old.as_str())
+                .is_some_and(|r| r.is_empty() || r.starts_with('/') || r.starts_with('~'))
+        })
+        .max_by_key(|(old, _)| old.len())?;
+    Some(format!("{pre}{new}{}", &path[old.len()..]))
+}
+
+/// Moves the state kept under moved embeds to their new paths.
+fn move_keys<V>(map: &mut BTreeMap<String, V>, moves: &[(String, String)]) {
+    let keys: Vec<(String, String)> = map
+        .keys()
+        .filter_map(|k| Some((k.clone(), moved_key(k, moves)?)))
+        .collect();
+    let moved: Vec<(String, V)> = keys
+        .into_iter()
+        .filter_map(|(old, new)| Some((new, map.remove(&old)?)))
+        .collect();
+    map.extend(moved);
 }
 
 /// The construct's edge graph (decision `content-addressed-construct`):
@@ -2672,33 +2759,52 @@ impl Session {
             height: size[1],
             scale: self.viewport.scale,
         };
-        let prev = self.stack[i].stale.take();
+        let mut prev = self.stack[i].stale.take();
         // On the construct's edge graph each scroll keeps its first visible
         // item where it was (decision `content-addressed-construct`).
-        let anchors = match (&prev, self.edges.is_some()) {
+        let mut anchors = match (&prev, self.edges.is_some()) {
             (Some(p), true) => anchors_of(p, &self.stack[i].scroll),
             _ => BTreeMap::new(),
         };
-        let e = &self.stack[i];
+        // Where the inline layouts were drawn: a view's state is kept by
+        // its path, which an edit of the layout embedding it can move.
+        let mut embeds = prev.as_ref().map(Laid::embeds);
         let started = Instant::now();
-        let laid = self.builder.relayout(
-            &Input {
-                root: &e.root,
-                data: &self.data,
-                form: &self.form,
-                route: &e.route,
-                layouts: &self.layouts,
-                scroll: &e.scroll,
-                viewport: vp,
-                dark: self.dark,
-                item: e.item.as_deref(),
-                insets,
-                focused: self.focused.as_deref(),
-                panels: &e.panels,
-            },
-            prev,
-        )?;
-        self.work.laid_out = self.work.laid_out.saturating_add(1);
+        let laid = loop {
+            let e = &self.stack[i];
+            let laid = self.builder.relayout(
+                &Input {
+                    root: &e.root,
+                    data: &self.data,
+                    form: &self.form,
+                    route: &e.route,
+                    layouts: &self.layouts,
+                    scroll: &e.scroll,
+                    viewport: vp,
+                    dark: self.dark,
+                    item: e.item.as_deref(),
+                    insets,
+                    focused: self.focused.as_deref(),
+                    panels: &e.panels,
+                },
+                prev.take(),
+            )?;
+            self.work.laid_out = self.work.laid_out.saturating_add(1);
+            let moves = embeds
+                .take()
+                .map(|b| moved_embeds(&b, &laid.embeds()))
+                .unwrap_or_default();
+            if moves.is_empty() {
+                break laid;
+            }
+            // An embed moved: its scroll offsets, anchors and panels follow
+            // it, and it is laid out once more with them.
+            let e = &mut self.stack[i];
+            move_keys(&mut e.scroll, &moves);
+            move_keys(&mut e.panels, &moves);
+            move_keys(&mut anchors, &moves);
+            prev = Some(laid);
+        };
         self.work.layout += started.elapsed();
         let e = &mut self.stack[i];
         for (id, anchor) in &anchors {
@@ -5505,5 +5611,97 @@ mod anchor_tests {
         // Only rows before it are left: the one before keeps its place.
         assert_eq!(a.offset_in(&items(&[("a", 0.0)])), Some(50.0));
         assert_eq!(a.offset_in(&items(&[("z", 0.0)])), None);
+    }
+
+    #[test]
+    fn an_item_drawn_twice_keeps_the_one_it_was_on() {
+        // A preview of a and b above the full list a, b, c.
+        let both = items(&[
+            ("a", 0.0),
+            ("b", 40.0),
+            ("a", 100.0),
+            ("b", 140.0),
+            ("c", 180.0),
+        ]);
+        // Scrolled 10 points into the full list's a, not the preview's.
+        let a = Anchor::at(110.0, &both).unwrap();
+        assert_eq!((a.uri.as_str(), a.nth, a.offset_dp), ("a", 1, 10.0));
+        assert_eq!(a.offset_in(&both), Some(110.0));
+        // A row above moves both copies down 30: the full list's a stays.
+        let lower: Vec<(String, f32, f32)> = both
+            .iter()
+            .map(|(u, t, h)| (u.clone(), t + 30.0, *h))
+            .collect();
+        assert_eq!(a.offset_in(&lower), Some(140.0));
+        // The preview went (a drawn once now): that one keeps its place.
+        let once = items(&[("a", 20.0), ("b", 60.0), ("c", 100.0)]);
+        assert_eq!(a.offset_in(&once), Some(30.0));
+    }
+
+    #[test]
+    fn state_under_a_moved_embed_follows_it() {
+        use super::{move_keys, moved_embeds};
+        use crate::layout::embed_prefixes;
+        use std::collections::{BTreeMap, BTreeSet};
+
+        assert_eq!(
+            embed_prefixes("root/1/tab/layout:c-a/0/layout:c-b/2"),
+            vec![
+                (
+                    "layout:c-a".to_string(),
+                    "root/1/tab/layout:c-a".to_string()
+                ),
+                (
+                    "layout:c-a/layout:c-b".to_string(),
+                    "root/1/tab/layout:c-a/0/layout:c-b".to_string()
+                ),
+            ]
+        );
+        assert!(embed_prefixes("layout:c-a").is_empty());
+        assert!(embed_prefixes("field:note").is_empty());
+
+        let embeds = |paths: &[&str]| {
+            let mut m: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+            for p in paths {
+                for (chain, path) in embed_prefixes(p) {
+                    m.entry(chain).or_default().insert(path);
+                }
+            }
+            m
+        };
+        // A node was put above the embed: c-a went from child 1 to child 2.
+        let before = embeds(&["root/1/layout:c-a/0", "root/1/layout:c-a/3/layout:c-b/0"]);
+        let after = embeds(&["root/2/layout:c-a/0", "root/2/layout:c-a/3/layout:c-b/0"]);
+        let moves = moved_embeds(&before, &after);
+        let mut scroll: BTreeMap<String, f32> = [
+            ("root/1/layout:c-a/0", 300.0),
+            ("stretch:root/1/layout:c-a/0", 4.0),
+            ("root/1/layout:c-a/3/layout:c-b/0", 50.0),
+            ("root/1/layout:c-ab/0", 9.0),
+            ("root/0", 7.0),
+        ]
+        .into_iter()
+        .map(|(k, v)| (k.to_string(), v))
+        .collect();
+        move_keys(&mut scroll, &moves);
+        let keys: Vec<(&str, f32)> = scroll.iter().map(|(k, v)| (k.as_str(), *v)).collect();
+        assert_eq!(
+            keys,
+            vec![
+                ("root/0", 7.0),
+                ("root/1/layout:c-ab/0", 9.0),
+                ("root/2/layout:c-a/0", 300.0),
+                ("root/2/layout:c-a/3/layout:c-b/0", 50.0),
+                ("stretch:root/2/layout:c-a/0", 4.0),
+            ]
+        );
+        // A layout embedded twice can't be told apart: nothing moves.
+        let twice = embeds(&["root/2/layout:c-a/0", "root/3/layout:c-a/0"]);
+        assert!(
+            moved_embeds(&before, &twice)
+                .iter()
+                .all(|(o, _)| !o.ends_with("layout:c-a"))
+        );
+        assert!(moved_embeds(&before, &before).is_empty());
     }
 }
