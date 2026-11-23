@@ -473,13 +473,67 @@ impl Anchor {
     }
 }
 
-/// The anchors of an entry's vertical scrolls laid out in `laid`.
+/// The anchors of an entry's vertical scrolls laid out in `laid` (its
+/// scrolling views, not the `stretch:`, `pager:` … offsets beside them).
 fn anchors_of(laid: &Laid, scroll: &BTreeMap<String, f32>) -> BTreeMap<String, Anchor> {
     scroll
         .iter()
-        .filter(|(id, _)| !id.contains(':'))
+        .filter(|(id, _)| laid.scroll_max.contains_key(*id))
         .filter_map(|(id, &offset)| Some((id.clone(), Anchor::at(offset, &laid.scroll_items(id))?)))
         .collect()
+}
+
+/// The inline embeds that moved between two frames ([`Laid::embeds`]):
+/// each one's old path and new path, for a chain of layouts drawn once in
+/// both (the embedding layout changed around it; a layout drawn twice
+/// can't be told apart, and keeps nothing).
+fn moved_embeds(
+    before: &BTreeMap<String, std::collections::BTreeSet<String>>,
+    after: &BTreeMap<String, std::collections::BTreeSet<String>>,
+) -> Vec<(String, String)> {
+    before
+        .iter()
+        .filter_map(|(chain, olds)| {
+            let news = after.get(chain)?;
+            if olds.len() != 1 || news.len() != 1 {
+                return None;
+            }
+            let (old, new) = (olds.first()?, news.first()?);
+            (old != new).then(|| (old.clone(), new.clone()))
+        })
+        .collect()
+}
+
+/// A state key (a path, or `stretch:`, `pager:` … and a path) under a moved
+/// embed, at its new path; the innermost embed that moved decides.
+fn moved_key(key: &str, moves: &[(String, String)]) -> Option<String> {
+    let (pre, path) = if key.starts_with("root") {
+        ("", key)
+    } else {
+        let i = key.find(':')?;
+        key.split_at(i + 1)
+    };
+    let (old, new) = moves
+        .iter()
+        .filter(|(old, _)| {
+            path.strip_prefix(old.as_str())
+                .is_some_and(|r| r.is_empty() || r.starts_with('/') || r.starts_with('~'))
+        })
+        .max_by_key(|(old, _)| old.len())?;
+    Some(format!("{pre}{new}{}", &path[old.len()..]))
+}
+
+/// Moves the state kept under moved embeds to their new paths.
+fn move_keys<V>(map: &mut BTreeMap<String, V>, moves: &[(String, String)]) {
+    let keys: Vec<(String, String)> = map
+        .keys()
+        .filter_map(|k| Some((k.clone(), moved_key(k, moves)?)))
+        .collect();
+    let moved: Vec<(String, V)> = keys
+        .into_iter()
+        .filter_map(|(old, new)| Some((new, map.remove(&old)?)))
+        .collect();
+    map.extend(moved);
 }
 
 /// The construct's edge graph (decision `content-addressed-construct`):
@@ -2672,33 +2726,52 @@ impl Session {
             height: size[1],
             scale: self.viewport.scale,
         };
-        let prev = self.stack[i].stale.take();
+        let mut prev = self.stack[i].stale.take();
         // On the construct's edge graph each scroll keeps its first visible
         // item where it was (decision `content-addressed-construct`).
-        let anchors = match (&prev, self.edges.is_some()) {
+        let mut anchors = match (&prev, self.edges.is_some()) {
             (Some(p), true) => anchors_of(p, &self.stack[i].scroll),
             _ => BTreeMap::new(),
         };
-        let e = &self.stack[i];
+        // Where the inline layouts were drawn: a view's state is kept by
+        // its path, which an edit of the layout embedding it can move.
+        let mut embeds = prev.as_ref().map(Laid::embeds);
         let started = Instant::now();
-        let laid = self.builder.relayout(
-            &Input {
-                root: &e.root,
-                data: &self.data,
-                form: &self.form,
-                route: &e.route,
-                layouts: &self.layouts,
-                scroll: &e.scroll,
-                viewport: vp,
-                dark: self.dark,
-                item: e.item.as_deref(),
-                insets,
-                focused: self.focused.as_deref(),
-                panels: &e.panels,
-            },
-            prev,
-        )?;
-        self.work.laid_out = self.work.laid_out.saturating_add(1);
+        let laid = loop {
+            let e = &self.stack[i];
+            let laid = self.builder.relayout(
+                &Input {
+                    root: &e.root,
+                    data: &self.data,
+                    form: &self.form,
+                    route: &e.route,
+                    layouts: &self.layouts,
+                    scroll: &e.scroll,
+                    viewport: vp,
+                    dark: self.dark,
+                    item: e.item.as_deref(),
+                    insets,
+                    focused: self.focused.as_deref(),
+                    panels: &e.panels,
+                },
+                prev.take(),
+            )?;
+            self.work.laid_out = self.work.laid_out.saturating_add(1);
+            let moves = embeds
+                .take()
+                .map(|b| moved_embeds(&b, &laid.embeds()))
+                .unwrap_or_default();
+            if moves.is_empty() {
+                break laid;
+            }
+            // An embed moved: its scroll offsets, anchors and panels follow
+            // it, and it is laid out once more with them.
+            let e = &mut self.stack[i];
+            move_keys(&mut e.scroll, &moves);
+            move_keys(&mut e.panels, &moves);
+            move_keys(&mut anchors, &moves);
+            prev = Some(laid);
+        };
         self.work.layout += started.elapsed();
         let e = &mut self.stack[i];
         for (id, anchor) in &anchors {
@@ -5505,5 +5578,72 @@ mod anchor_tests {
         // Only rows before it are left: the one before keeps its place.
         assert_eq!(a.offset_in(&items(&[("a", 0.0)])), Some(50.0));
         assert_eq!(a.offset_in(&items(&[("z", 0.0)])), None);
+    }
+
+    #[test]
+    fn state_under_a_moved_embed_follows_it() {
+        use super::{move_keys, moved_embeds};
+        use crate::layout::embed_prefixes;
+        use std::collections::{BTreeMap, BTreeSet};
+
+        assert_eq!(
+            embed_prefixes("root/1/tab/layout:c-a/0/layout:c-b/2"),
+            vec![
+                (
+                    "layout:c-a".to_string(),
+                    "root/1/tab/layout:c-a".to_string()
+                ),
+                (
+                    "layout:c-a/layout:c-b".to_string(),
+                    "root/1/tab/layout:c-a/0/layout:c-b".to_string()
+                ),
+            ]
+        );
+        assert!(embed_prefixes("layout:c-a").is_empty());
+        assert!(embed_prefixes("field:note").is_empty());
+
+        let embeds = |paths: &[&str]| {
+            let mut m: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+            for p in paths {
+                for (chain, path) in embed_prefixes(p) {
+                    m.entry(chain).or_default().insert(path);
+                }
+            }
+            m
+        };
+        // A node was put above the embed: c-a went from child 1 to child 2.
+        let before = embeds(&["root/1/layout:c-a/0", "root/1/layout:c-a/3/layout:c-b/0"]);
+        let after = embeds(&["root/2/layout:c-a/0", "root/2/layout:c-a/3/layout:c-b/0"]);
+        let moves = moved_embeds(&before, &after);
+        let mut scroll: BTreeMap<String, f32> = [
+            ("root/1/layout:c-a/0", 300.0),
+            ("stretch:root/1/layout:c-a/0", 4.0),
+            ("root/1/layout:c-a/3/layout:c-b/0", 50.0),
+            ("root/1/layout:c-ab/0", 9.0),
+            ("root/0", 7.0),
+        ]
+        .into_iter()
+        .map(|(k, v)| (k.to_string(), v))
+        .collect();
+        move_keys(&mut scroll, &moves);
+        let keys: Vec<(&str, f32)> = scroll.iter().map(|(k, v)| (k.as_str(), *v)).collect();
+        assert_eq!(
+            keys,
+            vec![
+                ("root/0", 7.0),
+                ("root/1/layout:c-ab/0", 9.0),
+                ("root/2/layout:c-a/0", 300.0),
+                ("root/2/layout:c-a/3/layout:c-b/0", 50.0),
+                ("stretch:root/2/layout:c-a/0", 4.0),
+            ]
+        );
+        // A layout embedded twice can't be told apart: nothing moves.
+        let twice = embeds(&["root/2/layout:c-a/0", "root/3/layout:c-a/0"]);
+        assert!(
+            moved_embeds(&before, &twice)
+                .iter()
+                .all(|(o, _)| !o.ends_with("layout:c-a"))
+        );
+        assert!(moved_embeds(&before, &before).is_empty());
     }
 }
