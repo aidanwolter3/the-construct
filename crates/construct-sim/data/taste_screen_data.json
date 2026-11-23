@@ -1,0 +1,343 @@
+{
+  "/v1/taste/screens/item?key=shop0_example__2000": {
+    "entities": {
+      "taste://items/shop0_example__2000": {
+        "brand": "Fernhill Supply",
+        "buy_url": "https://shop0.example/products/item-0",
+        "category": "jacket",
+        "host": "shop0.example",
+        "id": "shop0.example:2000",
+        "image": "https://cdn.shop0.example/storage/portrait-5.png?v=1&width=720",
+        "image_large": "https://cdn.shop0.example/storage/portrait-5.png?v=1&width=1600",
+        "key": "shop0_example__2000",
+        "liked": false,
+        "price_text": "$148",
+        "skipped": false,
+        "thumb": "https://cdn.shop0.example/storage/portrait-5.png?v=1&width=360",
+        "title": "Waxed Chore Coat in Olive",
+        "uri": "taste://items/shop0_example__2000",
+        "why_text": "Near your taste · 1",
+        "why_tone": "accent"
+      },
+      "taste://items/shop0_example__2003": {
+        "brand": "Saltmarsh",
+        "buy_url": "https://shop0.example/products/item-3",
+        "category": "t-shirt",
+        "host": "shop0.example",
+        "id": "shop0.example:2003",
+        "image": "https://cdn.shop0.example/storage/carousel-2.png?v=1&width=720",
+        "image_large": "https://cdn.shop0.example/storage/carousel-2.png?v=1&width=1600",
+        "key": "shop0_example__2003",
+        "liked": false,
+        "price_text": "$48",
+        "skipped": false,
+        "thumb": "https://cdn.shop0.example/storage/carousel-2.png?v=1&width=360",
+        "title": "Heavyweight Pocket Tee",
+        "uri": "taste://items/shop0_example__2003",
+        "why_text": "Near your taste · 2",
+        "why_tone": "accent"
+      },
+      "taste://items/shop0_example__2006": {
+        "brand": "Fernhill Supply",
+        "buy_url": "https://shop0.example/products/item-6",
+        "category": "jeans",
+        "host": "shop0.example",
+        "id": "shop0.example:2006",
+        "image": "https://cdn.shop0.example/storage/portrait-5.png?v=1&width=720",
+        "image_large": "https://cdn.shop0.example/storage/portrait-5.png?v=1&width=1600",
+        "key": "shop0_example__2006",
+        "liked": false,
+        "price_text": "$175",
+        "skipped": false,
+        "thumb": "https://cdn.shop0.example/storage/portrait-5.png?v=1&width=360",
+        "title": "Selvedge Denim Jeans",
+        "uri": "taste://items/shop0_example__2006",
+        "why_text": "Adjacent",
+        "why_tone": "success"
+      },
+      "taste://items/shop1_example__2001": {
+        "brand": "Okra & Wool",
+        "buy_url": "https://shop1.example/products/item-1",
+        "category": "overshirt",
+        "host": "shop1.example",
+        "id": "shop1.example:2001",
+        "image": "https://cdn.shop1.example/storage/carousel-1.png?v=1&width=720",
+        "image_large": "https://cdn.shop1.example/storage/carousel-1.png?v=1&width=1600",
+        "key": "shop1_example__2001",
+        "liked": true,
+        "price_text": "$118",
+        "skipped": false,
+        "thumb": "https://cdn.shop1.example/storage/carousel-1.png?v=1&width=360",
+        "title": "Brushed Flannel Overshirt",
+        "uri": "taste://items/shop1_example__2001",
+        "why_text": "Near your taste · 1",
+        "why_tone": "accent"
+      },
+      "taste://items/shop1_example__2004": {
+        "brand": "Linden Row",
+        "buy_url": "https://shop1.example/products/item-4",
+        "category": "cardigan",
+        "host": "shop1.example",
+        "id": "shop1.example:2004",
+        "image": "https://cdn.shop1.example/storage/reblog-6.png?v=1&width=720",
+        "image_large": "https://cdn.shop1.example/storage/reblog-6.png?v=1&width=1600",
+        "key": "shop1_example__2004",
+        "liked": false,
+        "price_text": "€210",
+        "skipped": false,
+        "thumb": "https://cdn.shop1.example/storage/reblog-6.png?v=1&width=360",
+        "title": "Shawl Collar Cardigan",
+        "uri": "taste://items/shop1_example__2004",
+        "why_text": "Exploring",
+        "why_tone": "muted"
+      },
+      "taste://items/shop1_example__2007": {
+        "brand": "Okra & Wool",
+        "buy_url": "https://shop1.example/products/item-7",
+        "category": "boots",
+        "host": "shop1.example",
+        "id": "shop1.example:2007",
+        "image": "https://cdn.shop1.example/storage/carousel-1.png?v=1&width=720",
+        "image_large": "https://cdn.shop1.example/storage/carousel-1.png?v=1&width=1600",
+        "key": "shop1_example__2007",
+        "liked": false,
+        "price_text": "$240",
+        "skipped": false,
+        "thumb": "https://cdn.shop1.example/storage/carousel-1.png?v=1&width=360",
+        "title": "Suede Chukka Boots",
+        "uri": "taste://items/shop1_example__2007",
+        "why_text": "Exploring",
+        "why_tone": "muted"
+      },
+      "taste://items/shop2_example__2005": {
+        "brand": "Copperleaf",
+        "buy_url": "https://shop2.example/products/item-5",
+        "category": "jacket",
+        "host": "shop2.example",
+        "id": "shop2.example:2005",
+        "image": "https://cdn.shop2.example/storage/carousel-3.png?v=1&width=720",
+        "image_large": "https://cdn.shop2.example/storage/carousel-3.png?v=1&width=1600",
+        "key": "shop2_example__2005",
+        "liked": false,
+        "price_text": "$198",
+        "skipped": false,
+        "thumb": "https://cdn.shop2.example/storage/carousel-3.png?v=1&width=360",
+        "title": "Canvas Work Jacket",
+        "uri": "taste://items/shop2_example__2005",
+        "why_text": "Near your taste · 1",
+        "why_tone": "accent"
+      }
+    },
+    "queries": {
+      "taste:contrast:shop0_example__2000": [
+        "taste://items/shop0_example__2003",
+        "taste://items/shop1_example__2004",
+        "taste://items/shop1_example__2007"
+      ],
+      "taste:similar:shop0_example__2000": [
+        "taste://items/shop2_example__2005",
+        "taste://items/shop1_example__2001",
+        "taste://items/shop0_example__2006"
+      ]
+    }
+  },
+  "/v1/taste/screens/likes": {
+    "entities": {
+      "taste://items/shop1_example__2001": {
+        "brand": "Okra & Wool",
+        "buy_url": "https://shop1.example/products/item-1",
+        "category": "overshirt",
+        "host": "shop1.example",
+        "id": "shop1.example:2001",
+        "image": "https://cdn.shop1.example/storage/carousel-1.png?v=1&width=720",
+        "image_large": "https://cdn.shop1.example/storage/carousel-1.png?v=1&width=1600",
+        "key": "shop1_example__2001",
+        "liked": true,
+        "price_text": "$118",
+        "skipped": false,
+        "thumb": "https://cdn.shop1.example/storage/carousel-1.png?v=1&width=360",
+        "title": "Brushed Flannel Overshirt",
+        "uri": "taste://items/shop1_example__2001",
+        "why_text": "Near your taste · 1",
+        "why_tone": "accent"
+      },
+      "taste://items/shop2_example__300": {
+        "brand": "Okra & Wool",
+        "buy_url": "https://shop2.example/products/p0",
+        "category": "overshirt",
+        "host": "shop2.example",
+        "id": "shop2.example:300",
+        "image": "https://cdn.shop2.example/storage/carousel-3.png?v=1&width=720",
+        "image_large": "https://cdn.shop2.example/storage/carousel-3.png?v=1&width=1600",
+        "key": "shop2_example__300",
+        "liked": true,
+        "price_text": "$118",
+        "skipped": false,
+        "thumb": "https://cdn.shop2.example/storage/carousel-3.png?v=1&width=360",
+        "title": "Ripstop Field Jacket",
+        "uri": "taste://items/shop2_example__300",
+        "why_text": "",
+        "why_tone": "muted"
+      },
+      "taste://items/shop2_example__301": {
+        "brand": "Okra & Wool",
+        "buy_url": "https://shop2.example/products/p1",
+        "category": "overshirt",
+        "host": "shop2.example",
+        "id": "shop2.example:301",
+        "image": "https://cdn.shop2.example/storage/landscape-4.png?v=1&width=720",
+        "image_large": "https://cdn.shop2.example/storage/landscape-4.png?v=1&width=1600",
+        "key": "shop2_example__301",
+        "liked": true,
+        "price_text": "$118",
+        "skipped": false,
+        "thumb": "https://cdn.shop2.example/storage/landscape-4.png?v=1&width=360",
+        "title": "Corduroy Work Trousers",
+        "uri": "taste://items/shop2_example__301",
+        "why_text": "",
+        "why_tone": "muted"
+      },
+      "taste://items/shop2_example__302": {
+        "brand": "Okra & Wool",
+        "buy_url": "https://shop2.example/products/p2",
+        "category": "overshirt",
+        "host": "shop2.example",
+        "id": "shop2.example:302",
+        "image": "https://cdn.shop2.example/storage/carousel-2.png?v=1&width=720",
+        "image_large": "https://cdn.shop2.example/storage/carousel-2.png?v=1&width=1600",
+        "key": "shop2_example__302",
+        "liked": true,
+        "price_text": "$118",
+        "skipped": false,
+        "thumb": "https://cdn.shop2.example/storage/carousel-2.png?v=1&width=360",
+        "title": "Fisherman Rib Sweater",
+        "uri": "taste://items/shop2_example__302",
+        "why_text": "",
+        "why_tone": "muted"
+      }
+    },
+    "queries": {
+      "taste:likes": [
+        "taste://items/shop1_example__2001",
+        "taste://items/shop2_example__300",
+        "taste://items/shop2_example__301",
+        "taste://items/shop2_example__302"
+      ]
+    }
+  },
+  "/v1/taste/screens/taste": {
+    "entities": {
+      "taste://summary/pod": {
+        "likes": 14,
+        "text": "You go for sturdy, textured pieces that look better worn in: waxed cotton, canvas and flannel in olive and brown, cut roomy enough to layer. Your second taste is softer: undyed knits and relaxed trousers in cream.",
+        "writing": false,
+        "written": true,
+        "written_text": "Written at 14 likes"
+      },
+      "taste://taste_items/0/shop1_example__2001": {
+        "brand": "Okra & Wool",
+        "buy_url": "https://shop1.example/products/item-1",
+        "category": "overshirt",
+        "host": "shop1.example",
+        "id": "shop1.example:2001",
+        "image": "https://cdn.shop1.example/storage/carousel-1.png?v=1&width=720",
+        "image_large": "https://cdn.shop1.example/storage/carousel-1.png?v=1&width=1600",
+        "key": "shop1_example__2001",
+        "liked": true,
+        "price_text": "$118",
+        "skipped": false,
+        "taste": "0",
+        "thumb": "https://cdn.shop1.example/storage/carousel-1.png?v=1&width=360",
+        "title": "Brushed Flannel Overshirt",
+        "uri": "taste://taste_items/0/shop1_example__2001",
+        "why_text": "",
+        "why_tone": "muted"
+      },
+      "taste://taste_items/0/shop2_example__300": {
+        "brand": "Okra & Wool",
+        "buy_url": "https://shop2.example/products/p0",
+        "category": "overshirt",
+        "host": "shop2.example",
+        "id": "shop2.example:300",
+        "image": "https://cdn.shop2.example/storage/carousel-3.png?v=1&width=720",
+        "image_large": "https://cdn.shop2.example/storage/carousel-3.png?v=1&width=1600",
+        "key": "shop2_example__300",
+        "liked": true,
+        "price_text": "$118",
+        "skipped": false,
+        "taste": "0",
+        "thumb": "https://cdn.shop2.example/storage/carousel-3.png?v=1&width=360",
+        "title": "Ripstop Field Jacket",
+        "uri": "taste://taste_items/0/shop2_example__300",
+        "why_text": "",
+        "why_tone": "muted"
+      },
+      "taste://taste_items/1/shop2_example__301": {
+        "brand": "Okra & Wool",
+        "buy_url": "https://shop2.example/products/p1",
+        "category": "overshirt",
+        "host": "shop2.example",
+        "id": "shop2.example:301",
+        "image": "https://cdn.shop2.example/storage/landscape-4.png?v=1&width=720",
+        "image_large": "https://cdn.shop2.example/storage/landscape-4.png?v=1&width=1600",
+        "key": "shop2_example__301",
+        "liked": true,
+        "price_text": "$118",
+        "skipped": false,
+        "taste": "1",
+        "thumb": "https://cdn.shop2.example/storage/landscape-4.png?v=1&width=360",
+        "title": "Corduroy Work Trousers",
+        "uri": "taste://taste_items/1/shop2_example__301",
+        "why_text": "",
+        "why_tone": "muted"
+      },
+      "taste://taste_items/1/shop2_example__302": {
+        "brand": "Okra & Wool",
+        "buy_url": "https://shop2.example/products/p2",
+        "category": "overshirt",
+        "host": "shop2.example",
+        "id": "shop2.example:302",
+        "image": "https://cdn.shop2.example/storage/carousel-2.png?v=1&width=720",
+        "image_large": "https://cdn.shop2.example/storage/carousel-2.png?v=1&width=1600",
+        "key": "shop2_example__302",
+        "liked": true,
+        "price_text": "$118",
+        "skipped": false,
+        "taste": "1",
+        "thumb": "https://cdn.shop2.example/storage/carousel-2.png?v=1&width=360",
+        "title": "Fisherman Rib Sweater",
+        "uri": "taste://taste_items/1/shop2_example__302",
+        "why_text": "",
+        "why_tone": "muted"
+      },
+      "taste://tastes/0": {
+        "attributes_text": "rugged workwear · waxed cotton · olive green · utilitarian",
+        "brands_text": "Fernhill Supply · Copperleaf",
+        "categories_text": "jacket · overshirt",
+        "n": "0",
+        "size_text": "9 likes",
+        "title": "Taste 1"
+      },
+      "taste://tastes/1": {
+        "attributes_text": "relaxed and oversized · cream and beige · knitted",
+        "brands_text": "Linden Row · Okra & Wool",
+        "categories_text": "cardigan · trousers",
+        "n": "1",
+        "size_text": "5 likes",
+        "title": "Taste 2"
+      }
+    },
+    "queries": {
+      "taste:taste_items": [
+        "taste://taste_items/0/shop1_example__2001",
+        "taste://taste_items/0/shop2_example__300",
+        "taste://taste_items/1/shop2_example__301",
+        "taste://taste_items/1/shop2_example__302"
+      ],
+      "taste:tastes": [
+        "taste://tastes/0",
+        "taste://tastes/1"
+      ]
+    }
+  }
+}

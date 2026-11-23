@@ -18,7 +18,7 @@ drawn by The Construct itself from this file (see [Keeping this current](#keepin
 This document explains how things fit. The guides go deeper on each subject: [layouts.md](layouts.md) (the layout
 vocabulary), [building.md](building.md) (layouts, Collections, sharing, jacks), [api.md](api.md) (the HTTP
 API), [server.md](server.md), [clients.md](clients.md), [rendering.md](rendering.md), [agents.md](agents.md),
-[notifications.md](notifications.md), [testing.md](testing.md) and [simulator.md](simulator.md). Why each choice
+[taste.md](taste.md), [notifications.md](notifications.md), [testing.md](testing.md) and [simulator.md](simulator.md). Why each choice
 was made is in the decisions: [DECISIONS.md](DECISIONS.md) (D1–D52) and [decisions/](decisions/).
 
 ## Part 1 · Why it exists
@@ -158,7 +158,8 @@ by every client.
 │ │ notifications              │ │
 │ │ sources: collections,      │ │
 │ │ pixelfed, events, agents,  │ │
-│ │ shell, monitor, dates      │ │
+│ │ taste, shell, monitor,     │ │
+│ │ dates                      │ │
 │ │ jacks: model, web,         │ │
 │ │ web_search, mcp, accounts  │ │
 │ └────────────────────────────┘ │
@@ -592,7 +593,7 @@ copy core layouts, and home embeds or opens them.
 
 #### Core layouts
 
-Core layouts are the screens the server ships: `pixelfed`, `events`, `agents`, `server_health`, `shell` (the blank
+Core layouts are the screens the server ships: `pixelfed`, `events`, `agents`, `taste`, `server_health`, `shell` (the blank
 home), `settings`, `inbox`, and the `checklist` kit. Each is a folder of append-only files in its source's crate,
 `crates/source-*/layouts/<id>/NNNN.json`; when a pod opens, each `@core/<id>` name moves to this build's newest
 file. A pod's layout can use a core layout whole by reference (`{"type": "core://Use", "ref": "@core/events"}`), which
@@ -752,10 +753,10 @@ Posting photos crosses every piece: the device stages photos, the engine uploads
 queues the create, the pod claims the uploads, and the source posts them to Pixelfed, resuming after a restart
 ([posting.md](posting.md)).
 
-### 5.5 Events, Agents and the small sources
+### 5.5 Events, Agents, Taste and the small sources
 
 The other sources show the range of what a source can be: one built entirely on Collections, one that mirrors an
-outside runner, and three that are mostly layouts.
+outside runner, one that keeps a page of an outside service's feed, and three that are mostly layouts.
 
 #### Events
 
@@ -769,6 +770,14 @@ Agents (`crates/source-agents`) mirrors an external **agent runner** that runs C
 the runner's protocol (CAP v3: a snapshot, a resumable event stream, actions). The pod owns the work (Tasks rows,
 schedules) and notifications; the runner owns the runs and their outcomes. It keeps its pod open to follow the
 stream ([agents.md](agents.md)).
+
+#### Taste
+
+Taste (`crates/source-taste`) shows the feed of the owner's own **taste service**, which ranks clothes from real
+stores by what they like and keeps exploring past it. The pod signs in to it with a URL and token like the agents
+runner, keeps the feed it was served (the service answers a new page every time it is asked, and a layout's feed is
+fetched again after every data event), and passes likes and skips on; the item, search and taste screens are read
+from the service when they are shown ([taste.md](taste.md)).
 
 #### Shell, Monitor and Dates
 
@@ -846,6 +855,7 @@ Settings → Jacks.
 | `mcp` | switch, on | Calling tools of the remote MCP servers the pod is connected to |
 | `pixelfed` | account | The Pixelfed source |
 | `agent_runner` | account | The Agents source |
+| `taste` | account | The Taste source |
 
 > **Try it:** Ask your agent for `list_jacks` to see what your pod is plugged into.
 
@@ -1065,7 +1075,7 @@ the engine, the renderer and its clients, and the test tools.
 | `pod-core` | The generic pod; `components/` holds the server components |
 | `pod-host` | Many pods in one server: `host.db`, tokens, temporary pods, scheduler, shelf, public links |
 | `server` | The binary and the `server pods` admin commands |
-| `source-collections`, `source-pixelfed`, `source-events`, `source-agents`, `source-monitor`, `source-dates`, `source-shell` | The sources; core layouts in `layouts/<id>/NNNN.json`, components in `components/` |
+| `source-collections`, `source-pixelfed`, `source-events`, `source-agents`, `source-taste`, `source-monitor`, `source-dates`, `source-shell` | The sources; core layouts in `layouts/<id>/NNNN.json`, components in `components/` |
 | `web-extract`, `agent` | The web module and the agent module |
 | `client-core` | The engine |
 | `construct-render` | The renderer, the desktop and Android apps, the pod's previews |

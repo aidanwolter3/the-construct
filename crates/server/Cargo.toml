@@ -25,6 +25,7 @@ source-events = { path = "../source-events" }
 source-monitor = { path = "../source-monitor" }
 source-dates = { path = "../source-dates" }
 source-agents = { path = "../source-agents" }
+source-taste = { path = "../source-taste" }
 protocol = { workspace = true }
 axum = { version = "0.8", features = ["http2"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "signal", "sync", "time"] }

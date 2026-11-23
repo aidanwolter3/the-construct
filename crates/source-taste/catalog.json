@@ -1,0 +1,6 @@
+{
+  "taste": {
+    "category": "layout",
+    "use_when": "The user browses clothes to learn their taste: a feed from their taste service with likes and skips, similar and opposite pieces, search, and what their taste is."
+  }
+}

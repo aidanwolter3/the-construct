@@ -6,7 +6,7 @@
 //! ...), `server::pixelfed` is the Pixelfed adapter crate,
 //! `server::collections` the Collections adapter crate, `server::events` the Events adapter crate,
 //! `server::monitor` the monitoring source crate, `server::agents` the agent
-//! runner source crate.
+//! runner source crate, `server::taste` the taste service source crate.
 
 use std::path::Path;
 use std::sync::Arc;
@@ -19,6 +19,7 @@ pub use source_events as events;
 pub use source_monitor as monitor;
 pub use source_pixelfed as pixelfed;
 pub use source_pixelfed::{DEFAULT_PIXELFED_URL, PixelfedAdapter, PixelfedConfig};
+pub use source_taste as taste;
 
 /// The pod's adapters, in the order their core layouts are listed: the Pixelfed feed (with the
 /// `pixelfed` sign-in), the Events app (the
@@ -29,7 +30,8 @@ pub use source_pixelfed::{DEFAULT_PIXELFED_URL, PixelfedAdapter, PixelfedConfig}
 /// configured from `CONSTRUCT_INFER_*` and `CONSTRUCT_FILL_*`), and the
 /// server monitoring source with its `server_health` core layout (decision `server-monitoring`), and the
 /// agent runner source with its `agents` core layout (decision
-/// `agents-data-source`).
+/// `agents-data-source`), and the taste service source with its `taste`
+/// core layout (decision `taste-data-source`).
 pub fn adapters(pixelfed: PixelfedConfig) -> Vec<Arc<dyn Source>> {
     vec![
         Arc::new(PixelfedAdapter::new(pixelfed)),
@@ -50,6 +52,7 @@ pub fn adapters(pixelfed: PixelfedConfig) -> Vec<Arc<dyn Source>> {
             source_monitor::MonitorConfig::from_env(),
         )),
         source_agents::adapter(),
+        source_taste::adapter(),
         source_dates::adapter(),
     ]
 }
@@ -108,11 +111,11 @@ pub fn check_open_pod(addr: &str, on_fly: bool, insecure_opt_in: bool) -> Result
 }
 
 /// Extra settings of temporary pods (anyone can make one, D46): Pixelfed
-/// only on the default instance, and the `model`, `web`, `web_search`, `mcp`
-/// and `agent_runner` jacks locked unplugged (decision `jacks`), so a
+/// only on the default instance, and the `model`, `web`, `web_search`, `mcp`,
+/// `agent_runner` and `taste` jacks locked unplugged (decision `jacks`), so a
 /// visitor can't make the server contact hosts of their choosing (fetch
 /// URLs, search, register OAuth apps, call MCP servers, follow an agent
-/// runner) or spend its model key.
+/// runner, call a taste service) or spend its model key.
 pub fn temporary_pod_settings() -> Vec<(String, String)> {
     let mut out = vec![(
         source_pixelfed::OTHER_INSTANCES_SETTING.to_owned(),
@@ -124,6 +127,7 @@ pub fn temporary_pod_settings() -> Vec<(String, String)> {
         pod_core::jacks::WEB_SEARCH,
         pod_core::jacks::MCP,
         source_agents::JACK,
+        source_taste::JACK,
     ]));
     out
 }
@@ -196,6 +200,7 @@ pub fn layout_files() -> Vec<layouts::LayoutSource> {
     files.extend_from_slice(source_shell::SETTINGS_FILES);
     files.extend_from_slice(source_shell::INBOX_FILES);
     files.extend_from_slice(source_agents::FILES);
+    files.extend_from_slice(source_taste::FILES);
     files
 }
 

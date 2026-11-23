@@ -4609,6 +4609,7 @@ dependencies = [
  "source-monitor",
  "source-pixelfed",
  "source-shell",
+ "source-taste",
  "tempfile",
  "tokio",
  "tower",
@@ -4958,6 +4959,24 @@ version = "0.1.0"
 dependencies = [
  "pod-core",
  "protocol",
+]
+
+[[package]]
+name = "source-taste"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "http-body-util",
+ "pod-core",
+ "protocol",
+ "reqwest",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "source-shell",
+ "tokio",
+ "tower",
+ "tracing",
 ]
 
 [[package]]

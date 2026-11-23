@@ -15,6 +15,7 @@ members = [
     "crates/source-monitor",
     "crates/source-dates",
     "crates/source-agents",
+    "crates/source-taste",
     "crates/source-shell",
     "crates/web-extract",
     "crates/agent",

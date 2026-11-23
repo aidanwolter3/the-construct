@@ -1,0 +1,395 @@
+{
+  "feed": [
+    {
+      "id": "shop0.example:2000",
+      "brand": "Fernhill Supply",
+      "title": "Waxed Chore Coat in Olive",
+      "url": "https://shop0.example/products/item-0",
+      "price": 148,
+      "currency": "USD",
+      "category": "jacket",
+      "images": [
+        "https://cdn.shop0.example/storage/portrait-5.png?v=1"
+      ],
+      "liked": false,
+      "skipped": false,
+      "why": "near:0"
+    },
+    {
+      "id": "shop1.example:2001",
+      "brand": "Okra & Wool",
+      "title": "Brushed Flannel Overshirt",
+      "url": "https://shop1.example/products/item-1",
+      "price": 118,
+      "currency": "USD",
+      "category": "overshirt",
+      "images": [
+        "https://cdn.shop1.example/storage/carousel-1.png?v=1"
+      ],
+      "liked": true,
+      "skipped": false,
+      "why": "near:0"
+    },
+    {
+      "id": "shop2.example:2002",
+      "brand": "Northgate Workshop",
+      "title": "Loose Pleated Trousers",
+      "url": "https://shop2.example/products/item-2",
+      "price": 165,
+      "currency": "GBP",
+      "category": "trousers",
+      "images": [
+        "https://cdn.shop2.example/storage/landscape-4.png?v=1"
+      ],
+      "liked": false,
+      "skipped": false,
+      "why": "adjacent"
+    },
+    {
+      "id": "shop0.example:2003",
+      "brand": "Saltmarsh",
+      "title": "Heavyweight Pocket Tee",
+      "url": "https://shop0.example/products/item-3",
+      "price": 48,
+      "currency": "USD",
+      "category": "t-shirt",
+      "images": [
+        "https://cdn.shop0.example/storage/carousel-2.png?v=1"
+      ],
+      "liked": false,
+      "skipped": false,
+      "why": "near:1"
+    },
+    {
+      "id": "shop1.example:2004",
+      "brand": "Linden Row",
+      "title": "Shawl Collar Cardigan",
+      "url": "https://shop1.example/products/item-4",
+      "price": 210,
+      "currency": "EUR",
+      "category": "cardigan",
+      "images": [
+        "https://cdn.shop1.example/storage/reblog-6.png?v=1"
+      ],
+      "liked": false,
+      "skipped": false,
+      "why": "explore"
+    },
+    {
+      "id": "shop2.example:2005",
+      "brand": "Copperleaf",
+      "title": "Canvas Work Jacket",
+      "url": "https://shop2.example/products/item-5",
+      "price": 198,
+      "currency": "USD",
+      "category": "jacket",
+      "images": [
+        "https://cdn.shop2.example/storage/carousel-3.png?v=1"
+      ],
+      "liked": false,
+      "skipped": false,
+      "why": "near:0"
+    },
+    {
+      "id": "shop0.example:2006",
+      "brand": "Fernhill Supply",
+      "title": "Selvedge Denim Jeans",
+      "url": "https://shop0.example/products/item-6",
+      "price": 175,
+      "currency": "USD",
+      "category": "jeans",
+      "images": [
+        "https://cdn.shop0.example/storage/portrait-5.png?v=1"
+      ],
+      "liked": false,
+      "skipped": false,
+      "why": "adjacent"
+    },
+    {
+      "id": "shop1.example:2007",
+      "brand": "Okra & Wool",
+      "title": "Suede Chukka Boots",
+      "url": "https://shop1.example/products/item-7",
+      "price": 240,
+      "currency": "USD",
+      "category": "boots",
+      "images": [
+        "https://cdn.shop1.example/storage/carousel-1.png?v=1"
+      ],
+      "liked": false,
+      "skipped": false,
+      "why": "explore"
+    }
+  ],
+  "status": {
+    "likes": 14,
+    "skips": 31
+  },
+  "items": {
+    "shop0.example:2000": {
+      "item": {
+        "id": "shop0.example:2000",
+        "brand": "Fernhill Supply",
+        "title": "Waxed Chore Coat in Olive",
+        "url": "https://shop0.example/products/item-0",
+        "price": 148,
+        "currency": "USD",
+        "category": "jacket",
+        "images": [
+          "https://cdn.shop0.example/storage/portrait-5.png?v=1"
+        ],
+        "liked": false,
+        "skipped": false
+      },
+      "similar": [
+        {
+          "id": "shop2.example:2005",
+          "brand": "Copperleaf",
+          "title": "Canvas Work Jacket",
+          "url": "https://shop2.example/products/item-5",
+          "price": 198,
+          "currency": "USD",
+          "category": "jacket",
+          "images": [
+            "https://cdn.shop2.example/storage/carousel-3.png?v=1"
+          ],
+          "liked": false,
+          "skipped": false
+        },
+        {
+          "id": "shop1.example:2001",
+          "brand": "Okra & Wool",
+          "title": "Brushed Flannel Overshirt",
+          "url": "https://shop1.example/products/item-1",
+          "price": 118,
+          "currency": "USD",
+          "category": "overshirt",
+          "images": [
+            "https://cdn.shop1.example/storage/carousel-1.png?v=1"
+          ],
+          "liked": true,
+          "skipped": false
+        },
+        {
+          "id": "shop0.example:2006",
+          "brand": "Fernhill Supply",
+          "title": "Selvedge Denim Jeans",
+          "url": "https://shop0.example/products/item-6",
+          "price": 175,
+          "currency": "USD",
+          "category": "jeans",
+          "images": [
+            "https://cdn.shop0.example/storage/portrait-5.png?v=1"
+          ],
+          "liked": false,
+          "skipped": false
+        }
+      ],
+      "contrast": [
+        {
+          "id": "shop0.example:2003",
+          "brand": "Saltmarsh",
+          "title": "Heavyweight Pocket Tee",
+          "url": "https://shop0.example/products/item-3",
+          "price": 48,
+          "currency": "USD",
+          "category": "t-shirt",
+          "images": [
+            "https://cdn.shop0.example/storage/carousel-2.png?v=1"
+          ],
+          "liked": false,
+          "skipped": false
+        },
+        {
+          "id": "shop1.example:2004",
+          "brand": "Linden Row",
+          "title": "Shawl Collar Cardigan",
+          "url": "https://shop1.example/products/item-4",
+          "price": 210,
+          "currency": "EUR",
+          "category": "cardigan",
+          "images": [
+            "https://cdn.shop1.example/storage/reblog-6.png?v=1"
+          ],
+          "liked": false,
+          "skipped": false
+        },
+        {
+          "id": "shop1.example:2007",
+          "brand": "Okra & Wool",
+          "title": "Suede Chukka Boots",
+          "url": "https://shop1.example/products/item-7",
+          "price": 240,
+          "currency": "USD",
+          "category": "boots",
+          "images": [
+            "https://cdn.shop1.example/storage/carousel-1.png?v=1"
+          ],
+          "liked": false,
+          "skipped": false
+        }
+      ]
+    }
+  },
+  "likes": [
+    {
+      "id": "shop1.example:2001",
+      "brand": "Okra & Wool",
+      "title": "Brushed Flannel Overshirt",
+      "url": "https://shop1.example/products/item-1",
+      "price": 118,
+      "currency": "USD",
+      "category": "overshirt",
+      "images": [
+        "https://cdn.shop1.example/storage/carousel-1.png?v=1"
+      ],
+      "liked": true,
+      "skipped": false
+    },
+    {
+      "id": "shop2.example:300",
+      "brand": "Okra & Wool",
+      "title": "Ripstop Field Jacket",
+      "url": "https://shop2.example/products/p0",
+      "price": 118,
+      "currency": "USD",
+      "category": "overshirt",
+      "images": [
+        "https://cdn.shop2.example/storage/carousel-3.png?v=1"
+      ],
+      "liked": true,
+      "skipped": false
+    },
+    {
+      "id": "shop2.example:301",
+      "brand": "Okra & Wool",
+      "title": "Corduroy Work Trousers",
+      "url": "https://shop2.example/products/p1",
+      "price": 118,
+      "currency": "USD",
+      "category": "overshirt",
+      "images": [
+        "https://cdn.shop2.example/storage/landscape-4.png?v=1"
+      ],
+      "liked": true,
+      "skipped": false
+    },
+    {
+      "id": "shop2.example:302",
+      "brand": "Okra & Wool",
+      "title": "Fisherman Rib Sweater",
+      "url": "https://shop2.example/products/p2",
+      "price": 118,
+      "currency": "USD",
+      "category": "overshirt",
+      "images": [
+        "https://cdn.shop2.example/storage/carousel-2.png?v=1"
+      ],
+      "liked": true,
+      "skipped": false
+    }
+  ],
+  "taste": {
+    "likes": 14,
+    "skips": 31,
+    "tastes": [
+      {
+        "size": 9,
+        "attributes": [
+          "rugged workwear",
+          "waxed cotton",
+          "olive green",
+          "utilitarian"
+        ],
+        "brands": [
+          "Fernhill Supply",
+          "Copperleaf"
+        ],
+        "categories": [
+          "jacket",
+          "overshirt"
+        ],
+        "items": [
+          {
+            "id": "shop1.example:2001",
+            "brand": "Okra & Wool",
+            "title": "Brushed Flannel Overshirt",
+            "url": "https://shop1.example/products/item-1",
+            "price": 118,
+            "currency": "USD",
+            "category": "overshirt",
+            "images": [
+              "https://cdn.shop1.example/storage/carousel-1.png?v=1"
+            ],
+            "liked": true,
+            "skipped": false
+          },
+          {
+            "id": "shop2.example:300",
+            "brand": "Okra & Wool",
+            "title": "Ripstop Field Jacket",
+            "url": "https://shop2.example/products/p0",
+            "price": 118,
+            "currency": "USD",
+            "category": "overshirt",
+            "images": [
+              "https://cdn.shop2.example/storage/carousel-3.png?v=1"
+            ],
+            "liked": true,
+            "skipped": false
+          }
+        ]
+      },
+      {
+        "size": 5,
+        "attributes": [
+          "relaxed and oversized",
+          "cream and beige",
+          "knitted"
+        ],
+        "brands": [
+          "Linden Row",
+          "Okra & Wool"
+        ],
+        "categories": [
+          "cardigan",
+          "trousers"
+        ],
+        "items": [
+          {
+            "id": "shop2.example:301",
+            "brand": "Okra & Wool",
+            "title": "Corduroy Work Trousers",
+            "url": "https://shop2.example/products/p1",
+            "price": 118,
+            "currency": "USD",
+            "category": "overshirt",
+            "images": [
+              "https://cdn.shop2.example/storage/landscape-4.png?v=1"
+            ],
+            "liked": true,
+            "skipped": false
+          },
+          {
+            "id": "shop2.example:302",
+            "brand": "Okra & Wool",
+            "title": "Fisherman Rib Sweater",
+            "url": "https://shop2.example/products/p2",
+            "price": 118,
+            "currency": "USD",
+            "category": "overshirt",
+            "images": [
+              "https://cdn.shop2.example/storage/carousel-2.png?v=1"
+            ],
+            "liked": true,
+            "skipped": false
+          }
+        ]
+      }
+    ],
+    "summary": {
+      "text": "You go for sturdy, textured pieces that look better worn in: waxed cotton, canvas and flannel in olive and brown, cut roomy enough to layer. Your second taste is softer: undyed knits and relaxed trousers in cream.",
+      "likes": 14
+    }
+  }
+}

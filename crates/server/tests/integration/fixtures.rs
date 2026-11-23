@@ -355,3 +355,86 @@ fn server_health_bundles() {
         );
     }
 }
+
+/// The simulator's `taste` page: the `taste` source's core layout over
+/// made-up answers of a taste service (`tests/data/simulator/taste_data.json`),
+/// made into entities by the source's own code, and the data paths of its
+/// screens (`taste_screen_data.json`).
+#[test]
+fn taste_bundles() {
+    use server::taste::bundle;
+    let path =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/data/simulator/taste_data.json");
+    let data: Value = serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+    let kept = data["feed"].as_array().cloned().unwrap_or_default();
+    // As the pod answers: the kept feed's reasons filled in.
+    let list = |v: &Value| bundle::with_why(&v.as_array().cloned().unwrap_or_default(), &kept);
+    let page = newest(server::taste::APP_ID);
+    assert_eq!(page["type"], "core://Page");
+
+    let mut feed = protocol::DataBundle::default();
+    bundle::status(
+        &mut feed,
+        &bundle::Status {
+            signed_in: true,
+            host: "taste.example".into(),
+            likes: data["status"]["likes"].as_i64().unwrap(),
+            skips: data["status"]["skips"].as_i64().unwrap(),
+            error: None,
+        },
+    );
+    bundle::put_items(&mut feed, bundle::FEED_QUERY, &list(&data["feed"]));
+    let mut entities = serde_json::to_value(&feed.entities).unwrap();
+    // What the pod adds for the source (`pod_core::compose`).
+    entities["core://sources/taste"] =
+        serde_json::json!({"id": "taste", "title": "Taste", "signed_in": true});
+    let b = serde_json::json!({
+        "version": "1.0.0",
+        "workspace": page,
+        "entities": entities,
+        "queries": feed.queries,
+    });
+    check_or_write(
+        "taste_bundle.json",
+        &(serde_json::to_string_pretty(&b).unwrap() + "\n"),
+    );
+
+    let mut screens = serde_json::Map::new();
+    for (id, s) in data["items"].as_object().unwrap() {
+        let key = bundle::key_of(id);
+        let mut b = protocol::DataBundle::default();
+        bundle::put_items(
+            &mut b,
+            &format!("taste:similar:{key}"),
+            &list(&s["similar"]),
+        );
+        bundle::put_items(
+            &mut b,
+            &format!("taste:contrast:{key}"),
+            &list(&s["contrast"]),
+        );
+        let item = bundle::with_why(std::slice::from_ref(&s["item"]), &kept).remove(0);
+        let (uri, rec) = bundle::item(&item).unwrap();
+        b.entities.insert(uri, rec);
+        screens.insert(
+            format!("/v1/taste/screens/item?key={key}"),
+            serde_json::to_value(&b).unwrap(),
+        );
+    }
+    let mut likes = protocol::DataBundle::default();
+    bundle::put_items(&mut likes, bundle::LIKES_QUERY, &list(&data["likes"]));
+    screens.insert(
+        "/v1/taste/screens/likes".into(),
+        serde_json::to_value(&likes).unwrap(),
+    );
+    let mut taste = protocol::DataBundle::default();
+    bundle::tastes(&mut taste, &data["taste"]);
+    screens.insert(
+        "/v1/taste/screens/taste".into(),
+        serde_json::to_value(&taste).unwrap(),
+    );
+    check_or_write(
+        "taste_screen_data.json",
+        &(serde_json::to_string_pretty(&Value::Object(screens)).unwrap() + "\n"),
+    );
+}
