@@ -959,6 +959,7 @@ fn temporary_pods_fetch_nothing_and_ask_no_model() {
         pod_core::jacks::WEB_SEARCH,
         pod_core::jacks::MCP,
         server::agents::JACK,
+        server::taste::JACK,
     ] {
         let key = format!("jack.{jack}");
         assert!(
@@ -968,6 +969,45 @@ fn temporary_pods_fetch_nothing_and_ask_no_model() {
             "{key}: {settings:?}"
         );
     }
+}
+
+/// Security audit 2026-11-23: a temporary pod made before a jack was locked
+/// (by a server whose settings didn't name it) has it locked once a newer
+/// server opens it, so its taste sign-in is refused like a new pod's.
+#[tokio::test]
+async fn temporary_pods_get_newer_locks_when_opened() {
+    let dir = tempfile::tempdir().unwrap();
+    let fake = spawn_fake().await;
+    let factory = || server::pod_factory(PixelfedConfig::new(&fake.url, None), false, 86_400, true);
+    let path = dir.path().to_owned();
+    let (older, f) = (HostConfig::default(), factory());
+    let token = tokio::task::spawn_blocking(move || {
+        let host = Host::open(&path, f, older).unwrap();
+        host.create_pod("visitor", PodKind::Temporary, None, &[])
+            .unwrap()
+            .token
+    })
+    .await
+    .unwrap();
+    let path = dir.path().to_owned();
+    let newer = HostConfig {
+        temporary_pod_settings: server::temporary_pod_settings(),
+        ..HostConfig::default()
+    };
+    let f = factory();
+    let host = tokio::task::spawn_blocking(move || Host::open(&path, f, newer))
+        .await
+        .unwrap()
+        .unwrap();
+    let server = serve(server::host::app(Arc::new(host))).await;
+    let (status, body) = post(
+        &format!("{}/v1/taste/sign-in", server.url),
+        Some(&token),
+        json!({ "url": "not a url", "token": "t" }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+    assert_eq!(body["error"], "jack_locked");
 }
 
 /// Security review of D46: a burst of creations can't overshoot the cap.

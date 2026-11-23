@@ -187,7 +187,8 @@ pub struct HostConfig {
     pub open_pod_any_ip: bool,
     pub temporary: Option<TemporaryPods>,
     /// Extra settings for temporary pods (anyone can make one), e.g. keeping
-    /// an adapter from contacting hosts the visitor picks.
+    /// an adapter from contacting hosts the visitor picks. Written when a
+    /// temporary pod is made and again each time it is opened.
     pub temporary_pod_settings: Vec<(String, String)>,
     /// Rate limits key on the `Fly-Client-IP` header (set by Fly's proxy)
     /// instead of the connection's peer. Only behind Fly (`FLY_APP_NAME`):
@@ -1088,6 +1089,13 @@ impl Host {
             let guard = pod_core::disk::DiskGuard::new(&host.dir, storage.min_free_disk_bytes);
             let store = Store::open(&path).map_err(|e| e.to_string())?;
             store.set_max_bytes(max_bytes).map_err(|e| e.to_string())?;
+            // Again on every open, not only at creation: a jack a newer
+            // server locks reaches the temporary pods an older one made.
+            if kind == PodKind::Temporary {
+                for (k, v) in &host.config.temporary_pod_settings {
+                    store.set_pod_setting(k, v).map_err(|e| e.to_string())?;
+                }
+            }
             let state = (host.factory)(store)?
                 .with_upload_quota_bytes(Some(quota))
                 .with_disk_guard(Some(guard));
