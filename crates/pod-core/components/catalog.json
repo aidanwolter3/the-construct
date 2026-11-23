@@ -155,6 +155,10 @@
     "category": "primitive",
     "use_when": "An icon in a tinted circle: a row's leading icon, a category."
   },
+  "tinted_text": {
+    "category": "primitive",
+    "use_when": "A text in one colour other than the muted one: an event's time in the accent, an error line, a heading in a section's hue. Use it instead of a Box that only sets content_color."
+  },
   "title_meta": {
     "category": "row",
     "use_when": "A bold title over one muted line: a name and its details."

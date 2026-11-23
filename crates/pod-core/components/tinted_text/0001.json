@@ -1,0 +1,92 @@
+{
+  "note": "First version: the text in one colour (a time in the accent, an error line, a hue's heading) that layouts wrap in a Box of their own",
+  "component": {
+    "doc": "A text in one colour, with no padding of its own: an event's time in the accent, a warning line in the error colour, a heading in a section's hue, a status headline in success. Secondary text by default; weight and max_lines are left out while empty. For the muted colour use core:muted_text, and for a small capitals label over a heading core:eyebrow.",
+    "params": [
+      {
+        "name": "text",
+        "type": "text",
+        "doc": "The text (bindings allowed, such as $item.start_text).",
+        "required": true
+      },
+      {
+        "name": "color",
+        "type": "text",
+        "doc": "Its colour, a theme token such as ${local://theme#accent} or ${local://theme#error}.",
+        "required": true
+      },
+      {
+        "name": "style",
+        "type": "text",
+        "doc": "A core://Text style (Caption for a small detail, Label for a heading, Title for a headline).",
+        "default": "Secondary"
+      },
+      {
+        "name": "weight",
+        "type": "text",
+        "doc": "A core://Text weight (SemiBold, Bold); empty for the style's own.",
+        "default": ""
+      },
+      {
+        "name": "max_lines",
+        "type": "number",
+        "doc": "The most lines it takes; 0 for no limit.",
+        "default": 0
+      }
+    ],
+    "template": {
+      "type": "core://Box",
+      "content_color": "$arg.color",
+      "content": {
+        "type": "core://Text",
+        "value_expr": "$arg.text",
+        "style": "$arg.style",
+        "weight": {
+          "type": "core://IfArg",
+          "arg": "weight",
+          "then": "$arg.weight"
+        },
+        "max_lines": {
+          "type": "core://IfArg",
+          "arg": "max_lines",
+          "then": "$arg.max_lines"
+        }
+      }
+    },
+    "examples": [
+      {
+        "args": {
+          "text": "$item.start_text",
+          "color": "${local://theme#accent}",
+          "style": "Caption"
+        },
+        "note": "when an event starts, over its title in a row"
+      },
+      {
+        "args": {
+          "text": "${local://screen#error}",
+          "color": "${local://theme#error}",
+          "style": "Caption"
+        },
+        "note": "why a screen's data didn't load, beside Try again"
+      },
+      {
+        "args": {
+          "text": "All systems running",
+          "color": "${local://theme#success}",
+          "style": "Title",
+          "weight": "SemiBold"
+        },
+        "note": "a status card's headline in the tone of the status"
+      },
+      {
+        "args": {
+          "text": "$item.url",
+          "color": "${local://theme#accent}",
+          "max_lines": 2
+        },
+        "note": "a link's address under its name, cut at two lines"
+      }
+    ]
+  }
+}
