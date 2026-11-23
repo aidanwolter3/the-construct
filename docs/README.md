@@ -18,6 +18,7 @@ Start with [design.md](design.md), the whole system from the top down (also a co
 | [posting.md](posting.md) | How photo posting works across client, engine, pod and source |
 | [notifications.md](notifications.md) | How notifications travel from an upstream to a device |
 | [agents.md](agents.md) | The Agents source: runs from an agent runner (CAP v3), the pod's schedules, its core layout, notifications and Tasks wiring |
+| [taste.md](taste.md) | The Taste source: a feed of clothes from the owner's taste service, likes and skips, its core layout |
 
 **Decisions.** [DECISIONS.md](DECISIONS.md) holds D1–D52, numbered and closed to new entries. Newer decisions are
 one file each in [decisions/](decisions/) ([how to write one](decisions/README.md)). They record why, at the time;

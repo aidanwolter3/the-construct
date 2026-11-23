@@ -1,0 +1,1103 @@
+{
+  "note": "The taste feed: big photos with why each is there, Like and Skip, More and Refresh; a piece's screen with Buy, This, but…, Similar and Opposite; Search, Likes and Your taste; the sign-in form",
+  "layout": {
+    "type": "core://Page",
+    "id": "taste",
+    "title": "Taste",
+    "root": {
+      "type": "core://Use",
+      "component": "core:screen_scaffold",
+      "args": {
+        "title": "Taste",
+        "spacing": 14
+      },
+      "children": [
+        {
+          "type": "core://Conditional",
+          "value": "${taste://status/pod#signed_in}",
+          "content": {
+            "type": "core://Use",
+            "component": "core:card",
+            "args": {
+              "spacing": 10
+            },
+            "children": [
+              {
+                "type": "core://Text",
+                "value_expr": "Sign in to your taste service",
+                "style": "Label"
+              },
+              {
+                "type": "core://Text",
+                "value_expr": "The pod connects to the service with its address and its token (TASTE_TOKEN). The token is stored sealed on the pod and never shown again.",
+                "style": "Secondary"
+              },
+              {
+                "type": "core://TextField",
+                "field": "taste_url",
+                "placeholder": "https://taste.example",
+                "max_length": 500
+              },
+              {
+                "type": "core://TextField",
+                "field": "taste_token",
+                "placeholder": "Token",
+                "max_length": 4096,
+                "secret": true
+              },
+              {
+                "type": "core://Button",
+                "label": "Sign in",
+                "on_click": {
+                  "intent": "action.mutation.optimistic",
+                  "entity_uri": "taste://status/pod",
+                  "field": "signed_in",
+                  "value_expr": "true",
+                  "rollback_value": false,
+                  "endpoint": "/v1/taste/sign-in",
+                  "payload": {
+                    "url": "$form.taste_url",
+                    "token": "$form.taste_token"
+                  },
+                  "also": [
+                    {
+                      "field": "status_text",
+                      "value_expr": "\"Signing in…\""
+                    }
+                  ]
+                },
+                "style": "Primary",
+                "size": "Regular"
+              }
+            ]
+          },
+          "equals": "false"
+        },
+        {
+          "type": "core://Conditional",
+          "value": "${taste://status/pod#signed_in}",
+          "content": {
+            "type": "core://Column",
+            "children": [
+              {
+                "type": "core://Row",
+                "children": [
+                  {
+                    "type": "core://Button",
+                    "label": "Search",
+                    "on_click": {
+                      "intent": "action.navigation.open",
+                      "presentation": "Push",
+                      "target_uri": "taste://search/pod"
+                    },
+                    "style": "Tonal",
+                    "size": "Small"
+                  },
+                  {
+                    "type": "core://Button",
+                    "label": "Likes",
+                    "on_click": {
+                      "intent": "action.navigation.open",
+                      "presentation": "Push",
+                      "target_uri": "taste://likes/pod"
+                    },
+                    "style": "Tonal",
+                    "size": "Small"
+                  },
+                  {
+                    "type": "core://Button",
+                    "label": "Your taste",
+                    "on_click": {
+                      "intent": "action.navigation.open",
+                      "presentation": "Push",
+                      "target_uri": "taste://taste/pod"
+                    },
+                    "style": "Tonal",
+                    "size": "Small"
+                  }
+                ],
+                "spacing_dp": 8
+              },
+              {
+                "type": "core://Use",
+                "component": "core:muted_text",
+                "args": {
+                  "text": "${taste://status/pod#counts_text}"
+                }
+              },
+              {
+                "type": "core://Conditional",
+                "value": "${taste://status/pod#error}",
+                "content": {
+                  "type": "core://Use",
+                  "component": "core:callout",
+                  "args": {
+                    "title": "The taste service didn't answer",
+                    "text": "${taste://status/pod#error}",
+                    "tone": "error"
+                  }
+                }
+              },
+              {
+                "type": "core://List",
+                "query_key": "taste:feed",
+                "item_template": {
+                  "type": "core://Use",
+                  "component": "core:card",
+                  "args": {
+                    "spacing": 8,
+                    "padding_h": 10,
+                    "padding_v": 10,
+                    "corner": 16
+                  },
+                  "children": [
+                    {
+                      "type": "core://Tappable",
+                      "content_description": "Open $item.title",
+                      "on_click": {
+                        "intent": "action.navigation.open",
+                        "presentation": "Push",
+                        "target_uri": "taste://items/$item.key"
+                      },
+                      "content": {
+                        "type": "core://Image",
+                        "url": "$item.image",
+                        "aspect_ratio": 0.8,
+                        "shape": "Rounded",
+                        "content_description": "$item.title"
+                      }
+                    },
+                    {
+                      "type": "core://Conditional",
+                      "value": "$item.why_text",
+                      "content": {
+                        "type": "core://Use",
+                        "component": "core:pill",
+                        "args": {
+                          "text": "$item.why_text"
+                        }
+                      }
+                    },
+                    {
+                      "type": "core://Column",
+                      "children": [
+                        {
+                          "type": "core://Text",
+                          "value_expr": "$item.brand",
+                          "style": "Caption",
+                          "caps": true,
+                          "weight": "SemiBold"
+                        },
+                        {
+                          "type": "core://Text",
+                          "value_expr": "$item.title",
+                          "style": "Label",
+                          "max_lines": 2
+                        }
+                      ],
+                      "spacing_dp": 2,
+                      "padding_h_dp": 2
+                    },
+                    {
+                      "type": "core://Row",
+                      "children": [
+                        {
+                          "type": "core://Text",
+                          "value_expr": "$item.price_text",
+                          "style": "Body"
+                        },
+                        {
+                          "type": "core://Spacer"
+                        },
+                        {
+                          "type": "core://Conditional",
+                          "value": "$item.liked",
+                          "content": {
+                            "type": "core://Button",
+                            "label": "Liked",
+                            "on_click": {
+                              "intent": "action.mutation.optimistic",
+                              "entity_uri": "$item.uri",
+                              "field": "liked",
+                              "value_expr": "false",
+                              "rollback_value": false,
+                              "endpoint": "/v1/taste/react",
+                              "payload": {
+                                "id": "$item.id",
+                                "liked": "$value"
+                              },
+                              "also": [
+                                {
+                                  "field": "skipped",
+                                  "value_expr": "false"
+                                }
+                              ]
+                            },
+                            "style": "Primary",
+                            "size": "Small"
+                          },
+                          "equals": "true"
+                        },
+                        {
+                          "type": "core://Conditional",
+                          "value": "$item.liked",
+                          "content": {
+                            "type": "core://Button",
+                            "label": "Like",
+                            "on_click": {
+                              "intent": "action.mutation.optimistic",
+                              "entity_uri": "$item.uri",
+                              "field": "liked",
+                              "value_expr": "true",
+                              "rollback_value": false,
+                              "endpoint": "/v1/taste/react",
+                              "payload": {
+                                "id": "$item.id",
+                                "liked": "$value"
+                              },
+                              "also": [
+                                {
+                                  "field": "skipped",
+                                  "value_expr": "false"
+                                }
+                              ]
+                            },
+                            "style": "Secondary",
+                            "size": "Small"
+                          },
+                          "equals": "true",
+                          "not": true
+                        },
+                        {
+                          "type": "core://Button",
+                          "label": "Skip",
+                          "on_click": {
+                            "intent": "action.mutation.optimistic",
+                            "entity_uri": "$item.uri",
+                            "field": "skipped",
+                            "value_expr": "true",
+                            "rollback_value": false,
+                            "endpoint": "/v1/taste/react",
+                            "payload": {
+                              "id": "$item.id",
+                              "skipped": "$value"
+                            },
+                            "also": [
+                              {
+                                "field": "liked",
+                                "value_expr": "false"
+                              }
+                            ]
+                          },
+                          "style": "Text",
+                          "size": "Small"
+                        }
+                      ],
+                      "spacing_dp": 6,
+                      "padding_h_dp": 2
+                    }
+                  ]
+                },
+                "where": [
+                  {
+                    "field": "skipped",
+                    "equals": "false"
+                  }
+                ],
+                "min_column_dp": 300,
+                "spacing_dp": 16,
+                "empty_text": "Your feed is on its way."
+              },
+              {
+                "type": "core://Row",
+                "children": [
+                  {
+                    "type": "core://Button",
+                    "label": "Show more",
+                    "on_click": {
+                      "intent": "action.mutation.optimistic",
+                      "entity_uri": "taste://status/pod",
+                      "field": "loading",
+                      "value_expr": "true",
+                      "rollback_value": false,
+                      "endpoint": "/v1/taste/more",
+                      "payload": {}
+                    },
+                    "style": "Primary",
+                    "size": "Regular"
+                  }
+                ],
+                "spacing_dp": 8,
+                "justify": "center"
+              },
+              {
+                "type": "core://Conditional",
+                "value": "${taste://status/pod#loading}",
+                "content": {
+                  "type": "core://Row",
+                  "children": [
+                    {
+                      "type": "core://Progress",
+                      "size_dp": 22
+                    }
+                  ],
+                  "spacing_dp": 8,
+                  "justify": "center"
+                },
+                "equals": "true"
+              },
+              {
+                "type": "core://Spacer",
+                "size_dp": 12
+              },
+              {
+                "type": "core://Row",
+                "children": [
+                  {
+                    "type": "core://Button",
+                    "label": "Sign out of the taste service",
+                    "on_click": {
+                      "intent": "action.confirm",
+                      "title": "Sign out of the taste service?",
+                      "message": "The pod forgets the service's address and token, and the feed it kept. Your likes stay with the service.",
+                      "confirm_label": "Sign out",
+                      "then": {
+                        "intent": "action.mutation.optimistic",
+                        "entity_uri": "taste://status/pod",
+                        "field": "signed_in",
+                        "value_expr": "false",
+                        "rollback_value": true,
+                        "endpoint": "/v1/taste/sign-out",
+                        "payload": {}
+                      }
+                    },
+                    "style": "Secondary",
+                    "size": "Small"
+                  }
+                ],
+                "spacing_dp": 8,
+                "justify": "center"
+              }
+            ],
+            "spacing_dp": 14
+          },
+          "equals": "true"
+        }
+      ],
+      "slots": {
+        "actions": [
+          {
+            "type": "core://Conditional",
+            "value": "${taste://status/pod#signed_in}",
+            "content": {
+              "type": "core://IconButton",
+              "icon": "refresh",
+              "content_description": "Start the feed again",
+              "on_click": {
+                "intent": "action.mutation.optimistic",
+                "entity_uri": "taste://status/pod",
+                "field": "loading",
+                "value_expr": "true",
+                "rollback_value": false,
+                "endpoint": "/v1/taste/refresh",
+                "payload": {}
+              }
+            },
+            "equals": "true"
+          }
+        ]
+      }
+    },
+    "screens": [
+      {
+        "id": "item",
+        "route": "taste://items/{key}",
+        "title": "Piece",
+        "data": "/v1/taste/screens/item?key=$route.key",
+        "item": "taste://items/$route.key",
+        "root": {
+          "type": "core://Use",
+          "component": "core:screen_scaffold",
+          "args": {
+            "title": "$item.brand",
+            "data": "/v1/taste/screens/item?key=$route.key",
+            "spacing": 14
+          },
+          "children": [
+            {
+              "type": "core://Image",
+              "url": "$item.image_large",
+              "aspect_ratio": 0.8,
+              "shape": "Rounded",
+              "content_description": "$item.title"
+            },
+            {
+              "type": "core://Column",
+              "children": [
+                {
+                  "type": "core://Use",
+                  "component": "core:eyebrow",
+                  "args": {
+                    "text": "$item.category"
+                  }
+                },
+                {
+                  "type": "core://Text",
+                  "value_expr": "$item.title",
+                  "style": "Headline"
+                },
+                {
+                  "type": "core://Text",
+                  "value_expr": "$item.price_text",
+                  "style": "Title"
+                }
+              ],
+              "spacing_dp": 4
+            },
+            {
+              "type": "core://Row",
+              "children": [
+                {
+                  "type": "core://Use",
+                  "component": "core:link_button",
+                  "args": {
+                    "label": "Buy at $item.host",
+                    "url": "$item.buy_url"
+                  }
+                },
+                {
+                  "type": "core://Spacer"
+                },
+                {
+                  "type": "core://Conditional",
+                  "value": "$item.liked",
+                  "content": {
+                    "type": "core://Button",
+                    "label": "Liked",
+                    "on_click": {
+                      "intent": "action.mutation.optimistic",
+                      "entity_uri": "$item.uri",
+                      "field": "liked",
+                      "value_expr": "false",
+                      "rollback_value": false,
+                      "endpoint": "/v1/taste/react",
+                      "payload": {
+                        "id": "$item.id",
+                        "liked": "$value"
+                      },
+                      "also": [
+                        {
+                          "field": "skipped",
+                          "value_expr": "false"
+                        }
+                      ]
+                    },
+                    "style": "Primary",
+                    "size": "Small"
+                  },
+                  "equals": "true"
+                },
+                {
+                  "type": "core://Conditional",
+                  "value": "$item.liked",
+                  "content": {
+                    "type": "core://Button",
+                    "label": "Like",
+                    "on_click": {
+                      "intent": "action.mutation.optimistic",
+                      "entity_uri": "$item.uri",
+                      "field": "liked",
+                      "value_expr": "true",
+                      "rollback_value": false,
+                      "endpoint": "/v1/taste/react",
+                      "payload": {
+                        "id": "$item.id",
+                        "liked": "$value"
+                      },
+                      "also": [
+                        {
+                          "field": "skipped",
+                          "value_expr": "false"
+                        }
+                      ]
+                    },
+                    "style": "Secondary",
+                    "size": "Small"
+                  },
+                  "equals": "true",
+                  "not": true
+                },
+                {
+                  "type": "core://Button",
+                  "label": "Skip",
+                  "on_click": {
+                    "intent": "action.mutation.optimistic",
+                    "entity_uri": "$item.uri",
+                    "field": "skipped",
+                    "value_expr": "true",
+                    "rollback_value": false,
+                    "endpoint": "/v1/taste/react",
+                    "payload": {
+                      "id": "$item.id",
+                      "skipped": "$value"
+                    },
+                    "also": [
+                      {
+                        "field": "liked",
+                        "value_expr": "false"
+                      }
+                    ]
+                  },
+                  "style": "Text",
+                  "size": "Small"
+                }
+              ],
+              "spacing_dp": 6
+            },
+            {
+              "type": "core://Use",
+              "component": "core:titled_section",
+              "args": {
+                "text": "This, but…"
+              },
+              "children": [
+                {
+                  "type": "core://Column",
+                  "children": [
+                    {
+                      "type": "core://TextField",
+                      "field": "steer_q",
+                      "placeholder": "more relaxed, in brown suede…",
+                      "max_length": 200,
+                      "on_submit": {
+                        "intent": "action.data.load",
+                        "path": "/v1/taste/screens/steer?key=$route.key&q=$form.steer_q"
+                      }
+                    },
+                    {
+                      "type": "core://Row",
+                      "children": [
+                        {
+                          "type": "core://Button",
+                          "label": "Relaxed",
+                          "on_click": {
+                            "intent": "action.data.load",
+                            "path": "/v1/taste/screens/steer?key=$route.key&q=more relaxed"
+                          },
+                          "style": "Tonal",
+                          "size": "Small"
+                        },
+                        {
+                          "type": "core://Button",
+                          "label": "Dressier",
+                          "on_click": {
+                            "intent": "action.data.load",
+                            "path": "/v1/taste/screens/steer?key=$route.key&q=dressier"
+                          },
+                          "style": "Tonal",
+                          "size": "Small"
+                        },
+                        {
+                          "type": "core://Button",
+                          "label": "Rugged",
+                          "on_click": {
+                            "intent": "action.data.load",
+                            "path": "/v1/taste/screens/steer?key=$route.key&q=more rugged"
+                          },
+                          "style": "Tonal",
+                          "size": "Small"
+                        }
+                      ],
+                      "spacing_dp": 8
+                    },
+                    {
+                      "type": "core://List",
+                      "query_key": "taste:steer:$route.key",
+                      "item_template": {
+                        "type": "core://Tappable",
+                        "content_description": "Open $item.title",
+                        "on_click": {
+                          "intent": "action.navigation.open",
+                          "presentation": "Push",
+                          "target_uri": "taste://items/$item.key"
+                        },
+                        "content": {
+                          "type": "core://Column",
+                          "children": [
+                            {
+                              "type": "core://Image",
+                              "url": "$item.thumb",
+                              "aspect_ratio": 0.8,
+                              "shape": "Rounded",
+                              "content_description": "$item.title"
+                            },
+                            {
+                              "type": "core://Text",
+                              "value_expr": "$item.brand",
+                              "style": "Caption",
+                              "caps": true,
+                              "max_lines": 1
+                            },
+                            {
+                              "type": "core://Text",
+                              "value_expr": "$item.title",
+                              "style": "Secondary",
+                              "max_lines": 2
+                            }
+                          ],
+                          "spacing_dp": 4
+                        }
+                      },
+                      "spacing_dp": 12,
+                      "empty_text": "Type how it should change, or pick one above.",
+                      "columns": 3
+                    }
+                  ],
+                  "spacing_dp": 10
+                }
+              ]
+            },
+            {
+              "type": "core://Use",
+              "component": "core:titled_section",
+              "args": {
+                "text": "Similar"
+              },
+              "children": [
+                {
+                  "type": "core://List",
+                  "query_key": "taste:similar:$route.key",
+                  "item_template": {
+                    "type": "core://Tappable",
+                    "content_description": "Open $item.title",
+                    "on_click": {
+                      "intent": "action.navigation.open",
+                      "presentation": "Push",
+                      "target_uri": "taste://items/$item.key"
+                    },
+                    "content": {
+                      "type": "core://Column",
+                      "children": [
+                        {
+                          "type": "core://Image",
+                          "url": "$item.thumb",
+                          "aspect_ratio": 0.8,
+                          "shape": "Rounded",
+                          "content_description": "$item.title"
+                        },
+                        {
+                          "type": "core://Text",
+                          "value_expr": "$item.brand",
+                          "style": "Caption",
+                          "caps": true,
+                          "max_lines": 1
+                        },
+                        {
+                          "type": "core://Text",
+                          "value_expr": "$item.title",
+                          "style": "Secondary",
+                          "max_lines": 2
+                        }
+                      ],
+                      "spacing_dp": 4
+                    }
+                  },
+                  "spacing_dp": 12,
+                  "empty_text": "Nothing close to it.",
+                  "columns": 3
+                }
+              ]
+            },
+            {
+              "type": "core://Use",
+              "component": "core:titled_section",
+              "args": {
+                "text": "Opposite"
+              },
+              "children": [
+                {
+                  "type": "core://Use",
+                  "component": "core:muted_text",
+                  "args": {
+                    "text": "Other $item.category pieces, as unlike this one as the catalog has."
+                  }
+                },
+                {
+                  "type": "core://Spacer",
+                  "size_dp": 8
+                },
+                {
+                  "type": "core://List",
+                  "query_key": "taste:contrast:$route.key",
+                  "item_template": {
+                    "type": "core://Tappable",
+                    "content_description": "Open $item.title",
+                    "on_click": {
+                      "intent": "action.navigation.open",
+                      "presentation": "Push",
+                      "target_uri": "taste://items/$item.key"
+                    },
+                    "content": {
+                      "type": "core://Column",
+                      "children": [
+                        {
+                          "type": "core://Image",
+                          "url": "$item.thumb",
+                          "aspect_ratio": 0.8,
+                          "shape": "Rounded",
+                          "content_description": "$item.title"
+                        },
+                        {
+                          "type": "core://Text",
+                          "value_expr": "$item.brand",
+                          "style": "Caption",
+                          "caps": true,
+                          "max_lines": 1
+                        },
+                        {
+                          "type": "core://Text",
+                          "value_expr": "$item.title",
+                          "style": "Secondary",
+                          "max_lines": 2
+                        }
+                      ],
+                      "spacing_dp": 4
+                    }
+                  },
+                  "spacing_dp": 12,
+                  "empty_text": "Nothing to set against it.",
+                  "columns": 3
+                }
+              ]
+            }
+          ]
+        }
+      },
+      {
+        "id": "search",
+        "route": "taste://search/pod",
+        "title": "Search",
+        "root": {
+          "type": "core://Use",
+          "component": "core:screen_scaffold",
+          "args": {
+            "title": "Search",
+            "spacing": 12
+          },
+          "children": [
+            {
+              "type": "core://TextField",
+              "field": "search_q",
+              "placeholder": "olive chore coat, loose pleated trousers…",
+              "max_length": 200,
+              "on_submit": {
+                "intent": "action.data.load",
+                "path": "/v1/taste/screens/search?q=$form.search_q"
+              }
+            },
+            {
+              "type": "core://Use",
+              "component": "core:muted_note",
+              "args": {
+                "text": "Matched by how things look, not by their names."
+              }
+            },
+            {
+              "type": "core://Conditional",
+              "value": "${taste://search/pod#q}",
+              "content": {
+                "type": "core://Text",
+                "value_expr": "“${taste://search/pod#q}” · ${taste://search/pod#count_text}",
+                "style": "Label"
+              }
+            },
+            {
+              "type": "core://List",
+              "query_key": "taste:search",
+              "item_template": {
+                "type": "core://Tappable",
+                "content_description": "Open $item.title",
+                "on_click": {
+                  "intent": "action.navigation.open",
+                  "presentation": "Push",
+                  "target_uri": "taste://items/$item.key"
+                },
+                "content": {
+                  "type": "core://Column",
+                  "children": [
+                    {
+                      "type": "core://Image",
+                      "url": "$item.thumb",
+                      "aspect_ratio": 0.8,
+                      "shape": "Rounded",
+                      "content_description": "$item.title"
+                    },
+                    {
+                      "type": "core://Text",
+                      "value_expr": "$item.brand",
+                      "style": "Caption",
+                      "caps": true,
+                      "max_lines": 1
+                    },
+                    {
+                      "type": "core://Text",
+                      "value_expr": "$item.title",
+                      "style": "Secondary",
+                      "max_lines": 2
+                    }
+                  ],
+                  "spacing_dp": 4
+                }
+              },
+              "spacing_dp": 12,
+              "empty_text": "Search for anything you can describe.",
+              "min_column_dp": 150
+            }
+          ]
+        }
+      },
+      {
+        "id": "likes",
+        "route": "taste://likes/pod",
+        "title": "Likes",
+        "data": "/v1/taste/screens/likes",
+        "root": {
+          "type": "core://Use",
+          "component": "core:screen_scaffold",
+          "args": {
+            "title": "Likes",
+            "data": "/v1/taste/screens/likes",
+            "spacing": 12
+          },
+          "children": [
+            {
+              "type": "core://List",
+              "query_key": "taste:likes",
+              "item_template": {
+                "type": "core://Tappable",
+                "content_description": "Open $item.title",
+                "on_click": {
+                  "intent": "action.navigation.open",
+                  "presentation": "Push",
+                  "target_uri": "taste://items/$item.key"
+                },
+                "content": {
+                  "type": "core://Column",
+                  "children": [
+                    {
+                      "type": "core://Image",
+                      "url": "$item.thumb",
+                      "aspect_ratio": 0.8,
+                      "shape": "Rounded",
+                      "content_description": "$item.title"
+                    },
+                    {
+                      "type": "core://Text",
+                      "value_expr": "$item.brand",
+                      "style": "Caption",
+                      "caps": true,
+                      "max_lines": 1
+                    },
+                    {
+                      "type": "core://Text",
+                      "value_expr": "$item.title",
+                      "style": "Secondary",
+                      "max_lines": 2
+                    }
+                  ],
+                  "spacing_dp": 4
+                }
+              },
+              "spacing_dp": 12,
+              "empty_text": "Nothing liked yet. Like pieces in the feed and they gather here.",
+              "min_column_dp": 150
+            }
+          ]
+        }
+      },
+      {
+        "id": "taste",
+        "route": "taste://taste/pod",
+        "title": "Your taste",
+        "data": "/v1/taste/screens/taste",
+        "root": {
+          "type": "core://Use",
+          "component": "core:screen_scaffold",
+          "args": {
+            "title": "Your taste",
+            "data": "/v1/taste/screens/taste",
+            "spacing": 14
+          },
+          "children": [
+            {
+              "type": "core://Use",
+              "component": "core:card",
+              "args": {
+                "spacing": 10
+              },
+              "children": [
+                {
+                  "type": "core://Conditional",
+                  "value": "${taste://summary/pod#written}",
+                  "content": {
+                    "type": "core://Column",
+                    "children": [
+                      {
+                        "type": "core://Text",
+                        "value_expr": "${taste://summary/pod#text}",
+                        "style": "Body"
+                      },
+                      {
+                        "type": "core://Use",
+                        "component": "core:muted_text",
+                        "args": {
+                          "text": "${taste://summary/pod#written_text}"
+                        }
+                      }
+                    ],
+                    "spacing_dp": 6
+                  },
+                  "equals": "true"
+                },
+                {
+                  "type": "core://Conditional",
+                  "value": "${taste://summary/pod#written}",
+                  "content": {
+                    "type": "core://Use",
+                    "component": "core:muted_text",
+                    "args": {
+                      "text": "Like a dozen pieces, then have your taste put into words."
+                    }
+                  },
+                  "equals": "true",
+                  "not": true
+                },
+                {
+                  "type": "core://Conditional",
+                  "value": "${taste://summary/pod#writing}",
+                  "content": {
+                    "type": "core://Row",
+                    "children": [
+                      {
+                        "type": "core://Progress",
+                        "size_dp": 18
+                      },
+                      {
+                        "type": "core://Use",
+                        "component": "core:muted_text",
+                        "args": {
+                          "text": "Writing… this takes a minute."
+                        }
+                      }
+                    ],
+                    "spacing_dp": 8
+                  },
+                  "equals": "true"
+                },
+                {
+                  "type": "core://Row",
+                  "children": [
+                    {
+                      "type": "core://Button",
+                      "label": "Describe my taste",
+                      "on_click": {
+                        "intent": "action.mutation.optimistic",
+                        "entity_uri": "taste://summary/pod",
+                        "field": "writing",
+                        "value_expr": "true",
+                        "rollback_value": false,
+                        "endpoint": "/v1/taste/summary",
+                        "payload": {}
+                      },
+                      "style": "Tonal",
+                      "size": "Small"
+                    }
+                  ],
+                  "spacing_dp": 8
+                }
+              ]
+            },
+            {
+              "type": "core://List",
+              "query_key": "taste:tastes",
+              "item_template": {
+                "type": "core://Use",
+                "component": "core:card",
+                "args": {
+                  "spacing": 8
+                },
+                "children": [
+                  {
+                    "type": "core://Row",
+                    "children": [
+                      {
+                        "type": "core://Text",
+                        "value_expr": "$item.title",
+                        "style": "Title"
+                      },
+                      {
+                        "type": "core://Spacer"
+                      },
+                      {
+                        "type": "core://Use",
+                        "component": "core:muted_text",
+                        "args": {
+                          "text": "$item.size_text"
+                        }
+                      }
+                    ],
+                    "spacing_dp": 8
+                  },
+                  {
+                    "type": "core://Text",
+                    "value_expr": "$item.attributes_text",
+                    "style": "Body"
+                  },
+                  {
+                    "type": "core://Use",
+                    "component": "core:muted_text",
+                    "args": {
+                      "text": "$item.brands_text",
+                      "when": "$item.brands_text"
+                    }
+                  },
+                  {
+                    "type": "core://List",
+                    "query_key": "taste:taste:$item.n",
+                    "item_template": {
+                      "type": "core://Tappable",
+                      "content_description": "Open $item.title",
+                      "on_click": {
+                        "intent": "action.navigation.open",
+                        "presentation": "Push",
+                        "target_uri": "taste://items/$item.key"
+                      },
+                      "content": {
+                        "type": "core://Column",
+                        "children": [
+                          {
+                            "type": "core://Image",
+                            "url": "$item.thumb",
+                            "aspect_ratio": 0.8,
+                            "shape": "Rounded",
+                            "content_description": "$item.title"
+                          }
+                        ],
+                        "spacing_dp": 4
+                      }
+                    },
+                    "spacing_dp": 12,
+                    "empty_text": "",
+                    "columns": 4
+                  }
+                ]
+              },
+              "spacing_dp": 12,
+              "empty_text": "Your tastes show up here once you've liked a few pieces."
+            }
+          ]
+        }
+      }
+    ]
+  }
+}

@@ -117,6 +117,7 @@ address or pod, 503 `too_many_streams` when the server (or its temporary pods to
 | `CONSTRUCT_MONITOR_LLM_TOKENS_PER_DAY` | `1000000` | It warns above this many model tokens a day: uncached input, cache writes and output. Tokens read from the prompt cache (a twentieth of the price) are counted (`direction="cache_read"`) and shown, but not toward this. |
 | `CONSTRUCT_MONITOR_TEMP_PODS_PERCENT` | `80` | It warns once live temporary pods reach this share of `CONSTRUCT_TEMP_POD_MAX` (40 of 50), before new ones are refused. |
 | `CONSTRUCT_AGENTS_PRIVATE_HOSTS` | unset | `1`: the Agents source may sign in to a runner on any address over http (local development only); otherwise `https://` public hosts. |
+| `CONSTRUCT_TASTE_PRIVATE_HOSTS` | unset | `1`: the Taste source may sign in to a taste service on any address over http (local development only); otherwise `https://` public hosts. |
 | `CONSTRUCT_SHOW_DEV_APPS` | unset | `1`: MCP also lists the dev core layouts and sources (`pixelfed_sample_no_login`; it works either way). |
 | `CONSTRUCT_TEST_HOOKS` | unset | `1` enables `POST /v1/test/fault` and local Web Push receivers. Tests only. |
 
@@ -184,8 +185,8 @@ machine only.
 
 With `CONSTRUCT_TEMP_PODS=1`, `POST /v1/pods/temporary` makes a pod that is deleted with everything in it after
 `CONSTRUCT_TEMP_POD_HOURS`. Temporary pods have every source, but Pixelfed only on the default instance (no typed-in
-servers), the `model`, `web`, `web_search`, `mcp` and `agent_runner` jacks locked (no model calls, no fetch fillers,
-no searches, no MCP servers, no agent runner sign-in: 403 `jack_locked`; decision `jacks`), no handle and no
+servers), the `model`, `web`, `web_search`, `mcp`, `agent_runner` and `taste` jacks locked (no model calls, no fetch fillers,
+no searches, no MCP servers, no agent runner or taste service sign-in: 403 `jack_locked`; decision `jacks`), no handle and no
 publishing (`set_handle` and `publish` answer `temporary_pod`), no public links, and smaller storage and upload
 quotas, with a cap on all of them together (`CONSTRUCT_TEMP_POD_TOTAL_BYTES`) and on their event streams together
 (`CONSTRUCT_SSE_MAX_TEMPORARY`). At most 5 are made per client address an hour. They are how visitors and automated sessions try a deployed server:

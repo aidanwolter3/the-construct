@@ -514,7 +514,7 @@ A pod's **jacks** are the abilities it is plugged into (decision [`jacks`](decis
 (switches, on by default), `web_search` (config: `provider` `brave` with the pod's own `api_key`, `searxng` with a
 `base_url` (`https://` on a public host name, never an IP address or an internal name), or `duckduckgo`), and
 `mcp` (a switch, on by default: calling the MCP servers the pod is connected to), and
-accounts sources declare: `pixelfed` and `agent_runner` (plugged by their own sign-in). Claude uses `list_jacks`, `plug_jack` and `unplug_jack`; `GET /v1/jacks` lists them. People plug them in the app
+accounts sources declare: `pixelfed`, `agent_runner` and `taste` (plugged by their own sign-in). Claude uses `list_jacks`, `plug_jack` and `unplug_jack`; `GET /v1/jacks` lists them. People plug them in the app
 too: Settings → Jacks lists each with its state, and a config jack's screen takes its provider and its key in a hidden
 field, sent straight to the pod (`GET /v1/jacks/screen`, `POST /v1/jacks/plug` and `/unplug`; decision
 [`jacks-in-settings`](decisions/jacks-in-settings.md)). Secrets are sealed and

@@ -1,0 +1,25 @@
+[package]
+name = "source-taste"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+# The `taste` data source (decision `taste-data-source`): a feed of clothes
+# from an external taste service, with likes and skips sent back to it.
+
+[dependencies]
+pod-core = { path = "../pod-core" }
+protocol = { workspace = true }
+serde_json.workspace = true
+serde.workspace = true
+rusqlite.workspace = true
+tracing = "0.1"
+axum = { version = "0.8", features = ["http2"] }
+tokio = { version = "1", features = ["rt", "time", "sync", "macros"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+
+[dev-dependencies]
+source-shell = { path = "../source-shell" }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "time", "net", "sync"] }
+tower = { version = "0.5", features = ["util"] }
+http-body-util = "0.1"

@@ -2,7 +2,7 @@
 
 Server-driven UI: a Rust pod serves app layouts (JSON `UiNode` trees) and entities; desktop, Android and a headless
 simulator draw them with one Rust renderer (`construct-render`) over one Rust engine (decision `rust-clients`). Built-in layouts are core layouts, not listed:
-Pixelfed (`pixelfed`), Events (`events`), Agents (`agents`), Server health (`server_health`), the blank home (`shell`), Settings
+Pixelfed (`pixelfed`), Events (`events`), Agents (`agents`), Taste (`taste`), Server health (`server_health`), the blank home (`shell`), Settings
 (`settings`) and the inbox (`inbox`). There are no apps at runtime: a pod's layouts are the user's own (from core layouts or Collections),
 starting with `home`, which clients open first and which embeds and presents the others on one engine
 (decision `layouts-not-apps`).
@@ -19,7 +19,8 @@ issues. `docs/history/` is archived; don't treat it as current.
   `adapter.rs`; `validate.rs` checks layout files); `crates/pod-host` many pods per server; `crates/server` the
   binary and `server pods` CLI.
 - `crates/source-pixelfed`, `source-collections`, `source-events` (Events), `source-monitor`,
-  `source-agents` (Agents: an external agent runner, [docs/agents.md](docs/agents.md)), `source-dates` (the days
+  `source-agents` (Agents: an external agent runner, [docs/agents.md](docs/agents.md)), `source-taste` (Taste: a
+  feed of clothes from the owner's taste service, [docs/taste.md](docs/taste.md)), `source-dates` (the days
   around today), `source-shell` (the home core layout): the sources.
   `crates/web-extract`: the web module (page fetching and extraction, host policy, search, web prompts);
   `crates/agent` (`construct-agent`): the agent module every model call goes through; `pod_core::jacks`: the
