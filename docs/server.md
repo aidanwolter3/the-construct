@@ -189,7 +189,8 @@ servers), the `model`, `web`, `web_search`, `mcp`, `agent_runner` and `taste` ja
 no searches, no MCP servers, no agent runner or taste service sign-in: 403 `jack_locked`; decision `jacks`), no handle and no
 publishing (`set_handle` and `publish` answer `temporary_pod`), no public links, and smaller storage and upload
 quotas, with a cap on all of them together (`CONSTRUCT_TEMP_POD_TOTAL_BYTES`) and on their event streams together
-(`CONSTRUCT_SSE_MAX_TEMPORARY`). At most 5 are made per client address an hour. They are how visitors and automated sessions try a deployed server:
+(`CONSTRUCT_SSE_MAX_TEMPORARY`). The server writes these settings again each time it opens a temporary pod, so a lock a
+newer server adds also reaches the temporary pods an older one made. At most 5 are made per client address an hour. They are how visitors and automated sessions try a deployed server:
 
 ```bash
 pod=https://the-construct-pod.fly.dev
