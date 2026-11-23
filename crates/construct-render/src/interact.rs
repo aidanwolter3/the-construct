@@ -432,44 +432,77 @@ pub struct Changes {
 /// Where a scrolling view was, by its items (decision
 /// `content-addressed-construct`): the first item showing, how far the view
 /// was scrolled past its top, and the items in order with their tops, for
-/// when that one is gone.
+/// when that one is gone. An entity can be drawn more than once in a view (a
+/// preview list above the full one): an item is its entity and which time
+/// it is drawn there (`nth`, from 0).
 #[derive(Debug, Clone, PartialEq)]
 pub struct Anchor {
     pub uri: String,
+    pub nth: usize,
     pub offset_dp: f32,
-    pub items: Vec<(String, f32)>,
+    pub items: Vec<(String, usize, f32)>,
+}
+
+/// Items (entity, top, height) as (entity, which time it is drawn, top).
+fn numbered(items: &[(String, f32, f32)]) -> Vec<(String, usize, f32)> {
+    let mut seen: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
+    items
+        .iter()
+        .map(|(u, top, _)| {
+            let n = seen.entry(u.as_str()).or_default();
+            let nth = *n;
+            *n += 1;
+            (u.clone(), nth, *top)
+        })
+        .collect()
 }
 
 impl Anchor {
     /// The anchor of a view scrolled to `offset` over `items` (entity, top,
     /// height); `None` without items.
     pub fn at(offset: f32, items: &[(String, f32, f32)]) -> Option<Anchor> {
-        let first = items
+        let i = items
             .iter()
-            .find(|(_, top, h)| top + h > offset)
-            .or(items.last())?;
+            .position(|(_, top, h)| top + h > offset)
+            .or(items.len().checked_sub(1))?;
+        let numbered = numbered(items);
+        let (uri, nth, top) = numbered[i].clone();
         Some(Anchor {
-            uri: first.0.clone(),
-            offset_dp: offset - first.1,
-            items: items.iter().map(|(u, t, _)| (u.clone(), *t)).collect(),
+            uri,
+            nth,
+            offset_dp: offset - top,
+            items: numbered,
         })
     }
 
     /// The offset that shows the anchored item where it was, over the
-    /// view's new `items`; if it is gone, the nearest one still there (the
-    /// next, else the one before) where that one was; `None` if none is.
+    /// view's new `items`; if it is drawn fewer times now, its last time
+    /// before that; if it is gone, the nearest one still there (the next,
+    /// else the one before) where that one was; `None` if none is.
     pub fn offset_in(&self, items: &[(String, f32, f32)]) -> Option<f32> {
-        let now = |uri: &str| items.iter().find(|(u, _, _)| u == uri).map(|i| i.1);
-        if let Some(top) = now(&self.uri) {
+        let numbered = numbered(items);
+        let now = |uri: &str, nth: usize| {
+            numbered
+                .iter()
+                .find(|(u, n, _)| u == uri && *n == nth)
+                .map(|i| i.2)
+        };
+        if let Some(top) = now(&self.uri, self.nth) {
             return Some(top + self.offset_dp);
         }
-        let at = self.items.iter().position(|(u, _)| *u == self.uri)?;
-        let scrolled = self.items[at].1 + self.offset_dp;
+        if let Some(top) = (0..self.nth).rev().find_map(|n| now(&self.uri, n)) {
+            return Some(top + self.offset_dp);
+        }
+        let at = self
+            .items
+            .iter()
+            .position(|(u, n, _)| *u == self.uri && *n == self.nth)?;
+        let scrolled = self.items[at].2 + self.offset_dp;
         let after = self.items[at + 1..].iter();
         let before = self.items[..at].iter().rev();
         after
             .chain(before)
-            .find_map(|(u, old)| now(u).map(|top| top + scrolled - old))
+            .find_map(|(u, n, old)| now(u, *n).map(|top| top + scrolled - old))
     }
 }
 
@@ -5578,6 +5611,31 @@ mod anchor_tests {
         // Only rows before it are left: the one before keeps its place.
         assert_eq!(a.offset_in(&items(&[("a", 0.0)])), Some(50.0));
         assert_eq!(a.offset_in(&items(&[("z", 0.0)])), None);
+    }
+
+    #[test]
+    fn an_item_drawn_twice_keeps_the_one_it_was_on() {
+        // A preview of a and b above the full list a, b, c.
+        let both = items(&[
+            ("a", 0.0),
+            ("b", 40.0),
+            ("a", 100.0),
+            ("b", 140.0),
+            ("c", 180.0),
+        ]);
+        // Scrolled 10 points into the full list's a, not the preview's.
+        let a = Anchor::at(110.0, &both).unwrap();
+        assert_eq!((a.uri.as_str(), a.nth, a.offset_dp), ("a", 1, 10.0));
+        assert_eq!(a.offset_in(&both), Some(110.0));
+        // A row above moves both copies down 30: the full list's a stays.
+        let lower: Vec<(String, f32, f32)> = both
+            .iter()
+            .map(|(u, t, h)| (u.clone(), t + 30.0, *h))
+            .collect();
+        assert_eq!(a.offset_in(&lower), Some(140.0));
+        // The preview went (a drawn once now): that one keeps its place.
+        let once = items(&[("a", 20.0), ("b", 60.0), ("c", 100.0)]);
+        assert_eq!(a.offset_in(&once), Some(30.0));
     }
 
     #[test]

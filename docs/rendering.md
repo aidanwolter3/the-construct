@@ -329,7 +329,9 @@ closes, back to the deepest entry that still resolves, each with its own transit
 `pop_to_root` close entries the same way. There a vertical scroll also keeps its first visible row in place: before an
 entry is laid out again it notes, per scroll, the entity of the first row showing and how far the view is past
 its top, and after the new layout it scrolls so that row sits where it was (rows added above don't move it); if the
-row is gone, the next one still there (else the one before) keeps its place, and with none the offset stays. A
+row is gone, the next one still there (else the one before) keeps its place, and with none the offset stays. A row
+drawn more than once in a view (a preview list above the full one) is told apart by which time it is drawn there,
+so the view stays on the copy it was on (if it is drawn fewer times now, its last copy before that). A
 view's state (scroll offsets, carousel pages, panels) is kept by its path, which runs through the layouts embedding
 it: when an edit of an embedding layout moves an inline layout to a new path (a node put above it), what was kept
 under its old path moves with it, as long as that layout is drawn there once (`Laid::embeds`). On a
