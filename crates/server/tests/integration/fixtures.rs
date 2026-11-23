@@ -383,7 +383,12 @@ fn taste_bundles() {
             error: None,
         },
     );
-    bundle::put_items(&mut feed, bundle::FEED_QUERY, &list(&data["feed"]));
+    // As the pod serves the deck: only the pieces not reacted to yet.
+    let waiting: Vec<Value> = list(&data["feed"])
+        .into_iter()
+        .filter(|i| !server::taste::db::reacted(i))
+        .collect();
+    bundle::put_items(&mut feed, bundle::FEED_QUERY, &waiting);
     let mut entities = serde_json::to_value(&feed.entities).unwrap();
     // What the pod adds for the source (`pod_core::compose`).
     entities["core://sources/taste"] =
@@ -433,6 +438,22 @@ fn taste_bundles() {
         "/v1/taste/screens/taste".into(),
         serde_json::to_value(&taste).unwrap(),
     );
+    for (area, tiles) in data["map"].as_object().unwrap() {
+        let mut m = protocol::DataBundle::default();
+        bundle::map(&mut m, area, tiles);
+        screens.insert(
+            format!("/v1/taste/screens/map?area={area}"),
+            serde_json::to_value(&m).unwrap(),
+        );
+    }
+    for (area, items) in data["area"].as_object().unwrap() {
+        let mut a = protocol::DataBundle::default();
+        bundle::put_items(&mut a, &bundle::area_query(area), &list(items));
+        screens.insert(
+            format!("/v1/taste/screens/area?area={area}"),
+            serde_json::to_value(&a).unwrap(),
+        );
+    }
     check_or_write(
         "taste_screen_data.json",
         &(serde_json::to_string_pretty(&Value::Object(screens)).unwrap() + "\n"),

@@ -69,10 +69,15 @@ scenario server-health-off server_health_off \
   "assert-text Server monitoring is off for this pod; assert-no-text Checks; assert-text Devices per day; \
 shot light; mode dark; shot dark"
 scenario taste taste \
-  "assert-text Waxed Chore Coat in Olive; assert-text Near your taste · 1; shot feed; \
-click Open Waxed Chore Coat in Olive; assert-text Buy at shop0.example; scroll-to Opposite; shot item; back; \
-click Your taste; assert-text rugged workwear · waxed cotton · olive green · utilitarian; shot taste; back; \
-mode dark; shot dark"
+  "assert-text Waxed Chore Coat in Olive; assert-text On the edge; assert-text blanket lining; shot deck; \
+click Next photo of Waxed Chore Coat in Olive; assert-text 2 / 3; shot photo-2; \
+click Details of Waxed Chore Coat in Olive; assert-text Buy at shop0.example; scroll-to Opposite; shot item; back; \
+drag-card 140 Waxed Chore Coat in Olive by Fernhill Supply: swipe right to like, left to skip; shot swiping; release; \
+assert-text Loose Pleated Trousers; shot next; \
+click Map; assert-text 10,533 pieces; shot map; click 412 pieces, like Waxed Chore Coat in Olive; \
+assert-text Zoomed in ×4; shot map-zoomed; click See the pieces here; assert-text Pieces here; shot area; back; back; \
+back; click Taste; assert-text rugged workwear · waxed cotton · olive green · utilitarian; shot taste; back; \
+screen desktop; shot desktop; screen phone; mode dark; shot dark"
 scenario tiles-home tiles_home \
   "shot top; scroll-to Photos; assert-text Read more; shot tiles"
 scenario screen-sizes screen_sizes \

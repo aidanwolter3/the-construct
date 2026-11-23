@@ -9,6 +9,10 @@
 //! - `GET /api/search?q=`, `GET /api/likes`: `{items}`.
 //! - `GET /api/taste`: `{likes, skips, tastes, summary}`; `POST
 //!   /api/taste/summary`: `{text, likes}`.
+//! - `GET /api/map/tiles?x0=&y0=&x1=&y1=&n=`: the map of the catalog (0..1,
+//!   y down) cut into an n × n grid over that box, `{bounds, n, tiles}`, each
+//!   tile `{i, j, x0, y0, x1, y1, count, likes, skips, p, color, item}`;
+//!   `GET /api/map/items?x0=&y0=&x1=&y1=&n=`: `{items}` inside the box.
 //!
 //! Everything it sends is read leniently and treated as untrusted display
 //! text ([`crate::bundle`]).
@@ -255,6 +259,54 @@ pub async fn search(
 /// `GET /api/likes`.
 pub async fn likes(c: &OutboundClient, s: &Service) -> Result<Vec<Value>, ApiError> {
     items(get(c, s, &["likes"], &[]).await?)
+}
+
+/// A box of the map, `0..1` each way (y down).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Bounds {
+    pub x0: f64,
+    pub y0: f64,
+    pub x1: f64,
+    pub y1: f64,
+}
+
+impl Bounds {
+    fn query(&self) -> Vec<(&'static str, String)> {
+        vec![
+            ("x0", self.x0.to_string()),
+            ("y0", self.y0.to_string()),
+            ("x1", self.x1.to_string()),
+            ("y1", self.y1.to_string()),
+        ]
+    }
+}
+
+/// `GET /api/map/tiles`: the box cut into an `n` × `n` grid.
+pub async fn map_tiles(
+    c: &OutboundClient,
+    s: &Service,
+    b: Bounds,
+    n: usize,
+) -> Result<Value, ApiError> {
+    let mut q = b.query();
+    q.push(("n", n.to_string()));
+    let v = get(c, s, &["map", "tiles"], &q).await?;
+    if !v.get("tiles").is_some_and(Value::is_array) {
+        return Err(ApiError::Unreachable("not a map".into()));
+    }
+    Ok(v)
+}
+
+/// `GET /api/map/items`: pieces inside the box.
+pub async fn map_items(
+    c: &OutboundClient,
+    s: &Service,
+    b: Bounds,
+    n: usize,
+) -> Result<Vec<Value>, ApiError> {
+    let mut q = b.query();
+    q.push(("n", n.to_string()));
+    items(get(c, s, &["map", "items"], &q).await?)
 }
 
 /// `POST /api/taste/summary`: `{text, likes}`.

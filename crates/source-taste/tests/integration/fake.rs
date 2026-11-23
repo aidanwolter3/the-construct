@@ -32,12 +32,14 @@ pub struct Fake {
     pub summaries: AtomicUsize,
     /// Answer 502, like a service that's down.
     pub down: AtomicBool,
+    /// The box of each map request.
+    pub boxes: Mutex<Vec<Box4>>,
 }
 
 /// Made-up product `n` of page `page`.
 pub fn product(page: usize, n: usize) -> Value {
     let brand = ["Fernhill Supply", "Okra & Wool", "Northgate"][n % 3];
-    let why = ["near:0", "adjacent", "explore"][n % 3];
+    let why = ["boundary", "explore", "likely"][n % 3];
     json!({
         "id": format!("shop{page}.example:{}", 1000 + n),
         "brand": brand,
@@ -46,7 +48,14 @@ pub fn product(page: usize, n: usize) -> Value {
         "price": 98.0 + n as f64,
         "currency": "USD",
         "category": "jacket",
-        "images": [format!("https://cdn.shop{page}.example/files/coat-{n}.jpg?v=1")],
+        "images": [
+            format!("https://cdn.shop{page}.example/files/coat-{n}-worn.jpg?v=1"),
+            format!("https://cdn.shop{page}.example/files/coat-{n}.jpg?v=1"),
+            format!("https://cdn.shop{page}.example/files/coat-{n}-back.jpg?v=1"),
+        ],
+        "worn": true,
+        "description": "A boxy chore coat in heavy cotton canvas, with three patch pockets.",
+        "p": 0.5,
         "liked": false,
         "skipped": false,
         "why": why,
@@ -77,6 +86,69 @@ struct Q {
     n: Option<usize>,
     #[serde(default)]
     q: Option<String>,
+}
+
+#[derive(serde::Deserialize, Debug, Clone, Copy)]
+pub struct Box4 {
+    pub x0: f64,
+    pub y0: f64,
+    pub x1: f64,
+    pub y1: f64,
+    #[serde(default)]
+    pub n: Option<usize>,
+}
+
+/// An n × n map over the box: the top-left tile is crowded, the bottom-right
+/// one empty, the rest hold a few.
+async fn map_tiles(
+    State(f): State<Arc<Fake>>,
+    headers: HeaderMap,
+    Query(b): Query<Box4>,
+) -> Response {
+    if let Err(r) = check(&f, &headers) {
+        return r;
+    }
+    f.boxes.lock().unwrap().push(b);
+    let n = b.n.unwrap_or(4);
+    let (w, h) = ((b.x1 - b.x0) / n as f64, (b.y1 - b.y0) / n as f64);
+    let mut tiles = Vec::new();
+    for j in 0..n {
+        for i in 0..n {
+            let count = if (i, j) == (0, 0) {
+                40
+            } else if (i, j) == (n - 1, n - 1) {
+                0
+            } else {
+                3
+            };
+            tiles.push(json!({
+                "i": i, "j": j,
+                "x0": b.x0 + i as f64 * w, "y0": b.y0 + j as f64 * h,
+                "x1": b.x0 + (i + 1) as f64 * w, "y1": b.y0 + (j + 1) as f64 * h,
+                "count": count, "likes": usize::from(i == 0), "skips": usize::from(j == 1),
+                "p": if count > 0 { json!(0.5) } else { Value::Null },
+                "color": "#C98A5B",
+                "item": if count > 0 { product(6, i + n * j) } else { Value::Null },
+            }));
+        }
+    }
+    Json(
+        json!({"bounds": {"x0": b.x0, "y0": b.y0, "x1": b.x1, "y1": b.y1}, "n": n, "tiles": tiles}),
+    )
+    .into_response()
+}
+
+async fn map_items(
+    State(f): State<Arc<Fake>>,
+    headers: HeaderMap,
+    Query(b): Query<Box4>,
+) -> Response {
+    if let Err(r) = check(&f, &headers) {
+        return r;
+    }
+    f.boxes.lock().unwrap().push(b);
+    Json(json!({"items": (0..b.n.unwrap_or(36).min(5)).map(|i| product(7, i)).collect::<Vec<_>>()}))
+        .into_response()
 }
 
 async fn feed(State(f): State<Arc<Fake>>, headers: HeaderMap, Query(q): Query<Q>) -> Response {
@@ -195,6 +267,8 @@ pub async fn serve(fake: Arc<Fake>) -> String {
         .route("/api/likes", get(likes))
         .route("/api/taste", get(taste))
         .route("/api/taste/summary", post(summary))
+        .route("/api/map/tiles", get(map_tiles))
+        .route("/api/map/items", get(map_items))
         .with_state(fake);
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
