@@ -109,9 +109,7 @@ pub fn sign_in(
 
 /// Forget the service and the feed.
 pub fn sign_out(store: &Store) -> rusqlite::Result<()> {
-    store.transaction(|tx| {
-        tx.execute_batch("DELETE FROM taste_account; DELETE FROM taste_items;")
-    })
+    store.transaction(|tx| tx.execute_batch("DELETE FROM taste_account; DELETE FROM taste_items;"))
 }
 
 /// Re-seal a token stored as plaintext or under an old key.
@@ -277,7 +275,11 @@ mod tests {
         append(&store, &[json!({"id": "a"}), json!({"id": "b"})], false).unwrap();
         let added = append(&store, &[json!({"id": "b"}), json!({"id": "c"})], false).unwrap();
         assert_eq!(added, 1);
-        let ids: Vec<Value> = items(&store).unwrap().iter().map(|i| i["id"].clone()).collect();
+        let ids: Vec<Value> = items(&store)
+            .unwrap()
+            .iter()
+            .map(|i| i["id"].clone())
+            .collect();
         assert_eq!(ids, vec![json!("a"), json!("b"), json!("c")]);
         react(&store, "b", true, false).unwrap();
         assert_eq!(item(&store, "b").unwrap().unwrap()["liked"], true);
@@ -288,7 +290,9 @@ mod tests {
     #[test]
     fn the_feed_keeps_the_newest() {
         let store = store();
-        let page: Vec<Value> = (0..MAX_ITEMS + 10).map(|n| json!({"id": format!("i{n}")})).collect();
+        let page: Vec<Value> = (0..MAX_ITEMS + 10)
+            .map(|n| json!({"id": format!("i{n}")}))
+            .collect();
         append(&store, &page, false).unwrap();
         let kept = items(&store).unwrap();
         assert_eq!(kept.len() as i64, MAX_ITEMS);

@@ -363,9 +363,12 @@ fn server_health_bundles() {
 #[test]
 fn taste_bundles() {
     use server::taste::bundle;
-    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/data/simulator/taste_data.json");
+    let path =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/data/simulator/taste_data.json");
     let data: Value = serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
-    let list = |v: &Value| v.as_array().cloned().unwrap_or_default();
+    let kept = data["feed"].as_array().cloned().unwrap_or_default();
+    // As the pod answers: the kept feed's reasons filled in.
+    let list = |v: &Value| bundle::with_why(&v.as_array().cloned().unwrap_or_default(), &kept);
     let page = newest(server::taste::APP_ID);
     assert_eq!(page["type"], "core://Page");
 
@@ -400,9 +403,18 @@ fn taste_bundles() {
     for (id, s) in data["items"].as_object().unwrap() {
         let key = bundle::key_of(id);
         let mut b = protocol::DataBundle::default();
-        bundle::put_items(&mut b, &format!("taste:similar:{key}"), &list(&s["similar"]));
-        bundle::put_items(&mut b, &format!("taste:contrast:{key}"), &list(&s["contrast"]));
-        let (uri, rec) = bundle::item(&s["item"]).unwrap();
+        bundle::put_items(
+            &mut b,
+            &format!("taste:similar:{key}"),
+            &list(&s["similar"]),
+        );
+        bundle::put_items(
+            &mut b,
+            &format!("taste:contrast:{key}"),
+            &list(&s["contrast"]),
+        );
+        let item = bundle::with_why(std::slice::from_ref(&s["item"]), &kept).remove(0);
+        let (uri, rec) = bundle::item(&item).unwrap();
         b.entities.insert(uri, rec);
         screens.insert(
             format!("/v1/taste/screens/item?key={key}"),

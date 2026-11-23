@@ -5,7 +5,7 @@
       "signed_in": true,
       "title": "Taste"
     },
-    "taste://items/shop0.example~2000": {
+    "taste://items/shop0_example__2000": {
       "brand": "Fernhill Supply",
       "buy_url": "https://shop0.example/products/item-0",
       "category": "jacket",
@@ -13,17 +13,17 @@
       "id": "shop0.example:2000",
       "image": "https://cdn.shop0.example/storage/portrait-5.png?v=1&width=720",
       "image_large": "https://cdn.shop0.example/storage/portrait-5.png?v=1&width=1600",
-      "key": "shop0.example~2000",
+      "key": "shop0_example__2000",
       "liked": false,
       "price_text": "$148",
       "skipped": false,
       "thumb": "https://cdn.shop0.example/storage/portrait-5.png?v=1&width=360",
       "title": "Waxed Chore Coat in Olive",
-      "uri": "taste://items/shop0.example~2000",
+      "uri": "taste://items/shop0_example__2000",
       "why_text": "Near your taste · 1",
       "why_tone": "accent"
     },
-    "taste://items/shop0.example~2003": {
+    "taste://items/shop0_example__2003": {
       "brand": "Saltmarsh",
       "buy_url": "https://shop0.example/products/item-3",
       "category": "t-shirt",
@@ -31,17 +31,17 @@
       "id": "shop0.example:2003",
       "image": "https://cdn.shop0.example/storage/carousel-2.png?v=1&width=720",
       "image_large": "https://cdn.shop0.example/storage/carousel-2.png?v=1&width=1600",
-      "key": "shop0.example~2003",
+      "key": "shop0_example__2003",
       "liked": false,
       "price_text": "$48",
       "skipped": false,
       "thumb": "https://cdn.shop0.example/storage/carousel-2.png?v=1&width=360",
       "title": "Heavyweight Pocket Tee",
-      "uri": "taste://items/shop0.example~2003",
+      "uri": "taste://items/shop0_example__2003",
       "why_text": "Near your taste · 2",
       "why_tone": "accent"
     },
-    "taste://items/shop0.example~2006": {
+    "taste://items/shop0_example__2006": {
       "brand": "Fernhill Supply",
       "buy_url": "https://shop0.example/products/item-6",
       "category": "jeans",
@@ -49,17 +49,17 @@
       "id": "shop0.example:2006",
       "image": "https://cdn.shop0.example/storage/portrait-5.png?v=1&width=720",
       "image_large": "https://cdn.shop0.example/storage/portrait-5.png?v=1&width=1600",
-      "key": "shop0.example~2006",
+      "key": "shop0_example__2006",
       "liked": false,
       "price_text": "$175",
       "skipped": false,
       "thumb": "https://cdn.shop0.example/storage/portrait-5.png?v=1&width=360",
       "title": "Selvedge Denim Jeans",
-      "uri": "taste://items/shop0.example~2006",
+      "uri": "taste://items/shop0_example__2006",
       "why_text": "Adjacent",
       "why_tone": "success"
     },
-    "taste://items/shop1.example~2001": {
+    "taste://items/shop1_example__2001": {
       "brand": "Okra & Wool",
       "buy_url": "https://shop1.example/products/item-1",
       "category": "overshirt",
@@ -67,17 +67,17 @@
       "id": "shop1.example:2001",
       "image": "https://cdn.shop1.example/storage/carousel-1.png?v=1&width=720",
       "image_large": "https://cdn.shop1.example/storage/carousel-1.png?v=1&width=1600",
-      "key": "shop1.example~2001",
+      "key": "shop1_example__2001",
       "liked": true,
       "price_text": "$118",
       "skipped": false,
       "thumb": "https://cdn.shop1.example/storage/carousel-1.png?v=1&width=360",
       "title": "Brushed Flannel Overshirt",
-      "uri": "taste://items/shop1.example~2001",
+      "uri": "taste://items/shop1_example__2001",
       "why_text": "Near your taste · 1",
       "why_tone": "accent"
     },
-    "taste://items/shop1.example~2004": {
+    "taste://items/shop1_example__2004": {
       "brand": "Linden Row",
       "buy_url": "https://shop1.example/products/item-4",
       "category": "cardigan",
@@ -85,17 +85,17 @@
       "id": "shop1.example:2004",
       "image": "https://cdn.shop1.example/storage/reblog-6.png?v=1&width=720",
       "image_large": "https://cdn.shop1.example/storage/reblog-6.png?v=1&width=1600",
-      "key": "shop1.example~2004",
+      "key": "shop1_example__2004",
       "liked": false,
       "price_text": "€210",
       "skipped": false,
       "thumb": "https://cdn.shop1.example/storage/reblog-6.png?v=1&width=360",
       "title": "Shawl Collar Cardigan",
-      "uri": "taste://items/shop1.example~2004",
+      "uri": "taste://items/shop1_example__2004",
       "why_text": "Exploring",
       "why_tone": "muted"
     },
-    "taste://items/shop1.example~2007": {
+    "taste://items/shop1_example__2007": {
       "brand": "Okra & Wool",
       "buy_url": "https://shop1.example/products/item-7",
       "category": "boots",
@@ -103,17 +103,17 @@
       "id": "shop1.example:2007",
       "image": "https://cdn.shop1.example/storage/carousel-1.png?v=1&width=720",
       "image_large": "https://cdn.shop1.example/storage/carousel-1.png?v=1&width=1600",
-      "key": "shop1.example~2007",
+      "key": "shop1_example__2007",
       "liked": false,
       "price_text": "$240",
       "skipped": false,
       "thumb": "https://cdn.shop1.example/storage/carousel-1.png?v=1&width=360",
       "title": "Suede Chukka Boots",
-      "uri": "taste://items/shop1.example~2007",
+      "uri": "taste://items/shop1_example__2007",
       "why_text": "Exploring",
       "why_tone": "muted"
     },
-    "taste://items/shop2.example~2002": {
+    "taste://items/shop2_example__2002": {
       "brand": "Northgate Workshop",
       "buy_url": "https://shop2.example/products/item-2",
       "category": "trousers",
@@ -121,17 +121,17 @@
       "id": "shop2.example:2002",
       "image": "https://cdn.shop2.example/storage/landscape-4.png?v=1&width=720",
       "image_large": "https://cdn.shop2.example/storage/landscape-4.png?v=1&width=1600",
-      "key": "shop2.example~2002",
+      "key": "shop2_example__2002",
       "liked": false,
       "price_text": "£165",
       "skipped": false,
       "thumb": "https://cdn.shop2.example/storage/landscape-4.png?v=1&width=360",
       "title": "Loose Pleated Trousers",
-      "uri": "taste://items/shop2.example~2002",
+      "uri": "taste://items/shop2_example__2002",
       "why_text": "Adjacent",
       "why_tone": "success"
     },
-    "taste://items/shop2.example~2005": {
+    "taste://items/shop2_example__2005": {
       "brand": "Copperleaf",
       "buy_url": "https://shop2.example/products/item-5",
       "category": "jacket",
@@ -139,13 +139,13 @@
       "id": "shop2.example:2005",
       "image": "https://cdn.shop2.example/storage/carousel-3.png?v=1&width=720",
       "image_large": "https://cdn.shop2.example/storage/carousel-3.png?v=1&width=1600",
-      "key": "shop2.example~2005",
+      "key": "shop2_example__2005",
       "liked": false,
       "price_text": "$198",
       "skipped": false,
       "thumb": "https://cdn.shop2.example/storage/carousel-3.png?v=1&width=360",
       "title": "Canvas Work Jacket",
-      "uri": "taste://items/shop2.example~2005",
+      "uri": "taste://items/shop2_example__2005",
       "why_text": "Near your taste · 1",
       "why_tone": "accent"
     },
@@ -162,14 +162,14 @@
   },
   "queries": {
     "taste:feed": [
-      "taste://items/shop0.example~2000",
-      "taste://items/shop1.example~2001",
-      "taste://items/shop2.example~2002",
-      "taste://items/shop0.example~2003",
-      "taste://items/shop1.example~2004",
-      "taste://items/shop2.example~2005",
-      "taste://items/shop0.example~2006",
-      "taste://items/shop1.example~2007"
+      "taste://items/shop0_example__2000",
+      "taste://items/shop1_example__2001",
+      "taste://items/shop2_example__2002",
+      "taste://items/shop0_example__2003",
+      "taste://items/shop1_example__2004",
+      "taste://items/shop2_example__2005",
+      "taste://items/shop0_example__2006",
+      "taste://items/shop1_example__2007"
     ],
     "taste:status": [
       "taste://status/pod"
@@ -1780,9 +1780,15 @@
                                 },
                                 "type": "core://Tappable"
                               },
-                              "query_key": "taste:taste:$item.n",
+                              "query_key": "taste:taste_items",
                               "spacing_dp": 12,
-                              "type": "core://List"
+                              "type": "core://List",
+                              "where": [
+                                {
+                                  "equals": "$item.n",
+                                  "field": "taste"
+                                }
+                              ]
                             }
                           ],
                           "spacing_dp": 8,

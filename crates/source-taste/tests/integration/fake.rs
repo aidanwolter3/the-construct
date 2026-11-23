@@ -59,7 +59,10 @@ fn authorized(headers: &HeaderMap) -> bool {
 
 fn check(f: &Fake, headers: &HeaderMap) -> Result<(), Response> {
     if !authorized(headers) {
-        return Err((StatusCode::UNAUTHORIZED, Json(json!({"detail": "missing or wrong token"})))
+        return Err((
+            StatusCode::UNAUTHORIZED,
+            Json(json!({"detail": "missing or wrong token"})),
+        )
             .into_response());
     }
     if f.down.load(Ordering::SeqCst) {
@@ -85,7 +88,11 @@ async fn feed(State(f): State<Arc<Fake>>, headers: HeaderMap, Query(q): Query<Q>
     Json(json!({"items": (0..n).map(|i| product(page, i)).collect::<Vec<_>>()})).into_response()
 }
 
-async fn event(State(f): State<Arc<Fake>>, headers: HeaderMap, Json(body): Json<Value>) -> Response {
+async fn event(
+    State(f): State<Arc<Fake>>,
+    headers: HeaderMap,
+    Json(body): Json<Value>,
+) -> Response {
     if let Err(r) = check(&f, &headers) {
         return r;
     }
@@ -110,7 +117,11 @@ async fn item(
         _ => (rest.clone(), None),
     };
     if !id.starts_with("shop") {
-        return (StatusCode::NOT_FOUND, Json(json!({"detail": "no such item"}))).into_response();
+        return (
+            StatusCode::NOT_FOUND,
+            Json(json!({"detail": "no such item"})),
+        )
+            .into_response();
     }
     match list {
         None => {

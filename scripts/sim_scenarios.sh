@@ -68,6 +68,11 @@ assert-no-text Studio MacBook; shot devices; mode dark; shot dark"
 scenario server-health-off server_health_off \
   "assert-text Server monitoring is off for this pod; assert-no-text Checks; assert-text Devices per day; \
 shot light; mode dark; shot dark"
+scenario taste taste \
+  "assert-text Waxed Chore Coat in Olive; assert-text Near your taste · 1; shot feed; \
+click Open Waxed Chore Coat in Olive; assert-text Buy at shop0.example; scroll-to Opposite; shot item; back; \
+click Your taste; assert-text rugged workwear · waxed cotton · olive green · utilitarian; shot taste; back; \
+mode dark; shot dark"
 scenario tiles-home tiles_home \
   "shot top; scroll-to Photos; assert-text Read more; shot tiles"
 scenario screen-sizes screen_sizes \

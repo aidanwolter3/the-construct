@@ -85,7 +85,7 @@
       "position": 3
     },
     {
-      "body": "```\n agent (Claude)    websites, Pixelfed,\n      │ MCP        models, runners\n      ▼                  ▲\n┌─ server ───────────────┼───────┐\n│ host: pods, tokens, scheduler  │\n│ ┌─ pod ──────────────────────┐ │\n│ │ the construct · sessions · │ │\n│ │ notifications              │ │\n│ │ sources: collections,      │ │\n│ │ pixelfed, events, agents,  │ │\n│ │ shell, monitor, dates      │ │\n│ │ jacks: model, web,         │ │\n│ │ web_search, mcp, accounts  │ │\n│ └────────────────────────────┘ │\n└──────▲─────────────────┬───────┘\n       │ HTTP: construct,│ SSE:\n       │ objects, data,  │ construct,\n       │ actions         ▼ data, …\n┌─ each device ──────────────────┐\n│ engine: cache, outbox,         │\n│ sign-in, event stream          │\n├────────────────────────────────┤\n│ renderer: layout → pixels      │\n├────────────────────────────────┤\n│ desktop · Android · web ·      │\n│ simulator · previews           │\n└────────────────────────────────┘\n```",
+      "body": "```\n agent (Claude)    websites, Pixelfed,\n      │ MCP        models, runners\n      ▼                  ▲\n┌─ server ───────────────┼───────┐\n│ host: pods, tokens, scheduler  │\n│ ┌─ pod ──────────────────────┐ │\n│ │ the construct · sessions · │ │\n│ │ notifications              │ │\n│ │ sources: collections,      │ │\n│ │ pixelfed, events, agents,  │ │\n│ │ taste, shell, monitor,     │ │\n│ │ dates                      │ │\n│ │ jacks: model, web,         │ │\n│ │ web_search, mcp, accounts  │ │\n│ └────────────────────────────┘ │\n└──────▲─────────────────┬───────┘\n       │ HTTP: construct,│ SSE:\n       │ objects, data,  │ construct,\n       │ actions         ▼ data, …\n┌─ each device ──────────────────┐\n│ engine: cache, outbox,         │\n│ sign-in, event stream          │\n├────────────────────────────────┤\n│ renderer: layout → pixels      │\n├────────────────────────────────┤\n│ desktop · Android · web ·      │\n│ simulator · previews           │\n└────────────────────────────────┘\n```",
       "heading": "The whole system",
       "key": "the-map/1",
       "lesson": "the-map",
@@ -323,7 +323,7 @@
       "position": 2
     },
     {
-      "body": "Core layouts are the screens the server ships: `pixelfed`, `events`, `agents`, `server_health`, `shell` (the blank home), `settings`, `inbox`, and the `checklist` kit. Each is a folder of append-only files in its source's crate, `crates/source-*/layouts/<id>/NNNN.json`; when a pod opens, each `@core/<id>` name moves to this build's newest file. A pod's layout can use a core layout whole by reference (`{\"type\": \"core://Use\", \"ref\": \"@core/events\"}`), which then follows every deploy, or copy it, which doesn't.",
+      "body": "Core layouts are the screens the server ships: `pixelfed`, `events`, `agents`, `taste`, `server_health`, `shell` (the blank home), `settings`, `inbox`, and the `checklist` kit. Each is a folder of append-only files in its source's crate, `crates/source-*/layouts/<id>/NNNN.json`; when a pod opens, each `@core/<id>` name moves to this build's newest file. A pod's layout can use a core layout whole by reference (`{\"type\": \"core://Use\", \"ref\": \"@core/events\"}`), which then follows every deploy, or copy it, which doesn't.",
       "heading": "Core layouts",
       "key": "home-core-layouts-and-the-agents-layouts/1",
       "lesson": "home-core-layouts-and-the-agents-layouts",
@@ -423,23 +423,30 @@
     {
       "body": "Events (`crates/source-events`) has no data of its own: it is the system collection `events`, each website the user watches is a fetch filler, and each rule an alert. It ships the `events` core layout and the `matches` notification channel.",
       "heading": "Events",
-      "key": "events-agents-and-the-small-sources/1",
-      "lesson": "events-agents-and-the-small-sources",
+      "key": "events-agents-taste-and-the-small-sources/1",
+      "lesson": "events-agents-taste-and-the-small-sources",
       "position": 1
     },
     {
       "body": "Agents (`crates/source-agents`) mirrors an external **agent runner** that runs Claude Code on cloud sandboxes, over the runner's protocol (CAP v3: a snapshot, a resumable event stream, actions). The pod owns the work (Tasks rows, schedules) and notifications; the runner owns the runs and their outcomes. It keeps its pod open to follow the stream ([agents.md](https://github.com/aidanwolter3/the-construct/blob/main/docs/agents.md)).",
       "heading": "Agents",
-      "key": "events-agents-and-the-small-sources/2",
-      "lesson": "events-agents-and-the-small-sources",
+      "key": "events-agents-taste-and-the-small-sources/2",
+      "lesson": "events-agents-taste-and-the-small-sources",
       "position": 2
+    },
+    {
+      "body": "Taste (`crates/source-taste`) shows the feed of the owner's own **taste service**, which ranks clothes from real stores by what they like and keeps exploring past it. The pod signs in to it with a URL and token like the agents runner, keeps the feed it was served (the service answers a new page every time it is asked, and a layout's feed is fetched again after every data event), and passes likes and skips on; the item, search and taste screens are read from the service when they are shown ([taste.md](https://github.com/aidanwolter3/the-construct/blob/main/docs/taste.md)).",
+      "heading": "Taste",
+      "key": "events-agents-taste-and-the-small-sources/3",
+      "lesson": "events-agents-taste-and-the-small-sources",
+      "position": 3
     },
     {
       "body": "- **Shell** (`crates/source-shell`): layouts only. `shell`, the blank home; `settings`; and `inbox`.\n- **Monitor** (`crates/source-monitor`): the server's health counters and checks (feed `overview`, for pods the operator turned it on for) and the user's devices with their builds (feed `devices`), with the `server_health` core layout.\n- **Dates** (`crates/source-dates`): the days around today in the pod's time zone (`dates:today`, `dates:this_week`, `dates:next_7`, …), so a layout that lists days needs no collection of dates. It tells devices to reload at the pod's midnight.",
       "heading": "Shell, Monitor and Dates",
-      "key": "events-agents-and-the-small-sources/3",
-      "lesson": "events-agents-and-the-small-sources",
-      "position": 3
+      "key": "events-agents-taste-and-the-small-sources/4",
+      "lesson": "events-agents-taste-and-the-small-sources",
+      "position": 4
     },
     {
       "body": "```\nupstream\n   │ poll\n   ▼\nsource ── a notification:\n   │      channel, title,\n   │      body, target_uri\n   ▼\npod: stored once, in the\nnotifications collection\n   ├─▶ `notification` event\n   │   on open streams\n   └─▶ Web Push to devices\n          │\n          ▼\ndevice: inbox, badge, OS\nnotification ─ tap ─▶ its\nlayout, then its screen\n```",
@@ -463,7 +470,7 @@
       "position": 1
     },
     {
-      "body": "| Jack | Kind | Enables |\n|---|---|---|\n| `model` | switch, on | Computed fields that ask a model, fillers that read pages or research, picks from search results |\n| `web` | switch, on | Fetching websites: fillers, Events' sites, previews |\n| `web_search` | config: `brave` + key, `searxng` + URL, or `duckduckgo` | `query_field` fillers and the search tool of agent fills |\n| `mcp` | switch, on | Calling tools of the remote MCP servers the pod is connected to |\n| `pixelfed` | account | The Pixelfed source |\n| `agent_runner` | account | The Agents source |",
+      "body": "| Jack | Kind | Enables |\n|---|---|---|\n| `model` | switch, on | Computed fields that ask a model, fillers that read pages or research, picks from search results |\n| `web` | switch, on | Fetching websites: fillers, Events' sites, previews |\n| `web_search` | config: `brave` + key, `searxng` + URL, or `duckduckgo` | `query_field` fillers and the search tool of agent fills |\n| `mcp` | switch, on | Calling tools of the remote MCP servers the pod is connected to |\n| `pixelfed` | account | The Pixelfed source |\n| `agent_runner` | account | The Agents source |\n| `taste` | account | The Taste source |",
       "heading": "The jacks today",
       "key": "what-a-jack-is/2",
       "lesson": "what-a-jack-is",
@@ -575,7 +582,7 @@
       "position": 2
     },
     {
-      "body": "| Crate | What it is |\n|---|---|\n| `protocol` | Wire types: `UiNode`, `ActionIntent`, `DataBundle`; `features/`, the named vocabulary |\n| `construct-elements` | Elements, hashes, references, component expansion, materializing; shared by pod and engine |\n| `pod-core` | The generic pod; `components/` holds the server components |\n| `pod-host` | Many pods in one server: `host.db`, tokens, temporary pods, scheduler, shelf, public links |\n| `server` | The binary and the `server pods` admin commands |\n| `source-collections`, `source-pixelfed`, `source-events`, `source-agents`, `source-monitor`, `source-dates`, `source-shell` | The sources; core layouts in `layouts/<id>/NNNN.json`, components in `components/` |\n| `web-extract`, `agent` | The web module and the agent module |\n| `client-core` | The engine |\n| `construct-render` | The renderer, the desktop and Android apps, the pod's previews |\n| `construct-web`, `construct-sim` | The web client and the headless simulator |\n| `e2e`, `fake-pixelfed/` | The end-to-end suite and a fake Pixelfed to run it against |\n| `design-lessons` | Reads this document into the course's JSON |",
+      "body": "| Crate | What it is |\n|---|---|\n| `protocol` | Wire types: `UiNode`, `ActionIntent`, `DataBundle`; `features/`, the named vocabulary |\n| `construct-elements` | Elements, hashes, references, component expansion, materializing; shared by pod and engine |\n| `pod-core` | The generic pod; `components/` holds the server components |\n| `pod-host` | Many pods in one server: `host.db`, tokens, temporary pods, scheduler, shelf, public links |\n| `server` | The binary and the `server pods` admin commands |\n| `source-collections`, `source-pixelfed`, `source-events`, `source-agents`, `source-taste`, `source-monitor`, `source-dates`, `source-shell` | The sources; core layouts in `layouts/<id>/NNNN.json`, components in `components/` |\n| `web-extract`, `agent` | The web module and the agent module |\n| `client-core` | The engine |\n| `construct-render` | The renderer, the desktop and Android apps, the pod's previews |\n| `construct-web`, `construct-sim` | The web client and the headless simulator |\n| `e2e`, `fake-pixelfed/` | The end-to-end suite and a fake Pixelfed to run it against |\n| `design-lessons` | Reads this document into the course's JSON |",
       "heading": "The crates",
       "key": "the-repository/1",
       "lesson": "the-repository",
@@ -1095,15 +1102,15 @@
       "why": ""
     },
     {
-      "key": "events-agents-and-the-small-sources",
+      "key": "events-agents-taste-and-the-small-sources",
       "number": "5.5",
       "position": 25,
-      "summary": "The other sources show the range of what a source can be: one built entirely on Collections, one that mirrors an outside runner, and three that are mostly layouts.",
-      "title": "Events, Agents and the small sources",
+      "summary": "The other sources show the range of what a source can be: one built entirely on Collections, one that mirrors an outside runner, one that keeps a page of an outside service's feed, and three that are mostly layouts.",
+      "title": "Events, Agents, Taste and the small sources",
       "track": "part-5",
       "track_title": "Data sources",
       "try_it": "",
-      "url": "https://github.com/aidanwolter3/the-construct/blob/main/docs/design.md#55-events-agents-and-the-small-sources",
+      "url": "https://github.com/aidanwolter3/the-construct/blob/main/docs/design.md#55-events-agents-taste-and-the-small-sources",
       "why": ""
     },
     {

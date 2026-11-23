@@ -1063,7 +1063,7 @@
                   },
                   {
                     "type": "core://List",
-                    "query_key": "taste:taste:$item.n",
+                    "query_key": "taste:taste_items",
                     "item_template": {
                       "type": "core://Tappable",
                       "content_description": "Open $item.title",
@@ -1088,7 +1088,13 @@
                     },
                     "spacing_dp": 12,
                     "empty_text": "",
-                    "columns": 4
+                    "columns": 4,
+                    "where": [
+                      {
+                        "field": "taste",
+                        "equals": "$item.n"
+                      }
+                    ]
                   }
                 ]
               },

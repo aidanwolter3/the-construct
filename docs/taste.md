@@ -25,12 +25,12 @@ with `CONSTRUCT_TASTE_PRIVATE_HOSTS=1`.
 | Data path | `/v1/taste/screens/steer?key={key}&q={q}` | `taste:steer:<key>`: the piece moved the way the words point |
 | Data path | `/v1/taste/screens/search?q={q}` | `taste:search` and `taste://search/pod` |
 | Data path | `/v1/taste/screens/likes` | `taste:likes` |
-| Data path | `/v1/taste/screens/taste` | `taste:tastes` (each `taste:taste:<n>`) and `taste://summary/pod` |
+| Data path | `/v1/taste/screens/taste` | `taste:tastes`, their pieces `taste:taste_items` (each with its `taste`) and `taste://summary/pod` |
 | Action | `/v1/taste/react` | `{id, liked}`, `{id, skipped}` or `{id, kind}`: passed to the service |
 | Action | `/v1/taste/more`, `/v1/taste/refresh` | Append the next page; start again with a fresh one |
 | Action | `/v1/taste/summary` | Have the service put the taste into words |
 
-An item's `key` is its service id with `:` as `~` (ids look like `shop.example:123`). Items carry `image` (720 px),
+An item's `key` is its service id made fit for a route (`shop.example:123` is `shop_example__123`). Items carry `image` (720 px),
 `image_large` (1600 px) and `thumb` (360 px), all the store's own CDN URLs, `price_text`, `buy_url`, `host`, `liked`,
 `skipped`, and in the feed `why_text` (Near your taste · 2, Adjacent, Exploring). `list_data_sources` lists every
 field.

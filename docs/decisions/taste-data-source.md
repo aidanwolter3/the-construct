@@ -29,8 +29,10 @@ Decision:
 - **Everything else is read when it is shown:** an item with its similar and opposite pieces, "this, but …"
   (steer), search, the likes and the taste page are data paths that call the service each time; steer and search
   are loaded with `action.data.load`, the words in the path.
-- **Item ids hold `:`** (`shop.example:123`), which the pod's query keys use between their parts, so entities, routes
-  and keys use the id with `:` as `~` (`key`); the service is always sent the id itself.
+- **Item ids are `<store host>:<product id>`** (`shop.example:123`), while a screen's route captures only letters,
+  digits, `_` and `-`, and query keys use `:` between their parts. So entities, routes and keys use a `key` with the
+  host's dots as `_` and the colon as `__` (`shop_example__123`; host names hold no `_`, so it turns back); the
+  service is always sent the id itself.
 - **Images are the stores' own CDN URLs** at a few widths (`width=` on the URL); the clients load them through the
   pod's image proxy, as they do every image that isn't the pod's, so the source needs no media route of its own.
 

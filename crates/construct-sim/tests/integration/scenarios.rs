@@ -334,6 +334,33 @@ fn server_health_shows_checks_and_devices_and_says_when_monitoring_is_off() {
         .unwrap();
 }
 
+/// The `taste` source's core layout over made-up answers of a taste service:
+/// the feed with why each piece is there, a piece's screen with its Similar
+/// and Opposite pieces, and the taste page with each taste's pieces.
+#[test]
+fn taste_shows_the_feed_a_piece_and_the_tastes() {
+    std::thread::Builder::new()
+        .stack_size(16 * 1024 * 1024)
+        .spawn(|| {
+            let (_, results) = run(
+                "taste",
+                "assert-text Waxed Chore Coat in Olive; assert-text Near your taste · 1; \
+                 assert-text 14 liked · 31 skipped; shot feed; scroll-to Liked; \
+                 scroll-to Waxed Chore Coat in Olive; click Open Waxed Chore Coat in Olive; \
+                 assert-text Buy at shop0.example; \
+                 scroll-to Opposite; assert-text Canvas Work Jacket; shot item; back; \
+                 assert-text Near your taste · 1; click Your taste; \
+                 assert-text rugged workwear · waxed cotton · olive green · utilitarian; \
+                 assert-text Written at 14 likes; shot taste; back; mode dark; shot dark",
+                &out_dir("taste"),
+            );
+            assert_ok(&results);
+        })
+        .unwrap()
+        .join()
+        .unwrap();
+}
+
 #[test]
 fn a_home_embeds_a_whole_layout_and_centres_its_tiles() {
     let (mut runner, results) = run(

@@ -18,8 +18,8 @@ pub use source_collections as collections;
 pub use source_events as events;
 pub use source_monitor as monitor;
 pub use source_pixelfed as pixelfed;
-pub use source_taste as taste;
 pub use source_pixelfed::{DEFAULT_PIXELFED_URL, PixelfedAdapter, PixelfedConfig};
+pub use source_taste as taste;
 
 /// The pod's adapters, in the order their core layouts are listed: the Pixelfed feed (with the
 /// `pixelfed` sign-in), the Events app (the

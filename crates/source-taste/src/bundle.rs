@@ -15,6 +15,7 @@ pub const STATUS_QUERY: &str = "taste:status";
 pub const LIKES_QUERY: &str = "taste:likes";
 pub const SEARCH_QUERY: &str = "taste:search";
 pub const TASTES_QUERY: &str = "taste:tastes";
+pub const TASTE_ITEMS_QUERY: &str = "taste:taste_items";
 
 /// Text from the service: control characters gone, at most `max` characters.
 pub fn clean(s: &str, max: usize) -> String {
@@ -57,15 +58,33 @@ pub fn sized(url: &str, width: u32) -> String {
     format!("{url}{sep}width={width}")
 }
 
-/// The service's id as a URI segment: ids hold `:` (`shop.example:123`),
-/// which the pod's query keys use between their parts, so it becomes `~`
-/// (never in a host name or a number). [`id_of`] turns it back.
+/// The service's id as a URI segment. Ids are `<store host>:<product id>`
+/// (`shop.example:123`), and a screen's route captures only letters, digits,
+/// `_` and `-` (at most 64), so the host's dots become `_` and the colon
+/// `__` (`shop_example__123`): host names hold no `_`, so [`id_of`] turns it
+/// back. An id of another shape gets a key that opens nothing.
 pub fn key_of(id: &str) -> String {
-    id.replace(':', "~")
+    let plain = |s: &str, extra: char| {
+        !s.is_empty()
+            && s.chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == extra)
+    };
+    match id.split_once(':') {
+        Some((host, rest)) if plain(host, '.') && plain(rest, '-') => {
+            format!("{}__{rest}", host.replace('.', "_"))
+        }
+        _ => id
+            .chars()
+            .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+            .collect(),
+    }
 }
 
 pub fn id_of(key: &str) -> String {
-    key.replace('~', ":")
+    match key.split_once("__") {
+        Some((host, rest)) => format!("{}:{rest}", host.replace('_', ".")),
+        None => key.to_owned(),
+    }
 }
 
 /// A price in its currency: `$148`, `£95`, `€210.50`, `12,000 JPY`.
@@ -160,6 +179,29 @@ pub fn item(v: &Value) -> Option<(String, EntityRecord)> {
     }
 }
 
+/// Items with the feed's reason filled in where the service left it out
+/// (only feed pages carry `why`): the device keeps one copy of each entity,
+/// so a list or screen without it would take the badge off the feed's card.
+pub fn with_why(items: &[Value], kept: &[Value]) -> Vec<Value> {
+    let why: std::collections::HashMap<&str, &Value> = kept
+        .iter()
+        .filter_map(|k| Some((k.get("id")?.as_str()?, k.get("why")?)))
+        .collect();
+    items
+        .iter()
+        .map(|v| {
+            let mut v = v.clone();
+            if v.get("why").is_none()
+                && let Some(id) = v.get("id").and_then(Value::as_str)
+                && let Some(w) = why.get(id)
+            {
+                v["why"] = (*w).clone();
+            }
+            v
+        })
+        .collect()
+}
+
 /// Items into `b` as query `key`, in order, each once.
 pub fn put_items(b: &mut DataBundle, key: &str, items: &[Value]) {
     let mut order = Vec::new();
@@ -203,11 +245,16 @@ pub fn status(b: &mut DataBundle, s: &Status) {
         .insert(STATUS_QUERY.into(), vec![STATUS_URI.to_owned()]);
 }
 
-/// The taste page: each taste (`taste:tastes`, its items as
-/// `taste:taste:<n>`) and the summary.
+/// The taste page: each taste (`taste:tastes`), their pieces
+/// (`taste:taste_items`, each with the `taste` it belongs to) and the summary.
 pub fn tastes(b: &mut DataBundle, v: &Value) {
     let mut order = Vec::new();
-    let list = v.get("tastes").and_then(Value::as_array).cloned().unwrap_or_default();
+    let mut pieces = Vec::new();
+    let list = v
+        .get("tastes")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
     for (n, t) in list.iter().take(12).enumerate() {
         let uri = format!("taste://tastes/{n}");
         let words = |k: &str, max: usize| {
@@ -225,7 +272,7 @@ pub fn tastes(b: &mut DataBundle, v: &Value) {
         };
         let size = t.get("size").and_then(Value::as_i64).unwrap_or(0);
         let rec = json!({
-            "n": n,
+            "n": n.to_string(),
             "title": format!("Taste {}", n + 1),
             "size_text": if size == 1 { "1 like".to_owned() } else { format!("{size} likes") },
             "attributes_text": words("attributes", 6),
@@ -235,11 +282,28 @@ pub fn tastes(b: &mut DataBundle, v: &Value) {
         if let Value::Object(m) = rec {
             b.entities.insert(uri.clone(), EntityRecord(m));
         }
-        let items = t.get("items").and_then(Value::as_array).cloned().unwrap_or_default();
-        put_items(b, &format!("taste:taste:{n}"), &items);
+        // Each taste's pieces as entities of their own (`taste` says whose),
+        // all in one query a list inside a taste's template filters.
+        for v in t
+            .get("items")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .take(12)
+        {
+            if let Some((_, mut rec)) = item(v) {
+                let key = rec.0["key"].as_str().unwrap_or_default().to_owned();
+                let piece = format!("taste://taste_items/{n}/{key}");
+                rec.0.insert("taste".into(), json!(n.to_string()));
+                rec.0.insert("uri".into(), json!(piece));
+                b.entities.insert(piece.clone(), rec);
+                pieces.push(piece);
+            }
+        }
         order.push(uri);
     }
     b.queries.insert(TASTES_QUERY.into(), order);
+    b.queries.insert(TASTE_ITEMS_QUERY.into(), pieces);
     let likes = v.get("likes").and_then(Value::as_i64).unwrap_or(0);
     summary(b, v.get("summary").filter(|s| s.is_object()), likes);
 }
@@ -308,12 +372,20 @@ mod tests {
             "images": ["https://cdn.example/a.jpg?v=1"], "liked": true, "why": "explore"
         }))
         .unwrap();
-        assert_eq!(uri, "taste://items/shop.example~42");
+        assert_eq!(uri, "taste://items/shop_example__42");
         assert_eq!(rec.0["brand"], "Example Co");
         assert_eq!(rec.0["buy_url"], "");
         assert_eq!(rec.0["image"], "https://cdn.example/a.jpg?v=1&width=720");
         assert_eq!(rec.0["price_text"], "$98");
         assert_eq!(rec.0["liked"], true);
-        assert_eq!(id_of("shop.example~42"), "shop.example:42");
+        assert_eq!(id_of("shop_example__42"), "shop.example:42");
+        assert_eq!(
+            key_of("www.shop-two.co.uk:7454613995597"),
+            "www_shop-two_co_uk__7454613995597"
+        );
+        assert_eq!(
+            id_of(&key_of("www.shop-two.co.uk:7454613995597")),
+            "www.shop-two.co.uk:7454613995597"
+        );
     }
 }

@@ -38,7 +38,10 @@ async fn a_signed_out_pod_shows_the_sign_in() {
     let pod = pod();
     let app = taste_layout(&pod).await;
     let ws = workspace(&pod, &app).await;
-    assert_eq!(ws["entities"]["taste://status/pod"]["signed_in"], false, "{ws}");
+    assert_eq!(
+        ws["entities"]["taste://status/pod"]["signed_in"], false,
+        "{ws}"
+    );
     assert_eq!(ws["queries"]["taste:feed"], json!([]));
     assert!(
         ws.to_string().contains("Sign in to your taste service"),

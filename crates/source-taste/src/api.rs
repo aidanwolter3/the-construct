@@ -241,7 +241,15 @@ pub async fn search(
     q: &str,
     n: usize,
 ) -> Result<Vec<Value>, ApiError> {
-    items(get(c, s, &["search"], &[("q", q.to_owned()), ("n", n.to_string())]).await?)
+    items(
+        get(
+            c,
+            s,
+            &["search"],
+            &[("q", q.to_owned()), ("n", n.to_string())],
+        )
+        .await?,
+    )
 }
 
 /// `GET /api/likes`.

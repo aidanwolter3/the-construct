@@ -75,14 +75,23 @@ pub const RELATED: usize = 12;
 pub const RESULTS: usize = 36;
 
 const ITEM_FIELDS: &[(&str, &str)] = &[
-    ("id", "the service's id of the product (e.g. shop.example:123)"),
-    ("key", "the id as a URI segment (: as ~): screens route on it"),
+    (
+        "id",
+        "the service's id of the product (e.g. shop.example:123)",
+    ),
+    (
+        "key",
+        "the id as a URI segment (shop_example__123): screens route on it",
+    ),
     ("uri", "taste://items/<key>"),
     ("brand", "the brand"),
     ("title", "the product's name"),
     ("category", "e.g. jacket, trousers, boots (from the photo)"),
     ("price_text", "e.g. $148, £95, or empty"),
-    ("buy_url", "the product's page in its store (http(s), or empty)"),
+    (
+        "buy_url",
+        "the product's page in its store (http(s), or empty)",
+    ),
     ("host", "the store's host, e.g. shop.example"),
     ("image", "the first photo 720 px wide (the store's CDN)"),
     ("image_large", "the same 1600 px wide"),
@@ -93,7 +102,10 @@ const ITEM_FIELDS: &[(&str, &str)] = &[
         "why_text",
         "feed items: why it is there, Near your taste · 2, Adjacent or Exploring",
     ),
-    ("why_tone", "a pill tone for why_text: accent, success or muted"),
+    (
+        "why_tone",
+        "a pill tone for why_text: accent, success or muted",
+    ),
 ];
 
 pub const MANIFEST: SourceManifest = SourceManifest {
@@ -134,10 +146,11 @@ pub const MANIFEST: SourceManifest = SourceManifest {
         },
         PathSpec {
             pattern: TASTE_PATH,
-            query_keys: &[bundle::TASTES_QUERY, "taste:taste:{n}"],
+            query_keys: &[bundle::TASTES_QUERY, bundle::TASTE_ITEMS_QUERY],
             doc: "The user's tastes (clusters of their likes, taste:tastes), each with its \
-                  describing words and brands and its items (taste:taste:<n>), and the \
-                  written summary (taste://summary/pod).",
+                  describing words and brands; their pieces (taste:taste_items, each with the \
+                  taste n it belongs to: a list in a taste's template filters where taste \
+                  equals $item.n); and the written summary (taste://summary/pod).",
         },
     ],
     actions: &[
@@ -193,17 +206,26 @@ pub const MANIFEST: SourceManifest = SourceManifest {
                 ("skips", "how many are skipped"),
                 ("counts_text", "e.g. 12 liked · 30 skipped"),
                 ("error", "the last call's failure in words, or empty"),
-                ("loading", "false as served; a layout sets it while More or Refresh runs"),
+                (
+                    "loading",
+                    "false as served; a layout sets it while More or Refresh runs",
+                ),
             ],
         },
         EntityDoc {
             uri: "taste://tastes/{n}",
             doc: "One taste: a cluster of the user's likes (taste:tastes).",
             fields: &[
-                ("n", "its place, from 0 (its items are taste:taste:<n>)"),
+                (
+                    "n",
+                    "its place, from \"0\" (its pieces: taste:taste_items where taste equals it)",
+                ),
                 ("title", "Taste 1, Taste 2, ..."),
                 ("size_text", "e.g. 8 likes"),
-                ("attributes_text", "words an image model puts to it, e.g. minimal · wool · earth tones"),
+                (
+                    "attributes_text",
+                    "words an image model puts to it, e.g. minimal · wool · earth tones",
+                ),
                 ("brands_text", "its brands, most liked first"),
                 ("categories_text", "its kinds of garment"),
             ],
@@ -216,7 +238,10 @@ pub const MANIFEST: SourceManifest = SourceManifest {
                 ("written", "true once written"),
                 ("written_text", "e.g. Written at 12 likes"),
                 ("likes", "how many likes there are now"),
-                ("writing", "false as served; a layout sets it while one is written"),
+                (
+                    "writing",
+                    "false as served; a layout sets it while one is written",
+                ),
             ],
         },
         EntityDoc {
@@ -574,7 +599,11 @@ fn service_error(e: ApiError) -> Response {
 /// The adapter and the service the pod is signed in to, or the refusal.
 async fn signed_in(pod: &Pod) -> Result<(&TasteAdapter, Service), Response> {
     let Some(a) = pod.adapter::<TasteAdapter>() else {
-        return Err(refuse(StatusCode::NOT_FOUND, "not_found", "no taste source"));
+        return Err(refuse(
+            StatusCode::NOT_FOUND,
+            "not_found",
+            "no taste source",
+        ));
     };
     match pod.blocking(db::service).await {
         Ok(Some(s)) => Ok((a, s)),
@@ -788,12 +817,20 @@ struct KeyQuery {
     q: String,
 }
 
+/// `items` with the kept feed's reasons filled in ([`bundle::with_why`]).
+async fn with_why(pod: &Pod, items: Vec<Value>) -> Vec<Value> {
+    match pod.blocking(db::items).await {
+        Ok(kept) => bundle::with_why(&items, &kept),
+        Err(_) => items,
+    }
+}
+
 fn valid_key(key: &str) -> bool {
     !key.is_empty()
-        && key.len() <= 300
+        && key.len() <= 64
         && key
             .bytes()
-            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'~' | b'.' | b'-' | b'_'))
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_'))
 }
 
 fn bad_key() -> Response {
@@ -841,13 +878,12 @@ async fn item_route(
         Ok(i) => i,
         Err(e) => return service_error(e),
     };
+    let similar = with_why(&pod, similar.unwrap_or_default()).await;
+    let contrast = with_why(&pod, contrast.unwrap_or_default()).await;
+    let item = with_why(&pod, vec![item]).await.remove(0);
     let mut b = DataBundle::default();
-    bundle::put_items(&mut b, &format!("taste:similar:{}", q.key), &similar.unwrap_or_default());
-    bundle::put_items(
-        &mut b,
-        &format!("taste:contrast:{}", q.key),
-        &contrast.unwrap_or_default(),
-    );
+    bundle::put_items(&mut b, &format!("taste:similar:{}", q.key), &similar);
+    bundle::put_items(&mut b, &format!("taste:contrast:{}", q.key), &contrast);
     // The item itself last, so its own fields win over a list's copy.
     if let Some((uri, rec)) = bundle::item(&item) {
         b.entities.insert(uri, rec);
@@ -877,6 +913,7 @@ async fn steer_route(
     let id = bundle::id_of(&q.key);
     match api::steer(&a.client, &service, &id, &words, RELATED).await {
         Ok(items) => {
+            let items = with_why(&pod, items).await;
             let mut b = DataBundle::default();
             bundle::put_items(&mut b, &format!("taste:steer:{}", q.key), &items);
             Json(b).into_response()
@@ -903,6 +940,7 @@ async fn search_route(
     };
     match api::search(&a.client, &service, &words, RESULTS).await {
         Ok(items) => {
+            let items = with_why(&pod, items).await;
             let mut b = DataBundle::default();
             bundle::search(&mut b, &words, &items);
             Json(b).into_response()
@@ -921,6 +959,7 @@ async fn likes_route(State(pod): State<Pod>, headers: HeaderMap) -> Response {
     };
     match api::likes(&a.client, &service).await {
         Ok(items) => {
+            let items = with_why(&pod, items).await;
             let mut b = DataBundle::default();
             bundle::put_items(&mut b, bundle::LIKES_QUERY, &items);
             Json(b).into_response()
@@ -958,18 +997,33 @@ mod tests {
 
     #[test]
     fn reactions_read_every_shape() {
-        assert_eq!(reaction(&json!({"liked": true})), Some(("like", true, false)));
-        assert_eq!(reaction(&json!({"liked": false})), Some(("clear", false, false)));
-        assert_eq!(reaction(&json!({"skipped": true})), Some(("skip", false, true)));
-        assert_eq!(reaction(&json!({"skipped": "true"})), Some(("skip", false, true)));
-        assert_eq!(reaction(&json!({"kind": "clear"})), Some(("clear", false, false)));
+        assert_eq!(
+            reaction(&json!({"liked": true})),
+            Some(("like", true, false))
+        );
+        assert_eq!(
+            reaction(&json!({"liked": false})),
+            Some(("clear", false, false))
+        );
+        assert_eq!(
+            reaction(&json!({"skipped": true})),
+            Some(("skip", false, true))
+        );
+        assert_eq!(
+            reaction(&json!({"skipped": "true"})),
+            Some(("skip", false, true))
+        );
+        assert_eq!(
+            reaction(&json!({"kind": "clear"})),
+            Some(("clear", false, false))
+        );
         assert_eq!(reaction(&json!({"kind": "flag"})), None);
         assert_eq!(reaction(&json!({})), None);
     }
 
     #[test]
     fn keys_are_checked() {
-        assert!(valid_key("shop.example~123"));
+        assert!(valid_key("shop_example__123"));
         assert!(!valid_key("../x"));
         assert!(!valid_key(""));
     }

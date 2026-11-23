@@ -54,7 +54,7 @@ async fn the_feed_is_kept_and_fetched_only_when_asked() {
     let feed = ws["queries"]["taste:feed"].as_array().unwrap().clone();
     assert_eq!(feed.len(), 6);
     let first = &ws["entities"][feed[0].as_str().unwrap()];
-    assert_eq!(first["key"], "shop0.example~1000");
+    assert_eq!(first["key"], "shop0_example__1000");
     assert_eq!(first["price_text"], "$98");
     assert_eq!(first["why_text"], "Near your taste · 1");
     assert!(first["image"].as_str().unwrap().ends_with("&width=720"));
@@ -62,17 +62,31 @@ async fn the_feed_is_kept_and_fetched_only_when_asked() {
     workspace(&pod, &app).await;
     assert_eq!(fake.pages.load(Ordering::SeqCst), 1);
 
-    let (status, body) = call(&pod, "POST", "/v1/taste/more", Some("phone"), Some(json!({}))).await;
+    let (status, body) = call(
+        &pod,
+        "POST",
+        "/v1/taste/more",
+        Some("phone"),
+        Some(json!({})),
+    )
+    .await;
     assert_eq!(status, StatusCode::OK, "{body}");
     let ws = workspace(&pod, &app).await;
     assert_eq!(ws["queries"]["taste:feed"].as_array().unwrap().len(), 12);
 
-    let (status, _) = call(&pod, "POST", "/v1/taste/refresh", Some("phone"), Some(json!({}))).await;
+    let (status, _) = call(
+        &pod,
+        "POST",
+        "/v1/taste/refresh",
+        Some("phone"),
+        Some(json!({})),
+    )
+    .await;
     assert_eq!(status, StatusCode::OK);
     let ws = workspace(&pod, &app).await;
     let feed = ws["queries"]["taste:feed"].as_array().unwrap();
     assert_eq!(feed.len(), 6);
-    assert_eq!(feed[0], "taste://items/shop2.example~1000");
+    assert_eq!(feed[0], "taste://items/shop2_example__1000");
     assert_eq!(fake.pages.load(Ordering::SeqCst), 3);
 }
 
@@ -95,7 +109,7 @@ async fn reactions_reach_the_service_and_stick() {
         "POST",
         "/v1/taste/react",
         Some("phone"),
-        Some(json!({"id": "shop0.example~1001", "skipped": "true"})),
+        Some(json!({"id": "shop0_example__1001", "skipped": "true"})),
     )
     .await;
     assert_eq!(status, StatusCode::OK);
@@ -108,9 +122,18 @@ async fn reactions_reach_the_service_and_stick() {
         ]
     );
     let ws = workspace(&pod, &app).await;
-    assert_eq!(ws["entities"]["taste://items/shop0.example~1000"]["liked"], true);
-    assert_eq!(ws["entities"]["taste://items/shop0.example~1001"]["skipped"], true);
-    assert_eq!(ws["entities"]["taste://status/pod"]["counts_text"], "1 liked · 1 skipped");
+    assert_eq!(
+        ws["entities"]["taste://items/shop0_example__1000"]["liked"],
+        true
+    );
+    assert_eq!(
+        ws["entities"]["taste://items/shop0_example__1001"]["skipped"],
+        true
+    );
+    assert_eq!(
+        ws["entities"]["taste://status/pod"]["counts_text"],
+        "1 liked · 1 skipped"
+    );
     let (status, _) = call(
         &pod,
         "POST",
@@ -119,39 +142,79 @@ async fn reactions_reach_the_service_and_stick() {
         Some(json!({"id": "shop0.example:1000"})),
     )
     .await;
-    assert_eq!(status, StatusCode::BAD_REQUEST, "a reaction says what it is");
+    assert_eq!(
+        status,
+        StatusCode::BAD_REQUEST,
+        "a reaction says what it is"
+    );
 }
 
 #[tokio::test]
 async fn screens_answer_their_lists() {
     let (pod, fake, _) = signed_in().await;
+    // The feed is kept, so the item screen keeps its card's reason.
+    let app = taste_layout(&pod).await;
+    workspace(&pod, &app).await;
     let (status, b) = call(
         &pod,
         "GET",
-        "/v1/taste/screens/item?key=shop0.example~1000",
+        "/v1/taste/screens/item?key=shop0_example__1000",
         Some("phone"),
         None,
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{b}");
-    assert_eq!(b["entities"]["taste://items/shop0.example~1000"]["id"], "shop0.example:1000");
-    assert_eq!(b["queries"]["taste:similar:shop0.example~1000"].as_array().unwrap().len(), 3);
-    assert_eq!(b["queries"]["taste:contrast:shop0.example~1000"].as_array().unwrap().len(), 3);
+    let item = &b["entities"]["taste://items/shop0_example__1000"];
+    assert_eq!(item["id"], "shop0.example:1000");
+    assert_eq!(
+        item["why_text"], "Near your taste · 1",
+        "the feed's reason stays"
+    );
+    assert_eq!(
+        b["queries"]["taste:similar:shop0_example__1000"]
+            .as_array()
+            .unwrap()
+            .len(),
+        3
+    );
+    assert_eq!(
+        b["queries"]["taste:contrast:shop0_example__1000"]
+            .as_array()
+            .unwrap()
+            .len(),
+        3
+    );
 
     let (status, b) = call(
         &pod,
         "GET",
-        "/v1/taste/screens/steer?key=shop0.example~1000&q=more%20relaxed",
+        "/v1/taste/screens/steer?key=shop0_example__1000&q=more%20relaxed",
         Some("phone"),
         None,
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{b}");
-    assert_eq!(b["queries"]["taste:steer:shop0.example~1000"].as_array().unwrap().len(), 3);
+    assert_eq!(
+        b["queries"]["taste:steer:shop0_example__1000"]
+            .as_array()
+            .unwrap()
+            .len(),
+        3
+    );
 
-    let (status, b) = call(&pod, "GET", "/v1/taste/screens/search?q=olive%20coat", Some("phone"), None).await;
+    let (status, b) = call(
+        &pod,
+        "GET",
+        "/v1/taste/screens/search?q=olive%20coat",
+        Some("phone"),
+        None,
+    )
+    .await;
     assert_eq!(status, StatusCode::OK, "{b}");
-    assert_eq!(b["entities"]["taste://search/pod"]["count_text"], "2 pieces");
+    assert_eq!(
+        b["entities"]["taste://search/pod"]["count_text"],
+        "2 pieces"
+    );
     assert_eq!(
         fake.queries.lock().unwrap().clone(),
         vec!["more relaxed".to_owned(), "olive coat".to_owned()]
@@ -163,15 +226,37 @@ async fn screens_answer_their_lists() {
 
     let (status, b) = call(&pod, "GET", "/v1/taste/screens/taste", Some("phone"), None).await;
     assert_eq!(status, StatusCode::OK);
-    assert_eq!(b["entities"]["taste://tastes/0"]["attributes_text"], "rugged workwear · earth tones · cotton canvas");
-    assert_eq!(b["queries"]["taste:taste:0"].as_array().unwrap().len(), 2);
+    assert_eq!(
+        b["entities"]["taste://tastes/0"]["attributes_text"],
+        "rugged workwear · earth tones · cotton canvas"
+    );
+    let pieces = b["queries"]["taste:taste_items"].as_array().unwrap();
+    assert_eq!(pieces.len(), 2);
+    assert_eq!(b["entities"][pieces[0].as_str().unwrap()]["taste"], "0");
     assert_eq!(b["entities"]["taste://summary/pod"]["written"], false);
-    let (status, _) = call(&pod, "POST", "/v1/taste/summary", Some("phone"), Some(json!({}))).await;
+    let (status, _) = call(
+        &pod,
+        "POST",
+        "/v1/taste/summary",
+        Some("phone"),
+        Some(json!({})),
+    )
+    .await;
     assert_eq!(status, StatusCode::OK);
     let (_, b) = call(&pod, "GET", "/v1/taste/screens/taste", Some("phone"), None).await;
-    assert_eq!(b["entities"]["taste://summary/pod"]["written_text"], "Written at 2 likes");
+    assert_eq!(
+        b["entities"]["taste://summary/pod"]["written_text"],
+        "Written at 2 likes"
+    );
 
-    let (status, _) = call(&pod, "GET", "/v1/taste/screens/item?key=..%2Fx", Some("phone"), None).await;
+    let (status, _) = call(
+        &pod,
+        "GET",
+        "/v1/taste/screens/item?key=..%2Fx",
+        Some("phone"),
+        None,
+    )
+    .await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
 }
 
@@ -181,7 +266,14 @@ async fn a_service_that_is_down_says_so_and_keeps_the_feed() {
     let app = taste_layout(&pod).await;
     workspace(&pod, &app).await;
     fake.down.store(true, Ordering::SeqCst);
-    let (status, body) = call(&pod, "POST", "/v1/taste/more", Some("phone"), Some(json!({}))).await;
+    let (status, body) = call(
+        &pod,
+        "POST",
+        "/v1/taste/more",
+        Some("phone"),
+        Some(json!({})),
+    )
+    .await;
     assert_eq!(status, StatusCode::BAD_GATEWAY, "{body}");
     let ws = workspace(&pod, &app).await;
     assert_eq!(ws["queries"]["taste:feed"].as_array().unwrap().len(), 6);
@@ -199,12 +291,26 @@ async fn signing_out_forgets_everything() {
     let (pod, _, _) = signed_in().await;
     let app = taste_layout(&pod).await;
     workspace(&pod, &app).await;
-    let (status, _) = call(&pod, "POST", "/v1/taste/sign-out", Some("phone"), Some(json!({}))).await;
+    let (status, _) = call(
+        &pod,
+        "POST",
+        "/v1/taste/sign-out",
+        Some("phone"),
+        Some(json!({})),
+    )
+    .await;
     assert_eq!(status, StatusCode::OK);
     let ws = workspace(&pod, &app).await;
     assert_eq!(ws["entities"]["taste://status/pod"]["signed_in"], false);
     assert_eq!(ws["queries"]["taste:feed"], json!([]));
-    let (status, body) = call(&pod, "POST", "/v1/taste/more", Some("phone"), Some(json!({}))).await;
+    let (status, body) = call(
+        &pod,
+        "POST",
+        "/v1/taste/more",
+        Some("phone"),
+        Some(json!({})),
+    )
+    .await;
     assert_eq!(status, StatusCode::CONFLICT, "{body}");
 }
 
