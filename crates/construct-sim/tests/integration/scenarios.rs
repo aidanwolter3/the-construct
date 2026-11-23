@@ -479,7 +479,7 @@ fn rows_added_above_the_scroll_position_dont_move_the_visible_row() {
 
 /// A layout drawn inline in home keeps its scroll position when home
 /// changes around it: a node put above the embed moves the embed's path,
-/// and its scroll offset follows.
+/// and its scroll offset (and a panel opened beside it) follows.
 #[test]
 fn an_inline_layout_keeps_its_scroll_when_the_layout_around_it_changes() {
     let d = "crates/construct-sim/data";
@@ -507,6 +507,20 @@ fn an_inline_layout_keeps_its_scroll_when_the_layout_around_it_changes() {
     .unwrap();
     assert_ok(&runner.run(&step));
     assert_eq!(first_showing(&mut runner), before);
+
+    // On a desktop a layout opened from inside it is a panel beside it,
+    // drawn in home's frame: the panel stays open, scrolled where it was.
+    let (_, results) = run(
+        "home",
+        &format!(
+            "screen desktop; construct {d}/construct_embed_v1.json; click Item 3; \
+             scroll-to Card Item 30; assert-text Card Item 30; \
+             construct {d}/construct_embed_moved.json; wait 300; assert-text New line; \
+             assert-text Card Item 30"
+        ),
+        &out_dir("embed-moved-panel"),
+    );
+    assert_ok(&results);
 }
 
 /// Decision `screen-sizes`: one layout on three windows. The size is device

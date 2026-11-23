@@ -20,7 +20,8 @@
           {
             "type": "core://Layout",
             "layout": "c-list",
-            "presentation": "Inline"
+            "presentation": "Inline",
+            "panels": true
           }
         ]
       }
@@ -30,15 +31,30 @@
       "id": "c-detail",
       "title": "Detail",
       "root": {
-        "type": "core://Column",
-        "padding_h_dp": 16,
-        "children": [
-          {
-            "type": "core://Text",
-            "style": "Title",
-            "value_expr": "Detail"
+        "type": "core://Scroll",
+        "content": {
+          "type": "core://List",
+          "query_key": "sim:items",
+          "item_template": {
+            "type": "core://Tappable",
+            "content_description": "$item.title",
+            "on_click": {
+              "intent": "action.navigation.back"
+            },
+            "content": {
+              "type": "core://Column",
+              "padding_h_dp": 16,
+              "padding_v_dp": 10,
+              "children": [
+                {
+                  "type": "core://Text",
+                  "style": "Body",
+                  "value_expr": "Card $item.title"
+                }
+              ]
+            }
           }
-        ]
+        }
       }
     },
     "c-list": {
