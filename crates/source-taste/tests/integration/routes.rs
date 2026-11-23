@@ -56,8 +56,17 @@ async fn the_feed_is_kept_and_fetched_only_when_asked() {
     let first = &ws["entities"][feed[0].as_str().unwrap()];
     assert_eq!(first["key"], "shop0_example__1000");
     assert_eq!(first["price_text"], "$98");
-    assert_eq!(first["why_text"], "Near your taste · 1");
+    assert_eq!(first["why_text"], "On the edge");
     assert!(first["image"].as_str().unwrap().ends_with("&width=720"));
+    assert_eq!(first["photo_count"], 3);
+    assert!(
+        first["image_0"]
+            .as_str()
+            .unwrap()
+            .contains("coat-0-worn.jpg")
+    );
+    assert_eq!(first["next_2"], 0);
+    assert_eq!(first["chance_text"], "50% your taste");
     // Fetching the data again doesn't take another page.
     workspace(&pod, &app).await;
     assert_eq!(fake.pages.load(Ordering::SeqCst), 1);
@@ -121,19 +130,46 @@ async fn reactions_reach_the_service_and_stick() {
             json!({"id": "shop0.example:1001", "kind": "skip"}),
         ]
     );
+    // A reacted piece leaves the deck, liked or skipped, and the pod tops the
+    // deck up by itself once fewer than a few are left.
     let ws = workspace(&pod, &app).await;
-    assert_eq!(
-        ws["entities"]["taste://items/shop0_example__1000"]["liked"],
-        true
+    let feed: Vec<String> = ws["queries"]["taste:feed"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|u| u.as_str().unwrap().to_owned())
+        .collect();
+    assert!(
+        !feed.contains(&"taste://items/shop0_example__1000".to_owned()),
+        "{feed:?}"
     );
-    assert_eq!(
-        ws["entities"]["taste://items/shop0_example__1001"]["skipped"],
-        true
+    assert!(
+        !feed.contains(&"taste://items/shop0_example__1001".to_owned()),
+        "{feed:?}"
     );
     assert_eq!(
         ws["entities"]["taste://status/pod"]["counts_text"],
         "1 liked · 1 skipped"
     );
+    let mut topped = false;
+    for _ in 0..100 {
+        if fake.pages.load(Ordering::SeqCst) == 2 {
+            topped = true;
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    assert!(topped, "the deck was topped up");
+    let mut len = 0;
+    for _ in 0..100 {
+        let ws = workspace(&pod, &app).await;
+        len = ws["queries"]["taste:feed"].as_array().unwrap().len();
+        if len == 10 {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    assert_eq!(len, 10, "4 left and a page of 6");
     let (status, _) = call(
         &pod,
         "POST",
@@ -166,10 +202,7 @@ async fn screens_answer_their_lists() {
     assert_eq!(status, StatusCode::OK, "{b}");
     let item = &b["entities"]["taste://items/shop0_example__1000"];
     assert_eq!(item["id"], "shop0.example:1000");
-    assert_eq!(
-        item["why_text"], "Near your taste · 1",
-        "the feed's reason stays"
-    );
+    assert_eq!(item["why_text"], "On the edge", "the feed's reason stays");
     assert_eq!(
         b["queries"]["taste:similar:shop0_example__1000"]
             .as_array()
@@ -333,4 +366,89 @@ async fn private_hosts_are_refused_by_default() {
     .await;
     assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
     assert_eq!(body["error"], "invalid_url");
+}
+
+#[tokio::test]
+async fn the_map_zooms_into_tiles_and_lists_an_area() {
+    let (pod, fake, _) = signed_in().await;
+    let whole = "0-0-1000000-1000000";
+    let (status, b) = call(
+        &pod,
+        "GET",
+        &format!("/v1/taste/screens/map?area={whole}"),
+        Some("phone"),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{b}");
+    let tiles = b["queries"][format!("taste:tiles:{whole}")]
+        .as_array()
+        .unwrap();
+    assert_eq!(tiles.len(), 16);
+    let tile = |n: usize| &b["entities"][tiles[n].as_str().unwrap()];
+    assert_eq!(
+        tile(0)["opens"],
+        "taste://map/0-0-250000-250000",
+        "a crowded tile zooms"
+    );
+    assert_eq!(
+        tile(1)["opens"],
+        "taste://area/250000-0-500000-250000",
+        "a few: their pieces"
+    );
+    assert_eq!(tile(15)["opens"], "", "an empty tile opens nothing");
+    assert_eq!(tile(0)["color"], "#C98A5B");
+    assert!(tile(0)["image"].as_str().unwrap().ends_with("&width=360"));
+    let area = &b["entities"][format!("taste://areas/{whole}")];
+    assert_eq!(area["title"], "Your taste map");
+    assert_eq!(area["count_text"], "82 pieces");
+
+    let zoomed = "0-0-250000-250000";
+    let (status, b) = call(
+        &pod,
+        "GET",
+        &format!("/v1/taste/screens/map?area={zoomed}"),
+        Some("phone"),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{b}");
+    assert_eq!(
+        b["entities"][format!("taste://areas/{zoomed}")]["title"],
+        "Zoomed in ×4"
+    );
+    let sent = *fake.boxes.lock().unwrap().last().unwrap();
+    assert_eq!(
+        (sent.x0, sent.y0, sent.x1, sent.y1, sent.n),
+        (0.0, 0.0, 0.25, 0.25, Some(4))
+    );
+
+    let (status, b) = call(
+        &pod,
+        "GET",
+        &format!("/v1/taste/screens/area?area={zoomed}"),
+        Some("phone"),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{b}");
+    assert_eq!(
+        b["queries"][format!("taste:area:{zoomed}")]
+            .as_array()
+            .unwrap()
+            .len(),
+        5
+    );
+
+    for bad in ["0-0-0-1", "x", "0-0-1000001-1000000", "..%2F"] {
+        let (status, _) = call(
+            &pod,
+            "GET",
+            &format!("/v1/taste/screens/map?area={bad}"),
+            Some("phone"),
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{bad}");
+    }
 }

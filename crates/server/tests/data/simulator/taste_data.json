@@ -9,11 +9,16 @@
       "currency": "USD",
       "category": "jacket",
       "images": [
-        "https://cdn.shop0.example/storage/portrait-5.png?v=1"
+        "https://cdn.shop0.example/storage/portrait-5.png?v=1",
+        "https://cdn.shop0.example/storage/carousel-1.png?v=1",
+        "https://cdn.shop0.example/storage/landscape-4.png?v=1"
       ],
       "liked": false,
       "skipped": false,
-      "why": "near:0"
+      "why": "boundary",
+      "description": "A boxy chore coat in waxed cotton that darkens and creases with wear. Corduroy collar, three patch pockets and a blanket lining for colder days.",
+      "p": 0.52,
+      "worn": true
     },
     {
       "id": "shop1.example:2001",
@@ -24,11 +29,15 @@
       "currency": "USD",
       "category": "overshirt",
       "images": [
-        "https://cdn.shop1.example/storage/carousel-1.png?v=1"
+        "https://cdn.shop1.example/storage/carousel-1.png?v=1",
+        "https://cdn.shop1.example/storage/landscape-4.png?v=1"
       ],
-      "liked": true,
+      "liked": false,
       "skipped": false,
-      "why": "near:0"
+      "why": "boundary",
+      "description": "Brushed cotton flannel, cut a little roomy, with a two-button cuff and a single chest pocket.",
+      "p": 0.47,
+      "worn": false
     },
     {
       "id": "shop2.example:2002",
@@ -43,7 +52,10 @@
       ],
       "liked": false,
       "skipped": false,
-      "why": "adjacent"
+      "why": "explore",
+      "description": "High-rise trousers with two forward pleats and a wide, straight leg in a soft wool twill.",
+      "p": null,
+      "worn": true
     },
     {
       "id": "shop0.example:2003",
@@ -54,11 +66,15 @@
       "currency": "USD",
       "category": "t-shirt",
       "images": [
-        "https://cdn.shop0.example/storage/carousel-2.png?v=1"
+        "https://cdn.shop0.example/storage/carousel-2.png?v=1",
+        "https://cdn.shop0.example/storage/reblog-6.png?v=1"
       ],
       "liked": false,
       "skipped": false,
-      "why": "near:1"
+      "why": "likely",
+      "description": "A 9 oz cotton tee with a chest pocket, cut square and short in the body.",
+      "p": 0.81,
+      "worn": false
     },
     {
       "id": "shop1.example:2004",
@@ -69,11 +85,16 @@
       "currency": "EUR",
       "category": "cardigan",
       "images": [
-        "https://cdn.shop1.example/storage/reblog-6.png?v=1"
+        "https://cdn.shop1.example/storage/reblog-6.png?v=1",
+        "https://cdn.shop1.example/storage/carousel-3.png?v=1",
+        "https://cdn.shop1.example/storage/portrait-5.png?v=1"
       ],
       "liked": false,
       "skipped": false,
-      "why": "explore"
+      "why": "boundary",
+      "description": "A chunky lambswool cardigan with a shawl collar and horn buttons.",
+      "p": 0.55,
+      "worn": true
     },
     {
       "id": "shop2.example:2005",
@@ -88,7 +109,10 @@
       ],
       "liked": false,
       "skipped": false,
-      "why": "near:0"
+      "why": "explore",
+      "description": "A canvas work jacket with a corduroy collar, triple stitched.",
+      "p": 0.12,
+      "worn": false
     },
     {
       "id": "shop0.example:2006",
@@ -99,11 +123,15 @@
       "currency": "USD",
       "category": "jeans",
       "images": [
-        "https://cdn.shop0.example/storage/portrait-5.png?v=1"
+        "https://cdn.shop0.example/storage/portrait-5.png?v=1",
+        "https://cdn.shop0.example/storage/carousel-1.png?v=1"
       ],
       "liked": false,
       "skipped": false,
-      "why": "adjacent"
+      "why": "likely",
+      "description": "Fourteen-ounce selvedge denim with a slim, tapered leg.",
+      "p": 0.77,
+      "worn": true
     },
     {
       "id": "shop1.example:2007",
@@ -118,7 +146,10 @@
       ],
       "liked": false,
       "skipped": false,
-      "why": "explore"
+      "why": "boundary",
+      "description": "Unlined suede chukkas on a crepe sole.",
+      "p": 0.49,
+      "worn": false
     }
   ],
   "status": {
@@ -136,10 +167,16 @@
         "currency": "USD",
         "category": "jacket",
         "images": [
-          "https://cdn.shop0.example/storage/portrait-5.png?v=1"
+          "https://cdn.shop0.example/storage/portrait-5.png?v=1",
+          "https://cdn.shop0.example/storage/carousel-1.png?v=1",
+          "https://cdn.shop0.example/storage/landscape-4.png?v=1"
         ],
         "liked": false,
-        "skipped": false
+        "skipped": false,
+        "description": "A boxy chore coat in waxed cotton that darkens and creases with wear. Corduroy collar, three patch pockets and a blanket lining for colder days.",
+        "p": 0.52,
+        "worn": true,
+        "why": "boundary"
       },
       "similar": [
         {
@@ -391,5 +428,810 @@
       "text": "You go for sturdy, textured pieces that look better worn in: waxed cotton, canvas and flannel in olive and brown, cut roomy enough to layer. Your second taste is softer: undyed knits and relaxed trousers in cream.",
       "likes": 14
     }
+  },
+  "map": {
+    "0-0-1000000-1000000": {
+      "n": 4,
+      "tiles": [
+        {
+          "i": 0,
+          "j": 0,
+          "x0": 0.0,
+          "y0": 0.0,
+          "x1": 0.25,
+          "y1": 0.25,
+          "count": 412,
+          "likes": 0,
+          "skips": 1,
+          "p": null,
+          "color": "#A9BCCB",
+          "item": {
+            "id": "shop0.example:2000",
+            "title": "Waxed Chore Coat in Olive",
+            "brand": "Fernhill Supply",
+            "images": [
+              "https://cdn.shop0.example/storage/portrait-5.png?v=1",
+              "https://cdn.shop0.example/storage/carousel-1.png?v=1",
+              "https://cdn.shop0.example/storage/landscape-4.png?v=1"
+            ]
+          }
+        },
+        {
+          "i": 1,
+          "j": 0,
+          "x0": 0.25,
+          "y0": 0.0,
+          "x1": 0.5,
+          "y1": 0.25,
+          "count": 1380,
+          "likes": 2,
+          "skips": 0,
+          "p": null,
+          "color": "#E2A76F",
+          "item": {
+            "id": "shop1.example:2001",
+            "title": "Brushed Flannel Overshirt",
+            "brand": "Okra & Wool",
+            "images": [
+              "https://cdn.shop1.example/storage/carousel-1.png?v=1",
+              "https://cdn.shop1.example/storage/landscape-4.png?v=1"
+            ]
+          }
+        },
+        {
+          "i": 2,
+          "j": 0,
+          "x0": 0.5,
+          "y0": 0.0,
+          "x1": 0.75,
+          "y1": 0.25,
+          "count": 96,
+          "likes": 0,
+          "skips": 0,
+          "p": null,
+          "color": "#DEDAD3",
+          "item": {
+            "id": "shop2.example:2002",
+            "title": "Loose Pleated Trousers",
+            "brand": "Northgate Workshop",
+            "images": [
+              "https://cdn.shop2.example/storage/landscape-4.png?v=1"
+            ]
+          }
+        },
+        {
+          "i": 3,
+          "j": 0,
+          "x0": 0.75,
+          "y0": 0.0,
+          "x1": 1.0,
+          "y1": 0.25,
+          "count": 0,
+          "likes": 0,
+          "skips": 0,
+          "p": null,
+          "color": "#DEDAD3",
+          "item": null
+        },
+        {
+          "i": 0,
+          "j": 1,
+          "x0": 0.0,
+          "y0": 0.25,
+          "x1": 0.25,
+          "y1": 0.5,
+          "count": 240,
+          "likes": 0,
+          "skips": 2,
+          "p": null,
+          "color": "#A9BCCB",
+          "item": {
+            "id": "shop1.example:2004",
+            "title": "Shawl Collar Cardigan",
+            "brand": "Linden Row",
+            "images": [
+              "https://cdn.shop1.example/storage/reblog-6.png?v=1",
+              "https://cdn.shop1.example/storage/carousel-3.png?v=1",
+              "https://cdn.shop1.example/storage/portrait-5.png?v=1"
+            ]
+          }
+        },
+        {
+          "i": 1,
+          "j": 1,
+          "x0": 0.25,
+          "y0": 0.25,
+          "x1": 0.5,
+          "y1": 0.5,
+          "count": 2210,
+          "likes": 0,
+          "skips": 0,
+          "p": null,
+          "color": "#E2A76F",
+          "item": {
+            "id": "shop2.example:2005",
+            "title": "Canvas Work Jacket",
+            "brand": "Copperleaf",
+            "images": [
+              "https://cdn.shop2.example/storage/carousel-3.png?v=1"
+            ]
+          }
+        },
+        {
+          "i": 2,
+          "j": 1,
+          "x0": 0.5,
+          "y0": 0.25,
+          "x1": 0.75,
+          "y1": 0.5,
+          "count": 1730,
+          "likes": 3,
+          "skips": 0,
+          "p": null,
+          "color": "#E2A76F",
+          "item": {
+            "id": "shop0.example:2006",
+            "title": "Selvedge Denim Jeans",
+            "brand": "Fernhill Supply",
+            "images": [
+              "https://cdn.shop0.example/storage/portrait-5.png?v=1",
+              "https://cdn.shop0.example/storage/carousel-1.png?v=1"
+            ]
+          }
+        },
+        {
+          "i": 3,
+          "j": 1,
+          "x0": 0.75,
+          "y0": 0.25,
+          "x1": 1.0,
+          "y1": 0.5,
+          "count": 64,
+          "likes": 0,
+          "skips": 0,
+          "p": null,
+          "color": "#E9CFA8",
+          "item": {
+            "id": "shop1.example:2007",
+            "title": "Suede Chukka Boots",
+            "brand": "Okra & Wool",
+            "images": [
+              "https://cdn.shop1.example/storage/carousel-1.png?v=1"
+            ]
+          }
+        },
+        {
+          "i": 0,
+          "j": 2,
+          "x0": 0.0,
+          "y0": 0.5,
+          "x1": 0.25,
+          "y1": 0.75,
+          "count": 880,
+          "likes": 0,
+          "skips": 0,
+          "p": null,
+          "color": "#DEDAD3",
+          "item": {
+            "id": "shop0.example:2000",
+            "title": "Waxed Chore Coat in Olive",
+            "brand": "Fernhill Supply",
+            "images": [
+              "https://cdn.shop0.example/storage/portrait-5.png?v=1",
+              "https://cdn.shop0.example/storage/carousel-1.png?v=1",
+              "https://cdn.shop0.example/storage/landscape-4.png?v=1"
+            ]
+          }
+        },
+        {
+          "i": 1,
+          "j": 2,
+          "x0": 0.25,
+          "y0": 0.5,
+          "x1": 0.5,
+          "y1": 0.75,
+          "count": 155,
+          "likes": 1,
+          "skips": 0,
+          "p": null,
+          "color": "#E9CFA8",
+          "item": {
+            "id": "shop1.example:2001",
+            "title": "Brushed Flannel Overshirt",
+            "brand": "Okra & Wool",
+            "images": [
+              "https://cdn.shop1.example/storage/carousel-1.png?v=1",
+              "https://cdn.shop1.example/storage/landscape-4.png?v=1"
+            ]
+          }
+        },
+        {
+          "i": 2,
+          "j": 2,
+          "x0": 0.5,
+          "y0": 0.5,
+          "x1": 0.75,
+          "y1": 0.75,
+          "count": 1290,
+          "likes": 0,
+          "skips": 1,
+          "p": null,
+          "color": "#A9BCCB",
+          "item": {
+            "id": "shop2.example:2002",
+            "title": "Loose Pleated Trousers",
+            "brand": "Northgate Workshop",
+            "images": [
+              "https://cdn.shop2.example/storage/landscape-4.png?v=1"
+            ]
+          }
+        },
+        {
+          "i": 3,
+          "j": 2,
+          "x0": 0.75,
+          "y0": 0.5,
+          "x1": 1.0,
+          "y1": 0.75,
+          "count": 520,
+          "likes": 0,
+          "skips": 0,
+          "p": null,
+          "color": "#DEDAD3",
+          "item": {
+            "id": "shop0.example:2003",
+            "title": "Heavyweight Pocket Tee",
+            "brand": "Saltmarsh",
+            "images": [
+              "https://cdn.shop0.example/storage/carousel-2.png?v=1",
+              "https://cdn.shop0.example/storage/reblog-6.png?v=1"
+            ]
+          }
+        },
+        {
+          "i": 0,
+          "j": 3,
+          "x0": 0.0,
+          "y0": 0.75,
+          "x1": 0.25,
+          "y1": 1.0,
+          "count": 37,
+          "likes": 0,
+          "skips": 0,
+          "p": null,
+          "color": "#DEDAD3",
+          "item": {
+            "id": "shop1.example:2004",
+            "title": "Shawl Collar Cardigan",
+            "brand": "Linden Row",
+            "images": [
+              "https://cdn.shop1.example/storage/reblog-6.png?v=1",
+              "https://cdn.shop1.example/storage/carousel-3.png?v=1",
+              "https://cdn.shop1.example/storage/portrait-5.png?v=1"
+            ]
+          }
+        },
+        {
+          "i": 1,
+          "j": 3,
+          "x0": 0.25,
+          "y0": 0.75,
+          "x1": 0.5,
+          "y1": 1.0,
+          "count": 610,
+          "likes": 0,
+          "skips": 0,
+          "p": null,
+          "color": "#E9CFA8",
+          "item": {
+            "id": "shop2.example:2005",
+            "title": "Canvas Work Jacket",
+            "brand": "Copperleaf",
+            "images": [
+              "https://cdn.shop2.example/storage/carousel-3.png?v=1"
+            ]
+          }
+        },
+        {
+          "i": 2,
+          "j": 3,
+          "x0": 0.5,
+          "y0": 0.75,
+          "x1": 0.75,
+          "y1": 1.0,
+          "count": 904,
+          "likes": 0,
+          "skips": 0,
+          "p": null,
+          "color": "#DEDAD3",
+          "item": {
+            "id": "shop0.example:2006",
+            "title": "Selvedge Denim Jeans",
+            "brand": "Fernhill Supply",
+            "images": [
+              "https://cdn.shop0.example/storage/portrait-5.png?v=1",
+              "https://cdn.shop0.example/storage/carousel-1.png?v=1"
+            ]
+          }
+        },
+        {
+          "i": 3,
+          "j": 3,
+          "x0": 0.75,
+          "y0": 0.75,
+          "x1": 1.0,
+          "y1": 1.0,
+          "count": 5,
+          "likes": 0,
+          "skips": 0,
+          "p": null,
+          "color": "#DEDAD3",
+          "item": {
+            "id": "shop1.example:2007",
+            "title": "Suede Chukka Boots",
+            "brand": "Okra & Wool",
+            "images": [
+              "https://cdn.shop1.example/storage/carousel-1.png?v=1"
+            ]
+          }
+        }
+      ]
+    },
+    "0-0-250000-250000": {
+      "n": 4,
+      "tiles": [
+        {
+          "i": 0,
+          "j": 0,
+          "x0": 0.0,
+          "y0": 0.0,
+          "x1": 0.0625,
+          "y1": 0.0625,
+          "count": 31,
+          "likes": 0,
+          "skips": 1,
+          "p": null,
+          "color": "#DEDAD3",
+          "item": {
+            "id": "shop0.example:2003",
+            "title": "Heavyweight Pocket Tee",
+            "brand": "Saltmarsh",
+            "images": [
+              "https://cdn.shop0.example/storage/carousel-2.png?v=1",
+              "https://cdn.shop0.example/storage/reblog-6.png?v=1"
+            ]
+          }
+        },
+        {
+          "i": 1,
+          "j": 0,
+          "x0": 0.0625,
+          "y0": 0.0,
+          "x1": 0.125,
+          "y1": 0.0625,
+          "count": 44,
+          "likes": 2,
+          "skips": 0,
+          "p": null,
+          "color": "#E9CFA8",
+          "item": {
+            "id": "shop1.example:2004",
+            "title": "Shawl Collar Cardigan",
+            "brand": "Linden Row",
+            "images": [
+              "https://cdn.shop1.example/storage/reblog-6.png?v=1",
+              "https://cdn.shop1.example/storage/carousel-3.png?v=1",
+              "https://cdn.shop1.example/storage/portrait-5.png?v=1"
+            ]
+          }
+        },
+        {
+          "i": 2,
+          "j": 0,
+          "x0": 0.125,
+          "y0": 0.0,
+          "x1": 0.1875,
+          "y1": 0.0625,
+          "count": 9,
+          "likes": 0,
+          "skips": 0,
+          "p": null,
+          "color": "#DEDAD3",
+          "item": {
+            "id": "shop2.example:2005",
+            "title": "Canvas Work Jacket",
+            "brand": "Copperleaf",
+            "images": [
+              "https://cdn.shop2.example/storage/carousel-3.png?v=1"
+            ]
+          }
+        },
+        {
+          "i": 3,
+          "j": 0,
+          "x0": 0.1875,
+          "y0": 0.0,
+          "x1": 0.25,
+          "y1": 0.0625,
+          "count": 0,
+          "likes": 0,
+          "skips": 0,
+          "p": null,
+          "color": "#DEDAD3",
+          "item": null
+        },
+        {
+          "i": 0,
+          "j": 1,
+          "x0": 0.0,
+          "y0": 0.0625,
+          "x1": 0.0625,
+          "y1": 0.125,
+          "count": 27,
+          "likes": 0,
+          "skips": 2,
+          "p": null,
+          "color": "#A9BCCB",
+          "item": {
+            "id": "shop1.example:2007",
+            "title": "Suede Chukka Boots",
+            "brand": "Okra & Wool",
+            "images": [
+              "https://cdn.shop1.example/storage/carousel-1.png?v=1"
+            ]
+          }
+        },
+        {
+          "i": 1,
+          "j": 1,
+          "x0": 0.0625,
+          "y0": 0.0625,
+          "x1": 0.125,
+          "y1": 0.125,
+          "count": 61,
+          "likes": 0,
+          "skips": 0,
+          "p": null,
+          "color": "#E2A76F",
+          "item": {
+            "id": "shop0.example:2000",
+            "title": "Waxed Chore Coat in Olive",
+            "brand": "Fernhill Supply",
+            "images": [
+              "https://cdn.shop0.example/storage/portrait-5.png?v=1",
+              "https://cdn.shop0.example/storage/carousel-1.png?v=1",
+              "https://cdn.shop0.example/storage/landscape-4.png?v=1"
+            ]
+          }
+        },
+        {
+          "i": 2,
+          "j": 1,
+          "x0": 0.125,
+          "y0": 0.0625,
+          "x1": 0.1875,
+          "y1": 0.125,
+          "count": 18,
+          "likes": 3,
+          "skips": 0,
+          "p": null,
+          "color": "#E9CFA8",
+          "item": {
+            "id": "shop1.example:2001",
+            "title": "Brushed Flannel Overshirt",
+            "brand": "Okra & Wool",
+            "images": [
+              "https://cdn.shop1.example/storage/carousel-1.png?v=1",
+              "https://cdn.shop1.example/storage/landscape-4.png?v=1"
+            ]
+          }
+        },
+        {
+          "i": 3,
+          "j": 1,
+          "x0": 0.1875,
+          "y0": 0.0625,
+          "x1": 0.25,
+          "y1": 0.125,
+          "count": 4,
+          "likes": 0,
+          "skips": 0,
+          "p": null,
+          "color": "#DEDAD3",
+          "item": {
+            "id": "shop2.example:2002",
+            "title": "Loose Pleated Trousers",
+            "brand": "Northgate Workshop",
+            "images": [
+              "https://cdn.shop2.example/storage/landscape-4.png?v=1"
+            ]
+          }
+        },
+        {
+          "i": 0,
+          "j": 2,
+          "x0": 0.0,
+          "y0": 0.125,
+          "x1": 0.0625,
+          "y1": 0.1875,
+          "count": 12,
+          "likes": 0,
+          "skips": 0,
+          "p": null,
+          "color": "#DEDAD3",
+          "item": {
+            "id": "shop0.example:2003",
+            "title": "Heavyweight Pocket Tee",
+            "brand": "Saltmarsh",
+            "images": [
+              "https://cdn.shop0.example/storage/carousel-2.png?v=1",
+              "https://cdn.shop0.example/storage/reblog-6.png?v=1"
+            ]
+          }
+        },
+        {
+          "i": 1,
+          "j": 2,
+          "x0": 0.0625,
+          "y0": 0.125,
+          "x1": 0.125,
+          "y1": 0.1875,
+          "count": 73,
+          "likes": 1,
+          "skips": 0,
+          "p": null,
+          "color": "#E2A76F",
+          "item": {
+            "id": "shop1.example:2004",
+            "title": "Shawl Collar Cardigan",
+            "brand": "Linden Row",
+            "images": [
+              "https://cdn.shop1.example/storage/reblog-6.png?v=1",
+              "https://cdn.shop1.example/storage/carousel-3.png?v=1",
+              "https://cdn.shop1.example/storage/portrait-5.png?v=1"
+            ]
+          }
+        },
+        {
+          "i": 2,
+          "j": 2,
+          "x0": 0.125,
+          "y0": 0.125,
+          "x1": 0.1875,
+          "y1": 0.1875,
+          "count": 40,
+          "likes": 0,
+          "skips": 1,
+          "p": null,
+          "color": "#E9CFA8",
+          "item": {
+            "id": "shop2.example:2005",
+            "title": "Canvas Work Jacket",
+            "brand": "Copperleaf",
+            "images": [
+              "https://cdn.shop2.example/storage/carousel-3.png?v=1"
+            ]
+          }
+        },
+        {
+          "i": 3,
+          "j": 2,
+          "x0": 0.1875,
+          "y0": 0.125,
+          "x1": 0.25,
+          "y1": 0.1875,
+          "count": 22,
+          "likes": 0,
+          "skips": 0,
+          "p": null,
+          "color": "#DEDAD3",
+          "item": {
+            "id": "shop0.example:2006",
+            "title": "Selvedge Denim Jeans",
+            "brand": "Fernhill Supply",
+            "images": [
+              "https://cdn.shop0.example/storage/portrait-5.png?v=1",
+              "https://cdn.shop0.example/storage/carousel-1.png?v=1"
+            ]
+          }
+        },
+        {
+          "i": 0,
+          "j": 3,
+          "x0": 0.0,
+          "y0": 0.1875,
+          "x1": 0.0625,
+          "y1": 0.25,
+          "count": 5,
+          "likes": 0,
+          "skips": 0,
+          "p": null,
+          "color": "#DEDAD3",
+          "item": {
+            "id": "shop1.example:2007",
+            "title": "Suede Chukka Boots",
+            "brand": "Okra & Wool",
+            "images": [
+              "https://cdn.shop1.example/storage/carousel-1.png?v=1"
+            ]
+          }
+        },
+        {
+          "i": 1,
+          "j": 3,
+          "x0": 0.0625,
+          "y0": 0.1875,
+          "x1": 0.125,
+          "y1": 0.25,
+          "count": 0,
+          "likes": 0,
+          "skips": 0,
+          "p": null,
+          "color": "#DEDAD3",
+          "item": null
+        },
+        {
+          "i": 2,
+          "j": 3,
+          "x0": 0.125,
+          "y0": 0.1875,
+          "x1": 0.1875,
+          "y1": 0.25,
+          "count": 16,
+          "likes": 0,
+          "skips": 0,
+          "p": null,
+          "color": "#A9BCCB",
+          "item": {
+            "id": "shop1.example:2001",
+            "title": "Brushed Flannel Overshirt",
+            "brand": "Okra & Wool",
+            "images": [
+              "https://cdn.shop1.example/storage/carousel-1.png?v=1",
+              "https://cdn.shop1.example/storage/landscape-4.png?v=1"
+            ]
+          }
+        },
+        {
+          "i": 3,
+          "j": 3,
+          "x0": 0.1875,
+          "y0": 0.1875,
+          "x1": 0.25,
+          "y1": 0.25,
+          "count": 50,
+          "likes": 0,
+          "skips": 0,
+          "p": null,
+          "color": "#E9CFA8",
+          "item": {
+            "id": "shop2.example:2002",
+            "title": "Loose Pleated Trousers",
+            "brand": "Northgate Workshop",
+            "images": [
+              "https://cdn.shop2.example/storage/landscape-4.png?v=1"
+            ]
+          }
+        }
+      ]
+    }
+  },
+  "area": {
+    "0-0-250000-250000": [
+      {
+        "id": "shop0.example:2000",
+        "brand": "Fernhill Supply",
+        "title": "Waxed Chore Coat in Olive",
+        "url": "https://shop0.example/products/item-0",
+        "price": 148,
+        "currency": "USD",
+        "category": "jacket",
+        "images": [
+          "https://cdn.shop0.example/storage/portrait-5.png?v=1",
+          "https://cdn.shop0.example/storage/carousel-1.png?v=1",
+          "https://cdn.shop0.example/storage/landscape-4.png?v=1"
+        ],
+        "liked": false,
+        "skipped": false,
+        "why": "boundary",
+        "description": "A boxy chore coat in waxed cotton that darkens and creases with wear. Corduroy collar, three patch pockets and a blanket lining for colder days.",
+        "p": 0.52,
+        "worn": true
+      },
+      {
+        "id": "shop1.example:2001",
+        "brand": "Okra & Wool",
+        "title": "Brushed Flannel Overshirt",
+        "url": "https://shop1.example/products/item-1",
+        "price": 118,
+        "currency": "USD",
+        "category": "overshirt",
+        "images": [
+          "https://cdn.shop1.example/storage/carousel-1.png?v=1",
+          "https://cdn.shop1.example/storage/landscape-4.png?v=1"
+        ],
+        "liked": false,
+        "skipped": false,
+        "why": "boundary",
+        "description": "Brushed cotton flannel, cut a little roomy, with a two-button cuff and a single chest pocket.",
+        "p": 0.47,
+        "worn": false
+      },
+      {
+        "id": "shop2.example:2002",
+        "brand": "Northgate Workshop",
+        "title": "Loose Pleated Trousers",
+        "url": "https://shop2.example/products/item-2",
+        "price": 165,
+        "currency": "GBP",
+        "category": "trousers",
+        "images": [
+          "https://cdn.shop2.example/storage/landscape-4.png?v=1"
+        ],
+        "liked": false,
+        "skipped": false,
+        "why": "explore",
+        "description": "High-rise trousers with two forward pleats and a wide, straight leg in a soft wool twill.",
+        "p": null,
+        "worn": true
+      },
+      {
+        "id": "shop0.example:2003",
+        "brand": "Saltmarsh",
+        "title": "Heavyweight Pocket Tee",
+        "url": "https://shop0.example/products/item-3",
+        "price": 48,
+        "currency": "USD",
+        "category": "t-shirt",
+        "images": [
+          "https://cdn.shop0.example/storage/carousel-2.png?v=1",
+          "https://cdn.shop0.example/storage/reblog-6.png?v=1"
+        ],
+        "liked": false,
+        "skipped": false,
+        "why": "likely",
+        "description": "A 9 oz cotton tee with a chest pocket, cut square and short in the body.",
+        "p": 0.81,
+        "worn": false
+      },
+      {
+        "id": "shop1.example:2004",
+        "brand": "Linden Row",
+        "title": "Shawl Collar Cardigan",
+        "url": "https://shop1.example/products/item-4",
+        "price": 210,
+        "currency": "EUR",
+        "category": "cardigan",
+        "images": [
+          "https://cdn.shop1.example/storage/reblog-6.png?v=1",
+          "https://cdn.shop1.example/storage/carousel-3.png?v=1",
+          "https://cdn.shop1.example/storage/portrait-5.png?v=1"
+        ],
+        "liked": false,
+        "skipped": false,
+        "why": "boundary",
+        "description": "A chunky lambswool cardigan with a shawl collar and horn buttons.",
+        "p": 0.55,
+        "worn": true
+      },
+      {
+        "id": "shop2.example:2005",
+        "brand": "Copperleaf",
+        "title": "Canvas Work Jacket",
+        "url": "https://shop2.example/products/item-5",
+        "price": 198,
+        "currency": "USD",
+        "category": "jacket",
+        "images": [
+          "https://cdn.shop2.example/storage/carousel-3.png?v=1"
+        ],
+        "liked": false,
+        "skipped": false,
+        "why": "explore",
+        "description": "A canvas work jacket with a corduroy collar, triple stitched.",
+        "p": 0.12,
+        "worn": false
+      }
+    ]
   }
 }

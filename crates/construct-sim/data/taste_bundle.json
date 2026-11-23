@@ -9,145 +9,289 @@
       "brand": "Fernhill Supply",
       "buy_url": "https://shop0.example/products/item-0",
       "category": "jacket",
+      "chance_text": "52% your taste",
+      "description": "A boxy chore coat in waxed cotton that darkens and creases with wear. Corduroy collar, three patch pockets and a blanket lining for colder days.",
       "host": "shop0.example",
       "id": "shop0.example:2000",
       "image": "https://cdn.shop0.example/storage/portrait-5.png?v=1&width=720",
+      "image_0": "https://cdn.shop0.example/storage/portrait-5.png?v=1&width=720",
+      "image_1": "https://cdn.shop0.example/storage/carousel-1.png?v=1&width=720",
+      "image_2": "https://cdn.shop0.example/storage/landscape-4.png?v=1&width=720",
+      "image_3": "",
+      "image_4": "",
+      "image_5": "",
       "image_large": "https://cdn.shop0.example/storage/portrait-5.png?v=1&width=1600",
       "key": "shop0_example__2000",
       "liked": false,
+      "next_0": 1,
+      "next_1": 2,
+      "next_2": 0,
+      "next_3": 1,
+      "next_4": 2,
+      "next_5": 0,
+      "p": 0.52,
+      "photo_count": 3,
+      "photos_many": true,
       "price_text": "$148",
       "skipped": false,
       "thumb": "https://cdn.shop0.example/storage/portrait-5.png?v=1&width=360",
       "title": "Waxed Chore Coat in Olive",
       "uri": "taste://items/shop0_example__2000",
-      "why_text": "Near your taste · 1",
-      "why_tone": "accent"
+      "why_text": "On the edge",
+      "why_tone": "accent",
+      "worn": true
     },
     "taste://items/shop0_example__2003": {
       "brand": "Saltmarsh",
       "buy_url": "https://shop0.example/products/item-3",
       "category": "t-shirt",
+      "chance_text": "81% your taste",
+      "description": "A 9 oz cotton tee with a chest pocket, cut square and short in the body.",
       "host": "shop0.example",
       "id": "shop0.example:2003",
       "image": "https://cdn.shop0.example/storage/carousel-2.png?v=1&width=720",
+      "image_0": "https://cdn.shop0.example/storage/carousel-2.png?v=1&width=720",
+      "image_1": "https://cdn.shop0.example/storage/reblog-6.png?v=1&width=720",
+      "image_2": "",
+      "image_3": "",
+      "image_4": "",
+      "image_5": "",
       "image_large": "https://cdn.shop0.example/storage/carousel-2.png?v=1&width=1600",
       "key": "shop0_example__2003",
       "liked": false,
+      "next_0": 1,
+      "next_1": 0,
+      "next_2": 1,
+      "next_3": 0,
+      "next_4": 1,
+      "next_5": 0,
+      "p": 0.81,
+      "photo_count": 2,
+      "photos_many": true,
       "price_text": "$48",
       "skipped": false,
       "thumb": "https://cdn.shop0.example/storage/carousel-2.png?v=1&width=360",
       "title": "Heavyweight Pocket Tee",
       "uri": "taste://items/shop0_example__2003",
-      "why_text": "Near your taste · 2",
-      "why_tone": "accent"
+      "why_text": "Probably yours",
+      "why_tone": "success",
+      "worn": false
     },
     "taste://items/shop0_example__2006": {
       "brand": "Fernhill Supply",
       "buy_url": "https://shop0.example/products/item-6",
       "category": "jeans",
+      "chance_text": "77% your taste",
+      "description": "Fourteen-ounce selvedge denim with a slim, tapered leg.",
       "host": "shop0.example",
       "id": "shop0.example:2006",
       "image": "https://cdn.shop0.example/storage/portrait-5.png?v=1&width=720",
+      "image_0": "https://cdn.shop0.example/storage/portrait-5.png?v=1&width=720",
+      "image_1": "https://cdn.shop0.example/storage/carousel-1.png?v=1&width=720",
+      "image_2": "",
+      "image_3": "",
+      "image_4": "",
+      "image_5": "",
       "image_large": "https://cdn.shop0.example/storage/portrait-5.png?v=1&width=1600",
       "key": "shop0_example__2006",
       "liked": false,
+      "next_0": 1,
+      "next_1": 0,
+      "next_2": 1,
+      "next_3": 0,
+      "next_4": 1,
+      "next_5": 0,
+      "p": 0.77,
+      "photo_count": 2,
+      "photos_many": true,
       "price_text": "$175",
       "skipped": false,
       "thumb": "https://cdn.shop0.example/storage/portrait-5.png?v=1&width=360",
       "title": "Selvedge Denim Jeans",
       "uri": "taste://items/shop0_example__2006",
-      "why_text": "Adjacent",
-      "why_tone": "success"
+      "why_text": "Probably yours",
+      "why_tone": "success",
+      "worn": true
     },
     "taste://items/shop1_example__2001": {
       "brand": "Okra & Wool",
       "buy_url": "https://shop1.example/products/item-1",
       "category": "overshirt",
+      "chance_text": "47% your taste",
+      "description": "Brushed cotton flannel, cut a little roomy, with a two-button cuff and a single chest pocket.",
       "host": "shop1.example",
       "id": "shop1.example:2001",
       "image": "https://cdn.shop1.example/storage/carousel-1.png?v=1&width=720",
+      "image_0": "https://cdn.shop1.example/storage/carousel-1.png?v=1&width=720",
+      "image_1": "https://cdn.shop1.example/storage/landscape-4.png?v=1&width=720",
+      "image_2": "",
+      "image_3": "",
+      "image_4": "",
+      "image_5": "",
       "image_large": "https://cdn.shop1.example/storage/carousel-1.png?v=1&width=1600",
       "key": "shop1_example__2001",
-      "liked": true,
+      "liked": false,
+      "next_0": 1,
+      "next_1": 0,
+      "next_2": 1,
+      "next_3": 0,
+      "next_4": 1,
+      "next_5": 0,
+      "p": 0.47,
+      "photo_count": 2,
+      "photos_many": true,
       "price_text": "$118",
       "skipped": false,
       "thumb": "https://cdn.shop1.example/storage/carousel-1.png?v=1&width=360",
       "title": "Brushed Flannel Overshirt",
       "uri": "taste://items/shop1_example__2001",
-      "why_text": "Near your taste · 1",
-      "why_tone": "accent"
+      "why_text": "On the edge",
+      "why_tone": "accent",
+      "worn": false
     },
     "taste://items/shop1_example__2004": {
       "brand": "Linden Row",
       "buy_url": "https://shop1.example/products/item-4",
       "category": "cardigan",
+      "chance_text": "55% your taste",
+      "description": "A chunky lambswool cardigan with a shawl collar and horn buttons.",
       "host": "shop1.example",
       "id": "shop1.example:2004",
       "image": "https://cdn.shop1.example/storage/reblog-6.png?v=1&width=720",
+      "image_0": "https://cdn.shop1.example/storage/reblog-6.png?v=1&width=720",
+      "image_1": "https://cdn.shop1.example/storage/carousel-3.png?v=1&width=720",
+      "image_2": "https://cdn.shop1.example/storage/portrait-5.png?v=1&width=720",
+      "image_3": "",
+      "image_4": "",
+      "image_5": "",
       "image_large": "https://cdn.shop1.example/storage/reblog-6.png?v=1&width=1600",
       "key": "shop1_example__2004",
       "liked": false,
+      "next_0": 1,
+      "next_1": 2,
+      "next_2": 0,
+      "next_3": 1,
+      "next_4": 2,
+      "next_5": 0,
+      "p": 0.55,
+      "photo_count": 3,
+      "photos_many": true,
       "price_text": "€210",
       "skipped": false,
       "thumb": "https://cdn.shop1.example/storage/reblog-6.png?v=1&width=360",
       "title": "Shawl Collar Cardigan",
       "uri": "taste://items/shop1_example__2004",
-      "why_text": "Exploring",
-      "why_tone": "muted"
+      "why_text": "On the edge",
+      "why_tone": "accent",
+      "worn": true
     },
     "taste://items/shop1_example__2007": {
       "brand": "Okra & Wool",
       "buy_url": "https://shop1.example/products/item-7",
       "category": "boots",
+      "chance_text": "49% your taste",
+      "description": "Unlined suede chukkas on a crepe sole.",
       "host": "shop1.example",
       "id": "shop1.example:2007",
       "image": "https://cdn.shop1.example/storage/carousel-1.png?v=1&width=720",
+      "image_0": "https://cdn.shop1.example/storage/carousel-1.png?v=1&width=720",
+      "image_1": "",
+      "image_2": "",
+      "image_3": "",
+      "image_4": "",
+      "image_5": "",
       "image_large": "https://cdn.shop1.example/storage/carousel-1.png?v=1&width=1600",
       "key": "shop1_example__2007",
       "liked": false,
+      "next_0": 0,
+      "next_1": 0,
+      "next_2": 0,
+      "next_3": 0,
+      "next_4": 0,
+      "next_5": 0,
+      "p": 0.49,
+      "photo_count": 1,
+      "photos_many": false,
       "price_text": "$240",
       "skipped": false,
       "thumb": "https://cdn.shop1.example/storage/carousel-1.png?v=1&width=360",
       "title": "Suede Chukka Boots",
       "uri": "taste://items/shop1_example__2007",
-      "why_text": "Exploring",
-      "why_tone": "muted"
+      "why_text": "On the edge",
+      "why_tone": "accent",
+      "worn": false
     },
     "taste://items/shop2_example__2002": {
       "brand": "Northgate Workshop",
       "buy_url": "https://shop2.example/products/item-2",
       "category": "trousers",
+      "chance_text": "",
+      "description": "High-rise trousers with two forward pleats and a wide, straight leg in a soft wool twill.",
       "host": "shop2.example",
       "id": "shop2.example:2002",
       "image": "https://cdn.shop2.example/storage/landscape-4.png?v=1&width=720",
+      "image_0": "https://cdn.shop2.example/storage/landscape-4.png?v=1&width=720",
+      "image_1": "",
+      "image_2": "",
+      "image_3": "",
+      "image_4": "",
+      "image_5": "",
       "image_large": "https://cdn.shop2.example/storage/landscape-4.png?v=1&width=1600",
       "key": "shop2_example__2002",
       "liked": false,
+      "next_0": 0,
+      "next_1": 0,
+      "next_2": 0,
+      "next_3": 0,
+      "next_4": 0,
+      "next_5": 0,
+      "p": null,
+      "photo_count": 1,
+      "photos_many": false,
       "price_text": "£165",
       "skipped": false,
       "thumb": "https://cdn.shop2.example/storage/landscape-4.png?v=1&width=360",
       "title": "Loose Pleated Trousers",
       "uri": "taste://items/shop2_example__2002",
-      "why_text": "Adjacent",
-      "why_tone": "success"
+      "why_text": "Exploring",
+      "why_tone": "muted",
+      "worn": true
     },
     "taste://items/shop2_example__2005": {
       "brand": "Copperleaf",
       "buy_url": "https://shop2.example/products/item-5",
       "category": "jacket",
+      "chance_text": "12% your taste",
+      "description": "A canvas work jacket with a corduroy collar, triple stitched.",
       "host": "shop2.example",
       "id": "shop2.example:2005",
       "image": "https://cdn.shop2.example/storage/carousel-3.png?v=1&width=720",
+      "image_0": "https://cdn.shop2.example/storage/carousel-3.png?v=1&width=720",
+      "image_1": "",
+      "image_2": "",
+      "image_3": "",
+      "image_4": "",
+      "image_5": "",
       "image_large": "https://cdn.shop2.example/storage/carousel-3.png?v=1&width=1600",
       "key": "shop2_example__2005",
       "liked": false,
+      "next_0": 0,
+      "next_1": 0,
+      "next_2": 0,
+      "next_3": 0,
+      "next_4": 0,
+      "next_5": 0,
+      "p": 0.12,
+      "photo_count": 1,
+      "photos_many": false,
       "price_text": "$198",
       "skipped": false,
       "thumb": "https://cdn.shop2.example/storage/carousel-3.png?v=1&width=360",
       "title": "Canvas Work Jacket",
       "uri": "taste://items/shop2_example__2005",
-      "why_text": "Near your taste · 1",
-      "why_tone": "accent"
+      "why_text": "Exploring",
+      "why_tone": "muted",
+      "worn": false
     },
     "taste://status/pod": {
       "counts_text": "14 liked · 31 skipped",
@@ -348,7 +492,7 @@
                             "type": "core://Button"
                           },
                           {
-                            "label": "Your taste",
+                            "label": "Taste",
                             "on_click": {
                               "intent": "action.navigation.open",
                               "presentation": "Push",
@@ -357,19 +501,21 @@
                             "size": "Small",
                             "style": "Tonal",
                             "type": "core://Button"
+                          },
+                          {
+                            "label": "Map",
+                            "on_click": {
+                              "intent": "action.navigation.open",
+                              "presentation": "Push",
+                              "target_uri": "taste://map/0-0-1000000-1000000"
+                            },
+                            "size": "Small",
+                            "style": "Tonal",
+                            "type": "core://Button"
                           }
                         ],
                         "spacing_dp": 8,
                         "type": "core://Row"
-                      },
-                      {
-                        "content": {
-                          "style": "Secondary",
-                          "type": "core://Text",
-                          "value_expr": "${taste://status/pod#counts_text}"
-                        },
-                        "content_color": "${local://theme#muted_text}",
-                        "type": "core://Box"
                       },
                       {
                         "content": {
@@ -411,220 +557,857 @@
                         "value": "${taste://status/pod#error}"
                       },
                       {
-                        "empty_text": "Your feed is on its way.",
-                        "item_template": {
-                          "background": "${local://theme#card}",
-                          "border_color": "${local://theme#card_border}",
-                          "content": {
-                            "children": [
-                              {
-                                "content": {
-                                  "aspect_ratio": 0.8,
-                                  "content_description": "$item.title",
-                                  "shape": "Rounded",
-                                  "type": "core://Image",
-                                  "url": "$item.image"
-                                },
-                                "content_description": "Open $item.title",
-                                "on_click": {
-                                  "intent": "action.navigation.open",
-                                  "presentation": "Push",
-                                  "target_uri": "taste://items/$item.key"
-                                },
-                                "type": "core://Tappable"
-                              },
-                              {
-                                "content": {
-                                  "background": "${local://theme#accent_surface}",
-                                  "content": {
-                                    "style": "Caption",
-                                    "type": "core://Text",
-                                    "value_expr": "$item.why_text"
-                                  },
-                                  "content_color": "${local://theme#accent}",
-                                  "corner_dp": 8,
-                                  "padding_h_dp": 8,
-                                  "padding_v_dp": 3,
-                                  "type": "core://Box"
-                                },
-                                "type": "core://Conditional",
-                                "value": "$item.why_text"
-                              },
-                              {
-                                "children": [
-                                  {
-                                    "caps": true,
-                                    "style": "Caption",
-                                    "type": "core://Text",
-                                    "value_expr": "$item.brand",
-                                    "weight": "SemiBold"
-                                  },
-                                  {
-                                    "max_lines": 2,
-                                    "style": "Label",
-                                    "type": "core://Text",
-                                    "value_expr": "$item.title"
-                                  }
-                                ],
-                                "padding_h_dp": 2,
-                                "spacing_dp": 2,
-                                "type": "core://Column"
-                              },
-                              {
-                                "children": [
-                                  {
-                                    "style": "Body",
-                                    "type": "core://Text",
-                                    "value_expr": "$item.price_text"
-                                  },
-                                  {
-                                    "type": "core://Spacer"
-                                  },
-                                  {
-                                    "content": {
-                                      "label": "Liked",
-                                      "on_click": {
-                                        "also": [
-                                          {
-                                            "field": "skipped",
-                                            "value_expr": "false"
-                                          }
-                                        ],
-                                        "endpoint": "/v1/taste/react",
-                                        "entity_uri": "$item.uri",
-                                        "field": "liked",
-                                        "intent": "action.mutation.optimistic",
-                                        "payload": {
-                                          "id": "$item.id",
-                                          "liked": "$value"
-                                        },
-                                        "rollback_value": false,
-                                        "value_expr": "false"
-                                      },
-                                      "size": "Small",
-                                      "type": "core://Button"
-                                    },
-                                    "equals": "true",
-                                    "type": "core://Conditional",
-                                    "value": "$item.liked"
-                                  },
-                                  {
-                                    "content": {
-                                      "label": "Like",
-                                      "on_click": {
-                                        "also": [
-                                          {
-                                            "field": "skipped",
-                                            "value_expr": "false"
-                                          }
-                                        ],
-                                        "endpoint": "/v1/taste/react",
-                                        "entity_uri": "$item.uri",
-                                        "field": "liked",
-                                        "intent": "action.mutation.optimistic",
-                                        "payload": {
-                                          "id": "$item.id",
-                                          "liked": "$value"
-                                        },
-                                        "rollback_value": false,
-                                        "value_expr": "true"
-                                      },
-                                      "size": "Small",
-                                      "style": "Secondary",
-                                      "type": "core://Button"
-                                    },
-                                    "equals": "true",
-                                    "not": true,
-                                    "type": "core://Conditional",
-                                    "value": "$item.liked"
-                                  },
-                                  {
-                                    "label": "Skip",
-                                    "on_click": {
-                                      "also": [
-                                        {
-                                          "field": "liked",
-                                          "value_expr": "false"
-                                        }
-                                      ],
-                                      "endpoint": "/v1/taste/react",
-                                      "entity_uri": "$item.uri",
-                                      "field": "skipped",
-                                      "intent": "action.mutation.optimistic",
-                                      "payload": {
-                                        "id": "$item.id",
-                                        "skipped": "$value"
-                                      },
-                                      "rollback_value": false,
-                                      "value_expr": "true"
-                                    },
-                                    "size": "Small",
-                                    "style": "Text",
-                                    "type": "core://Button"
-                                  }
-                                ],
-                                "padding_h_dp": 2,
-                                "spacing_dp": 6,
-                                "type": "core://Row"
-                              }
-                            ],
-                            "spacing_dp": 8,
-                            "type": "core://Column"
-                          },
-                          "corner_dp": 16,
-                          "padding_h_dp": 10,
-                          "padding_v_dp": 10,
-                          "type": "core://Box"
-                        },
-                        "min_column_dp": 300,
-                        "query_key": "taste:feed",
-                        "spacing_dp": 16,
-                        "type": "core://List",
-                        "where": [
-                          {
-                            "equals": "false",
-                            "field": "skipped"
-                          }
-                        ]
-                      },
-                      {
                         "children": [
                           {
-                            "label": "Show more",
-                            "on_click": {
-                              "endpoint": "/v1/taste/more",
-                              "entity_uri": "taste://status/pod",
-                              "field": "loading",
-                              "intent": "action.mutation.optimistic",
-                              "payload": {},
-                              "rollback_value": false,
-                              "value_expr": "true"
+                            "empty_text": "Finding more pieces…",
+                            "item_template": {
+                              "content": {
+                                "children": [
+                                  {
+                                    "content": {
+                                      "background": "${local://theme#card}",
+                                      "border_color": "${local://theme#card_border}",
+                                      "content": {
+                                        "children": [
+                                          {
+                                            "children": [
+                                              {
+                                                "content": {
+                                                  "children": [
+                                                    {
+                                                      "content": {
+                                                        "content": {
+                                                          "aspect_ratio": 0.8,
+                                                          "content_description": "$item.title",
+                                                          "shape": "Rounded",
+                                                          "type": "core://Image",
+                                                          "url": "$item.image_0"
+                                                        },
+                                                        "content_description": "Next photo of $item.title",
+                                                        "on_click": {
+                                                          "entity_uri": "$item.uri",
+                                                          "field": "photo",
+                                                          "intent": "action.local.set",
+                                                          "value_expr": "entity.next_0"
+                                                        },
+                                                        "type": "core://Tappable"
+                                                      },
+                                                      "not": true,
+                                                      "type": "core://Conditional",
+                                                      "value": "$item.photo"
+                                                    },
+                                                    {
+                                                      "content": {
+                                                        "content": {
+                                                          "aspect_ratio": 0.8,
+                                                          "content_description": "$item.title",
+                                                          "shape": "Rounded",
+                                                          "type": "core://Image",
+                                                          "url": "$item.image_1"
+                                                        },
+                                                        "content_description": "Next photo of $item.title",
+                                                        "on_click": {
+                                                          "entity_uri": "$item.uri",
+                                                          "field": "photo",
+                                                          "intent": "action.local.set",
+                                                          "value_expr": "entity.next_1"
+                                                        },
+                                                        "type": "core://Tappable"
+                                                      },
+                                                      "equals": "1",
+                                                      "type": "core://Conditional",
+                                                      "value": "$item.photo"
+                                                    },
+                                                    {
+                                                      "content": {
+                                                        "content": {
+                                                          "aspect_ratio": 0.8,
+                                                          "content_description": "$item.title",
+                                                          "shape": "Rounded",
+                                                          "type": "core://Image",
+                                                          "url": "$item.image_2"
+                                                        },
+                                                        "content_description": "Next photo of $item.title",
+                                                        "on_click": {
+                                                          "entity_uri": "$item.uri",
+                                                          "field": "photo",
+                                                          "intent": "action.local.set",
+                                                          "value_expr": "entity.next_2"
+                                                        },
+                                                        "type": "core://Tappable"
+                                                      },
+                                                      "equals": "2",
+                                                      "type": "core://Conditional",
+                                                      "value": "$item.photo"
+                                                    },
+                                                    {
+                                                      "content": {
+                                                        "content": {
+                                                          "aspect_ratio": 0.8,
+                                                          "content_description": "$item.title",
+                                                          "shape": "Rounded",
+                                                          "type": "core://Image",
+                                                          "url": "$item.image_3"
+                                                        },
+                                                        "content_description": "Next photo of $item.title",
+                                                        "on_click": {
+                                                          "entity_uri": "$item.uri",
+                                                          "field": "photo",
+                                                          "intent": "action.local.set",
+                                                          "value_expr": "entity.next_3"
+                                                        },
+                                                        "type": "core://Tappable"
+                                                      },
+                                                      "equals": "3",
+                                                      "type": "core://Conditional",
+                                                      "value": "$item.photo"
+                                                    },
+                                                    {
+                                                      "content": {
+                                                        "content": {
+                                                          "aspect_ratio": 0.8,
+                                                          "content_description": "$item.title",
+                                                          "shape": "Rounded",
+                                                          "type": "core://Image",
+                                                          "url": "$item.image_4"
+                                                        },
+                                                        "content_description": "Next photo of $item.title",
+                                                        "on_click": {
+                                                          "entity_uri": "$item.uri",
+                                                          "field": "photo",
+                                                          "intent": "action.local.set",
+                                                          "value_expr": "entity.next_4"
+                                                        },
+                                                        "type": "core://Tappable"
+                                                      },
+                                                      "equals": "4",
+                                                      "type": "core://Conditional",
+                                                      "value": "$item.photo"
+                                                    },
+                                                    {
+                                                      "content": {
+                                                        "content": {
+                                                          "aspect_ratio": 0.8,
+                                                          "content_description": "$item.title",
+                                                          "shape": "Rounded",
+                                                          "type": "core://Image",
+                                                          "url": "$item.image_5"
+                                                        },
+                                                        "content_description": "Next photo of $item.title",
+                                                        "on_click": {
+                                                          "entity_uri": "$item.uri",
+                                                          "field": "photo",
+                                                          "intent": "action.local.set",
+                                                          "value_expr": "entity.next_5"
+                                                        },
+                                                        "type": "core://Tappable"
+                                                      },
+                                                      "equals": "5",
+                                                      "type": "core://Conditional",
+                                                      "value": "$item.photo"
+                                                    }
+                                                  ],
+                                                  "type": "core://Column"
+                                                },
+                                                "type": "core://Box",
+                                                "width_dp": 420
+                                              },
+                                              {
+                                                "children": [
+                                                  {
+                                                    "align": "Center",
+                                                    "children": [
+                                                      {
+                                                        "content": {
+                                                          "background": "${local://theme#accent_surface}",
+                                                          "content": {
+                                                            "style": "Caption",
+                                                            "type": "core://Text",
+                                                            "value_expr": "$item.why_text"
+                                                          },
+                                                          "content_color": "${local://theme#accent}",
+                                                          "corner_dp": 8,
+                                                          "padding_h_dp": 8,
+                                                          "padding_v_dp": 3,
+                                                          "type": "core://Box"
+                                                        },
+                                                        "type": "core://Conditional",
+                                                        "value": "$item.why_text"
+                                                      },
+                                                      {
+                                                        "content": {
+                                                          "children": [
+                                                            {
+                                                              "content": {
+                                                                "style": "Caption",
+                                                                "type": "core://Text",
+                                                                "value_expr": "1 / $item.photo_count"
+                                                              },
+                                                              "not": true,
+                                                              "type": "core://Conditional",
+                                                              "value": "$item.photo"
+                                                            },
+                                                            {
+                                                              "content": {
+                                                                "style": "Caption",
+                                                                "type": "core://Text",
+                                                                "value_expr": "2 / $item.photo_count"
+                                                              },
+                                                              "equals": "1",
+                                                              "type": "core://Conditional",
+                                                              "value": "$item.photo"
+                                                            },
+                                                            {
+                                                              "content": {
+                                                                "style": "Caption",
+                                                                "type": "core://Text",
+                                                                "value_expr": "3 / $item.photo_count"
+                                                              },
+                                                              "equals": "2",
+                                                              "type": "core://Conditional",
+                                                              "value": "$item.photo"
+                                                            },
+                                                            {
+                                                              "content": {
+                                                                "style": "Caption",
+                                                                "type": "core://Text",
+                                                                "value_expr": "4 / $item.photo_count"
+                                                              },
+                                                              "equals": "3",
+                                                              "type": "core://Conditional",
+                                                              "value": "$item.photo"
+                                                            },
+                                                            {
+                                                              "content": {
+                                                                "style": "Caption",
+                                                                "type": "core://Text",
+                                                                "value_expr": "5 / $item.photo_count"
+                                                              },
+                                                              "equals": "4",
+                                                              "type": "core://Conditional",
+                                                              "value": "$item.photo"
+                                                            },
+                                                            {
+                                                              "content": {
+                                                                "style": "Caption",
+                                                                "type": "core://Text",
+                                                                "value_expr": "6 / $item.photo_count"
+                                                              },
+                                                              "equals": "5",
+                                                              "type": "core://Conditional",
+                                                              "value": "$item.photo"
+                                                            }
+                                                          ],
+                                                          "type": "core://Row"
+                                                        },
+                                                        "type": "core://Conditional",
+                                                        "value": "$item.photos_many"
+                                                      },
+                                                      {
+                                                        "type": "core://Spacer"
+                                                      }
+                                                    ],
+                                                    "padding_h_dp": 2,
+                                                    "spacing_dp": 8,
+                                                    "type": "core://Row"
+                                                  },
+                                                  {
+                                                    "children": [
+                                                      {
+                                                        "caps": true,
+                                                        "max_lines": 1,
+                                                        "style": "Caption",
+                                                        "type": "core://Text",
+                                                        "value_expr": "$item.brand",
+                                                        "weight": "SemiBold"
+                                                      },
+                                                      {
+                                                        "content": {
+                                                          "max_lines": 3,
+                                                          "style": "Label",
+                                                          "type": "core://Text",
+                                                          "value_expr": "$item.title"
+                                                        },
+                                                        "content_description": "Details of $item.title",
+                                                        "on_click": {
+                                                          "intent": "action.navigation.open",
+                                                          "presentation": "Push",
+                                                          "target_uri": "taste://items/$item.key"
+                                                        },
+                                                        "type": "core://Tappable"
+                                                      },
+                                                      {
+                                                        "children": [
+                                                          {
+                                                            "style": "Body",
+                                                            "type": "core://Text",
+                                                            "value_expr": "$item.price_text"
+                                                          },
+                                                          {
+                                                            "type": "core://Spacer"
+                                                          },
+                                                          {
+                                                            "style": "Caption",
+                                                            "type": "core://Text",
+                                                            "value_expr": "$item.chance_text"
+                                                          }
+                                                        ],
+                                                        "spacing_dp": 6,
+                                                        "type": "core://Row"
+                                                      },
+                                                      {
+                                                        "content": {
+                                                          "max_lines": 12,
+                                                          "style": "Secondary",
+                                                          "type": "core://Text",
+                                                          "value_expr": "$item.description"
+                                                        },
+                                                        "type": "core://Conditional",
+                                                        "value": "$item.description"
+                                                      }
+                                                    ],
+                                                    "padding_h_dp": 2,
+                                                    "spacing_dp": 3,
+                                                    "type": "core://Column"
+                                                  },
+                                                  {
+                                                    "size_dp": 8,
+                                                    "type": "core://Spacer"
+                                                  },
+                                                  {
+                                                    "children": [
+                                                      {
+                                                        "label": "Skip",
+                                                        "on_click": {
+                                                          "also": [
+                                                            {
+                                                              "field": "liked",
+                                                              "value_expr": "false"
+                                                            }
+                                                          ],
+                                                          "endpoint": "/v1/taste/react",
+                                                          "entity_uri": "$item.uri",
+                                                          "field": "skipped",
+                                                          "intent": "action.mutation.optimistic",
+                                                          "payload": {
+                                                            "id": "$item.id",
+                                                            "skipped": "$value"
+                                                          },
+                                                          "rollback_value": false,
+                                                          "value_expr": "true"
+                                                        },
+                                                        "size": "Small",
+                                                        "style": "Secondary",
+                                                        "type": "core://Button"
+                                                      },
+                                                      {
+                                                        "label": "Details",
+                                                        "on_click": {
+                                                          "intent": "action.navigation.open",
+                                                          "presentation": "Push",
+                                                          "target_uri": "taste://items/$item.key"
+                                                        },
+                                                        "size": "Small",
+                                                        "style": "Text",
+                                                        "type": "core://Button"
+                                                      },
+                                                      {
+                                                        "type": "core://Spacer"
+                                                      },
+                                                      {
+                                                        "label": "Like",
+                                                        "on_click": {
+                                                          "also": [
+                                                            {
+                                                              "field": "skipped",
+                                                              "value_expr": "false"
+                                                            }
+                                                          ],
+                                                          "endpoint": "/v1/taste/react",
+                                                          "entity_uri": "$item.uri",
+                                                          "field": "liked",
+                                                          "intent": "action.mutation.optimistic",
+                                                          "payload": {
+                                                            "id": "$item.id",
+                                                            "liked": "$value"
+                                                          },
+                                                          "rollback_value": false,
+                                                          "value_expr": "true"
+                                                        },
+                                                        "size": "Small",
+                                                        "type": "core://Button"
+                                                      }
+                                                    ],
+                                                    "spacing_dp": 6,
+                                                    "type": "core://Row"
+                                                  }
+                                                ],
+                                                "spacing_dp": 12,
+                                                "type": "core://Column"
+                                              }
+                                            ],
+                                            "spacing_dp": 20,
+                                            "type": "core://Row"
+                                          }
+                                        ],
+                                        "spacing_dp": 8,
+                                        "type": "core://Column"
+                                      },
+                                      "corner_dp": 18,
+                                      "padding_h_dp": 12,
+                                      "padding_v_dp": 12,
+                                      "type": "core://Box"
+                                    },
+                                    "equals": "expanded",
+                                    "type": "core://Conditional",
+                                    "value": "${local://device#size_class}"
+                                  },
+                                  {
+                                    "content": {
+                                      "background": "${local://theme#card}",
+                                      "border_color": "${local://theme#card_border}",
+                                      "content": {
+                                        "children": [
+                                          {
+                                            "content": {
+                                              "content": {
+                                                "aspect_ratio": 0.8,
+                                                "content_description": "$item.title",
+                                                "shape": "Rounded",
+                                                "type": "core://Image",
+                                                "url": "$item.image_0"
+                                              },
+                                              "content_description": "Next photo of $item.title",
+                                              "on_click": {
+                                                "entity_uri": "$item.uri",
+                                                "field": "photo",
+                                                "intent": "action.local.set",
+                                                "value_expr": "entity.next_0"
+                                              },
+                                              "type": "core://Tappable"
+                                            },
+                                            "not": true,
+                                            "type": "core://Conditional",
+                                            "value": "$item.photo"
+                                          },
+                                          {
+                                            "content": {
+                                              "content": {
+                                                "aspect_ratio": 0.8,
+                                                "content_description": "$item.title",
+                                                "shape": "Rounded",
+                                                "type": "core://Image",
+                                                "url": "$item.image_1"
+                                              },
+                                              "content_description": "Next photo of $item.title",
+                                              "on_click": {
+                                                "entity_uri": "$item.uri",
+                                                "field": "photo",
+                                                "intent": "action.local.set",
+                                                "value_expr": "entity.next_1"
+                                              },
+                                              "type": "core://Tappable"
+                                            },
+                                            "equals": "1",
+                                            "type": "core://Conditional",
+                                            "value": "$item.photo"
+                                          },
+                                          {
+                                            "content": {
+                                              "content": {
+                                                "aspect_ratio": 0.8,
+                                                "content_description": "$item.title",
+                                                "shape": "Rounded",
+                                                "type": "core://Image",
+                                                "url": "$item.image_2"
+                                              },
+                                              "content_description": "Next photo of $item.title",
+                                              "on_click": {
+                                                "entity_uri": "$item.uri",
+                                                "field": "photo",
+                                                "intent": "action.local.set",
+                                                "value_expr": "entity.next_2"
+                                              },
+                                              "type": "core://Tappable"
+                                            },
+                                            "equals": "2",
+                                            "type": "core://Conditional",
+                                            "value": "$item.photo"
+                                          },
+                                          {
+                                            "content": {
+                                              "content": {
+                                                "aspect_ratio": 0.8,
+                                                "content_description": "$item.title",
+                                                "shape": "Rounded",
+                                                "type": "core://Image",
+                                                "url": "$item.image_3"
+                                              },
+                                              "content_description": "Next photo of $item.title",
+                                              "on_click": {
+                                                "entity_uri": "$item.uri",
+                                                "field": "photo",
+                                                "intent": "action.local.set",
+                                                "value_expr": "entity.next_3"
+                                              },
+                                              "type": "core://Tappable"
+                                            },
+                                            "equals": "3",
+                                            "type": "core://Conditional",
+                                            "value": "$item.photo"
+                                          },
+                                          {
+                                            "content": {
+                                              "content": {
+                                                "aspect_ratio": 0.8,
+                                                "content_description": "$item.title",
+                                                "shape": "Rounded",
+                                                "type": "core://Image",
+                                                "url": "$item.image_4"
+                                              },
+                                              "content_description": "Next photo of $item.title",
+                                              "on_click": {
+                                                "entity_uri": "$item.uri",
+                                                "field": "photo",
+                                                "intent": "action.local.set",
+                                                "value_expr": "entity.next_4"
+                                              },
+                                              "type": "core://Tappable"
+                                            },
+                                            "equals": "4",
+                                            "type": "core://Conditional",
+                                            "value": "$item.photo"
+                                          },
+                                          {
+                                            "content": {
+                                              "content": {
+                                                "aspect_ratio": 0.8,
+                                                "content_description": "$item.title",
+                                                "shape": "Rounded",
+                                                "type": "core://Image",
+                                                "url": "$item.image_5"
+                                              },
+                                              "content_description": "Next photo of $item.title",
+                                              "on_click": {
+                                                "entity_uri": "$item.uri",
+                                                "field": "photo",
+                                                "intent": "action.local.set",
+                                                "value_expr": "entity.next_5"
+                                              },
+                                              "type": "core://Tappable"
+                                            },
+                                            "equals": "5",
+                                            "type": "core://Conditional",
+                                            "value": "$item.photo"
+                                          },
+                                          {
+                                            "align": "Center",
+                                            "children": [
+                                              {
+                                                "content": {
+                                                  "background": "${local://theme#accent_surface}",
+                                                  "content": {
+                                                    "style": "Caption",
+                                                    "type": "core://Text",
+                                                    "value_expr": "$item.why_text"
+                                                  },
+                                                  "content_color": "${local://theme#accent}",
+                                                  "corner_dp": 8,
+                                                  "padding_h_dp": 8,
+                                                  "padding_v_dp": 3,
+                                                  "type": "core://Box"
+                                                },
+                                                "type": "core://Conditional",
+                                                "value": "$item.why_text"
+                                              },
+                                              {
+                                                "content": {
+                                                  "children": [
+                                                    {
+                                                      "content": {
+                                                        "style": "Caption",
+                                                        "type": "core://Text",
+                                                        "value_expr": "1 / $item.photo_count"
+                                                      },
+                                                      "not": true,
+                                                      "type": "core://Conditional",
+                                                      "value": "$item.photo"
+                                                    },
+                                                    {
+                                                      "content": {
+                                                        "style": "Caption",
+                                                        "type": "core://Text",
+                                                        "value_expr": "2 / $item.photo_count"
+                                                      },
+                                                      "equals": "1",
+                                                      "type": "core://Conditional",
+                                                      "value": "$item.photo"
+                                                    },
+                                                    {
+                                                      "content": {
+                                                        "style": "Caption",
+                                                        "type": "core://Text",
+                                                        "value_expr": "3 / $item.photo_count"
+                                                      },
+                                                      "equals": "2",
+                                                      "type": "core://Conditional",
+                                                      "value": "$item.photo"
+                                                    },
+                                                    {
+                                                      "content": {
+                                                        "style": "Caption",
+                                                        "type": "core://Text",
+                                                        "value_expr": "4 / $item.photo_count"
+                                                      },
+                                                      "equals": "3",
+                                                      "type": "core://Conditional",
+                                                      "value": "$item.photo"
+                                                    },
+                                                    {
+                                                      "content": {
+                                                        "style": "Caption",
+                                                        "type": "core://Text",
+                                                        "value_expr": "5 / $item.photo_count"
+                                                      },
+                                                      "equals": "4",
+                                                      "type": "core://Conditional",
+                                                      "value": "$item.photo"
+                                                    },
+                                                    {
+                                                      "content": {
+                                                        "style": "Caption",
+                                                        "type": "core://Text",
+                                                        "value_expr": "6 / $item.photo_count"
+                                                      },
+                                                      "equals": "5",
+                                                      "type": "core://Conditional",
+                                                      "value": "$item.photo"
+                                                    }
+                                                  ],
+                                                  "type": "core://Row"
+                                                },
+                                                "type": "core://Conditional",
+                                                "value": "$item.photos_many"
+                                              },
+                                              {
+                                                "type": "core://Spacer"
+                                              }
+                                            ],
+                                            "padding_h_dp": 2,
+                                            "spacing_dp": 8,
+                                            "type": "core://Row"
+                                          },
+                                          {
+                                            "children": [
+                                              {
+                                                "caps": true,
+                                                "max_lines": 1,
+                                                "style": "Caption",
+                                                "type": "core://Text",
+                                                "value_expr": "$item.brand",
+                                                "weight": "SemiBold"
+                                              },
+                                              {
+                                                "content": {
+                                                  "max_lines": 1,
+                                                  "style": "Label",
+                                                  "type": "core://Text",
+                                                  "value_expr": "$item.title"
+                                                },
+                                                "content_description": "Details of $item.title",
+                                                "on_click": {
+                                                  "intent": "action.navigation.open",
+                                                  "presentation": "Push",
+                                                  "target_uri": "taste://items/$item.key"
+                                                },
+                                                "type": "core://Tappable"
+                                              },
+                                              {
+                                                "children": [
+                                                  {
+                                                    "style": "Body",
+                                                    "type": "core://Text",
+                                                    "value_expr": "$item.price_text"
+                                                  },
+                                                  {
+                                                    "type": "core://Spacer"
+                                                  },
+                                                  {
+                                                    "style": "Caption",
+                                                    "type": "core://Text",
+                                                    "value_expr": "$item.chance_text"
+                                                  }
+                                                ],
+                                                "spacing_dp": 6,
+                                                "type": "core://Row"
+                                              },
+                                              {
+                                                "content": {
+                                                  "max_lines": 3,
+                                                  "style": "Secondary",
+                                                  "type": "core://Text",
+                                                  "value_expr": "$item.description"
+                                                },
+                                                "type": "core://Conditional",
+                                                "value": "$item.description"
+                                              }
+                                            ],
+                                            "padding_h_dp": 2,
+                                            "spacing_dp": 3,
+                                            "type": "core://Column"
+                                          },
+                                          {
+                                            "children": [
+                                              {
+                                                "label": "Skip",
+                                                "on_click": {
+                                                  "also": [
+                                                    {
+                                                      "field": "liked",
+                                                      "value_expr": "false"
+                                                    }
+                                                  ],
+                                                  "endpoint": "/v1/taste/react",
+                                                  "entity_uri": "$item.uri",
+                                                  "field": "skipped",
+                                                  "intent": "action.mutation.optimistic",
+                                                  "payload": {
+                                                    "id": "$item.id",
+                                                    "skipped": "$value"
+                                                  },
+                                                  "rollback_value": false,
+                                                  "value_expr": "true"
+                                                },
+                                                "size": "Small",
+                                                "style": "Secondary",
+                                                "type": "core://Button"
+                                              },
+                                              {
+                                                "label": "Details",
+                                                "on_click": {
+                                                  "intent": "action.navigation.open",
+                                                  "presentation": "Push",
+                                                  "target_uri": "taste://items/$item.key"
+                                                },
+                                                "size": "Small",
+                                                "style": "Text",
+                                                "type": "core://Button"
+                                              },
+                                              {
+                                                "type": "core://Spacer"
+                                              },
+                                              {
+                                                "label": "Like",
+                                                "on_click": {
+                                                  "also": [
+                                                    {
+                                                      "field": "skipped",
+                                                      "value_expr": "false"
+                                                    }
+                                                  ],
+                                                  "endpoint": "/v1/taste/react",
+                                                  "entity_uri": "$item.uri",
+                                                  "field": "liked",
+                                                  "intent": "action.mutation.optimistic",
+                                                  "payload": {
+                                                    "id": "$item.id",
+                                                    "liked": "$value"
+                                                  },
+                                                  "rollback_value": false,
+                                                  "value_expr": "true"
+                                                },
+                                                "size": "Small",
+                                                "type": "core://Button"
+                                              }
+                                            ],
+                                            "spacing_dp": 6,
+                                            "type": "core://Row"
+                                          }
+                                        ],
+                                        "spacing_dp": 8,
+                                        "type": "core://Column"
+                                      },
+                                      "corner_dp": 18,
+                                      "padding_h_dp": 10,
+                                      "padding_v_dp": 10,
+                                      "type": "core://Box"
+                                    },
+                                    "equals": "expanded",
+                                    "not": true,
+                                    "type": "core://Conditional",
+                                    "value": "${local://device#size_class}"
+                                  }
+                                ],
+                                "type": "core://Column"
+                              },
+                              "content_description": "$item.title by $item.brand: swipe right to like, left to skip",
+                              "on_swipe_left": {
+                                "also": [
+                                  {
+                                    "field": "liked",
+                                    "value_expr": "false"
+                                  }
+                                ],
+                                "endpoint": "/v1/taste/react",
+                                "entity_uri": "$item.uri",
+                                "field": "skipped",
+                                "intent": "action.mutation.optimistic",
+                                "payload": {
+                                  "id": "$item.id",
+                                  "skipped": "$value"
+                                },
+                                "rollback_value": false,
+                                "value_expr": "true"
+                              },
+                              "on_swipe_right": {
+                                "also": [
+                                  {
+                                    "field": "skipped",
+                                    "value_expr": "false"
+                                  }
+                                ],
+                                "endpoint": "/v1/taste/react",
+                                "entity_uri": "$item.uri",
+                                "field": "liked",
+                                "intent": "action.mutation.optimistic",
+                                "payload": {
+                                  "id": "$item.id",
+                                  "liked": "$value"
+                                },
+                                "rollback_value": false,
+                                "value_expr": "true"
+                              },
+                              "type": "core://SwipeCard"
                             },
-                            "type": "core://Button"
+                            "query_key": "taste:feed",
+                            "stack": true,
+                            "type": "core://List",
+                            "where": [
+                              {
+                                "equals": "false",
+                                "field": "liked"
+                              },
+                              {
+                                "equals": "false",
+                                "field": "skipped"
+                              }
+                            ]
                           }
                         ],
-                        "justify": "center",
-                        "spacing_dp": 8,
-                        "type": "core://Row"
+                        "max_width_dp": 960,
+                        "type": "core://Column"
                       },
                       {
                         "content": {
-                          "children": [
-                            {
-                              "size_dp": 22,
-                              "type": "core://Progress"
-                            }
-                          ],
-                          "justify": "center",
-                          "spacing_dp": 8,
-                          "type": "core://Row"
+                          "style": "Secondary",
+                          "type": "core://Text",
+                          "value_expr": "${taste://status/pod#counts_text}"
                         },
-                        "equals": "true",
-                        "type": "core://Conditional",
-                        "value": "${taste://status/pod#loading}"
+                        "content_color": "${local://theme#muted_text}",
+                        "type": "core://Box"
                       },
                       {
-                        "size_dp": 12,
+                        "size_dp": 24,
                         "type": "core://Spacer"
                       },
                       {
@@ -656,7 +1439,7 @@
                         "type": "core://Row"
                       }
                     ],
-                    "spacing_dp": 14,
+                    "spacing_dp": 12,
                     "type": "core://Column"
                   },
                   "equals": "true",
@@ -781,11 +1564,209 @@
                 "content": {
                   "children": [
                     {
-                      "aspect_ratio": 0.8,
-                      "content_description": "$item.title",
-                      "shape": "Rounded",
-                      "type": "core://Image",
-                      "url": "$item.image_large"
+                      "content": {
+                        "content": {
+                          "aspect_ratio": 0.8,
+                          "content_description": "$item.title",
+                          "shape": "Rounded",
+                          "type": "core://Image",
+                          "url": "$item.image_0"
+                        },
+                        "content_description": "Next photo of $item.title",
+                        "on_click": {
+                          "entity_uri": "$item.uri",
+                          "field": "photo",
+                          "intent": "action.local.set",
+                          "value_expr": "entity.next_0"
+                        },
+                        "type": "core://Tappable"
+                      },
+                      "not": true,
+                      "type": "core://Conditional",
+                      "value": "$item.photo"
+                    },
+                    {
+                      "content": {
+                        "content": {
+                          "aspect_ratio": 0.8,
+                          "content_description": "$item.title",
+                          "shape": "Rounded",
+                          "type": "core://Image",
+                          "url": "$item.image_1"
+                        },
+                        "content_description": "Next photo of $item.title",
+                        "on_click": {
+                          "entity_uri": "$item.uri",
+                          "field": "photo",
+                          "intent": "action.local.set",
+                          "value_expr": "entity.next_1"
+                        },
+                        "type": "core://Tappable"
+                      },
+                      "equals": "1",
+                      "type": "core://Conditional",
+                      "value": "$item.photo"
+                    },
+                    {
+                      "content": {
+                        "content": {
+                          "aspect_ratio": 0.8,
+                          "content_description": "$item.title",
+                          "shape": "Rounded",
+                          "type": "core://Image",
+                          "url": "$item.image_2"
+                        },
+                        "content_description": "Next photo of $item.title",
+                        "on_click": {
+                          "entity_uri": "$item.uri",
+                          "field": "photo",
+                          "intent": "action.local.set",
+                          "value_expr": "entity.next_2"
+                        },
+                        "type": "core://Tappable"
+                      },
+                      "equals": "2",
+                      "type": "core://Conditional",
+                      "value": "$item.photo"
+                    },
+                    {
+                      "content": {
+                        "content": {
+                          "aspect_ratio": 0.8,
+                          "content_description": "$item.title",
+                          "shape": "Rounded",
+                          "type": "core://Image",
+                          "url": "$item.image_3"
+                        },
+                        "content_description": "Next photo of $item.title",
+                        "on_click": {
+                          "entity_uri": "$item.uri",
+                          "field": "photo",
+                          "intent": "action.local.set",
+                          "value_expr": "entity.next_3"
+                        },
+                        "type": "core://Tappable"
+                      },
+                      "equals": "3",
+                      "type": "core://Conditional",
+                      "value": "$item.photo"
+                    },
+                    {
+                      "content": {
+                        "content": {
+                          "aspect_ratio": 0.8,
+                          "content_description": "$item.title",
+                          "shape": "Rounded",
+                          "type": "core://Image",
+                          "url": "$item.image_4"
+                        },
+                        "content_description": "Next photo of $item.title",
+                        "on_click": {
+                          "entity_uri": "$item.uri",
+                          "field": "photo",
+                          "intent": "action.local.set",
+                          "value_expr": "entity.next_4"
+                        },
+                        "type": "core://Tappable"
+                      },
+                      "equals": "4",
+                      "type": "core://Conditional",
+                      "value": "$item.photo"
+                    },
+                    {
+                      "content": {
+                        "content": {
+                          "aspect_ratio": 0.8,
+                          "content_description": "$item.title",
+                          "shape": "Rounded",
+                          "type": "core://Image",
+                          "url": "$item.image_5"
+                        },
+                        "content_description": "Next photo of $item.title",
+                        "on_click": {
+                          "entity_uri": "$item.uri",
+                          "field": "photo",
+                          "intent": "action.local.set",
+                          "value_expr": "entity.next_5"
+                        },
+                        "type": "core://Tappable"
+                      },
+                      "equals": "5",
+                      "type": "core://Conditional",
+                      "value": "$item.photo"
+                    },
+                    {
+                      "content": {
+                        "children": [
+                          {
+                            "type": "core://Spacer"
+                          },
+                          {
+                            "content": {
+                              "style": "Caption",
+                              "type": "core://Text",
+                              "value_expr": "1 / $item.photo_count"
+                            },
+                            "not": true,
+                            "type": "core://Conditional",
+                            "value": "$item.photo"
+                          },
+                          {
+                            "content": {
+                              "style": "Caption",
+                              "type": "core://Text",
+                              "value_expr": "2 / $item.photo_count"
+                            },
+                            "equals": "1",
+                            "type": "core://Conditional",
+                            "value": "$item.photo"
+                          },
+                          {
+                            "content": {
+                              "style": "Caption",
+                              "type": "core://Text",
+                              "value_expr": "3 / $item.photo_count"
+                            },
+                            "equals": "2",
+                            "type": "core://Conditional",
+                            "value": "$item.photo"
+                          },
+                          {
+                            "content": {
+                              "style": "Caption",
+                              "type": "core://Text",
+                              "value_expr": "4 / $item.photo_count"
+                            },
+                            "equals": "3",
+                            "type": "core://Conditional",
+                            "value": "$item.photo"
+                          },
+                          {
+                            "content": {
+                              "style": "Caption",
+                              "type": "core://Text",
+                              "value_expr": "5 / $item.photo_count"
+                            },
+                            "equals": "4",
+                            "type": "core://Conditional",
+                            "value": "$item.photo"
+                          },
+                          {
+                            "content": {
+                              "style": "Caption",
+                              "type": "core://Text",
+                              "value_expr": "6 / $item.photo_count"
+                            },
+                            "equals": "5",
+                            "type": "core://Conditional",
+                            "value": "$item.photo"
+                          }
+                        ],
+                        "spacing_dp": 4,
+                        "type": "core://Row"
+                      },
+                      "type": "core://Conditional",
+                      "value": "$item.photos_many"
                     },
                     {
                       "children": [
@@ -809,6 +1790,15 @@
                           "style": "Title",
                           "type": "core://Text",
                           "value_expr": "$item.price_text"
+                        },
+                        {
+                          "content": {
+                            "style": "Body",
+                            "type": "core://Text",
+                            "value_expr": "$item.description"
+                          },
+                          "type": "core://Conditional",
+                          "value": "$item.description"
                         }
                       ],
                       "spacing_dp": 4,
@@ -1609,6 +2599,23 @@
                 "content": {
                   "children": [
                     {
+                      "children": [
+                        {
+                          "label": "See your taste on a map",
+                          "on_click": {
+                            "intent": "action.navigation.open",
+                            "presentation": "Push",
+                            "target_uri": "taste://map/0-0-1000000-1000000"
+                          },
+                          "size": "Small",
+                          "style": "Tonal",
+                          "type": "core://Button"
+                        }
+                      ],
+                      "spacing_dp": 8,
+                      "type": "core://Row"
+                    },
+                    {
                       "background": "${local://theme#card}",
                       "border_color": "${local://theme#card_border}",
                       "content": {
@@ -1823,6 +2830,379 @@
         },
         "route": "taste://taste/pod",
         "title": "Your taste"
+      },
+      {
+        "data": "/v1/taste/screens/map?area=$route.area",
+        "id": "map",
+        "item": "taste://areas/$route.area",
+        "root": {
+          "background": "${local://theme#page}",
+          "content": {
+            "children": [
+              {
+                "content": {
+                  "align": "Center",
+                  "children": [
+                    {
+                      "content": {
+                        "content_description": "Back",
+                        "icon": "arrow_back",
+                        "on_click": {
+                          "intent": "action.navigation.back"
+                        },
+                        "tag": "back",
+                        "type": "core://IconButton"
+                      },
+                      "type": "core://Conditional",
+                      "value": "${local://nav#can_go_back}"
+                    },
+                    {
+                      "style": "Headline",
+                      "type": "core://Text",
+                      "value_expr": "$item.title",
+                      "weight": "SemiBold"
+                    },
+                    {
+                      "content": {
+                        "size_dp": 18,
+                        "type": "core://Progress"
+                      },
+                      "type": "core://Conditional",
+                      "value": "${local://screen#loading}"
+                    },
+                    {
+                      "type": "core://Spacer"
+                    },
+                    {
+                      "content": {
+                        "size_dp": 0,
+                        "type": "core://Spacer"
+                      },
+                      "height_dp": 48,
+                      "type": "core://Box",
+                      "width_dp": 1
+                    }
+                  ],
+                  "padding_v_dp": 4,
+                  "spacing_dp": 4,
+                  "type": "core://Row"
+                },
+                "padding_h_dp": 20,
+                "padding_v_dp": 4,
+                "type": "core://Box"
+              },
+              {
+                "content": {
+                  "align": "Center",
+                  "children": [
+                    {
+                      "content": {
+                        "style": "Caption",
+                        "type": "core://Text",
+                        "value_expr": "${local://screen#error}"
+                      },
+                      "content_color": "${local://theme#error}",
+                      "type": "core://Box"
+                    },
+                    {
+                      "type": "core://Spacer"
+                    },
+                    {
+                      "label": "Try again",
+                      "on_click": {
+                        "intent": "action.data.load",
+                        "path": "/v1/taste/screens/map?area=$route.area"
+                      },
+                      "size": "Small",
+                      "style": "Text",
+                      "type": "core://Button"
+                    }
+                  ],
+                  "padding_h_dp": 20,
+                  "padding_v_dp": 4,
+                  "spacing_dp": 8,
+                  "type": "core://Row"
+                },
+                "type": "core://Conditional",
+                "value": "${local://screen#error}"
+              },
+              {
+                "content": {
+                  "children": [
+                    {
+                      "style": "Secondary",
+                      "type": "core://Text",
+                      "value_expr": "The catalog laid out by how things look: alike pieces sit together. Warm tiles are what you like, cool ones what you skip, grey ones you haven't shown yet. Tap a tile to zoom in."
+                    },
+                    {
+                      "style": "Caption",
+                      "type": "core://Text",
+                      "value_expr": "$item.count_text · $item.reactions_text"
+                    },
+                    {
+                      "columns": 4,
+                      "empty_text": "The map is on its way.",
+                      "item_template": {
+                        "content": {
+                          "background": "$item.color",
+                          "content": {
+                            "children": [
+                              {
+                                "content": {
+                                  "aspect_ratio": 1.0,
+                                  "content_description": "$item.description",
+                                  "shape": "Rounded",
+                                  "type": "core://Image",
+                                  "url": "$item.image"
+                                },
+                                "type": "core://Conditional",
+                                "value": "$item.image"
+                              },
+                              {
+                                "content": {
+                                  "content": {
+                                    "type": "core://Spacer"
+                                  },
+                                  "height_dp": 72,
+                                  "type": "core://Box"
+                                },
+                                "not": true,
+                                "type": "core://Conditional",
+                                "value": "$item.image"
+                              },
+                              {
+                                "max_lines": 1,
+                                "style": "Caption",
+                                "type": "core://Text",
+                                "value_expr": "$item.count_text"
+                              },
+                              {
+                                "content": {
+                                  "max_lines": 1,
+                                  "style": "Caption",
+                                  "type": "core://Text",
+                                  "value_expr": "$item.reactions_text"
+                                },
+                                "type": "core://Conditional",
+                                "value": "$item.reactions_text"
+                              }
+                            ],
+                            "spacing_dp": 3,
+                            "type": "core://Column"
+                          },
+                          "corner_dp": 10,
+                          "padding_h_dp": 4,
+                          "padding_v_dp": 4,
+                          "type": "core://Box"
+                        },
+                        "content_description": "$item.description",
+                        "on_click": {
+                          "intent": "action.navigation.open",
+                          "presentation": "Push",
+                          "target_uri": "$item.opens"
+                        },
+                        "type": "core://Tappable"
+                      },
+                      "query_key": "taste:tiles:$route.area",
+                      "spacing_dp": 6,
+                      "type": "core://List"
+                    },
+                    {
+                      "children": [
+                        {
+                          "label": "See the pieces here",
+                          "on_click": {
+                            "intent": "action.navigation.open",
+                            "presentation": "Push",
+                            "target_uri": "taste://area/$route.area"
+                          },
+                          "type": "core://Button"
+                        }
+                      ],
+                      "justify": "center",
+                      "spacing_dp": 8,
+                      "type": "core://Row"
+                    },
+                    {
+                      "size_dp": 16,
+                      "type": "core://Spacer"
+                    }
+                  ],
+                  "padding_h_dp": 20,
+                  "padding_v_dp": 8,
+                  "spacing_dp": 12,
+                  "type": "core://Column"
+                },
+                "type": "core://Scroll"
+              }
+            ],
+            "type": "core://Column"
+          },
+          "fill": true,
+          "type": "core://Box"
+        },
+        "route": "taste://map/{area}",
+        "title": "Taste map"
+      },
+      {
+        "data": "/v1/taste/screens/area?area=$route.area",
+        "id": "area",
+        "root": {
+          "background": "${local://theme#page}",
+          "content": {
+            "children": [
+              {
+                "content": {
+                  "align": "Center",
+                  "children": [
+                    {
+                      "content": {
+                        "content_description": "Back",
+                        "icon": "arrow_back",
+                        "on_click": {
+                          "intent": "action.navigation.back"
+                        },
+                        "tag": "back",
+                        "type": "core://IconButton"
+                      },
+                      "type": "core://Conditional",
+                      "value": "${local://nav#can_go_back}"
+                    },
+                    {
+                      "style": "Headline",
+                      "type": "core://Text",
+                      "value_expr": "Pieces here",
+                      "weight": "SemiBold"
+                    },
+                    {
+                      "content": {
+                        "size_dp": 18,
+                        "type": "core://Progress"
+                      },
+                      "type": "core://Conditional",
+                      "value": "${local://screen#loading}"
+                    },
+                    {
+                      "type": "core://Spacer"
+                    },
+                    {
+                      "content": {
+                        "size_dp": 0,
+                        "type": "core://Spacer"
+                      },
+                      "height_dp": 48,
+                      "type": "core://Box",
+                      "width_dp": 1
+                    }
+                  ],
+                  "padding_v_dp": 4,
+                  "spacing_dp": 4,
+                  "type": "core://Row"
+                },
+                "padding_h_dp": 20,
+                "padding_v_dp": 4,
+                "type": "core://Box"
+              },
+              {
+                "content": {
+                  "align": "Center",
+                  "children": [
+                    {
+                      "content": {
+                        "style": "Caption",
+                        "type": "core://Text",
+                        "value_expr": "${local://screen#error}"
+                      },
+                      "content_color": "${local://theme#error}",
+                      "type": "core://Box"
+                    },
+                    {
+                      "type": "core://Spacer"
+                    },
+                    {
+                      "label": "Try again",
+                      "on_click": {
+                        "intent": "action.data.load",
+                        "path": "/v1/taste/screens/area?area=$route.area"
+                      },
+                      "size": "Small",
+                      "style": "Text",
+                      "type": "core://Button"
+                    }
+                  ],
+                  "padding_h_dp": 20,
+                  "padding_v_dp": 4,
+                  "spacing_dp": 8,
+                  "type": "core://Row"
+                },
+                "type": "core://Conditional",
+                "value": "${local://screen#error}"
+              },
+              {
+                "content": {
+                  "children": [
+                    {
+                      "empty_text": "Nothing in this part of the map.",
+                      "item_template": {
+                        "content": {
+                          "children": [
+                            {
+                              "aspect_ratio": 0.8,
+                              "content_description": "$item.title",
+                              "shape": "Rounded",
+                              "type": "core://Image",
+                              "url": "$item.thumb"
+                            },
+                            {
+                              "caps": true,
+                              "max_lines": 1,
+                              "style": "Caption",
+                              "type": "core://Text",
+                              "value_expr": "$item.brand"
+                            },
+                            {
+                              "max_lines": 2,
+                              "style": "Secondary",
+                              "type": "core://Text",
+                              "value_expr": "$item.title"
+                            }
+                          ],
+                          "spacing_dp": 4,
+                          "type": "core://Column"
+                        },
+                        "content_description": "Open $item.title",
+                        "on_click": {
+                          "intent": "action.navigation.open",
+                          "presentation": "Push",
+                          "target_uri": "taste://items/$item.key"
+                        },
+                        "type": "core://Tappable"
+                      },
+                      "min_column_dp": 150,
+                      "query_key": "taste:area:$route.area",
+                      "spacing_dp": 12,
+                      "type": "core://List"
+                    },
+                    {
+                      "size_dp": 16,
+                      "type": "core://Spacer"
+                    }
+                  ],
+                  "padding_h_dp": 20,
+                  "padding_v_dp": 8,
+                  "spacing_dp": 12,
+                  "type": "core://Column"
+                },
+                "type": "core://Scroll"
+              }
+            ],
+            "type": "core://Column"
+          },
+          "fill": true,
+          "type": "core://Box"
+        },
+        "route": "taste://area/{area}",
+        "title": "Pieces here"
       }
     ],
     "title": "Taste",

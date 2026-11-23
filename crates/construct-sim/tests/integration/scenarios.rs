@@ -335,25 +335,43 @@ fn server_health_shows_checks_and_devices_and_says_when_monitoring_is_off() {
 }
 
 /// The `taste` source's core layout over made-up answers of a taste service:
-/// the feed with why each piece is there, a piece's screen with its Similar
-/// and Opposite pieces, and the taste page with each taste's pieces.
+/// a deck of one piece at a time (its photo tapped for the next, its
+/// description under it without scrolling, swiped off), a piece's screen,
+/// the taste map zoomed into and an area's pieces, and the taste page.
 #[test]
-fn taste_shows_the_feed_a_piece_and_the_tastes() {
+fn taste_deals_a_deck_maps_the_taste_and_shows_the_tastes() {
     std::thread::Builder::new()
         .stack_size(16 * 1024 * 1024)
         .spawn(|| {
-            let (_, results) = run(
+            let (mut runner, results) = run(
                 "taste",
-                "assert-text Waxed Chore Coat in Olive; assert-text Near your taste · 1; \
-                 assert-text 14 liked · 31 skipped; shot feed; scroll-to Liked; \
-                 scroll-to Waxed Chore Coat in Olive; click Open Waxed Chore Coat in Olive; \
-                 assert-text Buy at shop0.example; \
-                 scroll-to Opposite; assert-text Canvas Work Jacket; shot item; back; \
-                 assert-text Near your taste · 1; click Your taste; \
-                 assert-text rugged workwear · waxed cotton · olive green · utilitarian; \
-                 assert-text Written at 14 likes; shot taste; back; mode dark; shot dark",
+                "assert-text Waxed Chore Coat in Olive; assert-text On the edge; \
+                 assert-text 1 / 3; assert-text blanket lining",
                 &out_dir("taste"),
             );
+            assert_ok(&results);
+            // The description and the buttons are on the phone's screen as
+            // it opens: no scrolling to read them.
+            let scene = runner.session.scene().unwrap();
+            let like = scene.find_text("Like").unwrap().bounds;
+            assert!(like[1] + like[3] <= 844.0, "Like is on screen: {like:?}");
+            let results = runner.run(&construct_sim::script::parse(
+                "click Next photo of Waxed Chore Coat in Olive; assert-text 2 / 3; \
+                 click Next photo of Waxed Chore Coat in Olive; assert-text 3 / 3; \
+                 click Next photo of Waxed Chore Coat in Olive; assert-text 1 / 3; \
+                 click Details of Waxed Chore Coat in Olive; assert-text Buy at shop0.example; \
+                 scroll-to Opposite; assert-text Canvas Work Jacket; back; \
+                 swipe-right Waxed Chore Coat in Olive by Fernhill Supply: swipe right to like, left to skip; \
+                 assert-no-text Waxed Chore Coat in Olive by; assert-text Loose Pleated Trousers; \
+                 swipe-left Loose Pleated Trousers by Northgate Workshop: swipe right to like, left to skip; \
+                 assert-no-text Loose Pleated Trousers by; \
+                 click Map; assert-text 10,533 pieces; click 412 pieces, like Waxed Chore Coat in Olive; \
+                 assert-text Zoomed in ×4; click See the pieces here; assert-text Pieces here; \
+                 back; back; back; click Taste; \
+                 assert-text rugged workwear · waxed cotton · olive green · utilitarian; \
+                 assert-text Written at 14 likes; shot taste; back; mode dark; shot dark",
+            )
+            .unwrap());
             assert_ok(&results);
         })
         .unwrap()

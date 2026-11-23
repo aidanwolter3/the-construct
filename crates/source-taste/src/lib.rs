@@ -8,11 +8,13 @@
 //! The pod signs in with the service's URL and a token (`POST
 //! /v1/taste/sign-in`, from the Taste layout's form), stored sealed.
 //!
-//! - Feed `feed` (`taste:status`, `taste:feed`): the kept feed; the first
-//!   page is fetched when it is empty, the next on More (`/v1/taste/more`),
-//!   a fresh one on Refresh (`/v1/taste/refresh`).
+//! - Feed `feed` (`taste:status`, `taste:feed`): the kept feed's pieces not
+//!   reacted to yet, a deck; the first page is fetched when it is empty, the
+//!   next whenever a reaction leaves fewer than [`LOW`] (and on More,
+//!   `/v1/taste/more`), a fresh one on Refresh (`/v1/taste/refresh`).
 //! - Data paths: an item with its similar and opposite pieces, "this, but
-//!   …" (steer), search, the likes and the taste page.
+//!   …" (steer), search, the likes, the taste page, and the taste map: the
+//!   catalog's map cut into tiles to zoom into, and the pieces of an area.
 //! - Actions: sign in and out, react (like, skip, undo), more, refresh, and
 //!   write the taste's summary.
 //! - The `taste` core layout: `layouts/taste/`.
@@ -68,11 +70,17 @@ pub const STEER_PATH: &str = "/v1/taste/screens/steer";
 pub const SEARCH_PATH: &str = "/v1/taste/screens/search";
 pub const LIKES_PATH: &str = "/v1/taste/screens/likes";
 pub const TASTE_PATH: &str = "/v1/taste/screens/taste";
+pub const MAP_PATH: &str = "/v1/taste/screens/map";
+pub const AREA_PATH: &str = "/v1/taste/screens/area";
 
 /// Items asked for per page of the feed, and per list of an item screen.
 pub const PAGE: usize = 24;
 pub const RELATED: usize = 12;
 pub const RESULTS: usize = 36;
+/// The deck is topped up when a reaction leaves fewer pieces than this.
+pub const LOW: usize = 6;
+/// Tiles per side of a map screen.
+pub const GRID: usize = 4;
 
 const ITEM_FIELDS: &[(&str, &str)] = &[
     (
@@ -106,6 +114,26 @@ const ITEM_FIELDS: &[(&str, &str)] = &[
         "why_tone",
         "a pill tone for why_text: accent, success or muted",
     ),
+    (
+        "description",
+        "the store's description, plain text of at most 300 characters (may be empty)",
+    ),
+    ("worn", "true when the first photo shows someone wearing it"),
+    (
+        "chance_text",
+        "how likely the service thinks it's liked, e.g. 41% your taste (empty until it knows)",
+    ),
+    (
+        "image_0 .. image_5",
+        "photo k 720 px wide (someone wearing it first), or empty past photo_count",
+    ),
+    ("photo_count", "how many photos (0 to 6)"),
+    ("photos_many", "true with more than one photo"),
+    (
+        "next_0 .. next_5",
+        "the photo after photo k, wrapping to 0: a tap sets the device-only field photo to \
+         entity.next_<k> with action.local.set (photo is never served: 0 or missing is the first)",
+    ),
 ];
 
 pub const MANIFEST: SourceManifest = SourceManifest {
@@ -115,10 +143,12 @@ pub const MANIFEST: SourceManifest = SourceManifest {
     feeds: &[FeedSpec {
         name: FEED,
         query_keys: &[bundle::STATUS_QUERY, bundle::FEED_QUERY],
-        doc: "The taste feed as the pod keeps it (taste:feed): a page of clothes near the user's \
-              tastes, adjacent to them and exploring, each with why; More appends the next page, \
-              Refresh starts again. taste:status: whether the pod is signed in to the taste \
-              service, its host, the like and skip counts (counts_text) and the last error.",
+        doc: "The taste feed as the pod keeps it (taste:feed): the pieces not liked or skipped \
+              yet, in order, each with why (On the edge of the user's taste, Exploring, Probably \
+              yours), a deck: a reaction takes a piece out, and the pod fetches the next page \
+              itself when few are left; More appends one, Refresh starts again. taste:status: \
+              whether the pod is signed in to the taste service, its host, the like and skip \
+              counts (counts_text) and the last error.",
     }],
     data_paths: &[
         PathSpec {
@@ -138,6 +168,23 @@ pub const MANIFEST: SourceManifest = SourceManifest {
             query_keys: &[bundle::SEARCH_QUERY],
             doc: "Pieces that look like the words (matched by image, not product text), and \
                   taste://search/pod {q, count_text}; load it with action.data.load.",
+        },
+        PathSpec {
+            pattern: "/v1/taste/screens/map?area={area}",
+            query_keys: &["taste:tiles:{area}"],
+            doc: "The taste map over an area (taste://areas/<area>: title, count_text, \
+                  reactions_text): the catalog laid out by how its photos look, the area cut into \
+                  4 × 4 tiles (taste:tiles:<area>, row by row), each tinted by how likely the user \
+                  likes what's there (color), with a photo from it (image, empty for an empty \
+                  tile), counts and opens: the address a tap opens (a finer map of the tile, \
+                  taste://map/<tile's area>, or its pieces when it holds only a few, \
+                  taste://area/<tile's area>; empty for an empty tile). The whole map is area \
+                  0-0-1000000-1000000 (x0-y0-x1-y1 in millionths).",
+        },
+        PathSpec {
+            pattern: "/v1/taste/screens/area?area={area}",
+            query_keys: &["taste:area:{area}"],
+            doc: "A sample of the pieces inside an area of the taste map (taste:area:<area>).",
         },
         PathSpec {
             pattern: LIKES_PATH,
@@ -245,6 +292,44 @@ pub const MANIFEST: SourceManifest = SourceManifest {
             ],
         },
         EntityDoc {
+            uri: "taste://areas/{area}",
+            doc: "An area of the taste map (the map screen's).",
+            fields: &[
+                ("key", "the area, x0-y0-x1-y1 in millionths"),
+                ("title", "Your taste map, or Zoomed in ×16"),
+                ("whole", "true for the whole map"),
+                ("count_text", "e.g. 1,204 pieces"),
+                ("reactions_text", "e.g. 12 liked · 30 skipped here"),
+            ],
+        },
+        EntityDoc {
+            uri: "taste://tiles/{area}/{j}_{i}",
+            doc: "A tile of a map screen (taste:tiles:<area>).",
+            fields: &[
+                ("area", "the tile's own area"),
+                (
+                    "color",
+                    "#RRGGBB: warm where the user likes what's there, cool where not",
+                ),
+                (
+                    "image",
+                    "a photo of a piece there, 360 px wide (empty for an empty tile)",
+                ),
+                ("count", "how many pieces"),
+                ("count_text", "e.g. 40 pieces"),
+                ("reactions_text", "e.g. ♥ 2 · ✕ 1, or empty"),
+                ("empty", "true with nothing there"),
+                (
+                    "opens",
+                    "what a tap opens: a finer map or the pieces (empty for an empty tile)",
+                ),
+                (
+                    "description",
+                    "for screen readers, e.g. 40 pieces, like Waxed Chore Coat",
+                ),
+            ],
+        },
+        EntityDoc {
             uri: bundle::SEARCH_URI,
             doc: "The last search (with taste:search).",
             fields: &[
@@ -306,9 +391,11 @@ struct FeedLock(tokio::sync::Mutex<()>);
 
 const INSTRUCTIONS: &str = "The taste source shows the user's taste feed: clothes from their own \
 taste service, which learns what they like from likes and skips and keeps showing them things \
-they haven't seen. Feed feed: taste:feed (the items, each with why_text: near a taste, adjacent \
-or exploring) and taste:status (signed_in, counts_text). Data paths: an item screen with similar \
-and opposite pieces, \"this, but...\" steering, search, likes and the taste page. Actions: \
+they haven't seen, looking for the edges of their taste. Feed feed: taste:feed (a deck of the \
+pieces not reacted to yet, each with why_text: On the edge, Exploring or Probably yours, its \
+photos image_0..image_5 and description) and taste:status (signed_in, counts_text). Data paths: \
+an item screen with similar and opposite pieces, \"this, but...\" steering, search, likes, the \
+taste page and the taste map (tiles to zoom into, and an area's pieces). Actions: \
 /v1/taste/react {id, liked} or {id, skipped}, /v1/taste/more, /v1/taste/refresh, \
 /v1/taste/summary. The core layout taste is the whole thing: use it whole ({type: core://Use, \
 ref: @core/taste}) as a layout and link it from home, where taste:status's counts_text makes a \
@@ -357,6 +444,8 @@ impl Source for TasteAdapter {
             .route(SEARCH_PATH, get(search_route))
             .route(LIKES_PATH, get(likes_route))
             .route(TASTE_PATH, get(taste_route))
+            .route(MAP_PATH, get(map_route))
+            .route(AREA_PATH, get(area_route))
     }
 
     fn feed<'a>(
@@ -380,7 +469,7 @@ impl Source for TasteAdapter {
                 return Hydration::Data(b);
             };
             let mut error = account.last_error.clone();
-            let mut items = match pod.blocking(db::items).await {
+            let mut items = match pod.blocking(db::waiting).await {
                 Ok(i) => i,
                 Err(e) => return Hydration::Error(e.into_response()),
             };
@@ -472,16 +561,20 @@ impl Source for TasteAdapter {
 /// Which page a fetch takes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Fetch {
-    /// The first page of an empty feed (nothing when another fetch filled it
+    /// The first page of an empty deck (nothing when another fetch filled it
     /// meanwhile).
     First,
+    /// The next page when the deck is running low (nothing when it isn't,
+    /// by the time this fetch's turn comes).
+    TopUp,
     /// The next page, after the feed.
     More,
     /// A fresh page instead of the feed.
     Refresh,
 }
 
-/// Fetch a page and keep it; the feed after it. One at a time per pod.
+/// Fetch a page and keep it; the deck after it (the pieces not reacted to
+/// yet). One at a time per pod.
 async fn next_page(
     pod: &Pod,
     a: &TasteAdapter,
@@ -490,11 +583,15 @@ async fn next_page(
 ) -> Result<Vec<Value>, ApiError> {
     let lock = pod.local::<FeedLock>();
     let _held = lock.0.lock().await;
-    if fetch == Fetch::First
-        && let Ok(kept) = pod.blocking(db::items).await
-        && !kept.is_empty()
+    let enough = match fetch {
+        Fetch::First => 1,
+        Fetch::TopUp => LOW,
+        Fetch::More | Fetch::Refresh => usize::MAX,
+    };
+    if let Ok(waiting) = pod.blocking(db::waiting).await
+        && waiting.len() >= enough
     {
-        return Ok(kept);
+        return Ok(waiting);
     }
     let page = match api::feed(&a.client, service, PAGE).await {
         Ok(p) => p,
@@ -508,7 +605,7 @@ async fn next_page(
     pod.blocking(move |s| {
         db::append(s, &page, replace)?;
         db::set_error(s, None)?;
-        db::items(s)
+        db::waiting(s)
     })
     .await
     .map_err(|_| ApiError::Unreachable("the pod couldn't keep the page".into()))
@@ -759,7 +856,30 @@ async fn react_route(State(pod): State<Pod>, headers: HeaderMap, body: Bytes) ->
         return e.into_response();
     }
     pod.publish_data_all(NAME);
+    top_up(&pod);
     Json(json!({"ok": true, "likes": likes, "skips": skips})).into_response()
+}
+
+/// Keep the deck stocked: when fewer than [`LOW`] pieces are left, fetch
+/// the next page in the background and tell the devices once it is kept.
+fn top_up(pod: &Pod) {
+    let pod = pod.clone();
+    tokio::spawn(async move {
+        let low = matches!(pod.blocking(db::waiting).await, Ok(w) if w.len() < LOW);
+        if !low {
+            return;
+        }
+        let Some(a) = pod.adapter::<TasteAdapter>() else {
+            return;
+        };
+        let Ok(Some(service)) = pod.blocking(db::service).await else {
+            return;
+        };
+        match next_page(&pod, a, &service, Fetch::TopUp).await {
+            Ok(_) => pod.publish_data_all(NAME),
+            Err(e) => tracing::warn!(error = %e, "topping up the taste deck failed"),
+        }
+    });
 }
 
 async fn page_route(pod: Pod, headers: HeaderMap, body: Bytes, fetch: Fetch) -> Response {
@@ -980,6 +1100,71 @@ async fn taste_route(State(pod): State<Pod>, headers: HeaderMap) -> Response {
         Ok(v) => {
             let mut b = DataBundle::default();
             bundle::tastes(&mut b, &v);
+            Json(b).into_response()
+        }
+        Err(e) => service_error(e),
+    }
+}
+
+#[derive(serde::Deserialize)]
+struct AreaQuery {
+    #[serde(default)]
+    area: String,
+}
+
+fn bad_area() -> Response {
+    refuse(
+        StatusCode::BAD_REQUEST,
+        "invalid_request",
+        "\"area\" is x0-y0-x1-y1 in millionths of the map, e.g. 0-0-1000000-1000000",
+    )
+}
+
+async fn map_route(
+    State(pod): State<Pod>,
+    headers: HeaderMap,
+    Query(q): Query<AreaQuery>,
+) -> Response {
+    if let Err(r) = check_caller(&pod, &headers).await {
+        return r;
+    }
+    let Some(bounds) = bundle::area_of(&q.area) else {
+        return bad_area();
+    };
+    let (a, service) = match signed_in(&pod).await {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    match api::map_tiles(&a.client, &service, bounds, GRID).await {
+        Ok(v) => {
+            let mut b = DataBundle::default();
+            bundle::map(&mut b, &q.area, &v);
+            Json(b).into_response()
+        }
+        Err(e) => service_error(e),
+    }
+}
+
+async fn area_route(
+    State(pod): State<Pod>,
+    headers: HeaderMap,
+    Query(q): Query<AreaQuery>,
+) -> Response {
+    if let Err(r) = check_caller(&pod, &headers).await {
+        return r;
+    }
+    let Some(bounds) = bundle::area_of(&q.area) else {
+        return bad_area();
+    };
+    let (a, service) = match signed_in(&pod).await {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    match api::map_items(&a.client, &service, bounds, RESULTS).await {
+        Ok(items) => {
+            let items = with_why(&pod, items).await;
+            let mut b = DataBundle::default();
+            bundle::put_items(&mut b, &bundle::area_query(&q.area), &items);
             Json(b).into_response()
         }
         Err(e) => service_error(e),

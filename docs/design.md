@@ -774,10 +774,11 @@ stream ([agents.md](agents.md)).
 #### Taste
 
 Taste (`crates/source-taste`) shows the feed of the owner's own **taste service**, which ranks clothes from real
-stores by what they like and keeps exploring past it. The pod signs in to it with a URL and token like the agents
-runner, keeps the feed it was served (the service answers a new page every time it is asked, and a layout's feed is
-fetched again after every data event), and passes likes and skips on; the item, search and taste screens are read
-from the service when they are shown ([taste.md](taste.md)).
+stores to find the edges of what they like. The pod signs in to it with a URL and token like the agents runner,
+keeps the feed it was served (the service answers a new page every time it is asked, and a layout's feed is fetched
+again after every data event) and deals it as a deck of swipe cards, passing likes and skips on and fetching the
+next page itself when few are left; the item, search, taste and map screens are read from the service when they
+are shown, the map as tiles to zoom into ([taste.md](taste.md)).
 
 #### Shell, Monitor and Dates
 

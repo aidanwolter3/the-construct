@@ -38,6 +38,9 @@ const TOKEN_CONTEXT: &str = "taste_account.token:1";
 
 /// The most items the feed keeps: the oldest go first past it.
 pub const MAX_ITEMS: i64 = 240;
+/// The most reacted items kept (the newest): the deck shows only the rest,
+/// and lists use them only for their feed reasons.
+pub const MAX_REACTED: i64 = 60;
 
 /// The account: the service, its like and skip counts and the last error.
 #[derive(Debug, Clone, PartialEq)]
@@ -170,6 +173,17 @@ pub fn items(store: &Store) -> rusqlite::Result<Vec<Value>> {
     })
 }
 
+/// Whether a kept item has been liked or skipped.
+pub fn reacted(item: &Value) -> bool {
+    item.get("liked").and_then(Value::as_bool) == Some(true)
+        || item.get("skipped").and_then(Value::as_bool) == Some(true)
+}
+
+/// The kept items not reacted to yet, in order: the deck.
+pub fn waiting(store: &Store) -> rusqlite::Result<Vec<Value>> {
+    Ok(items(store)?.into_iter().filter(|i| !reacted(i)).collect())
+}
+
 /// One kept item by the service's id.
 pub fn item(store: &Store, id: &str) -> rusqlite::Result<Option<Value>> {
     let raw: Option<String> = store.with_conn(|c| {
@@ -205,8 +219,31 @@ pub fn append(store: &Store, page: &[Value], replace: bool) -> rusqlite::Result<
                (SELECT pos FROM taste_items ORDER BY pos DESC LIMIT ?1)",
             [MAX_ITEMS],
         )?;
+        prune_reacted(tx)?;
         Ok(added)
     })
+}
+
+/// Drop reacted items past the newest [`MAX_REACTED`] of them.
+fn prune_reacted(c: &rusqlite::Connection) -> rusqlite::Result<()> {
+    let mut st = c.prepare("SELECT pos, json FROM taste_items ORDER BY pos DESC")?;
+    let rows = st.query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?)))?;
+    let mut seen = 0;
+    let mut drop = Vec::new();
+    for row in rows {
+        let (pos, json) = row?;
+        let reacted = serde_json::from_str::<Value>(&json).is_ok_and(|v| reacted(&v));
+        if reacted {
+            seen += 1;
+            if seen > MAX_REACTED {
+                drop.push(pos);
+            }
+        }
+    }
+    for pos in drop {
+        c.execute("DELETE FROM taste_items WHERE pos = ?1", [pos])?;
+    }
+    Ok(())
 }
 
 /// Set a kept item's `liked` and `skipped` (a reaction the service took).
@@ -283,8 +320,28 @@ mod tests {
         assert_eq!(ids, vec![json!("a"), json!("b"), json!("c")]);
         react(&store, "b", true, false).unwrap();
         assert_eq!(item(&store, "b").unwrap().unwrap()["liked"], true);
+        let waiting: Vec<Value> = waiting(&store)
+            .unwrap()
+            .iter()
+            .map(|i| i["id"].clone())
+            .collect();
+        assert_eq!(waiting, vec![json!("a"), json!("c")]);
         append(&store, &[json!({"id": "d"})], true).unwrap();
         assert_eq!(items(&store).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn only_the_newest_reacted_items_stay() {
+        let store = store();
+        let page: Vec<Value> = (0..MAX_REACTED + 5)
+            .map(|n| json!({"id": format!("r{n}"), "skipped": true}))
+            .chain([json!({"id": "fresh"})])
+            .collect();
+        append(&store, &page, false).unwrap();
+        let kept = items(&store).unwrap();
+        assert_eq!(kept.len() as i64, MAX_REACTED + 1);
+        assert_eq!(kept[0]["id"], "r5");
+        assert_eq!(waiting(&store).unwrap().len(), 1);
     }
 
     #[test]

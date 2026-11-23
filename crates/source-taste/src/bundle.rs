@@ -17,6 +17,9 @@ pub const SEARCH_QUERY: &str = "taste:search";
 pub const TASTES_QUERY: &str = "taste:tastes";
 pub const TASTE_ITEMS_QUERY: &str = "taste:taste_items";
 
+/// The most photos an item carries (`image_0` to `image_5`).
+pub const PHOTOS: usize = 6;
+
 /// Text from the service: control characters gone, at most `max` characters.
 pub fn clean(s: &str, max: usize) -> String {
     let s: String = s
@@ -125,17 +128,36 @@ pub fn price_text(price: Option<f64>, currency: &str) -> String {
     format!("{symbol}{}", digits(p))
 }
 
-/// Why the feed showed an item, in words, and a pill tone for it.
+/// Why the feed showed an item, in words, and a pill tone for it. The
+/// service looks for the edges of the user's taste: `boundary` (it can't
+/// tell whether they'd like it), `explore` (somewhere they haven't been) and
+/// `likely` (probably a like); the older `near:<n>` and `adjacent` still read.
 pub fn why_text(why: &str) -> (String, &'static str) {
     if let Some(n) = why.strip_prefix("near:") {
         let n = n.parse::<u32>().map(|n| n + 1).unwrap_or(1);
         return (format!("Near your taste · {n}"), "accent");
     }
     match why {
+        "boundary" => ("On the edge".into(), "accent"),
+        "likely" => ("Probably yours".into(), "success"),
         "adjacent" => ("Adjacent".into(), "success"),
         "explore" => ("Exploring".into(), "muted"),
         _ => (String::new(), "muted"),
     }
+}
+
+/// The item's photos (at most [`PHOTOS`], `http(s)` only), in the
+/// service's order: someone wearing it first, when it has such a photo.
+fn photos(v: &Value) -> Vec<String> {
+    v.get("images")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .filter(|u| !link(u).is_empty())
+        .take(PHOTOS)
+        .map(str::to_owned)
+        .collect()
 }
 
 /// An item as its entity, `taste://items/<key>`; `None` without an id.
@@ -147,15 +169,17 @@ pub fn item(v: &Value) -> Option<(String, EntityRecord)> {
     }
     let key = key_of(&id);
     let uri = format!("taste://items/{key}");
-    let image = v
-        .get("images")
-        .and_then(Value::as_array)
-        .and_then(|a| a.iter().find_map(Value::as_str))
-        .unwrap_or("");
+    let photos = photos(v);
+    let image = photos.first().map(String::as_str).unwrap_or("");
     let buy = link(v.get("url").and_then(Value::as_str).unwrap_or(""));
     let (why, tone) = why_text(&text(v, "why", 40));
     let currency = text(v, "currency", 8);
-    let record = json!({
+    let p = v
+        .get("p")
+        .and_then(Value::as_f64)
+        .filter(|p| p.is_finite())
+        .map(|p| p.clamp(0.0, 1.0));
+    let mut record = json!({
         "id": id,
         "key": key,
         "uri": uri,
@@ -172,7 +196,27 @@ pub fn item(v: &Value) -> Option<(String, EntityRecord)> {
         "skipped": v.get("skipped").and_then(Value::as_bool).unwrap_or(false),
         "why_text": why,
         "why_tone": tone,
+        "description": text(v, "description", 300),
+        "worn": v.get("worn").and_then(Value::as_bool).unwrap_or(false),
+        "p": p,
+        "chance_text": p.map(|p| format!("{}% your taste", (p * 100.0).round() as i64)).unwrap_or_default(),
+        "photo_count": photos.len(),
+        "photos_many": photos.len() > 1,
     });
+    // A card shows one photo at a time: `image_<k>` is photo k, and a tap on
+    // photo k sets the device-only field `photo` to `next_<k>` (wrapping), so
+    // the layout needs no arithmetic. `photo` is never served: a reload shows
+    // the first photo again.
+    for k in 0..PHOTOS {
+        let url = photos.get(k).map(|u| sized(u, 720)).unwrap_or_default();
+        record[format!("image_{k}")] = json!(url);
+        let next = if photos.is_empty() {
+            0
+        } else {
+            (k + 1) % photos.len()
+        };
+        record[format!("next_{k}")] = json!(next);
+    }
     match record {
         Value::Object(m) => Some((uri, EntityRecord(m))),
         _ => None,
@@ -343,9 +387,262 @@ pub fn search(b: &mut DataBundle, q: &str, items: &[Value]) {
     put_items(b, SEARCH_QUERY, items);
 }
 
+/// The whole map, in millionths: areas are named by their box,
+/// `x0-y0-x1-y1` (`0-0-1000000-1000000`), so a screen's route can carry one
+/// (routes take only letters, digits, `_` and `-`).
+pub const SCALE: f64 = 1_000_000.0;
+pub const WHOLE_MAP: &str = "0-0-1000000-1000000";
+
+/// An area's key from its box (`0..1` each way).
+pub fn area_key(b: crate::api::Bounds) -> String {
+    let m = |f: f64| (f.clamp(0.0, 1.0) * SCALE).round() as i64;
+    format!("{}-{}-{}-{}", m(b.x0), m(b.y0), m(b.x1), m(b.y1))
+}
+
+/// The box an area's key names: four whole numbers `0..=1000000`, each
+/// side longer than nothing. `None` for anything else.
+pub fn area_of(key: &str) -> Option<crate::api::Bounds> {
+    let n: Vec<i64> = key
+        .split('-')
+        .map(|p| {
+            (!p.is_empty() && p.len() <= 7 && p.bytes().all(|b| b.is_ascii_digit()))
+                .then(|| p.parse().ok())
+                .flatten()
+        })
+        .collect::<Option<_>>()?;
+    let [x0, y0, x1, y1] = n[..] else { return None };
+    let ok = |a: i64, b: i64| (0..=1_000_000).contains(&a) && (0..=1_000_000).contains(&b) && a < b;
+    if !ok(x0, x1) || !ok(y0, y1) {
+        return None;
+    }
+    let f = |v: i64| v as f64 / SCALE;
+    Some(crate::api::Bounds {
+        x0: f(x0),
+        y0: f(y0),
+        x1: f(x1),
+        y1: f(y1),
+    })
+}
+
+/// `#RRGGBB`, else the map's colour for "not known yet".
+fn colour(v: &Value) -> String {
+    let c = v.get("color").and_then(Value::as_str).unwrap_or("");
+    if c.len() == 7 && c.starts_with('#') && c[1..].bytes().all(|b| b.is_ascii_hexdigit()) {
+        c.to_owned()
+    } else {
+        "#D9D4CC".to_owned()
+    }
+}
+
+/// `1,204`.
+fn grouped(n: i64) -> String {
+    let digits = n.abs().to_string();
+    let mut out = String::new();
+    for (i, c) in digits.chars().enumerate() {
+        if i > 0 && (digits.len() - i).is_multiple_of(3) {
+            out.push(',');
+        }
+        out.push(c);
+    }
+    if n < 0 { format!("-{out}") } else { out }
+}
+
+fn pieces(n: i64) -> String {
+    match n {
+        0 => "Nothing here".to_owned(),
+        1 => "1 piece".to_owned(),
+        n => format!("{} pieces", grouped(n)),
+    }
+}
+
+/// How far in an area is, from its width: 1 for the whole map.
+fn zoom(b: crate::api::Bounds) -> u32 {
+    let w = (b.x1 - b.x0).max(1e-6);
+    (1.0 / w).log(4.0).round().max(0.0) as u32
+}
+
+pub fn tiles_query(area: &str) -> String {
+    format!("taste:tiles:{area}")
+}
+
+pub fn area_query(area: &str) -> String {
+    format!("taste:area:{area}")
+}
+
+/// A tile opens a finer map of itself, or its pieces when it holds only a
+/// few (a finer map would be mostly empty).
+pub const FEW: i64 = 6;
+
+/// The map screen's data: the area (`taste://areas/<key>`) and its tiles
+/// (`taste:tiles:<key>`, row by row), each `taste://tiles/<key>/<j>_<i>`
+/// with its tint, photo, counts and what a tap opens.
+pub fn map(b: &mut DataBundle, area: &str, v: &Value) {
+    let mut order = Vec::new();
+    let mut total = 0;
+    let (mut likes, mut skips) = (0, 0);
+    let list = v
+        .get("tiles")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    for t in list.iter().take(64) {
+        let num = |k: &str| t.get(k).and_then(Value::as_f64).unwrap_or(0.0);
+        let int = |k: &str| t.get(k).and_then(Value::as_i64).unwrap_or(0).max(0);
+        let (i, j) = (int("i"), int("j"));
+        let bounds = crate::api::Bounds {
+            x0: num("x0"),
+            y0: num("y0"),
+            x1: num("x1"),
+            y1: num("y1"),
+        };
+        let child = area_key(bounds);
+        if area_of(&child).is_none() {
+            continue;
+        }
+        let count = int("count");
+        let (l, s) = (int("likes"), int("skips"));
+        total += count;
+        likes += l;
+        skips += s;
+        let photo = t
+            .get("item")
+            .and_then(|item| photos(item).into_iter().next())
+            .map(|u| sized(&u, 360))
+            .unwrap_or_default();
+        let opens = if count == 0 {
+            String::new()
+        } else if count <= FEW {
+            format!("taste://area/{child}")
+        } else {
+            format!("taste://map/{child}")
+        };
+        let reactions = match (l, s) {
+            (0, 0) => String::new(),
+            (l, 0) => format!("♥ {l}"),
+            (0, s) => format!("✕ {s}"),
+            (l, s) => format!("♥ {l} · ✕ {s}"),
+        };
+        let uri = format!("taste://tiles/{area}/{j}_{i}");
+        let rec = json!({
+            "area": child,
+            "color": colour(t),
+            "image": photo,
+            "count": count,
+            "count_text": pieces(count),
+            "reactions_text": reactions,
+            "empty": count == 0,
+            "opens": opens,
+            "description": match (count, t.get("item").and_then(|i| i.get("title")).and_then(Value::as_str)) {
+                (0, _) => "An empty part of the map".to_owned(),
+                (_, Some(title)) => format!("{}, like {}", pieces(count), clean(title, 80)),
+                _ => pieces(count),
+            },
+        });
+        if let Value::Object(m) = rec {
+            b.entities.insert(uri.clone(), EntityRecord(m));
+        }
+        order.push(uri);
+    }
+    b.queries.insert(tiles_query(area), order);
+    let bounds = area_of(area);
+    let level = bounds.map(zoom).unwrap_or(0);
+    let rec = json!({
+        "key": area,
+        "title": if area == WHOLE_MAP { "Your taste map".to_owned() } else { format!("Zoomed in ×{}", 4u32.pow(level)) },
+        "whole": area == WHOLE_MAP,
+        "count_text": pieces(total),
+        "reactions_text": format!("{} liked · {} skipped here", grouped(likes), grouped(skips)),
+    });
+    if let Value::Object(m) = rec {
+        b.entities
+            .insert(format!("taste://areas/{area}"), EntityRecord(m));
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn photos_cycle_and_wrap() {
+        let (_, rec) = item(&json!({
+            "id": "shop.example:7", "images": ["https://cdn.example/worn.jpg", "javascript:x",
+            "https://cdn.example/flat.jpg", "https://cdn.example/back.jpg"],
+            "description": "A heavy\ncanvas jacket.", "worn": true, "p": 0.4123
+        }))
+        .unwrap();
+        assert_eq!(rec.0["photo_count"], 3);
+        assert_eq!(rec.0["image_0"], "https://cdn.example/worn.jpg?width=720");
+        assert_eq!(rec.0["image_2"], "https://cdn.example/back.jpg?width=720");
+        assert_eq!(
+            [&rec.0["next_0"], &rec.0["next_1"], &rec.0["next_2"]],
+            [&json!(1), &json!(2), &json!(0)]
+        );
+        assert_eq!(rec.0["description"], "A heavy canvas jacket.");
+        assert_eq!(rec.0["chance_text"], "41% your taste");
+        assert_eq!(rec.0["photos_many"], true);
+    }
+
+    #[test]
+    fn areas_round_trip_and_refuse_nonsense() {
+        let b = area_of(WHOLE_MAP).unwrap();
+        assert_eq!((b.x0, b.x1), (0.0, 1.0));
+        assert_eq!(area_key(b), WHOLE_MAP);
+        let q = crate::api::Bounds {
+            x0: 0.25,
+            y0: 0.5,
+            x1: 0.5,
+            y1: 0.75,
+        };
+        assert_eq!(area_key(q), "250000-500000-500000-750000");
+        assert_eq!(area_of(&area_key(q)), Some(q));
+        for bad in [
+            "",
+            "1-2-3",
+            "5-0-5-1",
+            "0-0-2000000-1",
+            "a-b-c-d",
+            "0-0-1-1-1",
+            "-1-0-1-1",
+        ] {
+            assert!(area_of(bad).is_none(), "{bad}");
+        }
+        assert_eq!(zoom(b), 0);
+        assert_eq!(zoom(q), 1);
+    }
+
+    #[test]
+    fn a_map_has_tiles_that_zoom_or_open_their_pieces() {
+        let mut b = DataBundle::default();
+        let tile = |i: i64, j: i64, count: i64| {
+            json!({
+                "i": i, "j": j, "x0": i as f64 * 0.5, "y0": j as f64 * 0.5,
+                "x1": i as f64 * 0.5 + 0.5, "y1": j as f64 * 0.5 + 0.5,
+                "count": count, "likes": 1, "skips": 0, "color": "#aabbcc",
+                "item": if count > 0 { json!({"id": "s.example:1", "title": "Coat",
+                    "images": ["https://cdn.example/c.jpg"]}) } else { Value::Null }
+            })
+        };
+        map(
+            &mut b,
+            WHOLE_MAP,
+            &json!({"tiles": [tile(0, 0, 40), tile(1, 0, 3), tile(0, 1, 0),
+                              {"i": 1, "j": 1, "x0": 0.5, "y0": 0.5, "x1": 0.5, "y1": 1.0}]}),
+        );
+        let q = &b.queries[&tiles_query(WHOLE_MAP)];
+        assert_eq!(q.len(), 3, "a tile with no width is dropped");
+        let t = |n: usize| &b.entities[&q[n]].0;
+        assert_eq!(t(0)["opens"], "taste://map/0-0-500000-500000");
+        assert_eq!(t(1)["opens"], "taste://area/500000-0-1000000-500000");
+        assert_eq!(t(2)["opens"], "");
+        assert_eq!(t(2)["empty"], true);
+        assert_eq!(t(0)["image"], "https://cdn.example/c.jpg?width=360");
+        assert_eq!(t(0)["color"], "#aabbcc");
+        let area = &b.entities[&format!("taste://areas/{WHOLE_MAP}")].0;
+        assert_eq!(area["count_text"], "43 pieces");
+        assert_eq!(pieces(10533), "10,533 pieces");
+        assert_eq!(area["title"], "Your taste map");
+    }
 
     #[test]
     fn prices_read_naturally() {
@@ -358,6 +655,8 @@ mod tests {
 
     #[test]
     fn why_has_words() {
+        assert_eq!(why_text("boundary").0, "On the edge");
+        assert_eq!(why_text("likely").0, "Probably yours");
         assert_eq!(why_text("near:1").0, "Near your taste · 2");
         assert_eq!(why_text("adjacent").0, "Adjacent");
         assert_eq!(why_text("explore").0, "Exploring");
@@ -378,6 +677,9 @@ mod tests {
         assert_eq!(rec.0["image"], "https://cdn.example/a.jpg?v=1&width=720");
         assert_eq!(rec.0["price_text"], "$98");
         assert_eq!(rec.0["liked"], true);
+        assert_eq!(rec.0["photo_count"], 1);
+        assert_eq!(rec.0["next_0"], 0);
+        assert_eq!(rec.0["image_1"], "");
         assert_eq!(id_of("shop_example__42"), "shop.example:42");
         assert_eq!(
             key_of("www.shop-two.co.uk:7454613995597"),
