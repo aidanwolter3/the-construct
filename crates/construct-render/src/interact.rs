@@ -28,7 +28,9 @@ use crate::layout::{
 use crate::scene::{COVER, Draw, QuadInstance, Scene, SemanticNode, Tap};
 use crate::style::Rgba;
 
+mod gallery;
 mod media;
+pub use gallery::{GestureEnd, PAGE_WAIT, POINT_REACH, SELECT_HOLD, ScatterGesture, bind_vars};
 pub use media::{StageDone, Staged, attachment_uri, pick_files_here};
 
 /// A scrolling view under a point ([`Session::scroll_view_at`]).
@@ -904,6 +906,9 @@ pub struct Session {
     /// Carousels sliding to a page after a swipe: since when, from and to
     /// what offset, and the page.
     pager_anims: BTreeMap<String, (Instant, f32, f32, usize)>,
+    /// Tap-paged carousels tapped to a page whose images aren't ready yet:
+    /// the page and since when (`gallery`).
+    tap_pages: BTreeMap<String, (usize, Instant)>,
     /// Swipe cards let go, flying off or springing back (by semantic id).
     card_anims: BTreeMap<String, CardAnim>,
     /// Cards that flew off, whose intents run at [`Session::take_swiped`].
@@ -1099,6 +1104,7 @@ impl Session {
             frame_offset: 0.0,
             frame_settle: None,
             pager_anims: BTreeMap::new(),
+            tap_pages: BTreeMap::new(),
             card_anims: BTreeMap::new(),
             swiped: Vec::new(),
             edit: None,
@@ -1832,6 +1838,15 @@ impl Session {
             .id
             .clone();
         let (_, count) = self.pager(&id)?;
+        // A tap-paged carousel leaves drags to what is around it.
+        let ti = self.top_index();
+        if self.stack[ti]
+            .laid
+            .as_ref()
+            .is_some_and(|(l, _)| l.tap_pagers.contains_key(&id))
+        {
+            return None;
+        }
         (count > 1).then_some(id)
     }
 
@@ -2662,6 +2677,7 @@ impl Session {
             || self.held.is_some()
             || !self.held_answers.is_empty()
             || !self.pager_anims.is_empty()
+            || !self.tap_pages.is_empty()
             || !self.card_anims.is_empty()
             || !self.swiped.is_empty()
             || self
@@ -2872,6 +2888,7 @@ impl Session {
         self.follow_clock();
         let mut now = Instant::now();
         self.step_pagers(now);
+        self.step_tap_pages(now);
         self.step_cards(now);
         if self.caret_on() != self.caret_shown {
             self.scene = None;
@@ -3207,6 +3224,9 @@ impl Session {
                 n.parent = n.parent.and_then(|p| p.checked_sub(keep_from));
             }
         }
+        // What may show next first, so what shows now (asked for after)
+        // loads first.
+        self.prefetch();
         for d in &scene.draws {
             if let Draw::Image(i) = d {
                 self.images.request(&i.url);
@@ -3549,6 +3569,24 @@ impl Session {
 
     /// A tap on `target`.
     pub fn tap(&mut self, target: &Target) -> Result<Outcome, String> {
+        if let Target::Point(x, y) = *target {
+            // A scatter picks the point nearest the tap.
+            if let Some(out) = self.scatter_tap(x, y) {
+                return out;
+            }
+            // A tap-paged carousel turns on its outer thirds; its middle
+            // third taps as anything does (its `on_tap`).
+            if let Some((id, third)) = self.tap_pager_at(x, y)
+                && third != 0
+                && self.turn_page(&id, i32::from(third))
+            {
+                self.pressed = None;
+                return Ok(Outcome {
+                    node: self.scene.as_ref().and_then(|s| s.find_node(&id).cloned()),
+                    effects: vec![Effect::Nothing],
+                });
+            }
+        }
         let Some(node) = self.find(target)? else {
             // A tap on bare background (beside a layout drawn at phone
             // width, decision `phone-width-layouts`) still ends typing.

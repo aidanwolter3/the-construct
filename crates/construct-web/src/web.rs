@@ -933,6 +933,8 @@ struct App {
     /// Where the primary pointer went down, and when; a drag that moves
     /// scrolls, one that doesn't is a tap.
     down: Option<(f32, f32, f32, f32, Instant, bool)>,
+    /// Pointers on a `core://Scatter`: they pan, pinch and select it.
+    scatter: Option<construct_render::interact::ScatterGesture>,
     /// The finger's positions down the screen while it drags, for its speed
     /// when it lifts.
     tracker: VelocityTracker,
@@ -1071,6 +1073,28 @@ impl App {
         if let Some((what, at)) = tapped {
             log(&crate::tap_log(what, at, out.as_ref()));
         }
+        self.outcome(out);
+    }
+
+    /// A pointer leaving the scatter it was on: a tap where it didn't move,
+    /// the box's `on_select` where it selected one.
+    fn scatter_end(&mut self, e: &PointerEvent, cancelled: bool) {
+        use construct_render::interact::GestureEnd;
+        let Some(mut g) = self.scatter.take() else {
+            return;
+        };
+        let p = (e.offset_x() as f32, e.offset_y() as f32);
+        match g.ended(&mut self.controller.session, e.pointer_id() as u64, p, cancelled) {
+            GestureEnd::Continues => self.scatter = Some(g),
+            GestureEnd::Tap(x, y) => self.event(Event::Tap { x, y }),
+            GestureEnd::Selected(Ok(out)) => self.outcome(Some(out)),
+            GestureEnd::Selected(Err(_)) | GestureEnd::Done => wake(),
+        }
+    }
+
+    /// What an interaction did, carried out here: links to open, a pod to
+    /// leave; then the input and history follow and a frame is drawn.
+    fn outcome(&mut self, out: Option<construct_render::interact::Outcome>) {
         // A link opens in a new tab, not over the pod, once the app is let
         // go (`Lease`): the browser runs the page's code inside `window.open`.
         for effect in out.iter().flat_map(|o| &o.effects) {
@@ -1359,6 +1383,7 @@ async fn mount(session: Session, public: Option<Public>) -> Result<(), JsValue> 
         input: input.clone(),
         drawn: u64::MAX,
         down: None,
+        scatter: None,
         tracker: VelocityTracker::new(),
         fling: None,
         links: Vec::new(),
@@ -1388,13 +1413,31 @@ async fn mount(session: Session, public: Option<Public>) -> Result<(), JsValue> 
     listen(&canvas, "pointerdown", {
         let app = app.clone();
         move |e: PointerEvent| {
-            if !e.is_primary() {
-                return;
-            }
             let (x, y) = (e.offset_x() as f32, e.offset_y() as f32);
             let Some(mut a) = lease(&app) else {
                 return;
             };
+            // A scatter takes its pointers (a second finger pinches it; a
+            // mouse with Shift held selects).
+            let pointer = e.pointer_id() as u64;
+            if let Some(g) = a.scatter.as_mut() {
+                g.add(pointer, (x, y));
+                let _ = a.canvas.set_pointer_capture(e.pointer_id());
+                return;
+            }
+            if !e.is_primary() {
+                return;
+            }
+            if let Some(g) = construct_render::interact::ScatterGesture::begin(
+                &mut a.controller.session,
+                pointer,
+                (x, y),
+                e.shift_key(),
+            ) {
+                a.scatter = Some(g);
+                let _ = a.canvas.set_pointer_capture(e.pointer_id());
+                return;
+            }
             // A finger landing on a moving fling catches it: it stops, and
             // the touch is no tap.
             let caught = a.fling.take().is_some_and(|(f, _, _)| f.caught(secs()));
@@ -1411,6 +1454,14 @@ async fn mount(session: Session, public: Option<Public>) -> Result<(), JsValue> 
             let Some(mut a) = lease(&app) else {
                 return;
             };
+            if let Some(mut g) = a.scatter.take() {
+                let p = (e.offset_x() as f32, e.offset_y() as f32);
+                if g.moved(&mut a.controller.session, e.pointer_id() as u64, p) {
+                    wake();
+                }
+                a.scatter = Some(g);
+                return;
+            }
             let Some((x0, y0, _, ly, at, moved)) = a.down else {
                 // A mouse with no button down: what it rests over is drawn
                 // hovered (a finger never hovers).
@@ -1439,6 +1490,10 @@ async fn mount(session: Session, public: Option<Public>) -> Result<(), JsValue> 
             let Some(mut a) = lease(&app) else {
                 return;
             };
+            if a.scatter.is_some() {
+                a.scatter_end(&e, false);
+                return;
+            }
             let Some((x, y, _, _, at, moved)) = a.down.take() else {
                 return;
             };
@@ -1477,9 +1532,12 @@ async fn mount(session: Session, public: Option<Public>) -> Result<(), JsValue> 
     // The browser took the touch over (or it left): no tap, no fling.
     listen(&canvas, "pointercancel", {
         let app = app.clone();
-        move |_: PointerEvent| {
+        move |e: PointerEvent| {
             if let Some(mut a) = lease(&app) {
                 a.down = None;
+                if a.scatter.is_some() {
+                    a.scatter_end(&e, true);
+                }
             }
         }
     });
@@ -1493,6 +1551,16 @@ async fn mount(session: Session, public: Option<Public>) -> Result<(), JsValue> 
             let Some(mut a) = lease(&app) else {
                 return;
             };
+            // Over a scatter, the wheel (or a trackpad's pinch, which a
+            // browser sends as a wheel with Control) zooms it.
+            if e.delta_y() != 0.0
+                && a.controller
+                    .session
+                    .scatter_wheel(x, y, e.delta_y() as f32 * k * if e.ctrl_key() { 4.0 } else { 1.0 })
+            {
+                wake();
+                return;
+            }
             if e.delta_x().abs() > e.delta_y().abs() {
                 a.event(Event::ScrollSideways {
                     x,

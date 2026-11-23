@@ -68,6 +68,30 @@ pub enum Step {
         target: String,
     },
     ScrollTo(String),
+    /// `tap-photo left|right <target>`: a tap on the left or right third of
+    /// the tap-paged carousel at the target (feature `carousel_tap_paging`).
+    TapPhoto {
+        right: bool,
+        target: String,
+    },
+    /// `scatter-box`/`scatter-select <x0> <y0> <x1> <y1> <target>`: a box
+    /// dragged on a scatter between data points (0..1); `scatter-box` holds
+    /// it (drawn until `release`, which ends it), `scatter-select` lets go.
+    ScatterBox {
+        bounds: [f32; 4],
+        target: String,
+        release: bool,
+    },
+    /// `scatter-zoom <factor> <target>`: zoomed about the plot's middle.
+    ScatterZoom {
+        factor: f32,
+        target: String,
+    },
+    /// `scatter-tap <x> <y> <target>`: a tap at a data point (0..1).
+    ScatterTap {
+        at: [f32; 2],
+        target: String,
+    },
     Back,
     Wait(u64),
     Idle,
@@ -127,6 +151,11 @@ impl Step {
             Step::DragDown { .. } => "drag-down",
             Step::DragCard { .. } => "drag-card",
             Step::ScrollTo(_) => "scroll-to",
+            Step::TapPhoto { .. } => "tap-photo",
+            Step::ScatterBox { release: false, .. } => "scatter-box",
+            Step::ScatterBox { release: true, .. } => "scatter-select",
+            Step::ScatterZoom { .. } => "scatter-zoom",
+            Step::ScatterTap { .. } => "scatter-tap",
             Step::Back => "back",
             Step::Wait(_) => "wait",
             Step::Idle => "idle",
@@ -267,6 +296,62 @@ pub fn parse(script: &str) -> Result<Vec<Line>, String> {
                 }
             }
             "scroll-to" => Step::ScrollTo(need(target)?),
+            "tap-photo" => {
+                let a = need("left or right and a target")?;
+                let (side, t) = a.split_once(' ').unwrap_or((&a, ""));
+                match side {
+                    "left" | "right" if !t.trim().is_empty() => Step::TapPhoto {
+                        right: side == "right",
+                        target: t.trim().to_owned(),
+                    },
+                    _ => return Err(format!("{}: 'tap-photo' needs 'left|right <target>'", at())),
+                }
+            }
+            c @ ("scatter-box" | "scatter-select" | "scatter-zoom" | "scatter-tap") => {
+                let n = match c {
+                    "scatter-zoom" => 1,
+                    "scatter-tap" => 2,
+                    _ => 4,
+                };
+                let a = need("numbers and a target")?;
+                let mut parts = a.splitn(n + 1, ' ');
+                let nums: Vec<f32> = parts.by_ref().take(n).filter_map(|v| v.parse().ok()).collect();
+                let t = parts.next().unwrap_or("").trim().to_owned();
+                let unit = |v: &f32| (0.0..=1.0).contains(v);
+                let ok = nums.len() == n
+                    && !t.is_empty()
+                    && if c == "scatter-zoom" {
+                        (0.05..=50.0).contains(&nums[0])
+                    } else {
+                        nums.iter().all(unit)
+                    };
+                if !ok {
+                    return Err(format!(
+                        "{}: '{c}' needs {} and a target",
+                        at(),
+                        match c {
+                            "scatter-zoom" => "a factor (0.05..50)",
+                            "scatter-tap" => "'<x> <y>' (0..1)",
+                            _ => "'<x0> <y0> <x1> <y1>' (0..1)",
+                        }
+                    ));
+                }
+                match c {
+                    "scatter-zoom" => Step::ScatterZoom {
+                        factor: nums[0],
+                        target: t,
+                    },
+                    "scatter-tap" => Step::ScatterTap {
+                        at: [nums[0], nums[1]],
+                        target: t,
+                    },
+                    _ => Step::ScatterBox {
+                        bounds: [nums[0], nums[1], nums[2], nums[3]],
+                        target: t,
+                        release: c == "scatter-select",
+                    },
+                }
+            }
             "back" => none(Step::Back)?,
             "release" => none(Step::Release)?,
             "wait" => Step::Wait(ms(&need("a duration in ms")?).ok_or_else(|| {

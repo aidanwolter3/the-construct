@@ -9,6 +9,7 @@ use protocol::{
 };
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, HashMap, HashSet};
+use std::sync::Arc;
 use taffy::prelude::*;
 use taffy::{LayoutInput, LayoutOutput, compute_leaf_layout};
 
@@ -306,6 +307,176 @@ struct Elem {
     card: Option<(String, f32)>,
     /// A text field's text.
     field: Option<FieldText>,
+    /// A carousel's track that pages on taps (`tap_paging`), not swipes.
+    tap_pager: bool,
+    /// A `core://Scatter`: its points and what its gestures run.
+    scatter: Option<Arc<ScatterPlot>>,
+}
+
+/// What a laid-out `core://Scatter` draws and runs (feature `scatter`).
+#[derive(Debug)]
+pub struct ScatterPlot {
+    /// Its semantic id: its view (zoom, pan) and selection are kept under it.
+    pub id: String,
+    pub points: Vec<protocol::scatter::Point>,
+    /// The value ramp: low, middle, high.
+    pub ramp: [Rgba; 3],
+    pub none: Rgba,
+    pub highlight: Rgba,
+    pub muted: Rgba,
+    /// A drag selects a box (its `select` binding is truthy).
+    pub selecting: bool,
+    /// `on_tap` and `on_select`, bound to the item (`$point.` and
+    /// `$select.` are bound when they run).
+    pub on_tap: Option<Value>,
+    pub on_select: Option<Value>,
+}
+
+/// An image to have ready before it shows: its url and the size it is
+/// drawn at (points) with its corner radius.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Prefetch {
+    pub url: String,
+    pub w: f32,
+    pub h: f32,
+    pub radius: f32,
+}
+
+/// A scatter's view: how far it is zoomed in (1: the whole square) and
+/// the data point at its top left corner.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ScatterView {
+    pub zoom: f32,
+    pub x: f32,
+    pub y: f32,
+}
+
+/// The room around a scatter's points inside its box (points).
+pub const SCATTER_INSET: f32 = 10.0;
+/// The farthest a scatter zooms in.
+pub const SCATTER_MAX_ZOOM: f32 = 40.0;
+
+impl ScatterView {
+    /// The view kept under a scatter's id in a screen's offsets.
+    pub fn of(scroll: &BTreeMap<String, f32>, id: &str) -> ScatterView {
+        let get = |k: &str, d: f32| scroll.get(&format!("scatter:{id}:{k}")).copied().unwrap_or(d);
+        ScatterView {
+            zoom: get("z", 1.0).clamp(1.0, SCATTER_MAX_ZOOM),
+            x: get("x", 0.0),
+            y: get("y", 0.0),
+        }
+        .clamped()
+    }
+
+    /// Kept inside the data square.
+    pub fn clamped(self) -> ScatterView {
+        let span = 1.0 / self.zoom;
+        ScatterView {
+            zoom: self.zoom,
+            x: self.x.clamp(0.0, 1.0 - span),
+            y: self.y.clamp(0.0, 1.0 - span),
+        }
+    }
+
+    /// The plot area of a scatter drawn in `rect` (its box less the inset):
+    /// square, centred.
+    pub fn area(rect: [f32; 4]) -> [f32; 4] {
+        let side = (rect[2].min(rect[3]) - 2.0 * SCATTER_INSET).max(1.0);
+        [
+            rect[0] + (rect[2] - side) / 2.0,
+            rect[1] + (rect[3] - side) / 2.0,
+            side,
+            side,
+        ]
+    }
+
+    /// Where data point (`u`, `v`) is drawn in plot area `a`.
+    pub fn to_screen(&self, a: [f32; 4], u: f32, v: f32) -> (f32, f32) {
+        (
+            a[0] + (u - self.x) * self.zoom * a[2],
+            a[1] + (v - self.y) * self.zoom * a[3],
+        )
+    }
+
+    /// The data point drawn at screen point (`x`, `y`) in plot area `a`.
+    pub fn to_data(&self, a: [f32; 4], x: f32, y: f32) -> (f32, f32) {
+        (
+            self.x + (x - a[0]) / (a[2] * self.zoom),
+            self.y + (y - a[1]) / (a[3] * self.zoom),
+        )
+    }
+
+    /// Zoomed by `factor` about screen point (`x`, `y`), which stays put.
+    pub fn zoomed(&self, a: [f32; 4], factor: f32, x: f32, y: f32) -> ScatterView {
+        let (u, v) = self.to_data(a, x, y);
+        let zoom = (self.zoom * factor).clamp(1.0, SCATTER_MAX_ZOOM);
+        ScatterView {
+            zoom,
+            x: u - (x - a[0]) / (a[2] * zoom),
+            y: v - (y - a[1]) / (a[3] * zoom),
+        }
+        .clamped()
+    }
+
+    /// Moved so the content follows a drag of (`dx`, `dy`) points.
+    pub fn panned(&self, a: [f32; 4], dx: f32, dy: f32) -> ScatterView {
+        ScatterView {
+            zoom: self.zoom,
+            x: self.x - dx / (a[2] * self.zoom),
+            y: self.y - dy / (a[3] * self.zoom),
+        }
+        .clamped()
+    }
+
+    /// The radius of a plain point at this zoom (points).
+    pub fn dot(&self) -> f32 {
+        (1.7 * self.zoom.sqrt()).clamp(1.7, 5.0)
+    }
+}
+
+/// The index of the point of `plot` nearest screen point (`x`, `y`), within
+/// `reach` points, drawn in `rect` with `view`; highlighted points win ties
+/// within a few points (they are drawn on top).
+pub fn scatter_hit(
+    plot: &ScatterPlot,
+    view: ScatterView,
+    rect: [f32; 4],
+    x: f32,
+    y: f32,
+    reach: f32,
+) -> Option<usize> {
+    let a = ScatterView::area(rect);
+    let mut best: Option<(usize, f32)> = None;
+    for (i, p) in plot.points.iter().enumerate() {
+        let (sx, sy) = view.to_screen(a, p.x, p.y);
+        let mut d = ((sx - x).powi(2) + (sy - y).powi(2)).sqrt();
+        if d > reach {
+            continue;
+        }
+        if p.mark == protocol::scatter::Mark::Highlight {
+            d -= 3.0;
+        }
+        if best.is_none_or(|(_, bd)| d < bd) {
+            best = Some((i, d));
+        }
+    }
+    best.map(|(i, _)| i)
+}
+
+/// A colour along a three-stop ramp, `t` in 0..=1.
+pub fn ramp_color(ramp: &[Rgba; 3], t: f32) -> Rgba {
+    let t = t.clamp(0.0, 1.0);
+    let (a, b, f) = if t < 0.5 {
+        (ramp[0], ramp[1], t * 2.0)
+    } else {
+        (ramp[1], ramp[2], (t - 0.5) * 2.0)
+    };
+    Rgba([
+        a.0[0] + (b.0[0] - a.0[0]) * f,
+        a.0[1] + (b.0[1] - a.0[1]) * f,
+        a.0[2] + (b.0[2] - a.0[2]) * f,
+        a.0[3] + (b.0[3] - a.0[3]) * f,
+    ])
 }
 
 /// What a text field's text element knows of its field.
@@ -680,6 +851,9 @@ impl SceneBuilder {
             viewport: vp,
             scroll_max: BTreeMap::new(),
             pagers: BTreeMap::new(),
+            tap_pagers: BTreeMap::new(),
+            prefetch: Vec::new(),
+            scatters: BTreeMap::new(),
             slides: BTreeMap::new(),
             cards: BTreeMap::new(),
             follow_end: b.follow_end,
@@ -704,6 +878,12 @@ impl SceneBuilder {
                 let w = laid.tree.layout(e.node).ok()?.size.width;
                 Some((id, (w, e.kids.len())))
             })
+            .collect();
+        laid.collect_prefetch();
+        laid.scatters = laid
+            .elems
+            .iter()
+            .filter_map(|e| e.scatter.clone().map(|p| (p.id.clone(), p)))
             .collect();
         laid.cards = laid
             .elems
@@ -791,6 +971,7 @@ fn fills_width(n: &UiNode) -> bool {
         | UiNode::Page { .. }
         | UiNode::Dock { .. } => true,
         UiNode::Image { size_dp, .. } => size_dp.is_none(),
+        UiNode::Scatter { .. } => true,
         // A bar takes the width; a ring is its own size.
         UiNode::Progress { value, shape, .. } => {
             value.is_some() && *shape != Some(protocol::ProgressShape::Ring)
@@ -836,6 +1017,7 @@ fn fills_height_in(n: &UiNode, in_scroll: bool) -> bool {
         UiNode::Layout {
             height_dp: None, ..
         } => !in_scroll,
+        UiNode::Scatter { fill, .. } => *fill,
         UiNode::Tappable { content, .. }
         | UiNode::Gesture { content, .. }
         | UiNode::SwipeCard { content, .. }
@@ -1057,6 +1239,8 @@ impl<'i> Build<'_, 'i> {
             slides: None,
             card: None,
             field: None,
+            tap_pager: false,
+            scatter: None,
         });
         self.elems.len() - 1
     }
@@ -1433,6 +1617,8 @@ impl<'i> Build<'_, 'i> {
             slides: None,
             card: None,
             field: None,
+            tap_pager: false,
+            scatter: None,
         });
         self.elems.len() - 1
     }
@@ -2937,6 +3123,8 @@ impl<'i> Build<'_, 'i> {
                 min_aspect,
                 max_aspect,
                 tag,
+                tap_paging,
+                on_tap,
             } => {
                 let uris = ctx.list(items);
                 let first = uris.first().and_then(|u| ctx.entity(u).map(|e| (u, e)));
@@ -3006,7 +3194,85 @@ impl<'i> Build<'_, 'i> {
                 track_style.min_size.height = length(0.0);
                 let track = self.push(track_style, pages, Paint::None, None, false);
                 self.elems[track].pager = Some(id.clone());
+                self.elems[track].tap_pager = *tap_paging;
                 let mut kids = vec![track];
+                if *tap_paging {
+                    // Tapped through, as stories are: bars along the top,
+                    // the one showing bright, over a soft shade so they
+                    // show on a light photo too.
+                    if count > 1 {
+                        let mut shade = column(0, pad(0, 0), AlignItems::STRETCH);
+                        shade.position = Position::Absolute;
+                        shade.inset = Rect {
+                            left: length(0.0),
+                            right: length(0.0),
+                            top: length(0.0),
+                            bottom: auto(),
+                        };
+                        shade.size.height = length(28.0);
+                        kids.push(self.push(
+                            shade,
+                            Vec::new(),
+                            Paint::Quad {
+                                bg: Rgba([0.0, 0.0, 0.0, 0.18]),
+                                border: None,
+                                dashed: false,
+                                radius: 0.0,
+                            },
+                            None,
+                            false,
+                        ));
+                        let mut bars = Vec::new();
+                        for i in 0..count {
+                            let mut bs = row(0, pad(0, 0), AlignItems::STRETCH);
+                            bs.flex_grow = 1.0;
+                            bs.flex_basis = length(0.0);
+                            bs.size.height = length(3.0);
+                            let alpha = if i == page { 0.95 } else { 0.45 };
+                            bars.push(self.push(
+                                bs,
+                                Vec::new(),
+                                Paint::Quad {
+                                    bg: Rgba([1.0, 1.0, 1.0, alpha]),
+                                    border: None,
+                                    dashed: false,
+                                    radius: 1.5,
+                                },
+                                None,
+                                false,
+                            ));
+                        }
+                        let mut style = row(4, pad(10, 0), AlignItems::CENTER);
+                        style.position = Position::Absolute;
+                        style.inset = Rect {
+                            left: length(0.0),
+                            right: length(0.0),
+                            top: length(10.0),
+                            bottom: auto(),
+                        };
+                        let sem = Sem {
+                            id: format!("dots:{id}"),
+                            node_type: "dots".into(),
+                            text: Some(format!("Photo {} of {count}", page + 1)),
+                            tap: None,
+                            selected: false,
+                            gestures: BTreeMap::new(),
+                            hint: None,
+                        };
+                        kids.push(self.push(style, bars, Paint::None, Some(sem), false));
+                    }
+                    let mut style = column(0, pad(0, 0), AlignItems::STRETCH);
+                    style.aspect_ratio = Some(aspect as f32);
+                    style.size.width = percent(1.0);
+                    let tap = on_tap.as_ref().map(|i| Tap::Intent {
+                        intent: bind_intent(i, &b.ctx),
+                    });
+                    let mut sem = self.sem(b, n, None, tap);
+                    sem.id = id.clone();
+                    let frame = self.push(style, kids, Paint::None, Some(sem), true);
+                    let outer = column(0, pad(0, 0), AlignItems::STRETCH);
+                    return Some(self.push(outer, vec![frame], Paint::None, None, false));
+                }
                 if count > 1 {
                     let label = format!("{}/{count}", page + 1);
                     let sem = Sem {
@@ -3095,6 +3361,72 @@ impl<'i> Build<'_, 'i> {
                 };
                 let dots = self.push(ds, dots, Paint::None, Some(sem), false);
                 self.push(outer, vec![frame, dots], Paint::None, None, false)
+            }
+            UiNode::Scatter {
+                points,
+                colors,
+                none_color,
+                highlight_color,
+                muted_color,
+                select,
+                on_tap,
+                on_select,
+                aspect_ratio,
+                fill,
+                tag,
+                content_description,
+            } => {
+                let ctx = &b.ctx;
+                let id = match tag {
+                    Some(t) => ctx.text(t),
+                    None => b.path.clone(),
+                };
+                let pts = protocol::scatter::decode(&ctx.text(points)).unwrap_or_default();
+                let col = |c: &Option<String>, d: Rgba| c.as_deref().and_then(|c| ctx.color(c)).unwrap_or(d);
+                let ramp_default = [
+                    Rgba::hex("#7FA3C7").unwrap_or(self.theme.muted_text),
+                    Rgba::hex("#D9CFC0").unwrap_or(self.theme.muted_text),
+                    Rgba::hex("#E8854A").unwrap_or(self.theme.on_background),
+                ];
+                let mut ramp = ramp_default;
+                if let Some(cs) = colors {
+                    for (i, c) in cs.iter().take(3).enumerate() {
+                        if let Some(c) = ctx.color(c) {
+                            ramp[i] = c;
+                        }
+                    }
+                }
+                let plot = ScatterPlot {
+                    id: id.clone(),
+                    points: pts,
+                    ramp,
+                    none: col(none_color, self.theme.muted_text),
+                    highlight: col(highlight_color, Rgba::hex("#E8554A").unwrap_or(self.theme.on_background)),
+                    muted: col(muted_color, self.theme.on_background),
+                    selecting: select.as_deref().is_some_and(|s| ctx.shows(s, None)),
+                    on_tap: on_tap.as_ref().map(|i| bind_intent(i, ctx)),
+                    on_select: on_select.as_ref().map(|i| bind_intent(i, ctx)),
+                };
+                let mut style = column(0, pad(0, 0), AlignItems::STRETCH);
+                style.size.width = percent(1.0);
+                if *fill {
+                    style.flex_grow = 1.0;
+                    style.flex_shrink = 1.0;
+                    style.flex_basis = length(0.0);
+                    style.min_size.height = length(120.0);
+                    style.align_self = Some(AlignSelf::STRETCH);
+                } else {
+                    style.aspect_ratio = Some(aspect_ratio.unwrap_or(1.0).clamp(0.2, 5.0) as f32);
+                }
+                let text = content_description
+                    .as_deref()
+                    .map(|t| ctx.text(t))
+                    .or_else(|| Some(format!("Plot of {} points", plot.points.len())));
+                let mut sem = self.sem(b, n, text, None);
+                sem.id = id;
+                let k = self.push(style, Vec::new(), Paint::None, Some(sem), true);
+                self.elems[k].scatter = Some(Arc::new(plot));
+                k
             }
             UiNode::Bars {
                 query_key,
@@ -4413,6 +4745,16 @@ pub struct Laid {
     pub scroll_max: BTreeMap<String, f32>,
     /// Each carousel (by semantic id): its page width and page count.
     pub pagers: BTreeMap<String, (f32, usize)>,
+    /// The carousels that page on taps (`tap_paging`): for each page, the
+    /// indices in [`Laid::prefetch`] of the images on it.
+    pub tap_pagers: BTreeMap<String, Vec<Vec<usize>>>,
+    /// Images laid out but not necessarily drawn (every page of a
+    /// carousel, the card waiting under a deck's top one), to load and cut
+    /// at the size they'll be drawn before they show, so paging to one
+    /// never shows a blank (feature `carousel_tap_paging`).
+    pub prefetch: Vec<Prefetch>,
+    /// Each `core://Scatter` (by semantic id).
+    pub scatters: BTreeMap<String, Arc<ScatterPlot>>,
     /// How far each sideways-scrolling row can scroll (its content past its
     /// width).
     pub slides: BTreeMap<String, f32>,
@@ -4637,6 +4979,113 @@ impl Laid {
     }
 
     /// How far a sideways-scrolling row's content reaches past its width.
+    /// Fills [`Laid::prefetch`] and [`Laid::tap_pagers`]: every image on
+    /// every page of every carousel, at the size it is laid out at.
+    fn collect_prefetch(&mut self) {
+        let mut prefetch = Vec::new();
+        let mut tap_pagers = BTreeMap::new();
+        for e in &self.elems {
+            let Some(id) = &e.pager else {
+                continue;
+            };
+            let mut pages = Vec::new();
+            for &page in &e.kids {
+                let mut on_page = Vec::new();
+                let mut stack = vec![page];
+                while let Some(i) = stack.pop() {
+                    let el = &self.elems[i];
+                    if let Paint::Image { url, radius, .. } = &el.paint
+                        && let Ok(l) = self.tree.layout(el.node)
+                        && (url.starts_with("http://") || url.starts_with("https://"))
+                    {
+                        let (w, h) = (l.size.width, l.size.height);
+                        on_page.push(prefetch.len());
+                        prefetch.push(Prefetch {
+                            url: url.clone(),
+                            w,
+                            h,
+                            radius: radius.min(w.min(h) / 2.0),
+                        });
+                    }
+                    stack.extend(el.kids.iter().rev());
+                }
+                pages.push(on_page);
+            }
+            if e.tap_pager {
+                tap_pagers.insert(id.clone(), pages);
+            }
+        }
+        self.prefetch = prefetch;
+        self.tap_pagers = tap_pagers;
+    }
+
+    /// Draws a scatter's points (and the box being selected) in `rect`, in
+    /// the view kept in `scroll`: plain points first, then muted, then
+    /// highlighted ones on top; only those inside the plot.
+    fn paint_scatter(
+        &self,
+        plot: &ScatterPlot,
+        rect: [f32; 4],
+        clip: [f32; 4],
+        scroll: &BTreeMap<String, f32>,
+        scene: &mut Scene,
+    ) {
+        use protocol::scatter::Mark;
+        let view = ScatterView::of(scroll, &plot.id);
+        let a = ScatterView::area(rect);
+        let clip = intersect(clip, [a[0] - 6.0, a[1] - 6.0, a[2] + 12.0, a[3] + 12.0]);
+        let r = view.dot();
+        let inside = |x: f32, y: f32, m: f32| {
+            x >= clip[0] - m && x <= clip[0] + clip[2] + m && y >= clip[1] - m && y <= clip[1] + clip[3] + m
+        };
+        for pass in [Mark::Plain, Mark::Muted, Mark::Highlight] {
+            for p in plot.points.iter().filter(|p| p.mark == pass) {
+                let (x, y) = view.to_screen(a, p.x, p.y);
+                if !inside(x, y, 8.0) {
+                    continue;
+                }
+                let mut q = match pass {
+                    Mark::Plain => {
+                        let mut c = match p.value {
+                            Some(v) => ramp_color(&plot.ramp, v),
+                            None => plot.none,
+                        };
+                        c.0[3] *= 0.8;
+                        QuadInstance::fill([x - r, y - r, 2.0 * r, 2.0 * r], c, r)
+                    }
+                    Mark::Muted => {
+                        let m = (r * 0.9).max(1.5);
+                        let mut c = plot.muted;
+                        c.0[3] *= 0.55;
+                        QuadInstance::fill([x - m, y - m, 2.0 * m, 2.0 * m], c, m)
+                    }
+                    Mark::Highlight => {
+                        let h = r + 3.0;
+                        QuadInstance::fill([x - h, y - h, 2.0 * h, 2.0 * h], plot.highlight, h)
+                            .border(Rgba::rgb(255, 255, 255), 1.5)
+                    }
+                };
+                q.clip = clip;
+                scene.draws.push(Draw::Quad(q));
+            }
+        }
+        // The box being selected, in data coordinates.
+        let sel = |k: &str| scroll.get(&format!("scattersel:{}:{k}", plot.id)).copied();
+        if let (Some(x0), Some(y0), Some(x1), Some(y1)) = (sel("x0"), sel("y0"), sel("x1"), sel("y1")) {
+            let (ax, ay) = view.to_screen(a, x0.min(x1), y0.min(y1));
+            let (bx, by) = view.to_screen(a, x0.max(x1), y0.max(y1));
+            let mut q = QuadInstance::fill(
+                [ax, ay, (bx - ax).max(1.0), (by - ay).max(1.0)],
+                Rgba([plot.highlight.0[0], plot.highlight.0[1], plot.highlight.0[2], 0.14]),
+                4.0,
+            )
+            .border(plot.highlight, 2.0)
+            .dashed(6.0, 4.0);
+            q.clip = clip;
+            scene.draws.push(Draw::Quad(q));
+        }
+    }
+
     fn slide_extent(&self, e: &Elem) -> Option<f32> {
         let l = self.tree.layout(e.node).ok()?;
         let right = e
@@ -4734,6 +5183,9 @@ impl Laid {
         let visible = intersects(rect, clip);
         if visible {
             self.paint(e, rect, l, clip, at.rounded, scene);
+            if let Some(plot) = &e.scatter {
+                self.paint_scatter(plot, rect, clip, scroll, scene);
+            }
             if let (Some(f), Paint::Text { ty, .. }) = (&e.field, &e.paint) {
                 scene.fields.push(crate::scene::FieldBox {
                     field: f.field.clone(),

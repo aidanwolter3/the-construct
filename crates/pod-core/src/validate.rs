@@ -813,6 +813,36 @@ fn check_values(node: &UiNode) -> Result<(), String> {
             }
             Ok(())
         }
+        UiNode::Scatter {
+            colors,
+            none_color,
+            highlight_color,
+            muted_color,
+            aspect_ratio,
+            ..
+        } => {
+            if let Some(c) = colors
+                && c.len() != 3
+            {
+                return Err(format!(
+                    "scatter colors: low, middle and high ({} given)",
+                    c.len()
+                ));
+            }
+            for c in colors
+                .iter()
+                .flatten()
+                .chain(none_color)
+                .chain(highlight_color)
+                .chain(muted_color)
+            {
+                check_color(c).map_err(|e| format!("scatter {e}"))?;
+            }
+            if let Some(a) = aspect_ratio {
+                check_aspect("scatter aspect_ratio", *a as f32)?;
+            }
+            Ok(())
+        }
         UiNode::IconButton {
             icon,
             active_icon,

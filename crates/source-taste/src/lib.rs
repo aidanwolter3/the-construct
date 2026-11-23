@@ -72,6 +72,13 @@ pub const LIKES_PATH: &str = "/v1/taste/screens/likes";
 pub const TASTE_PATH: &str = "/v1/taste/screens/taste";
 pub const MAP_PATH: &str = "/v1/taste/screens/map";
 pub const AREA_PATH: &str = "/v1/taste/screens/area";
+pub const SCATTER_PATH: &str = "/v1/taste/screens/scatter";
+pub const POINT_PATH: &str = "/v1/taste/screens/point";
+/// How long the pod keeps the whole map before asking for it again.
+pub const MAP_KEEP: std::time::Duration = std::time::Duration::from_secs(30 * 60);
+/// After a reaction (the model's chances moved), the kept map is asked for
+/// again when shown, but not more often than this.
+pub const MAP_REFRESH: std::time::Duration = std::time::Duration::from_secs(15);
 
 /// Items asked for per page of the feed, and per list of an item screen.
 pub const PAGE: usize = 24;
@@ -185,6 +192,22 @@ pub const MANIFEST: SourceManifest = SourceManifest {
             pattern: "/v1/taste/screens/area?area={area}",
             query_keys: &["taste:area:{area}"],
             doc: "A sample of the pieces inside an area of the taste map (taste:area:<area>).",
+        },
+        PathSpec {
+            pattern: SCATTER_PATH,
+            query_keys: &[],
+            doc: "The whole taste map for a core://Scatter: taste://maps/catalog {points (every \
+                  piece, packed: likes highlighted, skips muted, coloured by how likely the user \
+                  likes it), count_text, reactions_text, modelled}. A point's index (on_tap's \
+                  $point.index) opens taste://points/<index>; a box selected ($select.box) opens \
+                  taste://area/<box>.",
+        },
+        PathSpec {
+            pattern: "/v1/taste/screens/point?n={n}",
+            query_keys: &["taste:similar:{key}", "taste:contrast:{key}"],
+            doc: "The piece at point <n> of the taste map (taste://points/<n>, with the item's \
+                  fields and its own key), its similar pieces and its opposites, as the item \
+                  screen has them.",
         },
         PathSpec {
             pattern: LIKES_PATH,
@@ -446,6 +469,8 @@ impl Source for TasteAdapter {
             .route(TASTE_PATH, get(taste_route))
             .route(MAP_PATH, get(map_route))
             .route(AREA_PATH, get(area_route))
+            .route(SCATTER_PATH, get(scatter_route))
+            .route(POINT_PATH, get(point_route))
     }
 
     fn feed<'a>(
@@ -793,6 +818,7 @@ async fn sign_out_route(State(pod): State<Pod>, headers: HeaderMap, body: Bytes)
     if let Err(e) = pod.blocking(db::sign_out).await {
         return e.into_response();
     }
+    pod.local::<MapCache>().forget();
     pod.publish_data_all(NAME);
     Json(json!({"ok": true})).into_response()
 }
@@ -841,23 +867,41 @@ async fn react_route(State(pod): State<Pod>, headers: HeaderMap, body: Bytes) ->
         Ok(v) => v,
         Err(r) => return r,
     };
-    let (likes, skips) = match api::event(&a.client, &service, &id, kind).await {
-        Ok(c) => c,
+    let counts = match api::event(&a.client, &service, &id, kind).await {
+        Ok(c) => Some(c),
+        // The service no longer has the piece (its catalog changed under
+        // the kept deck): it leaves the deck all the same, rather than
+        // coming back as the device undoes a refused swipe.
+        Err(ApiError::Status(404 | 410, _)) => None,
         Err(e) => return service_error(e),
     };
     let kept = id.clone();
+    let (liked, skipped) = if counts.is_some() {
+        (liked, skipped)
+    } else {
+        (false, true)
+    };
     if let Err(e) = pod
         .blocking(move |s| {
             db::react(s, &kept, liked, skipped)?;
-            db::set_counts(s, likes, skips)
+            if let Some((likes, skips)) = counts {
+                db::set_counts(s, likes, skips)?;
+            }
+            Ok(())
         })
         .await
     {
         return e.into_response();
     }
+    pod.local::<MapCache>().reacted(&id, liked, skipped);
     pod.publish_data_all(NAME);
     top_up(&pod);
-    Json(json!({"ok": true, "likes": likes, "skips": skips})).into_response()
+    match counts {
+        Some((likes, skips)) => {
+            Json(json!({"ok": true, "likes": likes, "skips": skips})).into_response()
+        }
+        None => Json(json!({"ok": true, "gone": true})).into_response(),
+    }
 }
 
 /// Keep the deck stocked: when fewer than [`LOW`] pieces are left, fetch
@@ -1005,8 +1049,164 @@ async fn item_route(
     bundle::put_items(&mut b, &format!("taste:similar:{}", q.key), &similar);
     bundle::put_items(&mut b, &format!("taste:contrast:{}", q.key), &contrast);
     // The item itself last, so its own fields win over a list's copy.
-    if let Some((uri, rec)) = bundle::item(&item) {
-        b.entities.insert(uri, rec);
+    bundle::put_item(&mut b, &item);
+    Json(b).into_response()
+}
+
+/// The whole map, as the pod keeps it ([`MAP_KEEP`]): asked for again once
+/// it is old, or a while after a reaction moved the model's chances; the
+/// likes and skips are kept current in between.
+#[derive(Default)]
+struct MapCache(std::sync::Mutex<Option<KeptMap>>);
+
+struct KeptMap {
+    map: Arc<api::MapData>,
+    at: std::time::Instant,
+    /// A reaction since: the chances are out of date.
+    stale: bool,
+}
+
+impl MapCache {
+    /// The kept map if it will do.
+    fn fresh(&self) -> Option<Arc<api::MapData>> {
+        let g = self.0.lock().unwrap_or_else(|e| e.into_inner());
+        let k = g.as_ref()?;
+        let age = k.at.elapsed();
+        (age < MAP_KEEP && (!k.stale || age < MAP_REFRESH)).then(|| k.map.clone())
+    }
+
+    /// The kept map, however old.
+    fn any(&self) -> Option<Arc<api::MapData>> {
+        let g = self.0.lock().unwrap_or_else(|e| e.into_inner());
+        g.as_ref().map(|k| k.map.clone())
+    }
+
+    fn keep(&self, map: Arc<api::MapData>) {
+        *self.0.lock().unwrap_or_else(|e| e.into_inner()) = Some(KeptMap {
+            map,
+            at: std::time::Instant::now(),
+            stale: false,
+        });
+    }
+
+    /// A reaction: its point is marked at once, and the chances are asked
+    /// for again next time.
+    fn reacted(&self, id: &str, liked: bool, skipped: bool) {
+        let mut g = self.0.lock().unwrap_or_else(|e| e.into_inner());
+        let Some(k) = g.as_mut() else {
+            return;
+        };
+        if let Some(i) = k.map.index_of(id) {
+            let m = Arc::make_mut(&mut k.map);
+            if liked {
+                m.liked.insert(i);
+            } else {
+                m.liked.remove(&i);
+            }
+            if skipped {
+                m.skipped.insert(i);
+            } else {
+                m.skipped.remove(&i);
+            }
+        }
+        k.stale = true;
+    }
+
+    fn forget(&self) {
+        *self.0.lock().unwrap_or_else(|e| e.into_inner()) = None;
+    }
+}
+
+/// The map: kept, or asked for (falling back on an old one when the
+/// service doesn't answer).
+async fn the_map(pod: &Pod, a: &TasteAdapter, service: &Service) -> Result<Arc<api::MapData>, ApiError> {
+    let cache = pod.local::<MapCache>();
+    if let Some(m) = cache.fresh() {
+        return Ok(m);
+    }
+    match api::map(&a.client, service).await {
+        Ok(m) => {
+            let m = Arc::new(m);
+            cache.keep(m.clone());
+            Ok(m)
+        }
+        Err(e) => cache.any().ok_or(e),
+    }
+}
+
+async fn scatter_route(State(pod): State<Pod>, headers: HeaderMap) -> Response {
+    if let Err(r) = check_caller(&pod, &headers).await {
+        return r;
+    }
+    let (a, service) = match signed_in(&pod).await {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    let map = match the_map(&pod, a, &service).await {
+        Ok(m) => m,
+        Err(e) => return service_error(e),
+    };
+    let mut b = DataBundle::default();
+    let (uri, rec) = bundle::scatter(&map);
+    b.entities.insert(uri, rec);
+    Json(b).into_response()
+}
+
+#[derive(serde::Deserialize)]
+struct PointQuery {
+    #[serde(default)]
+    n: String,
+}
+
+async fn point_route(
+    State(pod): State<Pod>,
+    headers: HeaderMap,
+    Query(q): Query<PointQuery>,
+) -> Response {
+    if let Err(r) = check_caller(&pod, &headers).await {
+        return r;
+    }
+    let Ok(n) = q.n.parse::<usize>() else {
+        return refuse(
+            StatusCode::BAD_REQUEST,
+            "invalid_request",
+            "\"n\" is a point of the map",
+        );
+    };
+    let (a, service) = match signed_in(&pod).await {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    let map = match the_map(&pod, a, &service).await {
+        Ok(m) => m,
+        Err(e) => return service_error(e),
+    };
+    let Some(id) = map.ids.get(n).cloned() else {
+        return refuse(StatusCode::NOT_FOUND, "not_found", "no such point");
+    };
+    let key = bundle::key_of(&id);
+    let (item, similar, contrast) = tokio::join!(
+        api::item(&a.client, &service, &id),
+        api::related(&a.client, &service, &id, "similar", RELATED),
+        api::related(&a.client, &service, &id, "contrast", RELATED),
+    );
+    let item = match item {
+        Ok(i) => i,
+        Err(e) => return service_error(e),
+    };
+    let similar = with_why(&pod, similar.unwrap_or_default()).await;
+    let contrast = with_why(&pod, contrast.unwrap_or_default()).await;
+    let item = with_why(&pod, vec![item]).await.remove(0);
+    let mut b = DataBundle::default();
+    bundle::put_items(&mut b, &format!("taste:similar:{key}"), &similar);
+    bundle::put_items(&mut b, &format!("taste:contrast:{key}"), &contrast);
+    bundle::put_item(&mut b, &item);
+    // The point's own copy of the piece: what its screen shows (a reaction
+    // there marks this copy, and the piece's own entity follows on reload).
+    if let Some((_, mut rec)) = bundle::item(&item) {
+        let point = format!("taste://points/{n}");
+        rec.0.insert("uri".into(), json!(point));
+        b.entities.insert(point, rec);
     }
     Json(b).into_response()
 }

@@ -177,6 +177,8 @@ const LONG_PRESS: f32 = 0.5;
 /// doesn't pay for a layout it throws away, and the finger usually rests
 /// 50–100 ms in all, leaving time for the layout before it lifts.
 const PREPARE_AFTER: std::time::Duration = std::time::Duration::from_millis(30);
+/// The pointer id a mouse's gestures on a scatter go by (touches have their own).
+const MOUSE_POINTER: u64 = u64::MAX;
 /// Movement for a drag that scrolled nothing to count as a swipe (points).
 const SWIPE_DISTANCE: f32 = 48.0;
 
@@ -188,6 +190,8 @@ pub struct App {
     surface: Option<Surface>,
     cursor: (f32, f32),
     drag: Option<Drag>,
+    /// A pointer (or two) on a `core://Scatter`: pans, pinches, selects.
+    scatter: Option<crate::interact::ScatterGesture>,
     /// A fling under way, and the point whose scrolling view it moves.
     fling: Option<(Flinging, (f32, f32))>,
     /// Mouse wheel notches still gliding, and where the pointer was.
@@ -220,6 +224,7 @@ impl App {
             platform: None,
             cursor: (0.0, 0.0),
             drag: None,
+            scatter: None,
             fling: None,
             wheel: Default::default(),
             stretch: None,
@@ -548,6 +553,56 @@ impl App {
     }
 
     /// The press ended (lifted, cancelled, or turned into a drag).
+    /// A pointer event for a scatter's gesture: starts one on a scatter (a
+    /// mouse with Shift held selects a box), or feeds the one under way.
+    /// Whether the scatter took the event.
+    fn scatter_pointer(&mut self, pointer: u64, phase: TouchPhase, p: (f32, f32)) -> bool {
+        use crate::interact::{GestureEnd, ScatterGesture};
+        let handled = match phase {
+            TouchPhase::Started => {
+                if let Some(g) = self.scatter.as_mut() {
+                    g.add(pointer, p);
+                    true
+                } else if self.drag.is_none() {
+                    let select = pointer == MOUSE_POINTER && self.mods.shift_key();
+                    match ScatterGesture::begin(&mut self.controller.session, pointer, p, select) {
+                        Some(g) => {
+                            self.scatter = Some(g);
+                            true
+                        }
+                        None => false,
+                    }
+                } else {
+                    false
+                }
+            }
+            TouchPhase::Moved => match self.scatter.as_mut() {
+                Some(g) => {
+                    g.moved(&mut self.controller.session, pointer, p);
+                    true
+                }
+                None => false,
+            },
+            TouchPhase::Ended | TouchPhase::Cancelled => match self.scatter.take() {
+                Some(mut g) => {
+                    let cancelled = phase == TouchPhase::Cancelled;
+                    match g.ended(&mut self.controller.session, pointer, p, cancelled) {
+                        GestureEnd::Continues => self.scatter = Some(g),
+                        GestureEnd::Tap(x, y) => self.apply(Event::Tap { x, y }),
+                        GestureEnd::Selected(Ok(out)) => self.after(Some(out), false),
+                        GestureEnd::Selected(Err(_)) | GestureEnd::Done => {}
+                    }
+                    true
+                }
+                None => false,
+            },
+        };
+        if handled && let Some(s) = &self.surface {
+            s.window.request_redraw();
+        }
+        handled
+    }
+
     fn release_press(&mut self) {
         if self.controller.session.release_press()
             && let Some(s) = &self.surface
@@ -1069,6 +1124,10 @@ impl ApplicationHandler for App {
             WindowEvent::RedrawRequested => self.draw(),
             WindowEvent::CursorMoved { position, .. } => {
                 self.cursor = (position.x as f32 / scale, position.y as f32 / scale);
+                if self.scatter.is_some() {
+                    self.scatter_pointer(MOUSE_POINTER, TouchPhase::Moved, self.cursor);
+                    return;
+                }
                 #[cfg(not(target_os = "android"))]
                 self.hover();
             }
@@ -1085,12 +1144,20 @@ impl ApplicationHandler for App {
                 state: ElementState::Pressed,
                 button: MouseButton::Left,
                 ..
-            } => self.press(self.cursor.0, self.cursor.1),
+            } => {
+                if !self.scatter_pointer(MOUSE_POINTER, TouchPhase::Started, self.cursor) {
+                    self.press(self.cursor.0, self.cursor.1);
+                }
+            }
             WindowEvent::MouseInput {
                 state: ElementState::Released,
                 button: MouseButton::Left,
                 ..
             } => {
+                if self.scatter.is_some() {
+                    self.scatter_pointer(MOUSE_POINTER, TouchPhase::Ended, self.cursor);
+                    return;
+                }
                 self.release_press();
                 self.apply(Event::Tap {
                     x: self.cursor.0,
@@ -1110,6 +1177,13 @@ impl ApplicationHandler for App {
                 } else {
                     dx
                 };
+                // Over a scatter, the wheel zooms it.
+                if dy != 0.0 && self.controller.session.scatter_wheel(self.cursor.0, self.cursor.1, dy) {
+                    if let Some(s) = &self.surface {
+                        s.window.request_redraw();
+                    }
+                    return;
+                }
                 if dx.abs() > dy.abs() || (dx != 0.0 && self.mods.shift_key()) {
                     let (x, y) = self.cursor;
                     self.apply(Event::ScrollSideways { x, y, dx });
@@ -1139,6 +1213,10 @@ impl ApplicationHandler for App {
                 let p = (t.location.x as f32 / scale, t.location.y as f32 / scale);
                 let now = Instant::now();
                 self.perf.input(now, matches!(t.phase, TouchPhase::Moved));
+                // A scatter takes its own gestures (and a second finger).
+                if self.scatter_pointer(t.id, t.phase, p) {
+                    return;
+                }
                 match t.phase {
                     TouchPhase::Started => {
                         // A touch is often work on its way (a screen opening).
