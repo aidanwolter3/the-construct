@@ -311,6 +311,9 @@ struct Elem {
     tap_pager: bool,
     /// A `core://Scatter`: its points and what its gestures run.
     scatter: Option<Arc<ScatterPlot>>,
+    /// A tap-paged carousel's frame: its page count and the page showing,
+    /// drawn as bars over the top of its photo after its pages.
+    page_bars: Option<(usize, usize)>,
 }
 
 /// What a laid-out `core://Scatter` draws and runs (feature `scatter`).
@@ -1149,6 +1152,26 @@ fn column(gap: u16, padding: Rect<LengthPercentage>, align: AlignItems) -> Style
     }
 }
 
+/// The page bars over the top of a tap-paged carousel's box `rect`: one per
+/// page, the one showing bright (feature `carousel_tap_paging`).
+fn paint_page_bars(scene: &mut Scene, rect: [f32; 4], clip: [f32; 4], count: usize, page: usize) {
+    const PAD: f32 = 10.0;
+    const GAP: f32 = 4.0;
+    let [x, y, w, _] = rect;
+    let bar = ((w - 2.0 * PAD - GAP * (count - 1) as f32) / count as f32).max(2.0);
+    for i in 0..count {
+        let alpha = if i == page { 0.95 } else { 0.5 };
+        let mut q = QuadInstance::fill(
+            [x + PAD + i as f32 * (bar + GAP), y + 10.0, bar, 3.0],
+            Rgba([1.0, 1.0, 1.0, alpha]),
+            1.5,
+        )
+        .border(Rgba([0.0, 0.0, 0.0, 0.28]), 0.75);
+        q.clip = clip;
+        scene.draws.push(Draw::Quad(q));
+    }
+}
+
 fn row(gap: u16, padding: Rect<LengthPercentage>, align: AlignItems) -> Style {
     Style {
         display: Display::Flex,
@@ -1246,6 +1269,7 @@ impl<'i> Build<'_, 'i> {
             field: None,
             tap_pager: false,
             scatter: None,
+            page_bars: None,
         });
         self.elems.len() - 1
     }
@@ -1624,6 +1648,7 @@ impl<'i> Build<'_, 'i> {
             field: None,
             tap_pager: false,
             scatter: None,
+            page_bars: None,
         });
         self.elems.len() - 1
     }
@@ -3202,58 +3227,27 @@ impl<'i> Build<'_, 'i> {
                 self.elems[track].tap_pager = *tap_paging;
                 let mut kids = vec![track];
                 if *tap_paging {
-                    // Tapped through, as stories are: bars along the top,
-                    // the one showing bright, over a soft shade so they
-                    // show on a light photo too.
+                    // Tapped through, as stories are: bars along the top of
+                    // the photo (`page_bars`), drawn once the frame is placed
+                    // (from its own box: boxes placed inside it absolutely
+                    // were sized against the window), each outlined in a soft
+                    // dark line so it shows on a light photo as on a dark one.
                     if count > 1 {
-                        let mut shade = column(0, pad(0, 0), AlignItems::STRETCH);
-                        shade.position = Position::Absolute;
-                        shade.inset = Rect {
-                            left: length(0.0),
-                            right: length(0.0),
-                            top: length(0.0),
-                            bottom: auto(),
+                        // What the bars say, for a screen reader and tests:
+                        // a box over them, drawn as nothing.
+                        let mut style = Style {
+                            position: Position::Absolute,
+                            ..Default::default()
                         };
-                        shade.size.height = length(28.0);
-                        kids.push(self.push(
-                            shade,
-                            Vec::new(),
-                            Paint::Quad {
-                                bg: Rgba([0.0, 0.0, 0.0, 0.18]),
-                                border: None,
-                                dashed: false,
-                                radius: 0.0,
-                            },
-                            None,
-                            false,
-                        ));
-                        let mut bars = Vec::new();
-                        for i in 0..count {
-                            let mut bs = row(0, pad(0, 0), AlignItems::STRETCH);
-                            bs.flex_grow = 1.0;
-                            bs.flex_basis = length(0.0);
-                            bs.size.height = length(3.0);
-                            let alpha = if i == page { 0.95 } else { 0.45 };
-                            bars.push(self.push(
-                                bs,
-                                Vec::new(),
-                                Paint::Quad {
-                                    bg: Rgba([1.0, 1.0, 1.0, alpha]),
-                                    border: None,
-                                    dashed: false,
-                                    radius: 1.5,
-                                },
-                                None,
-                                false,
-                            ));
-                        }
-                        let mut style = row(4, pad(10, 0), AlignItems::CENTER);
-                        style.position = Position::Absolute;
                         style.inset = Rect {
                             left: length(0.0),
-                            right: length(0.0),
+                            right: auto(),
                             top: length(10.0),
                             bottom: auto(),
+                        };
+                        style.size = Size {
+                            width: percent(1.0),
+                            height: length(3.0),
                         };
                         let sem = Sem {
                             id: format!("dots:{id}"),
@@ -3264,7 +3258,7 @@ impl<'i> Build<'_, 'i> {
                             gestures: BTreeMap::new(),
                             hint: None,
                         };
-                        kids.push(self.push(style, bars, Paint::None, Some(sem), false));
+                        kids.push(self.push(style, Vec::new(), Paint::None, Some(sem), false));
                     }
                     let mut style = column(0, pad(0, 0), AlignItems::STRETCH);
                     style.aspect_ratio = Some(aspect as f32);
@@ -3275,6 +3269,9 @@ impl<'i> Build<'_, 'i> {
                     let mut sem = self.sem(b, n, None, tap);
                     sem.id = id.clone();
                     let frame = self.push(style, kids, Paint::None, Some(sem), true);
+                    if count > 1 {
+                        self.elems[frame].page_bars = Some((count, page));
+                    }
                     let outer = column(0, pad(0, 0), AlignItems::STRETCH);
                     return Some(self.push(outer, vec![frame], Paint::None, None, false));
                 }
@@ -5292,6 +5289,9 @@ impl Laid {
                 pins,
                 scene,
             );
+        }
+        if let Some((count, page)) = e.page_bars {
+            paint_page_bars(scene, rect, inner_clip, count, page);
         }
         if stretch != 0.0 {
             // Pulled past an end: the content stretches from that end.

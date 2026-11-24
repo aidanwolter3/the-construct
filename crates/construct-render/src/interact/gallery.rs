@@ -578,10 +578,6 @@ mod tests {
 
     /// A piece with three photos, in a deck of two such pieces (the second
     /// card is laid out behind the first), each card a tap-paged carousel.
-    pub fn deck_for_probe() -> (UiNode, DataBundle) {
-        deck()
-    }
-
     fn deck() -> (UiNode, DataBundle) {
         let root: UiNode = serde_json::from_value(json!({
             "type": "core://List", "query_key": "q:deck", "stack": true,
@@ -870,19 +866,42 @@ mod tests {
         s.scatter_reset(&id);
         assert_eq!(s.scatter_view(&id).zoom, 1.0);
     }
-}
 
-#[cfg(test)]
-mod dots_probe {
     #[test]
-    fn probe() {
-        let (root, data) = super::tests::deck_for_probe();
-        let mut s = super::super::Session::new("home", root, data, super::super::Viewport::PHONE);
-        let scene = s.scene().unwrap();
-        for n in &scene.semantics {
-            if n.node_type == "dots" || n.id.contains("carousel") || n.node_type.contains("arousel") {
-                eprintln!("PROBE {} {} {:?}", n.node_type, n.id, n.bounds);
+    fn the_page_bars_fit_inside_the_photo() {
+        // A carousel in a padded column, as on a card: its bars stay inside it.
+        let (_, data) = deck();
+        for stack in [false, true] {
+            let root: UiNode = serde_json::from_value(json!({
+                "type": "core://List", "query_key": "q:deck", "stack": stack,
+                "item_template": {
+                    "type": "core://SwipeCard", "on_swipe_left": {"intent": "action.navigation.back"},
+                    "content": {"type": "core://Box", "padding_h_dp": 30, "content": {
+                        "type": "core://Carousel", "items": "$item.photos", "tap_paging": true,
+                        "aspect_ratio": 0.8,
+                        "item_template": {"type": "core://Image", "url": "$item.url"}
+                    }}
+                }
+            }))
+            .unwrap();
+            let (mut s, _) = session(root, data.clone());
+            let scene = s.scene().unwrap();
+            // Each carousel's bars (`dots:<its id>`) inside it.
+            let mut seen = 0;
+            for n in scene.semantics.iter().filter(|n| n.node_type == "dots") {
+                let id = n.id.strip_prefix("dots:").unwrap();
+                let frame = scene.find_node(id).expect("its carousel").bounds;
+                let dots = n.bounds;
+                let ok =
+                    dots[0] >= frame[0] - 0.5 && dots[0] + dots[2] <= frame[0] + frame[2] + 0.5;
+                assert!(ok, "stack {stack}: bars {dots:?} in {frame:?}");
+                assert!(
+                    dots[1] >= frame[1] && dots[1] < frame[1] + 40.0,
+                    "bars at the top: {dots:?}"
+                );
+                seen += 1;
             }
+            assert!(seen >= 1);
         }
     }
 }

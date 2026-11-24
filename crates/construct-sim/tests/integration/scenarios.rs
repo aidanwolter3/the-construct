@@ -361,6 +361,24 @@ fn taste_deals_a_deck_maps_the_taste_and_shows_the_tastes() {
                 .expect("a Like button")
                 .bounds;
             assert!(like[1] + like[3] <= 844.0, "Like is on screen: {like:?}");
+            // The photo's page bars lie inside the photo.
+            for n in scene.semantics.iter().filter(|n| n.node_type == "dots") {
+                let frame = scene.find_node(n.id.strip_prefix("dots:").unwrap()).unwrap().bounds;
+                let b = n.bounds;
+                // Each bar drawn is inside it too (3 points tall, at its top).
+                for d in &scene.draws {
+                    if let construct_render::scene::Draw::Quad(q) = d
+                        && (q.rect[3] - 3.0).abs() < 0.01
+                        && (q.rect[1] - (frame[1] + 10.0)).abs() < 0.01
+                        && q.rect[0] >= frame[0] - 1.0
+                        && q.rect[0] < frame[0] + frame[2]
+                    {
+                        let r = q.rect;
+                        assert!(r[0] >= frame[0] && r[0] + r[2] <= frame[0] + frame[2], "bar {r:?} in {frame:?}");
+                    }
+                }
+                assert!(b[0] >= frame[0] - 0.5 && b[0] + b[2] <= frame[0] + frame[2] + 0.5, "bars {b:?} in {frame:?}");
+            }
             const MAP: &str = "Map of 2,400 pieces, tap a dot to open it";
             let results = runner.run(&construct_sim::script::parse(&format!(
                 "tap-photo right Photo 1 of Waxed Chore Coat in Olive; assert-text Photo 2 of 3; \
