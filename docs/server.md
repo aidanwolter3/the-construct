@@ -266,8 +266,8 @@ Counts live in memory and restart from zero.
   each device's build stands against the server's (latest, behind, ahead) and devices per day by build for a
   `core://Bars` chart: `monitor:device_days` (one build per device and day) for older apps, and `monitor:device_cells`
   (each build a device ran that day, sized by when it switched, decision [`device-day-grid`](decisions/device-day-grid.md))
-  for the grid of devices by day, with `monitor:releases` (each server build the pod ran that a device ran too, and the
-  server's own, at the moment the pod first ran it) drawn as dashed lines down the grid. Over MCP, `list_devices`, `rename_device` and `watch_device` (run a source action or send a
+  for the grid of devices by day, with `monitor:releases` (the server's own build and the ones devices run now, at the
+  moment the pod first ran each; other builds are grey) drawn as dashed lines down the grid. Over MCP, `list_devices`, `rename_device` and `watch_device` (run a source action or send a
   "Device updates" notification once a device draws a feature or runs a newer build; an MCP credential's watch runs
   only actions an MCP credential reaches, such as a collection's row writes or reopening an agent's run).
 - **Prometheus:** with `CONSTRUCT_METRICS_ADDR`, `GET /metrics` on that address serves the same counters as

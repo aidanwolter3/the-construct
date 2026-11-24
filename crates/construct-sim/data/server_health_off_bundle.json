@@ -7,22 +7,6 @@
       "title": "Server monitoring"
     },
     "monitor://builds/0": {
-      "build": "0.5.1+20261103100000.4a7e210",
-      "color": "#C98500",
-      "label": "Nov 3 · 4a7e210",
-      "legend": "Nov 3 · 4a7e210",
-      "note": "",
-      "series": "4"
-    },
-    "monitor://builds/1": {
-      "build": "0.6.0+20261111100000.e81c5d4",
-      "color": "#199E70",
-      "label": "Nov 11 · e81c5d4",
-      "legend": "Nov 11 · e81c5d4",
-      "note": "",
-      "series": "3"
-    },
-    "monitor://builds/2": {
       "build": "0.6.0+20261114100000.9be03a1",
       "color": "#D95926",
       "label": "Nov 14 · 9be03a1",
@@ -30,7 +14,7 @@
       "note": "",
       "series": "2"
     },
-    "monitor://builds/3": {
+    "monitor://builds/1": {
       "build": "0.6.0+20261118100000.c41d9e2",
       "color": "#2A78D6",
       "label": "Nov 18 · c41d9e2",
@@ -38,7 +22,7 @@
       "note": "server",
       "series": "1"
     },
-    "monitor://builds/4": {
+    "monitor://builds/2": {
       "build": "0.6.0+20261119080000.f02b77e",
       "color": "#E34948",
       "label": "Nov 19 · f02b77e local",
@@ -46,13 +30,21 @@
       "note": "ahead",
       "series": "8"
     },
+    "monitor://builds/3": {
+      "build": "",
+      "color": "#9AA0A6",
+      "label": "Older builds",
+      "legend": "Older builds",
+      "note": "",
+      "series": "other"
+    },
     "monitor://device_cells/chromemac001/2026-11-06/0": {
       "bar": "2026-11-06",
       "bar_label": "6",
       "build": "0.5.1+20261103100000.4a7e210",
       "build_label": "Nov 3 · 4a7e210",
       "cell": "chromemac001/2026-11-06",
-      "color": "#C98500",
+      "color": "#9AA0A6",
       "detail": "Nov 3 · 4a7e210 · 8:10–21:45",
       "device": "Chrome on macOS",
       "hatched": false,
@@ -60,7 +52,7 @@
       "hours": 24.0,
       "kind": "web",
       "row": "chromemac001",
-      "series": "4"
+      "series": "other"
     },
     "monitor://device_cells/chromemac001/2026-11-07/1": {
       "bar": "2026-11-07",
@@ -68,7 +60,7 @@
       "build": "0.5.1+20261103100000.4a7e210",
       "build_label": "Nov 3 · 4a7e210",
       "cell": "chromemac001/2026-11-07",
-      "color": "#C98500",
+      "color": "#9AA0A6",
       "detail": "Nov 3 · 4a7e210 · 8:10–21:45",
       "device": "Chrome on macOS",
       "hatched": false,
@@ -76,7 +68,7 @@
       "hours": 24.0,
       "kind": "web",
       "row": "chromemac001",
-      "series": "4"
+      "series": "other"
     },
     "monitor://device_cells/chromemac001/2026-11-08/2": {
       "bar": "2026-11-08",
@@ -84,7 +76,7 @@
       "build": "0.5.1+20261103100000.4a7e210",
       "build_label": "Nov 3 · 4a7e210",
       "cell": "chromemac001/2026-11-08",
-      "color": "#C98500",
+      "color": "#9AA0A6",
       "detail": "Nov 3 · 4a7e210 · 8:10–21:45",
       "device": "Chrome on macOS",
       "hatched": false,
@@ -92,7 +84,7 @@
       "hours": 24.0,
       "kind": "web",
       "row": "chromemac001",
-      "series": "4"
+      "series": "other"
     },
     "monitor://device_cells/chromemac001/2026-11-09/3": {
       "bar": "2026-11-09",
@@ -100,7 +92,7 @@
       "build": "0.5.1+20261103100000.4a7e210",
       "build_label": "Nov 3 · 4a7e210",
       "cell": "chromemac001/2026-11-09",
-      "color": "#C98500",
+      "color": "#9AA0A6",
       "detail": "Nov 3 · 4a7e210 · 8:10–21:45",
       "device": "Chrome on macOS",
       "hatched": false,
@@ -108,7 +100,7 @@
       "hours": 24.0,
       "kind": "web",
       "row": "chromemac001",
-      "series": "4"
+      "series": "other"
     },
     "monitor://device_cells/chromemac001/2026-11-10/4": {
       "bar": "2026-11-10",
@@ -116,7 +108,7 @@
       "build": "0.5.1+20261103100000.4a7e210",
       "build_label": "Nov 3 · 4a7e210",
       "cell": "chromemac001/2026-11-10",
-      "color": "#C98500",
+      "color": "#9AA0A6",
       "detail": "Nov 3 · 4a7e210 · 8:10–21:45",
       "device": "Chrome on macOS",
       "hatched": false,
@@ -124,7 +116,7 @@
       "hours": 24.0,
       "kind": "web",
       "row": "chromemac001",
-      "series": "4"
+      "series": "other"
     },
     "monitor://device_cells/chromemac001/2026-11-11/5": {
       "bar": "2026-11-11",
@@ -132,7 +124,7 @@
       "build": "0.5.1+20261103100000.4a7e210",
       "build_label": "Nov 3 · 4a7e210",
       "cell": "chromemac001/2026-11-11",
-      "color": "#C98500",
+      "color": "#9AA0A6",
       "detail": "Nov 3 · 4a7e210 · 7:40–9:45",
       "device": "Chrome on macOS",
       "hatched": false,
@@ -140,7 +132,7 @@
       "hours": 10.0,
       "kind": "web",
       "row": "chromemac001",
-      "series": "4"
+      "series": "other"
     },
     "monitor://device_cells/chromemac001/2026-11-11/6": {
       "bar": "2026-11-11",
@@ -148,7 +140,7 @@
       "build": "0.6.0+20261111100000.e81c5d4",
       "build_label": "Nov 11 · e81c5d4",
       "cell": "chromemac001/2026-11-11",
-      "color": "#199E70",
+      "color": "#9AA0A6",
       "detail": "Nov 11 · e81c5d4 · 10:00–22:30",
       "device": "Chrome on macOS",
       "hatched": false,
@@ -156,7 +148,7 @@
       "hours": 14.0,
       "kind": "web",
       "row": "chromemac001",
-      "series": "3"
+      "series": "other"
     },
     "monitor://device_cells/chromemac001/2026-11-12/7": {
       "bar": "2026-11-12",
@@ -164,7 +156,7 @@
       "build": "0.6.0+20261111100000.e81c5d4",
       "build_label": "Nov 11 · e81c5d4",
       "cell": "chromemac001/2026-11-12",
-      "color": "#199E70",
+      "color": "#9AA0A6",
       "detail": "Nov 11 · e81c5d4 · 8:10–21:45",
       "device": "Chrome on macOS",
       "hatched": false,
@@ -172,7 +164,7 @@
       "hours": 24.0,
       "kind": "web",
       "row": "chromemac001",
-      "series": "3"
+      "series": "other"
     },
     "monitor://device_cells/chromemac001/2026-11-13/8": {
       "bar": "2026-11-13",
@@ -180,7 +172,7 @@
       "build": "0.6.0+20261111100000.e81c5d4",
       "build_label": "Nov 11 · e81c5d4",
       "cell": "chromemac001/2026-11-13",
-      "color": "#199E70",
+      "color": "#9AA0A6",
       "detail": "Nov 11 · e81c5d4 · 8:10–21:45",
       "device": "Chrome on macOS",
       "hatched": false,
@@ -188,7 +180,7 @@
       "hours": 24.0,
       "kind": "web",
       "row": "chromemac001",
-      "series": "3"
+      "series": "other"
     },
     "monitor://device_cells/chromemac001/2026-11-14/10": {
       "bar": "2026-11-14",
@@ -212,7 +204,7 @@
       "build": "0.6.0+20261111100000.e81c5d4",
       "build_label": "Nov 11 · e81c5d4",
       "cell": "chromemac001/2026-11-14",
-      "color": "#199E70",
+      "color": "#9AA0A6",
       "detail": "Nov 11 · e81c5d4 · 7:40–16:15",
       "device": "Chrome on macOS",
       "hatched": false,
@@ -220,7 +212,7 @@
       "hours": 16.5,
       "kind": "web",
       "row": "chromemac001",
-      "series": "3"
+      "series": "other"
     },
     "monitor://device_cells/chromemac001/2026-11-15/11": {
       "bar": "2026-11-15",
@@ -356,7 +348,7 @@
       "build": "0.5.1+20261103100000.4a7e210",
       "build_label": "Nov 3 · 4a7e210",
       "cell": "edgedesk001/2026-11-08",
-      "color": "#C98500",
+      "color": "#9AA0A6",
       "detail": "Nov 3 · 4a7e210 · 8:10–21:45",
       "device": "Edge on Windows",
       "hatched": false,
@@ -364,7 +356,7 @@
       "hours": 24.0,
       "kind": "web",
       "row": "edgedesk001",
-      "series": "4"
+      "series": "other"
     },
     "monitor://device_cells/edgedesk001/2026-11-09/20": {
       "bar": "2026-11-09",
@@ -372,7 +364,7 @@
       "build": "0.5.1+20261103100000.4a7e210",
       "build_label": "Nov 3 · 4a7e210",
       "cell": "edgedesk001/2026-11-09",
-      "color": "#C98500",
+      "color": "#9AA0A6",
       "detail": "Nov 3 · 4a7e210 · 8:10–21:45",
       "device": "Edge on Windows",
       "hatched": false,
@@ -380,7 +372,7 @@
       "hours": 24.0,
       "kind": "web",
       "row": "edgedesk001",
-      "series": "4"
+      "series": "other"
     },
     "monitor://device_cells/edgedesk001/2026-11-10/21": {
       "bar": "2026-11-10",
@@ -548,7 +540,7 @@
       "build": "0.5.1+20261103100000.4a7e210",
       "build_label": "Nov 3 · 4a7e210",
       "cell": "firefoxwork1/2026-11-06",
-      "color": "#C98500",
+      "color": "#9AA0A6",
       "detail": "Nov 3 · 4a7e210 · 8:10–21:45",
       "device": "Firefox on Linux",
       "hatched": false,
@@ -556,7 +548,7 @@
       "hours": 24.0,
       "kind": "web",
       "row": "firefoxwork1",
-      "series": "4"
+      "series": "other"
     },
     "monitor://device_cells/firefoxwork1/2026-11-07/32": {
       "bar": "2026-11-07",
@@ -596,7 +588,7 @@
       "build": "0.5.1+20261103100000.4a7e210",
       "build_label": "Nov 3 · 4a7e210",
       "cell": "firefoxwork1/2026-11-09",
-      "color": "#C98500",
+      "color": "#9AA0A6",
       "detail": "Nov 3 · 4a7e210 · 8:10–21:45",
       "device": "Firefox on Linux",
       "hatched": false,
@@ -604,7 +596,7 @@
       "hours": 24.0,
       "kind": "web",
       "row": "firefoxwork1",
-      "series": "4"
+      "series": "other"
     },
     "monitor://device_cells/firefoxwork1/2026-11-10/35": {
       "bar": "2026-11-10",
@@ -612,7 +604,7 @@
       "build": "0.5.1+20261103100000.4a7e210",
       "build_label": "Nov 3 · 4a7e210",
       "cell": "firefoxwork1/2026-11-10",
-      "color": "#C98500",
+      "color": "#9AA0A6",
       "detail": "Nov 3 · 4a7e210 · 8:10–21:45",
       "device": "Firefox on Linux",
       "hatched": false,
@@ -620,7 +612,7 @@
       "hours": 24.0,
       "kind": "web",
       "row": "firefoxwork1",
-      "series": "4"
+      "series": "other"
     },
     "monitor://device_cells/firefoxwork1/2026-11-11/36": {
       "bar": "2026-11-11",
@@ -628,7 +620,7 @@
       "build": "0.5.1+20261103100000.4a7e210",
       "build_label": "Nov 3 · 4a7e210",
       "cell": "firefoxwork1/2026-11-11",
-      "color": "#C98500",
+      "color": "#9AA0A6",
       "detail": "Nov 3 · 4a7e210 · 8:10–21:45",
       "device": "Firefox on Linux",
       "hatched": false,
@@ -636,7 +628,7 @@
       "hours": 24.0,
       "kind": "web",
       "row": "firefoxwork1",
-      "series": "4"
+      "series": "other"
     },
     "monitor://device_cells/firefoxwork1/2026-11-12/37": {
       "bar": "2026-11-12",
@@ -644,7 +636,7 @@
       "build": "0.5.1+20261103100000.4a7e210",
       "build_label": "Nov 3 · 4a7e210",
       "cell": "firefoxwork1/2026-11-12",
-      "color": "#C98500",
+      "color": "#9AA0A6",
       "detail": "Nov 3 · 4a7e210 · 8:10–21:45",
       "device": "Firefox on Linux",
       "hatched": false,
@@ -652,7 +644,7 @@
       "hours": 24.0,
       "kind": "web",
       "row": "firefoxwork1",
-      "series": "4"
+      "series": "other"
     },
     "monitor://device_cells/firefoxwork1/2026-11-13/38": {
       "bar": "2026-11-13",
@@ -660,7 +652,7 @@
       "build": "0.5.1+20261103100000.4a7e210",
       "build_label": "Nov 3 · 4a7e210",
       "cell": "firefoxwork1/2026-11-13",
-      "color": "#C98500",
+      "color": "#9AA0A6",
       "detail": "Nov 3 · 4a7e210 · 7:40–14:45",
       "device": "Firefox on Linux",
       "hatched": false,
@@ -668,7 +660,7 @@
       "hours": 15.0,
       "kind": "web",
       "row": "firefoxwork1",
-      "series": "4"
+      "series": "other"
     },
     "monitor://device_cells/firefoxwork1/2026-11-13/39": {
       "bar": "2026-11-13",
@@ -676,7 +668,7 @@
       "build": "0.6.0+20261111100000.e81c5d4",
       "build_label": "Nov 11 · e81c5d4",
       "cell": "firefoxwork1/2026-11-13",
-      "color": "#199E70",
+      "color": "#9AA0A6",
       "detail": "Nov 11 · e81c5d4 · 15:00–22:30",
       "device": "Firefox on Linux",
       "hatched": false,
@@ -684,7 +676,7 @@
       "hours": 9.0,
       "kind": "web",
       "row": "firefoxwork1",
-      "series": "3"
+      "series": "other"
     },
     "monitor://device_cells/firefoxwork1/2026-11-14/40": {
       "bar": "2026-11-14",
@@ -724,7 +716,7 @@
       "build": "0.6.0+20261111100000.e81c5d4",
       "build_label": "Nov 11 · e81c5d4",
       "cell": "firefoxwork1/2026-11-16",
-      "color": "#199E70",
+      "color": "#9AA0A6",
       "detail": "Nov 11 · e81c5d4 · 8:10–21:45",
       "device": "Firefox on Linux",
       "hatched": false,
@@ -732,7 +724,7 @@
       "hours": 24.0,
       "kind": "web",
       "row": "firefoxwork1",
-      "series": "3"
+      "series": "other"
     },
     "monitor://device_cells/firefoxwork1/2026-11-17/43": {
       "bar": "2026-11-17",
@@ -740,7 +732,7 @@
       "build": "0.6.0+20261111100000.e81c5d4",
       "build_label": "Nov 11 · e81c5d4",
       "cell": "firefoxwork1/2026-11-17",
-      "color": "#199E70",
+      "color": "#9AA0A6",
       "detail": "Nov 11 · e81c5d4 · 7:40–11:45",
       "device": "Firefox on Linux",
       "hatched": false,
@@ -748,7 +740,7 @@
       "hours": 12.0,
       "kind": "web",
       "row": "firefoxwork1",
-      "series": "3"
+      "series": "other"
     },
     "monitor://device_cells/firefoxwork1/2026-11-17/44": {
       "bar": "2026-11-17",
@@ -804,7 +796,7 @@
       "build": "0.5.1+20261103100000.4a7e210",
       "build_label": "Nov 3 · 4a7e210",
       "cell": "macbookair01/2026-11-06",
-      "color": "#C98500",
+      "color": "#9AA0A6",
       "detail": "Nov 3 · 4a7e210 · 8:10–21:45",
       "device": "Studio MacBook",
       "hatched": false,
@@ -812,7 +804,7 @@
       "hours": 24.0,
       "kind": "macos",
       "row": "macbookair01",
-      "series": "4"
+      "series": "other"
     },
     "monitor://device_cells/macbookair01/2026-11-07/63": {
       "bar": "2026-11-07",
@@ -852,7 +844,7 @@
       "build": "0.5.1+20261103100000.4a7e210",
       "build_label": "Nov 3 · 4a7e210",
       "cell": "macbookair01/2026-11-09",
-      "color": "#C98500",
+      "color": "#9AA0A6",
       "detail": "Nov 3 · 4a7e210 · 8:10–21:45",
       "device": "Studio MacBook",
       "hatched": false,
@@ -860,7 +852,7 @@
       "hours": 24.0,
       "kind": "macos",
       "row": "macbookair01",
-      "series": "4"
+      "series": "other"
     },
     "monitor://device_cells/macbookair01/2026-11-10/66": {
       "bar": "2026-11-10",
@@ -868,7 +860,7 @@
       "build": "0.5.1+20261103100000.4a7e210",
       "build_label": "Nov 3 · 4a7e210",
       "cell": "macbookair01/2026-11-10",
-      "color": "#C98500",
+      "color": "#9AA0A6",
       "detail": "Nov 3 · 4a7e210 · 8:10–21:45",
       "device": "Studio MacBook",
       "hatched": false,
@@ -876,7 +868,7 @@
       "hours": 24.0,
       "kind": "macos",
       "row": "macbookair01",
-      "series": "4"
+      "series": "other"
     },
     "monitor://device_cells/macbookair01/2026-11-11/67": {
       "bar": "2026-11-11",
@@ -884,7 +876,7 @@
       "build": "0.5.1+20261103100000.4a7e210",
       "build_label": "Nov 3 · 4a7e210",
       "cell": "macbookair01/2026-11-11",
-      "color": "#C98500",
+      "color": "#9AA0A6",
       "detail": "Nov 3 · 4a7e210 · 8:10–21:45",
       "device": "Studio MacBook",
       "hatched": false,
@@ -892,7 +884,7 @@
       "hours": 24.0,
       "kind": "macos",
       "row": "macbookair01",
-      "series": "4"
+      "series": "other"
     },
     "monitor://device_cells/macbookair01/2026-11-12/68": {
       "bar": "2026-11-12",
@@ -900,7 +892,7 @@
       "build": "0.5.1+20261103100000.4a7e210",
       "build_label": "Nov 3 · 4a7e210",
       "cell": "macbookair01/2026-11-12",
-      "color": "#C98500",
+      "color": "#9AA0A6",
       "detail": "Nov 3 · 4a7e210 · 8:10–21:45",
       "device": "Studio MacBook",
       "hatched": false,
@@ -908,7 +900,7 @@
       "hours": 24.0,
       "kind": "macos",
       "row": "macbookair01",
-      "series": "4"
+      "series": "other"
     },
     "monitor://device_cells/macbookair01/2026-11-13/69": {
       "bar": "2026-11-13",
@@ -916,7 +908,7 @@
       "build": "0.5.1+20261103100000.4a7e210",
       "build_label": "Nov 3 · 4a7e210",
       "cell": "macbookair01/2026-11-13",
-      "color": "#C98500",
+      "color": "#9AA0A6",
       "detail": "Nov 3 · 4a7e210 · 8:10–21:45",
       "device": "Studio MacBook",
       "hatched": false,
@@ -924,7 +916,7 @@
       "hours": 24.0,
       "kind": "macos",
       "row": "macbookair01",
-      "series": "4"
+      "series": "other"
     },
     "monitor://device_cells/macbookair01/2026-11-14/70": {
       "bar": "2026-11-14",
@@ -964,7 +956,7 @@
       "build": "0.5.1+20261103100000.4a7e210",
       "build_label": "Nov 3 · 4a7e210",
       "cell": "macbookair01/2026-11-16",
-      "color": "#C98500",
+      "color": "#9AA0A6",
       "detail": "Nov 3 · 4a7e210 · 7:40–8:45",
       "device": "Studio MacBook",
       "hatched": false,
@@ -972,7 +964,7 @@
       "hours": 9.0,
       "kind": "macos",
       "row": "macbookair01",
-      "series": "4"
+      "series": "other"
     },
     "monitor://device_cells/macbookair01/2026-11-16/73": {
       "bar": "2026-11-16",
@@ -1060,7 +1052,7 @@
       "build": "0.5.1+20261103100000.4a7e210",
       "build_label": "Nov 3 · 4a7e210",
       "cell": "pixel9demo01/2026-11-06",
-      "color": "#C98500",
+      "color": "#9AA0A6",
       "detail": "Nov 3 · 4a7e210 · 8:10–21:45",
       "device": "Pixel 9",
       "hatched": false,
@@ -1068,7 +1060,7 @@
       "hours": 24.0,
       "kind": "android",
       "row": "pixel9demo01",
-      "series": "4"
+      "series": "other"
     },
     "monitor://device_cells/pixel9demo01/2026-11-07/48": {
       "bar": "2026-11-07",
@@ -1076,7 +1068,7 @@
       "build": "0.5.1+20261103100000.4a7e210",
       "build_label": "Nov 3 · 4a7e210",
       "cell": "pixel9demo01/2026-11-07",
-      "color": "#C98500",
+      "color": "#9AA0A6",
       "detail": "Nov 3 · 4a7e210 · 8:10–21:45",
       "device": "Pixel 9",
       "hatched": false,
@@ -1084,7 +1076,7 @@
       "hours": 24.0,
       "kind": "android",
       "row": "pixel9demo01",
-      "series": "4"
+      "series": "other"
     },
     "monitor://device_cells/pixel9demo01/2026-11-08/49": {
       "bar": "2026-11-08",
@@ -1092,7 +1084,7 @@
       "build": "0.5.1+20261103100000.4a7e210",
       "build_label": "Nov 3 · 4a7e210",
       "cell": "pixel9demo01/2026-11-08",
-      "color": "#C98500",
+      "color": "#9AA0A6",
       "detail": "Nov 3 · 4a7e210 · 8:10–21:45",
       "device": "Pixel 9",
       "hatched": false,
@@ -1100,7 +1092,7 @@
       "hours": 24.0,
       "kind": "android",
       "row": "pixel9demo01",
-      "series": "4"
+      "series": "other"
     },
     "monitor://device_cells/pixel9demo01/2026-11-09/50": {
       "bar": "2026-11-09",
@@ -1108,7 +1100,7 @@
       "build": "0.5.1+20261103100000.4a7e210",
       "build_label": "Nov 3 · 4a7e210",
       "cell": "pixel9demo01/2026-11-09",
-      "color": "#C98500",
+      "color": "#9AA0A6",
       "detail": "Nov 3 · 4a7e210 · 8:10–21:45",
       "device": "Pixel 9",
       "hatched": false,
@@ -1116,7 +1108,7 @@
       "hours": 24.0,
       "kind": "android",
       "row": "pixel9demo01",
-      "series": "4"
+      "series": "other"
     },
     "monitor://device_cells/pixel9demo01/2026-11-10/51": {
       "bar": "2026-11-10",
@@ -1124,7 +1116,7 @@
       "build": "0.5.1+20261103100000.4a7e210",
       "build_label": "Nov 3 · 4a7e210",
       "cell": "pixel9demo01/2026-11-10",
-      "color": "#C98500",
+      "color": "#9AA0A6",
       "detail": "Nov 3 · 4a7e210 · 8:10–21:45",
       "device": "Pixel 9",
       "hatched": false,
@@ -1132,7 +1124,7 @@
       "hours": 24.0,
       "kind": "android",
       "row": "pixel9demo01",
-      "series": "4"
+      "series": "other"
     },
     "monitor://device_cells/pixel9demo01/2026-11-11/52": {
       "bar": "2026-11-11",
@@ -1140,7 +1132,7 @@
       "build": "0.5.1+20261103100000.4a7e210",
       "build_label": "Nov 3 · 4a7e210",
       "cell": "pixel9demo01/2026-11-11",
-      "color": "#C98500",
+      "color": "#9AA0A6",
       "detail": "Nov 3 · 4a7e210 · 8:10–21:45",
       "device": "Pixel 9",
       "hatched": false,
@@ -1148,7 +1140,7 @@
       "hours": 24.0,
       "kind": "android",
       "row": "pixel9demo01",
-      "series": "4"
+      "series": "other"
     },
     "monitor://device_cells/pixel9demo01/2026-11-12/53": {
       "bar": "2026-11-12",
@@ -1156,7 +1148,7 @@
       "build": "0.5.1+20261103100000.4a7e210",
       "build_label": "Nov 3 · 4a7e210",
       "cell": "pixel9demo01/2026-11-12",
-      "color": "#C98500",
+      "color": "#9AA0A6",
       "detail": "Nov 3 · 4a7e210 · 8:10–21:45",
       "device": "Pixel 9",
       "hatched": false,
@@ -1164,7 +1156,7 @@
       "hours": 24.0,
       "kind": "android",
       "row": "pixel9demo01",
-      "series": "4"
+      "series": "other"
     },
     "monitor://device_cells/pixel9demo01/2026-11-13/54": {
       "bar": "2026-11-13",
@@ -1172,7 +1164,7 @@
       "build": "0.5.1+20261103100000.4a7e210",
       "build_label": "Nov 3 · 4a7e210",
       "cell": "pixel9demo01/2026-11-13",
-      "color": "#C98500",
+      "color": "#9AA0A6",
       "detail": "Nov 3 · 4a7e210 · 8:10–21:45",
       "device": "Pixel 9",
       "hatched": false,
@@ -1180,7 +1172,7 @@
       "hours": 24.0,
       "kind": "android",
       "row": "pixel9demo01",
-      "series": "4"
+      "series": "other"
     },
     "monitor://device_cells/pixel9demo01/2026-11-14/55": {
       "bar": "2026-11-14",
@@ -1188,7 +1180,7 @@
       "build": "0.5.1+20261103100000.4a7e210",
       "build_label": "Nov 3 · 4a7e210",
       "cell": "pixel9demo01/2026-11-14",
-      "color": "#C98500",
+      "color": "#9AA0A6",
       "detail": "Nov 3 · 4a7e210 · 8:10–21:45",
       "device": "Pixel 9",
       "hatched": false,
@@ -1196,7 +1188,7 @@
       "hours": 24.0,
       "kind": "android",
       "row": "pixel9demo01",
-      "series": "4"
+      "series": "other"
     },
     "monitor://device_cells/pixel9demo01/2026-11-15/56": {
       "bar": "2026-11-15",
@@ -1204,7 +1196,7 @@
       "build": "0.5.1+20261103100000.4a7e210",
       "build_label": "Nov 3 · 4a7e210",
       "cell": "pixel9demo01/2026-11-15",
-      "color": "#C98500",
+      "color": "#9AA0A6",
       "detail": "Nov 3 · 4a7e210 · 8:10–21:45",
       "device": "Pixel 9",
       "hatched": false,
@@ -1212,7 +1204,7 @@
       "hours": 24.0,
       "kind": "android",
       "row": "pixel9demo01",
-      "series": "4"
+      "series": "other"
     },
     "monitor://device_cells/pixel9demo01/2026-11-16/57": {
       "bar": "2026-11-16",
@@ -1220,7 +1212,7 @@
       "build": "0.5.1+20261103100000.4a7e210",
       "build_label": "Nov 3 · 4a7e210",
       "cell": "pixel9demo01/2026-11-16",
-      "color": "#C98500",
+      "color": "#9AA0A6",
       "detail": "Nov 3 · 4a7e210 · 7:40–18:45",
       "device": "Pixel 9",
       "hatched": false,
@@ -1228,7 +1220,7 @@
       "hours": 19.0,
       "kind": "android",
       "row": "pixel9demo01",
-      "series": "4"
+      "series": "other"
     },
     "monitor://device_cells/pixel9demo01/2026-11-16/58": {
       "bar": "2026-11-16",
@@ -1299,7 +1291,7 @@
       "bar_label": "6",
       "build": "0.5.1+20261103100000.4a7e210",
       "build_label": "Nov 3 · 4a7e210",
-      "color": "#C98500",
+      "color": "#9AA0A6",
       "day_text": "Fri Nov 6",
       "detail": "Nov 3 · 4a7e210",
       "device": "Chrome on macOS",
@@ -1307,14 +1299,14 @@
       "hatched": false,
       "kind": "web",
       "note": "",
-      "series": "4"
+      "series": "other"
     },
     "monitor://device_days/2026-11-06/firefoxwork1": {
       "bar": "2026-11-06",
       "bar_label": "6",
       "build": "0.5.1+20261103100000.4a7e210",
       "build_label": "Nov 3 · 4a7e210",
-      "color": "#C98500",
+      "color": "#9AA0A6",
       "day_text": "Fri Nov 6",
       "detail": "Nov 3 · 4a7e210",
       "device": "Firefox on Linux",
@@ -1322,14 +1314,14 @@
       "hatched": false,
       "kind": "web",
       "note": "",
-      "series": "4"
+      "series": "other"
     },
     "monitor://device_days/2026-11-06/macbookair01": {
       "bar": "2026-11-06",
       "bar_label": "6",
       "build": "0.5.1+20261103100000.4a7e210",
       "build_label": "Nov 3 · 4a7e210",
-      "color": "#C98500",
+      "color": "#9AA0A6",
       "day_text": "Fri Nov 6",
       "detail": "Nov 3 · 4a7e210",
       "device": "Studio MacBook",
@@ -1337,14 +1329,14 @@
       "hatched": false,
       "kind": "macos",
       "note": "",
-      "series": "4"
+      "series": "other"
     },
     "monitor://device_days/2026-11-06/pixel9demo01": {
       "bar": "2026-11-06",
       "bar_label": "6",
       "build": "0.5.1+20261103100000.4a7e210",
       "build_label": "Nov 3 · 4a7e210",
-      "color": "#C98500",
+      "color": "#9AA0A6",
       "day_text": "Fri Nov 6",
       "detail": "Nov 3 · 4a7e210",
       "device": "Pixel 9",
@@ -1352,14 +1344,14 @@
       "hatched": false,
       "kind": "android",
       "note": "",
-      "series": "4"
+      "series": "other"
     },
     "monitor://device_days/2026-11-07/chromemac001": {
       "bar": "2026-11-07",
       "bar_label": "7",
       "build": "0.5.1+20261103100000.4a7e210",
       "build_label": "Nov 3 · 4a7e210",
-      "color": "#C98500",
+      "color": "#9AA0A6",
       "day_text": "Sat Nov 7",
       "detail": "Nov 3 · 4a7e210",
       "device": "Chrome on macOS",
@@ -1367,14 +1359,14 @@
       "hatched": false,
       "kind": "web",
       "note": "",
-      "series": "4"
+      "series": "other"
     },
     "monitor://device_days/2026-11-07/pixel9demo01": {
       "bar": "2026-11-07",
       "bar_label": "7",
       "build": "0.5.1+20261103100000.4a7e210",
       "build_label": "Nov 3 · 4a7e210",
-      "color": "#C98500",
+      "color": "#9AA0A6",
       "day_text": "Sat Nov 7",
       "detail": "Nov 3 · 4a7e210",
       "device": "Pixel 9",
@@ -1382,14 +1374,14 @@
       "hatched": false,
       "kind": "android",
       "note": "",
-      "series": "4"
+      "series": "other"
     },
     "monitor://device_days/2026-11-08/chromemac001": {
       "bar": "2026-11-08",
       "bar_label": "8",
       "build": "0.5.1+20261103100000.4a7e210",
       "build_label": "Nov 3 · 4a7e210",
-      "color": "#C98500",
+      "color": "#9AA0A6",
       "day_text": "Sun Nov 8",
       "detail": "Nov 3 · 4a7e210",
       "device": "Chrome on macOS",
@@ -1397,14 +1389,14 @@
       "hatched": false,
       "kind": "web",
       "note": "",
-      "series": "4"
+      "series": "other"
     },
     "monitor://device_days/2026-11-08/edgedesk001": {
       "bar": "2026-11-08",
       "bar_label": "8",
       "build": "0.5.1+20261103100000.4a7e210",
       "build_label": "Nov 3 · 4a7e210",
-      "color": "#C98500",
+      "color": "#9AA0A6",
       "day_text": "Sun Nov 8",
       "detail": "Nov 3 · 4a7e210",
       "device": "Edge on Windows",
@@ -1412,14 +1404,14 @@
       "hatched": false,
       "kind": "web",
       "note": "",
-      "series": "4"
+      "series": "other"
     },
     "monitor://device_days/2026-11-08/pixel9demo01": {
       "bar": "2026-11-08",
       "bar_label": "8",
       "build": "0.5.1+20261103100000.4a7e210",
       "build_label": "Nov 3 · 4a7e210",
-      "color": "#C98500",
+      "color": "#9AA0A6",
       "day_text": "Sun Nov 8",
       "detail": "Nov 3 · 4a7e210",
       "device": "Pixel 9",
@@ -1427,14 +1419,14 @@
       "hatched": false,
       "kind": "android",
       "note": "",
-      "series": "4"
+      "series": "other"
     },
     "monitor://device_days/2026-11-09/chromemac001": {
       "bar": "2026-11-09",
       "bar_label": "9",
       "build": "0.5.1+20261103100000.4a7e210",
       "build_label": "Nov 3 · 4a7e210",
-      "color": "#C98500",
+      "color": "#9AA0A6",
       "day_text": "Mon Nov 9",
       "detail": "Nov 3 · 4a7e210",
       "device": "Chrome on macOS",
@@ -1442,14 +1434,14 @@
       "hatched": false,
       "kind": "web",
       "note": "",
-      "series": "4"
+      "series": "other"
     },
     "monitor://device_days/2026-11-09/edgedesk001": {
       "bar": "2026-11-09",
       "bar_label": "9",
       "build": "0.5.1+20261103100000.4a7e210",
       "build_label": "Nov 3 · 4a7e210",
-      "color": "#C98500",
+      "color": "#9AA0A6",
       "day_text": "Mon Nov 9",
       "detail": "Nov 3 · 4a7e210",
       "device": "Edge on Windows",
@@ -1457,14 +1449,14 @@
       "hatched": false,
       "kind": "web",
       "note": "",
-      "series": "4"
+      "series": "other"
     },
     "monitor://device_days/2026-11-09/firefoxwork1": {
       "bar": "2026-11-09",
       "bar_label": "9",
       "build": "0.5.1+20261103100000.4a7e210",
       "build_label": "Nov 3 · 4a7e210",
-      "color": "#C98500",
+      "color": "#9AA0A6",
       "day_text": "Mon Nov 9",
       "detail": "Nov 3 · 4a7e210",
       "device": "Firefox on Linux",
@@ -1472,14 +1464,14 @@
       "hatched": false,
       "kind": "web",
       "note": "",
-      "series": "4"
+      "series": "other"
     },
     "monitor://device_days/2026-11-09/macbookair01": {
       "bar": "2026-11-09",
       "bar_label": "9",
       "build": "0.5.1+20261103100000.4a7e210",
       "build_label": "Nov 3 · 4a7e210",
-      "color": "#C98500",
+      "color": "#9AA0A6",
       "day_text": "Mon Nov 9",
       "detail": "Nov 3 · 4a7e210",
       "device": "Studio MacBook",
@@ -1487,14 +1479,14 @@
       "hatched": false,
       "kind": "macos",
       "note": "",
-      "series": "4"
+      "series": "other"
     },
     "monitor://device_days/2026-11-09/pixel9demo01": {
       "bar": "2026-11-09",
       "bar_label": "9",
       "build": "0.5.1+20261103100000.4a7e210",
       "build_label": "Nov 3 · 4a7e210",
-      "color": "#C98500",
+      "color": "#9AA0A6",
       "day_text": "Mon Nov 9",
       "detail": "Nov 3 · 4a7e210",
       "device": "Pixel 9",
@@ -1502,14 +1494,14 @@
       "hatched": false,
       "kind": "android",
       "note": "",
-      "series": "4"
+      "series": "other"
     },
     "monitor://device_days/2026-11-10/chromemac001": {
       "bar": "2026-11-10",
       "bar_label": "10",
       "build": "0.5.1+20261103100000.4a7e210",
       "build_label": "Nov 3 · 4a7e210",
-      "color": "#C98500",
+      "color": "#9AA0A6",
       "day_text": "Tue Nov 10",
       "detail": "Nov 3 · 4a7e210",
       "device": "Chrome on macOS",
@@ -1517,14 +1509,14 @@
       "hatched": false,
       "kind": "web",
       "note": "",
-      "series": "4"
+      "series": "other"
     },
     "monitor://device_days/2026-11-10/firefoxwork1": {
       "bar": "2026-11-10",
       "bar_label": "10",
       "build": "0.5.1+20261103100000.4a7e210",
       "build_label": "Nov 3 · 4a7e210",
-      "color": "#C98500",
+      "color": "#9AA0A6",
       "day_text": "Tue Nov 10",
       "detail": "Nov 3 · 4a7e210",
       "device": "Firefox on Linux",
@@ -1532,14 +1524,14 @@
       "hatched": false,
       "kind": "web",
       "note": "",
-      "series": "4"
+      "series": "other"
     },
     "monitor://device_days/2026-11-10/macbookair01": {
       "bar": "2026-11-10",
       "bar_label": "10",
       "build": "0.5.1+20261103100000.4a7e210",
       "build_label": "Nov 3 · 4a7e210",
-      "color": "#C98500",
+      "color": "#9AA0A6",
       "day_text": "Tue Nov 10",
       "detail": "Nov 3 · 4a7e210",
       "device": "Studio MacBook",
@@ -1547,14 +1539,14 @@
       "hatched": false,
       "kind": "macos",
       "note": "",
-      "series": "4"
+      "series": "other"
     },
     "monitor://device_days/2026-11-10/pixel9demo01": {
       "bar": "2026-11-10",
       "bar_label": "10",
       "build": "0.5.1+20261103100000.4a7e210",
       "build_label": "Nov 3 · 4a7e210",
-      "color": "#C98500",
+      "color": "#9AA0A6",
       "day_text": "Tue Nov 10",
       "detail": "Nov 3 · 4a7e210",
       "device": "Pixel 9",
@@ -1562,14 +1554,14 @@
       "hatched": false,
       "kind": "android",
       "note": "",
-      "series": "4"
+      "series": "other"
     },
     "monitor://device_days/2026-11-11/chromemac001": {
       "bar": "2026-11-11",
       "bar_label": "11",
       "build": "0.6.0+20261111100000.e81c5d4",
       "build_label": "Nov 11 · e81c5d4",
-      "color": "#199E70",
+      "color": "#9AA0A6",
       "day_text": "Wed Nov 11",
       "detail": "Nov 11 · e81c5d4",
       "device": "Chrome on macOS",
@@ -1577,14 +1569,14 @@
       "hatched": false,
       "kind": "web",
       "note": "",
-      "series": "3"
+      "series": "other"
     },
     "monitor://device_days/2026-11-11/firefoxwork1": {
       "bar": "2026-11-11",
       "bar_label": "11",
       "build": "0.5.1+20261103100000.4a7e210",
       "build_label": "Nov 3 · 4a7e210",
-      "color": "#C98500",
+      "color": "#9AA0A6",
       "day_text": "Wed Nov 11",
       "detail": "Nov 3 · 4a7e210",
       "device": "Firefox on Linux",
@@ -1592,14 +1584,14 @@
       "hatched": false,
       "kind": "web",
       "note": "",
-      "series": "4"
+      "series": "other"
     },
     "monitor://device_days/2026-11-11/macbookair01": {
       "bar": "2026-11-11",
       "bar_label": "11",
       "build": "0.5.1+20261103100000.4a7e210",
       "build_label": "Nov 3 · 4a7e210",
-      "color": "#C98500",
+      "color": "#9AA0A6",
       "day_text": "Wed Nov 11",
       "detail": "Nov 3 · 4a7e210",
       "device": "Studio MacBook",
@@ -1607,14 +1599,14 @@
       "hatched": false,
       "kind": "macos",
       "note": "",
-      "series": "4"
+      "series": "other"
     },
     "monitor://device_days/2026-11-11/pixel9demo01": {
       "bar": "2026-11-11",
       "bar_label": "11",
       "build": "0.5.1+20261103100000.4a7e210",
       "build_label": "Nov 3 · 4a7e210",
-      "color": "#C98500",
+      "color": "#9AA0A6",
       "day_text": "Wed Nov 11",
       "detail": "Nov 3 · 4a7e210",
       "device": "Pixel 9",
@@ -1622,14 +1614,14 @@
       "hatched": false,
       "kind": "android",
       "note": "",
-      "series": "4"
+      "series": "other"
     },
     "monitor://device_days/2026-11-12/chromemac001": {
       "bar": "2026-11-12",
       "bar_label": "12",
       "build": "0.6.0+20261111100000.e81c5d4",
       "build_label": "Nov 11 · e81c5d4",
-      "color": "#199E70",
+      "color": "#9AA0A6",
       "day_text": "Thu Nov 12",
       "detail": "Nov 11 · e81c5d4",
       "device": "Chrome on macOS",
@@ -1637,14 +1629,14 @@
       "hatched": false,
       "kind": "web",
       "note": "",
-      "series": "3"
+      "series": "other"
     },
     "monitor://device_days/2026-11-12/firefoxwork1": {
       "bar": "2026-11-12",
       "bar_label": "12",
       "build": "0.5.1+20261103100000.4a7e210",
       "build_label": "Nov 3 · 4a7e210",
-      "color": "#C98500",
+      "color": "#9AA0A6",
       "day_text": "Thu Nov 12",
       "detail": "Nov 3 · 4a7e210",
       "device": "Firefox on Linux",
@@ -1652,14 +1644,14 @@
       "hatched": false,
       "kind": "web",
       "note": "",
-      "series": "4"
+      "series": "other"
     },
     "monitor://device_days/2026-11-12/macbookair01": {
       "bar": "2026-11-12",
       "bar_label": "12",
       "build": "0.5.1+20261103100000.4a7e210",
       "build_label": "Nov 3 · 4a7e210",
-      "color": "#C98500",
+      "color": "#9AA0A6",
       "day_text": "Thu Nov 12",
       "detail": "Nov 3 · 4a7e210",
       "device": "Studio MacBook",
@@ -1667,14 +1659,14 @@
       "hatched": false,
       "kind": "macos",
       "note": "",
-      "series": "4"
+      "series": "other"
     },
     "monitor://device_days/2026-11-12/pixel9demo01": {
       "bar": "2026-11-12",
       "bar_label": "12",
       "build": "0.5.1+20261103100000.4a7e210",
       "build_label": "Nov 3 · 4a7e210",
-      "color": "#C98500",
+      "color": "#9AA0A6",
       "day_text": "Thu Nov 12",
       "detail": "Nov 3 · 4a7e210",
       "device": "Pixel 9",
@@ -1682,14 +1674,14 @@
       "hatched": false,
       "kind": "android",
       "note": "",
-      "series": "4"
+      "series": "other"
     },
     "monitor://device_days/2026-11-13/chromemac001": {
       "bar": "2026-11-13",
       "bar_label": "13",
       "build": "0.6.0+20261111100000.e81c5d4",
       "build_label": "Nov 11 · e81c5d4",
-      "color": "#199E70",
+      "color": "#9AA0A6",
       "day_text": "Fri Nov 13",
       "detail": "Nov 11 · e81c5d4",
       "device": "Chrome on macOS",
@@ -1697,14 +1689,14 @@
       "hatched": false,
       "kind": "web",
       "note": "",
-      "series": "3"
+      "series": "other"
     },
     "monitor://device_days/2026-11-13/firefoxwork1": {
       "bar": "2026-11-13",
       "bar_label": "13",
       "build": "0.6.0+20261111100000.e81c5d4",
       "build_label": "Nov 11 · e81c5d4",
-      "color": "#199E70",
+      "color": "#9AA0A6",
       "day_text": "Fri Nov 13",
       "detail": "Nov 11 · e81c5d4",
       "device": "Firefox on Linux",
@@ -1712,14 +1704,14 @@
       "hatched": false,
       "kind": "web",
       "note": "",
-      "series": "3"
+      "series": "other"
     },
     "monitor://device_days/2026-11-13/macbookair01": {
       "bar": "2026-11-13",
       "bar_label": "13",
       "build": "0.5.1+20261103100000.4a7e210",
       "build_label": "Nov 3 · 4a7e210",
-      "color": "#C98500",
+      "color": "#9AA0A6",
       "day_text": "Fri Nov 13",
       "detail": "Nov 3 · 4a7e210",
       "device": "Studio MacBook",
@@ -1727,14 +1719,14 @@
       "hatched": false,
       "kind": "macos",
       "note": "",
-      "series": "4"
+      "series": "other"
     },
     "monitor://device_days/2026-11-13/pixel9demo01": {
       "bar": "2026-11-13",
       "bar_label": "13",
       "build": "0.5.1+20261103100000.4a7e210",
       "build_label": "Nov 3 · 4a7e210",
-      "color": "#C98500",
+      "color": "#9AA0A6",
       "day_text": "Fri Nov 13",
       "detail": "Nov 3 · 4a7e210",
       "device": "Pixel 9",
@@ -1742,7 +1734,7 @@
       "hatched": false,
       "kind": "android",
       "note": "",
-      "series": "4"
+      "series": "other"
     },
     "monitor://device_days/2026-11-14/chromemac001": {
       "bar": "2026-11-14",
@@ -1764,7 +1756,7 @@
       "bar_label": "14",
       "build": "0.5.1+20261103100000.4a7e210",
       "build_label": "Nov 3 · 4a7e210",
-      "color": "#C98500",
+      "color": "#9AA0A6",
       "day_text": "Sat Nov 14",
       "detail": "Nov 3 · 4a7e210",
       "device": "Pixel 9",
@@ -1772,7 +1764,7 @@
       "hatched": false,
       "kind": "android",
       "note": "",
-      "series": "4"
+      "series": "other"
     },
     "monitor://device_days/2026-11-15/chromemac001": {
       "bar": "2026-11-15",
@@ -1809,7 +1801,7 @@
       "bar_label": "15",
       "build": "0.5.1+20261103100000.4a7e210",
       "build_label": "Nov 3 · 4a7e210",
-      "color": "#C98500",
+      "color": "#9AA0A6",
       "day_text": "Sun Nov 15",
       "detail": "Nov 3 · 4a7e210",
       "device": "Pixel 9",
@@ -1817,7 +1809,7 @@
       "hatched": false,
       "kind": "android",
       "note": "",
-      "series": "4"
+      "series": "other"
     },
     "monitor://device_days/2026-11-16/chromemac001": {
       "bar": "2026-11-16",
@@ -1854,7 +1846,7 @@
       "bar_label": "16",
       "build": "0.6.0+20261111100000.e81c5d4",
       "build_label": "Nov 11 · e81c5d4",
-      "color": "#199E70",
+      "color": "#9AA0A6",
       "day_text": "Mon Nov 16",
       "detail": "Nov 11 · e81c5d4",
       "device": "Firefox on Linux",
@@ -1862,7 +1854,7 @@
       "hatched": false,
       "kind": "web",
       "note": "",
-      "series": "3"
+      "series": "other"
     },
     "monitor://device_days/2026-11-16/macbookair01": {
       "bar": "2026-11-16",
@@ -2091,6 +2083,7 @@
     },
     "monitor://device_summary/pod": {
       "count_text": "5 devices",
+      "days_text": "last 14 days",
       "empty": false,
       "server_build": "0.6.0+20261118100000.c41d9e2",
       "server_build_label": "Nov 18 · c41d9e2",
@@ -2216,14 +2209,6 @@
       "time_text": "19 min ago",
       "title": "POST /v1/taste/sign-in → 400 invalid_url"
     },
-    "monitor://releases/0": {
-      "bar": "2026-11-11",
-      "build": "0.6.0+20261111100000.e81c5d4",
-      "build_label": "Nov 11 · e81c5d4",
-      "color": "#199E70",
-      "hours": 9.5,
-      "series": "3"
-    },
     "monitor://releases/1": {
       "bar": "2026-11-14",
       "build": "0.6.0+20261114100000.9be03a1",
@@ -2246,8 +2231,7 @@
       "monitor://builds/0",
       "monitor://builds/1",
       "monitor://builds/2",
-      "monitor://builds/3",
-      "monitor://builds/4"
+      "monitor://builds/3"
     ],
     "monitor:device_cells": [
       "monitor://device_cells/chromemac001/2026-11-06/0",
@@ -2400,7 +2384,6 @@
       "monitor://errors/2"
     ],
     "monitor:releases": [
-      "monitor://releases/0",
       "monitor://releases/1",
       "monitor://releases/2"
     ]
@@ -3136,7 +3119,7 @@
                                     "content": {
                                       "style": "Caption",
                                       "type": "core://Text",
-                                      "value_expr": "last 14 days"
+                                      "value_expr": "${monitor://device_summary/pod#days_text}"
                                     },
                                     "content_color": "${local://theme#muted_text}",
                                     "type": "core://Box"

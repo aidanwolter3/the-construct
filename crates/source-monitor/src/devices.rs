@@ -352,17 +352,27 @@ pub fn bundle(
         let seen_today = days.iter().any(|d| d.day == today && d.device == dev.id);
         items.push((today.clone(), dev, dev.build.clone(), seen_today));
     }
-    let cells = cells(devices, &all_days, day_keys, zone, now);
-    // The releases in the days shown: (build, day, hours into it).
-    // Only releases a device ran (in the days shown) and the server's
-    // own: staging releases on every merge, most of which no device ever
-    // runs, and each would take a line, a legend row and a colour.
-    let ran = |b: &str| b == server || cells.iter().any(|c| c.build.as_deref() == Some(b));
+    // The grid's days: from the first a device was seen (an empty
+    // fortnight before that says nothing), at least today.
+    let first = day_keys
+        .iter()
+        .position(|k| all_days.iter().any(|d| d.day == *k))
+        .unwrap_or(day_keys.len().saturating_sub(1));
+    let grid_keys = &day_keys[first..];
+    let cells = cells(devices, &all_days, grid_keys, zone, now);
+    // The builds that get a colour, a legend row and a release line: the
+    // one each device runs now and the server's. A build devices have
+    // moved on from is `other` (grey) where it shows on a past day; staging
+    // releases on every merge, and a colour each would be noise.
+    let mut current: Vec<&str> = devices.iter().map(|d| d.build.as_str()).collect();
+    current.push(server);
+    current.sort_unstable();
+    current.dedup();
     let shown_releases: Vec<(&str, &String, f64)> = releases
         .iter()
-        .filter(|(build, _)| ran(build))
+        .filter(|(build, _)| current.contains(&build.as_str()))
         .filter_map(|(build, at)| {
-            day_keys.iter().find_map(|day| {
+            grid_keys.iter().find_map(|day| {
                 let (start, end) = day_bounds(day, zone)?;
                 (start..end).contains(at).then(|| {
                     let h = (at - start) as f64 / (end - start) as f64 * CELL_HOURS;
@@ -371,11 +381,7 @@ pub fn bundle(
             })
         })
         .collect();
-    let mut builds: Vec<&str> = items.iter().map(|i| i.2.as_str()).collect();
-    builds.extend(cells.iter().filter_map(|c| c.build.as_deref()));
-    builds.extend(shown_releases.iter().map(|r| r.0));
-    builds.push(server);
-    let series = build_series(&builds, server);
+    let series = build_series(&current, server);
     let series_of = |b: &str| series.get(b).copied().unwrap_or(OTHER);
     let order = |build: &str| BuildId::parse(build).stamp.unwrap_or(0);
     // Within a day: older builds at the bottom (first), each build's
@@ -481,12 +487,10 @@ pub fn bundle(
     }
     b.queries.insert(RELEASES_QUERY.into(), uris);
 
-    // The legend: every build the charts show, oldest first.
-    let mut shown: Vec<&str> = items.iter().map(|i| i.2.as_str()).collect();
-    shown.extend(cells.iter().filter_map(|c| c.build.as_deref()));
-    shown.extend(shown_releases.iter().map(|r| r.0));
+    // The legend: the builds devices run now and the server's, oldest
+    // first, then one row for the older builds drawn grey, if any are.
+    let mut shown: Vec<&str> = current.clone();
     shown.sort_by_key(|b| (order(b) == 0 && !b.is_empty(), order(b)));
-    shown.dedup();
     let s = BuildId::parse(server);
     let mut uris = Vec::new();
     for (i, build) in shown.iter().enumerate() {
@@ -511,6 +515,26 @@ pub fn bundle(
                 "legend": if note.is_empty() { label.clone() } else { format!("{label} · {note}") },
                 "series": series_of(build),
                 "color": series_color(series_of(build)),
+            })),
+        );
+        uris.push(uri);
+    }
+    let older = items
+        .iter()
+        .map(|i| i.2.as_str())
+        .chain(cells.iter().filter_map(|c| c.build.as_deref()))
+        .any(|b| !current.contains(&b));
+    if older {
+        let uri = format!("monitor://builds/{}", uris.len());
+        b.entities.insert(
+            uri.clone(),
+            record(json!({
+                "build": "",
+                "label": "Older builds",
+                "note": "",
+                "legend": "Older builds",
+                "series": OTHER,
+                "color": series_color(OTHER),
             })),
         );
         uris.push(uri);
@@ -569,6 +593,10 @@ pub fn bundle(
         uri.clone(),
         record(json!({
             "today": today,
+            "days_text": match grid_keys.len() {
+                1 => "today".to_owned(),
+                n => format!("last {n} days"),
+            },
             "server_build": server,
             "server_build_label": build_label(server),
             "count_text": match devices.len() {
@@ -785,10 +813,17 @@ mod tests {
                 ..day("2026-11-19", "phone0001", SERVER)
             },
         ];
-        let keys: Vec<String> = ["2026-11-17", "2026-11-18", "2026-11-19"]
-            .iter()
-            .map(|s| s.to_string())
-            .collect();
+        // Two days before any device was seen: not in the grid.
+        let keys: Vec<String> = [
+            "2026-11-15",
+            "2026-11-16",
+            "2026-11-17",
+            "2026-11-18",
+            "2026-11-19",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
         // The server's build came out at 18:00; an older one before the
         // days shown.
         // And one at 9:00 no device ever ran: no line, no legend row.
@@ -807,6 +842,19 @@ mod tests {
             SERVER,
             now,
         );
+        assert_eq!(
+            b.entities["monitor://device_summary/pod"].0["days_text"],
+            "last 3 days"
+        );
+        // The phone runs the server's build now: that is the one colour;
+        // the build it ran before is grey, under one "Older builds" row.
+        let legend: Vec<(&Value, &Value)> = b.queries[BUILDS_QUERY]
+            .iter()
+            .map(|u| (&b.entities[u].0["legend"], &b.entities[u].0["series"]))
+            .collect();
+        assert_eq!(legend.len(), 2, "{legend:?}");
+        assert_eq!(legend[0].1, "1");
+        assert_eq!(legend[1], (&json!("Older builds"), &json!("other")));
         let shown = &b.queries[RELEASES_QUERY];
         assert_eq!(shown.len(), 1);
         let release = &b.entities[&shown[0]].0;
@@ -845,6 +893,7 @@ mod tests {
             ]
         );
         assert_eq!(cells[1]["detail"], "Not seen");
+        assert_eq!(cells[0]["series"], "other", "an older build is grey");
         assert_eq!(cells[1]["series"], "other");
         assert_eq!(cells[2]["detail"], "Nov 14 · 9be03a1 · 8:00–18:00");
         assert_eq!(cells[3]["series"], "1");

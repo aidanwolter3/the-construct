@@ -172,11 +172,11 @@
         "device_id": "chromemac001",
         "kind": "web",
         "build_label": "Nov 3 · 4a7e210",
-        "color": "#C98500",
+        "color": "#9AA0A6",
         "hatched": false,
         "note": "",
         "detail": "Nov 3 · 4a7e210",
-        "series": "4",
+        "series": "other",
         "build": "0.5.1+20261103100000.4a7e210"
       },
       "monitor://device_days/2026-11-06/firefoxwork1": {
@@ -187,11 +187,11 @@
         "device_id": "firefoxwork1",
         "kind": "web",
         "build_label": "Nov 3 · 4a7e210",
-        "color": "#C98500",
+        "color": "#9AA0A6",
         "hatched": false,
         "note": "",
         "detail": "Nov 3 · 4a7e210",
-        "series": "4",
+        "series": "other",
         "build": "0.5.1+20261103100000.4a7e210"
       },
       "monitor://device_days/2026-11-06/pixel9demo01": {
@@ -202,11 +202,11 @@
         "device_id": "pixel9demo01",
         "kind": "android",
         "build_label": "Nov 3 · 4a7e210",
-        "color": "#C98500",
+        "color": "#9AA0A6",
         "hatched": false,
         "note": "",
         "detail": "Nov 3 · 4a7e210",
-        "series": "4",
+        "series": "other",
         "build": "0.5.1+20261103100000.4a7e210"
       },
       "monitor://device_days/2026-11-06/macbookair01": {
@@ -217,11 +217,11 @@
         "device_id": "macbookair01",
         "kind": "macos",
         "build_label": "Nov 3 · 4a7e210",
-        "color": "#C98500",
+        "color": "#9AA0A6",
         "hatched": false,
         "note": "",
         "detail": "Nov 3 · 4a7e210",
-        "series": "4",
+        "series": "other",
         "build": "0.5.1+20261103100000.4a7e210"
       },
       "monitor://device_days/2026-11-07/chromemac001": {
@@ -232,11 +232,11 @@
         "device_id": "chromemac001",
         "kind": "web",
         "build_label": "Nov 3 · 4a7e210",
-        "color": "#C98500",
+        "color": "#9AA0A6",
         "hatched": false,
         "note": "",
         "detail": "Nov 3 · 4a7e210",
-        "series": "4",
+        "series": "other",
         "build": "0.5.1+20261103100000.4a7e210"
       },
       "monitor://device_days/2026-11-07/pixel9demo01": {
@@ -247,11 +247,11 @@
         "device_id": "pixel9demo01",
         "kind": "android",
         "build_label": "Nov 3 · 4a7e210",
-        "color": "#C98500",
+        "color": "#9AA0A6",
         "hatched": false,
         "note": "",
         "detail": "Nov 3 · 4a7e210",
-        "series": "4",
+        "series": "other",
         "build": "0.5.1+20261103100000.4a7e210"
       },
       "monitor://device_days/2026-11-08/chromemac001": {
@@ -262,11 +262,11 @@
         "device_id": "chromemac001",
         "kind": "web",
         "build_label": "Nov 3 · 4a7e210",
-        "color": "#C98500",
+        "color": "#9AA0A6",
         "hatched": false,
         "note": "",
         "detail": "Nov 3 · 4a7e210",
-        "series": "4",
+        "series": "other",
         "build": "0.5.1+20261103100000.4a7e210"
       },
       "monitor://device_days/2026-11-08/edgedesk001": {
@@ -277,11 +277,11 @@
         "device_id": "edgedesk001",
         "kind": "web",
         "build_label": "Nov 3 · 4a7e210",
-        "color": "#C98500",
+        "color": "#9AA0A6",
         "hatched": false,
         "note": "",
         "detail": "Nov 3 · 4a7e210",
-        "series": "4",
+        "series": "other",
         "build": "0.5.1+20261103100000.4a7e210"
       },
       "monitor://device_days/2026-11-08/pixel9demo01": {
@@ -292,11 +292,11 @@
         "device_id": "pixel9demo01",
         "kind": "android",
         "build_label": "Nov 3 · 4a7e210",
-        "color": "#C98500",
+        "color": "#9AA0A6",
         "hatched": false,
         "note": "",
         "detail": "Nov 3 · 4a7e210",
-        "series": "4",
+        "series": "other",
         "build": "0.5.1+20261103100000.4a7e210"
       },
       "monitor://device_days/2026-11-09/chromemac001": {
@@ -307,11 +307,11 @@
         "device_id": "chromemac001",
         "kind": "web",
         "build_label": "Nov 3 · 4a7e210",
-        "color": "#C98500",
+        "color": "#9AA0A6",
         "hatched": false,
         "note": "",
         "detail": "Nov 3 · 4a7e210",
-        "series": "4",
+        "series": "other",
         "build": "0.5.1+20261103100000.4a7e210"
       },
       "monitor://device_days/2026-11-09/edgedesk001": {
@@ -322,11 +322,11 @@
         "device_id": "edgedesk001",
         "kind": "web",
         "build_label": "Nov 3 · 4a7e210",
-        "color": "#C98500",
+        "color": "#9AA0A6",
         "hatched": false,
         "note": "",
         "detail": "Nov 3 · 4a7e210",
-        "series": "4",
+        "series": "other",
         "build": "0.5.1+20261103100000.4a7e210"
       },
       "monitor://device_days/2026-11-09/firefoxwork1": {
@@ -337,11 +337,11 @@
         "device_id": "firefoxwork1",
         "kind": "web",
         "build_label": "Nov 3 · 4a7e210",
-        "color": "#C98500",
+        "color": "#9AA0A6",
         "hatched": false,
         "note": "",
         "detail": "Nov 3 · 4a7e210",
-        "series": "4",
+        "series": "other",
         "build": "0.5.1+20261103100000.4a7e210"
       },
       "monitor://device_days/2026-11-09/pixel9demo01": {
@@ -352,11 +352,11 @@
         "device_id": "pixel9demo01",
         "kind": "android",
         "build_label": "Nov 3 · 4a7e210",
-        "color": "#C98500",
+        "color": "#9AA0A6",
         "hatched": false,
         "note": "",
         "detail": "Nov 3 · 4a7e210",
-        "series": "4",
+        "series": "other",
         "build": "0.5.1+20261103100000.4a7e210"
       },
       "monitor://device_days/2026-11-09/macbookair01": {
@@ -367,11 +367,11 @@
         "device_id": "macbookair01",
         "kind": "macos",
         "build_label": "Nov 3 · 4a7e210",
-        "color": "#C98500",
+        "color": "#9AA0A6",
         "hatched": false,
         "note": "",
         "detail": "Nov 3 · 4a7e210",
-        "series": "4",
+        "series": "other",
         "build": "0.5.1+20261103100000.4a7e210"
       },
       "monitor://device_days/2026-11-10/chromemac001": {
@@ -382,11 +382,11 @@
         "device_id": "chromemac001",
         "kind": "web",
         "build_label": "Nov 3 · 4a7e210",
-        "color": "#C98500",
+        "color": "#9AA0A6",
         "hatched": false,
         "note": "",
         "detail": "Nov 3 · 4a7e210",
-        "series": "4",
+        "series": "other",
         "build": "0.5.1+20261103100000.4a7e210"
       },
       "monitor://device_days/2026-11-10/firefoxwork1": {
@@ -397,11 +397,11 @@
         "device_id": "firefoxwork1",
         "kind": "web",
         "build_label": "Nov 3 · 4a7e210",
-        "color": "#C98500",
+        "color": "#9AA0A6",
         "hatched": false,
         "note": "",
         "detail": "Nov 3 · 4a7e210",
-        "series": "4",
+        "series": "other",
         "build": "0.5.1+20261103100000.4a7e210"
       },
       "monitor://device_days/2026-11-10/pixel9demo01": {
@@ -412,11 +412,11 @@
         "device_id": "pixel9demo01",
         "kind": "android",
         "build_label": "Nov 3 · 4a7e210",
-        "color": "#C98500",
+        "color": "#9AA0A6",
         "hatched": false,
         "note": "",
         "detail": "Nov 3 · 4a7e210",
-        "series": "4",
+        "series": "other",
         "build": "0.5.1+20261103100000.4a7e210"
       },
       "monitor://device_days/2026-11-10/macbookair01": {
@@ -427,11 +427,11 @@
         "device_id": "macbookair01",
         "kind": "macos",
         "build_label": "Nov 3 · 4a7e210",
-        "color": "#C98500",
+        "color": "#9AA0A6",
         "hatched": false,
         "note": "",
         "detail": "Nov 3 · 4a7e210",
-        "series": "4",
+        "series": "other",
         "build": "0.5.1+20261103100000.4a7e210"
       },
       "monitor://device_days/2026-11-11/firefoxwork1": {
@@ -442,11 +442,11 @@
         "device_id": "firefoxwork1",
         "kind": "web",
         "build_label": "Nov 3 · 4a7e210",
-        "color": "#C98500",
+        "color": "#9AA0A6",
         "hatched": false,
         "note": "",
         "detail": "Nov 3 · 4a7e210",
-        "series": "4",
+        "series": "other",
         "build": "0.5.1+20261103100000.4a7e210"
       },
       "monitor://device_days/2026-11-11/pixel9demo01": {
@@ -457,11 +457,11 @@
         "device_id": "pixel9demo01",
         "kind": "android",
         "build_label": "Nov 3 · 4a7e210",
-        "color": "#C98500",
+        "color": "#9AA0A6",
         "hatched": false,
         "note": "",
         "detail": "Nov 3 · 4a7e210",
-        "series": "4",
+        "series": "other",
         "build": "0.5.1+20261103100000.4a7e210"
       },
       "monitor://device_days/2026-11-11/macbookair01": {
@@ -472,11 +472,11 @@
         "device_id": "macbookair01",
         "kind": "macos",
         "build_label": "Nov 3 · 4a7e210",
-        "color": "#C98500",
+        "color": "#9AA0A6",
         "hatched": false,
         "note": "",
         "detail": "Nov 3 · 4a7e210",
-        "series": "4",
+        "series": "other",
         "build": "0.5.1+20261103100000.4a7e210"
       },
       "monitor://device_days/2026-11-11/chromemac001": {
@@ -487,11 +487,11 @@
         "device_id": "chromemac001",
         "kind": "web",
         "build_label": "Nov 11 · e81c5d4",
-        "color": "#199E70",
+        "color": "#9AA0A6",
         "hatched": false,
         "note": "",
         "detail": "Nov 11 · e81c5d4",
-        "series": "3",
+        "series": "other",
         "build": "0.6.0+20261111100000.e81c5d4"
       },
       "monitor://device_days/2026-11-12/firefoxwork1": {
@@ -502,11 +502,11 @@
         "device_id": "firefoxwork1",
         "kind": "web",
         "build_label": "Nov 3 · 4a7e210",
-        "color": "#C98500",
+        "color": "#9AA0A6",
         "hatched": false,
         "note": "",
         "detail": "Nov 3 · 4a7e210",
-        "series": "4",
+        "series": "other",
         "build": "0.5.1+20261103100000.4a7e210"
       },
       "monitor://device_days/2026-11-12/pixel9demo01": {
@@ -517,11 +517,11 @@
         "device_id": "pixel9demo01",
         "kind": "android",
         "build_label": "Nov 3 · 4a7e210",
-        "color": "#C98500",
+        "color": "#9AA0A6",
         "hatched": false,
         "note": "",
         "detail": "Nov 3 · 4a7e210",
-        "series": "4",
+        "series": "other",
         "build": "0.5.1+20261103100000.4a7e210"
       },
       "monitor://device_days/2026-11-12/macbookair01": {
@@ -532,11 +532,11 @@
         "device_id": "macbookair01",
         "kind": "macos",
         "build_label": "Nov 3 · 4a7e210",
-        "color": "#C98500",
+        "color": "#9AA0A6",
         "hatched": false,
         "note": "",
         "detail": "Nov 3 · 4a7e210",
-        "series": "4",
+        "series": "other",
         "build": "0.5.1+20261103100000.4a7e210"
       },
       "monitor://device_days/2026-11-12/chromemac001": {
@@ -547,11 +547,11 @@
         "device_id": "chromemac001",
         "kind": "web",
         "build_label": "Nov 11 · e81c5d4",
-        "color": "#199E70",
+        "color": "#9AA0A6",
         "hatched": false,
         "note": "",
         "detail": "Nov 11 · e81c5d4",
-        "series": "3",
+        "series": "other",
         "build": "0.6.0+20261111100000.e81c5d4"
       },
       "monitor://device_days/2026-11-13/pixel9demo01": {
@@ -562,11 +562,11 @@
         "device_id": "pixel9demo01",
         "kind": "android",
         "build_label": "Nov 3 · 4a7e210",
-        "color": "#C98500",
+        "color": "#9AA0A6",
         "hatched": false,
         "note": "",
         "detail": "Nov 3 · 4a7e210",
-        "series": "4",
+        "series": "other",
         "build": "0.5.1+20261103100000.4a7e210"
       },
       "monitor://device_days/2026-11-13/macbookair01": {
@@ -577,11 +577,11 @@
         "device_id": "macbookair01",
         "kind": "macos",
         "build_label": "Nov 3 · 4a7e210",
-        "color": "#C98500",
+        "color": "#9AA0A6",
         "hatched": false,
         "note": "",
         "detail": "Nov 3 · 4a7e210",
-        "series": "4",
+        "series": "other",
         "build": "0.5.1+20261103100000.4a7e210"
       },
       "monitor://device_days/2026-11-13/chromemac001": {
@@ -592,11 +592,11 @@
         "device_id": "chromemac001",
         "kind": "web",
         "build_label": "Nov 11 · e81c5d4",
-        "color": "#199E70",
+        "color": "#9AA0A6",
         "hatched": false,
         "note": "",
         "detail": "Nov 11 · e81c5d4",
-        "series": "3",
+        "series": "other",
         "build": "0.6.0+20261111100000.e81c5d4"
       },
       "monitor://device_days/2026-11-13/firefoxwork1": {
@@ -607,11 +607,11 @@
         "device_id": "firefoxwork1",
         "kind": "web",
         "build_label": "Nov 11 · e81c5d4",
-        "color": "#199E70",
+        "color": "#9AA0A6",
         "hatched": false,
         "note": "",
         "detail": "Nov 11 · e81c5d4",
-        "series": "3",
+        "series": "other",
         "build": "0.6.0+20261111100000.e81c5d4"
       },
       "monitor://device_days/2026-11-14/pixel9demo01": {
@@ -622,11 +622,11 @@
         "device_id": "pixel9demo01",
         "kind": "android",
         "build_label": "Nov 3 · 4a7e210",
-        "color": "#C98500",
+        "color": "#9AA0A6",
         "hatched": false,
         "note": "",
         "detail": "Nov 3 · 4a7e210",
-        "series": "4",
+        "series": "other",
         "build": "0.5.1+20261103100000.4a7e210"
       },
       "monitor://device_days/2026-11-14/chromemac001": {
@@ -652,11 +652,11 @@
         "device_id": "pixel9demo01",
         "kind": "android",
         "build_label": "Nov 3 · 4a7e210",
-        "color": "#C98500",
+        "color": "#9AA0A6",
         "hatched": false,
         "note": "",
         "detail": "Nov 3 · 4a7e210",
-        "series": "4",
+        "series": "other",
         "build": "0.5.1+20261103100000.4a7e210"
       },
       "monitor://device_days/2026-11-15/chromemac001": {
@@ -697,11 +697,11 @@
         "device_id": "firefoxwork1",
         "kind": "web",
         "build_label": "Nov 11 · e81c5d4",
-        "color": "#199E70",
+        "color": "#9AA0A6",
         "hatched": false,
         "note": "",
         "detail": "Nov 11 · e81c5d4",
-        "series": "3",
+        "series": "other",
         "build": "0.6.0+20261111100000.e81c5d4"
       },
       "monitor://device_days/2026-11-16/chromemac001": {
@@ -959,46 +959,6 @@
         "series": "8",
         "build": "0.6.0+20261119080000.f02b77e"
       },
-      "monitor://builds/0": {
-        "build": "0.5.1+20261103100000.4a7e210",
-        "label": "Nov 3 · 4a7e210",
-        "note": "",
-        "legend": "Nov 3 · 4a7e210",
-        "color": "#C98500",
-        "series": "4"
-      },
-      "monitor://builds/1": {
-        "build": "0.6.0+20261111100000.e81c5d4",
-        "label": "Nov 11 · e81c5d4",
-        "note": "",
-        "legend": "Nov 11 · e81c5d4",
-        "color": "#199E70",
-        "series": "3"
-      },
-      "monitor://builds/2": {
-        "build": "0.6.0+20261114100000.9be03a1",
-        "label": "Nov 14 · 9be03a1",
-        "note": "",
-        "legend": "Nov 14 · 9be03a1",
-        "color": "#D95926",
-        "series": "2"
-      },
-      "monitor://builds/3": {
-        "build": "0.6.0+20261118100000.c41d9e2",
-        "label": "Nov 18 · c41d9e2",
-        "note": "server",
-        "legend": "Nov 18 · c41d9e2 · server",
-        "color": "#2A78D6",
-        "series": "1"
-      },
-      "monitor://builds/4": {
-        "build": "0.6.0+20261119080000.f02b77e",
-        "label": "Nov 19 · f02b77e local",
-        "note": "ahead",
-        "legend": "Nov 19 · f02b77e local · ahead",
-        "color": "#E34948",
-        "series": "8"
-      },
       "monitor://devices/pixel9demo01": {
         "id": "pixel9demo01",
         "name": "Pixel 9",
@@ -1085,7 +1045,8 @@
         "server_build_label": "Nov 18 · c41d9e2",
         "count_text": "5 devices",
         "status_text": "1 on the server's build · 1 ahead · 3 behind",
-        "empty": false
+        "empty": false,
+        "days_text": "last 14 days"
       },
       "monitor://device_cells/chromemac001/2026-11-06/0": {
         "row": "chromemac001",
@@ -1099,8 +1060,8 @@
         "build_label": "Nov 3 · 4a7e210",
         "hours": 24.0,
         "hatched": false,
-        "series": "4",
-        "color": "#C98500",
+        "series": "other",
+        "color": "#9AA0A6",
         "detail": "Nov 3 · 4a7e210 · 8:10–21:45"
       },
       "monitor://device_cells/chromemac001/2026-11-07/1": {
@@ -1115,8 +1076,8 @@
         "build_label": "Nov 3 · 4a7e210",
         "hours": 24.0,
         "hatched": false,
-        "series": "4",
-        "color": "#C98500",
+        "series": "other",
+        "color": "#9AA0A6",
         "detail": "Nov 3 · 4a7e210 · 8:10–21:45"
       },
       "monitor://device_cells/chromemac001/2026-11-08/2": {
@@ -1131,8 +1092,8 @@
         "build_label": "Nov 3 · 4a7e210",
         "hours": 24.0,
         "hatched": false,
-        "series": "4",
-        "color": "#C98500",
+        "series": "other",
+        "color": "#9AA0A6",
         "detail": "Nov 3 · 4a7e210 · 8:10–21:45"
       },
       "monitor://device_cells/chromemac001/2026-11-09/3": {
@@ -1147,8 +1108,8 @@
         "build_label": "Nov 3 · 4a7e210",
         "hours": 24.0,
         "hatched": false,
-        "series": "4",
-        "color": "#C98500",
+        "series": "other",
+        "color": "#9AA0A6",
         "detail": "Nov 3 · 4a7e210 · 8:10–21:45"
       },
       "monitor://device_cells/chromemac001/2026-11-10/4": {
@@ -1163,8 +1124,8 @@
         "build_label": "Nov 3 · 4a7e210",
         "hours": 24.0,
         "hatched": false,
-        "series": "4",
-        "color": "#C98500",
+        "series": "other",
+        "color": "#9AA0A6",
         "detail": "Nov 3 · 4a7e210 · 8:10–21:45"
       },
       "monitor://device_cells/chromemac001/2026-11-11/5": {
@@ -1179,8 +1140,8 @@
         "build_label": "Nov 3 · 4a7e210",
         "hours": 10.0,
         "hatched": false,
-        "series": "4",
-        "color": "#C98500",
+        "series": "other",
+        "color": "#9AA0A6",
         "detail": "Nov 3 · 4a7e210 · 7:40–9:45"
       },
       "monitor://device_cells/chromemac001/2026-11-11/6": {
@@ -1195,8 +1156,8 @@
         "build_label": "Nov 11 · e81c5d4",
         "hours": 14.0,
         "hatched": false,
-        "series": "3",
-        "color": "#199E70",
+        "series": "other",
+        "color": "#9AA0A6",
         "detail": "Nov 11 · e81c5d4 · 10:00–22:30"
       },
       "monitor://device_cells/chromemac001/2026-11-12/7": {
@@ -1211,8 +1172,8 @@
         "build_label": "Nov 11 · e81c5d4",
         "hours": 24.0,
         "hatched": false,
-        "series": "3",
-        "color": "#199E70",
+        "series": "other",
+        "color": "#9AA0A6",
         "detail": "Nov 11 · e81c5d4 · 8:10–21:45"
       },
       "monitor://device_cells/chromemac001/2026-11-13/8": {
@@ -1227,8 +1188,8 @@
         "build_label": "Nov 11 · e81c5d4",
         "hours": 24.0,
         "hatched": false,
-        "series": "3",
-        "color": "#199E70",
+        "series": "other",
+        "color": "#9AA0A6",
         "detail": "Nov 11 · e81c5d4 · 8:10–21:45"
       },
       "monitor://device_cells/chromemac001/2026-11-14/9": {
@@ -1243,8 +1204,8 @@
         "build_label": "Nov 11 · e81c5d4",
         "hours": 16.5,
         "hatched": false,
-        "series": "3",
-        "color": "#199E70",
+        "series": "other",
+        "color": "#9AA0A6",
         "detail": "Nov 11 · e81c5d4 · 7:40–16:15"
       },
       "monitor://device_cells/chromemac001/2026-11-14/10": {
@@ -1403,8 +1364,8 @@
         "build_label": "Nov 3 · 4a7e210",
         "hours": 24.0,
         "hatched": false,
-        "series": "4",
-        "color": "#C98500",
+        "series": "other",
+        "color": "#9AA0A6",
         "detail": "Nov 3 · 4a7e210 · 8:10–21:45"
       },
       "monitor://device_cells/edgedesk001/2026-11-09/20": {
@@ -1419,8 +1380,8 @@
         "build_label": "Nov 3 · 4a7e210",
         "hours": 24.0,
         "hatched": false,
-        "series": "4",
-        "color": "#C98500",
+        "series": "other",
+        "color": "#9AA0A6",
         "detail": "Nov 3 · 4a7e210 · 8:10–21:45"
       },
       "monitor://device_cells/edgedesk001/2026-11-10/21": {
@@ -1595,8 +1556,8 @@
         "build_label": "Nov 3 · 4a7e210",
         "hours": 24.0,
         "hatched": false,
-        "series": "4",
-        "color": "#C98500",
+        "series": "other",
+        "color": "#9AA0A6",
         "detail": "Nov 3 · 4a7e210 · 8:10–21:45"
       },
       "monitor://device_cells/firefoxwork1/2026-11-07/32": {
@@ -1643,8 +1604,8 @@
         "build_label": "Nov 3 · 4a7e210",
         "hours": 24.0,
         "hatched": false,
-        "series": "4",
-        "color": "#C98500",
+        "series": "other",
+        "color": "#9AA0A6",
         "detail": "Nov 3 · 4a7e210 · 8:10–21:45"
       },
       "monitor://device_cells/firefoxwork1/2026-11-10/35": {
@@ -1659,8 +1620,8 @@
         "build_label": "Nov 3 · 4a7e210",
         "hours": 24.0,
         "hatched": false,
-        "series": "4",
-        "color": "#C98500",
+        "series": "other",
+        "color": "#9AA0A6",
         "detail": "Nov 3 · 4a7e210 · 8:10–21:45"
       },
       "monitor://device_cells/firefoxwork1/2026-11-11/36": {
@@ -1675,8 +1636,8 @@
         "build_label": "Nov 3 · 4a7e210",
         "hours": 24.0,
         "hatched": false,
-        "series": "4",
-        "color": "#C98500",
+        "series": "other",
+        "color": "#9AA0A6",
         "detail": "Nov 3 · 4a7e210 · 8:10–21:45"
       },
       "monitor://device_cells/firefoxwork1/2026-11-12/37": {
@@ -1691,8 +1652,8 @@
         "build_label": "Nov 3 · 4a7e210",
         "hours": 24.0,
         "hatched": false,
-        "series": "4",
-        "color": "#C98500",
+        "series": "other",
+        "color": "#9AA0A6",
         "detail": "Nov 3 · 4a7e210 · 8:10–21:45"
       },
       "monitor://device_cells/firefoxwork1/2026-11-13/38": {
@@ -1707,8 +1668,8 @@
         "build_label": "Nov 3 · 4a7e210",
         "hours": 15.0,
         "hatched": false,
-        "series": "4",
-        "color": "#C98500",
+        "series": "other",
+        "color": "#9AA0A6",
         "detail": "Nov 3 · 4a7e210 · 7:40–14:45"
       },
       "monitor://device_cells/firefoxwork1/2026-11-13/39": {
@@ -1723,8 +1684,8 @@
         "build_label": "Nov 11 · e81c5d4",
         "hours": 9.0,
         "hatched": false,
-        "series": "3",
-        "color": "#199E70",
+        "series": "other",
+        "color": "#9AA0A6",
         "detail": "Nov 11 · e81c5d4 · 15:00–22:30"
       },
       "monitor://device_cells/firefoxwork1/2026-11-14/40": {
@@ -1771,8 +1732,8 @@
         "build_label": "Nov 11 · e81c5d4",
         "hours": 24.0,
         "hatched": false,
-        "series": "3",
-        "color": "#199E70",
+        "series": "other",
+        "color": "#9AA0A6",
         "detail": "Nov 11 · e81c5d4 · 8:10–21:45"
       },
       "monitor://device_cells/firefoxwork1/2026-11-17/43": {
@@ -1787,8 +1748,8 @@
         "build_label": "Nov 11 · e81c5d4",
         "hours": 12.0,
         "hatched": false,
-        "series": "3",
-        "color": "#199E70",
+        "series": "other",
+        "color": "#9AA0A6",
         "detail": "Nov 11 · e81c5d4 · 7:40–11:45"
       },
       "monitor://device_cells/firefoxwork1/2026-11-17/44": {
@@ -1851,8 +1812,8 @@
         "build_label": "Nov 3 · 4a7e210",
         "hours": 24.0,
         "hatched": false,
-        "series": "4",
-        "color": "#C98500",
+        "series": "other",
+        "color": "#9AA0A6",
         "detail": "Nov 3 · 4a7e210 · 8:10–21:45"
       },
       "monitor://device_cells/pixel9demo01/2026-11-07/48": {
@@ -1867,8 +1828,8 @@
         "build_label": "Nov 3 · 4a7e210",
         "hours": 24.0,
         "hatched": false,
-        "series": "4",
-        "color": "#C98500",
+        "series": "other",
+        "color": "#9AA0A6",
         "detail": "Nov 3 · 4a7e210 · 8:10–21:45"
       },
       "monitor://device_cells/pixel9demo01/2026-11-08/49": {
@@ -1883,8 +1844,8 @@
         "build_label": "Nov 3 · 4a7e210",
         "hours": 24.0,
         "hatched": false,
-        "series": "4",
-        "color": "#C98500",
+        "series": "other",
+        "color": "#9AA0A6",
         "detail": "Nov 3 · 4a7e210 · 8:10–21:45"
       },
       "monitor://device_cells/pixel9demo01/2026-11-09/50": {
@@ -1899,8 +1860,8 @@
         "build_label": "Nov 3 · 4a7e210",
         "hours": 24.0,
         "hatched": false,
-        "series": "4",
-        "color": "#C98500",
+        "series": "other",
+        "color": "#9AA0A6",
         "detail": "Nov 3 · 4a7e210 · 8:10–21:45"
       },
       "monitor://device_cells/pixel9demo01/2026-11-10/51": {
@@ -1915,8 +1876,8 @@
         "build_label": "Nov 3 · 4a7e210",
         "hours": 24.0,
         "hatched": false,
-        "series": "4",
-        "color": "#C98500",
+        "series": "other",
+        "color": "#9AA0A6",
         "detail": "Nov 3 · 4a7e210 · 8:10–21:45"
       },
       "monitor://device_cells/pixel9demo01/2026-11-11/52": {
@@ -1931,8 +1892,8 @@
         "build_label": "Nov 3 · 4a7e210",
         "hours": 24.0,
         "hatched": false,
-        "series": "4",
-        "color": "#C98500",
+        "series": "other",
+        "color": "#9AA0A6",
         "detail": "Nov 3 · 4a7e210 · 8:10–21:45"
       },
       "monitor://device_cells/pixel9demo01/2026-11-12/53": {
@@ -1947,8 +1908,8 @@
         "build_label": "Nov 3 · 4a7e210",
         "hours": 24.0,
         "hatched": false,
-        "series": "4",
-        "color": "#C98500",
+        "series": "other",
+        "color": "#9AA0A6",
         "detail": "Nov 3 · 4a7e210 · 8:10–21:45"
       },
       "monitor://device_cells/pixel9demo01/2026-11-13/54": {
@@ -1963,8 +1924,8 @@
         "build_label": "Nov 3 · 4a7e210",
         "hours": 24.0,
         "hatched": false,
-        "series": "4",
-        "color": "#C98500",
+        "series": "other",
+        "color": "#9AA0A6",
         "detail": "Nov 3 · 4a7e210 · 8:10–21:45"
       },
       "monitor://device_cells/pixel9demo01/2026-11-14/55": {
@@ -1979,8 +1940,8 @@
         "build_label": "Nov 3 · 4a7e210",
         "hours": 24.0,
         "hatched": false,
-        "series": "4",
-        "color": "#C98500",
+        "series": "other",
+        "color": "#9AA0A6",
         "detail": "Nov 3 · 4a7e210 · 8:10–21:45"
       },
       "monitor://device_cells/pixel9demo01/2026-11-15/56": {
@@ -1995,8 +1956,8 @@
         "build_label": "Nov 3 · 4a7e210",
         "hours": 24.0,
         "hatched": false,
-        "series": "4",
-        "color": "#C98500",
+        "series": "other",
+        "color": "#9AA0A6",
         "detail": "Nov 3 · 4a7e210 · 8:10–21:45"
       },
       "monitor://device_cells/pixel9demo01/2026-11-16/57": {
@@ -2011,8 +1972,8 @@
         "build_label": "Nov 3 · 4a7e210",
         "hours": 19.0,
         "hatched": false,
-        "series": "4",
-        "color": "#C98500",
+        "series": "other",
+        "color": "#9AA0A6",
         "detail": "Nov 3 · 4a7e210 · 7:40–18:45"
       },
       "monitor://device_cells/pixel9demo01/2026-11-16/58": {
@@ -2091,8 +2052,8 @@
         "build_label": "Nov 3 · 4a7e210",
         "hours": 24.0,
         "hatched": false,
-        "series": "4",
-        "color": "#C98500",
+        "series": "other",
+        "color": "#9AA0A6",
         "detail": "Nov 3 · 4a7e210 · 8:10–21:45"
       },
       "monitor://device_cells/macbookair01/2026-11-07/63": {
@@ -2139,8 +2100,8 @@
         "build_label": "Nov 3 · 4a7e210",
         "hours": 24.0,
         "hatched": false,
-        "series": "4",
-        "color": "#C98500",
+        "series": "other",
+        "color": "#9AA0A6",
         "detail": "Nov 3 · 4a7e210 · 8:10–21:45"
       },
       "monitor://device_cells/macbookair01/2026-11-10/66": {
@@ -2155,8 +2116,8 @@
         "build_label": "Nov 3 · 4a7e210",
         "hours": 24.0,
         "hatched": false,
-        "series": "4",
-        "color": "#C98500",
+        "series": "other",
+        "color": "#9AA0A6",
         "detail": "Nov 3 · 4a7e210 · 8:10–21:45"
       },
       "monitor://device_cells/macbookair01/2026-11-11/67": {
@@ -2171,8 +2132,8 @@
         "build_label": "Nov 3 · 4a7e210",
         "hours": 24.0,
         "hatched": false,
-        "series": "4",
-        "color": "#C98500",
+        "series": "other",
+        "color": "#9AA0A6",
         "detail": "Nov 3 · 4a7e210 · 8:10–21:45"
       },
       "monitor://device_cells/macbookair01/2026-11-12/68": {
@@ -2187,8 +2148,8 @@
         "build_label": "Nov 3 · 4a7e210",
         "hours": 24.0,
         "hatched": false,
-        "series": "4",
-        "color": "#C98500",
+        "series": "other",
+        "color": "#9AA0A6",
         "detail": "Nov 3 · 4a7e210 · 8:10–21:45"
       },
       "monitor://device_cells/macbookair01/2026-11-13/69": {
@@ -2203,8 +2164,8 @@
         "build_label": "Nov 3 · 4a7e210",
         "hours": 24.0,
         "hatched": false,
-        "series": "4",
-        "color": "#C98500",
+        "series": "other",
+        "color": "#9AA0A6",
         "detail": "Nov 3 · 4a7e210 · 8:10–21:45"
       },
       "monitor://device_cells/macbookair01/2026-11-14/70": {
@@ -2251,8 +2212,8 @@
         "build_label": "Nov 3 · 4a7e210",
         "hours": 9.0,
         "hatched": false,
-        "series": "4",
-        "color": "#C98500",
+        "series": "other",
+        "color": "#9AA0A6",
         "detail": "Nov 3 · 4a7e210 · 7:40–8:45"
       },
       "monitor://device_cells/macbookair01/2026-11-16/73": {
@@ -2335,14 +2296,6 @@
         "color": "#E34948",
         "detail": "Nov 19 · f02b77e local · 13:00–16:05"
       },
-      "monitor://releases/0": {
-        "build": "0.6.0+20261111100000.e81c5d4",
-        "build_label": "Nov 11 · e81c5d4",
-        "bar": "2026-11-11",
-        "hours": 9.5,
-        "series": "3",
-        "color": "#199E70"
-      },
       "monitor://releases/1": {
         "build": "0.6.0+20261114100000.9be03a1",
         "build_label": "Nov 14 · 9be03a1",
@@ -2358,6 +2311,38 @@
         "hours": 10.75,
         "series": "1",
         "color": "#2A78D6"
+      },
+      "monitor://builds/0": {
+        "build": "0.6.0+20261114100000.9be03a1",
+        "label": "Nov 14 · 9be03a1",
+        "note": "",
+        "legend": "Nov 14 · 9be03a1",
+        "color": "#D95926",
+        "series": "2"
+      },
+      "monitor://builds/1": {
+        "build": "0.6.0+20261118100000.c41d9e2",
+        "label": "Nov 18 · c41d9e2",
+        "note": "server",
+        "legend": "Nov 18 · c41d9e2 · server",
+        "color": "#2A78D6",
+        "series": "1"
+      },
+      "monitor://builds/2": {
+        "build": "0.6.0+20261119080000.f02b77e",
+        "label": "Nov 19 · f02b77e local",
+        "note": "ahead",
+        "legend": "Nov 19 · f02b77e local · ahead",
+        "color": "#E34948",
+        "series": "8"
+      },
+      "monitor://builds/3": {
+        "build": "",
+        "label": "Older builds",
+        "note": "",
+        "legend": "Older builds",
+        "series": "other",
+        "color": "#9AA0A6"
       }
     },
     "queries": {
@@ -2420,8 +2405,7 @@
         "monitor://builds/0",
         "monitor://builds/1",
         "monitor://builds/2",
-        "monitor://builds/3",
-        "monitor://builds/4"
+        "monitor://builds/3"
       ],
       "monitor:devices": [
         "monitor://devices/pixel9demo01",
@@ -2514,7 +2498,6 @@
         "monitor://device_cells/macbookair01/2026-11-19/77"
       ],
       "monitor:releases": [
-        "monitor://releases/0",
         "monitor://releases/1",
         "monitor://releases/2"
       ]
