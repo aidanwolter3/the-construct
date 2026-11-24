@@ -101,11 +101,17 @@ pub const MANIFEST: SourceManifest = SourceManifest {
                 devices::DEVICES_QUERY,
                 devices::DEVICE_DAYS_QUERY,
                 devices::BUILDS_QUERY,
+                devices::DEVICE_CELLS_QUERY,
+                devices::RELEASES_QUERY,
             ],
             doc: "The user's devices (phone, desktop app, each browser) and the build each \
                   runs against the server's (latest, behind, ahead), and devices per day by \
-                  build for the last 14 days (a core://Bars chart, today's bar every device \
-                  at its latest build). The pod's own data: no operator switch.",
+                  build for the last 14 days: monitor:device_cells for a core://Bars grid \
+                  (row: \"row\", a row per device, each day split between the builds it \
+                  ran by when it switched, a day it wasn't seen hatched) with \
+                  monitor:releases as its marks (the server's releases), and \
+                  monitor:device_days for a bar chart (one build per device and day). The \
+                  pod's own data: no operator switch.",
         },
         FeedSpec {
             name: errors::ERRORS_FEED,
@@ -234,6 +240,47 @@ pub const MANIFEST: SourceManifest = SourceManifest {
                     "detail",
                     "the build and the note, e.g. Nov 14 · 9be03a1 · seen 3 days ago",
                 ),
+            ],
+        },
+        EntityDoc {
+            uri: "monitor://device_cells/{id}/{day}/{n}",
+            doc: "One build a device ran on one day of the last 14, or a day it wasn't seen (monitor:device_cells), for a core://Bars grid with row: \"row\", row_label: \"$item.device\", bar: \"bar\", value: \"hours\", scale_min: 24, hatched: \"hatched\", merge: \"build\" and field set (a tap sets it to the cell value). A day's builds come in the order it ran them.",
+            fields: &[
+                ("row", "the device's id"),
+                ("device", "the device's name"),
+                (
+                    "kind",
+                    "its kind (filter the grid with where kind equals ...)",
+                ),
+                ("bar", "the day, YYYY-MM-DD"),
+                ("bar_label", "the day of the month"),
+                (
+                    "cell",
+                    "<device id>/<day>: what a tap on the cell sets the field to",
+                ),
+                ("header", "e.g. Pixel 9 · Mon Nov 16, or Pixel 9 · today"),
+                ("build", "the build, or empty on a day it wasn't seen"),
+                ("build_label", "e.g. Nov 14 · 9be03a1"),
+                (
+                    "hours",
+                    "how much of the day's 24 it covers: from its first ping to the next build's",
+                ),
+                ("hatched", "true on a day the device wasn't seen"),
+                ("series", "its build's chart series (chart_<series>)"),
+                ("color", "its build's colour, #RRGGBB"),
+                ("detail", "e.g. Nov 14 · 9be03a1 · 19:00–22:30, or Not seen"),
+            ],
+        },
+        EntityDoc {
+            uri: "monitor://releases/{n}",
+            doc: "A server build the pod ran, at the moment it first ran it, in the days shown (monitor:releases): a core://Bars grid's marks with at: \"hours\".",
+            fields: &[
+                ("build", "the server's build"),
+                ("build_label", "e.g. Nov 18 · c41d9e2"),
+                ("bar", "the day, YYYY-MM-DD"),
+                ("hours", "hours into that day it came out"),
+                ("series", "its chart series (chart_<series>)"),
+                ("color", "its colour, #RRGGBB"),
             ],
         },
         EntityDoc {
@@ -1023,6 +1070,39 @@ pub fn bundle(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Every query key a core layout file reads is one the source fills,
+    /// so the user's copy of it (and an agent's edit) validates.
+    #[test]
+    fn every_query_key_of_the_layouts_is_declared() {
+        fn keys(v: &serde_json::Value, out: &mut Vec<String>) {
+            match v {
+                serde_json::Value::Object(m) => {
+                    for (k, v) in m {
+                        if k == "query_key"
+                            && let Some(s) = v.as_str()
+                        {
+                            out.push(s.to_owned());
+                        }
+                        keys(v, out);
+                    }
+                }
+                serde_json::Value::Array(a) => a.iter().for_each(|v| keys(v, out)),
+                _ => {}
+            }
+        }
+        let declared: Vec<&str> = MANIFEST
+            .feeds
+            .iter()
+            .flat_map(|f| f.query_keys.iter().copied())
+            .collect();
+        let newest = FILES.last().expect("a layout file");
+        let mut found = Vec::new();
+        keys(&serde_json::from_str(newest.text).unwrap(), &mut found);
+        for k in found {
+            assert!(declared.contains(&k.as_str()), "{} reads {k}", newest.name);
+        }
+    }
     use metrics::{
         AUTH_FAILURES, CREDENTIALS_ISSUED, DAY, HTTP_RESPONSES, LLM_REQUESTS, LLM_TOKENS,
         LLM_WEB_TOOLS, RATE_LIMITED, TEMPORARY_PODS,
