@@ -196,7 +196,7 @@ pub fn dot_radius(zoom: f32) -> f32 {
 /// A scatter's points as one draw: the dots are prepared once per layout
 /// (in paint order: plain, muted, highlighted) and shared, so a scene holds
 /// them for the price of a pointer, and a pan or pinch only changes `view`
-/// (decision `scatter-and-tap-paging`, Update). The renderers turn it into
+/// (decision `scatter-draws-as-one-run`). The renderers turn it into
 /// circles at draw time, culled to `clip`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct PointsRun {

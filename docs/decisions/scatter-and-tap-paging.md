@@ -1,5 +1,7 @@
 # Photos page on taps, and a scatter plot draws thousands of points
 
+Superseded in part by [scatter-draws-as-one-run](scatter-draws-as-one-run.md): how the scatter draws.
+
 Date: 2026-11-24. Related: [swipe-cards](swipe-cards.md), [taste-deck-and-map](taste-deck-and-map.md),
 [taste-data-source](taste-data-source.md), [rust-clients](rust-clients.md), [web-client](web-client.md).
 
