@@ -349,7 +349,9 @@ and only from the pod (issue #443): the pod's own without the session (it serves
 followed only within its origin), every other site's through its image proxy, `GET /v1/image?url=<url>` with the
 session's bearer (nothing when signed out). A layout can name any URL (rows filled from scraped pages, adopted
 layouts), so the device never reaches its own network (LAN, loopback) for one, nor shows a site its address; the
-pod fetches public hosts only, raster images only, at most 10 MiB. The client reads at most 10 MiB too, and decodes
+pod fetches public hosts only, raster images only, at most 10 MiB, and keeps what it fetched for an hour in one
+server-wide cache of at most 64 MiB and 4096 images (each counted with its URL, so tiny images at long URLs can't
+grow it). The client reads at most 10 MiB too, and decodes
 within limits (`image::Limits`: 12,000 px a side, 128 MiB allocated), so a decompression bomb fails and keeps its
 placeholder; what decodes is scaled to 1600 px a side. Images are cut to their box (cropped to fill, corners
 rounded) and drawn over their placeholder once they arrive; the window redraws then. A cut is made for each pixel
