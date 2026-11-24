@@ -610,12 +610,18 @@ impl HostStore {
         )
     }
 
-    /// Revoke every MCP credential of a pod; how many went.
+    /// Revoke every MCP credential of a pod; how many went. Its pending
+    /// authorization codes go too, so none mints a credential afterwards.
     pub fn revoke_mcp(&self, pod_id: &str) -> rusqlite::Result<usize> {
-        self.conn().execute(
+        let mut conn = self.conn();
+        let tx = conn.transaction()?;
+        let n = tx.execute(
             "DELETE FROM credentials WHERE pod_id = ?1 AND kind = 'mcp'",
             [pod_id],
-        )
+        )?;
+        tx.execute("DELETE FROM oauth_codes WHERE pod_id = ?1", [pod_id])?;
+        tx.commit()?;
+        Ok(n)
     }
 
     /// `(label, created_at)` of a pod's MCP credentials (idle ones too,
@@ -796,6 +802,9 @@ impl HostStore {
             "DELETE FROM credentials WHERE pod_id = ?1 AND kind IN ('pod_token', 'web')",
             [pod_id],
         )?;
+        // And the authorization codes the old token approved (Claude's and
+        // sites'), still to be redeemed: each would mint a new credential.
+        tx.execute("DELETE FROM oauth_codes WHERE pod_id = ?1", [pod_id])?;
         tx.execute(
             "INSERT INTO credentials (token_hash, pod_id, kind, created_at)
              VALUES (?1, ?2, 'pod_token', ?3)",
@@ -1049,6 +1058,32 @@ mod tests {
         assert!(store.credential("m1").unwrap().is_some());
         assert_eq!(store.revoke_mcp("p1").unwrap(), 1);
         assert!(store.credential("m1").unwrap().is_none());
+    }
+
+    #[test]
+    fn rotating_or_revoking_drops_the_pods_pending_codes() {
+        let store = HostStore::open_in_memory().unwrap();
+        store
+            .insert_pod(&pod("p1", PodKind::Admin, None), "h1")
+            .unwrap();
+        let code = |pod: &str| OAuthCode {
+            client_id: "c".into(),
+            pod_id: pod.into(),
+            redirect_uri: "https://claude.ai/cb".into(),
+            challenge: "x".into(),
+        };
+        for (hash, pod) in [("k1", "p1"), ("k2", "p1"), ("k3", "p2")] {
+            store.insert_code(hash, &code(pod), 300).unwrap();
+        }
+        // Approved with the old token, redeemed after the rotation: refused.
+        store.replace_token("p1", "h2").unwrap();
+        assert!(store.take_code("k1").unwrap().is_none());
+        // Another pod's code is untouched.
+        assert!(store.take_code("k3").unwrap().is_some());
+        store.insert_code("k4", &code("p1"), 300).unwrap();
+        store.revoke_mcp("p1").unwrap();
+        assert!(store.take_code("k4").unwrap().is_none());
+        assert!(store.take_code("k2").unwrap().is_none());
     }
 
     #[test]
