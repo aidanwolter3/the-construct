@@ -3111,12 +3111,14 @@ impl<'i> Build<'_, 'i> {
                 merge,
                 row,
                 row_label,
+                marks,
             } => self.bars(
                 n,
                 b,
                 BarsSpec {
                     row: row.as_deref(),
                     row_label: row_label.as_deref(),
+                    marks: marks.as_ref(),
                     row_height: height_dp.unwrap_or(GRID_ROW_DP) as f32,
                     query_key,
                     bar,
@@ -3832,6 +3834,7 @@ struct BarsSpec<'n> {
     row: Option<&'n str>,
     row_label: Option<&'n str>,
     row_height: f32,
+    marks: Option<&'n protocol::BarsMarks>,
 }
 
 /// A `core://Bars` grid row's height without `height_dp`.
@@ -4143,7 +4146,7 @@ impl<'i> Build<'_, 'i> {
             })
             .collect();
         let cell_style = |h: f32| {
-            let mut st = row(1, pad(0, 0), AlignItems::STRETCH);
+            let mut st = row(0, pad(0, 0), AlignItems::STRETCH);
             st.flex_grow = 1.0;
             st.flex_basis = length(0.0);
             st.min_size.width = length(col_min);
@@ -4156,6 +4159,25 @@ impl<'i> Build<'_, 'i> {
             };
             st
         };
+
+        // Marks: (bar, where along it out of the scale, colour).
+        let mut marks: Vec<(String, f32, Rgba)> = Vec::new();
+        if let Some(m) = spec.marks
+            && let Some(uris) = ctx.query(&m.query_key)
+        {
+            for uri in uris {
+                let Some(e) = ctx.entity(uri) else { continue };
+                let at = match e.get(&m.at) {
+                    Some(Value::Number(n)) => n.as_f64().unwrap_or(0.0) as f32,
+                    Some(Value::String(s)) => s.trim().parse().unwrap_or(0.0),
+                    _ => continue,
+                };
+                let ectx = ctx.with_item(uri, e);
+                let col = ectx.color(&ectx.text(&m.color)).unwrap_or(theme.muted_text);
+                let bar = e.get(spec.bar).map(render).unwrap_or_default();
+                marks.push((bar, (at / scale).clamp(0.0, 1.0), col));
+            }
+        }
 
         let mut lines = Vec::new();
         for (r, ((key, items), text)) in rows.iter().zip(&row_labels).enumerate() {
@@ -4223,6 +4245,48 @@ impl<'i> Build<'_, 'i> {
                     };
                     segs.push(self.push(style, Vec::new(), Paint::None, None, false));
                 }
+                // The segments a row the cell's width, and each mark a row
+                // over it (pulled back over the segments by a -100% margin;
+                // a percentage inset resolves against the wrong box): its
+                // dashed line `at` along, a little past the cell's edges.
+                let mut st = row(1, pad(0, 0), AlignItems::STRETCH);
+                st.size.width = percent(1.0);
+                st.flex_shrink = 0.0;
+                let mut kids = vec![self.push(st, segs, Paint::None, None, false)];
+                for (_, at, col) in marks.iter().filter(|m| m.0 == *bar) {
+                    let tall = spec.row_height + 3.0;
+                    let dashes = (tall / 5.0).floor().max(1.0) as usize;
+                    let dash = (0..dashes)
+                        .map(|_| {
+                            let paint = Paint::Quad {
+                                bg: *col,
+                                border: None,
+                                dashed: false,
+                                radius: 0.0,
+                            };
+                            self.push(fixed(1.5, 3.0), Vec::new(), paint, None, false)
+                        })
+                        .collect();
+                    let line = column(2, pad(0, 0), AlignItems::FLEX_START);
+                    let line = self.push(line, dash, Paint::None, None, false);
+                    let gap = |this: &mut Self, grow: f32| {
+                        let st = Style {
+                            flex_grow: grow,
+                            flex_basis: length(0.0),
+                            ..Default::default()
+                        };
+                        this.push(st, Vec::new(), Paint::None, None, false)
+                    };
+                    let before = gap(self, *at);
+                    let after = gap(self, 1.0 - *at);
+                    let mut st = row(0, pad(0, 0), AlignItems::FLEX_START);
+                    st.size.width = percent(1.0);
+                    st.flex_shrink = 0.0;
+                    st.margin.left = percent(-1.0);
+                    st.margin.top = length(-3.0);
+                    st.align_self = Some(AlignSelf::FLEX_START);
+                    kids.push(self.push(st, vec![before, line, after], Paint::None, None, false));
+                }
                 let value = format!("{key}/{bar}");
                 let on = chosen.as_deref() == Some(value.as_str());
                 let paint = if on {
@@ -4251,7 +4315,7 @@ impl<'i> Build<'_, 'i> {
                 let mut sem = self.sem(b, n, Some(format!("{text} {}", bar_labels[c])), tap);
                 sem.id = format!("{}/cell{r}_{c}", b.path);
                 sem.selected = on;
-                cells.push(self.push(cell_style(spec.row_height), segs, paint, Some(sem), false));
+                cells.push(self.push(cell_style(spec.row_height), kids, paint, Some(sem), false));
             }
             let mut line = row(2, pad(0, 0), AlignItems::CENTER);
             line.align_self = Some(AlignSelf::STRETCH);

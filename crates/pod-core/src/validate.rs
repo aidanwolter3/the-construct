@@ -563,8 +563,23 @@ fn check_values(node: &UiNode) -> Result<(), String> {
             merge,
             row,
             row_label,
+            marks,
             ..
         } => {
+            if let Some(m) = marks {
+                if row.is_none() {
+                    return Err("bars marks draw down a grid's rows: they need a row field".into());
+                }
+                if m.query_key.trim().is_empty() || m.at.trim().is_empty() {
+                    return Err("bars marks need a query_key and an at field".into());
+                }
+                check_color(&m.color).map_err(|_| {
+                    format!(
+                        "bars marks colour '{}' must be #RRGGBB or a binding",
+                        m.color
+                    )
+                })?;
+            }
             if row.as_ref().is_some_and(|r| r.trim().is_empty()) {
                 return Err("bars row names the field whose values make the grid's rows".into());
             }

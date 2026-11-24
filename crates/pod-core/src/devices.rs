@@ -465,6 +465,16 @@ pub fn server_builds(store: &Store) -> rusqlite::Result<Vec<String>> {
     })
 }
 
+/// The server builds the pod ran with when it first ran each (its
+/// releases, as the pod saw them), oldest first.
+pub fn server_build_times(store: &Store) -> rusqlite::Result<Vec<(String, i64)>> {
+    store.with_conn(|c| {
+        let mut st =
+            c.prepare_cached("SELECT build, first_seen FROM server_builds ORDER BY first_seen")?;
+        st.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?.collect()
+    })
+}
+
 /// Every device, the most recently seen first, against server build
 /// `server`.
 pub fn devices(store: &Store, server: &str) -> rusqlite::Result<Vec<Device>> {

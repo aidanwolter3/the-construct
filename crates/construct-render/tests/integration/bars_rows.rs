@@ -117,3 +117,51 @@ fn a_tap_names_the_row_and_the_bar_and_rows_need_the_feature() {
         "{features:?}"
     );
 }
+
+#[test]
+fn a_mark_is_a_dashed_line_at_its_moment_down_every_row() {
+    let (mut root, mut data) = grid();
+    if let UiNode::Bars { marks, .. } = &mut root {
+        *marks = Some(protocol::BarsMarks {
+            query_key: "m".into(),
+            at: "at".into(),
+            color: "#00FF00".into(),
+        });
+    }
+    // Noon on day 2.
+    data.entities.insert(
+        "x://m/0".into(),
+        serde_json::from_value(json!({"day": "2", "at": 12.0})).unwrap(),
+    );
+    data.queries.insert("m".into(), vec!["x://m/0".into()]);
+    let day2 = fills(&root, &data)[3];
+    let scene = build(
+        &root,
+        &data,
+        &BTreeMap::new(),
+        Viewport {
+            width: 390.0,
+            height: 400.0,
+            scale: 1.0,
+        },
+    );
+    let green = Rgba::hex("#00FF00").unwrap().0;
+    let dashes: Vec<[f32; 4]> = scene
+        .draws
+        .iter()
+        .filter_map(|d| match d {
+            Draw::Quad(q) if q.bg_color == green => Some(q.rect),
+            _ => None,
+        })
+        .collect();
+    // Dashes in both rows, all down the middle of day 2's cell.
+    let middle = day2.1 + day2.3 / 2.0;
+    assert!(dashes.len() >= 6, "{dashes:?}");
+    assert!(
+        dashes.iter().all(|d| (d[0] - middle).abs() < 2.0),
+        "{dashes:?} {middle}"
+    );
+    assert!(dashes.iter().any(|d| d[1] > day2.2), "{dashes:?}");
+    // The segments are where they were.
+    assert_eq!(fills(&root, &data), fills(&grid().0, &grid().1));
+}

@@ -19,6 +19,7 @@ pub const DEVICES_QUERY: &str = "monitor:devices";
 pub const DEVICE_DAYS_QUERY: &str = "monitor:device_days";
 pub const BUILDS_QUERY: &str = "monitor:builds";
 pub const DEVICE_CELLS_QUERY: &str = "monitor:device_cells";
+pub const RELEASES_QUERY: &str = "monitor:releases";
 /// Days the chart shows, today included.
 pub const CHART_DAYS: i64 = 14;
 
@@ -316,12 +317,15 @@ fn day_bounds(day: &str, zone: &TimeZone) -> Option<(i64, i64)> {
 }
 
 /// The feed's data: `devices` the pod knows, `days` their builds per day
-/// (`day_keys`, oldest first, the last one today, in `zone`), against
+/// (`day_keys`, oldest first, the last one today, in `zone`), `releases`
+/// the server builds the pod ran and when it first ran each, against
 /// server build `server`, at `now`.
+#[allow(clippy::too_many_arguments)]
 pub fn bundle(
     devices: &[Device],
     days: &[DeviceDay],
     day_keys: &[String],
+    releases: &[(String, i64)],
     zone: &TimeZone,
     server: &str,
     now: i64,
@@ -349,8 +353,22 @@ pub fn bundle(
         items.push((today.clone(), dev, dev.build.clone(), seen_today));
     }
     let cells = cells(devices, &all_days, day_keys, zone, now);
+    // The releases in the days shown: (build, day, hours into it).
+    let shown_releases: Vec<(&str, &String, f64)> = releases
+        .iter()
+        .filter_map(|(build, at)| {
+            day_keys.iter().find_map(|day| {
+                let (start, end) = day_bounds(day, zone)?;
+                (start..end).contains(at).then(|| {
+                    let h = (at - start) as f64 / (end - start) as f64 * CELL_HOURS;
+                    (build.as_str(), day, (h * 100.0).round() / 100.0)
+                })
+            })
+        })
+        .collect();
     let mut builds: Vec<&str> = items.iter().map(|i| i.2.as_str()).collect();
     builds.extend(cells.iter().filter_map(|c| c.build.as_deref()));
+    builds.extend(shown_releases.iter().map(|r| r.0));
     builds.push(server);
     let series = build_series(&builds, server);
     let series_of = |b: &str| series.get(b).copied().unwrap_or(OTHER);
@@ -437,9 +455,31 @@ pub fn bundle(
     }
     b.queries.insert(DEVICE_CELLS_QUERY.into(), uris);
 
+    // Releases: dashed lines down the grid where the server's build
+    // changed.
+    let mut uris = Vec::new();
+    for (i, (build, day, hours)) in shown_releases.iter().enumerate() {
+        let uri = format!("monitor://releases/{i}");
+        let series = series_of(build);
+        b.entities.insert(
+            uri.clone(),
+            record(json!({
+                "build": build,
+                "build_label": build_label(build),
+                "bar": day,
+                "hours": hours,
+                "series": series,
+                "color": series_color(series),
+            })),
+        );
+        uris.push(uri);
+    }
+    b.queries.insert(RELEASES_QUERY.into(), uris);
+
     // The legend: every build the charts show, oldest first.
     let mut shown: Vec<&str> = items.iter().map(|i| i.2.as_str()).collect();
     shown.extend(cells.iter().filter_map(|c| c.build.as_deref()));
+    shown.extend(shown_releases.iter().map(|r| r.0));
     shown.sort_by_key(|b| (order(b) == 0 && !b.is_empty(), order(b)));
     shown.dedup();
     let s = BuildId::parse(server);
@@ -683,7 +723,7 @@ mod tests {
             .iter()
             .map(|s| s.to_string())
             .collect();
-        let b = bundle(&devices, &days, &keys, &TimeZone::UTC, SERVER, now);
+        let b = bundle(&devices, &days, &keys, &[], &TimeZone::UTC, SERVER, now);
         let bars = &b.queries[DEVICE_DAYS_QUERY];
         assert_eq!(bars.len(), 3);
         let today: Vec<&Value> = bars
@@ -744,7 +784,27 @@ mod tests {
             .iter()
             .map(|s| s.to_string())
             .collect();
-        let b = bundle(&devices, &days, &keys, &TimeZone::UTC, SERVER, now);
+        // The server's build came out at 18:00; an older one before the
+        // days shown.
+        let releases = vec![
+            (old.to_owned(), midnight - 20 * 86_400),
+            (SERVER.to_owned(), midnight + 18 * 3600),
+        ];
+        let b = bundle(
+            &devices,
+            &days,
+            &keys,
+            &releases,
+            &TimeZone::UTC,
+            SERVER,
+            now,
+        );
+        let shown = &b.queries[RELEASES_QUERY];
+        assert_eq!(shown.len(), 1);
+        let release = &b.entities[&shown[0]].0;
+        assert_eq!(release["bar"], "2026-11-19");
+        assert_eq!(release["hours"], 18.0);
+        assert_eq!(release["series"], "1");
         let cells: Vec<&serde_json::Map<String, Value>> = b.queries[DEVICE_CELLS_QUERY]
             .iter()
             .map(|u| &b.entities[u].0)
@@ -793,7 +853,7 @@ mod tests {
             now - 30 * 86_400,
         )];
         let keys = vec!["2026-11-19".to_string()];
-        let b = bundle(&devices, &[], &keys, &TimeZone::UTC, SERVER, now);
+        let b = bundle(&devices, &[], &keys, &[], &TimeZone::UTC, SERVER, now);
         assert!(b.queries[DEVICE_CELLS_QUERY].is_empty());
     }
 }

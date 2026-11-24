@@ -485,7 +485,10 @@ async fn devices_feed(pod: &Pod) -> Hydration {
                 .collect::<rusqlite::Result<Vec<_>>>()?;
             let days = pod_core::devices::days(s, keys.first().map_or("", String::as_str))?;
             let zone = pod_core::tz::time_zone(s)?;
-            Ok(devices::bundle(&all, &days, &keys, &zone, server, now))
+            let releases = pod_core::devices::server_build_times(s)?;
+            Ok(devices::bundle(
+                &all, &days, &keys, &releases, &zone, server, now,
+            ))
         })
         .await;
     match read {

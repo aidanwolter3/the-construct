@@ -368,6 +368,11 @@
                       "hatched": "hatched",
                       "field": "device_cell",
                       "height_dp": 18,
+                      "marks": {
+                        "query_key": "monitor:releases",
+                        "at": "hours",
+                        "color": "${local://theme#chart_$item.series}"
+                      },
                       "where": {
                         "field": "kind",
                         "equals": "$form.device_kind"

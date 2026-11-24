@@ -2302,6 +2302,30 @@
       "title": "pods (temporary)",
       "total": 7
     },
+    "monitor://releases/0": {
+      "bar": "2026-11-11",
+      "build": "0.6.0+20261111100000.e81c5d4",
+      "build_label": "Nov 11 · e81c5d4",
+      "color": "#199E70",
+      "hours": 9.5,
+      "series": "3"
+    },
+    "monitor://releases/1": {
+      "bar": "2026-11-14",
+      "build": "0.6.0+20261114100000.9be03a1",
+      "build_label": "Nov 14 · 9be03a1",
+      "color": "#D95926",
+      "hours": 15.0,
+      "series": "2"
+    },
+    "monitor://releases/2": {
+      "bar": "2026-11-18",
+      "build": "0.6.0+20261118100000.c41d9e2",
+      "build_label": "Nov 18 · c41d9e2",
+      "color": "#2A78D6",
+      "hours": 10.75,
+      "series": "1"
+    },
     "monitor://summary/server": {
       "checked_at": 1795082400,
       "color": "#B26A00",
@@ -2482,6 +2506,11 @@
       "monitor://metrics/llm_tokens",
       "monitor://metrics/pods_admin",
       "monitor://metrics/pods_temporary"
+    ],
+    "monitor:releases": [
+      "monitor://releases/0",
+      "monitor://releases/1",
+      "monitor://releases/2"
     ],
     "monitor:summary": [
       "monitor://summary/server"
@@ -3067,6 +3096,11 @@
                                 "hatched": "hatched",
                                 "height_dp": 18,
                                 "label": "$item.bar_label",
+                                "marks": {
+                                  "at": "hours",
+                                  "color": "${local://theme#chart_$item.series}",
+                                  "query_key": "monitor:releases"
+                                },
                                 "query_key": "monitor:device_cells",
                                 "row": "row",
                                 "row_label": "$item.device",

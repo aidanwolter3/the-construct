@@ -373,13 +373,17 @@ fn node_features(node: &UiNode, out: &mut BTreeSet<&'static str>) {
             }
         }
         UiNode::Bars {
-            where_, merge, row, ..
+            where_,
+            merge,
+            row,
+            marks,
+            ..
         } => {
             add(feature::BARS);
             if merge.is_some() {
                 add(feature::BARS_MERGE);
             }
-            if row.is_some() {
+            if row.is_some() || marks.is_some() {
                 add(feature::BARS_ROWS);
             }
             // A bar chart filters as a list does: the same features.

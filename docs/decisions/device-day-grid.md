@@ -30,6 +30,11 @@ Decision:
   `chart_other` part. Today's cell is the day so far the same way, dashed when the device hasn't pinged today.
   Each part's `detail` names the build and its first and last ping (`Nov 14 · 9be03a1 · 19:00–22:30`).
   `monitor:device_days` stays, one build per device and day (the last one run), for the layouts older apps draw.
+- **Releases are dashed lines down the grid**: `marks` on the grid (`query_key`, `at`, `color`) draws each item as
+  a dashed vertical line through every row at a moment in its column. The feed's `monitor:releases` are the server
+  builds the pod ran (`server_builds`), at the moment the pod first ran each, coloured as the build, so a line
+  shows where devices could switch to that colour. That is when the pod first saw the deploy (its first request
+  after it), not the deploy itself.
 - **Server health 0002** draws the grid, filtered by the kind chips, and a tap shows that device's day.
 
 Limits: days recorded before this show one build all day. A device's first build of a day colours the day from

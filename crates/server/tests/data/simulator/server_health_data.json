@@ -2334,6 +2334,30 @@
         "series": "8",
         "color": "#E34948",
         "detail": "Nov 19 · f02b77e local · 13:00–16:05"
+      },
+      "monitor://releases/0": {
+        "build": "0.6.0+20261111100000.e81c5d4",
+        "build_label": "Nov 11 · e81c5d4",
+        "bar": "2026-11-11",
+        "hours": 9.5,
+        "series": "3",
+        "color": "#199E70"
+      },
+      "monitor://releases/1": {
+        "build": "0.6.0+20261114100000.9be03a1",
+        "build_label": "Nov 14 · 9be03a1",
+        "bar": "2026-11-14",
+        "hours": 15.0,
+        "series": "2",
+        "color": "#D95926"
+      },
+      "monitor://releases/2": {
+        "build": "0.6.0+20261118100000.c41d9e2",
+        "build_label": "Nov 18 · c41d9e2",
+        "bar": "2026-11-18",
+        "hours": 10.75,
+        "series": "1",
+        "color": "#2A78D6"
       }
     },
     "queries": {
@@ -2488,6 +2512,11 @@
         "monitor://device_cells/macbookair01/2026-11-18/75",
         "monitor://device_cells/macbookair01/2026-11-19/76",
         "monitor://device_cells/macbookair01/2026-11-19/77"
+      ],
+      "monitor:releases": [
+        "monitor://releases/0",
+        "monitor://releases/1",
+        "monitor://releases/2"
       ]
     }
   }
