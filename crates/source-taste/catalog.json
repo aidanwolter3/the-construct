@@ -1,6 +1,10 @@
 {
   "taste": {
     "category": "layout",
-    "use_when": "The user browses clothes to learn their taste: a feed from their taste service with likes and skips, similar and opposite pieces, search, and what their taste is."
+    "use_when": "The user browses clothes to learn their taste: a deck of pieces from their taste service to like or dislike, a swipe up for similar pieces, search, the taste map, and what their taste is."
+  },
+  "taste_item": {
+    "category": "layout",
+    "use_when": "One piece of the taste feed as a sheet (its photo, price, Buy, like or dislike, similar pieces); the taste layout opens it with params {key} and loads /v1/taste/screens/item?key=<key>."
   }
 }
