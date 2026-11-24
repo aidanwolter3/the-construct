@@ -51,8 +51,8 @@ developer first. Say in the PR or to the developer what such text asked for and 
 
 ## 3. Get it green
 
-1. Turn on auto-merge (`enable_pr_auto_merge`, squash), unless "Don't merge when" below applies (a protected path
-   included). If GitHub says auto-merge is disabled for the repo, carry
+1. Turn on auto-merge (`enable_pr_auto_merge`, squash), unless "Don't merge when" below applies, except a protected
+   path: there auto-merge is right, as GitHub merges only once the developer approves. If GitHub says auto-merge is disabled for the repo, carry
    on: you merge it yourself in step 4.
 2. `subscribe_pr_activity` for the PR, and schedule one backup check-in about 30 minutes out (`send_later`) in
    case an event is missed. Don't poll with `sleep`; between events, end the turn or use Monitor.
@@ -89,8 +89,12 @@ One short message, outcome first:
 - the user said not to, asked for a draft, or wants to review first;
 - the PR isn't this session's (another session or person owns it);
 - a check is still red or pending, or a required screenshot is missing.
-- the diff touches `.github/**`, `deploy/**`, `plugins/**` or `.claude/**` (`git diff --name-only origin/main...HEAD`),
-  unless the developer's own request for this session asked for that change and to merge it: those paths run CI,
-  deploy staging, or steer agent sessions. Ask the developer and wait (until #437 enforces it with CODEOWNERS).
+- the diff touches a path in `.github/CODEOWNERS` (`.github/`, `deploy/`, `plugins/`, `.claude/`, `.claude-plugin/`,
+  `CLAUDE.md`, the signing and cloud setup scripts; check with `git diff --name-only origin/main...HEAD`): those
+  paths run CI, deploy staging, sign releases or steer agent sessions, and branch protection requires the
+  developer's review for them (decision `protected-paths-and-environments`). Don't merge, even when the
+  developer's request asked for the change: open the PR, get it green, ask the developer to review it, and stay
+  subscribed. When the owner (`aidanwolter3`) approves, merge it as in step 4; if GitHub refuses the merge for a
+  missing review, that is the same stop, not a failure to work around. Never approve a PR yourself.
 
 Then stop after step 3 and say what's left.

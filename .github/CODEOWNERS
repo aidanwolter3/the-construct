@@ -1,0 +1,15 @@
+# Paths that run CI, deploy staging, sign releases or steer agent sessions need the developer's review
+# (issue #437, decision `protected-paths-and-environments`). With branch protection's "Require review from
+# Code Owners" on, a pull request touching any of them can't merge until the developer approves it; every
+# other path still merges on green checks. The `ship` skill reads this list too.
+#
+# Keep it short: each entry here is a PR an agent can't merge by itself.
+
+/.github/                 @aidanwolter3
+/deploy/                  @aidanwolter3
+/plugins/                 @aidanwolter3
+/.claude/                 @aidanwolter3
+/.claude-plugin/          @aidanwolter3
+/CLAUDE.md                @aidanwolter3
+/scripts/android_sign.sh  @aidanwolter3
+/scripts/cloud_setup.sh   @aidanwolter3

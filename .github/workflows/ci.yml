@@ -8,8 +8,8 @@ name: CI
 # Weekly on main too, so the pod image's Chromium and Debian packages are rebuilt current even in a week with no
 #   push (CHROMIUM_REFRESH in deploy/pod.Dockerfile, decision `browser-sandbox`).
 # The fake Pixelfed it talks to deploys from its own workflow (fake-pixelfed.yml).
-# The deploy needs the repo secret FLY_API_TOKEN_POD (an app-scoped Fly deploy token); without it
-# the deploy steps are skipped, not failed.
+# The deploy job runs in the `staging` Environment (issue #437), which only `main` may deploy from and which
+# holds FLY_API_TOKEN_POD (an app-scoped Fly deploy token); without it the deploy steps are skipped, not failed.
 # Third-party actions are pinned to commit SHAs (tag in the comment); Dependabot
 # (.github/dependabot.yml) proposes updates.
 
@@ -291,6 +291,11 @@ jobs:
     needs: [rust, audit]
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    # The Environment's deployment-branch rule (main only) keeps its secret from a run on any other ref, even one a
+    # pushed branch's own workflow starts (#437).
+    environment:
+      name: staging
+      url: https://the-construct-pod.fly.dev
     concurrency:
       group: deploy-staging
       cancel-in-progress: false
