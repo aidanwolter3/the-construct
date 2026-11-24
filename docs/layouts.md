@@ -268,7 +268,7 @@ request. Any layout may bind them; a layout needs no feed for them.
 
 | Entity or query | Fields |
 |---|---|
-| `local://connection` | `online`, `pending` (unsent changes), `label` ("Offline · 2 pending"), `attention` (offline or changes waiting) |
+| `local://connection` | `online`, `pending` (unsent changes), `label` ("Offline · 2 pending", "Online · 3 pending · not saving"), `attention` (offline or changes waiting), `stuck` (online, but the pod keeps answering the oldest change with an error), `error` ("HTTP 502: taste_unreachable"), `since` (unix ms), `dropped` (changes given up on this run), `dropped_text` ("1 change couldn't be saved (…)", empty when none), `color` |
 | `local://inbox` | `unread`, `label` ("3 unread"), `has_older` (the inbox has more than `local:notifications` holds), `loading` (an older page is loading) |
 | `local:notifications` (query) | The newest page, then the older pages `load_older_notifications` loaded: `id`, `channel_layout`, `app_title` (its layout's title), `title`, `body`, `when` ("5 min"), `day` ("Today"), `unread` |
 | `local:channels` (query) | `layout`, `app_title`, `id`, `title`, `description`, `enabled` |

@@ -42,6 +42,7 @@ fn fast_config() -> EngineConfig {
         poll_interval: Duration::from_millis(100),
         backoff_base: Duration::from_millis(20),
         backoff_cap: Duration::from_millis(200),
+        give_up_after: Duration::from_secs(600),
     }
 }
 
@@ -337,6 +338,7 @@ fn rejected_row_reapplies_later_rows_with_all_their_fields() {
     let config = EngineConfig {
         backoff_base: Duration::from_millis(400),
         backoff_cap: Duration::from_millis(2000),
+        give_up_after: Duration::from_secs(600),
         ..fast_config()
     };
     let engine = engine(&dir, &format!("http://{addr}"), config);
@@ -379,6 +381,7 @@ fn refetch_reapplies_all_fields_of_pending_rows() {
     let config = EngineConfig {
         backoff_base: Duration::from_millis(300),
         backoff_cap: Duration::from_millis(2000),
+        give_up_after: Duration::from_secs(600),
         ..fast_config()
     };
     let engine = engine(&dir, &format!("http://{addr}"), config);

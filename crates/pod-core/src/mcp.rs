@@ -1341,7 +1341,7 @@ fn vocabulary_with(components: Vec<Value>) -> Value {
         ],
         "local_data": {
             "doc": "Data the device provides, with no feed: bind ${local://<entity>#<field>} anywhere and list local:notifications in a core://List.",
-            "local://connection": "online (bool), pending (count of unsent changes), label (\"Online\", \"Offline · 2 pending\"), attention (true while offline or changes wait)",
+            "local://connection": "online (bool), pending (count of unsent changes), label (\"Online\", \"Offline · 2 pending\", \"Online · 3 pending · not saving\"), attention (true while offline or changes wait), stuck (online, but the pod keeps answering the oldest change with an error), error (that answer, \"HTTP 502: taste_unreachable\"), since (when it started failing, unix ms), dropped (changes given up on this run: undone after the pod refused them for 10 minutes), dropped_text (\"1 change couldn't be saved (HTTP 502: …)\", empty when none), color",
             "local://inbox": "unread (count), label (\"3 unread\"), has_older (more notifications than local:notifications holds: show a Load older button sending load_older_notifications), loading (a page is loading)",
             "local:notifications": "query of the newest notifications: id, channel_layout, layout, app_title (its layout's title), title, body, when (\"5 min\"), day (\"Today\"), unread",
             "local:channels": "query of the notification channels: layout, app_title (its layout's title), id, title, description, enabled",

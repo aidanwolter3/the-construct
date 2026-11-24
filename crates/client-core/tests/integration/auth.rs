@@ -49,6 +49,7 @@ fn fast_config() -> EngineConfig {
         poll_interval: Duration::from_millis(100),
         backoff_base: Duration::from_millis(20),
         backoff_cap: Duration::from_millis(200),
+        give_up_after: Duration::from_secs(600),
     }
 }
 

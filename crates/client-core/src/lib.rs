@@ -146,6 +146,11 @@ pub struct EngineConfig {
     /// `min(backoff_base * 2^n, backoff_cap)`.
     pub backoff_base: Duration,
     pub backoff_cap: Duration,
+    /// How long the pod may keep answering an outbox row with an error
+    /// (5xx, 408, 429) before the engine gives up on it: rolls it back like
+    /// a rejection and sends the rows behind it (decision
+    /// `failing-saves-give-up`). Network errors never count.
+    pub give_up_after: Duration,
 }
 
 impl Default for EngineConfig {
@@ -154,9 +159,14 @@ impl Default for EngineConfig {
             poll_interval: Duration::from_secs(2),
             backoff_base: Duration::from_secs(1),
             backoff_cap: Duration::from_secs(60),
+            give_up_after: Duration::from_secs(10 * 60),
         }
     }
 }
+
+/// How many given-up saves the engine remembers (this run only) for
+/// [`StateSnapshot::sync_json`].
+const DROPPED_KEPT: usize = 5;
 
 impl EngineConfig {
     /// Delay before the next attempt of a row that has now failed
@@ -374,6 +384,33 @@ pub struct StateSnapshot {
     /// through its embeds theirs); a stack entry resolves while the one below
     /// it reaches its key. `""` until the pod has answered a root.
     pub construct_json: String,
+    /// The outbox's health (decision `failing-saves-give-up`):
+    /// `{"failing": null | {"endpoint", "error", "attempts", "since"}, "dropped":
+    /// [{"endpoint", "entity_uri", "field", "error", "at"}], "give_up_after_s"}`.
+    /// `failing` is the oldest pending row once an attempt has failed
+    /// (`since`: unix ms of the pod's first error answer, null when only the
+    /// network failed); `dropped` the saves given up on this run, newest
+    /// first (`at` unix ms).
+    pub sync_json: String,
+}
+
+/// The oldest pending outbox row, as [`StateSnapshot::sync_json`] reports it.
+#[derive(Clone, Debug, Default, PartialEq)]
+struct HeadRow {
+    endpoint: String,
+    attempts: i64,
+    error: Option<String>,
+    failing_since: Option<i64>,
+}
+
+/// A save the engine gave up on ([`EngineConfig::give_up_after`]).
+#[derive(Clone, Debug, PartialEq, serde::Serialize)]
+struct DroppedSave {
+    endpoint: String,
+    entity_uri: String,
+    field: Option<String>,
+    error: String,
+    at: i64,
 }
 
 /// Another layout the engine holds (see [`StateSnapshot::layouts_json`]).
@@ -504,6 +541,12 @@ struct State {
     seq: u64,
     /// PENDING outbox rows; kept in step with the store on every write.
     pending_actions: u32,
+    /// The oldest of them (with [`State::pending_actions`]).
+    head: Option<HeadRow>,
+    /// Saves given up on this run, newest first (at most [`DROPPED_KEPT`]).
+    dropped: Vec<DroppedSave>,
+    /// [`EngineConfig::give_up_after`], for `sync_json`.
+    give_up_after_s: u64,
     /// Consecutive transport-level fetch failures and the last error, to
     /// keep the retry loop from logging every attempt.
     fetch_failures: u32,
@@ -663,7 +706,19 @@ impl State {
             notifications_json: self.notifications_json(),
             layouts_json: serde_json::to_string(&self.layouts).unwrap_or_else(|_| "{}".into()),
             construct_json: self.construct_json.clone(),
+            sync_json: self.sync_json(),
         }
+    }
+
+    /// [`StateSnapshot::sync_json`].
+    fn sync_json(&self) -> String {
+        let failing = self.head.as_ref().filter(|h| h.attempts > 0).map(|h| {
+            json!({ "endpoint": h.endpoint, "error": h.error.as_deref().unwrap_or(""),
+                    "attempts": h.attempts, "since": h.failing_since })
+        });
+        json!({ "failing": failing, "dropped": self.dropped,
+            "give_up_after_s": self.give_up_after_s })
+        .to_string()
     }
 
     /// The workspace's queries, overlaid with every loaded data path's
@@ -1005,6 +1060,8 @@ impl State {
     /// pod's session replaces this one: they were meant for this pod). The
     /// in-memory layout stays until the refetch replaces it.
     fn purge_private(&mut self, workspace_id: &str, outbox: PurgeOutbox) {
+        // Which saves failed is the session's business too.
+        self.dropped.clear();
         let mut keep: std::collections::HashSet<String> = Default::default();
         // The other layouts this engine opened are the pod's too
         // (`open_layout`): cached under their own ids.
@@ -1156,6 +1213,19 @@ impl State {
             match store.pending_count() {
                 Ok(n) => self.pending_actions = n,
                 Err(e) => eprintln!("[ConstructEngine] failed to count pending actions: {e}"),
+            }
+            match store.first_pending() {
+                Ok(row) => {
+                    self.head = row.map(|r| HeadRow {
+                        endpoint: r.endpoint,
+                        attempts: r.retry_count,
+                        error: r.last_error,
+                        failing_since: r.failing_since,
+                    })
+                }
+                Err(e) => {
+                    eprintln!("[ConstructEngine] failed to read the oldest pending action: {e}")
+                }
             }
         }
     }
@@ -1750,6 +1820,7 @@ impl ConstructEngine {
         let mut state = State {
             workspace_id: workspace_id.to_owned(),
             store,
+            give_up_after_s: config.give_up_after.as_secs(),
             ..State::default()
         };
         state.load_cached(workspace_id);
@@ -2665,7 +2736,44 @@ impl Inner {
         result: FlushResult,
     ) -> (Option<StateSnapshot>, bool) {
         let id = row.id;
+        let now_ms = unix_now_ms();
+        // The pod has kept failing this row for `give_up_after`: give up on
+        // it as if it were rejected, so the rows behind it are sent
+        // (decision `failing-saves-give-up`).
+        let mut gave_up = None;
+        let result = match result {
+            FlushResult::ServerError(code, body)
+                if row.failing_since.is_some_and(|since| {
+                    now_ms.saturating_sub(since)
+                        >= i64::try_from(self.config.give_up_after.as_millis()).unwrap_or(i64::MAX)
+                }) =>
+            {
+                let error = short_error(code, &body);
+                eprintln!(
+                    "[ConstructEngine] outbox #{id} POST {url} -> {error}; failing for {} s \
+                     after {} attempt(s): giving up on it",
+                    (now_ms - row.failing_since.unwrap_or(now_ms)) / 1000,
+                    row.retry_count + 1
+                );
+                gave_up = Some(error);
+                FlushResult::Rejected(code, body)
+            }
+            other => other,
+        };
         let mut st = lock(&self.state);
+        if let Some(error) = &gave_up {
+            st.dropped.insert(
+                0,
+                DroppedSave {
+                    endpoint: row.endpoint.clone(),
+                    entity_uri: row.entity_uri.clone(),
+                    field: row.field.clone(),
+                    error: error.clone(),
+                    at: now_ms,
+                },
+            );
+            st.dropped.truncate(DROPPED_KEPT);
+        }
         let (error, network) = match result {
             FlushResult::Accepted(code) => {
                 let deleted = st.store.as_ref().map(|s| s.delete_outbox(id));
@@ -2757,7 +2865,7 @@ impl Inner {
                     }
                 }
             }
-            FlushResult::ServerError(code, body) => (format!("HTTP {code}: {body}"), false),
+            FlushResult::ServerError(code, body) => (short_error(code, &body), false),
             FlushResult::Network(e) => (e, true),
             // Handled by `outbox_unauthorized` before this is called.
             FlushResult::Unauthorized => ("HTTP 401".to_string(), false),
@@ -2765,10 +2873,18 @@ impl Inner {
 
         let retry_count = row.retry_count + 1;
         let delay = self.config.backoff(retry_count);
-        let next = unix_now_ms() + delay.as_millis() as i64;
-        if let Some(Err(e)) = st.store.as_ref().map(|s| s.mark_retry(id, next, &error)) {
+        let next = now_ms + delay.as_millis() as i64;
+        // Only the pod's own error answers start the give-up clock: a phone
+        // that is offline for a day keeps its saves.
+        let failed_at = (!network).then_some(now_ms);
+        if let Some(Err(e)) = st
+            .store
+            .as_ref()
+            .map(|s| s.mark_retry(id, next, &error, failed_at))
+        {
             eprintln!("[ConstructEngine] outbox #{id}: failed to record the retry: {e}");
         }
+        st.sync_pending_count();
         eprintln!(
             "[ConstructEngine] outbox #{id} POST {url} -> {error}; retry #{retry_count} in {} ms \
              ({} pending)",
@@ -4418,6 +4534,28 @@ fn classify(resp: reqwest::blocking::Response) -> (FlushResult, String) {
     (classify_error(code, resp), String::new())
 }
 
+/// An error answer as the outbox records it: the status and, when the body
+/// is a JSON object with an `error` code (the pod's convention), that code;
+/// else the body's start. Kept short: it is shown on screen.
+fn short_error(code: u16, body: &str) -> String {
+    let code_text = serde_json::from_str::<Value>(body)
+        .ok()
+        .and_then(|v| v.get("error")?.as_str().map(str::to_owned));
+    let detail = code_text.unwrap_or_else(|| {
+        let t = body.trim();
+        let mut cut: String = t.chars().take(80).collect();
+        if cut.len() < t.len() {
+            cut.push('…');
+        }
+        cut
+    });
+    if detail.is_empty() {
+        format!("HTTP {code}")
+    } else {
+        format!("HTTP {code}: {detail}")
+    }
+}
+
 fn classify_error(code: u16, resp: reqwest::blocking::Response) -> FlushResult {
     if code == 401 {
         return FlushResult::Unauthorized;
@@ -4522,6 +4660,7 @@ mod tests {
         let fast = EngineConfig {
             backoff_base: Duration::from_millis(10),
             backoff_cap: Duration::from_millis(80),
+            give_up_after: Duration::from_secs(600),
             ..EngineConfig::default()
         };
         assert_eq!(fast.backoff(2), Duration::from_millis(40));
@@ -4592,6 +4731,7 @@ mod tests {
             last_error: None,
             also: Vec::new(),
             create: None,
+            failing_since: None,
         }
     }
 

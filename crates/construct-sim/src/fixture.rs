@@ -104,6 +104,9 @@ struct State {
     data: PathBuf,
     media: PathBuf,
     online: bool,
+    /// `not-saving <error>`: changes wait and the pod answers them with
+    /// this error (decision `failing-saves-give-up`).
+    failing: Option<String>,
     screen_data: BTreeMap<String, DataBundle>,
     /// Wire shape, `created_at` in seconds.
     notifications: Vec<Value>,
@@ -174,6 +177,7 @@ impl FixturePod {
                 data,
                 media: root.join(MEDIA_DIR),
                 online: true,
+                failing: None,
                 screen_data,
                 notifications,
                 channels,
@@ -196,6 +200,12 @@ impl FixturePod {
 
     pub fn set_online(&self, online: bool) {
         self.lock().online = online;
+    }
+
+    /// `not-saving <error>`: two changes wait, the pod answering the oldest
+    /// with `error`, and one was given up; `None` clears it.
+    pub fn set_failing(&self, error: Option<String>) {
+        self.lock().failing = error;
     }
 
     /// A live notification arrives (`notify`).
@@ -270,10 +280,19 @@ impl FixturePod {
                 out.entities.insert(uri.to_owned(), e);
             }
         };
-        let connection = if s.online {
-            json!({ "online": true, "pending": 0, "label": "Online", "attention": false, "color": "#2E7D32" })
+        let connection = if let (true, Some(error)) = (s.online, &s.failing) {
+            json!({ "online": true, "pending": 2, "label": "Online · 2 pending · not saving",
+                "attention": true, "stuck": true, "error": error, "since": 0, "dropped": 1,
+                "dropped_text": format!("1 change couldn't be saved ({error})"),
+                "color": "#B26A00" })
+        } else if s.online {
+            json!({ "online": true, "pending": 0, "label": "Online", "attention": false,
+                "stuck": false, "error": "", "since": null, "dropped": 0, "dropped_text": "",
+                "color": "#2E7D32" })
         } else {
-            json!({ "online": false, "pending": 0, "label": "Offline", "attention": true, "color": "#9E9E9E" })
+            json!({ "online": false, "pending": 0, "label": "Offline", "attention": true,
+                "stuck": false, "error": "", "since": null, "dropped": 0, "dropped_text": "",
+                "color": "#9E9E9E" })
         };
         set(&mut out, "local://connection", connection);
         set(

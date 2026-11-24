@@ -114,6 +114,9 @@ pub enum Step {
     Clock(i64),
     Offline,
     Online,
+    /// `not-saving <error>` (`not-saving` alone clears it): changes wait
+    /// and the pod answers them with `error`.
+    NotSaving(Option<String>),
     PublishVersion(String),
     OpenLayout {
         layout: String,
@@ -170,6 +173,7 @@ impl Step {
             Step::Clock(_) => "clock",
             Step::Offline => "offline",
             Step::Online => "online",
+            Step::NotSaving(_) => "not-saving",
             Step::PublishVersion(_) => "publish-version",
             Step::OpenLayout { .. } => "open-layout",
             Step::OpenSettings => "open-settings",
@@ -186,6 +190,7 @@ impl Step {
             self,
             Step::Offline
                 | Step::Online
+                | Step::NotSaving(_)
                 | Step::PublishVersion(_)
                 | Step::Notify { .. }
                 | Step::Construct(_)
@@ -421,6 +426,7 @@ pub fn parse(script: &str) -> Result<Vec<Line>, String> {
             ),
             "offline" => none(Step::Offline)?,
             "online" => none(Step::Online)?,
+            "not-saving" => Step::NotSaving((!arg.is_empty()).then(|| arg.clone())),
             "publish-version" => Step::PublishVersion(need("a note (the changelog line)")?),
             "open-layout" => {
                 let a = need("a layout id and push, sheet or panel")?;

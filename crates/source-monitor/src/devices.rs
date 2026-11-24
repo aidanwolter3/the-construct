@@ -83,7 +83,7 @@ pub fn build_series(builds: &[&str], server: &str) -> HashMap<String, &'static s
     out
 }
 
-fn seen_text(secs: i64) -> String {
+pub(crate) fn seen_text(secs: i64) -> String {
     match secs.max(0) {
         s if s < 90 => "just now".into(),
         s if s < 3600 => format!("{} min ago", s / 60),
