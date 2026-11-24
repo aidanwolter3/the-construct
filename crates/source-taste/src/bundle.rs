@@ -300,7 +300,7 @@ pub fn scatter(map: &crate::api::MapData) -> (String, EntityRecord) {
         "points": encode(&points),
         "count": n,
         "count_text": format!("{} pieces", grouped(n as i64)),
-        "reactions_text": format!("{} liked · {} skipped", map.liked.len(), map.skipped.len()),
+        "reactions_text": format!("{} liked · {} disliked", map.liked.len(), map.skipped.len()),
         "modelled": map.p.is_some(),
     });
     let rec = match rec {
@@ -357,7 +357,7 @@ pub struct Status {
 }
 
 pub fn status(b: &mut DataBundle, s: &Status) {
-    let counts = format!("{} liked · {} skipped", s.likes, s.skips);
+    let counts = format!("{} liked · {} disliked", s.likes, s.skips);
     let rec = json!({
         "signed_in": s.signed_in,
         "host": s.host,
@@ -637,7 +637,7 @@ pub fn map(b: &mut DataBundle, area: &str, v: &Value) {
         "title": if area == WHOLE_MAP { "Your taste map".to_owned() } else { format!("Zoomed in ×{}", 4u32.pow(level)) },
         "whole": area == WHOLE_MAP,
         "count_text": pieces(total),
-        "reactions_text": format!("{} liked · {} skipped here", grouped(likes), grouped(skips)),
+        "reactions_text": format!("{} liked · {} disliked here", grouped(likes), grouped(skips)),
     });
     if let Value::Object(m) = rec {
         b.entities

@@ -482,13 +482,16 @@ fn intent_features(intent: &ActionIntent, out: &mut BTreeSet<&'static str>) {
             ..
         } => {
             add(feature::NAVIGATE);
-            if layout.is_some()
-                || matches!(
-                    presentation,
-                    PresentationMode::Sheet | PresentationMode::Panel | PresentationMode::Overlay
-                )
-            {
+            let framed = matches!(
+                presentation,
+                PresentationMode::Sheet | PresentationMode::Panel | PresentationMode::Overlay
+            );
+            if layout.is_some() || framed {
                 add(feature::NAVIGATE_LAYOUT);
+            }
+            // A screen of this layout (no `layout`) presented over it.
+            if layout.is_none() && framed {
+                add(feature::NAVIGATE_SCREEN_SHEET);
             }
             if *presentation == PresentationMode::Overlay {
                 add(feature::OVERLAY_EDGE);
