@@ -1,9 +1,9 @@
 # The Taste source
 
-The `taste` source (crate `source-taste`, decisions [`taste-data-source`](decisions/taste-data-source.md) and
-[`taste-deck-and-map`](decisions/taste-deck-and-map.md)) shows the
+The `taste` source (crate `source-taste`, decisions [`taste-data-source`](decisions/taste-data-source.md),
+[`taste-deck-and-map`](decisions/taste-deck-and-map.md) and [`taste-item-sheet`](decisions/taste-item-sheet.md)) shows the
 feed of the owner's **taste service** in the pod: clothes from real stores, each with its photo and a link to buy
-it, ranked by a service that learns what they like from likes and skips and keeps showing them things they haven't
+it, ranked by a service that learns what they like from likes and dislikes and keeps showing them things they haven't
 seen. The service is a separate HTTP service (its own repository); the pod connects out to it and keeps the feed
 it was served.
 
@@ -11,8 +11,8 @@ it was served.
 
 The `taste` core layout opens on a form for the service's address (`https://…`) and its token (the service's
 `TASTE_TOKEN`). `POST /v1/taste/sign-in {url, token}` checks them with `GET /api/taste` and stores the token sealed.
-Settings shows the `taste` jack as plugged once signed in; unplugging it, or the layout's Sign out
-(`/v1/taste/sign-out`), forgets the service and the kept feed. Temporary pods have the jack locked.
+Settings shows the `taste` jack as plugged once signed in; unplugging it (Settings signs out there), or
+`/v1/taste/sign-out`, forgets the service and the kept feed. Temporary pods have the jack locked.
 
 The address must be `https://` on a public host. For a service on this machine (development, tests), run the server
 with `CONSTRUCT_TASTE_PRIVATE_HOSTS=1`.
@@ -85,8 +85,19 @@ the service's whole map (`GET /api/map`) for 30 minutes, asks again 15 s after a
 piece's point at once. A reaction to a piece the service no longer has (404 or 410) takes it out of the deck and
 answers `{ok: true, gone: true}`, so the card doesn't come back.
 
+Since `layouts/taste/0004.json` (decision `taste-item-sheet`; layouts only, no new build): a swipe up on a deck
+card, or a tap in the middle of its photo, opens the piece as a sheet, the `taste_item` core layout (its photo,
+brand, title, price, Buy, Like and Dislike, and its Similar pieces; a similar piece takes the sheet's place). It is
+the one item view: Likes, Search and an area's pieces open it too (map dots keep their point screen, made compact).
+The card says "⌃ Swipe up for similar" under the photo. Gone: the Details screen and button, "This, but…", Opposite,
+the liked and disliked counts, and the sign-out button. The owner reads "disliked" where the wire says `skipped`.
+The sheet is opened with `{intent: action.sequence, steps: [{intent: action.navigation.open, layout: taste_item,
+presentation: Sheet, params: {key}}, {intent: action.data.load, path: /v1/taste/screens/item?key=<key>}]}` and reads
+its piece as `${taste://items/$route.key#<field>}` and its similar pieces from `taste:sheet:similar` (copies tagged
+`of: <key>`, listed `where of equals $route.key`).
+
 Use it whole from a pod's layout, `{"type": "core://Use", "ref": "@core/taste"}` with the feed `["taste", "feed"]`,
-and link that from home; `taste:status`'s `counts_text` (12 liked · 30 skipped) makes a one-line summary there.
+and link that from home; `taste:status`'s `counts_text` (12 liked · 30 disliked) makes a one-line summary there.
 
 ## The service's API
 

@@ -137,7 +137,9 @@ edge scroll sideways under a finger, a sideways wheel or trackpad, or Shift and 
 (with its Send button beside it when it has `on_submit`), Switch, Progress, Dock, Layout (inline, from the layouts
 given), Carousel (pages side by side, an "n/N" badge and dots; a sideways drag pages it, snapping to a page; with
 `tap_paging`, bars over the page instead, taps on its outer thirds turn it, and a turn waits for the next page's
-photo with the current one showing: `interact/gallery.rs`), Scatter (one `Draw::Points` run: its dots prepared
+photo with the current one showing: `interact/gallery.rs`; its page is kept under its `tag`, or else its path with
+an enclosing list cell's index replaced by the cell's item, so it moves with the item, as a deck's next card
+coming to the top: decision `carousel-page-follows-its-item`), Scatter (one `Draw::Points` run: its dots prepared
 once per layout and shared, plain ones first and highlighted ones on top, drawn as circles through the zoom and pan
 kept among the screen's offsets, which a pan patches into the drawn scene; and the box being selected), and
 every named icon (`icons.rs`: Material path data, rasterized with zeno; on the GPU they are glyphon
