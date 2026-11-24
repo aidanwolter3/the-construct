@@ -7,6 +7,7 @@
 use std::collections::HashMap;
 
 use pod_core::devices::{Device, DeviceDay, Relation, platform_text};
+use pod_core::tz::jiff::{self, tz::TimeZone};
 use protocol::{BuildId, DataBundle};
 use serde_json::json;
 
@@ -17,6 +18,7 @@ pub const DEVICE_SUMMARY_QUERY: &str = "monitor:device_summary";
 pub const DEVICES_QUERY: &str = "monitor:devices";
 pub const DEVICE_DAYS_QUERY: &str = "monitor:device_days";
 pub const BUILDS_QUERY: &str = "monitor:builds";
+pub const DEVICE_CELLS_QUERY: &str = "monitor:device_cells";
 /// Days the chart shows, today included.
 pub const CHART_DAYS: i64 = 14;
 
@@ -150,22 +152,26 @@ pub fn fold_replaced(devices: &[Device], days: &[DeviceDay]) -> (Vec<Device>, Ve
         .filter(|d| !into.contains_key(d.id.as_str()))
         .cloned()
         .collect();
-    // A day both ran on keeps the newer one's build.
+    // A build both ran on one day is one row: their pings together, from
+    // the earlier first ping to the later last one.
     let mut out: Vec<DeviceDay> = Vec::new();
-    let mut at: HashMap<(String, String), usize> = HashMap::new();
+    let mut at: HashMap<(String, String, String), usize> = HashMap::new();
     for d in days {
         let owner = into.get(d.device.as_str()).copied().unwrap_or(&d.device);
         let row = DeviceDay {
             device: owner.to_owned(),
             ..d.clone()
         };
-        let key = (d.day.clone(), owner.to_owned());
+        let key = (d.day.clone(), owner.to_owned(), d.build.clone());
         match at.get(&key) {
             Some(&i) => {
-                out[i].pings += d.pings;
-                if d.device == owner {
-                    out[i].build = d.build.clone();
-                }
+                let o = &mut out[i];
+                o.pings += d.pings;
+                o.first_seen = match (o.first_seen, d.first_seen) {
+                    (Some(a), Some(b)) => Some(a.min(b)),
+                    (a, b) => a.or(b),
+                };
+                o.last_seen = o.last_seen.max(d.last_seen);
             }
             None => {
                 at.insert(key, out.len());
@@ -173,21 +179,156 @@ pub fn fold_replaced(devices: &[Device], days: &[DeviceDay]) -> (Vec<Device>, Ve
             }
         }
     }
+    // Each device's day in the order it ran its builds; a row from before
+    // the times were kept first.
+    out.sort_by(|a, b| {
+        (&a.day, &a.device, a.first_seen, &a.build).cmp(&(
+            &b.day,
+            &b.device,
+            b.first_seen,
+            &b.build,
+        ))
+    });
     (kept, out)
 }
 
+/// One build per device and day, the one it ran last that day (the
+/// `device_days` bars, for apps without feature `bars_rows`).
+fn last_builds(days: &[DeviceDay]) -> Vec<DeviceDay> {
+    let mut out: Vec<DeviceDay> = Vec::new();
+    for d in days {
+        match out.last_mut() {
+            Some(o) if o.day == d.day && o.device == d.device => {
+                let pings = o.pings + d.pings;
+                *o = DeviceDay { pings, ..d.clone() };
+            }
+            _ => out.push(d.clone()),
+        }
+    }
+    out
+}
+
+/// One part of a cell of the grid: a build `device` ran on `day` for
+/// `hours` of it, or (`build` none) a day it wasn't seen.
+struct Part<'d> {
+    device: &'d Device,
+    day: String,
+    build: Option<String>,
+    hours: f64,
+    detail: String,
+}
+
+/// The grid's parts: the devices seen in the days shown, by name, each
+/// with a cell per day. A day's builds share it by when the device first
+/// ran each: the first from the day's start, the last to its end (a
+/// build is all of a day recorded before the times were kept). A build
+/// it ran for a moment still shows, an hour wide.
+fn cells<'d>(
+    devices: &'d [Device],
+    days: &[DeviceDay],
+    day_keys: &[String],
+    zone: &TimeZone,
+    now: i64,
+) -> Vec<Part<'d>> {
+    let today = day_keys.last().cloned().unwrap_or_default();
+    let mut shown: Vec<&Device> = devices
+        .iter()
+        .filter(|d| {
+            days.iter()
+                .any(|x| x.device == d.id && day_keys.contains(&x.day))
+        })
+        .collect();
+    shown.sort_by_key(|d| (d.name.to_lowercase(), d.id.clone()));
+    let mut out = Vec::new();
+    for dev in shown {
+        for day in day_keys {
+            let ran: Vec<&DeviceDay> = days
+                .iter()
+                .filter(|x| x.device == dev.id && x.day == *day)
+                .collect();
+            if ran.is_empty() {
+                out.push(Part {
+                    device: dev,
+                    day: day.clone(),
+                    build: None,
+                    hours: CELL_HOURS,
+                    detail: if *day == today {
+                        format!("Not seen today · seen {}", seen_text(now - dev.last_seen))
+                    } else {
+                        "Not seen".to_owned()
+                    },
+                });
+                continue;
+            }
+            let (start, end) = day_bounds(day, zone).unwrap_or((0, 86_400));
+            let at = |x: &DeviceDay| x.first_seen.unwrap_or(start).clamp(start, end);
+            for (j, x) in ran.iter().enumerate() {
+                let from = if j == 0 { start } else { at(x) };
+                let to = ran.get(j + 1).map_or(end, |n| at(n));
+                let hours = (to - from) as f64 / (end - start) as f64 * CELL_HOURS;
+                let label = build_label(&x.build);
+                let detail = match (x.first_seen, x.last_seen) {
+                    (Some(f), Some(l)) => {
+                        let (f, l) = (clock(f, zone), clock(l, zone));
+                        if f == l {
+                            format!("{label} · {f}")
+                        } else {
+                            format!("{label} · {f}–{l}")
+                        }
+                    }
+                    _ => label,
+                };
+                out.push(Part {
+                    device: dev,
+                    day: day.clone(),
+                    build: Some(x.build.clone()),
+                    hours: (hours.max(1.0) * 100.0).round() / 100.0,
+                    detail,
+                });
+            }
+        }
+    }
+    out
+}
+
+/// Hours a cell of the grid holds: a whole day.
+const CELL_HOURS: f64 = 24.0;
+
+/// `9:14` for `secs` in `zone`.
+fn clock(secs: i64, zone: &TimeZone) -> String {
+    jiff::Timestamp::from_second(secs)
+        .map(|t| t.to_zoned(zone.clone()).strftime("%-H:%M").to_string())
+        .unwrap_or_default()
+}
+
+/// The first second of `day` and of the day after it, in `zone`.
+fn day_bounds(day: &str, zone: &TimeZone) -> Option<(i64, i64)> {
+    let d: jiff::civil::Date = day.parse().ok()?;
+    let start = d.to_zoned(zone.clone()).ok()?.timestamp().as_second();
+    let end = d
+        .tomorrow()
+        .ok()?
+        .to_zoned(zone.clone())
+        .ok()?
+        .timestamp()
+        .as_second();
+    Some((start, end.max(start + 1)))
+}
+
 /// The feed's data: `devices` the pod knows, `days` their builds per day
-/// (`day_keys`, oldest first, the last one today), against server build
-/// `server`, at `now`.
+/// (`day_keys`, oldest first, the last one today, in `zone`), against
+/// server build `server`, at `now`.
 pub fn bundle(
     devices: &[Device],
     days: &[DeviceDay],
     day_keys: &[String],
+    zone: &TimeZone,
     server: &str,
     now: i64,
 ) -> DataBundle {
-    let (devices, days) = fold_replaced(devices, days);
-    let (devices, days) = (devices.as_slice(), days.as_slice());
+    let (devices, all_days) = fold_replaced(devices, days);
+    let last = last_builds(&all_days);
+    let (devices, days) = (devices.as_slice(), last.as_slice());
     let mut b = DataBundle::default();
     let today = day_keys.last().cloned().unwrap_or_default();
     let by_id: HashMap<&str, &Device> = devices.iter().map(|d| (d.id.as_str(), d)).collect();
@@ -207,7 +348,9 @@ pub fn bundle(
         let seen_today = days.iter().any(|d| d.day == today && d.device == dev.id);
         items.push((today.clone(), dev, dev.build.clone(), seen_today));
     }
+    let cells = cells(devices, &all_days, day_keys, zone, now);
     let mut builds: Vec<&str> = items.iter().map(|i| i.2.as_str()).collect();
+    builds.extend(cells.iter().filter_map(|c| c.build.as_deref()));
     builds.push(server);
     let series = build_series(&builds, server);
     let series_of = |b: &str| series.get(b).copied().unwrap_or(OTHER);
@@ -263,8 +406,40 @@ pub fn bundle(
     }
     b.queries.insert(DEVICE_DAYS_QUERY.into(), uris);
 
-    // The legend: every build the chart shows, oldest first.
+    // The grid (feature `bars_rows`): a row per device, a cell per day,
+    // each build it ran that day for as long as it ran it.
+    let mut uris = Vec::new();
+    for (i, c) in cells.iter().enumerate() {
+        let uri = format!("monitor://device_cells/{}/{}/{i}", c.device.id, c.day);
+        let series = c.build.as_deref().map_or(OTHER, series_of);
+        let is_today = c.day == today;
+        b.entities.insert(
+            uri.clone(),
+            record(json!({
+                "row": c.device.id,
+                "device": c.device.name,
+                "kind": c.device.platform,
+                "bar": c.day,
+                "bar_label": c.day.rsplit('-').next().unwrap_or_default().trim_start_matches('0'),
+                "cell": format!("{}/{}", c.device.id, c.day),
+                "header": format!("{} · {}", c.device.name,
+                    if is_today { "today".to_owned() } else { day_text(&c.day) }),
+                "build": c.build.clone().unwrap_or_default(),
+                "build_label": c.build.as_deref().map(build_label).unwrap_or_default(),
+                "hours": c.hours,
+                "hatched": c.build.is_none(),
+                "series": series,
+                "color": series_color(series),
+                "detail": c.detail,
+            })),
+        );
+        uris.push(uri);
+    }
+    b.queries.insert(DEVICE_CELLS_QUERY.into(), uris);
+
+    // The legend: every build the charts show, oldest first.
     let mut shown: Vec<&str> = items.iter().map(|i| i.2.as_str()).collect();
+    shown.extend(cells.iter().filter_map(|c| c.build.as_deref()));
     shown.sort_by_key(|b| (order(b) == 0 && !b.is_empty(), order(b)));
     shown.dedup();
     let s = BuildId::parse(server);
@@ -426,6 +601,8 @@ mod tests {
             device: device.into(),
             build: build.into(),
             pings: 1,
+            first_seen: None,
+            last_seen: None,
         }
     }
 
@@ -448,14 +625,10 @@ mod tests {
         assert_eq!(
             days,
             vec![
-                DeviceDay {
-                    pings: 1,
-                    ..day("2026-11-18", "newid0001", old_build)
-                },
-                DeviceDay {
-                    pings: 2,
-                    ..day("2026-11-19", "newid0001", SERVER)
-                },
+                day("2026-11-18", "newid0001", old_build),
+                // The day both ran keeps each one's build.
+                day("2026-11-19", "newid0001", old_build),
+                day("2026-11-19", "newid0001", SERVER),
             ]
         );
     }
@@ -494,19 +667,23 @@ mod tests {
                 device: "laptop001".into(),
                 build: "0.6.0+20261114100000.9be03a1".into(),
                 pings: 4,
+                first_seen: None,
+                last_seen: None,
             },
             DeviceDay {
                 day: "2026-11-19".into(),
                 device: "phone0001".into(),
                 build: SERVER.into(),
                 pings: 9,
+                first_seen: None,
+                last_seen: None,
             },
         ];
         let keys: Vec<String> = ["2026-11-16", "2026-11-17", "2026-11-18", "2026-11-19"]
             .iter()
             .map(|s| s.to_string())
             .collect();
-        let b = bundle(&devices, &days, &keys, SERVER, now);
+        let b = bundle(&devices, &days, &keys, &TimeZone::UTC, SERVER, now);
         let bars = &b.queries[DEVICE_DAYS_QUERY];
         assert_eq!(bars.len(), 3);
         let today: Vec<&Value> = bars
@@ -532,5 +709,91 @@ mod tests {
             .collect();
         assert_eq!(legend.len(), 2);
         assert_eq!(legend[1], "Nov 18 · c41d9e2 · server");
+    }
+
+    #[test]
+    fn a_device_that_updated_splits_its_day_and_a_missed_day_is_dashed() {
+        let old = "0.6.0+20261114100000.9be03a1";
+        // 2026-11-19 00:00 UTC.
+        let midnight = 1_795_046_400;
+        let now = midnight + 20 * 3600;
+        let devices = vec![dev(
+            "phone0001",
+            "android",
+            SERVER,
+            Relation::Latest,
+            now - 60,
+        )];
+        let days = vec![
+            DeviceDay {
+                pings: 3,
+                ..day("2026-11-17", "phone0001", old)
+            },
+            DeviceDay {
+                first_seen: Some(midnight + 8 * 3600),
+                last_seen: Some(midnight + 18 * 3600),
+                ..day("2026-11-19", "phone0001", old)
+            },
+            DeviceDay {
+                first_seen: Some(midnight + 18 * 3600 + 15 * 60),
+                last_seen: Some(midnight + 19 * 3600),
+                ..day("2026-11-19", "phone0001", SERVER)
+            },
+        ];
+        let keys: Vec<String> = ["2026-11-17", "2026-11-18", "2026-11-19"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        let b = bundle(&devices, &days, &keys, &TimeZone::UTC, SERVER, now);
+        let cells: Vec<&serde_json::Map<String, Value>> = b.queries[DEVICE_CELLS_QUERY]
+            .iter()
+            .map(|u| &b.entities[u].0)
+            .collect();
+        let got: Vec<(&str, f64, bool)> = cells
+            .iter()
+            .map(|c| {
+                (
+                    c["bar"].as_str().unwrap(),
+                    c["hours"].as_f64().unwrap(),
+                    c["hatched"].as_bool().unwrap(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            got,
+            vec![
+                ("2026-11-17", 24.0, false),
+                ("2026-11-18", 24.0, true),
+                // The old build from midnight to the update at 18:15, the
+                // new one to the day's end.
+                ("2026-11-19", 18.25, false),
+                ("2026-11-19", 5.75, false),
+            ]
+        );
+        assert_eq!(cells[1]["detail"], "Not seen");
+        assert_eq!(cells[1]["series"], "other");
+        assert_eq!(cells[2]["detail"], "Nov 14 · 9be03a1 · 8:00–18:00");
+        assert_eq!(cells[3]["series"], "1");
+        assert_eq!(cells[3]["cell"], "phone0001/2026-11-19");
+        assert_eq!(cells[3]["bar_label"], "19");
+        assert_eq!(cells[3]["header"], "phone0001 name · today");
+        // The old bars keep one build a day, the last one.
+        let bar = &b.entities["monitor://device_days/2026-11-19/phone0001"].0;
+        assert_eq!(bar["build"], SERVER);
+    }
+
+    #[test]
+    fn a_device_not_seen_in_the_days_shown_has_no_row() {
+        let now = 1_795_046_400;
+        let devices = vec![dev(
+            "gone00001",
+            "web",
+            SERVER,
+            Relation::Latest,
+            now - 30 * 86_400,
+        )];
+        let keys = vec!["2026-11-19".to_string()];
+        let b = bundle(&devices, &[], &keys, &TimeZone::UTC, SERVER, now);
+        assert!(b.queries[DEVICE_CELLS_QUERY].is_empty());
     }
 }

@@ -561,8 +561,16 @@ fn check_values(node: &UiNode) -> Result<(), String> {
             field,
             on_click,
             merge,
+            row,
+            row_label,
             ..
         } => {
+            if row.as_ref().is_some_and(|r| r.trim().is_empty()) {
+                return Err("bars row names the field whose values make the grid's rows".into());
+            }
+            if row_label.is_some() && row.is_none() {
+                return Err("bars row_label labels a grid's rows: it needs a row field".into());
+            }
             if merge.as_ref().is_some_and(|m| m.trim().is_empty()) {
                 return Err(
                     "bars merge names the field whose equal values draw as one segment".into(),

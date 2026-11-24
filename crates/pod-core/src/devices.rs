@@ -326,9 +326,11 @@ pub fn write(c: &Connection, p: &Ping, pings: i64, day: &str, now: i64) -> rusql
         }
     }
     c.execute(
-        "INSERT INTO client_days (day, device, build, pings) VALUES (?1, ?2, ?3, ?4)
-         ON CONFLICT (day, device) DO UPDATE SET build = ?3, pings = pings + ?4",
-        params![day, p.device, build, pings],
+        "INSERT INTO client_days (day, device, build, pings, first_seen, last_seen)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?5)
+         ON CONFLICT (day, device, build) DO UPDATE SET pings = pings + ?4,
+             first_seen = COALESCE(first_seen, ?5), last_seen = ?5",
+        params![day, p.device, build, pings, now],
     )?;
     Ok(())
 }
@@ -502,21 +504,26 @@ pub fn devices(store: &Store, server: &str) -> rusqlite::Result<Vec<Device>> {
     })
 }
 
-/// One device's build on one day.
+/// One build a device ran on one day (a device that updated that day has
+/// a row per build). `first_seen` and `last_seen` are the first and last
+/// ping on it that day; days recorded before they were kept have none.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DeviceDay {
     pub day: String,
     pub device: String,
     pub build: String,
     pub pings: i64,
+    pub first_seen: Option<i64>,
+    pub last_seen: Option<i64>,
 }
 
-/// The days from `from` (`YYYY-MM-DD`) on, oldest first.
+/// The days from `from` (`YYYY-MM-DD`) on, oldest first; a day's builds
+/// in the order the device first ran them.
 pub fn days(store: &Store, from: &str) -> rusqlite::Result<Vec<DeviceDay>> {
     store.with_conn(|c| {
         let mut st = c.prepare_cached(
-            "SELECT day, device, build, pings FROM client_days WHERE day >= ?1
-             ORDER BY day, device",
+            "SELECT day, device, build, pings, first_seen, last_seen FROM client_days
+             WHERE day >= ?1 ORDER BY day, device, first_seen",
         )?;
         st.query_map([from], |r| {
             Ok(DeviceDay {
@@ -524,6 +531,8 @@ pub fn days(store: &Store, from: &str) -> rusqlite::Result<Vec<DeviceDay>> {
                 device: r.get(1)?,
                 build: r.get(2)?,
                 pings: r.get(3)?,
+                first_seen: r.get(4)?,
+                last_seen: r.get(5)?,
             })
         })?
         .collect()
@@ -1049,6 +1058,42 @@ mod tests {
     use super::*;
 
     const S: &str = "0.6.0+20261118153000.c41d9e2";
+
+    /// Decision `device-day-grid`: a device that updates during a day has
+    /// a row per build, each with its first and last ping that day.
+    #[test]
+    fn a_day_keeps_each_build_and_when_it_ran() {
+        let store = Store::open_in_memory().unwrap();
+        let old = "0.6.0+20261114100000.9be03a1";
+        let ping = |build: &str| Ping {
+            device: "phone0001".into(),
+            platform: "android".into(),
+            build: build.into(),
+            name: "Pixel 9".into(),
+            features: String::new(),
+        };
+        let day = "2026-11-19";
+        store
+            .with_conn(|c| {
+                write(c, &ping(old), 1, day, 1_000)?;
+                write(c, &ping(old), 2, day, 2_000)?;
+                write(c, &ping(S), 1, day, 3_000)?;
+                write(c, &ping(S), 1, day, 4_000)
+            })
+            .unwrap();
+        let got: Vec<(String, i64, Option<i64>, Option<i64>)> = days(&store, day)
+            .unwrap()
+            .into_iter()
+            .map(|d| (d.build, d.pings, d.first_seen, d.last_seen))
+            .collect();
+        assert_eq!(
+            got,
+            vec![
+                (old.to_owned(), 3, Some(1_000), Some(2_000)),
+                (S.to_owned(), 2, Some(3_000), Some(4_000)),
+            ]
+        );
+    }
 
     #[test]
     fn a_device_is_latest_behind_or_ahead_of_the_server() {

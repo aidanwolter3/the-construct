@@ -3109,10 +3109,15 @@ impl<'i> Build<'_, 'i> {
                 field,
                 on_click,
                 merge,
+                row,
+                row_label,
             } => self.bars(
                 n,
                 b,
                 BarsSpec {
+                    row: row.as_deref(),
+                    row_label: row_label.as_deref(),
+                    row_height: height_dp.unwrap_or(GRID_ROW_DP) as f32,
                     query_key,
                     bar,
                     label,
@@ -3823,7 +3828,18 @@ struct BarsSpec<'n> {
     field: Option<&'n str>,
     on_click: Option<&'n ActionIntent>,
     merge: Option<&'n str>,
+    /// Feature `bars_rows`: the field whose values make a grid's rows.
+    row: Option<&'n str>,
+    row_label: Option<&'n str>,
+    row_height: f32,
 }
+
+/// A `core://Bars` grid row's height without `height_dp`.
+const GRID_ROW_DP: u16 = 18;
+/// The most rows a grid draws (the first ones).
+const MAX_ROWS: usize = 200;
+/// The widest a grid's row labels get; longer ones wrap.
+const GRID_LABEL_MAX_DP: f32 = 84.0;
 
 /// A `core://Bars` chart's height without `height_dp`.
 const BARS_HEIGHT_DP: u16 = 140;
@@ -3836,6 +3852,9 @@ impl<'i> Build<'_, 'i> {
     /// bottom over its label; a tap on a column runs `on_click` with
     /// `$item` the bar's first item.
     fn bars<'c>(&mut self, n: &UiNode, b: &B<'c>, spec: BarsSpec) -> usize {
+        if let Some(row_field) = spec.row {
+            return self.bar_grid(n, b, &spec, row_field);
+        }
         let ctx = b.ctx;
         let theme = self.theme.clone();
         let Some(all) = ctx.query(spec.query_key) else {
@@ -4043,6 +4062,236 @@ impl<'i> Build<'_, 'i> {
         style.align_self = Some(AlignSelf::STRETCH);
         let sem = self.sem(b, n, None, None);
         self.push(style, vec![axis, plots], Paint::None, Some(sem), false)
+    }
+}
+
+impl<'i> Build<'_, 'i> {
+    /// A `core://Bars` grid (feature `bars_rows`): a row per `row` value,
+    /// its label on the left, then a cell per bar, the cell's items side by
+    /// side from the left, each `value` wide out of `scale_min` (or the
+    /// cell's total, if more); the bars' labels under the last row. A tap
+    /// on a cell sets `$form.<field>` to `<row>/<bar>`, or runs `on_click`
+    /// with `$item` the cell's first item.
+    fn bar_grid<'c>(&mut self, n: &UiNode, b: &B<'c>, spec: &BarsSpec, row_field: &str) -> usize {
+        let ctx = b.ctx;
+        let theme = self.theme.clone();
+        let Some(all) = ctx.query(spec.query_key) else {
+            return self.push(Style::default(), Vec::new(), Paint::None, None, false);
+        };
+        let wants = Where::of(spec.conds, &ctx);
+        let (now, zone) = (self.now, self.zone.clone());
+        let mut next = None;
+        // Rows in the order their first item comes, and bars in the order
+        // they first come in any row: (key, items).
+        let mut rows: Vec<(String, Vec<&String>)> = Vec::new();
+        let mut bars: Vec<(String, &String)> = Vec::new();
+        for uri in all {
+            let Some(e) = ctx.entity(uri) else { continue };
+            if !wants
+                .iter()
+                .all(|w| w.matches(e, now, zone.as_ref(), &mut next))
+            {
+                continue;
+            }
+            let bar = e.get(spec.bar).map(render).unwrap_or_default();
+            if !bars.iter().any(|(k, _)| *k == bar) {
+                if bars.len() >= MAX_BARS {
+                    continue;
+                }
+                bars.push((bar, uri));
+            }
+            let key = e.get(row_field).map(render).unwrap_or_default();
+            if let Some(i) = rows.iter().position(|(k, _)| *k == key) {
+                rows[i].1.push(uri);
+            } else if rows.len() < MAX_ROWS {
+                rows.push((key, vec![uri]));
+            }
+        }
+        self.changes_at = earliest(self.changes_at, next);
+        let size_of = |e: &protocol::EntityRecord| -> f32 {
+            spec.value
+                .map_or(1.0, |f| match e.get(f) {
+                    Some(Value::Number(n)) => n.as_f64().unwrap_or(0.0) as f32,
+                    Some(Value::String(s)) => s.trim().parse().unwrap_or(0.0),
+                    _ => 0.0,
+                })
+                .max(0.0)
+        };
+        let scale = f32::from(spec.scale_min).max(1.0);
+        let chosen = spec
+            .field
+            .and_then(|f| ctx.form.get(f).filter(|v| !v.is_empty()).cloned());
+        let caption = type_for(TextStyle::Caption);
+        let bar_labels: Vec<String> = bars
+            .iter()
+            .map(|(_, uri)| {
+                let e = ctx.entity(uri).expect("filtered");
+                ctx.with_item(uri, e).text(spec.label)
+            })
+            .collect();
+        // Every column at least as wide as the widest bar label, so the
+        // cells line up with the labels under them.
+        let col_min = bar_labels
+            .iter()
+            .map(|t| self.text.measure(t, caption, None, 1.0).width.ceil() + 1.0)
+            .fold(0.0f32, f32::max);
+        let row_labels: Vec<String> = rows
+            .iter()
+            .map(|(key, items)| {
+                let first = items[0];
+                let e = ctx.entity(first).expect("filtered");
+                spec.row_label
+                    .map_or_else(|| key.clone(), |l| ctx.with_item(first, e).text(l))
+            })
+            .collect();
+        let label_w = row_labels
+            .iter()
+            .map(|t| self.text.measure(t, caption, None, 1.0).width.ceil() + 1.0)
+            .fold(0.0f32, f32::max)
+            .min(GRID_LABEL_MAX_DP);
+        let cell_style = |h: f32| {
+            let mut st = row(1, pad(0, 0), AlignItems::STRETCH);
+            st.flex_grow = 1.0;
+            st.flex_basis = length(0.0);
+            st.min_size.width = length(col_min);
+            st.size.height = length(h);
+            st.padding = Rect {
+                left: length(1.5),
+                right: length(1.5),
+                top: length(1.5),
+                bottom: length(1.5),
+            };
+            st
+        };
+        let label_style = || Style {
+            size: Size {
+                width: length(label_w),
+                height: auto(),
+            },
+            flex_shrink: 0.0,
+            ..Default::default()
+        };
+
+        let mut lines = Vec::new();
+        for (r, ((key, items), text)) in rows.iter().zip(&row_labels).enumerate() {
+            let label = self.text_leaf(
+                label_style(),
+                text.clone(),
+                caption,
+                theme.on_background,
+                None,
+            );
+            let mut cells = vec![label];
+            for (c, (bar, _)) in bars.iter().enumerate() {
+                let here: Vec<&String> = items
+                    .iter()
+                    .copied()
+                    .filter(|u| {
+                        ctx.entity(u).is_some_and(|e| {
+                            e.get(spec.bar).map(render).unwrap_or_default() == *bar
+                        })
+                    })
+                    .collect();
+                let total: f32 = here.iter().filter_map(|u| ctx.entity(u)).map(size_of).sum();
+                let full = total.max(scale);
+                let mut segs = Vec::new();
+                for uri in &here {
+                    let Some(e) = ctx.entity(uri) else { continue };
+                    let v = size_of(e);
+                    if v <= 0.0 {
+                        continue;
+                    }
+                    let striped = spec.hatched.is_some_and(|f| {
+                        e.get(f)
+                            .is_some_and(|v| matches!(render(v).as_str(), "true" | "1"))
+                    });
+                    let ectx = ctx.with_item(uri, e);
+                    let col = ectx.color(&ectx.text(spec.color)).unwrap_or(theme.outline);
+                    let style = Style {
+                        flex_grow: v / full,
+                        flex_basis: length(0.0),
+                        min_size: Size {
+                            width: length(2.0),
+                            height: auto(),
+                        },
+                        ..Default::default()
+                    };
+                    let paint = Paint::Quad {
+                        bg: if striped { Rgba::TRANSPARENT } else { col },
+                        border: striped.then_some(col),
+                        dashed: striped,
+                        radius: 3.0,
+                    };
+                    segs.push(self.push(style, Vec::new(), paint, None, false));
+                }
+                if full > total {
+                    let style = Style {
+                        flex_grow: (full - total) / full,
+                        flex_basis: length(0.0),
+                        ..Default::default()
+                    };
+                    segs.push(self.push(style, Vec::new(), Paint::None, None, false));
+                }
+                let value = format!("{key}/{bar}");
+                let on = chosen.as_deref() == Some(value.as_str());
+                let paint = if on {
+                    Paint::Quad {
+                        bg: theme.surface_variant,
+                        border: Some(theme.on_background),
+                        dashed: false,
+                        radius: 4.0,
+                    }
+                } else {
+                    Paint::None
+                };
+                let tap = match (spec.field, spec.on_click, here.first()) {
+                    (Some(f), _, _) => Some(Tap::SetForm {
+                        field: f.to_owned(),
+                        value,
+                    }),
+                    (None, Some(i), Some(first)) => {
+                        let e = ctx.entity(first).expect("filtered");
+                        Some(Tap::Intent {
+                            intent: bind_intent(i, &ctx.with_item(first, e)),
+                        })
+                    }
+                    _ => None,
+                };
+                let mut sem = self.sem(b, n, Some(format!("{text} {}", bar_labels[c])), tap);
+                sem.id = format!("{}/cell{r}_{c}", b.path);
+                sem.selected = on;
+                cells.push(self.push(cell_style(spec.row_height), segs, paint, Some(sem), false));
+            }
+            let mut line = row(2, pad(0, 0), AlignItems::CENTER);
+            line.align_self = Some(AlignSelf::STRETCH);
+            lines.push(self.push(line, cells, Paint::None, None, false));
+        }
+        // The bars' labels under the grid, a column each.
+        if !rows.is_empty() {
+            let gap = self.push(label_style(), Vec::new(), Paint::None, None, false);
+            let mut labels = vec![gap];
+            for t in &bar_labels {
+                let mut st = column(0, pad(0, 0), AlignItems::CENTER);
+                st.flex_grow = 1.0;
+                st.flex_basis = length(0.0);
+                st.min_size.width = length(col_min);
+                let text = self.text_leaf(
+                    Style::default(),
+                    if t.is_empty() { " ".into() } else { t.clone() },
+                    caption,
+                    theme.muted_text,
+                    None,
+                );
+                labels.push(self.push(st, vec![text], Paint::None, None, false));
+            }
+            let mut line = row(2, pad(0, 0), AlignItems::FLEX_START);
+            line.align_self = Some(AlignSelf::STRETCH);
+            lines.push(self.push(line, labels, Paint::None, None, false));
+        }
+        let mut style = column(2, pad(0, 0), AlignItems::STRETCH);
+        style.align_self = Some(AlignSelf::STRETCH);
+        let sem = self.sem(b, n, None, None);
+        self.push(style, lines, Paint::None, Some(sem), false)
     }
 }
 

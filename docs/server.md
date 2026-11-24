@@ -250,10 +250,12 @@ Counts live in memory and restart from zero.
   [`server-monitoring-alerts`](decisions/server-monitoring-alerts.md)).
 - **Devices** (decision [`device-versions`](decisions/device-versions.md)): every pod records the devices that reach
   it (one per app install or browser, from `x-construct-device`), the build each runs (`x-construct-build`) and the
-  build each ran each day. Only a request with one of the pod's sessions counts: one on a public path (an upload, a
+  builds each ran each day, with the first and last ping on each. Only a request with one of the pod's sessions counts: one on a public path (an upload, a
   Pixelfed image, the OAuth callback), which anyone with the pod's id can reach, is no device of the pod. The `monitor` source's `devices` feed shows them in any pod (no operator switch): how
   each device's build stands against the server's (latest, behind, ahead) and devices per day by build for a
-  `core://Bars` chart. Over MCP, `list_devices`, `rename_device` and `watch_device` (run a source action or send a
+  `core://Bars` chart: `monitor:device_days` (one build per device and day) for older apps, and `monitor:device_cells`
+  (each build a device ran that day, sized by when it switched, decision [`device-day-grid`](decisions/device-day-grid.md))
+  for the grid of devices by day. Over MCP, `list_devices`, `rename_device` and `watch_device` (run a source action or send a
   "Device updates" notification once a device draws a feature or runs a newer build; an MCP credential's watch runs
   only actions an MCP credential reaches, such as a collection's row writes or reopening an agent's run).
 - **Prometheus:** with `CONSTRUCT_METRICS_ADDR`, `GET /metrics` on that address serves the same counters as

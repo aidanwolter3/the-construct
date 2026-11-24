@@ -299,7 +299,7 @@ fn a_bar_chart_filters_and_picks_a_day() {
 }
 
 /// The `monitor` source's core layout `server_health`: the status, the checks,
-/// the devices chart and list and the counters from core components; where
+/// the devices grid (a tap shows a device's day) and list and the counters from core components; where
 /// monitoring is off (the source's 403) it says so and still shows the devices.
 #[test]
 fn server_health_shows_checks_and_devices_and_says_when_monitoring_is_off() {
@@ -313,7 +313,11 @@ fn server_health_shows_checks_and_devices_and_says_when_monitoring_is_off() {
                  assert-text Wrong pod codes and unknown tokens; assert-text Disk space; \
                  assert-no-text Server monitoring is off for this pod; shot light; \
                  scroll-to Studio MacBook; scroll-to Ahead of server; \
-                 click Web; assert-no-text Studio MacBook; shot devices; \
+                 assert-text Tap a day to see which builds a device ran and when; \
+                 click Pixel 9 16; assert-text Pixel 9 · Mon Nov 16; \
+                 assert-text Nov 3 · 4a7e210 · 7:40–18:45; assert-text Nov 14 · 9be03a1 · 19:00–22:30; \
+                 click Web; assert-no-text Studio MacBook; assert-no-text Pixel 9 · Mon Nov 16; \
+                 shot devices; \
                  scroll-to All counters; scroll-to pods (temporary); assert-text 7 now; \
                  mode dark; shot dark",
                 &out_dir("server-health"),

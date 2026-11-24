@@ -648,6 +648,13 @@ pub enum UiNode {
         on_click: Option<ActionIntent>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         merge: Option<String>,
+        /// Feature `bars_rows`: a grid, a row per value of this field and a
+        /// cell per `bar`, the cell's items side by side.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        row: Option<String>,
+        /// Feature `bars_rows`: a row's label, bound to its first item.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        row_label: Option<String>,
     },
 
     // Feature `dock` (crates/protocol/features/dock.md)
