@@ -952,11 +952,11 @@
         "device_id": "macbookair01",
         "kind": "macos",
         "build_label": "Nov 19 · f02b77e local",
-        "color": "#E34948",
+        "color": "#199E70",
         "hatched": false,
         "note": "",
         "detail": "Nov 19 · f02b77e local",
-        "series": "8",
+        "series": "3",
         "build": "0.6.0+20261119080000.f02b77e"
       },
       "monitor://devices/pixel9demo01": {
@@ -982,14 +982,14 @@
         "kind_text": "Mac app",
         "build": "0.6.0+20261119080000.f02b77e",
         "build_label": "Nov 19 · f02b77e local",
-        "color": "#E34948",
+        "color": "#199E70",
         "relation": "ahead",
         "relation_text": "Ahead of server",
         "relation_color": "#136B6B",
         "relation_bg": "#D8EFEE",
         "seen_text": "seen 1 h ago",
         "subtitle": "Mac app · Nov 19 · f02b77e local · seen 1 h ago",
-        "series": "8"
+        "series": "3"
       },
       "monitor://devices/chromemac001": {
         "id": "chromemac001",
@@ -2292,8 +2292,8 @@
         "build_label": "Nov 19 · f02b77e local",
         "hours": 11.0,
         "hatched": false,
-        "series": "8",
-        "color": "#E34948",
+        "series": "3",
+        "color": "#199E70",
         "detail": "Nov 19 · f02b77e local · 13:00–16:05"
       },
       "monitor://releases/1": {
@@ -2333,8 +2333,8 @@
         "label": "Nov 19 · f02b77e local",
         "note": "ahead",
         "legend": "Nov 19 · f02b77e local · ahead",
-        "color": "#E34948",
-        "series": "8"
+        "color": "#199E70",
+        "series": "3"
       },
       "monitor://builds/3": {
         "build": "",

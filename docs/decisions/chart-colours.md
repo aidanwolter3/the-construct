@@ -1,5 +1,7 @@
 # Charts colour series from the theme, and merge equal neighbours
 
+Superseded in part by [device-day-grid](device-day-grid.md) (which series each build gets).
+
 Date: 2026-11-20. Related: [device-versions](device-versions.md), [custom-theme-tokens](custom-theme-tokens.md),
 [dark-palette](dark-palette.md).
 

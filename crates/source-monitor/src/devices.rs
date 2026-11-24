@@ -23,11 +23,13 @@ pub const RELEASES_QUERY: &str = "monitor:releases";
 /// Days the chart shows, today included.
 pub const CHART_DAYS: i64 = 14;
 
-/// Builds behind the server's that get a series of their own (2 to 7);
-/// older ones are `other`.
+/// Builds behind the server's that get a series of their own; older ones
+/// are `other`.
 const BEHIND: usize = 6;
-/// The series of builds newer than the server's: red, on top of its blue.
-const AHEAD: &str = "8";
+/// The series of builds newer than the server's: aqua, far from the
+/// server's blue and the newest behind's orange (decision
+/// `device-day-grid`; red was too close to that orange).
+const AHEAD: &str = "3";
 /// The series of a build older than [`BEHIND`] holds, or with no time.
 const OTHER: &str = "other";
 
@@ -52,12 +54,13 @@ fn relation_colors(r: Relation) -> (&'static str, &'static str) {
     }
 }
 
-/// Each build's chart series (decision `chart-colours`): `1` the
-/// server's, `2` to `7` the builds behind it, newest first (so the builds
-/// most devices run get the strongest colours), `8` the ones past it, and
-/// `other` older builds and one with no time.
+/// Each build's chart series (decisions `chart-colours`, `device-day-grid`):
+/// `1` (blue) the server's, the builds behind it newest first in `2`
+/// orange, `5` magenta, `7` violet, `4` yellow, `6` green, `8` red (an
+/// order whose first few, the ones usually shown, stay far apart), `3`
+/// (aqua) the ones past it, and `other` older builds and one with no time.
 pub fn build_series(builds: &[&str], server: &str) -> HashMap<String, &'static str> {
-    const BEHIND_SERIES: [&str; BEHIND] = ["2", "3", "4", "5", "6", "7"];
+    const BEHIND_SERIES: [&str; BEHIND] = ["2", "5", "7", "4", "6", "8"];
     let s = BuildId::parse(server);
     let mut known: Vec<(BuildId, &str)> = builds
         .iter()
@@ -642,11 +645,11 @@ mod tests {
         builds.extend([SERVER, "0.6.0+20261119100000.f02b77e", ""]);
         let c = build_series(&builds, SERVER);
         assert_eq!(c[SERVER], "1");
-        assert_eq!(c["0.6.0+20261119100000.f02b77e"], "8");
-        // Newest behind first: the 17th 2, the 16th 3, ...
+        assert_eq!(c["0.6.0+20261119100000.f02b77e"], "3");
+        // Newest behind first: the 17th 2, the 16th 5, ...
         assert_eq!(c[older[7].as_str()], "2");
-        assert_eq!(c[older[6].as_str()], "3");
-        assert_eq!(c[older[2].as_str()], "7");
+        assert_eq!(c[older[6].as_str()], "5");
+        assert_eq!(c[older[2].as_str()], "8");
         // Past the six: other, like a build with no time.
         assert_eq!(c[older[1].as_str()], "other");
         assert_eq!(c[""], "other");

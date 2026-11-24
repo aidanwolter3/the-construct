@@ -23,11 +23,11 @@
     },
     "monitor://builds/2": {
       "build": "0.6.0+20261119080000.f02b77e",
-      "color": "#E34948",
+      "color": "#199E70",
       "label": "Nov 19 · f02b77e local",
       "legend": "Nov 19 · f02b77e local · ahead",
       "note": "ahead",
-      "series": "8"
+      "series": "3"
     },
     "monitor://builds/3": {
       "build": "",
@@ -1105,7 +1105,7 @@
       "build": "0.6.0+20261119080000.f02b77e",
       "build_label": "Nov 19 · f02b77e local",
       "cell": "macbookair01/2026-11-19",
-      "color": "#E34948",
+      "color": "#199E70",
       "detail": "Nov 19 · f02b77e local · 13:00–16:05",
       "device": "Studio MacBook",
       "hatched": false,
@@ -1113,7 +1113,7 @@
       "hours": 11.0,
       "kind": "macos",
       "row": "macbookair01",
-      "series": "8"
+      "series": "3"
     },
     "monitor://device_cells/pixel9demo01/2026-11-06/47": {
       "bar": "2026-11-06",
@@ -2125,7 +2125,7 @@
       "bar_label": "Now",
       "build": "0.6.0+20261119080000.f02b77e",
       "build_label": "Nov 19 · f02b77e local",
-      "color": "#E34948",
+      "color": "#199E70",
       "day_text": "Now",
       "detail": "Nov 19 · f02b77e local",
       "device": "Studio MacBook",
@@ -2133,7 +2133,7 @@
       "hatched": false,
       "kind": "macos",
       "note": "",
-      "series": "8"
+      "series": "3"
     },
     "monitor://device_days/2026-11-19/pixel9demo01": {
       "bar": "2026-11-19",
@@ -2210,7 +2210,7 @@
     "monitor://devices/macbookair01": {
       "build": "0.6.0+20261119080000.f02b77e",
       "build_label": "Nov 19 · f02b77e local",
-      "color": "#E34948",
+      "color": "#199E70",
       "id": "macbookair01",
       "kind": "macos",
       "kind_text": "Mac app",
@@ -2220,7 +2220,7 @@
       "relation_color": "#136B6B",
       "relation_text": "Ahead of server",
       "seen_text": "seen 1 h ago",
-      "series": "8",
+      "series": "3",
       "subtitle": "Mac app · Nov 19 · f02b77e local · seen 1 h ago"
     },
     "monitor://devices/pixel9demo01": {

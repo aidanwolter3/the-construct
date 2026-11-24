@@ -45,6 +45,10 @@ Decision:
   on from is grey (`chart_other`) where it shows on a past day, under one "Older builds" legend row. Staging
   releases on every merge, and a colour for each would be noise. That is when the pod first saw the deploy (its first request
   after it), not the deploy itself.
+- **Series that stay apart**: with only the current builds coloured, the usual set is the server's (blue), the
+  newest behind it (orange) and one ahead of it, which was red, too close to that orange to tell apart. A build
+  ahead is now aqua (`chart_3`), and the builds behind take, newest first, orange, magenta, violet, yellow, green
+  and red, so the first few, the ones shown, stay far apart. The theme's palette is unchanged.
 - **Server health 0003** (0004 with the real day count in its caption) draws the grid, filtered by the kind chips, and a tap shows that device's day.
 
 Limits: days recorded before this show one build all day. A device's first build of a day colours the day from
