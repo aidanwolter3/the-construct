@@ -4146,7 +4146,7 @@ impl<'i> Build<'_, 'i> {
             })
             .collect();
         let cell_style = |h: f32| {
-            let mut st = row(0, pad(0, 0), AlignItems::STRETCH);
+            let mut st = row(1, pad(0, 0), AlignItems::STRETCH);
             st.flex_grow = 1.0;
             st.flex_basis = length(0.0);
             st.min_size.width = length(col_min);
@@ -4179,7 +4179,41 @@ impl<'i> Build<'_, 'i> {
             }
         }
 
-        let mut lines = Vec::new();
+        let striped_of = |e: &protocol::EntityRecord| {
+            spec.hatched.is_some_and(|f| {
+                e.get(f)
+                    .is_some_and(|v| matches!(render(v).as_str(), "true" | "1"))
+            })
+        };
+        let merge_of = |u: &String| {
+            let e = ctx.entity(u)?;
+            if striped_of(e) || size_of(e) <= 0.0 {
+                return None;
+            }
+            spec.merge.map(|f| e.get(f).map(render).unwrap_or_default())
+        };
+        // A join is a square piece after a cell's last segment, in its
+        // colour, from under that segment's rounded end, over the two
+        // cells' padding and the gap between them (5), to past the next
+        // segment's rounded corners; its margins take back its width and the
+        // flex gap before it, so the cell's segments keep their sizes.
+        let join_style = || Style {
+            size: Size {
+                width: length(13.0),
+                height: auto(),
+            },
+            flex_shrink: 0.0,
+            margin: Rect {
+                left: length(-5.0),
+                right: length(-9.0),
+                top: zero(),
+                bottom: zero(),
+            },
+            ..Default::default()
+        };
+
+        let mut groups = Vec::new();
+        let label_h = self.text.measure("Ag", caption, None, 1.0).height;
         for (r, ((key, items), text)) in rows.iter().zip(&row_labels).enumerate() {
             // The row's label on its own line, its cells the full width
             // under it, so a long label never squeezes or misaligns them.
@@ -4194,30 +4228,46 @@ impl<'i> Build<'_, 'i> {
                 theme.on_background,
                 None,
             );
+            let per_bar: Vec<Vec<&String>> = bars
+                .iter()
+                .map(|(bar, _)| {
+                    items
+                        .iter()
+                        .copied()
+                        .filter(|u| {
+                            ctx.entity(u).is_some_and(|e| {
+                                e.get(spec.bar).map(render).unwrap_or_default() == *bar
+                            })
+                        })
+                        .collect()
+                })
+                .collect();
             let mut cells = Vec::new();
             for (c, (bar, _)) in bars.iter().enumerate() {
-                let here: Vec<&String> = items
-                    .iter()
-                    .copied()
-                    .filter(|u| {
-                        ctx.entity(u).is_some_and(|e| {
-                            e.get(spec.bar).map(render).unwrap_or_default() == *bar
-                        })
-                    })
-                    .collect();
+                let here = &per_bar[c];
                 let total: f32 = here.iter().filter_map(|u| ctx.entity(u)).map(size_of).sum();
                 let full = total.max(scale);
-                let mut segs = Vec::new();
-                for uri in &here {
-                    let Some(e) = ctx.entity(uri) else { continue };
-                    let v = size_of(e);
-                    if v <= 0.0 {
-                        continue;
-                    }
-                    let striped = spec.hatched.is_some_and(|f| {
-                        e.get(f)
-                            .is_some_and(|v| matches!(render(v).as_str(), "true" | "1"))
+                // With `merge`, a cell's last segment joins the next cell's
+                // first when both have the same value and neither is hatched
+                // (and nothing empty is between them).
+                let joins = full <= total
+                    && here.last().and_then(|u| merge_of(u)).is_some_and(|m| {
+                        per_bar
+                            .get(c + 1)
+                            .and_then(|next| next.first())
+                            .and_then(|u| merge_of(u))
+                            == Some(m)
                     });
+                let shown: Vec<&String> = here
+                    .iter()
+                    .copied()
+                    .filter(|u| ctx.entity(u).is_some_and(|e| size_of(e) > 0.0))
+                    .collect();
+                let mut segs = Vec::new();
+                for (i, uri) in shown.iter().enumerate() {
+                    let e = ctx.entity(uri).expect("filtered");
+                    let v = size_of(e);
+                    let striped = striped_of(e);
                     let ectx = ctx.with_item(uri, e);
                     let col = ectx.color(&ectx.text(spec.color)).unwrap_or(theme.outline);
                     let style = Style {
@@ -4236,6 +4286,15 @@ impl<'i> Build<'_, 'i> {
                         radius: 3.0,
                     };
                     segs.push(self.push(style, Vec::new(), paint, None, false));
+                    if joins && i + 1 == shown.len() {
+                        let paint = Paint::Quad {
+                            bg: col,
+                            border: None,
+                            dashed: false,
+                            radius: 0.0,
+                        };
+                        segs.push(self.push(join_style(), Vec::new(), paint, None, false));
+                    }
                 }
                 if full > total {
                     let style = Style {
@@ -4244,48 +4303,6 @@ impl<'i> Build<'_, 'i> {
                         ..Default::default()
                     };
                     segs.push(self.push(style, Vec::new(), Paint::None, None, false));
-                }
-                // The segments a row the cell's width, and each mark a row
-                // over it (pulled back over the segments by a -100% margin;
-                // a percentage inset resolves against the wrong box): its
-                // dashed line `at` along, a little past the cell's edges.
-                let mut st = row(1, pad(0, 0), AlignItems::STRETCH);
-                st.size.width = percent(1.0);
-                st.flex_shrink = 0.0;
-                let mut kids = vec![self.push(st, segs, Paint::None, None, false)];
-                for (_, at, col) in marks.iter().filter(|m| m.0 == *bar) {
-                    let tall = spec.row_height + 3.0;
-                    let dashes = (tall / 5.0).floor().max(1.0) as usize;
-                    let dash = (0..dashes)
-                        .map(|_| {
-                            let paint = Paint::Quad {
-                                bg: *col,
-                                border: None,
-                                dashed: false,
-                                radius: 0.0,
-                            };
-                            self.push(fixed(1.5, 3.0), Vec::new(), paint, None, false)
-                        })
-                        .collect();
-                    let line = column(2, pad(0, 0), AlignItems::FLEX_START);
-                    let line = self.push(line, dash, Paint::None, None, false);
-                    let gap = |this: &mut Self, grow: f32| {
-                        let st = Style {
-                            flex_grow: grow,
-                            flex_basis: length(0.0),
-                            ..Default::default()
-                        };
-                        this.push(st, Vec::new(), Paint::None, None, false)
-                    };
-                    let before = gap(self, *at);
-                    let after = gap(self, 1.0 - *at);
-                    let mut st = row(0, pad(0, 0), AlignItems::FLEX_START);
-                    st.size.width = percent(1.0);
-                    st.flex_shrink = 0.0;
-                    st.margin.left = percent(-1.0);
-                    st.margin.top = length(-3.0);
-                    st.align_self = Some(AlignSelf::FLEX_START);
-                    kids.push(self.push(st, vec![before, line, after], Paint::None, None, false));
                 }
                 let value = format!("{key}/{bar}");
                 let on = chosen.as_deref() == Some(value.as_str());
@@ -4315,14 +4332,81 @@ impl<'i> Build<'_, 'i> {
                 let mut sem = self.sem(b, n, Some(format!("{text} {}", bar_labels[c])), tap);
                 sem.id = format!("{}/cell{r}_{c}", b.path);
                 sem.selected = on;
-                cells.push(self.push(cell_style(spec.row_height), kids, paint, Some(sem), false));
+                cells.push(self.push(cell_style(spec.row_height), segs, paint, Some(sem), false));
             }
             let mut line = row(2, pad(0, 0), AlignItems::CENTER);
             line.align_self = Some(AlignSelf::STRETCH);
             let line = self.push(line, cells, Paint::None, None, false);
             let group = column(2, pad(0, 0), AlignItems::STRETCH);
-            lines.push(self.push(group, vec![label, line], Paint::None, None, false));
+            groups.push(self.push(group, vec![label, line], Paint::None, None, false));
         }
+        let mut body = column(6, pad(0, 0), AlignItems::STRETCH);
+        body.size.width = percent(1.0);
+        body.flex_shrink = 0.0;
+        let body = self.push(body, groups, Paint::None, None, false);
+        let mut lines = vec![body];
+        // Marks: one layer over every row, a column per bar laid out as the
+        // cells are, each mark a dashed line from the first row's label to
+        // the last row's cells. The layer is pulled back over the rows by a
+        // -100% margin (a percentage inset resolves against the wrong box).
+        if !marks.is_empty() && !rows.is_empty() {
+            let n_rows = rows.len() as f32;
+            let tall = n_rows * (label_h + 2.0 + spec.row_height) + (n_rows - 1.0) * 6.0;
+            let dashes = (tall / 5.0).floor().max(1.0) as usize;
+            let mut cols = Vec::new();
+            for (bar, _) in &bars {
+                let mut ats: Vec<(f32, Rgba)> = marks
+                    .iter()
+                    .filter(|m| m.0 == *bar)
+                    .map(|m| (m.1, m.2))
+                    .collect();
+                ats.sort_by(|a, b| a.0.total_cmp(&b.0));
+                let mut kids = Vec::new();
+                let mut was = 0.0;
+                let gap = |this: &mut Self, grow: f32| {
+                    let st = Style {
+                        flex_grow: grow.max(0.0),
+                        flex_basis: length(0.0),
+                        ..Default::default()
+                    };
+                    this.push(st, Vec::new(), Paint::None, None, false)
+                };
+                for (at, col) in ats {
+                    kids.push(gap(self, at - was));
+                    was = at;
+                    let dash = (0..dashes)
+                        .map(|_| {
+                            let paint = Paint::Quad {
+                                bg: col,
+                                border: None,
+                                dashed: false,
+                                radius: 0.0,
+                            };
+                            self.push(fixed(1.5, 3.0), Vec::new(), paint, None, false)
+                        })
+                        .collect();
+                    let mut line = column(2, pad(0, 0), AlignItems::FLEX_START);
+                    line.margin.left = length(-0.75);
+                    line.margin.right = length(-0.75);
+                    kids.push(self.push(line, dash, Paint::None, None, false));
+                }
+                kids.push(gap(self, 1.0 - was));
+                let mut st = cell_style(tall);
+                st.size.height = auto();
+                st.align_items = AlignItems::FLEX_START;
+                cols.push(self.push(st, kids, Paint::None, None, false));
+            }
+            let mut layer = row(2, pad(0, 0), AlignItems::FLEX_START);
+            layer.size.width = percent(1.0);
+            layer.flex_shrink = 0.0;
+            layer.margin.left = percent(-1.0);
+            let layer = self.push(layer, cols, Paint::None, None, false);
+            lines.push(layer);
+        }
+        let mut stack = row(0, pad(0, 0), AlignItems::FLEX_START);
+        stack.align_self = Some(AlignSelf::STRETCH);
+        let stack = self.push(stack, lines, Paint::None, None, false);
+        let mut lines = vec![stack];
         // The bars' labels under the grid, a column each.
         if !rows.is_empty() {
             let mut labels = Vec::new();

@@ -367,6 +367,7 @@
                       "color": "${local://theme#chart_$item.series}",
                       "hatched": "hatched",
                       "field": "device_cell",
+                      "merge": "build",
                       "height_dp": 18,
                       "marks": {
                         "query_key": "monitor:releases",

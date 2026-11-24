@@ -30,8 +30,13 @@ Decision:
   `chart_other` part. Today's cell is the day so far the same way, dashed when the device hasn't pinged today.
   Each part's `detail` names the build and its first and last ping (`Nov 14 · 9be03a1 · 19:00–22:30`).
   `monitor:device_days` stays, one build per device and day (the last one run), for the layouts older apps draw.
+- **Days on one build are one bar**: with `merge` (`build` here), a cell's last part and the next cell's first in
+  the same row join when they have the same value and neither is hatched, so a device that stayed on a build for a
+  week is one bar, broken only where it changed build or wasn't seen. The join is a square piece over the gap
+  between the cells that takes no room in the row, so each day's parts keep their sizes.
 - **Releases are dashed lines down the grid**: `marks` on the grid (`query_key`, `at`, `color`) draws each item as
-  a dashed vertical line through every row at a moment in its column. The feed's `monitor:releases` are the server
+  a dashed vertical line down the whole grid, from the first row's label to the last row's cells, at a moment in
+  its column (one layer over the rows, laid out as the cells are). The feed's `monitor:releases` are the server
   builds the pod ran (`server_builds`), at the moment the pod first ran each, coloured as the build, so a line
   shows where devices could switch to that colour. That is when the pod first saw the deploy (its first request
   after it), not the deploy itself.

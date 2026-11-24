@@ -165,3 +165,28 @@ fn a_mark_is_a_dashed_line_at_its_moment_down_every_row() {
     // The segments are where they were.
     assert_eq!(fills(&root, &data), fills(&grid().0, &grid().1));
 }
+
+#[test]
+fn neighbouring_cells_of_one_merge_value_join_without_resizing() {
+    let (plain, data) = grid();
+    let mut root = plain.clone();
+    if let UiNode::Bars { merge, .. } = &mut root {
+        *merge = Some("series".into());
+    }
+    let apart = fills(&plain, &data);
+    let joined = fills(&root, &data);
+    // a's day 1 ends orange and its day 2 starts orange: one join piece
+    // between them, from under day 1's end to past day 2's start.
+    assert_eq!(joined.len(), apart.len() + 1, "{joined:?}");
+    let join = joined[1];
+    assert_eq!(join.0, ORANGE);
+    let (day1, day2) = (apart[0], apart[1]);
+    assert!(
+        join.1 < day1.1 + day1.3 && join.1 + join.3 > day2.1 + 3.0,
+        "{joined:?}"
+    );
+    // Every segment keeps its place and size.
+    let mut rest = joined.clone();
+    rest.remove(1);
+    assert_eq!(rest, apart);
+}

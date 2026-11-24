@@ -3101,6 +3101,7 @@
                                   "color": "${local://theme#chart_$item.series}",
                                   "query_key": "monitor:releases"
                                 },
+                                "merge": "build",
                                 "query_key": "monitor:device_cells",
                                 "row": "row",
                                 "row_label": "$item.device",
