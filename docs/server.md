@@ -140,7 +140,8 @@ Run on the server machine (on Fly: `fly ssh console -a <app> -C "/server pods â€
 ```bash
 server pods create <name>                      # prints the pod code once
 server pods list
-server pods rotate <name> [--revoke-mcp]       # new code; the old one stops working and app sign-ins end
+server pods rotate <name> [--revoke-mcp]       # new code; the old one stops working, app sign-ins end and
+                                               # sign-ins it approved but not yet finished are void
                                                # (--revoke-mcp: connected apps are disconnected too)
 server pods delete <name>                      # stops now; files deleted within 5 minutes
 server pods notify-test <name>                 # a test notification to the inbox and the pod's devices
