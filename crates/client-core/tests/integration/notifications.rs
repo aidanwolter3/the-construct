@@ -287,6 +287,7 @@ fn engine(stub: &Stub, storage: &str, token: Option<&str>) -> ConstructEngine {
                 poll_interval: Duration::from_millis(100),
                 backoff_base: Duration::from_millis(50),
                 backoff_cap: Duration::from_millis(200),
+                give_up_after: Duration::from_secs(600),
             },
             secure_store: Some(store),
             ..EngineOptions::default()

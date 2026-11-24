@@ -236,7 +236,9 @@ queues it, the pod routes it to a source, and the source talks to the outside se
 2. **Optimistic change.** The engine flips `is_liked` in its cache and writes the request to its **outbox** in the
    same database transaction. The screen redraws: the heart is red before any network call.
 3. **Sending.** A background worker sends outbox rows oldest first. A 2xx removes the row; a 4xx removes it and
-   rolls the change back; a 5xx, a timeout or no network keeps it and retries with backoff.
+   rolls the change back; a 5xx, a timeout or no network keeps it and retries with backoff. A row the pod has kept
+   answering with an error for 10 minutes is given up (rolled back like a 4xx) so the rows behind it are sent, and
+   the device says which (decision `failing-saves-give-up`).
 4. **The pod.** The route `/v1/pixelfed/posts/like` belongs to the Pixelfed source, which the pod mounted. The
    source calls Pixelfed's API with the token it keeps sealed in the pod.
 5. **Back to every device.** The source tells the pod its data changed; the pod sends a `data` event to every open
@@ -786,8 +788,9 @@ dot to open its piece, drag a box to list the pieces in it; a tile grid stays fo
 
 - **Shell** (`crates/source-shell`): layouts only. `shell`, the blank home; `settings`; and `inbox`.
 - **Monitor** (`crates/source-monitor`): the server's health counters and checks (feed `overview`, for pods the
-  operator turned it on for) and the user's devices with their builds (feed `devices`), with the `server_health`
-  core layout.
+  operator turned it on for), the user's devices with their builds (feed `devices`) and the pod's own recent
+  failed requests (feed `errors`: route pattern, status, error code, device; kept in memory per pod by
+  `pod_core::recent_errors`, decision `recent-server-errors`), with the `server_health` core layout.
 - **Dates** (`crates/source-dates`): the days around today in the pod's time zone (`dates:today`,
   `dates:this_week`, `dates:next_7`, …), so a layout that lists days needs no collection of dates. It tells devices
   to reload at the pod's midnight.
@@ -941,8 +944,9 @@ The renderer only ever sees its snapshots.
 - **The cache** (`cache.db`, SQLite): entities, data loads, construct objects, form values, notifications, so the
   last screen shows at once on launch and offline.
 - **The outbox** (`action_outbox`): optimistic changes and their requests, written in one transaction, sent oldest
-  first, rolled back on a refusal, retried on failure. A refetch re-applies changes still pending, so nothing
-  flickers.
+  first, rolled back on a refusal, retried on failure; one the pod keeps failing for 10 minutes is given up and
+  rolled back, and `local://connection` says when changes are stuck and which were given up. A refetch re-applies
+  changes still pending, so nothing flickers.
 - **The event stream**: `/v1/construct/events`, reconnecting with backoff and catching up on reconnect.
 - **Sign-in**: OAuth 2 with PKCE run by the engine itself, through a loopback port on desktop and an App Link on
   Android. Upstream tokens stay on the pod; the device keeps only its pod session.

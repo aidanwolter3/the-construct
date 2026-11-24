@@ -106,7 +106,7 @@ impl Ping {
 }
 
 /// `[A-Za-z0-9_-]{8,64}`, as the engine makes them.
-fn valid_device_id(id: &str) -> bool {
+pub(crate) fn valid_device_id(id: &str) -> bool {
     (8..=64).contains(&id.len())
         && id
             .bytes()

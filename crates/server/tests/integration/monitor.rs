@@ -138,3 +138,116 @@ async fn the_operator_turns_monitoring_on_for_a_pod() {
     assert!(text.contains("construct_http_responses_total{status=\"401\"}"));
     serve.abort();
 }
+
+/// `sample_data` of the monitor's `errors` feed over MCP: the raw text and
+/// the data.
+async fn errors_feed(url: &str, token: &str) -> (String, Value) {
+    let body: Value = reqwest::Client::new()
+        .post(format!("{url}/v1/mcp"))
+        .bearer_auth(token)
+        .json(
+            &json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {
+                "name": "sample_data",
+                "arguments": {"source": "monitor", "feed": "errors", "limit": 100},
+            }}),
+        )
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let text = body["result"]["content"][0]["text"]
+        .as_str()
+        .unwrap_or("null")
+        .to_owned();
+    let v = serde_json::from_str(&text).unwrap_or(Value::Null);
+    (text, v)
+}
+
+/// Through the real host (decision `recent-server-errors`): a pod's failed
+/// request is kept with its route's pattern and code in that pod only, and
+/// the query it was asked with is not.
+#[tokio::test]
+async fn a_pods_failed_requests_stay_in_that_pod() {
+    let dir = tempfile::tempdir().unwrap();
+    let factory = server::pod_factory(
+        PixelfedConfig::new("http://127.0.0.1:9", None),
+        true,
+        86_400,
+        false,
+    );
+    let path = dir.path().to_owned();
+    let host =
+        tokio::task::spawn_blocking(move || Host::open(&path, factory, HostConfig::default()))
+            .await
+            .unwrap()
+            .unwrap();
+    let host = Arc::new(host);
+    let h = host.clone();
+    let (mine, theirs) = tokio::task::spawn_blocking(move || {
+        (
+            h.create_pod("mine", PodKind::Admin, None, &[])
+                .unwrap()
+                .token,
+            h.create_pod("theirs", PodKind::Admin, None, &[])
+                .unwrap()
+                .token,
+        )
+    })
+    .await
+    .unwrap();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    let router = server::host::app(host.clone());
+    let serve = tokio::spawn(async move {
+        axum::serve(
+            listener,
+            router.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+        )
+        .await
+        .unwrap();
+    });
+    let client = reqwest::Client::new();
+    // The next write of "mine" fails as a 502 would.
+    let armed = client
+        .post(format!("{url}/v1/test/fault"))
+        .bearer_auth(&mine)
+        .json(&json!({"status": 502, "count": 1}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(armed.status(), StatusCode::OK);
+    let failed = client
+        .post(format!(
+            "{url}/v1/pixelfed_sample_no_login/ack?secret=query_value_42"
+        ))
+        .bearer_auth(&mine)
+        .header(protocol::DEVICE_HEADER, "phone0000device01")
+        .json(&json!({}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(failed.status(), StatusCode::BAD_GATEWAY);
+
+    let (text, data) = errors_feed(&url, &mine).await;
+    let order = data["queries"]["monitor:recent_errors"]
+        .as_array()
+        .unwrap_or_else(|| panic!("{text}"));
+    assert_eq!(order.len(), 1, "{text}");
+    assert!(
+        text.contains("POST /v1/pixelfed_sample_no_login/ack → 502 injected_fault"),
+        "{text}"
+    );
+    assert!(text.contains("phone0000device01"), "{text}");
+    assert!(!text.contains("query_value_42"), "{text}");
+    assert!(!text.contains(&mine), "{text}");
+
+    let (text, data) = errors_feed(&url, &theirs).await;
+    assert_eq!(
+        data["queries"]["monitor:recent_errors"],
+        json!([]),
+        "{text}"
+    );
+    serve.abort();
+}

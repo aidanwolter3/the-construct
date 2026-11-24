@@ -40,7 +40,7 @@ Decision:
   builds the pod ran (`server_builds`), at the moment the pod first ran each, coloured as the build, so a line
   shows where devices could switch to that colour. That is when the pod first saw the deploy (its first request
   after it), not the deploy itself.
-- **Server health 0002** draws the grid, filtered by the kind chips, and a tap shows that device's day.
+- **Server health 0003** draws the grid, filtered by the kind chips, and a tap shows that device's day.
 
 Limits: days recorded before this show one build all day. A device's first build of a day colours the day from
 midnight, though it may have first pinged later. Builds are told apart by colour only from the six newest behind

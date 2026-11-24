@@ -39,6 +39,7 @@ fn fast_config() -> EngineConfig {
         poll_interval: Duration::from_millis(100),
         backoff_base: Duration::from_millis(20),
         backoff_cap: Duration::from_millis(200),
+        give_up_after: Duration::from_secs(600),
     }
 }
 
@@ -462,6 +463,7 @@ fn server_errors_retry_with_capped_backoff_then_flush() {
         poll_interval: Duration::from_millis(100),
         backoff_base: Duration::from_millis(10),
         backoff_cap: Duration::from_millis(80),
+        give_up_after: Duration::from_secs(600),
     };
     let cap_ms = 80;
     let engine = engine(&dir, &server.url(), config.clone());
@@ -614,6 +616,100 @@ fn network_error_on_flush_marks_offline_and_keeps_row() {
     assert_eq!(r.retry_count, 1);
     assert!(r.next_attempt_at > 0);
     assert!(r.last_error.as_deref().is_some_and(|e| !e.is_empty()));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// `sync_json` as a value.
+fn sync(engine: &ConstructEngine) -> Value {
+    serde_json::from_str(&engine.snapshot().sync_json).unwrap()
+}
+
+#[test]
+fn a_save_the_pod_keeps_failing_is_given_up_so_the_next_one_is_sent() {
+    let server = TestServer::start();
+    let dir = temp_dir("giveup");
+    let config = EngineConfig {
+        backoff_base: Duration::from_millis(10),
+        backoff_cap: Duration::from_millis(50),
+        give_up_after: Duration::from_millis(400),
+        ..fast_config()
+    };
+    let engine = engine(&dir, &server.url(), config);
+    wait_online(&engine);
+    assert_eq!(sync(&engine)["failing"], Value::Null);
+    assert_eq!(sync(&engine)["give_up_after_s"], 0);
+
+    // Every mutation fails until the fault is cleared.
+    server.fault(502, u32::MAX);
+    engine.dispatch(INCREMENT);
+    engine.dispatch(INCREMENT);
+    assert_eq!(count(&engine.snapshot()), 2, "both shown at once");
+
+    // While it fails, the oldest row is reported with the pod's error code.
+    wait_until("the first row reported failing", || {
+        let f = &sync(&engine)["failing"];
+        f["since"].is_i64() && f["attempts"].as_i64().unwrap_or(0) >= 1
+    });
+    let failing = sync(&engine)["failing"].clone();
+    assert_eq!(failing["endpoint"], INC);
+    assert_eq!(failing["error"], "HTTP 502: injected_fault");
+
+    // After give_up_after the first row is given up: rolled back and
+    // reported; the second row is now the one failing.
+    wait_until("the first row given up", || {
+        sync(&engine)["dropped"]
+            .as_array()
+            .is_some_and(|d| !d.is_empty())
+    });
+    let dropped = sync(&engine)["dropped"][0].clone();
+    assert_eq!(dropped["endpoint"], INC);
+    assert_eq!(dropped["entity_uri"], URI);
+    assert_eq!(dropped["field"], "count");
+    assert_eq!(dropped["error"], "HTTP 502: injected_fault");
+    assert!(dropped["at"].as_i64().unwrap() > 0);
+    let s = engine.snapshot();
+    assert_eq!((count(&s), s.pending_actions), (1, 1), "first rolled back");
+
+    // The pod recovers: the second row is sent.
+    server.fault(0, 0);
+    wait_flushed(&engine, &server, 1);
+    assert_eq!(count(&engine.snapshot()), 1);
+    assert_eq!(sync(&engine)["failing"], Value::Null);
+    assert_eq!(
+        sync(&engine)["dropped"].as_array().map(Vec::len),
+        Some(1),
+        "the second row was not given up"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn a_save_that_only_the_network_fails_is_never_given_up() {
+    let base = serve_dropping_posts();
+    let dir = temp_dir("nogiveup");
+    let config = EngineConfig {
+        poll_interval: Duration::from_millis(50),
+        backoff_base: Duration::from_millis(10),
+        backoff_cap: Duration::from_millis(20),
+        give_up_after: Duration::ZERO,
+    };
+    let engine = engine(&dir, &base, config);
+    wait_online(&engine);
+    engine.dispatch(INCREMENT);
+    wait_until("several failed attempts", || {
+        rows(&dir).first().is_some_and(|r| r.retry_count >= 3)
+    });
+    let r = &rows(&dir)[0];
+    assert_eq!(
+        r.failing_since, None,
+        "network errors don't start the clock"
+    );
+    let s = engine.snapshot();
+    assert_eq!((count(&s), s.pending_actions), (1, 1), "kept");
+    let sync = sync(&engine);
+    assert_eq!(sync["dropped"], json!([]));
+    assert_eq!(sync["failing"]["since"], Value::Null);
+    assert!(sync["failing"]["attempts"].as_i64().unwrap() >= 1);
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -926,7 +1022,7 @@ fn row_due_beyond_the_backoff_cap_is_sent_anyway() {
         + 86_400_000;
     Store::open(&dir.join("cache.db"))
         .unwrap()
-        .mark_retry(id, day_ahead, "HTTP 503")
+        .mark_retry(id, day_ahead, "HTTP 503", None)
         .unwrap();
 
     let server = TestServer::start_on(addr);

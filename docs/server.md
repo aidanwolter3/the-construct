@@ -239,10 +239,20 @@ Counts live in memory and restart from zero.
   `server pods monitoring <name> on`. The built-in layout **Server health** (core layout `server_health`,
   `crates/source-monitor/layouts/server_health/`) shows it: the status, the checks, the devices (below) and every
   counter. Use it whole, `{"type": "core://Use", "ref": "@core/server_health"}` as a layout's root with feeds
-  `[["monitor","overview"],["monitor","devices"]]`, or open it by reference (`action.navigation.open` with
+  `[["monitor","overview"],["monitor","devices"],["monitor","errors"]]`, or open it by reference (`action.navigation.open` with
   `"ref": "@core/server_health"`); no agent has to write the screen. In a pod without monitoring it says that
   monitoring is off for this pod and shows the devices alone (it reads `${core://sources/monitor#error}`, `error 403`
   there).
+- **Recent failed requests** (decision [`recent-server-errors`](decisions/recent-server-errors.md)): the counters
+  say how many 5xx answers there were, not which. Every pod also keeps, in memory, its own last 50 answers of 400 or
+  more (401 and 404 left out): when, the method, the route's pattern (`/v1/uploads/{id}`, never the path asked for,
+  which can hold a token, and never the query), the status, the answer's `error` code when it is a small JSON object
+  (`taste_unreachable`), and the device that asked (`x-construct-device`). Bodies, headers, tokens and pod codes are
+  never kept. The `monitor` source's `errors` feed (`monitor:recent_errors`, entities `monitor://errors/<n>`) lists
+  them in any pod, like the devices; the `server_errors` check adds the most frequent of the pod's own 5xx in the
+  last hour to its line, e.g. `3 in the last hour, 3 in the last day · in this pod: POST /v1/taste/react → 502
+  taste_unreachable ×3 (Pixel 10 Pro)`, and Server health lists them under "Recent failed requests". Requests the
+  host answers before any pod (a wrong pod code, an unknown token) belong to no pod and are only counted.
 - **Alerts:** in such a pod, the layout that shows the source gets a "Server warnings" notification channel
   (decision [`notification-owner`](decisions/notification-owner.md)). The
   source looks at the checks every 5 minutes (while the pod has a registered device), and a check that turns to

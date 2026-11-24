@@ -194,10 +194,24 @@ fn bundle(snap: &StateSnapshot) -> DataBundle {
     }
 }
 
-/// `local://connection` as the shared UI builds it.
+/// `local://connection` as the shared UI builds it. Besides being online and
+/// how many changes wait, it says when they are stuck: the oldest has been
+/// failing at the pod (`stuck`, `error`, `since` unix ms), and which changes
+/// were given up on this run (`dropped`, `dropped_text`; decision
+/// `failing-saves-give-up`).
 fn connection(snap: &StateSnapshot) -> Value {
     let online = snap.online_known.then_some(snap.is_online);
     let pending = snap.pending_actions;
+    let sync: Value = serde_json::from_str(&snap.sync_json).unwrap_or_default();
+    let failing = &sync["failing"];
+    // Stuck: online, yet the pod keeps answering the oldest change with an
+    // error (an offline phone is just offline).
+    let stuck = online == Some(true) && pending > 0 && failing["since"].is_i64();
+    let error = if stuck {
+        failing["error"].as_str().unwrap_or("").to_owned()
+    } else {
+        String::new()
+    };
     let mut label = match online {
         Some(true) => "Online",
         Some(false) => "Offline",
@@ -207,10 +221,31 @@ fn connection(snap: &StateSnapshot) -> Value {
     if pending > 0 {
         label.push_str(&format!(" · {pending} pending"));
     }
+    if stuck {
+        label.push_str(" · not saving");
+    }
+    let dropped = sync["dropped"].as_array().cloned().unwrap_or_default();
+    let dropped_text = match dropped.first() {
+        None => String::new(),
+        Some(d) => {
+            let n = dropped.len();
+            let what = if n == 1 {
+                "1 change couldn't be saved".to_owned()
+            } else {
+                format!("{n} changes couldn't be saved")
+            };
+            match d["error"].as_str().filter(|e| !e.is_empty()) {
+                Some(e) => format!("{what} ({e})"),
+                None => what,
+            }
+        }
+    };
     json!({
         "online": online == Some(true), "pending": pending, "label": label,
         "attention": online == Some(false) || pending > 0,
-        "color": if online == Some(true) { "#2E7D32" } else { "#9E9E9E" },
+        "stuck": stuck, "error": error, "since": if stuck { failing["since"].clone() } else { Value::Null },
+        "dropped": dropped.len(), "dropped_text": dropped_text,
+        "color": if stuck { "#B26A00" } else if online == Some(true) { "#2E7D32" } else { "#9E9E9E" },
     })
 }
 
@@ -1107,6 +1142,81 @@ pub fn desktop_store(dir: Option<&Path>) -> Arc<dyn SecureStore> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn snap(online: bool, pending: u32, sync: Value) -> StateSnapshot {
+        StateSnapshot {
+            workspace_json: "null".into(),
+            entities_json: "{}".into(),
+            is_online: online,
+            online_known: true,
+            seq: 1,
+            pending_actions: pending,
+            queries_json: "{}".into(),
+            auth_json: String::new(),
+            layout_json: String::new(),
+            loads_json: "{}".into(),
+            notifications_json: "{}".into(),
+            layouts_json: "{}".into(),
+            construct_json: String::new(),
+            sync_json: sync.to_string(),
+        }
+    }
+
+    #[test]
+    fn connection_says_when_changes_are_stuck_or_given_up() {
+        let failing = json!({ "endpoint": "/v1/taste/like", "error": "HTTP 502: taste_unreachable",
+            "attempts": 7, "since": 1_000 });
+        let c = connection(&snap(true, 3, json!({ "failing": failing, "dropped": [] })));
+        assert_eq!(c["label"], "Online · 3 pending · not saving");
+        assert_eq!(c["stuck"], true);
+        assert_eq!(c["error"], "HTTP 502: taste_unreachable");
+        assert_eq!(c["since"], 1_000);
+        assert_eq!(c["attention"], true);
+        assert_eq!(c["dropped_text"], "");
+
+        // Offline is just offline, whatever the last error was.
+        let c = connection(&snap(
+            false,
+            3,
+            json!({ "failing": failing, "dropped": [] }),
+        ));
+        assert_eq!(c["label"], "Offline · 3 pending");
+        assert_eq!(
+            (c["stuck"].clone(), c["error"].clone()),
+            (json!(false), json!(""))
+        );
+
+        // Only network failures so far (no `since`): not stuck.
+        let net = json!({ "endpoint": "/x", "error": "timed out", "attempts": 2, "since": null });
+        let c = connection(&snap(true, 1, json!({ "failing": net, "dropped": [] })));
+        assert_eq!(
+            (c["label"].clone(), c["stuck"].clone()),
+            (json!("Online · 1 pending"), json!(false))
+        );
+
+        let dropped = json!([
+            { "endpoint": "/v1/taste/like", "entity_uri": "taste://items/a", "field": "liked",
+              "error": "HTTP 502: taste_unreachable", "at": 5 },
+            { "endpoint": "/v1/taste/like", "entity_uri": "taste://items/b", "field": "liked",
+              "error": "HTTP 502: taste_unreachable", "at": 4 }
+        ]);
+        let c = connection(&snap(
+            true,
+            0,
+            json!({ "failing": null, "dropped": dropped }),
+        ));
+        assert_eq!(c["label"], "Online");
+        assert_eq!(c["dropped"], 2);
+        assert_eq!(
+            c["dropped_text"],
+            "2 changes couldn't be saved (HTTP 502: taste_unreachable)"
+        );
+        assert_eq!(c["attention"], false);
+        // An old engine's snapshot without sync_json still reads.
+        let mut old = snap(true, 0, json!({}));
+        old.sync_json = String::new();
+        assert_eq!(connection(&old)["label"], "Online");
+    }
 
     fn bundle_of(entities: &[(&str, &str)], queries: &[(&str, &[&str])]) -> DataBundle {
         let mut b = DataBundle::default();

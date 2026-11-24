@@ -119,6 +119,7 @@ fn a_device_opens_a_pod_signs_in_signs_out_and_leaves() {
                 poll_interval: Duration::from_millis(100),
                 backoff_base: Duration::from_millis(20),
                 backoff_cap: Duration::from_millis(200),
+                give_up_after: Duration::from_secs(600),
             },
             secure_store: Some(Arc::clone(&store) as Arc<dyn SecureStore>),
             url_opener: Some(Arc::new(Browser)),

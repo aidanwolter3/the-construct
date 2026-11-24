@@ -240,6 +240,7 @@ fn ready(stub: &Stub) -> ConstructEngine {
         poll_interval: Duration::from_millis(100),
         backoff_base: Duration::from_secs(5),
         backoff_cap: Duration::from_secs(5),
+        give_up_after: Duration::from_secs(600),
     };
     let engine = ConstructEngine::init_with_config("", &stub.base, "home", config);
     wait_until("the workspace", || stub.hits("layout:home") >= 1);
@@ -471,6 +472,7 @@ fn a_restored_answer_never_hides_a_fresh_one() {
         poll_interval: Duration::from_millis(100),
         backoff_base: Duration::from_secs(5),
         backoff_cap: Duration::from_secs(5),
+        give_up_after: Duration::from_secs(600),
     };
     let first =
         ConstructEngine::init_with_config(dir.to_str().unwrap(), &stub.base, "home", config());

@@ -1,5 +1,5 @@
 {
-  "note": "Made-up data for the simulator's server_health fixtures: the monitor source's overview feed (one check warning) and its devices feed (the device_versions devices).",
+  "note": "Made-up data for the simulator's server_health fixtures: the monitor source's overview feed (one check warning), its devices feed (the device_versions devices) and its errors feed (two failed requests).",
   "overview": {
     "entities": {
       "monitor://summary/server": {
@@ -48,8 +48,8 @@
         "status": "ok",
         "ok": true,
         "status_text": "OK",
-        "detail": "0 in the last hour, 0 in the last day",
-        "value": 0,
+        "detail": "2 in the last hour, 2 in the last day · in this pod: POST /v1/taste/react → 502 taste_unreachable ×2 (Pixel 9)",
+        "value": 2,
         "color": "#2E7D32"
       },
       "monitor://checks/llm_tokens": {
@@ -2517,6 +2517,56 @@
         "monitor://releases/0",
         "monitor://releases/1",
         "monitor://releases/2"
+      ]
+    }
+  },
+  "errors": {
+    "entities": {
+      "monitor://errors/0": {
+        "time": 1795000000,
+        "time_text": "2 min ago",
+        "method": "POST",
+        "route": "/v1/taste/react",
+        "status": 502,
+        "code": "taste_unreachable",
+        "device": "Pixel 9",
+        "device_id": "phone0000device01",
+        "server_error": true,
+        "title": "POST /v1/taste/react → 502 taste_unreachable",
+        "subtitle": "2 min ago · Pixel 9"
+      },
+      "monitor://errors/1": {
+        "time": 1794999940,
+        "time_text": "3 min ago",
+        "method": "POST",
+        "route": "/v1/taste/react",
+        "status": 502,
+        "code": "taste_unreachable",
+        "device": "Pixel 9",
+        "device_id": "phone0000device01",
+        "server_error": true,
+        "title": "POST /v1/taste/react → 502 taste_unreachable",
+        "subtitle": "3 min ago · Pixel 9"
+      },
+      "monitor://errors/2": {
+        "time": 1794999000,
+        "time_text": "19 min ago",
+        "method": "POST",
+        "route": "/v1/taste/sign-in",
+        "status": 400,
+        "code": "invalid_url",
+        "device": "",
+        "device_id": "",
+        "server_error": false,
+        "title": "POST /v1/taste/sign-in → 400 invalid_url",
+        "subtitle": "19 min ago"
+      }
+    },
+    "queries": {
+      "monitor:recent_errors": [
+        "monitor://errors/0",
+        "monitor://errors/1",
+        "monitor://errors/2"
       ]
     }
   }

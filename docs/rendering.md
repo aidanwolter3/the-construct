@@ -350,7 +350,11 @@ layouts), so the device never reaches its own network (LAN, loopback) for one, n
 pod fetches public hosts only, raster images only, at most 10 MiB. The client reads at most 10 MiB too, and decodes
 within limits (`image::Limits`: 12,000 px a side, 128 MiB allocated), so a decompression bomb fails and keeps its
 placeholder; what decodes is scaled to 1600 px a side. Images are cut to their box (cropped to fill, corners
-rounded) and drawn over their placeholder once they arrive; the window redraws then. The store keeps at most
+rounded) and drawn over their placeholder once they arrive; the window redraws then. A cut is made for each pixel
+size an image is drawn at, on a background thread for the GPU; while a loaded image's cut at a new size is being made
+(its box grew, as the card behind a deck's top one does when it takes the top), a cut of it at another size, scaled
+to the box, stands in (`ImageStore::stand_in`, under a glyph id of its own so the atlas never keeps it in place of
+the exact cut), so an image that has shown never blinks back to its placeholder. The store keeps at most
 160 MiB of decoded images (`images::BUDGET_BYTES`): the least recently drawn goes first and downloads again when it
 is next shown, and at most 1,024 failed URLs are remembered.
 
@@ -406,7 +410,9 @@ it off (then its intent runs, from `take_swiped`, which the window calls each fr
 that goes down on a `core://Scatter` is its gesture (`ScatterGesture`): a drag pans, two fingers pinch, the wheel
 zooms, a long press (or the plot's `select`) makes the drag draw a box that runs `on_select` on release, and one
 that doesn't move is a tap on the nearest point. Every image a layout lays out but may not draw yet (a carousel's
-other pages, the card behind a deck's top one) is asked for before those drawn (`Session::prefetch`). A `core://Progress` spinner is an arc with a fading tail
+other pages, the card behind a deck's top one) is asked for before those drawn (`Session::prefetch`), and cut at
+its size once loaded; the first photos of the card behind a deck's top one are also cut at the size they'll have on
+top (wider by the deck's inset, as tall or the same shape), so the swipe that brings it there finds them ready. A `core://Progress` spinner is an arc with a fading tail
 that turns once a second; a window draws every frame while one is on screen, and previews and the simulator draw it
 still. Text fields are edited by the engine itself, as Android's
 own fields behave, and on Android the keyboard edits them too (below): a tap puts the cursor where

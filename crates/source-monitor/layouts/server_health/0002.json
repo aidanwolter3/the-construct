@@ -1,5 +1,5 @@
 {
-  "note": "Server health: devices per day as a grid, a row per device and a cell per day, coloured by the builds it ran that day and when; a day it wasn't seen dashed",
+  "note": "Server health as a built-in layout: the status, the checks, the pod's recent failed requests, devices per day by build, the devices and every counter, from core components; says so where monitoring is off",
   "layout": {
     "type": "core://Page",
     "id": "server_health",
@@ -262,6 +262,85 @@
           }
         },
         {
+          "type": "core://Conditional",
+          "count": {
+            "query_key": "monitor:recent_errors"
+          },
+          "content": {
+            "type": "core://Use",
+            "component": "core:titled_section",
+            "args": {
+              "text": "Recent failed requests"
+            },
+            "children": [
+              {
+                "type": "core://Use",
+                "component": "core:counted_list",
+                "args": {
+                  "count": {
+                    "query_key": "monitor:recent_errors"
+                  },
+                  "empty": "No failed requests"
+                },
+                "children": [
+                  {
+                    "type": "core://List",
+                    "query_key": "monitor:recent_errors",
+                    "spacing_dp": 1,
+                    "item_template": {
+                      "type": "core://Use",
+                      "component": "core:item_row",
+                      "args": {
+                        "title": "$item.title",
+                        "meta": "$item.subtitle",
+                        "meta_lines": 2
+                      },
+                      "children": [
+                        {
+                          "type": "core://Box",
+                          "width_dp": 34,
+                          "content": {
+                            "type": "core://Column",
+                            "children": [
+                              {
+                                "type": "core://Conditional",
+                                "value": "$item.server_error",
+                                "equals": "true",
+                                "content": {
+                                  "type": "core://Use",
+                                  "component": "core:tinted_icon",
+                                  "args": {
+                                    "icon": "warning",
+                                    "tone": "error"
+                                  }
+                                }
+                              },
+                              {
+                                "type": "core://Conditional",
+                                "value": "$item.server_error",
+                                "equals": "true",
+                                "not": true,
+                                "content": {
+                                  "type": "core://Use",
+                                  "component": "core:tinted_icon",
+                                  "args": {
+                                    "icon": "warning",
+                                    "tone": "muted"
+                                  }
+                                }
+                              }
+                            ]
+                          }
+                        }
+                      ]
+                    }
+                  }
+                ]
+              }
+            ]
+          }
+        },
+        {
           "type": "core://Use",
           "component": "core:titled_section",
           "args": {
@@ -357,23 +436,15 @@
                     },
                     {
                       "type": "core://Bars",
-                      "query_key": "monitor:device_cells",
-                      "row": "row",
-                      "row_label": "$item.device",
+                      "query_key": "monitor:device_days",
                       "bar": "bar",
                       "label": "$item.bar_label",
-                      "value": "hours",
-                      "scale_min": 24,
                       "color": "${local://theme#chart_$item.series}",
                       "hatched": "hatched",
-                      "field": "device_cell",
                       "merge": "build",
-                      "height_dp": 18,
-                      "marks": {
-                        "query_key": "monitor:releases",
-                        "at": "hours",
-                        "color": "${local://theme#chart_$item.series}"
-                      },
+                      "field": "device_day",
+                      "height_dp": 140,
+                      "scale_min": 5,
                       "where": {
                         "field": "kind",
                         "equals": "$form.device_kind"
@@ -414,15 +485,15 @@
                     },
                     {
                       "type": "core://Conditional",
-                      "value": "$form.device_cell",
+                      "value": "$form.device_day",
                       "content": {
                         "type": "core://List",
-                        "query_key": "monitor:device_cells",
+                        "query_key": "monitor:device_days",
                         "spacing_dp": 6,
                         "where": [
                           {
-                            "field": "cell",
-                            "equals": "$form.device_cell"
+                            "field": "bar",
+                            "equals": "$form.device_day"
                           },
                           {
                             "field": "kind",
@@ -430,10 +501,10 @@
                           }
                         ],
                         "group_by": {
-                          "field": "cell",
+                          "field": "bar",
                           "header": {
                             "type": "core://Text",
-                            "value_expr": "$item.header",
+                            "value_expr": "$item.day_text",
                             "style": "Label"
                           }
                         },
@@ -453,8 +524,19 @@
                             },
                             {
                               "type": "core://Text",
-                              "value_expr": "$item.detail",
+                              "value_expr": "$item.device",
                               "style": "Body"
+                            },
+                            {
+                              "type": "core://Spacer"
+                            },
+                            {
+                              "type": "core://Use",
+                              "component": "core:muted_text",
+                              "args": {
+                                "text": "$item.detail",
+                                "style": "Caption"
+                              }
                             }
                           ]
                         }
@@ -462,15 +544,65 @@
                     },
                     {
                       "type": "core://Conditional",
-                      "value": "$form.device_cell",
+                      "value": "$form.device_day",
                       "not": true,
                       "content": {
-                        "type": "core://Use",
-                        "component": "core:muted_text",
-                        "args": {
-                          "text": "Tap a day to see which builds a device ran and when",
-                          "style": "Caption"
-                        }
+                        "type": "core://Column",
+                        "spacing_dp": 6,
+                        "children": [
+                          {
+                            "type": "core://Text",
+                            "value_expr": "Now: every device at its latest build",
+                            "style": "Label"
+                          },
+                          {
+                            "type": "core://List",
+                            "query_key": "monitor:device_days",
+                            "spacing_dp": 6,
+                            "where": [
+                              {
+                                "field": "bar",
+                                "equals": "${monitor://device_summary/pod#today}"
+                              },
+                              {
+                                "field": "kind",
+                                "equals": "$form.device_kind"
+                              }
+                            ],
+                            "item_template": {
+                              "type": "core://Row",
+                              "align": "Center",
+                              "spacing_dp": 8,
+                              "children": [
+                                {
+                                  "type": "core://Use",
+                                  "component": "core:dot",
+                                  "args": {
+                                    "color": "${local://theme#chart_$item.series}",
+                                    "size": 10,
+                                    "corner": 3
+                                  }
+                                },
+                                {
+                                  "type": "core://Text",
+                                  "value_expr": "$item.device",
+                                  "style": "Body"
+                                },
+                                {
+                                  "type": "core://Spacer"
+                                },
+                                {
+                                  "type": "core://Use",
+                                  "component": "core:muted_text",
+                                  "args": {
+                                    "text": "$item.detail",
+                                    "style": "Caption"
+                                  }
+                                }
+                              ]
+                            }
+                          }
+                        ]
                       }
                     }
                   ]

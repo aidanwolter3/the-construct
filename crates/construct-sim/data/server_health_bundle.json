@@ -87,13 +87,13 @@
     },
     "monitor://checks/server_errors": {
       "color": "#2E7D32",
-      "detail": "0 in the last hour, 0 in the last day",
+      "detail": "2 in the last hour, 2 in the last day · in this pod: POST /v1/taste/react → 502 taste_unreachable ×2 (Pixel 9)",
       "id": "server_errors",
       "ok": true,
       "status": "ok",
       "status_text": "OK",
       "title": "Server errors",
-      "value": 0
+      "value": 2
     },
     "monitor://checks/sign_in_failures": {
       "color": "#B26A00",
@@ -2246,6 +2246,45 @@
       "series": "2",
       "subtitle": "Android · Nov 14 · 9be03a1 · seen 2 min ago"
     },
+    "monitor://errors/0": {
+      "code": "taste_unreachable",
+      "device": "Pixel 9",
+      "device_id": "phone0000device01",
+      "method": "POST",
+      "route": "/v1/taste/react",
+      "server_error": true,
+      "status": 502,
+      "subtitle": "2 min ago · Pixel 9",
+      "time": 1795000000,
+      "time_text": "2 min ago",
+      "title": "POST /v1/taste/react → 502 taste_unreachable"
+    },
+    "monitor://errors/1": {
+      "code": "taste_unreachable",
+      "device": "Pixel 9",
+      "device_id": "phone0000device01",
+      "method": "POST",
+      "route": "/v1/taste/react",
+      "server_error": true,
+      "status": 502,
+      "subtitle": "3 min ago · Pixel 9",
+      "time": 1794999940,
+      "time_text": "3 min ago",
+      "title": "POST /v1/taste/react → 502 taste_unreachable"
+    },
+    "monitor://errors/2": {
+      "code": "invalid_url",
+      "device": "",
+      "device_id": "",
+      "method": "POST",
+      "route": "/v1/taste/sign-in",
+      "server_error": false,
+      "status": 400,
+      "subtitle": "19 min ago",
+      "time": 1794999000,
+      "time_text": "19 min ago",
+      "title": "POST /v1/taste/sign-in → 400 invalid_url"
+    },
     "monitor://metrics/auth_failures_pod_code": {
       "id": "auth_failures_pod_code",
       "kind": "counter",
@@ -2506,6 +2545,11 @@
       "monitor://metrics/llm_tokens",
       "monitor://metrics/pods_admin",
       "monitor://metrics/pods_temporary"
+    ],
+    "monitor:recent_errors": [
+      "monitor://errors/0",
+      "monitor://errors/1",
+      "monitor://errors/2"
     ],
     "monitor:releases": [
       "monitor://releases/0",
@@ -2979,6 +3023,172 @@
                   },
                   "count": {
                     "query_key": "monitor:summary"
+                  },
+                  "type": "core://Conditional",
+                  "value": ""
+                },
+                {
+                  "content": {
+                    "children": [
+                      {
+                        "size_dp": 14,
+                        "type": "core://Spacer"
+                      },
+                      {
+                        "content": {
+                          "style": "Label",
+                          "type": "core://Text",
+                          "value_expr": "Recent failed requests"
+                        },
+                        "content_color": "${local://theme#muted_text}",
+                        "padding_h_dp": 4,
+                        "type": "core://Box"
+                      },
+                      {
+                        "size_dp": 8,
+                        "type": "core://Spacer"
+                      },
+                      {
+                        "content": {
+                          "background": "${local://theme#card}",
+                          "border_color": "${local://theme#card_border}",
+                          "content": {
+                            "background": "${local://theme#card_border}",
+                            "content": {
+                              "children": [
+                                {
+                                  "item_template": {
+                                    "background": "${local://theme#card}",
+                                    "content": {
+                                      "align": "Center",
+                                      "children": [
+                                        {
+                                          "content": {
+                                            "children": [
+                                              {
+                                                "content": {
+                                                  "align": "Center",
+                                                  "background": "${local://theme#error_surface}",
+                                                  "content": {
+                                                    "icon": "warning",
+                                                    "text": "",
+                                                    "type": "core://Badge"
+                                                  },
+                                                  "content_color": "${local://theme#error}",
+                                                  "corner_dp": 512,
+                                                  "height_dp": 34,
+                                                  "type": "core://Box",
+                                                  "width_dp": 34
+                                                },
+                                                "equals": "true",
+                                                "type": "core://Conditional",
+                                                "value": "$item.server_error"
+                                              },
+                                              {
+                                                "content": {
+                                                  "align": "Center",
+                                                  "background": "${local://theme#muted_surface}",
+                                                  "content": {
+                                                    "icon": "warning",
+                                                    "text": "",
+                                                    "type": "core://Badge"
+                                                  },
+                                                  "content_color": "${local://theme#muted_text}",
+                                                  "corner_dp": 512,
+                                                  "height_dp": 34,
+                                                  "type": "core://Box",
+                                                  "width_dp": 34
+                                                },
+                                                "equals": "true",
+                                                "not": true,
+                                                "type": "core://Conditional",
+                                                "value": "$item.server_error"
+                                              }
+                                            ],
+                                            "type": "core://Column"
+                                          },
+                                          "type": "core://Box",
+                                          "width_dp": 34
+                                        },
+                                        {
+                                          "children": [
+                                            {
+                                              "style": "Label",
+                                              "type": "core://Text",
+                                              "value_expr": "$item.title"
+                                            },
+                                            {
+                                              "content": {
+                                                "content": {
+                                                  "max_lines": 2,
+                                                  "style": "Secondary",
+                                                  "type": "core://Text",
+                                                  "value_expr": "$item.subtitle"
+                                                },
+                                                "content_color": "${local://theme#muted_text}",
+                                                "type": "core://Box"
+                                              },
+                                              "type": "core://Conditional",
+                                              "value": "$item.subtitle"
+                                            }
+                                          ],
+                                          "spacing_dp": 2,
+                                          "type": "core://Column"
+                                        },
+                                        {
+                                          "type": "core://Spacer"
+                                        }
+                                      ],
+                                      "padding_h_dp": 11,
+                                      "padding_v_dp": 12,
+                                      "spacing_dp": 12,
+                                      "type": "core://Row"
+                                    },
+                                    "type": "core://Box"
+                                  },
+                                  "query_key": "monitor:recent_errors",
+                                  "spacing_dp": 1,
+                                  "type": "core://List"
+                                }
+                              ],
+                              "type": "core://Column"
+                            },
+                            "type": "core://Box"
+                          },
+                          "corner_dp": 18,
+                          "padding_h_dp": 5,
+                          "padding_v_dp": 6,
+                          "type": "core://Box"
+                        },
+                        "count": {
+                          "query_key": "monitor:recent_errors"
+                        },
+                        "type": "core://Conditional",
+                        "value": ""
+                      },
+                      {
+                        "content": {
+                          "content": {
+                            "style": "Secondary",
+                            "type": "core://Text",
+                            "value_expr": "No failed requests"
+                          },
+                          "content_color": "${local://theme#muted_text}",
+                          "padding_h_dp": 4,
+                          "type": "core://Box"
+                        },
+                        "count": {
+                          "query_key": "monitor:recent_errors"
+                        },
+                        "not": true,
+                        "type": "core://Conditional",
+                        "value": ""
+                      }
+                    ],
+                    "type": "core://Column"
+                  },
+                  "count": {
+                    "query_key": "monitor:recent_errors"
                   },
                   "type": "core://Conditional",
                   "value": ""
