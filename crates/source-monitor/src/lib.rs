@@ -179,6 +179,10 @@ pub const MANIFEST: SourceManifest = SourceManifest {
             doc: "The devices at a glance (monitor:device_summary).",
             fields: &[
                 ("today", "today's bar key (YYYY-MM-DD, the pod's time zone)"),
+                (
+                    "days_text",
+                    "how many days the grid shows, e.g. last 6 days",
+                ),
                 ("server_build", "the server's build id"),
                 ("server_build_label", "e.g. Nov 18 · c41d9e2"),
                 ("count_text", "e.g. 5 devices"),

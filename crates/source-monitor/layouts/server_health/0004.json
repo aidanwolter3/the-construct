@@ -1,0 +1,758 @@
+{
+  "note": "Server health: the devices grid starts at the first day a device was seen, says how many days it shows, and colours only the builds devices run now and the server's",
+  "layout": {
+    "type": "core://Page",
+    "id": "server_health",
+    "title": "Server health",
+    "root": {
+      "type": "core://Use",
+      "component": "core:screen_scaffold",
+      "args": {
+        "title": "Server health",
+        "spacing": 0
+      },
+      "children": [
+        {
+          "type": "core://Conditional",
+          "value": "${monitor://summary/server#ok}",
+          "equals": "true",
+          "content": {
+            "type": "core://Use",
+            "component": "core:filled_card",
+            "args": {
+              "background": "${local://theme#success_surface}",
+              "color": "${local://theme#success}",
+              "padding_h": 14,
+              "padding_v": 14
+            },
+            "children": [
+              {
+                "type": "core://Row",
+                "align": "Center",
+                "spacing_dp": 14,
+                "children": [
+                  {
+                    "type": "core://Use",
+                    "component": "core:tinted_icon",
+                    "args": {
+                      "icon": "check",
+                      "tint": "${local://theme#card}",
+                      "tint_bg": "${local://theme#success}",
+                      "size": 40
+                    }
+                  },
+                  {
+                    "type": "core://Column",
+                    "spacing_dp": 2,
+                    "children": [
+                      {
+                        "type": "core://Text",
+                        "value_expr": "${monitor://summary/server#headline}",
+                        "style": "Title",
+                        "weight": "SemiBold"
+                      },
+                      {
+                        "type": "core://Use",
+                        "component": "core:muted_text",
+                        "args": {
+                          "text": "Server up ${monitor://summary/server#uptime_text}"
+                        }
+                      },
+                      {
+                        "type": "core://Conditional",
+                        "value": "${monitor://summary/server#window_note}",
+                        "content": {
+                          "type": "core://Use",
+                          "component": "core:muted_text",
+                          "args": {
+                            "text": "${monitor://summary/server#window_note}",
+                            "style": "Caption"
+                          }
+                        }
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "type": "core://Conditional",
+          "count": {
+            "query_key": "monitor:summary"
+          },
+          "content": {
+            "type": "core://Conditional",
+            "value": "${monitor://summary/server#ok}",
+            "equals": "true",
+            "not": true,
+            "content": {
+              "type": "core://Use",
+              "component": "core:filled_card",
+              "args": {
+                "background": "${local://theme#error_surface}",
+                "color": "${local://theme#error}",
+                "padding_h": 14,
+                "padding_v": 14
+              },
+              "children": [
+                {
+                  "type": "core://Row",
+                  "align": "Center",
+                  "spacing_dp": 14,
+                  "children": [
+                    {
+                      "type": "core://Use",
+                      "component": "core:tinted_icon",
+                      "args": {
+                        "icon": "warning",
+                        "tint": "${local://theme#card}",
+                        "tint_bg": "${local://theme#error}",
+                        "size": 40
+                      }
+                    },
+                    {
+                      "type": "core://Column",
+                      "spacing_dp": 2,
+                      "children": [
+                        {
+                          "type": "core://Text",
+                          "value_expr": "${monitor://summary/server#headline}",
+                          "style": "Title",
+                          "weight": "SemiBold"
+                        },
+                        {
+                          "type": "core://Use",
+                          "component": "core:muted_text",
+                          "args": {
+                            "text": "Server up ${monitor://summary/server#uptime_text}"
+                          }
+                        },
+                        {
+                          "type": "core://Conditional",
+                          "value": "${monitor://summary/server#window_note}",
+                          "content": {
+                            "type": "core://Use",
+                            "component": "core:muted_text",
+                            "args": {
+                              "text": "${monitor://summary/server#window_note}",
+                              "style": "Caption"
+                            }
+                          }
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        },
+        {
+          "type": "core://Conditional",
+          "value": "${core://sources/monitor#error}",
+          "equals": "error 403",
+          "content": {
+            "type": "core://Use",
+            "component": "core:callout",
+            "args": {
+              "tone": "muted",
+              "title": "Server monitoring is off for this pod",
+              "text": "Your devices are below. The server's checks and counters show once its operator turns monitoring on for this pod (server pods monitoring <pod> on)."
+            }
+          }
+        },
+        {
+          "type": "core://Conditional",
+          "value": "${core://sources/monitor#error}",
+          "content": {
+            "type": "core://Conditional",
+            "value": "${core://sources/monitor#error}",
+            "equals": "error 403",
+            "not": true,
+            "content": {
+              "type": "core://Use",
+              "component": "core:callout",
+              "args": {
+                "tone": "error",
+                "title": "The server's health couldn't be loaded",
+                "text": "The pod answered ${core://sources/monitor#error}. Your devices may be missing below."
+              }
+            }
+          }
+        },
+        {
+          "type": "core://Conditional",
+          "count": {
+            "query_key": "monitor:summary"
+          },
+          "content": {
+            "type": "core://Use",
+            "component": "core:titled_section",
+            "args": {
+              "text": "Checks"
+            },
+            "children": [
+              {
+                "type": "core://Use",
+                "component": "core:counted_list",
+                "args": {
+                  "count": {
+                    "query_key": "monitor:checks"
+                  },
+                  "empty": "No checks yet"
+                },
+                "children": [
+                  {
+                    "type": "core://List",
+                    "query_key": "monitor:checks",
+                    "spacing_dp": 1,
+                    "item_template": {
+                      "type": "core://Use",
+                      "component": "core:item_row",
+                      "args": {
+                        "title": "$item.title",
+                        "meta": "$item.detail",
+                        "meta_lines": 6
+                      },
+                      "children": [
+                        {
+                          "type": "core://Box",
+                          "width_dp": 34,
+                          "content": {
+                            "type": "core://Column",
+                            "children": [
+                              {
+                                "type": "core://Conditional",
+                                "value": "$item.ok",
+                                "equals": "true",
+                                "content": {
+                                  "type": "core://Use",
+                                  "component": "core:tinted_icon",
+                                  "args": {
+                                    "icon": "check",
+                                    "tone": "success"
+                                  }
+                                }
+                              },
+                              {
+                                "type": "core://Conditional",
+                                "value": "$item.ok",
+                                "equals": "true",
+                                "not": true,
+                                "content": {
+                                  "type": "core://Use",
+                                  "component": "core:tinted_icon",
+                                  "args": {
+                                    "icon": "warning",
+                                    "tone": "error"
+                                  }
+                                }
+                              }
+                            ]
+                          }
+                        }
+                      ]
+                    }
+                  }
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "type": "core://Conditional",
+          "count": {
+            "query_key": "monitor:recent_errors"
+          },
+          "content": {
+            "type": "core://Use",
+            "component": "core:titled_section",
+            "args": {
+              "text": "Recent failed requests"
+            },
+            "children": [
+              {
+                "type": "core://Use",
+                "component": "core:counted_list",
+                "args": {
+                  "count": {
+                    "query_key": "monitor:recent_errors"
+                  },
+                  "empty": "No failed requests"
+                },
+                "children": [
+                  {
+                    "type": "core://List",
+                    "query_key": "monitor:recent_errors",
+                    "spacing_dp": 1,
+                    "item_template": {
+                      "type": "core://Use",
+                      "component": "core:item_row",
+                      "args": {
+                        "title": "$item.title",
+                        "meta": "$item.subtitle",
+                        "meta_lines": 2
+                      },
+                      "children": [
+                        {
+                          "type": "core://Box",
+                          "width_dp": 34,
+                          "content": {
+                            "type": "core://Column",
+                            "children": [
+                              {
+                                "type": "core://Conditional",
+                                "value": "$item.server_error",
+                                "equals": "true",
+                                "content": {
+                                  "type": "core://Use",
+                                  "component": "core:tinted_icon",
+                                  "args": {
+                                    "icon": "warning",
+                                    "tone": "error"
+                                  }
+                                }
+                              },
+                              {
+                                "type": "core://Conditional",
+                                "value": "$item.server_error",
+                                "equals": "true",
+                                "not": true,
+                                "content": {
+                                  "type": "core://Use",
+                                  "component": "core:tinted_icon",
+                                  "args": {
+                                    "icon": "warning",
+                                    "tone": "muted"
+                                  }
+                                }
+                              }
+                            ]
+                          }
+                        }
+                      ]
+                    }
+                  }
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "type": "core://Use",
+          "component": "core:titled_section",
+          "args": {
+            "text": "Devices"
+          },
+          "children": [
+            {
+              "type": "core://Column",
+              "spacing_dp": 10,
+              "children": [
+                {
+                  "type": "core://Column",
+                  "spacing_dp": 2,
+                  "children": [
+                    {
+                      "type": "core://Conditional",
+                      "value": "${monitor://device_summary/pod#count_text}",
+                      "content": {
+                        "type": "core://Use",
+                        "component": "core:muted_note",
+                        "args": {
+                          "text": "${monitor://device_summary/pod#count_text}",
+                          "style": "Caption"
+                        }
+                      }
+                    },
+                    {
+                      "type": "core://Conditional",
+                      "value": "${monitor://device_summary/pod#status_text}",
+                      "content": {
+                        "type": "core://Use",
+                        "component": "core:muted_note",
+                        "args": {
+                          "text": "${monitor://device_summary/pod#status_text}",
+                          "style": "Caption"
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "type": "core://ChoiceChips",
+                  "field": "device_kind",
+                  "options": [
+                    {
+                      "label": "All",
+                      "value": ""
+                    },
+                    {
+                      "label": "Phone",
+                      "value": "android"
+                    },
+                    {
+                      "label": "Mac",
+                      "value": "macos"
+                    },
+                    {
+                      "label": "Web",
+                      "value": "web"
+                    }
+                  ]
+                },
+                {
+                  "type": "core://Use",
+                  "component": "core:card",
+                  "args": {
+                    "spacing": 12,
+                    "corner": 18,
+                    "padding_v": 14
+                  },
+                  "children": [
+                    {
+                      "type": "core://Row",
+                      "align": "Center",
+                      "children": [
+                        {
+                          "type": "core://Text",
+                          "value_expr": "Devices per day",
+                          "style": "Label"
+                        },
+                        {
+                          "type": "core://Spacer"
+                        },
+                        {
+                          "type": "core://Use",
+                          "component": "core:muted_text",
+                          "args": {
+                            "text": "${monitor://device_summary/pod#days_text}",
+                            "style": "Caption"
+                          }
+                        }
+                      ]
+                    },
+                    {
+                      "type": "core://Bars",
+                      "query_key": "monitor:device_cells",
+                      "row": "row",
+                      "row_label": "$item.device",
+                      "bar": "bar",
+                      "label": "$item.bar_label",
+                      "value": "hours",
+                      "scale_min": 24,
+                      "color": "${local://theme#chart_$item.series}",
+                      "hatched": "hatched",
+                      "field": "device_cell",
+                      "merge": "build",
+                      "height_dp": 18,
+                      "marks": {
+                        "query_key": "monitor:releases",
+                        "at": "hours",
+                        "color": "${local://theme#chart_$item.series}"
+                      },
+                      "where": {
+                        "field": "kind",
+                        "equals": "$form.device_kind"
+                      }
+                    },
+                    {
+                      "type": "core://List",
+                      "query_key": "monitor:builds",
+                      "columns": 2,
+                      "spacing_dp": 4,
+                      "item_template": {
+                        "type": "core://Row",
+                        "align": "Center",
+                        "spacing_dp": 6,
+                        "children": [
+                          {
+                            "type": "core://Use",
+                            "component": "core:dot",
+                            "args": {
+                              "color": "${local://theme#chart_$item.series}",
+                              "size": 10,
+                              "corner": 3
+                            }
+                          },
+                          {
+                            "type": "core://Use",
+                            "component": "core:muted_text",
+                            "args": {
+                              "text": "$item.legend",
+                              "style": "Caption"
+                            }
+                          }
+                        ]
+                      }
+                    },
+                    {
+                      "type": "core://Divider"
+                    },
+                    {
+                      "type": "core://Conditional",
+                      "value": "$form.device_cell",
+                      "content": {
+                        "type": "core://List",
+                        "query_key": "monitor:device_cells",
+                        "spacing_dp": 6,
+                        "where": [
+                          {
+                            "field": "cell",
+                            "equals": "$form.device_cell"
+                          },
+                          {
+                            "field": "kind",
+                            "equals": "$form.device_kind"
+                          }
+                        ],
+                        "group_by": {
+                          "field": "cell",
+                          "header": {
+                            "type": "core://Text",
+                            "value_expr": "$item.header",
+                            "style": "Label"
+                          }
+                        },
+                        "item_template": {
+                          "type": "core://Row",
+                          "align": "Center",
+                          "spacing_dp": 8,
+                          "children": [
+                            {
+                              "type": "core://Use",
+                              "component": "core:dot",
+                              "args": {
+                                "color": "${local://theme#chart_$item.series}",
+                                "size": 10,
+                                "corner": 3
+                              }
+                            },
+                            {
+                              "type": "core://Text",
+                              "value_expr": "$item.detail",
+                              "style": "Body"
+                            }
+                          ]
+                        }
+                      }
+                    },
+                    {
+                      "type": "core://Conditional",
+                      "value": "$form.device_cell",
+                      "not": true,
+                      "content": {
+                        "type": "core://Use",
+                        "component": "core:muted_text",
+                        "args": {
+                          "text": "Tap a day to see which builds a device ran and when",
+                          "style": "Caption"
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "type": "core://Use",
+                  "component": "core:counted_list",
+                  "args": {
+                    "count": {
+                      "query_key": "monitor:devices",
+                      "where": [
+                        {
+                          "field": "kind",
+                          "equals": "$form.device_kind"
+                        }
+                      ]
+                    },
+                    "empty": "No devices here yet"
+                  },
+                  "children": [
+                    {
+                      "type": "core://List",
+                      "query_key": "monitor:devices",
+                      "spacing_dp": 1,
+                      "where": {
+                        "field": "kind",
+                        "equals": "$form.device_kind"
+                      },
+                      "item_template": {
+                        "type": "core://Use",
+                        "component": "core:item_row",
+                        "args": {
+                          "title": "$item.name",
+                          "meta": "$item.kind_text · $item.seen_text",
+                          "trailing": true
+                        },
+                        "children": [
+                          {
+                            "type": "core://Use",
+                            "component": "core:dot",
+                            "args": {
+                              "color": "${local://theme#chart_$item.series}",
+                              "size": 10,
+                              "corner": 3
+                            }
+                          },
+                          {
+                            "type": "core://Column",
+                            "children": [
+                              {
+                                "type": "core://Conditional",
+                                "value": "$item.relation",
+                                "equals": "latest",
+                                "content": {
+                                  "type": "core://Use",
+                                  "component": "core:pill",
+                                  "args": {
+                                    "text": "$item.relation_text",
+                                    "tone": "success"
+                                  }
+                                }
+                              },
+                              {
+                                "type": "core://Conditional",
+                                "value": "$item.relation",
+                                "equals": "behind",
+                                "content": {
+                                  "type": "core://Use",
+                                  "component": "core:pill",
+                                  "args": {
+                                    "text": "$item.relation_text",
+                                    "tone": "error"
+                                  }
+                                }
+                              },
+                              {
+                                "type": "core://Conditional",
+                                "value": "$item.relation",
+                                "equals": "ahead",
+                                "content": {
+                                  "type": "core://Use",
+                                  "component": "core:pill",
+                                  "args": {
+                                    "text": "$item.relation_text",
+                                    "tone": "accent"
+                                  }
+                                }
+                              },
+                              {
+                                "type": "core://Conditional",
+                                "value": "$item.relation",
+                                "equals": "unknown",
+                                "content": {
+                                  "type": "core://Use",
+                                  "component": "core:pill",
+                                  "args": {
+                                    "text": "$item.relation_text",
+                                    "tone": "muted"
+                                  }
+                                }
+                              }
+                            ]
+                          }
+                        ]
+                      }
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "core://Conditional",
+          "count": {
+            "query_key": "monitor:summary"
+          },
+          "content": {
+            "type": "core://Use",
+            "component": "core:titled_section",
+            "args": {
+              "text": "All counters"
+            },
+            "children": [
+              {
+                "type": "core://Column",
+                "spacing_dp": 8,
+                "children": [
+                  {
+                    "type": "core://Use",
+                    "component": "core:muted_note",
+                    "args": {
+                      "text": "Last hour · last day · since the server started",
+                      "style": "Caption"
+                    }
+                  },
+                  {
+                    "type": "core://Use",
+                    "component": "core:counted_list",
+                    "args": {
+                      "count": {
+                        "query_key": "monitor:metrics"
+                      },
+                      "empty": "No counters yet"
+                    },
+                    "children": [
+                      {
+                        "type": "core://List",
+                        "query_key": "monitor:metrics",
+                        "spacing_dp": 1,
+                        "item_template": {
+                          "type": "core://Use",
+                          "component": "core:item_row",
+                          "args": {
+                            "title": "$item.title",
+                            "leading": false,
+                            "trailing": true
+                          },
+                          "children": [
+                            {
+                              "type": "core://Column",
+                              "children": [
+                                {
+                                  "type": "core://Conditional",
+                                  "value": "$item.kind",
+                                  "equals": "counter",
+                                  "content": {
+                                    "type": "core://Use",
+                                    "component": "core:muted_text",
+                                    "args": {
+                                      "text": "$item.last_hour · $item.last_day · $item.total"
+                                    }
+                                  }
+                                },
+                                {
+                                  "type": "core://Conditional",
+                                  "value": "$item.kind",
+                                  "equals": "gauge",
+                                  "content": {
+                                    "type": "core://Use",
+                                    "component": "core:muted_text",
+                                    "args": {
+                                      "text": "$item.total now"
+                                    }
+                                  }
+                                }
+                              ]
+                            }
+                          ]
+                        }
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "type": "core://Spacer",
+          "size_dp": 24
+        }
+      ]
+    }
+  }
+}

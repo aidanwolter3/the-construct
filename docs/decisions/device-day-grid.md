@@ -24,7 +24,9 @@ Decision:
   line), and a cell per bar across the full width; a cell's items lie side by side, each `value` wide out of `scale_min`
   (or the cell's total), a hatched one a dashed outline. A tap with `field` sets `<row>/<bar>`. It is drawn by
   the shared renderer, so every client has it with one build; older apps keep the newest layout they can draw.
-- **The `devices` feed's `monitor:device_cells`**: a row per device seen in the 14 days (by name), a cell per day.
+- **The `devices` feed's `monitor:device_cells`**: a row per device seen in the 14 days (by name), a cell per day,
+  from the first day any device was seen (`days_text` on the summary says how many: an empty fortnight before
+  that says nothing).
   A day's builds share its 24 hours by when the device first ran each: the first from the day's start, the last
   to its end; a build it ran for a moment still shows, an hour wide. A day it wasn't seen is one dashed
   `chart_other` part. Today's cell is the day so far the same way, dashed when the device hasn't pinged today.
@@ -38,11 +40,16 @@ Decision:
   a dashed vertical line down the whole grid, from the first row's label to the last row's cells, at a moment in
   its column (one layer over the rows, laid out as the cells are). The feed's `monitor:releases` are the server
   builds the pod ran (`server_builds`), at the moment the pod first ran each, coloured as the build, so a line
-  shows where devices could switch to that colour. Only releases a device ran in the days shown, and the
-  server's own build, are shown: staging releases on every merge, and the rest would each take a line, a legend
-  row and a colour. That is when the pod first saw the deploy (its first request
+  shows where devices could switch to that colour. Only the builds devices run now and the server's own get a
+  colour, a legend row and a release line (one per device at most, plus the latest); a build devices have moved
+  on from is grey (`chart_other`) where it shows on a past day, under one "Older builds" legend row. Staging
+  releases on every merge, and a colour for each would be noise. That is when the pod first saw the deploy (its first request
   after it), not the deploy itself.
-- **Server health 0003** draws the grid, filtered by the kind chips, and a tap shows that device's day.
+- **Series that stay apart**: with only the current builds coloured, the usual set is the server's (blue), the
+  newest behind it (orange) and one ahead of it, which was red, too close to that orange to tell apart. A build
+  ahead is now aqua (`chart_3`), and the builds behind take, newest first, orange, magenta, violet, yellow, green
+  and red, so the first few, the ones shown, stay far apart. The theme's palette is unchanged.
+- **Server health 0003** (0004 with the real day count in its caption) draws the grid, filtered by the kind chips, and a tap shows that device's day.
 
 Limits: days recorded before this show one build all day. A device's first build of a day colours the day from
 midnight, though it may have first pinged later. Builds are told apart by colour only from the six newest behind
