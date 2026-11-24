@@ -1699,7 +1699,7 @@ mod web {
             ..HostConfig::default()
         })
         .await;
-        env.create("cook").await;
+        let cook = env.create("cook").await;
         let key = mcp_key(&env, "cook").await;
         let def = tool(&env, &key, "define_collection", json!({ "name": "recipes", "fields": [
             { "name": "title", "type": "text" }, { "name": "notes", "type": "text", "optional": true },
@@ -1833,6 +1833,26 @@ mod web {
                 .status(),
             StatusCode::NOT_FOUND
         );
+        // Visitors have a limit of their own: using it up leaves the
+        // owner's devices theirs.
+        let named = "https%3A%2F%2Fimg.example%2Fsoup.png";
+        for _ in 0..server::host::web::IMAGES_PER_MINUTE {
+            assert_ne!(
+                img(named).await.unwrap().status(),
+                StatusCode::TOO_MANY_REQUESTS
+            );
+        }
+        assert_eq!(
+            img(named).await.unwrap().status(),
+            StatusCode::TOO_MANY_REQUESTS
+        );
+        let own = client()
+            .get(env.url("/v1/image?url=http%3A%2F%2F127.0.0.1%2Fa.png"))
+            .bearer_auth(&cook)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(own.status(), StatusCode::BAD_REQUEST);
         // An unknown or malformed link is nothing.
         let unknown = client()
             .get(env.url("/s/pub-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/view"))
