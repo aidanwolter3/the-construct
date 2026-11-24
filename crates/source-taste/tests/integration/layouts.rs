@@ -105,3 +105,51 @@ fn the_deck_has_no_buttons_and_does_not_scroll() {
         "the phone card's text block has no fixed height"
     );
 }
+
+fn newest(app: &str) -> serde_json::Value {
+    let f = FILES
+        .iter()
+        .filter(|f| f.app_id == app)
+        .max_by_key(|f| f.name)
+        .unwrap();
+    serde_json::from_str(f.text).unwrap()
+}
+
+#[test]
+fn a_taste_opens_a_grid_of_its_pieces() {
+    let page = newest("taste");
+    let screens = page["layout"]["screens"].as_array().unwrap();
+    let taste = screens.iter().find(|s| s["id"] == "taste").unwrap();
+    assert!(
+        taste
+            .to_string()
+            .contains("\"target_uri\":\"taste://tastes/$item.n\""),
+        "a taste card doesn't open its taste"
+    );
+    let one = screens
+        .iter()
+        .find(|s| s["route"] == "taste://tastes/{n}")
+        .expect("a screen for one taste");
+    assert_eq!(one["data"], "/v1/taste/screens/one-taste?n=$route.n");
+    let grid = one.to_string();
+    assert!(grid.contains("\"query_key\":\"taste:one-taste:$route.n\""));
+    assert!(grid.contains("\"min_column_dp\":150"), "not a grid");
+    assert!(
+        grid.contains("\"layout\":\"taste_item\""),
+        "a piece doesn't open the sheet"
+    );
+}
+
+#[test]
+fn the_piece_sheet_shows_a_big_photo() {
+    let sheet = newest("taste_item");
+    let text = sheet.to_string();
+    assert!(
+        text.contains("\"type\":\"core://Carousel\""),
+        "no photo carousel"
+    );
+    assert!(text.contains("\"tap_paging\":true"));
+    assert!(text.contains("\"query_key\":\"taste:sheet:piece\""));
+    assert!(text.contains("\"items\":\"$item.photos\""));
+    assert!(text.contains("${taste://items/$route.key#description}"));
+}

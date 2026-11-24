@@ -470,6 +470,7 @@ fn taste_bundles() {
         let item = bundle::with_why(std::slice::from_ref(&s["item"]), &kept).remove(0);
         // As the pod answers: the similar pieces again, for the piece's sheet.
         bundle::put_sheet_similar(&mut b, &key, &list(&s["similar"]));
+        bundle::put_sheet_piece(&mut b, &item);
         bundle::put_item(&mut b, &item);
         screens.insert(
             format!("/v1/taste/screens/item?key={key}"),
@@ -510,6 +511,33 @@ fn taste_bundles() {
         "/v1/taste/screens/taste".into(),
         serde_json::to_value(&taste).unwrap(),
     );
+    // Each taste to browse, as the service answers GET /api/taste/<n>: its
+    // likes, then the feed's pieces as the nearest ones not judged yet.
+    for (n, t) in data["taste"]["tastes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .enumerate()
+    {
+        let mut v = t.clone();
+        let liked: Vec<&Value> = t["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|i| &i["id"])
+            .collect();
+        let more: Vec<Value> = list(&data["feed"])
+            .into_iter()
+            .filter(|i| !liked.contains(&&i["id"]))
+            .collect();
+        v["more"] = Value::Array(more);
+        let mut b = protocol::DataBundle::default();
+        bundle::one_taste(&mut b, n, &v);
+        screens.insert(
+            format!("/v1/taste/screens/one-taste?n={n}"),
+            serde_json::to_value(&b).unwrap(),
+        );
+    }
     for (area, tiles) in data["map"].as_object().unwrap() {
         let mut m = protocol::DataBundle::default();
         bundle::map(&mut m, area, tiles);

@@ -1971,11 +1971,21 @@
                         "content": {
                           "children": [
                             {
+                              "align": "Center",
                               "children": [
                                 {
-                                  "style": "Title",
-                                  "type": "core://Text",
-                                  "value_expr": "$item.title"
+                                  "content": {
+                                    "style": "Title",
+                                    "type": "core://Text",
+                                    "value_expr": "$item.title"
+                                  },
+                                  "content_description": "Browse $item.title",
+                                  "on_click": {
+                                    "intent": "action.navigation.open",
+                                    "presentation": "Push",
+                                    "target_uri": "taste://tastes/$item.n"
+                                  },
+                                  "type": "core://Tappable"
                                 },
                                 {
                                   "type": "core://Spacer"
@@ -1988,6 +1998,17 @@
                                   },
                                   "content_color": "${local://theme#muted_text}",
                                   "type": "core://Box"
+                                },
+                                {
+                                  "label": "Browse",
+                                  "on_click": {
+                                    "intent": "action.navigation.open",
+                                    "presentation": "Push",
+                                    "target_uri": "taste://tastes/$item.n"
+                                  },
+                                  "size": "Small",
+                                  "style": "Tonal",
+                                  "type": "core://Button"
                                 }
                               ],
                               "spacing_dp": 8,
@@ -2091,6 +2112,251 @@
         },
         "route": "taste://taste/pod",
         "title": "Your taste"
+      },
+      {
+        "data": "/v1/taste/screens/one-taste?n=$route.n",
+        "id": "one_taste",
+        "root": {
+          "background": "${local://theme#page}",
+          "content": {
+            "children": [
+              {
+                "content": {
+                  "align": "Center",
+                  "children": [
+                    {
+                      "content": {
+                        "content_description": "Back",
+                        "icon": "arrow_back",
+                        "on_click": {
+                          "intent": "action.navigation.back"
+                        },
+                        "tag": "back",
+                        "type": "core://IconButton"
+                      },
+                      "type": "core://Conditional",
+                      "value": "${local://nav#can_go_back}"
+                    },
+                    {
+                      "style": "Headline",
+                      "type": "core://Text",
+                      "value_expr": "${taste://tastes/$route.n#title}",
+                      "weight": "SemiBold"
+                    },
+                    {
+                      "content": {
+                        "size_dp": 18,
+                        "type": "core://Progress"
+                      },
+                      "type": "core://Conditional",
+                      "value": "${local://screen#loading}"
+                    },
+                    {
+                      "type": "core://Spacer"
+                    },
+                    {
+                      "content": {
+                        "size_dp": 0,
+                        "type": "core://Spacer"
+                      },
+                      "height_dp": 48,
+                      "type": "core://Box",
+                      "width_dp": 1
+                    }
+                  ],
+                  "padding_v_dp": 4,
+                  "spacing_dp": 4,
+                  "type": "core://Row"
+                },
+                "padding_h_dp": 20,
+                "padding_v_dp": 4,
+                "type": "core://Box"
+              },
+              {
+                "content": {
+                  "align": "Center",
+                  "children": [
+                    {
+                      "content": {
+                        "style": "Caption",
+                        "type": "core://Text",
+                        "value_expr": "${local://screen#error}"
+                      },
+                      "content_color": "${local://theme#error}",
+                      "type": "core://Box"
+                    },
+                    {
+                      "type": "core://Spacer"
+                    },
+                    {
+                      "label": "Try again",
+                      "on_click": {
+                        "intent": "action.data.load",
+                        "path": "/v1/taste/screens/one-taste?n=$route.n"
+                      },
+                      "size": "Small",
+                      "style": "Text",
+                      "type": "core://Button"
+                    }
+                  ],
+                  "padding_h_dp": 20,
+                  "padding_v_dp": 4,
+                  "spacing_dp": 8,
+                  "type": "core://Row"
+                },
+                "type": "core://Conditional",
+                "value": "${local://screen#error}"
+              },
+              {
+                "content": {
+                  "children": [
+                    {
+                      "style": "Body",
+                      "type": "core://Text",
+                      "value_expr": "${taste://tastes/$route.n#attributes_text}"
+                    },
+                    {
+                      "content": {
+                        "content": {
+                          "style": "Secondary",
+                          "type": "core://Text",
+                          "value_expr": "${taste://tastes/$route.n#brands_text}"
+                        },
+                        "content_color": "${local://theme#muted_text}",
+                        "type": "core://Box"
+                      },
+                      "type": "core://Conditional",
+                      "value": "${taste://tastes/$route.n#brands_text}"
+                    },
+                    {
+                      "content": {
+                        "content": {
+                          "style": "Secondary",
+                          "type": "core://Text",
+                          "value_expr": "${taste://tastes/$route.n#categories_text}"
+                        },
+                        "content_color": "${local://theme#muted_text}",
+                        "type": "core://Box"
+                      },
+                      "type": "core://Conditional",
+                      "value": "${taste://tastes/$route.n#categories_text}"
+                    },
+                    {
+                      "content": {
+                        "content": {
+                          "style": "Secondary",
+                          "type": "core://Text",
+                          "value_expr": "${taste://tastes/$route.n#count_text}: your likes first (♥), then the pieces nearest this taste."
+                        },
+                        "content_color": "${local://theme#muted_text}",
+                        "type": "core://Box"
+                      },
+                      "type": "core://Conditional",
+                      "value": "${taste://tastes/$route.n#count_text}"
+                    },
+                    {
+                      "empty_text": "Loading this taste…",
+                      "item_template": {
+                        "content": {
+                          "children": [
+                            {
+                              "aspect_ratio": 0.8,
+                              "content_description": "$item.title",
+                              "shape": "Rounded",
+                              "type": "core://Image",
+                              "url": "$item.thumb"
+                            },
+                            {
+                              "align": "Center",
+                              "children": [
+                                {
+                                  "caps": true,
+                                  "max_lines": 1,
+                                  "style": "Caption",
+                                  "type": "core://Text",
+                                  "value_expr": "$item.brand"
+                                },
+                                {
+                                  "type": "core://Spacer"
+                                },
+                                {
+                                  "content": {
+                                    "content": {
+                                      "style": "Caption",
+                                      "type": "core://Text",
+                                      "value_expr": "♥ liked"
+                                    },
+                                    "content_color": "${local://theme#accent}",
+                                    "type": "core://Box"
+                                  },
+                                  "equals": "true",
+                                  "type": "core://Conditional",
+                                  "value": "$item.liked"
+                                }
+                              ],
+                              "spacing_dp": 4,
+                              "type": "core://Row"
+                            },
+                            {
+                              "max_lines": 2,
+                              "style": "Secondary",
+                              "type": "core://Text",
+                              "value_expr": "$item.title"
+                            },
+                            {
+                              "style": "Caption",
+                              "type": "core://Text",
+                              "value_expr": "$item.price_text"
+                            }
+                          ],
+                          "spacing_dp": 4,
+                          "type": "core://Column"
+                        },
+                        "content_description": "Open $item.title",
+                        "on_click": {
+                          "intent": "action.sequence",
+                          "steps": [
+                            {
+                              "intent": "action.navigation.open",
+                              "layout": "taste_item",
+                              "params": {
+                                "key": "$item.key"
+                              },
+                              "presentation": "Sheet"
+                            },
+                            {
+                              "intent": "action.data.load",
+                              "path": "/v1/taste/screens/item?key=$item.key"
+                            }
+                          ]
+                        },
+                        "type": "core://Tappable"
+                      },
+                      "min_column_dp": 150,
+                      "query_key": "taste:one-taste:$route.n",
+                      "spacing_dp": 14,
+                      "type": "core://List"
+                    },
+                    {
+                      "size_dp": 16,
+                      "type": "core://Spacer"
+                    }
+                  ],
+                  "padding_h_dp": 20,
+                  "padding_v_dp": 8,
+                  "spacing_dp": 12,
+                  "type": "core://Column"
+                },
+                "type": "core://Scroll"
+              }
+            ],
+            "type": "core://Column"
+          },
+          "fill": true,
+          "type": "core://Box"
+        },
+        "route": "taste://tastes/{n}",
+        "title": "${taste://tastes/$route.n#title}"
       },
       {
         "data": "/v1/taste/screens/scatter",
