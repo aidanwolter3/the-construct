@@ -404,7 +404,15 @@ async fn image_of(host: Arc<Host>, named: Named, q: Option<String>) -> Response 
             json!({ "error": "not_in_this_page" }),
         );
     }
-    proxy_image(&host, &c.owner_pod, url).await
+    // Its own count: a visitor never uses up the owner's devices' images.
+    if !host.public_image_fetches.allow(&c.owner_pod) {
+        pod_core::metrics::inc(
+            pod_core::metrics::RATE_LIMITED,
+            &[("limit", "public_image")],
+        );
+        return crate::rate_limited();
+    }
+    pod_core::image_proxy::proxy(url).await
 }
 
 /// The cookie's token on a request the host may take it on: the web client
@@ -771,8 +779,9 @@ async fn image(State(host): State<Arc<Host>>, RawQuery(q): RawQuery, req: Reques
 }
 
 /// Images one pod's pages and clients may pass through the proxies per
-/// minute (`/web/image`, `/s/<link>/image` and the native clients'
-/// `/v1/image`, counted together).
+/// minute (`/web/image` and the native clients' `/v1/image`, counted
+/// together); its public links' `/s/<link>/image` have as many again, counted
+/// apart.
 pub const IMAGES_PER_MINUTE: u32 = 120;
 
 /// Whether `pod` may pass one more image through a proxy now: every attempt

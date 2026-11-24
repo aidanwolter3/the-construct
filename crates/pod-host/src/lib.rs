@@ -351,8 +351,11 @@ pub struct Host {
     temp_lock: Mutex<()>,
     /// Open event streams ([`streams::Streams`]).
     streams: Arc<streams::Streams>,
-    /// Images passed through `/web/image` and public links, per pod.
+    /// Images passed through `/web/image` and `/v1/image`, per pod.
     image_fetches: limits::RateLimit,
+    /// Images passed through a pod's public links (`/s/<link>/image`), per
+    /// pod: anyone can ask for those, so they never use up the owner's.
+    public_image_fetches: limits::RateLimit,
     /// The next wake last written to `host.db` per pod (skips rewrites).
     wakes: Mutex<HashMap<String, Option<i64>>>,
 }
@@ -383,6 +386,10 @@ impl Host {
             temp_creates: TwoLevel::temp_creates(),
             temp_lock: Mutex::new(()),
             image_fetches: limits::RateLimit::new(web::IMAGES_PER_MINUTE, Duration::from_secs(60)),
+            public_image_fetches: limits::RateLimit::new(
+                web::IMAGES_PER_MINUTE,
+                Duration::from_secs(60),
+            ),
             wakes: Mutex::new(HashMap::new()),
         };
         if let Some(name) = host.config.open_pod.clone() {
