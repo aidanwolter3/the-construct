@@ -461,12 +461,14 @@ fn numbered(items: &[(String, f32, f32)]) -> Vec<(String, usize, f32)> {
 
 impl Anchor {
     /// The anchor of a view scrolled to `offset` over `items` (entity, top,
-    /// height); `None` without items.
+    /// height): the last row starting at or above the view's top (the row
+    /// under it, or the one just past when the top is in a gap or a heading
+    /// after it). `None` without items, or while the view's top is above
+    /// every row: what is shown there (a search box, a heading) isn't a row,
+    /// and rows appearing under it (results while typing) must not scroll
+    /// it away.
     pub fn at(offset: f32, items: &[(String, f32, f32)]) -> Option<Anchor> {
-        let i = items
-            .iter()
-            .position(|(_, top, h)| top + h > offset)
-            .or(items.len().checked_sub(1))?;
+        let i = items.iter().rposition(|(_, top, _)| *top <= offset)?;
         let numbered = numbered(items);
         let (uri, nth, top) = numbered[i].clone();
         Some(Anchor {
@@ -5649,6 +5651,19 @@ mod anchor_tests {
         // Only rows before it are left: the one before keeps its place.
         assert_eq!(a.offset_in(&items(&[("a", 0.0)])), Some(50.0));
         assert_eq!(a.offset_in(&items(&[("z", 0.0)])), None);
+    }
+
+    #[test]
+    fn a_view_whose_top_is_above_every_row_keeps_its_offset() {
+        // A search box above a list, the view at its top: rows that appear
+        // under the box (results while typing) push the list down, and the
+        // view stays on the box instead of following the list.
+        let list = items(&[("a", 120.0), ("b", 160.0)]);
+        assert_eq!(Anchor::at(0.0, &list), None);
+        assert_eq!(Anchor::at(119.0, &list), None);
+        // In the gap or a heading just past a row, that row is the anchor.
+        let a = Anchor::at(205.0, &list).unwrap();
+        assert_eq!((a.uri.as_str(), a.offset_dp), ("b", 45.0));
     }
 
     #[test]
