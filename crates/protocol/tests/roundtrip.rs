@@ -73,6 +73,8 @@ fn post_template(author_tag: Option<String>, items: ListBinding) -> UiNode {
                 min_aspect: Some(0.75),
                 max_aspect: None,
                 tag: author_tag,
+                tap_paging: false,
+                on_tap: None,
             },
             UiNode::Row {
                 align: Some(Align::Start),

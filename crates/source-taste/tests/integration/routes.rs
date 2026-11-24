@@ -452,3 +452,145 @@ async fn the_map_zooms_into_tiles_and_lists_an_area() {
         assert_eq!(status, StatusCode::BAD_REQUEST, "{bad}");
     }
 }
+
+#[tokio::test]
+async fn the_scatter_is_the_whole_map_packed_and_kept() {
+    use protocol::scatter::{Mark, decode};
+    let (pod, fake, _) = signed_in().await;
+    let (status, b) = call(
+        &pod,
+        "GET",
+        "/v1/taste/screens/scatter",
+        Some("phone"),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{b}");
+    let map = &b["entities"]["taste://maps/catalog"];
+    assert_eq!(map["count"], 5);
+    assert_eq!(map["reactions_text"], "1 liked · 1 skipped");
+    assert_eq!(map["modelled"], true);
+    let points = decode(map["points"].as_str().unwrap()).unwrap();
+    assert_eq!(points.len(), 5);
+    assert_eq!(points[0].mark, Mark::Highlight);
+    assert_eq!(points[4].mark, Mark::Muted);
+    assert_eq!(points[2].mark, Mark::Plain);
+    assert!(points[3].value.is_none(), "an unknown chance stays unknown");
+    assert!((points[0].value.unwrap() - 0.9).abs() < 0.01);
+    assert!((points[1].x - 0.3).abs() < 0.001 && (points[1].y - 0.7).abs() < 0.001);
+    // Six bytes a point, base64: small enough for tens of thousands.
+    assert!(map["points"].as_str().unwrap().len() <= 5 * 8 + 4);
+
+    // Kept: asked again, the service isn't.
+    call(
+        &pod,
+        "GET",
+        "/v1/taste/screens/scatter",
+        Some("phone"),
+        None,
+    )
+    .await;
+    assert_eq!(fake.maps.load(Ordering::SeqCst), 1);
+
+    // A like marks its point at once, from the kept map.
+    let (status, _) = call(
+        &pod,
+        "POST",
+        "/v1/taste/react",
+        Some("phone"),
+        Some(json!({"id": "shop0.example:1002", "liked": true})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let (_, b) = call(
+        &pod,
+        "GET",
+        "/v1/taste/screens/scatter",
+        Some("phone"),
+        None,
+    )
+    .await;
+    let points = decode(
+        b["entities"]["taste://maps/catalog"]["points"]
+            .as_str()
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(points[2].mark, Mark::Highlight);
+    assert_eq!(
+        fake.maps.load(Ordering::SeqCst),
+        1,
+        "within a moment of a reaction, still kept"
+    );
+}
+
+#[tokio::test]
+async fn a_point_opens_its_piece() {
+    let (pod, _, _) = signed_in().await;
+    let (status, b) = call(
+        &pod,
+        "GET",
+        "/v1/taste/screens/point?n=1",
+        Some("phone"),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{b}");
+    let point = &b["entities"]["taste://points/1"];
+    assert_eq!(point["id"], "shop0.example:1001", "{point}");
+    assert!(point["title"].as_str().is_some_and(|t| !t.is_empty()));
+    assert!(b["queries"]["taste:point-similar:1"].is_array());
+    assert!(b["queries"]["taste:point-contrast:1"].is_array());
+    let (status, _) = call(
+        &pod,
+        "GET",
+        "/v1/taste/screens/point?n=99",
+        Some("phone"),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    let (status, _) = call(
+        &pod,
+        "GET",
+        "/v1/taste/screens/point?n=x",
+        Some("phone"),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn a_piece_the_service_no_longer_has_leaves_the_deck() {
+    let (pod, fake, _) = signed_in().await;
+    let app = taste_layout(&pod).await;
+    let ws = workspace(&pod, &app).await;
+    let first = ws["queries"]["taste:feed"][0].as_str().unwrap().to_owned();
+    let id = ws["entities"][&first]["id"].as_str().unwrap().to_owned();
+    fake.gone.lock().unwrap().push(id.clone());
+    let (status, body) = call(
+        &pod,
+        "POST",
+        "/v1/taste/react",
+        Some("phone"),
+        Some(json!({"id": id, "skipped": true})),
+    )
+    .await;
+    // Not an error: the device keeps the swipe instead of putting the card back.
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["gone"], true);
+    let ws = workspace(&pod, &app).await;
+    let feed: Vec<String> = ws["queries"]["taste:feed"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|u| {
+            ws["entities"][u.as_str().unwrap()]["id"]
+                .as_str()
+                .unwrap()
+                .to_owned()
+        })
+        .collect();
+    assert!(!feed.contains(&id), "{feed:?}");
+}

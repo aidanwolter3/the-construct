@@ -96,6 +96,8 @@ pub struct Runner {
     picks: Vec<std::path::PathBuf>,
     /// The swipe card `drag-card` holds, until `release`.
     held_card: Option<String>,
+    /// A scatter whose box `scatter-box` holds until `release`.
+    held_scatter: Option<String>,
 }
 
 /// A file name part from a shot's name.
@@ -127,6 +129,7 @@ impl Runner {
             switched: Vec::new(),
             picks: Vec::new(),
             held_card: None,
+            held_scatter: None,
         };
         if matches!(r.source, Source::Live { .. }) {
             let timeout = r.opts.timeout;
@@ -252,6 +255,12 @@ impl Runner {
             }
             Step::Release => {
                 self.session.release_press();
+                if let Some(id) = self.held_scatter.take() {
+                    return match self.session.scatter_select_end(&id) {
+                        Ok(o) => self.effects(o),
+                        Err(e) => done(&e),
+                    };
+                }
                 match self.held_card.take() {
                     Some(id) => match self.session.release_card(&id, 0.0) {
                         Some(o) => self.effects(o),
@@ -297,6 +306,50 @@ impl Runner {
             Step::ScrollTo(target) => {
                 self.reveal(target)?;
                 done("")
+            }
+            Step::TapPhoto { right, target } => {
+                let (x, y) = self.drag_point(target)?;
+                let Some((id, _)) = self.session.tap_pager_at(x, y) else {
+                    return Err(format!("no tap-paged core://Carousel at '{target}'"));
+                };
+                let b = self.scene()?.find_node(&id).map(|n| n.bounds).ok_or("carousel gone")?;
+                let tx = b[0] + b[2] * if *right { 0.85 } else { 0.15 };
+                let o = self.session.tap(&Target::Point(tx, b[1] + b[3] / 2.0))?;
+                // The page turns once its photo is ready.
+                self.wait_images(Duration::from_secs(10));
+                self.pump(Duration::from_millis(50));
+                self.effects(o)
+            }
+            Step::ScatterBox {
+                bounds,
+                target,
+                release,
+            } => {
+                let (id, a, v) = self.scatter(target)?;
+                let from = v.to_screen(a, bounds[0], bounds[1]);
+                let to = v.to_screen(a, bounds[2], bounds[3]);
+                self.session.scatter_select(&id, from, to);
+                if *release {
+                    match self.session.scatter_select_end(&id) {
+                        Ok(o) => self.effects(o),
+                        Err(e) => Err(e),
+                    }
+                } else {
+                    self.held_scatter = Some(id);
+                    done("held")
+                }
+            }
+            Step::ScatterZoom { factor, target } => {
+                let (id, a, _) = self.scatter(target)?;
+                self.session
+                    .scatter_zoom(&id, *factor, a[0] + a[2] / 2.0, a[1] + a[3] / 2.0);
+                done("")
+            }
+            Step::ScatterTap { at, target } => {
+                let (_, a, v) = self.scatter(target)?;
+                let (x, y) = v.to_screen(a, at[0], at[1]);
+                let o = self.session.tap(&Target::Point(x, y))?;
+                self.effects(o)
             }
             Step::Back => {
                 let o = self
@@ -589,6 +642,25 @@ impl Runner {
 
     /// Where a drag on `target` starts: a sheet's handle for
     /// `tag:sheet-handle`, else the node's centre.
+    /// The scatter at a target: its id, plot area and view.
+    fn scatter(
+        &mut self,
+        target: &str,
+    ) -> Result<(String, [f32; 4], construct_render::layout::ScatterView), String> {
+        let (x, y) = self.drag_point(target)?;
+        let id = self
+            .session
+            .scatter_at(x, y)
+            .ok_or_else(|| format!("no core://Scatter at '{target}'"))?;
+        let rect = self
+            .scene()?
+            .find_node(&id)
+            .map(|n| n.bounds)
+            .ok_or("scatter gone")?;
+        let a = construct_render::layout::ScatterView::area(rect);
+        Ok((id.clone(), a, self.session.scatter_view(&id)))
+    }
+
     fn drag_point(&mut self, target: &str) -> Result<(f32, f32), String> {
         if target == "tag:sheet-handle" {
             let vp = self.session.viewport;

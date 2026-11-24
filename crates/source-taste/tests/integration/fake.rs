@@ -34,6 +34,32 @@ pub struct Fake {
     pub down: AtomicBool,
     /// The box of each map request.
     pub boxes: Mutex<Vec<Box4>>,
+    /// How many times the whole map was asked for.
+    pub maps: AtomicUsize,
+    /// Pieces the service no longer has: a reaction to one answers 404.
+    pub gone: Mutex<Vec<String>>,
+}
+
+/// The whole map: five made-up pieces of page 0 along a diagonal, the
+/// first liked, the last skipped.
+async fn map(State(f): State<Arc<Fake>>, headers: HeaderMap) -> Response {
+    if let Err(r) = check(&f, &headers) {
+        return r;
+    }
+    f.maps.fetch_add(1, Ordering::SeqCst);
+    let ids: Vec<String> = (0..5)
+        .map(|n| format!("shop0.example:{}", 1000 + n))
+        .collect();
+    Json(json!({
+        "ids": ids,
+        "xy": (0..5).map(|n| [0.1 + 0.2 * n as f64, 0.9 - 0.2 * n as f64]).collect::<Vec<_>>(),
+        "cluster": [0, 0, 1, 1, 2],
+        "thumb": (0..5).map(|n| format!("https://cdn.shop0.example/files/coat-{n}.jpg")).collect::<Vec<_>>(),
+        "liked": [0],
+        "skipped": [4],
+        "p": [0.9, 0.7, 0.5, null, 0.1],
+    }))
+    .into_response()
 }
 
 /// Made-up product `n` of page `page`.
@@ -168,6 +194,16 @@ async fn event(
     if let Err(r) = check(&f, &headers) {
         return r;
     }
+    if body["id"]
+        .as_str()
+        .is_some_and(|id| f.gone.lock().unwrap().iter().any(|g| g == id))
+    {
+        return (
+            axum::http::StatusCode::NOT_FOUND,
+            Json(json!({"detail": "no such item"})),
+        )
+            .into_response();
+    }
     let mut events = f.events.lock().unwrap();
     events.push(body);
     let likes = events.iter().filter(|e| e["kind"] == "like").count();
@@ -267,6 +303,7 @@ pub async fn serve(fake: Arc<Fake>) -> String {
         .route("/api/likes", get(likes))
         .route("/api/taste", get(taste))
         .route("/api/taste/summary", post(summary))
+        .route("/api/map", get(map))
         .route("/api/map/tiles", get(map_tiles))
         .route("/api/map/items", get(map_items))
         .with_state(fake);

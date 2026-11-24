@@ -335,9 +335,10 @@ fn server_health_shows_checks_and_devices_and_says_when_monitoring_is_off() {
 }
 
 /// The `taste` source's core layout over made-up answers of a taste service:
-/// a deck of one piece at a time (its photo tapped for the next, its
-/// description under it without scrolling, swiped off), a piece's screen,
-/// the taste map zoomed into and an area's pieces, and the taste page.
+/// a deck of one piece at a time (its photos turned by taps on either side,
+/// its description under it without scrolling, swiped off), a piece's
+/// screen, the taste map as a scatter (zoomed, a dot opened, a box selected)
+/// and as a grid, and the taste page.
 #[test]
 fn taste_deals_a_deck_maps_the_taste_and_shows_the_tastes() {
     std::thread::Builder::new()
@@ -346,31 +347,57 @@ fn taste_deals_a_deck_maps_the_taste_and_shows_the_tastes() {
             let (mut runner, results) = run(
                 "taste",
                 "assert-text Waxed Chore Coat in Olive; assert-text On the edge; \
-                 assert-text 1 / 3; assert-text blanket lining",
+                 assert-text Photo 1 of 3; assert-text blanket lining",
                 &out_dir("taste"),
             );
             assert_ok(&results);
             // The description and the buttons are on the phone's screen as
             // it opens: no scrolling to read them.
             let scene = runner.session.scene().unwrap();
-            let like = scene.find_text("Like").unwrap().bounds;
+            let like = scene
+                .semantics
+                .iter()
+                .find(|n| n.text_content.as_deref() == Some("Like Waxed Chore Coat in Olive"))
+                .expect("a Like button")
+                .bounds;
             assert!(like[1] + like[3] <= 844.0, "Like is on screen: {like:?}");
-            let results = runner.run(&construct_sim::script::parse(
-                "click Next photo of Waxed Chore Coat in Olive; assert-text 2 / 3; \
-                 click Next photo of Waxed Chore Coat in Olive; assert-text 3 / 3; \
-                 click Next photo of Waxed Chore Coat in Olive; assert-text 1 / 3; \
+            // The photo's page bars lie inside the photo.
+            for n in scene.semantics.iter().filter(|n| n.node_type == "dots") {
+                let frame = scene.find_node(n.id.strip_prefix("dots:").unwrap()).unwrap().bounds;
+                let b = n.bounds;
+                // Each bar drawn is inside it too (3 points tall, at its top).
+                for d in &scene.draws {
+                    if let construct_render::scene::Draw::Quad(q) = d
+                        && (q.rect[3] - 3.0).abs() < 0.01
+                        && (q.rect[1] - (frame[1] + 10.0)).abs() < 0.01
+                        && q.rect[0] >= frame[0] - 1.0
+                        && q.rect[0] < frame[0] + frame[2]
+                    {
+                        let r = q.rect;
+                        assert!(r[0] >= frame[0] && r[0] + r[2] <= frame[0] + frame[2], "bar {r:?} in {frame:?}");
+                    }
+                }
+                assert!(b[0] >= frame[0] - 0.5 && b[0] + b[2] <= frame[0] + frame[2] + 0.5, "bars {b:?} in {frame:?}");
+            }
+            const MAP: &str = "Map of 2,400 pieces, tap a dot to open it";
+            let results = runner.run(&construct_sim::script::parse(&format!(
+                "tap-photo right Photo 1 of Waxed Chore Coat in Olive; assert-text Photo 2 of 3; \
+                 tap-photo right Photo 2 of Waxed Chore Coat in Olive; assert-text Photo 3 of 3; \
+                 tap-photo right Photo 3 of Waxed Chore Coat in Olive; assert-text Photo 1 of 3; \
+                 tap-photo left Photo 1 of Waxed Chore Coat in Olive; assert-text Photo 3 of 3; \
                  click Details of Waxed Chore Coat in Olive; assert-text Buy at shop0.example; \
                  scroll-to Opposite; assert-text Canvas Work Jacket; back; \
                  swipe-right Waxed Chore Coat in Olive by Fernhill Supply: swipe right to like, left to skip; \
                  assert-no-text Waxed Chore Coat in Olive by; assert-text Loose Pleated Trousers; \
                  swipe-left Loose Pleated Trousers by Northgate Workshop: swipe right to like, left to skip; \
                  assert-no-text Loose Pleated Trousers by; \
-                 click Map; assert-text 10,533 pieces; click 412 pieces, like Waxed Chore Coat in Olive; \
-                 assert-text Zoomed in ×4; click See the pieces here; assert-text Pieces here; \
-                 back; back; back; click Taste; \
+                 click Map; assert-text 2,400 pieces; scatter-zoom 3 {MAP}; \
+                 scatter-tap 0.5 0.5 {MAP}; assert-text Buy at shop0.example; back; \
+                 click Select an area; scatter-select 0.2 0.2 0.45 0.45 {MAP}; assert-text Pieces here; \
+                 back; click Grid view; assert-text 10,533 pieces; back; back; click Taste; \
                  assert-text rugged workwear · waxed cotton · olive green · utilitarian; \
                  assert-text Written at 14 likes; shot taste; back; mode dark; shot dark",
-            )
+            ))
             .unwrap());
             assert_ok(&results);
         })

@@ -56,6 +56,9 @@ pub const REQUEST_TIMEOUT: Duration = Duration::from_secs(20);
 pub const SUMMARY_TIMEOUT: Duration = Duration::from_secs(120);
 /// The most the pod reads of one answer.
 pub const MAX_BODY: usize = 4 * 1024 * 1024;
+/// The most the pod reads of the whole map (every item's place: tens of
+/// thousands of items, several megabytes).
+pub const MAX_MAP_BODY: usize = 24 * 1024 * 1024;
 const MAX_ERROR_BODY: usize = 16 * 1024;
 
 /// The HTTP client. It follows no redirects: the token goes to the service
@@ -129,6 +132,13 @@ async fn json_capped(resp: OutboundResponse, max: usize) -> Result<Value, ApiErr
 }
 
 async fn answer(resp: Result<OutboundResponse, OutboundError>) -> Result<Value, ApiError> {
+    answer_capped(resp, MAX_BODY).await
+}
+
+async fn answer_capped(
+    resp: Result<OutboundResponse, OutboundError>,
+    max: usize,
+) -> Result<Value, ApiError> {
     let resp = resp.map_err(|e| ApiError::Unreachable(short(&e)))?;
     let status = resp.status().as_u16();
     if status == 401 || status == 403 {
@@ -146,7 +156,7 @@ async fn answer(resp: Result<OutboundResponse, OutboundError>) -> Result<Value, 
             .unwrap_or_default();
         return Err(ApiError::Status(status, detail));
     }
-    json_capped(resp, MAX_BODY).await
+    json_capped(resp, max).await
 }
 
 /// The `items` list of an answer.
@@ -279,6 +289,78 @@ impl Bounds {
             ("y1", self.y1.to_string()),
         ]
     }
+}
+
+/// The whole map: every item's id and place (0..1, y down), the user's
+/// likes and skips (by index) and the model's like chance for each (`None`
+/// before it has enough reactions).
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct MapData {
+    pub ids: Vec<String>,
+    pub xy: Vec<[f32; 2]>,
+    pub liked: std::collections::HashSet<usize>,
+    pub skipped: std::collections::HashSet<usize>,
+    pub p: Option<Vec<f32>>,
+}
+
+impl MapData {
+    /// Reads `GET /api/map`'s answer; `None` when it isn't one.
+    pub fn from_json(v: &Value) -> Option<MapData> {
+        let ids: Vec<String> = v
+            .get("ids")?
+            .as_array()?
+            .iter()
+            .map(|i| i.as_str().map(str::to_owned))
+            .collect::<Option<_>>()?;
+        let xy: Vec<[f32; 2]> = v
+            .get("xy")?
+            .as_array()?
+            .iter()
+            .map(|p| {
+                let a = p.as_array()?;
+                Some([a.first()?.as_f64()? as f32, a.get(1)?.as_f64()? as f32])
+            })
+            .collect::<Option<_>>()?;
+        if xy.len() != ids.len() {
+            return None;
+        }
+        let rows = |k: &str| -> std::collections::HashSet<usize> {
+            v.get(k)
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .filter_map(Value::as_u64)
+                .map(|r| r as usize)
+                .filter(|r| *r < ids.len())
+                .collect()
+        };
+        let p = v.get("p").and_then(Value::as_array).and_then(|a| {
+            (a.len() == ids.len()).then(|| {
+                a.iter()
+                    .map(|x| x.as_f64().map_or(f32::NAN, |x| x as f32))
+                    .collect()
+            })
+        });
+        Some(MapData {
+            liked: rows("liked"),
+            skipped: rows("skipped"),
+            ids,
+            xy,
+            p,
+        })
+    }
+
+    /// The index of item `id`.
+    pub fn index_of(&self, id: &str) -> Option<usize> {
+        self.ids.iter().position(|i| i == id)
+    }
+}
+
+/// `GET /api/map`: the whole map ([`MapData`]).
+pub async fn map(c: &OutboundClient, s: &Service) -> Result<MapData, ApiError> {
+    let u = url(s, &["map"])?;
+    let v = answer_capped(c.get(u).bearer_auth(&s.token).send().await, MAX_MAP_BODY).await?;
+    MapData::from_json(&v).ok_or_else(|| ApiError::Unreachable("not a map".into()))
 }
 
 /// `GET /api/map/tiles`: the box cut into an `n` × `n` grid.

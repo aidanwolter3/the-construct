@@ -342,7 +342,14 @@ fn node_features(node: &UiNode, out: &mut BTreeSet<&'static str>) {
                 }
             }
         }
-        UiNode::Carousel { .. } => add(feature::CAROUSEL),
+        UiNode::Carousel { tap_paging, .. } => {
+            add(feature::CAROUSEL);
+            // A client without it would page on swipes, under a swipe card.
+            if *tap_paging {
+                add(feature::CAROUSEL_TAP_PAGING);
+            }
+        }
+        UiNode::Scatter { .. } => add(feature::SCATTER),
         UiNode::IconButton { .. } => add(feature::ICON_BUTTON),
         UiNode::Chip { .. } => add(feature::CHIP),
         UiNode::Badge { .. } => add(feature::BADGE),
@@ -842,6 +849,7 @@ mod tests {
                 "core://Carousel" => {
                     json!({"type": t, "items": "$item.m", "item_template": {"type": "core://Divider"}})
                 }
+                "core://Scatter" => json!({"type": t, "points": "$item.points"}),
                 "core://IconButton" => {
                     json!({"type": t, "icon": "send", "content_description": "x",
                                               "on_click": {"intent": "action.navigation.back"}})

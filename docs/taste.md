@@ -73,6 +73,18 @@ Opposite pieces. Your taste shows each taste's words, brands and pieces, and the
 The Map screen shows the whole map as tiles; a tile zooms in (a screen per area, Back zooms out), and See the pieces
 here lists an area's pieces.
 
+Since `layouts/taste/0003.json` (decision `scatter-and-tap-paging`, a build with features `carousel_tap_paging` and
+`scatter`; older clients keep 0002): a card's and a piece's photos page on taps (the left third back, the right
+third on, the middle opens the piece) with bars over the photo, every photo loaded up front; Skip and Like are round
+buttons. Map opens the whole catalog as a scatter (`taste://scatter/pod`, data `/v1/taste/screens/scatter`:
+`taste://maps/catalog` with its packed `points`, likes highlighted and skips muted, coloured by the model's chance),
+with a legend: pinch or scroll to zoom, drag to move, tap a dot to open its piece (`taste://points/<n>`, data
+`/v1/taste/screens/point?n=`, lists `taste:point-similar:<n>` and `taste:point-contrast:<n>`), and long-press (or
+Select an area) and drag to open the pieces in a box (`taste://area/<box>`). Grid view is the tile map. The pod keeps
+the service's whole map (`GET /api/map`) for 30 minutes, asks again 15 s after a reaction, and marks a reacted
+piece's point at once. A reaction to a piece the service no longer has (404 or 410) takes it out of the deck and
+answers `{ok: true, gone: true}`, so the card doesn't come back.
+
 Use it whole from a pod's layout, `{"type": "core://Use", "ref": "@core/taste"}` with the feed `["taste", "feed"]`,
 and link that from home; `taste:status`'s `counts_text` (12 liked · 30 skipped) makes a one-line summary there.
 
@@ -80,7 +92,8 @@ and link that from home; `taste:status`'s `counts_text` (12 liked · 30 skipped)
 
 What the source calls, each with `Authorization: Bearer <token>`: `GET /api/feed?n=`, `POST /api/event {id, kind}`,
 `GET /api/item/<id>` and its `/similar`, `/contrast` and `/steer?q=`, `GET /api/search?q=`, `GET /api/likes`,
-`GET /api/taste`, `POST /api/taste/summary`, `GET /api/map/tiles?x0=&y0=&x1=&y1=&n=` (`{bounds, n, tiles}`, each tile
+`GET /api/taste`, `POST /api/taste/summary`, `GET /api/map` (`{ids, xy, cluster, thumb, liked, skipped, p}`: every
+item's place, the liked and skipped ones by index and each one's chance or null), `GET /api/map/tiles?x0=&y0=&x1=&y1=&n=` (`{bounds, n, tiles}`, each tile
 `{i, j, x0, y0, x1, y1, count, likes, skips, p, color, item}`, row by row) and `GET /api/map/items?x0=&y0=&x1=&y1=&n=`.
 Items may carry `description`, `worn` (the first photo shows someone wearing it) and `p` (the chance the user likes
 it, or null). Everything it answers is treated as untrusted display text: cleaned,
