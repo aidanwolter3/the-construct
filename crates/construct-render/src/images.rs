@@ -306,6 +306,11 @@ impl ImageStore {
         false
     }
 
+    /// Whether a cut is being made on another thread ([`Self::prepare`]).
+    pub fn cutting(&self) -> bool {
+        !self.lock().cutting.is_empty()
+    }
+
     /// Whether some cut of `url` is ready (at any size), to stand in for
     /// one that isn't cut yet ([`ImageStore::stand_in_glyph_id`]).
     pub fn has_cut(&self, url: &str) -> bool {

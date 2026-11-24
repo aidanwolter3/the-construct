@@ -1092,9 +1092,12 @@ mod tests {
         // The deck shows a moment: its photos are cut (on other threads;
         // until then they show their placeholders, as any photo does the
         // first time).
-        for _ in 0..40 {
+        for i in 0..1000 {
             let scene = s.scene().unwrap().clone();
             drawn_images(&scene, &store);
+            if i >= 3 && !store.cutting() {
+                break;
+            }
             std::thread::sleep(std::time::Duration::from_millis(10));
         }
         let card = |s: &mut Session| {
