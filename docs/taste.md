@@ -12,7 +12,7 @@ it was served.
 The `taste` core layout opens on a form for the service's address (`https://…`) and its token (the service's
 `TASTE_TOKEN`). `POST /v1/taste/sign-in {url, token}` checks them with `GET /api/taste` and stores the token sealed.
 Settings shows the `taste` jack as plugged once signed in; unplugging it (Settings signs out there), or
-`/v1/taste/sign-out`, forgets the service and the kept feed. Temporary pods have the jack locked.
+`/v1/taste/sign-out`, forgets the service, the kept feed and the kept map; a new sign-in forgets the map too. Temporary pods have the jack locked.
 
 The address must be `https://` on a public host. For a service on this machine (development, tests), run the server
 with `CONSTRUCT_TASTE_PRIVATE_HOSTS=1`.

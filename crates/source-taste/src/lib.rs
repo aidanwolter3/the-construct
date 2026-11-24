@@ -599,6 +599,7 @@ impl Source for TasteAdapter {
                 pod.blocking(db::sign_out)
                     .await
                     .map_err(|_| "signing out of the taste service failed".to_owned())?;
+                pod.local::<MapCache>().forget();
                 pod.publish_data_all(NAME);
                 Ok(())
             }) as BoxFuture<'a, Result<(), String>>
@@ -837,6 +838,8 @@ async fn sign_in_route(State(pod): State<Pod>, headers: HeaderMap, body: Bytes) 
     {
         return e.into_response();
     }
+    // A map kept from the service (or account) signed in before is not this one's.
+    pod.local::<MapCache>().forget();
     pod.publish_data_all(NAME);
     tracing::info!(%host, "signed in to a taste service");
     Json(json!({"ok": true, "host": host})).into_response()

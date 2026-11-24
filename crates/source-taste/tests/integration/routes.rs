@@ -5,7 +5,7 @@ use std::sync::atomic::Ordering;
 use axum::http::StatusCode;
 use serde_json::json;
 
-use crate::fake::{Fake, TOKEN, call, pod, serve, signed_in, taste_layout, workspace};
+use crate::fake::{Fake, TOKEN, call, pod, serve, signed_in, taste_layout, tool, workspace};
 
 #[tokio::test]
 async fn sign_in_checks_the_service_first() {
@@ -542,6 +542,42 @@ async fn the_scatter_is_the_whole_map_packed_and_kept() {
         1,
         "within a moment of a reaction, still kept"
     );
+}
+
+#[tokio::test]
+async fn the_kept_map_is_forgotten_with_the_service() {
+    let (pod, fake, _) = signed_in().await;
+    let scatter = || {
+        call(
+            &pod,
+            "GET",
+            "/v1/taste/screens/scatter",
+            Some("phone"),
+            None,
+        )
+    };
+    scatter().await;
+    assert_eq!(fake.maps.load(Ordering::SeqCst), 1);
+    let sign_in = |url: String| {
+        call(
+            &pod,
+            "POST",
+            "/v1/taste/sign-in",
+            Some("phone"),
+            Some(json!({"url": url, "token": TOKEN})),
+        )
+    };
+    // Unplugged from Settings (or by Claude), then another service: its map.
+    tool(&pod, "unplug_jack", json!({"id": "taste"})).await;
+    let other = std::sync::Arc::new(Fake::default());
+    assert_eq!(sign_in(serve(other.clone()).await).await.0, StatusCode::OK);
+    scatter().await;
+    assert_eq!(other.maps.load(Ordering::SeqCst), 1);
+    // Signed in again over it, without signing out: the new one's too.
+    let third = std::sync::Arc::new(Fake::default());
+    assert_eq!(sign_in(serve(third.clone()).await).await.0, StatusCode::OK);
+    scatter().await;
+    assert_eq!(third.maps.load(Ordering::SeqCst), 1);
 }
 
 #[tokio::test]
