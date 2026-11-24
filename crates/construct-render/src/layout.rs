@@ -3838,8 +3838,6 @@ struct BarsSpec<'n> {
 const GRID_ROW_DP: u16 = 18;
 /// The most rows a grid draws (the first ones).
 const MAX_ROWS: usize = 200;
-/// The widest a grid's row labels get; longer ones wrap.
-const GRID_LABEL_MAX_DP: f32 = 84.0;
 
 /// A `core://Bars` chart's height without `height_dp`.
 const BARS_HEIGHT_DP: u16 = 140;
@@ -4067,7 +4065,7 @@ impl<'i> Build<'_, 'i> {
 
 impl<'i> Build<'_, 'i> {
     /// A `core://Bars` grid (feature `bars_rows`): a row per `row` value,
-    /// its label on the left, then a cell per bar, the cell's items side by
+    /// its label on a line above it, then a cell per bar, the cell's items side by
     /// side from the left, each `value` wide out of `scale_min` (or the
     /// cell's total, if more); the bars' labels under the last row. A tap
     /// on a cell sets `$form.<field>` to `<row>/<bar>`, or runs `on_click`
@@ -4144,11 +4142,6 @@ impl<'i> Build<'_, 'i> {
                     .map_or_else(|| key.clone(), |l| ctx.with_item(first, e).text(l))
             })
             .collect();
-        let label_w = row_labels
-            .iter()
-            .map(|t| self.text.measure(t, caption, None, 1.0).width.ceil() + 1.0)
-            .fold(0.0f32, f32::max)
-            .min(GRID_LABEL_MAX_DP);
         let cell_style = |h: f32| {
             let mut st = row(1, pad(0, 0), AlignItems::STRETCH);
             st.flex_grow = 1.0;
@@ -4163,25 +4156,23 @@ impl<'i> Build<'_, 'i> {
             };
             st
         };
-        let label_style = || Style {
-            size: Size {
-                width: length(label_w),
-                height: auto(),
-            },
-            flex_shrink: 0.0,
-            ..Default::default()
-        };
 
         let mut lines = Vec::new();
         for (r, ((key, items), text)) in rows.iter().zip(&row_labels).enumerate() {
+            // The row's label on its own line, its cells the full width
+            // under it, so a long label never squeezes or misaligns them.
             let label = self.text_leaf(
-                label_style(),
-                text.clone(),
+                Style::default(),
+                if text.is_empty() {
+                    " ".into()
+                } else {
+                    text.clone()
+                },
                 caption,
                 theme.on_background,
                 None,
             );
-            let mut cells = vec![label];
+            let mut cells = Vec::new();
             for (c, (bar, _)) in bars.iter().enumerate() {
                 let here: Vec<&String> = items
                     .iter()
@@ -4264,12 +4255,13 @@ impl<'i> Build<'_, 'i> {
             }
             let mut line = row(2, pad(0, 0), AlignItems::CENTER);
             line.align_self = Some(AlignSelf::STRETCH);
-            lines.push(self.push(line, cells, Paint::None, None, false));
+            let line = self.push(line, cells, Paint::None, None, false);
+            let group = column(2, pad(0, 0), AlignItems::STRETCH);
+            lines.push(self.push(group, vec![label, line], Paint::None, None, false));
         }
         // The bars' labels under the grid, a column each.
         if !rows.is_empty() {
-            let gap = self.push(label_style(), Vec::new(), Paint::None, None, false);
-            let mut labels = vec![gap];
+            let mut labels = Vec::new();
             for t in &bar_labels {
                 let mut st = column(0, pad(0, 0), AlignItems::CENTER);
                 st.flex_grow = 1.0;
@@ -4288,7 +4280,7 @@ impl<'i> Build<'_, 'i> {
             line.align_self = Some(AlignSelf::STRETCH);
             lines.push(self.push(line, labels, Paint::None, None, false));
         }
-        let mut style = column(2, pad(0, 0), AlignItems::STRETCH);
+        let mut style = column(6, pad(0, 0), AlignItems::STRETCH);
         style.align_self = Some(AlignSelf::STRETCH);
         let sem = self.sem(b, n, None, None);
         self.push(style, lines, Paint::None, Some(sem), false)

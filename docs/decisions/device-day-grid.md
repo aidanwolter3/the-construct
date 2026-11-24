@@ -20,7 +20,8 @@ Decision:
   the first and last ping on that build that day (migration `device_day_builds`; days recorded before have one
   build and no times). The `monitor` source folds a replaced device's rows per build, as before per day.
 - **A grid is a `core://Bars` with `row`** (feature `bars_rows`): items with the same `row` value make a row,
-  labelled `row_label`, and a cell per bar; a cell's items lie side by side, each `value` wide out of `scale_min`
+  labelled `row_label` on a line above it (beside it, a long name on a phone wrapped and pushed the cells out of
+  line), and a cell per bar across the full width; a cell's items lie side by side, each `value` wide out of `scale_min`
   (or the cell's total), a hatched one a dashed outline. A tap with `field` sets `<row>/<bar>`. It is drawn by
   the shared renderer, so every client has it with one build; older apps keep the newest layout they can draw.
 - **The `devices` feed's `monitor:device_cells`**: a row per device seen in the 14 days (by name), a cell per day.
