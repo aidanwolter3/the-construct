@@ -340,8 +340,8 @@ fn server_health_shows_checks_and_devices_and_says_when_monitoring_is_off() {
 
 /// The `taste` source's core layout over made-up answers of a taste service:
 /// a deck of one piece at a time (its photos turned by taps on either side,
-/// its description under it without scrolling, swiped off), a piece's
-/// screen, the taste map as a scatter (zoomed, a dot opened, a box selected)
+/// its description under it without scrolling, swiped off), a swipe up to
+/// the piece's sheet (Buy and similar pieces), the taste map as a scatter (zoomed, a dot opened, a box selected)
 /// and as a grid, and the taste page.
 #[test]
 fn taste_deals_a_deck_maps_the_taste_and_shows_the_tastes() {
@@ -389,13 +389,17 @@ fn taste_deals_a_deck_maps_the_taste_and_shows_the_tastes() {
                  tap-photo right Photo 2 of Waxed Chore Coat in Olive; assert-text Photo 3 of 3; \
                  tap-photo right Photo 3 of Waxed Chore Coat in Olive; assert-text Photo 1 of 3; \
                  tap-photo left Photo 1 of Waxed Chore Coat in Olive; assert-text Photo 3 of 3; \
-                 click Details of Waxed Chore Coat in Olive; assert-text Buy at shop0.example; \
-                 scroll-to Opposite; assert-text Canvas Work Jacket; back; \
-                 swipe-right Waxed Chore Coat in Olive by Fernhill Supply: swipe right to like, left to skip; \
+                 assert-no-text Details; assert-no-text Sign out of the taste service; \
+                 assert-no-text 14 liked; assert-text Swipe up for similar; \
+                 swipe-up Swipe up for pieces like Waxed Chore Coat in Olive; \
+                 assert-text Buy at shop0.example; assert-text Similar; assert-text Canvas Work Jacket; \
+                 assert-no-text Opposite; assert-no-text This, but; back; \
+                 swipe-right Waxed Chore Coat in Olive by Fernhill Supply: swipe right to like, left to dislike, up for similar; \
                  assert-no-text Waxed Chore Coat in Olive by; assert-text Loose Pleated Trousers; \
-                 swipe-left Loose Pleated Trousers by Northgate Workshop: swipe right to like, left to skip; \
+                 swipe-left Loose Pleated Trousers by Northgate Workshop: swipe right to like, left to dislike, up for similar; \
                  assert-no-text Loose Pleated Trousers by; \
-                 click Map; assert-text 2,400 pieces; scatter-zoom 3 {MAP}; \
+                 click Map; assert-text 2,400 pieces; assert-text disliked; assert-no-text skipped; \
+                 scatter-zoom 3 {MAP}; \
                  scatter-tap 0.5 0.5 {MAP}; assert-text Buy at shop0.example; back; \
                  click Select an area; scatter-select 0.2 0.2 0.45 0.45 {MAP}; assert-text Pieces here; \
                  back; click Grid view; assert-text 10,533 pieces; back; back; click Taste; \

@@ -408,7 +408,7 @@
       "url": "https://cdn.shop2.example/storage/carousel-3.png?v=1&width=1080"
     },
     "taste://status/pod": {
-      "counts_text": "14 liked · 31 skipped",
+      "counts_text": "14 liked · 31 disliked",
       "error": "",
       "host": "taste.example",
       "likes": 14,
@@ -676,464 +676,443 @@
                             "empty_text": "Finding more pieces…",
                             "item_template": {
                               "content": {
-                                "children": [
-                                  {
-                                    "content": {
-                                      "background": "${local://theme#card}",
-                                      "border_color": "${local://theme#card_border}",
+                                "content": {
+                                  "children": [
+                                    {
                                       "content": {
-                                        "children": [
-                                          {
-                                            "children": [
-                                              {
-                                                "content": {
-                                                  "aspect_ratio": 0.8,
-                                                  "item_template": {
+                                        "background": "${local://theme#card}",
+                                        "border_color": "${local://theme#card_border}",
+                                        "content": {
+                                          "children": [
+                                            {
+                                              "children": [
+                                                {
+                                                  "content": {
                                                     "aspect_ratio": 0.8,
-                                                    "content_description": "Photo $item.n of $item.title",
-                                                    "shape": "Rounded",
-                                                    "type": "core://Image",
-                                                    "url": "$item.url"
+                                                    "item_template": {
+                                                      "aspect_ratio": 0.8,
+                                                      "content_description": "Photo $item.n of $item.title",
+                                                      "shape": "Rounded",
+                                                      "type": "core://Image",
+                                                      "url": "$item.url"
+                                                    },
+                                                    "items": "$item.photos",
+                                                    "on_tap": {
+                                                      "intent": "action.navigation.open",
+                                                      "presentation": "Sheet",
+                                                      "target_uri": "taste://items/$item.key"
+                                                    },
+                                                    "tap_paging": true,
+                                                    "type": "core://Carousel"
                                                   },
-                                                  "items": "$item.photos",
-                                                  "on_tap": {
-                                                    "intent": "action.navigation.open",
-                                                    "presentation": "Push",
-                                                    "target_uri": "taste://items/$item.key"
-                                                  },
-                                                  "tap_paging": true,
-                                                  "type": "core://Carousel"
+                                                  "type": "core://Box",
+                                                  "width_dp": 420
                                                 },
-                                                "type": "core://Box",
-                                                "width_dp": 420
-                                              },
-                                              {
-                                                "children": [
-                                                  {
-                                                    "align": "Center",
-                                                    "children": [
-                                                      {
-                                                        "content": {
-                                                          "background": "${local://theme#accent_surface}",
+                                                {
+                                                  "children": [
+                                                    {
+                                                      "align": "Center",
+                                                      "children": [
+                                                        {
                                                           "content": {
-                                                            "style": "Caption",
-                                                            "type": "core://Text",
-                                                            "value_expr": "$item.why_text"
+                                                            "background": "${local://theme#accent_surface}",
+                                                            "content": {
+                                                              "style": "Caption",
+                                                              "type": "core://Text",
+                                                              "value_expr": "$item.why_text"
+                                                            },
+                                                            "content_color": "${local://theme#accent}",
+                                                            "corner_dp": 8,
+                                                            "padding_h_dp": 8,
+                                                            "padding_v_dp": 3,
+                                                            "type": "core://Box"
                                                           },
-                                                          "content_color": "${local://theme#accent}",
-                                                          "corner_dp": 8,
-                                                          "padding_h_dp": 8,
-                                                          "padding_v_dp": 3,
-                                                          "type": "core://Box"
+                                                          "type": "core://Conditional",
+                                                          "value": "$item.why_text"
                                                         },
-                                                        "type": "core://Conditional",
-                                                        "value": "$item.why_text"
-                                                      },
-                                                      {
-                                                        "type": "core://Spacer"
-                                                      }
-                                                    ],
-                                                    "padding_h_dp": 2,
-                                                    "spacing_dp": 8,
-                                                    "type": "core://Row"
-                                                  },
-                                                  {
-                                                    "children": [
-                                                      {
-                                                        "caps": true,
-                                                        "max_lines": 1,
-                                                        "style": "Caption",
-                                                        "type": "core://Text",
-                                                        "value_expr": "$item.brand",
-                                                        "weight": "SemiBold"
-                                                      },
-                                                      {
-                                                        "content": {
+                                                        {
+                                                          "type": "core://Spacer"
+                                                        },
+                                                        {
+                                                          "style": "Caption",
+                                                          "type": "core://Text",
+                                                          "value_expr": "⌃ Swipe up for similar"
+                                                        }
+                                                      ],
+                                                      "padding_h_dp": 2,
+                                                      "spacing_dp": 8,
+                                                      "type": "core://Row"
+                                                    },
+                                                    {
+                                                      "children": [
+                                                        {
+                                                          "caps": true,
+                                                          "max_lines": 1,
+                                                          "style": "Caption",
+                                                          "type": "core://Text",
+                                                          "value_expr": "$item.brand",
+                                                          "weight": "SemiBold"
+                                                        },
+                                                        {
                                                           "max_lines": 3,
                                                           "style": "Label",
                                                           "type": "core://Text",
                                                           "value_expr": "$item.title"
                                                         },
-                                                        "content_description": "Details of $item.title",
-                                                        "on_click": {
-                                                          "intent": "action.navigation.open",
-                                                          "presentation": "Push",
-                                                          "target_uri": "taste://items/$item.key"
-                                                        },
-                                                        "type": "core://Tappable"
-                                                      },
-                                                      {
-                                                        "children": [
-                                                          {
-                                                            "style": "Body",
-                                                            "type": "core://Text",
-                                                            "value_expr": "$item.price_text"
-                                                          },
-                                                          {
-                                                            "type": "core://Spacer"
-                                                          },
-                                                          {
-                                                            "style": "Caption",
-                                                            "type": "core://Text",
-                                                            "value_expr": "$item.chance_text"
-                                                          }
-                                                        ],
-                                                        "spacing_dp": 6,
-                                                        "type": "core://Row"
-                                                      },
-                                                      {
-                                                        "content": {
-                                                          "max_lines": 12,
-                                                          "style": "Secondary",
-                                                          "type": "core://Text",
-                                                          "value_expr": "$item.description"
-                                                        },
-                                                        "type": "core://Conditional",
-                                                        "value": "$item.description"
-                                                      }
-                                                    ],
-                                                    "padding_h_dp": 2,
-                                                    "spacing_dp": 3,
-                                                    "type": "core://Column"
-                                                  },
-                                                  {
-                                                    "size_dp": 8,
-                                                    "type": "core://Spacer"
-                                                  },
-                                                  {
-                                                    "align": "Center",
-                                                    "children": [
-                                                      {
-                                                        "type": "core://Spacer"
-                                                      },
-                                                      {
-                                                        "align": "Center",
-                                                        "background": "${local://theme#card}",
-                                                        "border_color": "${local://theme#card_border}",
-                                                        "content": {
-                                                          "content_description": "Skip $item.title",
-                                                          "icon": "close",
-                                                          "on_click": {
-                                                            "also": [
-                                                              {
-                                                                "field": "liked",
-                                                                "value_expr": "false"
-                                                              }
-                                                            ],
-                                                            "endpoint": "/v1/taste/react",
-                                                            "entity_uri": "$item.uri",
-                                                            "field": "skipped",
-                                                            "intent": "action.mutation.optimistic",
-                                                            "payload": {
-                                                              "id": "$item.id",
-                                                              "skipped": "$value"
+                                                        {
+                                                          "children": [
+                                                            {
+                                                              "style": "Body",
+                                                              "type": "core://Text",
+                                                              "value_expr": "$item.price_text"
                                                             },
-                                                            "rollback_value": false,
-                                                            "value_expr": "true"
-                                                          },
-                                                          "size_dp": 26,
-                                                          "type": "core://IconButton"
-                                                        },
-                                                        "content_color": "${local://theme#muted_text}",
-                                                        "corner_dp": 28,
-                                                        "height_dp": 56,
-                                                        "type": "core://Box",
-                                                        "width_dp": 56
-                                                      },
-                                                      {
-                                                        "label": "Details",
-                                                        "on_click": {
-                                                          "intent": "action.navigation.open",
-                                                          "presentation": "Push",
-                                                          "target_uri": "taste://items/$item.key"
-                                                        },
-                                                        "size": "Small",
-                                                        "style": "Text",
-                                                        "type": "core://Button"
-                                                      },
-                                                      {
-                                                        "align": "Center",
-                                                        "background": "${local://theme#accent}",
-                                                        "border_color": "${local://theme#accent}",
-                                                        "content": {
-                                                          "content_description": "Like $item.title",
-                                                          "icon": "favorite",
-                                                          "on_click": {
-                                                            "also": [
-                                                              {
-                                                                "field": "skipped",
-                                                                "value_expr": "false"
-                                                              }
-                                                            ],
-                                                            "endpoint": "/v1/taste/react",
-                                                            "entity_uri": "$item.uri",
-                                                            "field": "liked",
-                                                            "intent": "action.mutation.optimistic",
-                                                            "payload": {
-                                                              "id": "$item.id",
-                                                              "liked": "$value"
+                                                            {
+                                                              "type": "core://Spacer"
                                                             },
-                                                            "rollback_value": false,
-                                                            "value_expr": "true"
-                                                          },
-                                                          "size_dp": 26,
-                                                          "type": "core://IconButton"
+                                                            {
+                                                              "style": "Caption",
+                                                              "type": "core://Text",
+                                                              "value_expr": "$item.chance_text"
+                                                            }
+                                                          ],
+                                                          "spacing_dp": 6,
+                                                          "type": "core://Row"
                                                         },
-                                                        "content_color": "${local://theme#page}",
-                                                        "corner_dp": 28,
-                                                        "height_dp": 56,
-                                                        "type": "core://Box",
-                                                        "width_dp": 56
-                                                      },
-                                                      {
-                                                        "type": "core://Spacer"
-                                                      }
-                                                    ],
-                                                    "spacing_dp": 16,
-                                                    "type": "core://Row"
-                                                  }
-                                                ],
-                                                "spacing_dp": 12,
-                                                "type": "core://Column"
-                                              }
-                                            ],
-                                            "spacing_dp": 20,
-                                            "type": "core://Row"
-                                          }
-                                        ],
-                                        "spacing_dp": 8,
-                                        "type": "core://Column"
+                                                        {
+                                                          "content": {
+                                                            "max_lines": 12,
+                                                            "style": "Secondary",
+                                                            "type": "core://Text",
+                                                            "value_expr": "$item.description"
+                                                          },
+                                                          "type": "core://Conditional",
+                                                          "value": "$item.description"
+                                                        }
+                                                      ],
+                                                      "padding_h_dp": 2,
+                                                      "spacing_dp": 3,
+                                                      "type": "core://Column"
+                                                    },
+                                                    {
+                                                      "size_dp": 8,
+                                                      "type": "core://Spacer"
+                                                    },
+                                                    {
+                                                      "align": "Center",
+                                                      "children": [
+                                                        {
+                                                          "type": "core://Spacer"
+                                                        },
+                                                        {
+                                                          "align": "Center",
+                                                          "background": "${local://theme#card}",
+                                                          "border_color": "${local://theme#card_border}",
+                                                          "content": {
+                                                            "content_description": "Dislike $item.title",
+                                                            "icon": "close",
+                                                            "on_click": {
+                                                              "also": [
+                                                                {
+                                                                  "field": "liked",
+                                                                  "value_expr": "false"
+                                                                }
+                                                              ],
+                                                              "endpoint": "/v1/taste/react",
+                                                              "entity_uri": "$item.uri",
+                                                              "field": "skipped",
+                                                              "intent": "action.mutation.optimistic",
+                                                              "payload": {
+                                                                "id": "$item.id",
+                                                                "skipped": "$value"
+                                                              },
+                                                              "rollback_value": false,
+                                                              "value_expr": "true"
+                                                            },
+                                                            "size_dp": 26,
+                                                            "type": "core://IconButton"
+                                                          },
+                                                          "content_color": "${local://theme#muted_text}",
+                                                          "corner_dp": 28,
+                                                          "height_dp": 56,
+                                                          "type": "core://Box",
+                                                          "width_dp": 56
+                                                        },
+                                                        {
+                                                          "align": "Center",
+                                                          "background": "${local://theme#accent}",
+                                                          "border_color": "${local://theme#accent}",
+                                                          "content": {
+                                                            "content_description": "Like $item.title",
+                                                            "icon": "favorite",
+                                                            "on_click": {
+                                                              "also": [
+                                                                {
+                                                                  "field": "skipped",
+                                                                  "value_expr": "false"
+                                                                }
+                                                              ],
+                                                              "endpoint": "/v1/taste/react",
+                                                              "entity_uri": "$item.uri",
+                                                              "field": "liked",
+                                                              "intent": "action.mutation.optimistic",
+                                                              "payload": {
+                                                                "id": "$item.id",
+                                                                "liked": "$value"
+                                                              },
+                                                              "rollback_value": false,
+                                                              "value_expr": "true"
+                                                            },
+                                                            "size_dp": 26,
+                                                            "type": "core://IconButton"
+                                                          },
+                                                          "content_color": "${local://theme#page}",
+                                                          "corner_dp": 28,
+                                                          "height_dp": 56,
+                                                          "type": "core://Box",
+                                                          "width_dp": 56
+                                                        },
+                                                        {
+                                                          "type": "core://Spacer"
+                                                        }
+                                                      ],
+                                                      "spacing_dp": 16,
+                                                      "type": "core://Row"
+                                                    }
+                                                  ],
+                                                  "spacing_dp": 12,
+                                                  "type": "core://Column"
+                                                }
+                                              ],
+                                              "spacing_dp": 20,
+                                              "type": "core://Row"
+                                            }
+                                          ],
+                                          "spacing_dp": 8,
+                                          "type": "core://Column"
+                                        },
+                                        "corner_dp": 18,
+                                        "padding_h_dp": 12,
+                                        "padding_v_dp": 12,
+                                        "type": "core://Box"
                                       },
-                                      "corner_dp": 18,
-                                      "padding_h_dp": 12,
-                                      "padding_v_dp": 12,
-                                      "type": "core://Box"
+                                      "equals": "expanded",
+                                      "type": "core://Conditional",
+                                      "value": "${local://device#size_class}"
                                     },
-                                    "equals": "expanded",
-                                    "type": "core://Conditional",
-                                    "value": "${local://device#size_class}"
-                                  },
-                                  {
-                                    "content": {
-                                      "background": "${local://theme#card}",
-                                      "border_color": "${local://theme#card_border}",
+                                    {
                                       "content": {
-                                        "children": [
-                                          {
-                                            "aspect_ratio": 0.8,
-                                            "item_template": {
+                                        "background": "${local://theme#card}",
+                                        "border_color": "${local://theme#card_border}",
+                                        "content": {
+                                          "children": [
+                                            {
                                               "aspect_ratio": 0.8,
-                                              "content_description": "Photo $item.n of $item.title",
-                                              "shape": "Rounded",
-                                              "type": "core://Image",
-                                              "url": "$item.url"
+                                              "item_template": {
+                                                "aspect_ratio": 0.8,
+                                                "content_description": "Photo $item.n of $item.title",
+                                                "shape": "Rounded",
+                                                "type": "core://Image",
+                                                "url": "$item.url"
+                                              },
+                                              "items": "$item.photos",
+                                              "on_tap": {
+                                                "intent": "action.navigation.open",
+                                                "presentation": "Sheet",
+                                                "target_uri": "taste://items/$item.key"
+                                              },
+                                              "tap_paging": true,
+                                              "type": "core://Carousel"
                                             },
-                                            "items": "$item.photos",
-                                            "on_tap": {
-                                              "intent": "action.navigation.open",
-                                              "presentation": "Push",
-                                              "target_uri": "taste://items/$item.key"
-                                            },
-                                            "tap_paging": true,
-                                            "type": "core://Carousel"
-                                          },
-                                          {
-                                            "align": "Center",
-                                            "children": [
-                                              {
-                                                "content": {
-                                                  "background": "${local://theme#accent_surface}",
+                                            {
+                                              "align": "Center",
+                                              "children": [
+                                                {
                                                   "content": {
-                                                    "style": "Caption",
-                                                    "type": "core://Text",
-                                                    "value_expr": "$item.why_text"
+                                                    "background": "${local://theme#accent_surface}",
+                                                    "content": {
+                                                      "style": "Caption",
+                                                      "type": "core://Text",
+                                                      "value_expr": "$item.why_text"
+                                                    },
+                                                    "content_color": "${local://theme#accent}",
+                                                    "corner_dp": 8,
+                                                    "padding_h_dp": 8,
+                                                    "padding_v_dp": 3,
+                                                    "type": "core://Box"
                                                   },
-                                                  "content_color": "${local://theme#accent}",
-                                                  "corner_dp": 8,
-                                                  "padding_h_dp": 8,
-                                                  "padding_v_dp": 3,
-                                                  "type": "core://Box"
+                                                  "type": "core://Conditional",
+                                                  "value": "$item.why_text"
                                                 },
-                                                "type": "core://Conditional",
-                                                "value": "$item.why_text"
-                                              },
-                                              {
-                                                "type": "core://Spacer"
-                                              }
-                                            ],
-                                            "padding_h_dp": 2,
-                                            "spacing_dp": 8,
-                                            "type": "core://Row"
-                                          },
-                                          {
-                                            "children": [
-                                              {
-                                                "caps": true,
-                                                "max_lines": 1,
-                                                "style": "Caption",
-                                                "type": "core://Text",
-                                                "value_expr": "$item.brand",
-                                                "weight": "SemiBold"
-                                              },
-                                              {
-                                                "content": {
+                                                {
+                                                  "type": "core://Spacer"
+                                                },
+                                                {
+                                                  "style": "Caption",
+                                                  "type": "core://Text",
+                                                  "value_expr": "⌃ Swipe up for similar"
+                                                }
+                                              ],
+                                              "padding_h_dp": 2,
+                                              "spacing_dp": 8,
+                                              "type": "core://Row"
+                                            },
+                                            {
+                                              "children": [
+                                                {
+                                                  "caps": true,
+                                                  "max_lines": 1,
+                                                  "style": "Caption",
+                                                  "type": "core://Text",
+                                                  "value_expr": "$item.brand",
+                                                  "weight": "SemiBold"
+                                                },
+                                                {
                                                   "max_lines": 1,
                                                   "style": "Label",
                                                   "type": "core://Text",
                                                   "value_expr": "$item.title"
                                                 },
-                                                "content_description": "Details of $item.title",
-                                                "on_click": {
-                                                  "intent": "action.navigation.open",
-                                                  "presentation": "Push",
-                                                  "target_uri": "taste://items/$item.key"
-                                                },
-                                                "type": "core://Tappable"
-                                              },
-                                              {
-                                                "children": [
-                                                  {
-                                                    "style": "Body",
-                                                    "type": "core://Text",
-                                                    "value_expr": "$item.price_text"
-                                                  },
-                                                  {
-                                                    "type": "core://Spacer"
-                                                  },
-                                                  {
-                                                    "style": "Caption",
-                                                    "type": "core://Text",
-                                                    "value_expr": "$item.chance_text"
-                                                  }
-                                                ],
-                                                "spacing_dp": 6,
-                                                "type": "core://Row"
-                                              },
-                                              {
-                                                "content": {
-                                                  "max_lines": 3,
-                                                  "style": "Secondary",
-                                                  "type": "core://Text",
-                                                  "value_expr": "$item.description"
-                                                },
-                                                "type": "core://Conditional",
-                                                "value": "$item.description"
-                                              }
-                                            ],
-                                            "padding_h_dp": 2,
-                                            "spacing_dp": 3,
-                                            "type": "core://Column"
-                                          },
-                                          {
-                                            "align": "Center",
-                                            "children": [
-                                              {
-                                                "type": "core://Spacer"
-                                              },
-                                              {
-                                                "align": "Center",
-                                                "background": "${local://theme#card}",
-                                                "border_color": "${local://theme#card_border}",
-                                                "content": {
-                                                  "content_description": "Skip $item.title",
-                                                  "icon": "close",
-                                                  "on_click": {
-                                                    "also": [
-                                                      {
-                                                        "field": "liked",
-                                                        "value_expr": "false"
-                                                      }
-                                                    ],
-                                                    "endpoint": "/v1/taste/react",
-                                                    "entity_uri": "$item.uri",
-                                                    "field": "skipped",
-                                                    "intent": "action.mutation.optimistic",
-                                                    "payload": {
-                                                      "id": "$item.id",
-                                                      "skipped": "$value"
+                                                {
+                                                  "children": [
+                                                    {
+                                                      "style": "Body",
+                                                      "type": "core://Text",
+                                                      "value_expr": "$item.price_text"
                                                     },
-                                                    "rollback_value": false,
-                                                    "value_expr": "true"
-                                                  },
-                                                  "size_dp": 26,
-                                                  "type": "core://IconButton"
-                                                },
-                                                "content_color": "${local://theme#muted_text}",
-                                                "corner_dp": 28,
-                                                "height_dp": 56,
-                                                "type": "core://Box",
-                                                "width_dp": 56
-                                              },
-                                              {
-                                                "label": "Details",
-                                                "on_click": {
-                                                  "intent": "action.navigation.open",
-                                                  "presentation": "Push",
-                                                  "target_uri": "taste://items/$item.key"
-                                                },
-                                                "size": "Small",
-                                                "style": "Text",
-                                                "type": "core://Button"
-                                              },
-                                              {
-                                                "align": "Center",
-                                                "background": "${local://theme#accent}",
-                                                "border_color": "${local://theme#accent}",
-                                                "content": {
-                                                  "content_description": "Like $item.title",
-                                                  "icon": "favorite",
-                                                  "on_click": {
-                                                    "also": [
-                                                      {
-                                                        "field": "skipped",
-                                                        "value_expr": "false"
-                                                      }
-                                                    ],
-                                                    "endpoint": "/v1/taste/react",
-                                                    "entity_uri": "$item.uri",
-                                                    "field": "liked",
-                                                    "intent": "action.mutation.optimistic",
-                                                    "payload": {
-                                                      "id": "$item.id",
-                                                      "liked": "$value"
+                                                    {
+                                                      "type": "core://Spacer"
                                                     },
-                                                    "rollback_value": false,
-                                                    "value_expr": "true"
-                                                  },
-                                                  "size_dp": 26,
-                                                  "type": "core://IconButton"
+                                                    {
+                                                      "style": "Caption",
+                                                      "type": "core://Text",
+                                                      "value_expr": "$item.chance_text"
+                                                    }
+                                                  ],
+                                                  "spacing_dp": 6,
+                                                  "type": "core://Row"
                                                 },
-                                                "content_color": "${local://theme#page}",
-                                                "corner_dp": 28,
-                                                "height_dp": 56,
-                                                "type": "core://Box",
-                                                "width_dp": 56
-                                              },
-                                              {
-                                                "type": "core://Spacer"
-                                              }
-                                            ],
-                                            "spacing_dp": 16,
-                                            "type": "core://Row"
-                                          }
-                                        ],
-                                        "spacing_dp": 8,
-                                        "type": "core://Column"
+                                                {
+                                                  "content": {
+                                                    "max_lines": 3,
+                                                    "style": "Secondary",
+                                                    "type": "core://Text",
+                                                    "value_expr": "$item.description"
+                                                  },
+                                                  "type": "core://Conditional",
+                                                  "value": "$item.description"
+                                                }
+                                              ],
+                                              "padding_h_dp": 2,
+                                              "spacing_dp": 3,
+                                              "type": "core://Column"
+                                            },
+                                            {
+                                              "align": "Center",
+                                              "children": [
+                                                {
+                                                  "type": "core://Spacer"
+                                                },
+                                                {
+                                                  "align": "Center",
+                                                  "background": "${local://theme#card}",
+                                                  "border_color": "${local://theme#card_border}",
+                                                  "content": {
+                                                    "content_description": "Dislike $item.title",
+                                                    "icon": "close",
+                                                    "on_click": {
+                                                      "also": [
+                                                        {
+                                                          "field": "liked",
+                                                          "value_expr": "false"
+                                                        }
+                                                      ],
+                                                      "endpoint": "/v1/taste/react",
+                                                      "entity_uri": "$item.uri",
+                                                      "field": "skipped",
+                                                      "intent": "action.mutation.optimistic",
+                                                      "payload": {
+                                                        "id": "$item.id",
+                                                        "skipped": "$value"
+                                                      },
+                                                      "rollback_value": false,
+                                                      "value_expr": "true"
+                                                    },
+                                                    "size_dp": 26,
+                                                    "type": "core://IconButton"
+                                                  },
+                                                  "content_color": "${local://theme#muted_text}",
+                                                  "corner_dp": 28,
+                                                  "height_dp": 56,
+                                                  "type": "core://Box",
+                                                  "width_dp": 56
+                                                },
+                                                {
+                                                  "align": "Center",
+                                                  "background": "${local://theme#accent}",
+                                                  "border_color": "${local://theme#accent}",
+                                                  "content": {
+                                                    "content_description": "Like $item.title",
+                                                    "icon": "favorite",
+                                                    "on_click": {
+                                                      "also": [
+                                                        {
+                                                          "field": "skipped",
+                                                          "value_expr": "false"
+                                                        }
+                                                      ],
+                                                      "endpoint": "/v1/taste/react",
+                                                      "entity_uri": "$item.uri",
+                                                      "field": "liked",
+                                                      "intent": "action.mutation.optimistic",
+                                                      "payload": {
+                                                        "id": "$item.id",
+                                                        "liked": "$value"
+                                                      },
+                                                      "rollback_value": false,
+                                                      "value_expr": "true"
+                                                    },
+                                                    "size_dp": 26,
+                                                    "type": "core://IconButton"
+                                                  },
+                                                  "content_color": "${local://theme#page}",
+                                                  "corner_dp": 28,
+                                                  "height_dp": 56,
+                                                  "type": "core://Box",
+                                                  "width_dp": 56
+                                                },
+                                                {
+                                                  "type": "core://Spacer"
+                                                }
+                                              ],
+                                              "spacing_dp": 16,
+                                              "type": "core://Row"
+                                            }
+                                          ],
+                                          "spacing_dp": 8,
+                                          "type": "core://Column"
+                                        },
+                                        "corner_dp": 18,
+                                        "padding_h_dp": 10,
+                                        "padding_v_dp": 10,
+                                        "type": "core://Box"
                                       },
-                                      "corner_dp": 18,
-                                      "padding_h_dp": 10,
-                                      "padding_v_dp": 10,
-                                      "type": "core://Box"
-                                    },
-                                    "equals": "expanded",
-                                    "not": true,
-                                    "type": "core://Conditional",
-                                    "value": "${local://device#size_class}"
-                                  }
-                                ],
-                                "type": "core://Column"
+                                      "equals": "expanded",
+                                      "not": true,
+                                      "type": "core://Conditional",
+                                      "value": "${local://device#size_class}"
+                                    }
+                                  ],
+                                  "type": "core://Column"
+                                },
+                                "content_description": "Swipe up for pieces like $item.title",
+                                "on_swipe_up": {
+                                  "intent": "action.navigation.open",
+                                  "presentation": "Sheet",
+                                  "target_uri": "taste://items/$item.key"
+                                },
+                                "type": "core://Gesture"
                               },
-                              "content_description": "$item.title by $item.brand: swipe right to like, left to skip",
+                              "content_description": "$item.title by $item.brand: swipe right to like, left to dislike, up for similar",
                               "on_swipe_left": {
                                 "also": [
                                   {
@@ -1191,45 +1170,8 @@
                         "type": "core://Column"
                       },
                       {
-                        "content": {
-                          "style": "Secondary",
-                          "type": "core://Text",
-                          "value_expr": "${taste://status/pod#counts_text}"
-                        },
-                        "content_color": "${local://theme#muted_text}",
-                        "type": "core://Box"
-                      },
-                      {
                         "size_dp": 24,
                         "type": "core://Spacer"
-                      },
-                      {
-                        "children": [
-                          {
-                            "label": "Sign out of the taste service",
-                            "on_click": {
-                              "confirm_label": "Sign out",
-                              "intent": "action.confirm",
-                              "message": "The pod forgets the service's address and token, and the feed it kept. Your likes stay with the service.",
-                              "then": {
-                                "endpoint": "/v1/taste/sign-out",
-                                "entity_uri": "taste://status/pod",
-                                "field": "signed_in",
-                                "intent": "action.mutation.optimistic",
-                                "payload": {},
-                                "rollback_value": true,
-                                "value_expr": "false"
-                              },
-                              "title": "Sign out of the taste service?"
-                            },
-                            "size": "Small",
-                            "style": "Secondary",
-                            "type": "core://Button"
-                          }
-                        ],
-                        "justify": "center",
-                        "spacing_dp": 8,
-                        "type": "core://Row"
                       }
                     ],
                     "spacing_dp": 12,
@@ -1357,53 +1299,43 @@
                 "content": {
                   "children": [
                     {
-                      "aspect_ratio": 0.8,
-                      "item_template": {
-                        "aspect_ratio": 0.8,
-                        "content_description": "Photo $item.n of $item.title",
-                        "shape": "Rounded",
-                        "type": "core://Image",
-                        "url": "$item.url"
-                      },
-                      "items": "$item.photos",
-                      "tap_paging": true,
-                      "type": "core://Carousel"
-                    },
-                    {
+                      "align": "Center",
                       "children": [
                         {
-                          "content": {
-                            "caps": true,
-                            "style": "Caption",
-                            "type": "core://Text",
-                            "value_expr": "$item.category",
-                            "weight": "SemiBold"
-                          },
-                          "content_color": "${local://theme#accent}",
-                          "type": "core://Box"
+                          "content_description": "$item.title",
+                          "shape": "Rounded",
+                          "size_dp": 88,
+                          "type": "core://Image",
+                          "url": "$item.thumb"
                         },
                         {
-                          "style": "Headline",
-                          "type": "core://Text",
-                          "value_expr": "$item.title"
-                        },
-                        {
-                          "style": "Title",
-                          "type": "core://Text",
-                          "value_expr": "$item.price_text"
-                        },
-                        {
-                          "content": {
-                            "style": "Body",
-                            "type": "core://Text",
-                            "value_expr": "$item.description"
-                          },
-                          "type": "core://Conditional",
-                          "value": "$item.description"
+                          "children": [
+                            {
+                              "caps": true,
+                              "max_lines": 1,
+                              "style": "Caption",
+                              "type": "core://Text",
+                              "value_expr": "$item.brand",
+                              "weight": "SemiBold"
+                            },
+                            {
+                              "max_lines": 2,
+                              "style": "Title",
+                              "type": "core://Text",
+                              "value_expr": "$item.title"
+                            },
+                            {
+                              "style": "Body",
+                              "type": "core://Text",
+                              "value_expr": "$item.price_text"
+                            }
+                          ],
+                          "spacing_dp": 2,
+                          "type": "core://Column"
                         }
                       ],
-                      "spacing_dp": 4,
-                      "type": "core://Column"
+                      "spacing_dp": 12,
+                      "type": "core://Row"
                     },
                     {
                       "children": [
@@ -1481,7 +1413,7 @@
                           "value": "$item.liked"
                         },
                         {
-                          "label": "Skip",
+                          "label": "Dislike",
                           "on_click": {
                             "also": [
                               {
@@ -1507,123 +1439,6 @@
                       ],
                       "spacing_dp": 6,
                       "type": "core://Row"
-                    },
-                    {
-                      "children": [
-                        {
-                          "size_dp": 14,
-                          "type": "core://Spacer"
-                        },
-                        {
-                          "content": {
-                            "style": "Label",
-                            "type": "core://Text",
-                            "value_expr": "This, but…"
-                          },
-                          "content_color": "${local://theme#muted_text}",
-                          "padding_h_dp": 4,
-                          "type": "core://Box"
-                        },
-                        {
-                          "size_dp": 8,
-                          "type": "core://Spacer"
-                        },
-                        {
-                          "children": [
-                            {
-                              "field": "steer_q",
-                              "max_length": 200,
-                              "on_submit": {
-                                "intent": "action.data.load",
-                                "path": "/v1/taste/screens/steer?key=$route.key&q=$form.steer_q"
-                              },
-                              "placeholder": "more relaxed, in brown suede…",
-                              "type": "core://TextField"
-                            },
-                            {
-                              "children": [
-                                {
-                                  "label": "Relaxed",
-                                  "on_click": {
-                                    "intent": "action.data.load",
-                                    "path": "/v1/taste/screens/steer?key=$route.key&q=more relaxed"
-                                  },
-                                  "size": "Small",
-                                  "style": "Tonal",
-                                  "type": "core://Button"
-                                },
-                                {
-                                  "label": "Dressier",
-                                  "on_click": {
-                                    "intent": "action.data.load",
-                                    "path": "/v1/taste/screens/steer?key=$route.key&q=dressier"
-                                  },
-                                  "size": "Small",
-                                  "style": "Tonal",
-                                  "type": "core://Button"
-                                },
-                                {
-                                  "label": "Rugged",
-                                  "on_click": {
-                                    "intent": "action.data.load",
-                                    "path": "/v1/taste/screens/steer?key=$route.key&q=more rugged"
-                                  },
-                                  "size": "Small",
-                                  "style": "Tonal",
-                                  "type": "core://Button"
-                                }
-                              ],
-                              "spacing_dp": 8,
-                              "type": "core://Row"
-                            },
-                            {
-                              "columns": 3,
-                              "empty_text": "Type how it should change, or pick one above.",
-                              "item_template": {
-                                "content": {
-                                  "children": [
-                                    {
-                                      "aspect_ratio": 0.8,
-                                      "content_description": "$item.title",
-                                      "shape": "Rounded",
-                                      "type": "core://Image",
-                                      "url": "$item.thumb"
-                                    },
-                                    {
-                                      "caps": true,
-                                      "max_lines": 1,
-                                      "style": "Caption",
-                                      "type": "core://Text",
-                                      "value_expr": "$item.brand"
-                                    },
-                                    {
-                                      "max_lines": 2,
-                                      "style": "Secondary",
-                                      "type": "core://Text",
-                                      "value_expr": "$item.title"
-                                    }
-                                  ],
-                                  "spacing_dp": 4,
-                                  "type": "core://Column"
-                                },
-                                "content_description": "Open $item.title",
-                                "on_click": {
-                                  "intent": "action.navigation.open",
-                                  "presentation": "Push",
-                                  "target_uri": "taste://items/$item.key"
-                                },
-                                "type": "core://Tappable"
-                              },
-                              "query_key": "taste:steer:$route.key",
-                              "spacing_dp": 12,
-                              "type": "core://List"
-                            }
-                          ],
-                          "spacing_dp": 10,
-                          "type": "core://Column"
-                        }
-                      ],
-                      "type": "core://Column"
                     },
                     {
                       "children": [
@@ -1678,90 +1493,12 @@
                             "content_description": "Open $item.title",
                             "on_click": {
                               "intent": "action.navigation.open",
-                              "presentation": "Push",
+                              "presentation": "Sheet",
                               "target_uri": "taste://items/$item.key"
                             },
                             "type": "core://Tappable"
                           },
                           "query_key": "taste:similar:$route.key",
-                          "spacing_dp": 12,
-                          "type": "core://List"
-                        }
-                      ],
-                      "type": "core://Column"
-                    },
-                    {
-                      "children": [
-                        {
-                          "size_dp": 14,
-                          "type": "core://Spacer"
-                        },
-                        {
-                          "content": {
-                            "style": "Label",
-                            "type": "core://Text",
-                            "value_expr": "Opposite"
-                          },
-                          "content_color": "${local://theme#muted_text}",
-                          "padding_h_dp": 4,
-                          "type": "core://Box"
-                        },
-                        {
-                          "size_dp": 8,
-                          "type": "core://Spacer"
-                        },
-                        {
-                          "content": {
-                            "style": "Secondary",
-                            "type": "core://Text",
-                            "value_expr": "Other $item.category pieces, as unlike this one as the catalog has."
-                          },
-                          "content_color": "${local://theme#muted_text}",
-                          "type": "core://Box"
-                        },
-                        {
-                          "size_dp": 8,
-                          "type": "core://Spacer"
-                        },
-                        {
-                          "columns": 3,
-                          "empty_text": "Nothing to set against it.",
-                          "item_template": {
-                            "content": {
-                              "children": [
-                                {
-                                  "aspect_ratio": 0.8,
-                                  "content_description": "$item.title",
-                                  "shape": "Rounded",
-                                  "type": "core://Image",
-                                  "url": "$item.thumb"
-                                },
-                                {
-                                  "caps": true,
-                                  "max_lines": 1,
-                                  "style": "Caption",
-                                  "type": "core://Text",
-                                  "value_expr": "$item.brand"
-                                },
-                                {
-                                  "max_lines": 2,
-                                  "style": "Secondary",
-                                  "type": "core://Text",
-                                  "value_expr": "$item.title"
-                                }
-                              ],
-                              "spacing_dp": 4,
-                              "type": "core://Column"
-                            },
-                            "content_description": "Open $item.title",
-                            "on_click": {
-                              "intent": "action.navigation.open",
-                              "presentation": "Push",
-                              "target_uri": "taste://items/$item.key"
-                            },
-                            "type": "core://Tappable"
-                          },
-                          "query_key": "taste:contrast:$route.key",
                           "spacing_dp": 12,
                           "type": "core://List"
                         }
@@ -1888,53 +1625,43 @@
                 "content": {
                   "children": [
                     {
-                      "aspect_ratio": 0.8,
-                      "item_template": {
-                        "aspect_ratio": 0.8,
-                        "content_description": "Photo $item.n of $item.title",
-                        "shape": "Rounded",
-                        "type": "core://Image",
-                        "url": "$item.url"
-                      },
-                      "items": "$item.photos",
-                      "tap_paging": true,
-                      "type": "core://Carousel"
-                    },
-                    {
+                      "align": "Center",
                       "children": [
                         {
-                          "content": {
-                            "caps": true,
-                            "style": "Caption",
-                            "type": "core://Text",
-                            "value_expr": "$item.category",
-                            "weight": "SemiBold"
-                          },
-                          "content_color": "${local://theme#accent}",
-                          "type": "core://Box"
+                          "content_description": "$item.title",
+                          "shape": "Rounded",
+                          "size_dp": 88,
+                          "type": "core://Image",
+                          "url": "$item.thumb"
                         },
                         {
-                          "style": "Headline",
-                          "type": "core://Text",
-                          "value_expr": "$item.title"
-                        },
-                        {
-                          "style": "Title",
-                          "type": "core://Text",
-                          "value_expr": "$item.price_text"
-                        },
-                        {
-                          "content": {
-                            "style": "Body",
-                            "type": "core://Text",
-                            "value_expr": "$item.description"
-                          },
-                          "type": "core://Conditional",
-                          "value": "$item.description"
+                          "children": [
+                            {
+                              "caps": true,
+                              "max_lines": 1,
+                              "style": "Caption",
+                              "type": "core://Text",
+                              "value_expr": "$item.brand",
+                              "weight": "SemiBold"
+                            },
+                            {
+                              "max_lines": 2,
+                              "style": "Title",
+                              "type": "core://Text",
+                              "value_expr": "$item.title"
+                            },
+                            {
+                              "style": "Body",
+                              "type": "core://Text",
+                              "value_expr": "$item.price_text"
+                            }
+                          ],
+                          "spacing_dp": 2,
+                          "type": "core://Column"
                         }
                       ],
-                      "spacing_dp": 4,
-                      "type": "core://Column"
+                      "spacing_dp": 12,
+                      "type": "core://Row"
                     },
                     {
                       "children": [
@@ -2012,7 +1739,7 @@
                           "value": "$item.liked"
                         },
                         {
-                          "label": "Skip",
+                          "label": "Dislike",
                           "on_click": {
                             "also": [
                               {
@@ -2038,123 +1765,6 @@
                       ],
                       "spacing_dp": 6,
                       "type": "core://Row"
-                    },
-                    {
-                      "children": [
-                        {
-                          "size_dp": 14,
-                          "type": "core://Spacer"
-                        },
-                        {
-                          "content": {
-                            "style": "Label",
-                            "type": "core://Text",
-                            "value_expr": "This, but…"
-                          },
-                          "content_color": "${local://theme#muted_text}",
-                          "padding_h_dp": 4,
-                          "type": "core://Box"
-                        },
-                        {
-                          "size_dp": 8,
-                          "type": "core://Spacer"
-                        },
-                        {
-                          "children": [
-                            {
-                              "field": "steer_q",
-                              "max_length": 200,
-                              "on_submit": {
-                                "intent": "action.data.load",
-                                "path": "/v1/taste/screens/steer?key=$item.key&q=$form.steer_q"
-                              },
-                              "placeholder": "more relaxed, in brown suede…",
-                              "type": "core://TextField"
-                            },
-                            {
-                              "children": [
-                                {
-                                  "label": "Relaxed",
-                                  "on_click": {
-                                    "intent": "action.data.load",
-                                    "path": "/v1/taste/screens/steer?key=$item.key&q=more relaxed"
-                                  },
-                                  "size": "Small",
-                                  "style": "Tonal",
-                                  "type": "core://Button"
-                                },
-                                {
-                                  "label": "Dressier",
-                                  "on_click": {
-                                    "intent": "action.data.load",
-                                    "path": "/v1/taste/screens/steer?key=$item.key&q=dressier"
-                                  },
-                                  "size": "Small",
-                                  "style": "Tonal",
-                                  "type": "core://Button"
-                                },
-                                {
-                                  "label": "Rugged",
-                                  "on_click": {
-                                    "intent": "action.data.load",
-                                    "path": "/v1/taste/screens/steer?key=$item.key&q=more rugged"
-                                  },
-                                  "size": "Small",
-                                  "style": "Tonal",
-                                  "type": "core://Button"
-                                }
-                              ],
-                              "spacing_dp": 8,
-                              "type": "core://Row"
-                            },
-                            {
-                              "columns": 3,
-                              "empty_text": "Type how it should change, or pick one above.",
-                              "item_template": {
-                                "content": {
-                                  "children": [
-                                    {
-                                      "aspect_ratio": 0.8,
-                                      "content_description": "$item.title",
-                                      "shape": "Rounded",
-                                      "type": "core://Image",
-                                      "url": "$item.thumb"
-                                    },
-                                    {
-                                      "caps": true,
-                                      "max_lines": 1,
-                                      "style": "Caption",
-                                      "type": "core://Text",
-                                      "value_expr": "$item.brand"
-                                    },
-                                    {
-                                      "max_lines": 2,
-                                      "style": "Secondary",
-                                      "type": "core://Text",
-                                      "value_expr": "$item.title"
-                                    }
-                                  ],
-                                  "spacing_dp": 4,
-                                  "type": "core://Column"
-                                },
-                                "content_description": "Open $item.title",
-                                "on_click": {
-                                  "intent": "action.navigation.open",
-                                  "presentation": "Push",
-                                  "target_uri": "taste://items/$item.key"
-                                },
-                                "type": "core://Tappable"
-                              },
-                              "query_key": "taste:steer:$item.key",
-                              "spacing_dp": 12,
-                              "type": "core://List"
-                            }
-                          ],
-                          "spacing_dp": 10,
-                          "type": "core://Column"
-                        }
-                      ],
-                      "type": "core://Column"
                     },
                     {
                       "children": [
@@ -2209,90 +1819,12 @@
                             "content_description": "Open $item.title",
                             "on_click": {
                               "intent": "action.navigation.open",
-                              "presentation": "Push",
+                              "presentation": "Sheet",
                               "target_uri": "taste://items/$item.key"
                             },
                             "type": "core://Tappable"
                           },
                           "query_key": "taste:point-similar:$route.n",
-                          "spacing_dp": 12,
-                          "type": "core://List"
-                        }
-                      ],
-                      "type": "core://Column"
-                    },
-                    {
-                      "children": [
-                        {
-                          "size_dp": 14,
-                          "type": "core://Spacer"
-                        },
-                        {
-                          "content": {
-                            "style": "Label",
-                            "type": "core://Text",
-                            "value_expr": "Opposite"
-                          },
-                          "content_color": "${local://theme#muted_text}",
-                          "padding_h_dp": 4,
-                          "type": "core://Box"
-                        },
-                        {
-                          "size_dp": 8,
-                          "type": "core://Spacer"
-                        },
-                        {
-                          "content": {
-                            "style": "Secondary",
-                            "type": "core://Text",
-                            "value_expr": "Other $item.category pieces, as unlike this one as the catalog has."
-                          },
-                          "content_color": "${local://theme#muted_text}",
-                          "type": "core://Box"
-                        },
-                        {
-                          "size_dp": 8,
-                          "type": "core://Spacer"
-                        },
-                        {
-                          "columns": 3,
-                          "empty_text": "Nothing to set against it.",
-                          "item_template": {
-                            "content": {
-                              "children": [
-                                {
-                                  "aspect_ratio": 0.8,
-                                  "content_description": "$item.title",
-                                  "shape": "Rounded",
-                                  "type": "core://Image",
-                                  "url": "$item.thumb"
-                                },
-                                {
-                                  "caps": true,
-                                  "max_lines": 1,
-                                  "style": "Caption",
-                                  "type": "core://Text",
-                                  "value_expr": "$item.brand"
-                                },
-                                {
-                                  "max_lines": 2,
-                                  "style": "Secondary",
-                                  "type": "core://Text",
-                                  "value_expr": "$item.title"
-                                }
-                              ],
-                              "spacing_dp": 4,
-                              "type": "core://Column"
-                            },
-                            "content_description": "Open $item.title",
-                            "on_click": {
-                              "intent": "action.navigation.open",
-                              "presentation": "Push",
-                              "target_uri": "taste://items/$item.key"
-                            },
-                            "type": "core://Tappable"
-                          },
-                          "query_key": "taste:point-contrast:$route.n",
                           "spacing_dp": 12,
                           "type": "core://List"
                         }
@@ -2442,7 +1974,7 @@
                         "content_description": "Open $item.title",
                         "on_click": {
                           "intent": "action.navigation.open",
-                          "presentation": "Push",
+                          "presentation": "Sheet",
                           "target_uri": "taste://items/$item.key"
                         },
                         "type": "core://Tappable"
@@ -2602,7 +2134,7 @@
                         "content_description": "Open $item.title",
                         "on_click": {
                           "intent": "action.navigation.open",
-                          "presentation": "Push",
+                          "presentation": "Sheet",
                           "target_uri": "taste://items/$item.key"
                         },
                         "type": "core://Tappable"
@@ -2914,7 +2446,7 @@
                                 "content_description": "Open $item.title",
                                 "on_click": {
                                   "intent": "action.navigation.open",
-                                  "presentation": "Push",
+                                  "presentation": "Sheet",
                                   "target_uri": "taste://items/$item.key"
                                 },
                                 "type": "core://Tappable"
@@ -3064,7 +2596,7 @@
                     {
                       "style": "Secondary",
                       "type": "core://Text",
-                      "value_expr": "Every piece in the catalog, placed by how it looks: alike pieces sit together. Warm is what the model thinks you like, cool what you'd skip."
+                      "value_expr": "Every piece in the catalog, placed by how it looks: alike pieces sit together. Warm is what the model thinks you like, cool what you'd dislike."
                     },
                     {
                       "style": "Caption",
@@ -3178,7 +2710,7 @@
                             {
                               "style": "Caption",
                               "type": "core://Text",
-                              "value_expr": "skipped"
+                              "value_expr": "disliked"
                             }
                           ],
                           "spacing_dp": 6,
@@ -3222,7 +2754,7 @@
                             },
                             "on_tap": {
                               "intent": "action.navigation.open",
-                              "presentation": "Push",
+                              "presentation": "Sheet",
                               "target_uri": "taste://points/$point.index"
                             },
                             "points": "$item.points",
@@ -3413,7 +2945,7 @@
                     {
                       "style": "Secondary",
                       "type": "core://Text",
-                      "value_expr": "The catalog laid out by how things look: alike pieces sit together. Warm tiles are what you like, cool ones what you skip, grey ones you haven't shown yet. Tap a tile to zoom in."
+                      "value_expr": "The catalog laid out by how things look: alike pieces sit together. Warm tiles are what you like, cool ones what you dislike, grey ones you haven't shown yet. Tap a tile to zoom in."
                     },
                     {
                       "style": "Caption",
@@ -3654,7 +3186,7 @@
                         "content_description": "Open $item.title",
                         "on_click": {
                           "intent": "action.navigation.open",
-                          "presentation": "Push",
+                          "presentation": "Sheet",
                           "target_uri": "taste://items/$item.key"
                         },
                         "type": "core://Tappable"
