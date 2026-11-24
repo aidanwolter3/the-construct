@@ -1,0 +1,67 @@
+{
+  "note": "First version: the pinned bar (a search field, view chips) that layouts wrap in a page-coloured Box under a core://Sticky of their own",
+  "component": {
+    "doc": "A bar pinned to the top of a scrolling column while the rest scrolls under it: its one child (a search field, view or filter chips, or both in a core://Column) on the page colour, so rows pass behind the bar rather than through it, 4 dp above and below. Put it first in the column that scrolls (not inside a core://List).",
+    "params": [
+      {
+        "name": "background",
+        "type": "text",
+        "doc": "The bar's colour, a theme token; the page colour so it matches what is under it.",
+        "default": "${local://theme#page}"
+      },
+      {
+        "name": "padding_v",
+        "type": "number",
+        "doc": "Space above and below the child in dp.",
+        "default": 4
+      }
+    ],
+    "children": true,
+    "template": {
+      "type": "core://Sticky",
+      "content": {
+        "type": "core://Box",
+        "background": "$arg.background",
+        "padding_v_dp": "$arg.padding_v",
+        "content": {
+          "type": "core://Children",
+          "at": 0
+        }
+      }
+    },
+    "examples": [
+      {
+        "args": {},
+        "children": [
+          {
+            "type": "core://TextField",
+            "field": "q",
+            "placeholder": "Search recipes"
+          }
+        ],
+        "note": "a search field that stays in reach while the list under it scrolls"
+      },
+      {
+        "args": {},
+        "children": [
+          {
+            "type": "core://ChoiceChips",
+            "field": "view",
+            "options": [
+              {
+                "label": "Upcoming",
+                "value": ""
+              },
+              {
+                "label": "Past",
+                "value": "past"
+              }
+            ],
+            "remember": true
+          }
+        ],
+        "note": "view chips pinned over the list they switch"
+      }
+    ]
+  }
+}
