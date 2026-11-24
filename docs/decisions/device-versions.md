@@ -1,7 +1,8 @@
 # Device versions: one build id, devices recorded per pod, watches that wake agents
 
-Superseded in part by [chart-colours](chart-colours.md) (how builds are coloured) and
-[replaced-devices-are-one](replaced-devices-are-one.md) (a device a new one replaced).
+Superseded in part by [chart-colours](chart-colours.md) (how builds are coloured),
+[replaced-devices-are-one](replaced-devices-are-one.md) (a device a new one replaced) and
+[device-day-grid](device-day-grid.md) (every build a device ran each day, and the chart as a grid).
 
 Date: 2026-11-19. Related: [server-monitoring](server-monitoring.md), [named-vocabulary](named-vocabulary.md),
 [notification-owner](notification-owner.md), [agents-runs](agents-runs.md), [web-client](web-client.md).

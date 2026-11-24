@@ -432,6 +432,25 @@ pub const STEPS: &[Step] = &[
         "device_watch_scope",
         "ALTER TABLE device_watches ADD COLUMN scope TEXT NOT NULL DEFAULT 'mcp';",
     ),
+    // Decision `device-day-grid`: every build a device ran each day, with
+    // when it first and last pinged on it, so a day can show the moment a
+    // device updated. Days recorded before have one build and no times.
+    Step::sql(
+        "device_day_builds",
+        "CREATE TABLE client_days_new (
+             day        TEXT NOT NULL,
+             device     TEXT NOT NULL,
+             build      TEXT NOT NULL,
+             pings      INTEGER NOT NULL,
+             first_seen INTEGER,
+             last_seen  INTEGER,
+             PRIMARY KEY (day, device, build)
+         ) WITHOUT ROWID;
+         INSERT INTO client_days_new (day, device, build, pings)
+             SELECT day, device, build, pings FROM client_days;
+         DROP TABLE client_days;
+         ALTER TABLE client_days_new RENAME TO client_days;",
+    ),
 ];
 
 /// Whether the old layout system's tables are still there (dropped by

@@ -2,6 +2,7 @@
 
 mod accessibility;
 mod bars_merge;
+mod bars_rows;
 mod bench;
 mod button_styles;
 mod common;

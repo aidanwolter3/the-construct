@@ -66,7 +66,8 @@ scenario device-versions device_versions \
   "shot all; click Web; click 16; assert-text Mon Nov 16; shot web-16; mode dark; shot dark"
 scenario server-health server_health \
   "assert-text 1 check needs a look; assert-text Disk space; shot light; scroll-to Devices per day; click Web; \
-assert-no-text Studio MacBook; shot devices; mode dark; shot dark"
+assert-no-text Studio MacBook; shot devices; click All; click Pixel 9 16; assert-text Pixel 9 · Mon Nov 16; \
+assert-text Nov 14 · 9be03a1 · 19:00–22:30; shot device-day; mode dark; shot dark"
 scenario server-health-off server_health_off \
   "assert-text Server monitoring is off for this pod; assert-no-text Checks; assert-text Devices per day; \
 shot light; mode dark; shot dark"

@@ -659,6 +659,17 @@ pub enum UiNode {
         on_click: Option<ActionIntent>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         merge: Option<String>,
+        /// Feature `bars_rows`: a grid, a row per value of this field and a
+        /// cell per `bar`, the cell's items side by side.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        row: Option<String>,
+        /// Feature `bars_rows`: a row's label, bound to its first item.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        row_label: Option<String>,
+        /// Feature `bars_rows`: dashed lines down a grid's rows at moments
+        /// in its bars (a release in a day).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        marks: Option<BarsMarks>,
     },
 
     // Feature `dock` (crates/protocol/features/dock.md)
@@ -1271,6 +1282,17 @@ pub enum DateTest {
     Today,
     /// The moment hasn't come yet (a bare date: it is after today).
     Future,
+}
+
+/// `core://Bars` `marks` (feature `bars_rows`): each item of `query_key`
+/// is a dashed vertical line through every row of a grid, in the column
+/// whose bar is the item's value of the grid's `bar` field, `at` (a field)
+/// along it out of `scale_min`, coloured `color` (a binding).
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct BarsMarks {
+    pub query_key: String,
+    pub at: String,
+    pub color: String,
 }
 
 /// The shape of a determinate `core://Progress`: a bar (the default) or a
