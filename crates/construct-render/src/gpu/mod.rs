@@ -226,10 +226,15 @@ fn rasterize(
     }
     if req.id >= crate::images::FIRST_GLYPH_ID {
         let store = images?;
-        let (url, radius) = store.glyph(req.id)?;
-        let img = store.cut(&url, req.width as u32, req.height as u32, radius as f32)?;
+        let (url, radius, stand_in) = store.glyph(req.id)?;
+        let (w, h) = (req.width as u32, req.height as u32);
+        let data = if stand_in {
+            store.stand_in(&url, w, h, radius)?.into_raw()
+        } else {
+            store.cut(&url, w, h, radius as f32)?.as_raw().clone()
+        };
         return Some(RasterizedCustomGlyph {
-            data: img.as_raw().clone(),
+            data,
             content_type: ContentType::Color,
         });
     }
@@ -336,23 +341,32 @@ fn layers(scene: &Scene, images: Option<&crate::images::ImageStore>) -> Layers {
                         // Past the last free id: not drawn.
                         None => continue,
                     },
-                    Draw::Image(i) => match images.filter(|st| {
-                        st.prepare(
+                    Draw::Image(i) => {
+                        let Some(st) = images else { continue };
+                        let ready = st.prepare(
                             &i.url,
                             (i.rect[2] * scene.scale).round() as u32,
                             (i.rect[3] * scene.scale).round() as u32,
                             i.radius * scene.scale,
-                        )
-                    }) {
-                        Some(st) => GlyphRun {
-                            id: st.glyph_id(&i.url, i.radius * scene.scale),
+                        );
+                        let id = if ready {
+                            st.glyph_id(&i.url, i.radius * scene.scale)
+                        } else if st.has_cut(&i.url) {
+                            // Loaded, but not cut to this size yet (it is
+                            // being cut): a cut at another size stands in,
+                            // so it never blinks to its placeholder.
+                            st.stand_in_glyph_id(&i.url, i.radius * scene.scale)
+                        } else {
+                            // Not loaded: its placeholder quad stays.
+                            continue;
+                        };
+                        GlyphRun {
+                            id,
                             rect: i.rect,
                             color: None,
                             clip: i.clip,
-                        },
-                        // Not loaded: its placeholder quad stays.
-                        None => continue,
-                    },
+                        }
+                    }
                     _ => unreachable!("matched above"),
                 };
                 let e = run.rect;
@@ -924,6 +938,207 @@ mod tests {
             view: [1.0, 0.0, 0.0],
             clip: [14.0, 94.0, 362.0, 362.0],
         }
+    }
+
+    /// The images `layers` draws (by their glyph runs), each with whether it
+    /// is a stand-in for a cut not made yet.
+    fn drawn_images(
+        scene: &Scene,
+        store: &crate::images::ImageStore,
+    ) -> Vec<(String, [f32; 4], bool)> {
+        let (_, _, icons) = layers(scene, Some(store));
+        icons
+            .iter()
+            .flatten()
+            .filter(|r| r.id >= crate::images::FIRST_GLYPH_ID)
+            .filter_map(|r| {
+                let (url, _, stand_in) = store.glyph(r.id)?;
+                Some((url, r.rect, stand_in))
+            })
+            .collect()
+    }
+
+    /// An image that has loaded draws at a size it isn't cut to yet: a cut
+    /// at another size stands in until the exact one is made, never its
+    /// placeholder. One that hasn't loaded is left to its placeholder.
+    #[test]
+    fn a_loaded_image_draws_at_a_new_size_without_a_blank() {
+        let store = crate::images::ImageStore::new();
+        let url = "https://img.example/a.jpg";
+        store.insert(url, Some(image::RgbaImage::new(80, 100)));
+        store.cut(url, 40, 50, 0.0).unwrap();
+        let image = |rect: [f32; 4], url: &str| {
+            let mut scene = Scene {
+                scale: 1.0,
+                ..Scene::default()
+            };
+            scene
+                .draws
+                .push(crate::scene::Draw::Image(crate::scene::ImageRun {
+                    url: url.into(),
+                    rect,
+                    radius: 0.0,
+                    clip: [0.0, 0.0, 400.0, 800.0],
+                }));
+            scene
+        };
+        // Cut at 40 × 50: drawn exactly.
+        let drawn = drawn_images(&image([0.0, 0.0, 40.0, 50.0], url), &store);
+        assert_eq!(drawn.len(), 1);
+        assert!(!drawn[0].2, "the exact cut");
+        // At 44 × 55 it isn't cut yet: the 40 × 50 one stands in.
+        let drawn = drawn_images(&image([0.0, 0.0, 44.0, 55.0], url), &store);
+        assert_eq!(drawn.len(), 1, "drawn, not left blank");
+        assert!(drawn[0].2, "a stand-in");
+        // Not loaded: nothing to draw (its placeholder quad shows).
+        let drawn = drawn_images(
+            &image([0.0, 0.0, 44.0, 55.0], "https://img.example/x.jpg"),
+            &store,
+        );
+        assert!(drawn.is_empty());
+    }
+
+    /// The user's report: swiping a deck's top card away, the card that
+    /// takes its place showed its photo, then blinked blank, then showed it
+    /// again. The card behind is laid out narrower, so its photo was cut at
+    /// that size, and the GPU drew nothing until a cut at the top card's
+    /// size was made. Every frame from the drag through the fly-off to the
+    /// new top card, every photo that has loaded is drawn, and once the
+    /// deck has been shown a moment the new top card's is the exact cut
+    /// (it was cut ahead at that size), not a stand-in.
+    #[test]
+    fn the_next_card_keeps_its_photo_through_a_swipe() {
+        use protocol::{DataBundle, EntityRecord, UiNode};
+        use serde_json::json;
+
+        use crate::interact::Session;
+        use crate::layout::Viewport;
+
+        let entity = |v: serde_json::Value| match v {
+            serde_json::Value::Object(m) => EntityRecord(m),
+            _ => unreachable!(),
+        };
+        let root: UiNode = serde_json::from_value(json!({
+            "type": "core://List", "query_key": "q:deck", "stack": true,
+            "where": {"field": "gone", "equals": "false"},
+            "item_template": {
+                "type": "core://SwipeCard",
+                "on_swipe_left": {"intent": "action.local.set", "entity_uri": "x://pieces/a",
+                                  "field": "gone", "value_expr": "true"},
+                "content": {
+                    "type": "core://Carousel", "items": "$item.photos", "tap_paging": true,
+                    "aspect_ratio": 0.8,
+                    "item_template": {"type": "core://Image", "url": "$item.url"}
+                }
+            }
+        }))
+        .unwrap();
+        let mut data = DataBundle::default();
+        for piece in ["a", "b", "c"] {
+            let photos: Vec<String> = (0..2).map(|k| format!("x://photos/{piece}{k}")).collect();
+            for (k, uri) in photos.iter().enumerate() {
+                data.entities.insert(
+                    uri.clone(),
+                    entity(json!({"url": format!("https://img.example/{piece}{k}.jpg")})),
+                );
+            }
+            data.entities.insert(
+                format!("x://pieces/{piece}"),
+                entity(json!({"photos": photos, "gone": false})),
+            );
+        }
+        data.queries.insert(
+            "q:deck".into(),
+            vec![
+                "x://pieces/a".into(),
+                "x://pieces/b".into(),
+                "x://pieces/c".into(),
+            ],
+        );
+        let mut s = Session::new("home", root, data, Viewport::PHONE);
+        s.animate = true;
+        for piece in ["a", "b", "c"] {
+            for k in 0..2 {
+                s.images.insert(
+                    &format!("https://img.example/{piece}{k}.jpg"),
+                    Some(image::RgbaImage::new(160, 200)),
+                );
+            }
+        }
+        let store = s.images.clone();
+        // Every photo this frame draws that has been drawn before is drawn:
+        // none blinks back to its placeholder. (One drawn for the first
+        // time, like the new card behind, shows its placeholder until it is
+        // cut, under the top card.)
+        let frame = |s: &mut Session| -> Vec<(String, [f32; 4], bool)> {
+            let scene = s.scene().unwrap().clone();
+            let images: Vec<_> = scene
+                .draws
+                .iter()
+                .filter_map(|d| match d {
+                    crate::scene::Draw::Image(i) if store.has_cut(&i.url) => Some(i.url.clone()),
+                    _ => None,
+                })
+                .collect();
+            let drawn = drawn_images(&scene, &store);
+            for url in &images {
+                assert!(
+                    drawn.iter().any(|(u, ..)| u == url),
+                    "{url} blinked: {drawn:?}"
+                );
+            }
+            drawn
+        };
+        // The deck shows a moment: its photos are cut (on other threads;
+        // until then they show their placeholders, as any photo does the
+        // first time).
+        for _ in 0..40 {
+            let scene = s.scene().unwrap().clone();
+            drawn_images(&scene, &store);
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        let card = |s: &mut Session| {
+            s.scene()
+                .unwrap()
+                .semantics
+                .iter()
+                .find(|n| n.gestures.contains_key("swipe_left"))
+                .map(|n| n.id.clone())
+                .expect("a swipe card")
+        };
+        let top = card(&mut s);
+        // Dragged left past its threshold, then let go: it flies off.
+        for x in [-20.0, -60.0, -120.0, -160.0] {
+            s.drag_card(&top, x);
+            frame(&mut s);
+        }
+        s.release_card(&top, -800.0);
+        let mut swiped = Vec::new();
+        for _ in 0..60 {
+            frame(&mut s);
+            swiped.extend(s.take_swiped());
+            if !swiped.is_empty() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        assert_eq!(swiped.len(), 1, "the card flew off");
+        // Piece b is on top now, at the top card's size: its first photo is
+        // the exact cut, made ahead while it waited behind.
+        let drawn = frame(&mut s);
+        let b0: Vec<_> = drawn
+            .iter()
+            .filter(|(u, ..)| u.ends_with("/b0.jpg"))
+            .collect();
+        assert!(!b0.is_empty(), "b's first photo shows: {drawn:?}");
+        assert!(
+            b0.iter().all(|(.., stand_in)| !stand_in),
+            "cut ahead at the top card's size: {b0:?}"
+        );
+        assert!(
+            drawn.iter().all(|(u, ..)| !u.contains("/a")),
+            "a is gone: {drawn:?}"
+        );
     }
 
     /// A plot's points take one layer, under what is drawn over them, and
