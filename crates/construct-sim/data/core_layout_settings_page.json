@@ -43,33 +43,75 @@
             {
               "children": [
                 {
-                  "background": "${local://connection#color}",
+                  "children": [
+                    {
+                      "background": "${local://connection#color}",
+                      "content": {
+                        "type": "core://Spacer"
+                      },
+                      "corner_dp": 5,
+                      "height_dp": 10,
+                      "type": "core://Box",
+                      "width_dp": 10
+                    },
+                    {
+                      "style": "Body",
+                      "type": "core://Text",
+                      "value_expr": "${local://connection#label}"
+                    },
+                    {
+                      "type": "core://Spacer"
+                    },
+                    {
+                      "style": "Secondary",
+                      "type": "core://Text",
+                      "value_expr": "${local://session#server}"
+                    }
+                  ],
+                  "padding_h_dp": 16,
+                  "padding_v_dp": 8,
+                  "spacing_dp": 8,
+                  "type": "core://Row"
+                },
+                {
                   "content": {
-                    "type": "core://Spacer"
+                    "children": [
+                      {
+                        "style": "Body",
+                        "type": "core://Text",
+                        "value_expr": "Changes aren't reaching the pod",
+                        "weight": "SemiBold"
+                      },
+                      {
+                        "style": "Secondary",
+                        "type": "core://Text",
+                        "value_expr": "The pod answers: ${local://connection#error}. It keeps trying; a change it still refuses after a while is undone so the rest can be saved."
+                      }
+                    ],
+                    "padding_h_dp": 16,
+                    "padding_v_dp": 4,
+                    "spacing_dp": 2,
+                    "type": "core://Column"
                   },
-                  "corner_dp": 5,
-                  "height_dp": 10,
-                  "type": "core://Box",
-                  "width_dp": 10
+                  "type": "core://Conditional",
+                  "value": "${local://connection#stuck}"
                 },
                 {
-                  "style": "Body",
-                  "type": "core://Text",
-                  "value_expr": "${local://connection#label}"
-                },
-                {
-                  "type": "core://Spacer"
-                },
-                {
-                  "style": "Secondary",
-                  "type": "core://Text",
-                  "value_expr": "${local://session#server}"
+                  "content": {
+                    "content": {
+                      "style": "Secondary",
+                      "type": "core://Text",
+                      "value_expr": "${local://connection#dropped_text}. Undone on this device."
+                    },
+                    "padding_h_dp": 16,
+                    "padding_v_dp": 4,
+                    "type": "core://Box"
+                  },
+                  "type": "core://Conditional",
+                  "value": "${local://connection#dropped_text}"
                 }
               ],
-              "padding_h_dp": 16,
-              "padding_v_dp": 8,
-              "spacing_dp": 8,
-              "type": "core://Row"
+              "type": "core://Column"
             },
             {
               "children": [

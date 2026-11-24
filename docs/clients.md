@@ -258,7 +258,10 @@ The client opens the pod's `home` layout (the default) and draws everything from
 
 The last workspace and every loaded screen are cached, so the app opens and scrolls offline. A tap changes the screen
 at once and queues the request; Settings shows "N pending" (and `local://connection` lets a layout show it too). Queued actions are sent in order when the server is
-reachable again, including after a restart. If the server refuses one, its change is rolled back. Details:
+reachable again, including after a restart. If the server refuses one, its change is rolled back. If the pod keeps
+answering one with an error (an upstream it relies on is down), the device keeps trying for 10 minutes, Settings
+says "not saving" and why (`HTTP 502: taste_unreachable`), and then it undoes that change so the ones behind it are
+sent; Settings lists what was undone (decision `failing-saves-give-up`). Network errors never undo anything. Details:
 [design.md](design.md#71-the-engine).
 
 ## Signing in to an upstream

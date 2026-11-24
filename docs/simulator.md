@@ -56,7 +56,7 @@ cargo run -p construct-sim -- --base-url https://the-construct-pod.fly.dev --out
   --script "click Try a temporary pod; wait-text 20000 Notifications; shot home; open-settings; shot settings"
 ```
 
-`offline`, `online` and `notify` are fixture-only.
+`offline`, `online`, `not-saving` and `notify` are fixture-only.
 
 ## Flags
 
@@ -109,6 +109,7 @@ word is the command and the rest of the entry, as written, its argument: `click 
 | `insets <top> <right> <bottom> <left>` | The space a phone's system bars cover, in points (none at start): `insets 36 0 24 0` shows what each screen draws under the status and navigation bars (decision `system-bars-follow-the-page`). |
 | `clock <YYYY-MM-DDTHH:MM>` | Stops the device's wall clock there (as `--now`), to show a screen before and after a `date` conditional changes: `clock 2026-11-16T08:59; shot before; clock 2026-11-16T09:00; shot after`. |
 | `offline` / `online` | Fixture mode: the fake pod becomes unreachable / reachable. |
+| `not-saving <error>` | Fixture mode: two changes wait and the pod answers the oldest with `<error>` (`local://connection` is `stuck`), and one was given up; `not-saving` alone clears it. |
 | `open-layout <id> [push\|sheet\|panel]` | Presents a layout (`action.navigation.open {layout}`) and waits for its data. |
 | `open-settings` | Presents the Settings layout as a side panel. |
 | `open-inbox` | Presents the inbox layout as a sheet. |

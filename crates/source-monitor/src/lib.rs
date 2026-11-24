@@ -17,6 +17,10 @@
 //! - `monitor:metrics`: every counter with its last hour and last day, and
 //!   the gauges (pods, credentials, disk).
 //!
+//! A second feed, `errors` (decision `recent-server-errors`, [`errors`]),
+//! lists the pod's own recent failed requests (`monitor:recent_errors`);
+//! the `server_errors` check names the most frequent of them.
+//!
 //! Alerts (decision `server-monitoring-alerts`): in those pods, the one
 //! layout that shows the source (decision `notification-owner`) gets a
 //! "Server warnings" notification channel, and a check that turns to
@@ -26,6 +30,7 @@
 use std::time::Duration;
 
 pub mod devices;
+pub mod errors;
 
 use pod_core::layouts::LayoutSource;
 use pod_core::metrics::{self, Gauge, Series};
@@ -66,7 +71,11 @@ pub const APP: CoreLayoutInfo = CoreLayoutInfo {
     icon: "dashboard",
     dev: false,
     auth: AuthPolicy::Public,
-    feeds: &[(NAME, OVERVIEW_FEED), (NAME, devices::DEVICES_FEED)],
+    feeds: &[
+        (NAME, OVERVIEW_FEED),
+        (NAME, devices::DEVICES_FEED),
+        (NAME, errors::ERRORS_FEED),
+    ],
 };
 
 // `FILES`: every `layouts/*.json` of this crate, in number order (`build.rs`).
@@ -97,6 +106,14 @@ pub const MANIFEST: SourceManifest = SourceManifest {
                   runs against the server's (latest, behind, ahead), and devices per day by \
                   build for the last 14 days (a core://Bars chart, today's bar every device \
                   at its latest build). The pod's own data: no operator switch.",
+        },
+        FeedSpec {
+            name: errors::ERRORS_FEED,
+            query_keys: &[errors::RECENT_ERRORS_QUERY],
+            doc: "The pod's recent failed requests (the last 50 answers of 400 or more, \
+                  except 401 and 404), newest first: when, the route's pattern, the status, \
+                  the error code and the device. Kept in memory since the server started. \
+                  The pod's own data: no operator switch.",
         },
     ],
     data_paths: &[],
@@ -220,6 +237,32 @@ pub const MANIFEST: SourceManifest = SourceManifest {
             ],
         },
         EntityDoc {
+            uri: "monitor://errors/{n}",
+            doc: "One failed request of this pod (monitor:recent_errors), newest first.",
+            fields: &[
+                ("time", "when it was answered (Unix seconds)"),
+                ("time_text", "e.g. 2 min ago"),
+                ("method", "e.g. POST"),
+                (
+                    "route",
+                    "the route's pattern, e.g. /v1/taste/react (never the path asked for)",
+                ),
+                ("status", "the answer's status, e.g. 502"),
+                (
+                    "code",
+                    "the answer's error code, e.g. taste_unreachable, or empty",
+                ),
+                (
+                    "device",
+                    "the device's name (or a short id), empty when none was named",
+                ),
+                ("device_id", "the device's id, or empty"),
+                ("server_error", "true for a 5xx"),
+                ("title", "e.g. POST /v1/taste/react → 502 taste_unreachable"),
+                ("subtitle", "e.g. 2 min ago · Pixel 10 Pro"),
+            ],
+        },
+        EntityDoc {
             uri: "monitor://builds/{n}",
             doc: "The builds the chart shows, oldest first (monitor:builds), for its legend.",
             fields: &[
@@ -329,23 +372,33 @@ impl Source for MonitorAdapter {
             if feed == devices::DEVICES_FEED {
                 return devices_feed(pod).await;
             }
+            if feed == errors::ERRORS_FEED {
+                return errors_feed(pod).await;
+            }
             if feed != OVERVIEW_FEED {
                 return pod_core::unknown_feed(NAME, feed);
             }
+            let p = pod.clone();
+            let now = pod_core::util::now_secs();
             let read = pod
-                .blocking(|s| {
+                .blocking(move |s| {
                     let on = s.pod_setting(ENABLED_SETTING)?.as_deref() == Some("1");
+                    if !on {
+                        return Ok(None);
+                    }
+                    let note = pod_errors_note(&p, s, now)?;
                     // The gauges read host.db: off the async runtime too.
-                    Ok(on.then(|| (metrics::series(), metrics::gauges())))
+                    Ok(Some((metrics::series(), metrics::gauges(), note)))
                 })
                 .await;
             match read {
-                Ok(Some((series, gauges))) => Hydration::Data(bundle(
+                Ok(Some((series, gauges, note))) => Hydration::Data(bundle(
                     &series,
                     &gauges,
                     &self.config,
-                    pod_core::util::now_secs(),
+                    now,
                     metrics::started_at(),
+                    note.as_deref(),
                 )),
                 Ok(None) => Hydration::Error(pod_core::json_error(
                     axum::http::StatusCode::FORBIDDEN,
@@ -409,9 +462,10 @@ impl Source for MonitorAdapter {
                         .pod_setting(WARNED_SETTING)?
                         .and_then(|v| serde_json::from_str(&v).ok())
                         .unwrap_or_default();
-                    let now_checks = checks(&metrics::series(), &metrics::gauges(), &config);
-                    let (new, still) =
-                        alerts(&now_checks, &warned, &apps, pod_core::util::now_secs());
+                    let now = pod_core::util::now_secs();
+                    let mut now_checks = checks(&metrics::series(), &metrics::gauges(), &config);
+                    note_errors(&mut now_checks, pod_errors_note(&p, s, now)?.as_deref());
+                    let (new, still) = alerts(&now_checks, &warned, &apps, now);
                     if still != warned {
                         s.set_pod_setting(WARNED_SETTING, &json!(still).to_string())?;
                     }
@@ -490,6 +544,47 @@ async fn devices_feed(pod: &Pod) -> Hydration {
     match read {
         Ok(b) => Hydration::Data(b),
         Err(e) => Hydration::Error(axum::response::IntoResponse::into_response(e)),
+    }
+}
+
+/// The pod's device names by id. Blocking.
+fn device_names(store: &Store) -> rusqlite::Result<std::collections::HashMap<String, String>> {
+    Ok(pod_core::devices::devices(store, protocol::build())?
+        .into_iter()
+        .map(|d| (d.id, d.name))
+        .collect())
+}
+
+/// The `errors` feed: the pod's own failed requests, for any pod.
+async fn errors_feed(pod: &Pod) -> Hydration {
+    let recent = pod_core::recent_errors::recent(pod);
+    let now = pod_core::util::now_secs();
+    match pod.blocking(device_names).await {
+        Ok(names) => Hydration::Data(errors::bundle(&recent, &names, now)),
+        Err(e) => Hydration::Error(axum::response::IntoResponse::into_response(e)),
+    }
+}
+
+/// The `server_errors` check's line about `pod`'s own 5xx answers in the
+/// last hour ([`errors::server_errors_note`]). Blocking (device names).
+fn pod_errors_note(pod: &Pod, store: &Store, now: i64) -> rusqlite::Result<Option<String>> {
+    let recent = pod_core::recent_errors::recent(pod);
+    if !recent.iter().any(|e| e.status >= 500) {
+        return Ok(None);
+    }
+    let names = device_names(store)?;
+    Ok(errors::server_errors_note(
+        &recent,
+        &names,
+        now - metrics::HOUR,
+    ))
+}
+
+/// Add `note` (this pod's failures) to the `server_errors` check's detail.
+pub fn note_errors(checks: &mut [Check], note: Option<&str>) {
+    let Some(note) = note else { return };
+    if let Some(c) = checks.iter_mut().find(|c| c.id == "server_errors") {
+        c.detail = format!("{} · {note}", c.detail);
     }
 }
 
@@ -818,16 +913,19 @@ fn metric_id(name: &str, labels: &[(String, String)]) -> String {
 }
 
 /// The feed's data at `now`, for a server that started counting at
-/// `started`.
+/// `started`; `errors_note` is this pod's own failures
+/// ([`errors::server_errors_note`]).
 pub fn bundle(
     series: &[Series],
     gauges: &[Gauge],
     cfg: &MonitorConfig,
     now: i64,
     started: i64,
+    errors_note: Option<&str>,
 ) -> DataBundle {
     let mut b = DataBundle::default();
-    let checks = checks(series, gauges, cfg);
+    let mut checks = checks(series, gauges, cfg);
+    note_errors(&mut checks, errors_note);
     let warn_count = checks.iter().filter(|c| c.warn).count();
 
     let uptime = now - started;
@@ -1000,6 +1098,7 @@ mod tests {
             &MonitorConfig::default(),
             10_000,
             0,
+            None,
         );
         let summary = &b.entities["monitor://summary/server"];
         assert_eq!(summary.get_str("headline"), Some("All clear"));
@@ -1051,7 +1150,7 @@ mod tests {
             "2000000 tokens over 6 calls and 3 web searches and fetches in the last day \
              (collections 2000000)"
         );
-        let b = bundle(&series, &g, &MonitorConfig::default(), 2 * DAY, 0);
+        let b = bundle(&series, &g, &MonitorConfig::default(), 2 * DAY, 0, None);
         let summary = &b.entities["monitor://summary/server"];
         assert_eq!(summary.get_str("headline"), Some("9 checks need a look"));
         assert_eq!(summary.get_str("window_note"), Some(""));

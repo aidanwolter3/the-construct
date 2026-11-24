@@ -413,6 +413,12 @@ impl Runner {
                 self.device_data(&pod);
                 done("")
             }
+            Step::NotSaving(error) => {
+                let pod = fixture_pod.expect("fixture mode");
+                pod.set_failing(error.clone());
+                self.device_data(&pod);
+                done("")
+            }
             Step::PublishVersion(_) => Err(
                 "'publish-version' isn't supported yet: the Rust engine always shows a layout's latest version"
                     .into(),

@@ -19,6 +19,8 @@ scenario like pixelfed_sample_no_login \
   "shot feed; click Like; assert-text Unlike; assert-text 90; shot liked; offline; shot offline"
 scenario layouts pixelfed \
   "shot feed; open-layout events; shot events; back; open-settings; shot settings; back; open-inbox; shot inbox"
+scenario not_saving pixelfed \
+  "not-saving HTTP 502: taste_unreachable; open-settings; shot not-saving; mode dark; shot not-saving-dark"
 scenario pressed pixelfed \
   "open-settings; press Pixelfed; shot pressed; release; mode dark; press Pixelfed; shot pressed-dark"
 scenario comments pixelfed \

@@ -183,6 +183,13 @@ CREATE TABLE IF NOT EXISTS construct_objects (
 /// a device draws a layout's current element, and pins are gone.
 const MIGRATION_DROP_PINNED_VERSIONS: &str = "DROP TABLE IF EXISTS pinned_versions;";
 
+/// When an outbox row's server first answered it with an error (unix ms;
+/// NULL while it has had none, or only network errors): the engine gives up
+/// on a row the pod keeps failing (decision `failing-saves-give-up`).
+const MIGRATION_FAILING_SINCE: &str = "
+ALTER TABLE action_outbox ADD COLUMN failing_since INTEGER;
+";
+
 /// The store's steps, `(name, sql)`, run in order, each once, in its own
 /// transaction; `schema_migrations` records the names that ran. Add a step at
 /// the end with a new name; never rename, edit or remove one that shipped:
@@ -198,6 +205,7 @@ const MIGRATIONS: &[(&str, &str)] = &[
     ("pinned_versions", MIGRATION_PINNED_VERSIONS),
     ("construct_objects", MIGRATION_CONSTRUCT_OBJECTS),
     ("drop_pinned_versions", MIGRATION_DROP_PINNED_VERSIONS),
+    ("failing_since", MIGRATION_FAILING_SINCE),
 ];
 
 /// Notifications kept in the cache (the newest ids).
@@ -335,11 +343,15 @@ pub struct OutboxRow {
     pub also: Vec<AlsoUpdate>,
     /// Set for an `action.mutation.create` row.
     pub create: Option<CreateInfo>,
+    /// When the pod first answered this row with an error (unix ms); `None`
+    /// while it has had none (network errors don't count).
+    pub failing_since: Option<i64>,
 }
 
 const OUTBOX_COLUMNS: &str = "id, entity_uri, endpoint, payload_json, created_at, \
     COALESCE(retry_count, 0), COALESCE(status, 'PENDING'), field, value_expr, prev_value_json, \
-    rollback_value_json, COALESCE(next_attempt_at, 0), last_error, also_json, create_json";
+    rollback_value_json, COALESCE(next_attempt_at, 0), last_error, also_json, create_json, \
+    failing_since";
 
 fn outbox_row(r: &Row<'_>) -> rusqlite::Result<OutboxRow> {
     let id: i64 = r.get(0)?;
@@ -380,6 +392,7 @@ fn outbox_row(r: &Row<'_>) -> rusqlite::Result<OutboxRow> {
         last_error: r.get(12)?,
         also,
         create,
+        failing_since: r.get(15)?,
     })
 }
 
@@ -691,14 +704,22 @@ pub trait StoreOps {
     }
 
     /// Record a failed attempt: `retry_count += 1`, set `next_attempt_at`
-    /// and `last_error`.
-    fn mark_retry(&self, id: i64, next_attempt_at: i64, last_error: &str) -> StoreResult<()> {
+    /// and `last_error`; `failed_at` (the pod answered with an error, unix
+    /// ms) sets `failing_since` if it is not set yet.
+    fn mark_retry(
+        &self,
+        id: i64,
+        next_attempt_at: i64,
+        last_error: &str,
+        failed_at: Option<i64>,
+    ) -> StoreResult<()> {
         self.conn()
             .prepare_cached(
                 "UPDATE action_outbox SET retry_count = COALESCE(retry_count, 0) + 1,
-                     next_attempt_at = ?2, last_error = ?3 WHERE id = ?1",
+                     next_attempt_at = ?2, last_error = ?3,
+                     failing_since = COALESCE(failing_since, ?4) WHERE id = ?1",
             )?
-            .execute(params![id, next_attempt_at, last_error])?;
+            .execute(params![id, next_attempt_at, last_error, failed_at])?;
         Ok(())
     }
 
@@ -1521,13 +1542,19 @@ mod tests {
         assert_eq!(rows[0].next_attempt_at, 0);
         assert_eq!(rows[0].field.as_deref(), Some("count"));
 
-        s.mark_retry(a, 99, "HTTP 503").unwrap();
-        s.mark_retry(a, 100, "HTTP 503").unwrap();
+        assert_eq!(rows[0].failing_since, None);
+        // A network error leaves failing_since unset; the pod's first error
+        // sets it and later ones keep it.
+        s.mark_retry(a, 98, "connection refused", None).unwrap();
+        assert_eq!(s.first_pending().unwrap().unwrap().failing_since, None);
+        s.mark_retry(a, 99, "HTTP 503", Some(50)).unwrap();
+        s.mark_retry(a, 100, "HTTP 503", Some(60)).unwrap();
         let first = s.first_pending().unwrap().unwrap();
         assert_eq!(first.id, a);
-        assert_eq!(first.retry_count, 2);
+        assert_eq!(first.retry_count, 3);
         assert_eq!(first.next_attempt_at, 100);
         assert_eq!(first.last_error.as_deref(), Some("HTTP 503"));
+        assert_eq!(first.failing_since, Some(50));
 
         s.set_outbox_prev_value(b, "7").unwrap();
         assert_eq!(

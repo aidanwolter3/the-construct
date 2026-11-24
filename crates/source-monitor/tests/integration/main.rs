@@ -2,3 +2,4 @@
 
 mod alerts;
 mod devices;
+mod recent_errors;

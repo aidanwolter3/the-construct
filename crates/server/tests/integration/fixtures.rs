@@ -306,9 +306,9 @@ fn simulator_bundles() {
 
 /// The simulator's `server_health` pages: the `monitor` source's core layout
 /// as this build's clients draw it, over made-up data
-/// (`tests/data/simulator/server_health_data.json`): with both feeds, and
-/// (`server_health_off`) as a pod without monitoring gets it, the devices
-/// and the source's 403.
+/// (`tests/data/simulator/server_health_data.json`): with every feed, and
+/// (`server_health_off`) as a pod without monitoring gets it, the devices,
+/// the pod's failed requests and the source's 403.
 #[test]
 fn server_health_bundles() {
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -320,12 +320,12 @@ fn server_health_bundles() {
     for (name, feeds, error) in [
         (
             "server_health_bundle.json",
-            &["overview", "devices"][..],
+            &["overview", "devices", "errors"][..],
             None,
         ),
         (
             "server_health_off_bundle.json",
-            &["devices"][..],
+            &["devices", "errors"][..],
             Some("error 403"),
         ),
     ] {

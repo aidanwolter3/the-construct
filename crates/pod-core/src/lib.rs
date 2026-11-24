@@ -32,6 +32,7 @@ pub mod porcelain;
 pub mod preview;
 pub mod public_copy;
 pub mod push;
+pub mod recent_errors;
 pub mod secrets;
 pub mod session;
 pub mod source;
@@ -666,6 +667,11 @@ pub fn app(state: Pod) -> Router {
         .route_layer(middleware::from_fn_with_state(
             state.clone(),
             devices::note_layer,
+        ))
+        // Outermost: it sees the answers of the layers above too.
+        .route_layer(middleware::from_fn_with_state(
+            state.clone(),
+            recent_errors::layer,
         ))
         .with_state(state)
 }
