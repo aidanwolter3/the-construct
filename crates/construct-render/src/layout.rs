@@ -1988,6 +1988,87 @@ impl<'i> Build<'_, 'i> {
     }
 
     /// Builds `n` itself ([`Build::node`] places it).
+    /// A `core://Scatter` (feature `scatter`), out of [`Self::build_node`]
+    /// so its locals don't add to every level of that recursion's stack.
+    #[inline(never)]
+    fn scatter_node<'c>(&mut self, n: &'c UiNode, b: &B<'c>) -> Option<usize> {
+        let UiNode::Scatter {
+            points,
+            colors,
+            none_color,
+            highlight_color,
+            muted_color,
+            select,
+            on_tap,
+            on_select,
+            aspect_ratio,
+            fill,
+            tag,
+            content_description,
+        } = n
+        else {
+            return None;
+        };
+        let k = {
+            let ctx = &b.ctx;
+            let id = match tag {
+                Some(t) => ctx.text(t),
+                None => b.path.clone(),
+            };
+            let pts = protocol::scatter::decode(&ctx.text(points)).unwrap_or_default();
+            let col =
+                |c: &Option<String>, d: Rgba| c.as_deref().and_then(|c| ctx.color(c)).unwrap_or(d);
+            let ramp_default = [
+                Rgba::hex("#7FA3C7").unwrap_or(self.theme.muted_text),
+                Rgba::hex("#D9CFC0").unwrap_or(self.theme.muted_text),
+                Rgba::hex("#E8854A").unwrap_or(self.theme.on_background),
+            ];
+            let mut ramp = ramp_default;
+            if let Some(cs) = colors {
+                for (i, c) in cs.iter().take(3).enumerate() {
+                    if let Some(c) = ctx.color(c) {
+                        ramp[i] = c;
+                    }
+                }
+            }
+            let plot = ScatterPlot {
+                id: id.clone(),
+                points: pts,
+                ramp,
+                none: col(none_color, self.theme.muted_text),
+                highlight: col(
+                    highlight_color,
+                    Rgba::hex("#E8554A").unwrap_or(self.theme.on_background),
+                ),
+                muted: col(muted_color, self.theme.on_background),
+                selecting: select.as_deref().is_some_and(|s| ctx.shows(s, None)),
+                on_tap: on_tap.as_ref().map(|i| bind_intent(i, ctx)),
+                on_select: on_select.as_ref().map(|i| bind_intent(i, ctx)),
+            };
+            let mut style = column(0, pad(0, 0), AlignItems::STRETCH);
+            style.size.width = percent(1.0);
+            if *fill {
+                style.flex_grow = 1.0;
+                style.flex_shrink = 1.0;
+                style.flex_basis = length(0.0);
+                style.min_size.height = length(120.0);
+                style.align_self = Some(AlignSelf::STRETCH);
+            } else {
+                style.aspect_ratio = Some(aspect_ratio.unwrap_or(1.0).clamp(0.2, 5.0) as f32);
+            }
+            let text = content_description
+                .as_deref()
+                .map(|t| ctx.text(t))
+                .or_else(|| Some(format!("Plot of {} points", plot.points.len())));
+            let mut sem = self.sem(b, n, text, None);
+            sem.id = id;
+            let k = self.push(style, Vec::new(), Paint::None, Some(sem), true);
+            self.elems[k].scatter = Some(Arc::new(plot));
+            k
+        };
+        Some(k)
+    }
+
     fn build_node<'c>(&mut self, n: &'c UiNode, b: &B<'c>) -> Option<usize> {
         let ctx = b.ctx;
         let theme = self.theme.clone();
@@ -3364,77 +3445,7 @@ impl<'i> Build<'_, 'i> {
                 let dots = self.push(ds, dots, Paint::None, Some(sem), false);
                 self.push(outer, vec![frame, dots], Paint::None, None, false)
             }
-            UiNode::Scatter {
-                points,
-                colors,
-                none_color,
-                highlight_color,
-                muted_color,
-                select,
-                on_tap,
-                on_select,
-                aspect_ratio,
-                fill,
-                tag,
-                content_description,
-            } => {
-                let ctx = &b.ctx;
-                let id = match tag {
-                    Some(t) => ctx.text(t),
-                    None => b.path.clone(),
-                };
-                let pts = protocol::scatter::decode(&ctx.text(points)).unwrap_or_default();
-                let col = |c: &Option<String>, d: Rgba| {
-                    c.as_deref().and_then(|c| ctx.color(c)).unwrap_or(d)
-                };
-                let ramp_default = [
-                    Rgba::hex("#7FA3C7").unwrap_or(self.theme.muted_text),
-                    Rgba::hex("#D9CFC0").unwrap_or(self.theme.muted_text),
-                    Rgba::hex("#E8854A").unwrap_or(self.theme.on_background),
-                ];
-                let mut ramp = ramp_default;
-                if let Some(cs) = colors {
-                    for (i, c) in cs.iter().take(3).enumerate() {
-                        if let Some(c) = ctx.color(c) {
-                            ramp[i] = c;
-                        }
-                    }
-                }
-                let plot = ScatterPlot {
-                    id: id.clone(),
-                    points: pts,
-                    ramp,
-                    none: col(none_color, self.theme.muted_text),
-                    highlight: col(
-                        highlight_color,
-                        Rgba::hex("#E8554A").unwrap_or(self.theme.on_background),
-                    ),
-                    muted: col(muted_color, self.theme.on_background),
-                    selecting: select.as_deref().is_some_and(|s| ctx.shows(s, None)),
-                    on_tap: on_tap.as_ref().map(|i| bind_intent(i, ctx)),
-                    on_select: on_select.as_ref().map(|i| bind_intent(i, ctx)),
-                };
-                let mut style = column(0, pad(0, 0), AlignItems::STRETCH);
-                style.size.width = percent(1.0);
-                if *fill {
-                    style.flex_grow = 1.0;
-                    style.flex_shrink = 1.0;
-                    style.flex_basis = length(0.0);
-                    style.min_size.height = length(120.0);
-                    style.align_self = Some(AlignSelf::STRETCH);
-                } else {
-                    style.aspect_ratio = Some(aspect_ratio.unwrap_or(1.0).clamp(0.2, 5.0) as f32);
-                }
-                let text = content_description
-                    .as_deref()
-                    .map(|t| ctx.text(t))
-                    .or_else(|| Some(format!("Plot of {} points", plot.points.len())));
-                let mut sem = self.sem(b, n, text, None);
-                sem.id = id;
-                let k = self.push(style, Vec::new(), Paint::None, Some(sem), true);
-                self.elems[k].scatter = Some(Arc::new(plot));
-                k
-            }
+            UiNode::Scatter { .. } => return self.scatter_node(n, b),
             UiNode::Bars {
                 query_key,
                 bar,
