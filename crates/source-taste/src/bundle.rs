@@ -19,6 +19,11 @@ pub const TASTE_ITEMS_QUERY: &str = "taste:taste_items";
 
 /// The most photos an item carries (`image_0` to `image_5`).
 pub const PHOTOS: usize = 6;
+/// The width every big photo is asked for at, on a card and on the item's
+/// screen alike, so one download serves both (and the image caches hit).
+pub const PHOTO_WIDTH: u32 = 1080;
+/// The entity of the whole taste map's points (`core://Scatter`).
+pub const SCATTER_URI: &str = "taste://maps/catalog";
 
 /// Text from the service: control characters gone, at most `max` characters.
 pub fn clean(s: &str, max: usize) -> String {
@@ -202,6 +207,11 @@ pub fn item(v: &Value) -> Option<(String, EntityRecord)> {
         "chance_text": p.map(|p| format!("{}% your taste", (p * 100.0).round() as i64)).unwrap_or_default(),
         "photo_count": photos.len(),
         "photos_many": photos.len() > 1,
+        // Each photo as an entity of its own, for a carousel to page through.
+        "photos": (0..photos.len())
+            .map(|k| format!("taste://photos/{key}-{k}"))
+            .collect::<Vec<_>>(),
+        "photo_url": sized(image, PHOTO_WIDTH),
     });
     // A card shows one photo at a time: `image_<k>` is photo k, and a tap on
     // photo k sets the device-only field `photo` to `next_<k>` (wrapping), so
@@ -221,6 +231,83 @@ pub fn item(v: &Value) -> Option<(String, EntityRecord)> {
         Value::Object(m) => Some((uri, EntityRecord(m))),
         _ => None,
     }
+}
+
+/// An item's photos as entities, `taste://photos/<key>-<k>`: the photo at
+/// [`PHOTO_WIDTH`] (`url`), its number and the item's title (to describe it).
+pub fn photo_entities(v: &Value) -> Vec<(String, EntityRecord)> {
+    let Some(id) = v.get("id").and_then(Value::as_str) else {
+        return Vec::new();
+    };
+    let key = key_of(&clean(id, 300));
+    let title = text(v, "title", 200);
+    photos(v)
+        .iter()
+        .enumerate()
+        .filter_map(|(k, u)| {
+            let rec = json!({
+                "url": sized(u, PHOTO_WIDTH),
+                "n": k + 1,
+                "title": title,
+            });
+            match rec {
+                Value::Object(m) => Some((format!("taste://photos/{key}-{k}"), EntityRecord(m))),
+                _ => None,
+            }
+        })
+        .collect()
+}
+
+/// An item and its photos into a bundle.
+pub fn put_item(b: &mut DataBundle, v: &Value) -> Option<String> {
+    let (uri, rec) = item(v)?;
+    for (u, r) in photo_entities(v) {
+        b.entities.insert(u, r);
+    }
+    b.entities.insert(uri.clone(), rec);
+    Some(uri)
+}
+
+/// The whole map as one entity for a `core://Scatter` ([`SCATTER_URI`]):
+/// every item a point (likes highlighted, skips muted, coloured by the
+/// model's like chance), its counts in words.
+pub fn scatter(map: &crate::api::MapData) -> (String, EntityRecord) {
+    use protocol::scatter::{Mark, Point, encode};
+    let points: Vec<Point> = map
+        .xy
+        .iter()
+        .enumerate()
+        .map(|(i, [x, y])| Point {
+            x: *x,
+            y: *y,
+            value: map
+                .p
+                .as_ref()
+                .and_then(|p| p.get(i))
+                .copied()
+                .filter(|v| v.is_finite()),
+            mark: if map.liked.contains(&i) {
+                Mark::Highlight
+            } else if map.skipped.contains(&i) {
+                Mark::Muted
+            } else {
+                Mark::Plain
+            },
+        })
+        .collect();
+    let n = map.ids.len();
+    let rec = json!({
+        "points": encode(&points),
+        "count": n,
+        "count_text": format!("{} pieces", grouped(n as i64)),
+        "reactions_text": format!("{} liked · {} skipped", map.liked.len(), map.skipped.len()),
+        "modelled": map.p.is_some(),
+    });
+    let rec = match rec {
+        Value::Object(m) => EntityRecord(m),
+        _ => EntityRecord(Default::default()),
+    };
+    (SCATTER_URI.to_owned(), rec)
 }
 
 /// Items with the feed's reason filled in where the service left it out
@@ -250,10 +337,9 @@ pub fn with_why(items: &[Value], kept: &[Value]) -> Vec<Value> {
 pub fn put_items(b: &mut DataBundle, key: &str, items: &[Value]) {
     let mut order = Vec::new();
     for v in items {
-        if let Some((uri, rec)) = item(v)
+        if let Some(uri) = put_item(b, v)
             && !order.contains(&uri)
         {
-            b.entities.insert(uri.clone(), rec);
             order.push(uri);
         }
     }

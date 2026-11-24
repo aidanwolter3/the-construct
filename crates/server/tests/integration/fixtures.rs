@@ -356,6 +356,48 @@ fn server_health_bundles() {
     }
 }
 
+/// A made-up taste map: 2,400 pieces in twelve clusters (a fixed
+/// pseudo-random walk, so the fixture never changes), point 0 in the
+/// middle, the model's chance rising toward the upper left, likes among the
+/// warmest and skips among the coolest.
+fn made_up_map() -> server::taste::api::MapData {
+    let mut seed: u64 = 0x5eed_1234;
+    let mut rnd = move || {
+        seed = seed
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add(1442695040888963407);
+        ((seed >> 33) as f32) / (1u64 << 31) as f32
+    };
+    let centres: Vec<[f32; 2]> = (0..12)
+        .map(|_| [0.1 + 0.8 * rnd(), 0.1 + 0.8 * rnd()])
+        .collect();
+    let mut m = server::taste::api::MapData::default();
+    let mut chances = Vec::new();
+    for i in 0..2400 {
+        let [x, y] = if i == 0 {
+            [0.5, 0.5]
+        } else {
+            let c = centres[i % centres.len()];
+            let (a, r) = (rnd() * std::f32::consts::TAU, 0.09 * rnd().sqrt());
+            [
+                (c[0] + r * a.cos()).clamp(0.0, 1.0),
+                (c[1] + r * a.sin()).clamp(0.0, 1.0),
+            ]
+        };
+        let p = (1.15 - 0.9 * x - 0.6 * y + 0.15 * (rnd() - 0.5)).clamp(0.0, 1.0);
+        m.ids.push(format!("shop{}.example:{}", i % 7, 5000 + i));
+        m.xy.push([x, y]);
+        chances.push(p);
+        if i == 0 || (p > 0.55 && i % 5 == 0) {
+            m.liked.insert(i);
+        } else if p < 0.15 && i % 7 == 0 {
+            m.skipped.insert(i);
+        }
+    }
+    m.p = Some(chances);
+    m
+}
+
 /// The simulator's `taste` page: the `taste` source's core layout over
 /// made-up answers of a taste service (`tests/data/simulator/taste_data.json`),
 /// made into entities by the source's own code, and the data paths of its
@@ -419,13 +461,34 @@ fn taste_bundles() {
             &list(&s["contrast"]),
         );
         let item = bundle::with_why(std::slice::from_ref(&s["item"]), &kept).remove(0);
-        let (uri, rec) = bundle::item(&item).unwrap();
-        b.entities.insert(uri, rec);
+        bundle::put_item(&mut b, &item);
         screens.insert(
             format!("/v1/taste/screens/item?key={key}"),
             serde_json::to_value(&b).unwrap(),
         );
+        // The same piece as point 0 of the map (the dot in its middle).
+        let mut pt = protocol::DataBundle::default();
+        bundle::put_items(&mut pt, "taste:point-similar:0", &list(&s["similar"]));
+        bundle::put_items(&mut pt, "taste:point-contrast:0", &list(&s["contrast"]));
+        bundle::put_item(&mut pt, &item);
+        if let Some((_, mut rec)) = bundle::item(&item) {
+            rec.0.insert("uri".into(), Value::from("taste://points/0"));
+            pt.entities.insert("taste://points/0".into(), rec);
+        }
+        screens.insert(
+            "/v1/taste/screens/point?n=0".into(),
+            serde_json::to_value(&pt).unwrap(),
+        );
     }
+    // The whole map: made-up pieces in clusters, liked where the model's
+    // chance is high and skipped where it is low.
+    let mut map = protocol::DataBundle::default();
+    let (uri, rec) = bundle::scatter(&made_up_map());
+    map.entities.insert(uri, rec);
+    screens.insert(
+        "/v1/taste/screens/scatter".into(),
+        serde_json::to_value(&map).unwrap(),
+    );
     let mut likes = protocol::DataBundle::default();
     bundle::put_items(&mut likes, bundle::LIKES_QUERY, &list(&data["likes"]));
     screens.insert(
@@ -446,6 +509,15 @@ fn taste_bundles() {
             serde_json::to_value(&m).unwrap(),
         );
     }
+    // The box the scenario selects on the scatter.
+    let selected = "200000-200000-450000-450000";
+    let mut a = protocol::DataBundle::default();
+    let first_area = data["area"].as_object().unwrap().values().next().unwrap();
+    bundle::put_items(&mut a, &bundle::area_query(selected), &list(first_area));
+    screens.insert(
+        format!("/v1/taste/screens/area?area={selected}"),
+        serde_json::to_value(&a).unwrap(),
+    );
     for (area, items) in data["area"].as_object().unwrap() {
         let mut a = protocol::DataBundle::default();
         bundle::put_items(&mut a, &bundle::area_query(area), &list(items));

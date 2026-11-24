@@ -16,7 +16,7 @@ use std::collections::BTreeMap;
 use crate::intent::{ActionIntent, Animation, Edge};
 
 /// Node types this build knows (an other type is [`UiNode::Unknown`]).
-pub const NODE_TYPES: [&str; 32] = [
+pub const NODE_TYPES: [&str; 33] = [
     "core://Bars",
     "core://Workspace",
     "core://Page",
@@ -49,6 +49,7 @@ pub const NODE_TYPES: [&str; 32] = [
     "core://Layout",
     "core://Gesture",
     "core://SwipeCard",
+    "core://Scatter",
 ];
 
 /// Icon names clients draw (`core://IconButton`, `core://Chip`).
@@ -447,6 +448,16 @@ pub enum UiNode {
         max_aspect: Option<f64>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         tag: Option<String>,
+        /// Feature `carousel_tap_paging`: pages turn on taps, not swipes (a
+        /// tap on the left third shows the previous page, on the right third
+        /// the next, wrapping round), with dots over the page; a sideways
+        /// drag is left to what is around it (a `core://SwipeCard`). Every
+        /// page's images load as soon as the carousel is drawn.
+        #[serde(default, skip_serializing_if = "is_false")]
+        tap_paging: bool,
+        /// With `tap_paging`, what a tap on the middle third does.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        on_tap: Option<ActionIntent>,
     },
     /// An icon button. `active` (a binding to a bool, e.g. `$item.is_liked`)
     /// switches to `active_icon`, `active_tint` (`#RRGGBB`) and
@@ -819,6 +830,46 @@ pub enum UiNode {
         content_description: Option<String>,
     },
 
+    // Feature `scatter` (crates/protocol/features/scatter.md)
+    /// A scatter plot of many points (thousands) in a square of data
+    /// coordinates 0..1 (y down), packed in one string (`points`, see
+    /// [`crate::scatter`]): each point coloured by its value along a ramp
+    /// (`colors`: low, middle, high; `none_color` for a point without one)
+    /// and drawn plain, highlighted (`highlight_color`, larger, ringed) or
+    /// muted (`muted_color`, small). Pinch or wheel zooms, a drag pans; a tap
+    /// near a point runs `on_tap` with `$point.index`, `$point.x`,
+    /// `$point.y` bound; while `select` is truthy (or after a long press) a
+    /// drag draws a box and its release runs `on_select` with `$select.x0`,
+    /// `$select.y0`, `$select.x1`, `$select.y1` (0..1) and `$select.box`
+    /// (`x0-y0-x1-y1` in millionths, for a route) bound. As wide as its
+    /// parent, `aspect_ratio` (default 1) tall, or the space given with `fill`.
+    #[serde(rename = "core://Scatter")]
+    Scatter {
+        points: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        colors: Option<Vec<String>>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        none_color: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        highlight_color: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        muted_color: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        select: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        on_tap: Option<ActionIntent>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        on_select: Option<ActionIntent>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        aspect_ratio: Option<f64>,
+        #[serde(default, skip_serializing_if = "is_false")]
+        fill: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        tag: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        content_description: Option<String>,
+    },
+
     /// A node of a type this build does not know: its JSON, kept as is.
     #[serde(skip)]
     Unknown(Value),
@@ -944,6 +995,7 @@ impl UiNode {
             | UiNode::MediaPicker { .. }
             | UiNode::Progress { .. }
             | UiNode::Bars { .. }
+            | UiNode::Scatter { .. }
             | UiNode::Unknown(_) => Vec::new(),
         }
     }
@@ -963,6 +1015,10 @@ impl UiNode {
                 on_swipe_right,
                 ..
             } => on_swipe_left.iter().chain(on_swipe_right).collect(),
+            UiNode::Carousel { on_tap, .. } => on_tap.iter().collect(),
+            UiNode::Scatter {
+                on_tap, on_select, ..
+            } => on_tap.iter().chain(on_select).collect(),
             _ => Vec::new(),
         };
         // The steps of an `action.sequence` count as the node's intents too,

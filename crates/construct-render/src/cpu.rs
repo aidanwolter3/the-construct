@@ -199,6 +199,7 @@ impl CpuRenderer {
                 Draw::Text(t) => self.text(&mut px, w, h, t, s, text),
                 Draw::Icon(i) => self.icon(&mut px, w, h, i, s),
                 Draw::Image(i) => self.image(&mut px, w, h, i, s),
+                Draw::Points(run) => run.for_each_quad(|q| self.quad(&mut px, w, h, &q, s)),
             }
         }
         // Unpremultiplied: opaque pixels (nearly all) are copied as they are.

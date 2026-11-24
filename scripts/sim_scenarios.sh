@@ -71,14 +71,19 @@ scenario server-health-off server_health_off \
 shot light; mode dark; shot dark"
 scenario taste taste \
   "assert-text Waxed Chore Coat in Olive; assert-text On the edge; assert-text blanket lining; shot deck; \
-click Next photo of Waxed Chore Coat in Olive; assert-text 2 / 3; shot photo-2; \
-click Details of Waxed Chore Coat in Olive; assert-text Buy at shop0.example; scroll-to Opposite; shot item; back; \
+tap-photo right Photo 1 of Waxed Chore Coat in Olive; assert-text Photo 2 of 3; shot photo-2; \
+tap-photo left Photo 2 of Waxed Chore Coat in Olive; assert-text Photo 1 of 3; shot photo-back; \
+click Details of Waxed Chore Coat in Olive; assert-text Buy at shop0.example; shot item; scroll-to Opposite; \
+shot item-lists; back; \
 drag-card 140 Waxed Chore Coat in Olive by Fernhill Supply: swipe right to like, left to skip; shot swiping; release; \
 assert-text Loose Pleated Trousers; shot next; \
-click Map; assert-text 10,533 pieces; shot map; click 412 pieces, like Waxed Chore Coat in Olive; \
-assert-text Zoomed in ×4; shot map-zoomed; click See the pieces here; assert-text Pieces here; shot area; back; back; \
-back; click Taste; assert-text rugged workwear · waxed cotton · olive green · utilitarian; shot taste; back; \
-screen desktop; shot desktop; screen phone; mode dark; shot dark"
+click Map; assert-text 2,400 pieces; shot map; scatter-zoom 2.5 Map of 2,400 pieces, tap a dot to open it; shot map-zoomed; \
+scatter-tap 0.5 0.5 Map of 2,400 pieces, tap a dot to open it; assert-text Buy at shop0.example; shot point; back; \
+click Select an area; scatter-box 0.2 0.2 0.45 0.45 Map of 2,400 pieces, tap a dot to open it; shot selecting; release; assert-text Pieces here; \
+shot area; back; click Grid view; assert-text 10,533 pieces; shot grid; back; back; \
+click Taste; assert-text rugged workwear · waxed cotton · olive green · utilitarian; shot taste; back; \
+screen desktop; shot desktop; click Map; shot desktop-map; back; screen phone; mode dark; shot dark; \
+click Map; shot dark-map"
 scenario tiles-home tiles_home \
   "shot top; scroll-to Photos; assert-text Read more; shot tiles"
 scenario screen-sizes screen_sizes \
