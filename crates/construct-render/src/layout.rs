@@ -598,9 +598,27 @@ struct B<'a> {
     /// fills height takes the room short content leaves and is as tall as
     /// its content otherwise ([`placed`]).
     in_scroll: bool,
+    /// The list cell this is inside, if any: the cell's path (`…/i3`) and
+    /// the same path keyed by the cell's item rather than its place
+    /// (`…/[<item uri>]`). View state that belongs to the item (a carousel's
+    /// page) is keyed by the second, so it moves with the item when the
+    /// list's order changes, as when a deck's top card leaves.
+    cell: Option<(String, String)>,
 }
 
 impl<'a> B<'a> {
+    /// This node's path with the enclosing list cell's index replaced by
+    /// its item (see [`B::cell`]): the same for an item wherever the list
+    /// puts it.
+    fn item_path(&self) -> String {
+        match &self.cell {
+            Some((cell, keyed)) if self.path.starts_with(cell.as_str()) => {
+                format!("{keyed}{}", &self.path[cell.len()..])
+            }
+            _ => self.path.clone(),
+        }
+    }
+
     fn child(&self, i: impl std::fmt::Display, axis: Axis) -> B<'a> {
         B {
             path: format!("{}/{i}", self.path),
@@ -898,6 +916,7 @@ impl SceneBuilder {
             path: "root".into(),
             depth: 0,
             in_scroll: false,
+            cell: None,
         };
         let content = b.node(input.root, &state);
         if let Some(c) = content
@@ -1926,6 +1945,7 @@ impl<'i> Build<'_, 'i> {
                 path: panel_id(host, k),
                 depth: b.depth + 1,
                 in_scroll: false,
+                cell: None,
             };
             let mut capped = false;
             let col = match input.layouts.get(&p.layout) {
@@ -3168,9 +3188,11 @@ impl<'i> Build<'_, 'i> {
                 };
                 for (i, uri) in uris.iter().enumerate() {
                     let item = ctx.entity(uri).expect("filtered");
+                    let cb = b.child(format!("i{i}"), Axis::Column);
                     let ib = B {
                         ctx: ctx.with_item(uri, item),
-                        ..b.child(format!("i{i}"), Axis::Column)
+                        cell: Some((cb.path.clone(), format!("{}/[{uri}]", b.path))),
+                        ..cb
                     };
                     if let Some(g) = group_by {
                         let v = item.get(&g.field).map(render).unwrap_or_default();
@@ -3335,9 +3357,12 @@ impl<'i> Build<'_, 'i> {
                 let aspect = aspect
                     .max(min_aspect.unwrap_or(0.1))
                     .min(max_aspect.unwrap_or(10.0));
+                // Keyed by its item, not its place in a list: a deck's next
+                // card keeps its page (and its photo) when it comes to the
+                // top, and doesn't take the page of the card that left.
                 let id = match tag {
                     Some(t) => ctx.text(t),
-                    None => b.path.clone(),
+                    None => b.item_path(),
                 };
                 // The page shown: set by the session when a swipe settles.
                 let count = uris.len();
