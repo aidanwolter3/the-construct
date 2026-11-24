@@ -597,7 +597,12 @@ impl Host {
     /// A new MCP credential for pod `name` (`cmcp_…`, shown once), e.g. for
     /// Claude Code (`claude mcp add --transport http ... --header
     /// "Authorization: Bearer <it>"`); `label` says whose it is.
-    pub fn issue_mcp(&self, name: &str, label: &str) -> Result<String, String> {
+    pub fn issue_mcp(
+        &self,
+        name: &str,
+        label: &str,
+        access: pod_core::mcp::Access,
+    ) -> Result<String, String> {
         let pod = self
             .store
             .pod_by_name(name)
@@ -609,7 +614,7 @@ impl Host {
             format!("{}{}", oauth::MCP_TOKEN_PREFIX, hex(&buf))
         };
         self.store
-            .insert_mcp_credential(&pod.id, &session_hash(&token), label, None)
+            .insert_mcp_credential(&pod.id, &session_hash(&token), label, None, access)
             .map_err(|e| e.to_string())?;
         Ok(token)
     }
@@ -695,7 +700,13 @@ impl Host {
         }
         if let Some(k) = mcp_key {
             self.store
-                .insert_mcp_credential_if_missing(&pod.id, &session_hash(k), "local testing")
+                // The developer's own local key reaches every tool.
+                .insert_mcp_credential_if_missing(
+                    &pod.id,
+                    &session_hash(k),
+                    "local testing",
+                    pod_core::mcp::Access::Outward,
+                )
                 .map_err(|e| e.to_string())?;
         }
         Ok(())
@@ -1480,6 +1491,7 @@ fn set_prefix(headers: &mut HeaderMap, pod_id: &str) {
 /// request that came in from outside.
 fn strip_host_headers(headers: &mut axum::http::HeaderMap) {
     headers.remove(pod_core::CREDENTIAL_HEADER);
+    headers.remove(pod_core::mcp::ACCESS_HEADER);
     headers.remove(pod_core::session::INTERNAL_HEADER);
 }
 
@@ -1514,9 +1526,20 @@ async fn dispatch(State(host): State<Arc<Host>>, mut req: Request) -> Response {
     let is_mcp = req.uri().path() == oauth::MCP_PATH;
     let found = match credential {
         Some((id, CredentialKind::Mcp)) if is_mcp => {
+            // What it may do (decision `mcp-access-levels`), for the pod to
+            // check per tool.
+            let hash = token.as_deref().map(session_hash).unwrap_or_default();
+            let access = match host.blocking(move |h| h.store.mcp_access(&hash)).await {
+                Ok(Ok(a)) => a,
+                _ => pod_core::mcp::Access::Read,
+            };
             req.headers_mut().remove(header::AUTHORIZATION);
             req.headers_mut()
                 .insert(pod_core::CREDENTIAL_HEADER, HeaderValue::from_static("mcp"));
+            req.headers_mut().insert(
+                pod_core::mcp::ACCESS_HEADER,
+                HeaderValue::from_static(access.id()),
+            );
             Some(id)
         }
         Some((_, CredentialKind::Mcp)) => {

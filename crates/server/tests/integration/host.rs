@@ -1668,9 +1668,12 @@ mod web {
 
     async fn mcp_key(env: &Env, pod: &str) -> String {
         let (host, pod) = (env.host.clone(), pod.to_owned());
-        tokio::task::spawn_blocking(move || host.issue_mcp(&pod, "test").unwrap())
-            .await
-            .unwrap()
+        tokio::task::spawn_blocking(move || {
+            host.issue_mcp(&pod, "test", pod_core::mcp::Access::Outward)
+                .unwrap()
+        })
+        .await
+        .unwrap()
     }
 
     /// Decision `public-web-links`: a reviewed copy of a layout and the

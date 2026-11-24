@@ -7,7 +7,7 @@ use std::collections::HashMap;
 
 use axum::http::StatusCode;
 use pod_core::layouts::{self as pod_layouts, SourceUse};
-use pod_core::mcp::untrusted;
+use pod_core::mcp::{Access, untrusted};
 use pod_core::{BoxFuture, Pod};
 use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
@@ -289,6 +289,42 @@ pub fn tools() -> Vec<Value> {
             &["collection"],
         ),
     ]
+}
+
+/// The access each tool needs (decision `mcp-access-levels`). Reaching a
+/// host the pod didn't reach before (a filler, a file to import, a recipe
+/// to try) is outward, as are secrets and deleting a collection.
+pub fn access(tool: &str, args: &Value) -> Option<Access> {
+    let has = |k: &str| match args.get(k) {
+        None | Some(Value::Null) => false,
+        Some(Value::Array(a)) => !a.is_empty(),
+        Some(Value::String(s)) => !s.is_empty(),
+        Some(_) => true,
+    };
+    Some(match tool {
+        "collections_status" | "export_collection" => Access::Read,
+        "define_collection" if has("fillers") => Access::Outward,
+        "apply_change"
+            if args["changes"]
+                .as_array()
+                .is_some_and(|c| c.iter().any(|c| c["op"] == "set_filler")) =>
+        {
+            Access::Outward
+        }
+        "edit_rows" if has("url") => Access::Outward,
+        "use_kit"
+        | "define_collection"
+        | "apply_change"
+        | "restore_collection_version"
+        | "restore_collection"
+        | "edit_rows"
+        | "add_row"
+        | "run_action"
+        | "undo_edit"
+        | "collections_refresh" => Access::Edit,
+        "collections_preview" | "collections_set_secret" | "delete_collection" => Access::Outward,
+        _ => return None,
+    })
 }
 
 pub fn call<'a>(
@@ -2108,6 +2144,7 @@ fn write_all(
     ats: &[String],
     caps: crate::Caps,
     now: i64,
+    writer: Option<&str>,
 ) -> rusqlite::Result<Result<Written, Value>> {
     let count = |op: &str| planned.iter().filter(|(o, ..)| *o == op).count() as i64;
     let restored = planned
@@ -2157,6 +2194,9 @@ fn write_all(
         }
         if *op == "create" {
             db::insert_row(tx, name, after)?;
+            if writer.is_some() {
+                db::note_writes(tx, name, None, after, writer, now)?;
+            }
         } else {
             db::save_row(tx, name, after)?;
             db::note_writes(
@@ -2164,7 +2204,7 @@ fn write_all(
                 name,
                 before.as_ref().map(|b| &b.values),
                 after,
-                None,
+                writer,
                 now,
             )?;
         }
@@ -2201,6 +2241,9 @@ async fn edit(
         ));
     }
     let collection = name.clone();
+    // Below outward access, what Claude writes is recorded as Claude's
+    // (decision `mcp-access-levels`).
+    let writer = db::current_writer();
     let out = refusable(pod, move |tx| {
         let Some((version, def)) = db::latest_def(tx, &name)? else {
             return Ok(Err(missing(&name)));
@@ -2255,7 +2298,7 @@ async fn edit(
                 .collect();
             // Try the whole set (caps, unique fields), then put everything back.
             tx.execute_batch("SAVEPOINT edit_preview")?;
-            let tried = write_all(tx, &def, &name, &mut planned.clone(), &writes, &ats, caps, now);
+            let tried = write_all(tx, &def, &name, &mut planned.clone(), &writes, &ats, caps, now, writer);
             tx.execute_batch("ROLLBACK TO edit_preview; RELEASE edit_preview")?;
             if let Err(e) = tried? {
                 return Ok(Err(e));
@@ -2282,7 +2325,7 @@ async fn edit(
             }
             return Ok(Ok((Vec::new(), preview)));
         }
-        let (jobs, records) = match write_all(tx, &def, &name, &mut planned, &writes, &ats, caps, now)? {
+        let (jobs, records) = match write_all(tx, &def, &name, &mut planned, &writes, &ats, caps, now, writer)? {
             Ok(v) => v,
             Err(e) => return Ok(Err(e)),
         };

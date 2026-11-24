@@ -949,6 +949,9 @@ struct Run<'a> {
     defs: &'a Defs,
     caps: Caps,
     now: i64,
+    /// Who the call's writes count as ([`db::current_writer`]): `None` a
+    /// person, else Claude below outward access.
+    writer: Option<&'static str>,
     /// Rows touched, in order: (collection, id) → state before (`None`:
     /// made by the call).
     touched: Vec<(String, String, Option<Value>)>,
@@ -1128,6 +1131,9 @@ impl Run<'_> {
                 .to_owned()));
         }
         db::insert_row(self.tx, &def.name, &row)?;
+        if self.writer.is_some() {
+            db::note_writes(self.tx, &def.name, None, &row, self.writer, self.now)?;
+        }
         self.note_copied(def, &row, None, copied)?;
         self.jobs.entry(def.name.clone()).or_default().extend(jobs);
         self.touch(&def.name, &row.id, None);
@@ -1187,7 +1193,7 @@ impl Run<'_> {
             &def.name,
             Some(&before.values),
             row,
-            None,
+            self.writer,
             self.now,
         )?;
         self.note_copied(def, row, Some(&before.values), copied)?;
@@ -1260,6 +1266,7 @@ pub struct Done {
 /// Run action `name` of collection `collection` with `args` (`{param:
 /// value, client_id?}`), inside `tx`. `Ok(Err(body))`: refused (nothing
 /// stays).
+#[allow(clippy::too_many_arguments)]
 pub fn run(
     tx: &Connection,
     collection: &str,
@@ -1268,6 +1275,7 @@ pub fn run(
     note: Option<&str>,
     caps: Caps,
     now: i64,
+    writer: Option<&'static str>,
 ) -> rusqlite::Result<Result<Done, Value>> {
     let refuse = |status: u16, error: &str, detail: String| {
         Ok(Err(
@@ -1393,6 +1401,7 @@ pub fn run(
         defs: &defs,
         caps,
         now,
+        writer,
         touched: Vec::new(),
         jobs: BTreeMap::new(),
         cache: HashMap::new(),

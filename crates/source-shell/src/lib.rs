@@ -88,7 +88,8 @@ fn empty() -> WorkspaceSpec {
 /// `jacks-in-settings`), served by `pod_core` (`GET /v1/jacks/screen`,
 /// `POST /v1/jacks/plug`, `POST /v1/jacks/unplug`), and the connected apps
 /// (decision `connected-apps`), which the pod host answers itself (`GET
-/// /v1/connected-apps/screen`, `POST /v1/connected-apps/revoke`).
+/// /v1/connected-apps/screen`, `POST /v1/connected-apps/revoke` and
+/// `/v1/connected-apps/access`, decision `mcp-access-levels`).
 pub const SETTINGS_MANIFEST: SourceManifest = SourceManifest {
     feeds: pod_core::static_app::FEEDS,
     entity_schemes: &["jacks", "connected_apps"],
@@ -130,6 +131,11 @@ pub const SETTINGS_MANIFEST: SourceManifest = SourceManifest {
             query_keys: &[],
             doc: "{id}: disconnect that app (its MCP credential stops working at once).",
         },
+        PathSpec {
+            pattern: "/v1/connected-apps/access",
+            query_keys: &[],
+            doc: "{id, access}: what that app may do: read, edit or outward (decision mcp-access-levels).",
+        },
     ],
     entities: &[
         EntityDoc {
@@ -144,6 +150,8 @@ pub const SETTINGS_MANIFEST: SourceManifest = SourceManifest {
                 ),
                 ("expiry", "when it ends by itself if unused, in words"),
                 ("connected", "true until it is disconnected"),
+                ("access", "what it may do: read, edit or outward"),
+                ("access_label", "its access and what that allows, in words"),
             ],
         },
         EntityDoc {

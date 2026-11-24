@@ -648,6 +648,10 @@ impl Source for CollectionsAdapter {
         mcp::tools()
     }
 
+    fn mcp_access(&self, tool: &str, args: &Value) -> Option<pod_core::mcp::Access> {
+        mcp::access(tool, args)
+    }
+
     fn mcp_summary(&self) -> Option<&'static str> {
         Some("data a layout keeps: lists, logs, any rows, with fillers and reminders")
     }
@@ -824,6 +828,9 @@ async fn write_row(
     };
     let caps = adapter(pod).caps;
     let name = collection.to_owned();
+    // Claude below outward access writes as itself, not as the owner
+    // (decision `mcp-access-levels`).
+    let writer = db::current_writer();
     let out = refusable_followed(pod, move |tx| {
         let Some((_, def)) = db::latest_def(tx, &name)? else {
             return Ok(Err(
@@ -898,6 +905,9 @@ async fn write_row(
                 return Ok(Err(e));
             }
             db::insert_row(tx, &name, &row)?;
+            if writer.is_some() {
+                db::note_writes(tx, &name, None, &row, writer, now)?;
+            }
             return Ok(Ok((
                 json!({ "ok": true, "id": row.id, "uri": db::row_uri(&name, &row.id) }),
                 jobs,
@@ -986,7 +996,7 @@ async fn write_row(
         }
         row.updated_at = now;
         db::save_row(tx, &name, &row)?;
-        db::note_writes(tx, &name, Some(&before_values), &row, None, now)?;
+        db::note_writes(tx, &name, Some(&before_values), &row, writer, now)?;
         Ok(Ok((json!({ "ok": true, "id": row.id }), jobs, computed)))
     })
     .await?;
@@ -1073,6 +1083,7 @@ pub(crate) async fn run_action(
 ) -> Result<Value, Value> {
     let caps = adapter(pod).caps;
     let (c, n) = (collection.to_owned(), name.to_owned());
+    let writer = db::current_writer();
     let done = refusable(pod, move |tx| {
         actions::run(
             tx,
@@ -1082,6 +1093,7 @@ pub(crate) async fn run_action(
             note.as_deref(),
             caps,
             pod_core::util::now_secs(),
+            writer,
         )
     })
     .await?;

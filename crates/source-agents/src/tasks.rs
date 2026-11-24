@@ -18,9 +18,10 @@
 //! did (summary and pull request, or why it failed) is appended to
 //! `diagnosis`, once.
 //!
-//! **Origin** (issue #243): only a row you (or Claude) queued starts a run.
-//! A row a filler made, or whose status, title, notes, workspace, model or
-//! runtime a filler or a model wrote last (Collections records who wrote
+//! **Origin** (issue #243): only a row you (or Claude with outward access,
+//! decision `mcp-access-levels`) queued starts a run. A row a filler made,
+//! or whose status, title, notes, workspace, model or runtime a filler, a
+//! model or Claude below outward access wrote last (Collections records who wrote
 //! each field: `collections_field_writers`), is failed with the reason
 //! instead; setting those fields yourself makes it startable again.
 //!
@@ -313,8 +314,9 @@ fn prompt(row: &Named) -> String {
 }
 
 /// Why row `t` may not start a run (issue #243): a filler made it, or a
-/// filler or a model wrote one of the fields a run is made from. `None`:
-/// you (or Claude) wrote it all.
+/// filler, a model or Claude below outward access wrote one of the fields a
+/// run is made from. `None`: you (or Claude with outward access) wrote it
+/// all.
 fn untrusted_origin(def: &model::Definition, t: &Task) -> Option<String> {
     let who = |w: &str| match w.strip_prefix("filler:") {
         Some(id) => match source_collections::filler::find(def, id) {
@@ -322,6 +324,9 @@ fn untrusted_origin(def: &model::Definition, t: &Task) -> Option<String> {
             _ => format!("the filler {id}"),
         },
         None if w == cdb::WRITER_DERIVED => "a value from other rows".to_owned(),
+        None if w == cdb::WRITER_CLAUDE => {
+            "Claude (through a connection without outward access)".to_owned()
+        }
         None => "a model".to_owned(),
     };
     if let Some(f) = &t.filler {
