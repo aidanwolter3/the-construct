@@ -539,7 +539,8 @@ async fn a_point_opens_its_piece() {
     let point = &b["entities"]["taste://points/1"];
     assert_eq!(point["id"], "shop0.example:1001", "{point}");
     assert!(point["title"].as_str().is_some_and(|t| !t.is_empty()));
-    assert!(b["queries"]["taste:similar:shop0_example__1001"].is_array());
+    assert!(b["queries"]["taste:point-similar:1"].is_array());
+    assert!(b["queries"]["taste:point-contrast:1"].is_array());
     let (status, _) = call(
         &pod,
         "GET",

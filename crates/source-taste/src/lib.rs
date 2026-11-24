@@ -204,10 +204,11 @@ pub const MANIFEST: SourceManifest = SourceManifest {
         },
         PathSpec {
             pattern: "/v1/taste/screens/point?n={n}",
-            query_keys: &["taste:similar:{key}", "taste:contrast:{key}"],
+            query_keys: &["taste:point-similar:{n}", "taste:point-contrast:{n}"],
             doc: "The piece at point <n> of the taste map (taste://points/<n>, with the item's \
-                  fields and its own key), its similar pieces and its opposites, as the item \
-                  screen has them.",
+                  fields and its own key, so taste://items/<key> opens its full screen), its \
+                  similar pieces (taste:point-similar:<n>) and its opposites \
+                  (taste:point-contrast:<n>).",
         },
         PathSpec {
             pattern: LIKES_PATH,
@@ -1188,7 +1189,6 @@ async fn point_route(
     let Some(id) = map.ids.get(n).cloned() else {
         return refuse(StatusCode::NOT_FOUND, "not_found", "no such point");
     };
-    let key = bundle::key_of(&id);
     let (item, similar, contrast) = tokio::join!(
         api::item(&a.client, &service, &id),
         api::related(&a.client, &service, &id, "similar", RELATED),
@@ -1202,8 +1202,8 @@ async fn point_route(
     let contrast = with_why(&pod, contrast.unwrap_or_default()).await;
     let item = with_why(&pod, vec![item]).await.remove(0);
     let mut b = DataBundle::default();
-    bundle::put_items(&mut b, &format!("taste:similar:{key}"), &similar);
-    bundle::put_items(&mut b, &format!("taste:contrast:{key}"), &contrast);
+    bundle::put_items(&mut b, &format!("taste:point-similar:{n}"), &similar);
+    bundle::put_items(&mut b, &format!("taste:point-contrast:{n}"), &contrast);
     bundle::put_item(&mut b, &item);
     // The point's own copy of the piece: what its screen shows (a reaction
     // there marks this copy, and the piece's own entity follows on reload).
