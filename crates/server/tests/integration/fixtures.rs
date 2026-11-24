@@ -413,6 +413,13 @@ fn taste_bundles() {
     let list = |v: &Value| bundle::with_why(&v.as_array().cloned().unwrap_or_default(), &kept);
     let page = newest(server::taste::APP_ID);
     assert_eq!(page["type"], "core://Page");
+    // The piece's sheet, a core layout the taste layout opens by id.
+    let sheet = newest(server::taste::ITEM_ID);
+    assert_eq!(sheet["type"], "core://Page");
+    check_or_write(
+        &format!("core_layout_{}_page.json", server::taste::ITEM_ID),
+        &(serde_json::to_string_pretty(&sheet).unwrap() + "\n"),
+    );
 
     let mut feed = protocol::DataBundle::default();
     bundle::status(
@@ -461,6 +468,8 @@ fn taste_bundles() {
             &list(&s["contrast"]),
         );
         let item = bundle::with_why(std::slice::from_ref(&s["item"]), &kept).remove(0);
+        // As the pod answers: the similar pieces again, for the piece's sheet.
+        bundle::put_sheet_similar(&mut b, &key, &list(&s["similar"]));
         bundle::put_item(&mut b, &item);
         screens.insert(
             format!("/v1/taste/screens/item?key={key}"),

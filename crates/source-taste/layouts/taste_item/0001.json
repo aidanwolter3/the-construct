@@ -13,155 +13,143 @@
       },
       "children": [
         {
-          "type": "core://List",
-          "query_key": "taste:item:$route.key",
-          "spacing_dp": 14,
-          "empty_text": "Loading…",
-          "item_template": {
-            "type": "core://Column",
-            "spacing_dp": 14,
-            "children": [
-              {
-                "type": "core://Row",
-                "spacing_dp": 12,
-                "align": "Center",
-                "children": [
-                  {
-                    "type": "core://Image",
-                    "url": "$item.thumb",
-                    "size_dp": 88,
-                    "shape": "Rounded",
-                    "content_description": "$item.title"
+          "type": "core://Row",
+          "spacing_dp": 12,
+          "align": "Center",
+          "children": [
+            {
+              "type": "core://Image",
+              "url": "${taste://items/$route.key#thumb}",
+              "size_dp": 88,
+              "shape": "Rounded",
+              "content_description": "${taste://items/$route.key#title}"
+            },
+            {
+              "type": "core://Column",
+              "spacing_dp": 2,
+              "children": [
+                {
+                  "type": "core://Text",
+                  "value_expr": "${taste://items/$route.key#brand}",
+                  "style": "Caption",
+                  "caps": true,
+                  "weight": "SemiBold",
+                  "max_lines": 1
+                },
+                {
+                  "type": "core://Text",
+                  "value_expr": "${taste://items/$route.key#title}",
+                  "style": "Title",
+                  "max_lines": 2
+                },
+                {
+                  "type": "core://Text",
+                  "value_expr": "${taste://items/$route.key#price_text}",
+                  "style": "Body"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "core://Row",
+          "children": [
+            {
+              "type": "core://Use",
+              "component": "core:link_button",
+              "args": {
+                "label": "Buy at ${taste://items/$route.key#host}",
+                "url": "${taste://items/$route.key#buy_url}"
+              }
+            },
+            {
+              "type": "core://Spacer"
+            },
+            {
+              "type": "core://Conditional",
+              "value": "${taste://items/$route.key#liked}",
+              "content": {
+                "type": "core://Button",
+                "label": "Liked",
+                "on_click": {
+                  "intent": "action.mutation.optimistic",
+                  "entity_uri": "taste://items/$route.key",
+                  "field": "liked",
+                  "value_expr": "false",
+                  "rollback_value": false,
+                  "endpoint": "/v1/taste/react",
+                  "payload": {
+                    "id": "${taste://items/$route.key#id}",
+                    "liked": "$value"
                   },
+                  "also": [
+                    {
+                      "field": "skipped",
+                      "value_expr": "false"
+                    }
+                  ]
+                },
+                "style": "Primary",
+                "size": "Small"
+              },
+              "equals": "true"
+            },
+            {
+              "type": "core://Conditional",
+              "value": "${taste://items/$route.key#liked}",
+              "content": {
+                "type": "core://Button",
+                "label": "Like",
+                "on_click": {
+                  "intent": "action.mutation.optimistic",
+                  "entity_uri": "taste://items/$route.key",
+                  "field": "liked",
+                  "value_expr": "true",
+                  "rollback_value": false,
+                  "endpoint": "/v1/taste/react",
+                  "payload": {
+                    "id": "${taste://items/$route.key#id}",
+                    "liked": "$value"
+                  },
+                  "also": [
+                    {
+                      "field": "skipped",
+                      "value_expr": "false"
+                    }
+                  ]
+                },
+                "style": "Secondary",
+                "size": "Small"
+              },
+              "equals": "true",
+              "not": true
+            },
+            {
+              "type": "core://Button",
+              "label": "Dislike",
+              "on_click": {
+                "intent": "action.mutation.optimistic",
+                "entity_uri": "taste://items/$route.key",
+                "field": "skipped",
+                "value_expr": "true",
+                "rollback_value": false,
+                "endpoint": "/v1/taste/react",
+                "payload": {
+                  "id": "${taste://items/$route.key#id}",
+                  "skipped": "$value"
+                },
+                "also": [
                   {
-                    "type": "core://Column",
-                    "spacing_dp": 2,
-                    "children": [
-                      {
-                        "type": "core://Text",
-                        "value_expr": "$item.brand",
-                        "style": "Caption",
-                        "caps": true,
-                        "weight": "SemiBold",
-                        "max_lines": 1
-                      },
-                      {
-                        "type": "core://Text",
-                        "value_expr": "$item.title",
-                        "style": "Title",
-                        "max_lines": 2
-                      },
-                      {
-                        "type": "core://Text",
-                        "value_expr": "$item.price_text",
-                        "style": "Body"
-                      }
-                    ]
+                    "field": "liked",
+                    "value_expr": "false"
                   }
                 ]
               },
-              {
-                "type": "core://Row",
-                "children": [
-                  {
-                    "type": "core://Use",
-                    "component": "core:link_button",
-                    "args": {
-                      "label": "Buy at $item.host",
-                      "url": "$item.buy_url"
-                    }
-                  },
-                  {
-                    "type": "core://Spacer"
-                  },
-                  {
-                    "type": "core://Conditional",
-                    "value": "$item.liked",
-                    "content": {
-                      "type": "core://Button",
-                      "label": "Liked",
-                      "on_click": {
-                        "intent": "action.mutation.optimistic",
-                        "entity_uri": "$item.uri",
-                        "field": "liked",
-                        "value_expr": "false",
-                        "rollback_value": false,
-                        "endpoint": "/v1/taste/react",
-                        "payload": {
-                          "id": "$item.id",
-                          "liked": "$value"
-                        },
-                        "also": [
-                          {
-                            "field": "skipped",
-                            "value_expr": "false"
-                          }
-                        ]
-                      },
-                      "style": "Primary",
-                      "size": "Small"
-                    },
-                    "equals": "true"
-                  },
-                  {
-                    "type": "core://Conditional",
-                    "value": "$item.liked",
-                    "content": {
-                      "type": "core://Button",
-                      "label": "Like",
-                      "on_click": {
-                        "intent": "action.mutation.optimistic",
-                        "entity_uri": "$item.uri",
-                        "field": "liked",
-                        "value_expr": "true",
-                        "rollback_value": false,
-                        "endpoint": "/v1/taste/react",
-                        "payload": {
-                          "id": "$item.id",
-                          "liked": "$value"
-                        },
-                        "also": [
-                          {
-                            "field": "skipped",
-                            "value_expr": "false"
-                          }
-                        ]
-                      },
-                      "style": "Secondary",
-                      "size": "Small"
-                    },
-                    "equals": "true",
-                    "not": true
-                  },
-                  {
-                    "type": "core://Button",
-                    "label": "Dislike",
-                    "on_click": {
-                      "intent": "action.mutation.optimistic",
-                      "entity_uri": "$item.uri",
-                      "field": "skipped",
-                      "value_expr": "true",
-                      "rollback_value": false,
-                      "endpoint": "/v1/taste/react",
-                      "payload": {
-                        "id": "$item.id",
-                        "skipped": "$value"
-                      },
-                      "also": [
-                        {
-                          "field": "liked",
-                          "value_expr": "false"
-                        }
-                      ]
-                    },
-                    "style": "Text",
-                    "size": "Small"
-                  }
-                ],
-                "spacing_dp": 6
-              }
-            ]
-          }
+              "style": "Text",
+              "size": "Small"
+            }
+          ],
+          "spacing_dp": 6
         },
         {
           "type": "core://Use",
@@ -172,13 +160,16 @@
           "children": [
             {
               "type": "core://List",
-              "query_key": "taste:similar:$route.key",
+              "query_key": "taste:sheet:similar",
               "item_template": {
                 "type": "core://Tappable",
                 "content_description": "Open $item.title",
                 "on_click": {
                   "intent": "action.sequence",
                   "steps": [
+                    {
+                      "intent": "action.navigation.back"
+                    },
                     {
                       "intent": "action.navigation.open",
                       "layout": "taste_item",
@@ -222,7 +213,13 @@
               },
               "spacing_dp": 12,
               "empty_text": "Nothing close to it.",
-              "columns": 3
+              "columns": 3,
+              "where": [
+                {
+                  "field": "of",
+                  "equals": "$route.key"
+                }
+              ]
             }
           ]
         }

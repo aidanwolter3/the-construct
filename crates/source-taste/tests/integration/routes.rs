@@ -217,6 +217,26 @@ async fn screens_answer_their_lists() {
             .len(),
         3
     );
+    // The similar pieces again for the piece's sheet (the taste_item core
+    // layout), under one fixed name, each a copy tagged with the piece.
+    let sheet = b["queries"]["taste:sheet:similar"].as_array().unwrap();
+    assert_eq!(sheet.len(), 3);
+    for uri in sheet {
+        let uri = uri.as_str().unwrap();
+        assert!(
+            uri.starts_with("taste://sheet-similar/shop0_example__1000/"),
+            "{uri}"
+        );
+        let e = &b["entities"][uri];
+        assert_eq!(e["of"], "shop0_example__1000");
+        assert_eq!(e["uri"], uri);
+        assert!(
+            e["key"]
+                .as_str()
+                .is_some_and(|k| k != "shop0_example__1000"),
+            "{e}"
+        );
+    }
 
     let (status, b) = call(
         &pod,

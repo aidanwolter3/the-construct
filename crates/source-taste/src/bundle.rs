@@ -268,6 +268,30 @@ pub fn put_item(b: &mut DataBundle, v: &Value) -> Option<String> {
     Some(uri)
 }
 
+/// The query of the similar pieces of the piece a sheet shows (the
+/// `taste_item` core layout): one fixed name, since a layout's list can't
+/// name a query by its route.
+pub const SHEET_SIMILAR: &str = "taste:sheet:similar";
+
+/// `items` (the pieces like the one keyed `key`) as [`SHEET_SIMILAR`]:
+/// copies at `taste://sheet-similar/<key>/<n>`, each with `of` set to
+/// `key`, so a sheet shows only its own piece's (`where of equals
+/// $route.key`), never another piece's while its own loads.
+pub fn put_sheet_similar(b: &mut DataBundle, key: &str, items: &[Value]) {
+    let mut uris = Vec::new();
+    for (n, v) in items.iter().enumerate() {
+        let Some((_, mut rec)) = item(v) else {
+            continue;
+        };
+        let uri = format!("taste://sheet-similar/{key}/{n}");
+        rec.0.insert("uri".into(), Value::from(uri.clone()));
+        rec.0.insert("of".into(), Value::from(key));
+        b.entities.insert(uri.clone(), rec);
+        uris.push(uri);
+    }
+    b.queries.insert(SHEET_SIMILAR.into(), uris);
+}
+
 /// The whole map as one entity for a `core://Scatter` ([`SCATTER_URI`]):
 /// every item a point (likes highlighted, skips muted, coloured by the
 /// model's like chance), its counts in words.

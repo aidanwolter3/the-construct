@@ -698,9 +698,21 @@
                                                     },
                                                     "items": "$item.photos",
                                                     "on_tap": {
-                                                      "intent": "action.navigation.open",
-                                                      "presentation": "Sheet",
-                                                      "target_uri": "taste://items/$item.key"
+                                                      "intent": "action.sequence",
+                                                      "steps": [
+                                                        {
+                                                          "intent": "action.navigation.open",
+                                                          "layout": "taste_item",
+                                                          "params": {
+                                                            "key": "$item.key"
+                                                          },
+                                                          "presentation": "Sheet"
+                                                        },
+                                                        {
+                                                          "intent": "action.data.load",
+                                                          "path": "/v1/taste/screens/item?key=$item.key"
+                                                        }
+                                                      ]
                                                     },
                                                     "tap_paging": true,
                                                     "type": "core://Carousel"
@@ -916,9 +928,21 @@
                                               },
                                               "items": "$item.photos",
                                               "on_tap": {
-                                                "intent": "action.navigation.open",
-                                                "presentation": "Sheet",
-                                                "target_uri": "taste://items/$item.key"
+                                                "intent": "action.sequence",
+                                                "steps": [
+                                                  {
+                                                    "intent": "action.navigation.open",
+                                                    "layout": "taste_item",
+                                                    "params": {
+                                                      "key": "$item.key"
+                                                    },
+                                                    "presentation": "Sheet"
+                                                  },
+                                                  {
+                                                    "intent": "action.data.load",
+                                                    "path": "/v1/taste/screens/item?key=$item.key"
+                                                  }
+                                                ]
                                               },
                                               "tap_paging": true,
                                               "type": "core://Carousel"
@@ -1106,9 +1130,21 @@
                                 },
                                 "content_description": "Swipe up for pieces like $item.title",
                                 "on_swipe_up": {
-                                  "intent": "action.navigation.open",
-                                  "presentation": "Sheet",
-                                  "target_uri": "taste://items/$item.key"
+                                  "intent": "action.sequence",
+                                  "steps": [
+                                    {
+                                      "intent": "action.navigation.open",
+                                      "layout": "taste_item",
+                                      "params": {
+                                        "key": "$item.key"
+                                      },
+                                      "presentation": "Sheet"
+                                    },
+                                    {
+                                      "intent": "action.data.load",
+                                      "path": "/v1/taste/screens/item?key=$item.key"
+                                    }
+                                  ]
                                 },
                                 "type": "core://Gesture"
                               },
@@ -1200,332 +1236,6 @@
       "type": "core://Box"
     },
     "screens": [
-      {
-        "data": "/v1/taste/screens/item?key=$route.key",
-        "id": "item",
-        "item": "taste://items/$route.key",
-        "root": {
-          "background": "${local://theme#page}",
-          "content": {
-            "children": [
-              {
-                "content": {
-                  "align": "Center",
-                  "children": [
-                    {
-                      "content": {
-                        "content_description": "Back",
-                        "icon": "arrow_back",
-                        "on_click": {
-                          "intent": "action.navigation.back"
-                        },
-                        "tag": "back",
-                        "type": "core://IconButton"
-                      },
-                      "type": "core://Conditional",
-                      "value": "${local://nav#can_go_back}"
-                    },
-                    {
-                      "style": "Headline",
-                      "type": "core://Text",
-                      "value_expr": "$item.brand",
-                      "weight": "SemiBold"
-                    },
-                    {
-                      "content": {
-                        "size_dp": 18,
-                        "type": "core://Progress"
-                      },
-                      "type": "core://Conditional",
-                      "value": "${local://screen#loading}"
-                    },
-                    {
-                      "type": "core://Spacer"
-                    },
-                    {
-                      "content": {
-                        "size_dp": 0,
-                        "type": "core://Spacer"
-                      },
-                      "height_dp": 48,
-                      "type": "core://Box",
-                      "width_dp": 1
-                    }
-                  ],
-                  "padding_v_dp": 4,
-                  "spacing_dp": 4,
-                  "type": "core://Row"
-                },
-                "padding_h_dp": 20,
-                "padding_v_dp": 4,
-                "type": "core://Box"
-              },
-              {
-                "content": {
-                  "align": "Center",
-                  "children": [
-                    {
-                      "content": {
-                        "style": "Caption",
-                        "type": "core://Text",
-                        "value_expr": "${local://screen#error}"
-                      },
-                      "content_color": "${local://theme#error}",
-                      "type": "core://Box"
-                    },
-                    {
-                      "type": "core://Spacer"
-                    },
-                    {
-                      "label": "Try again",
-                      "on_click": {
-                        "intent": "action.data.load",
-                        "path": "/v1/taste/screens/item?key=$route.key"
-                      },
-                      "size": "Small",
-                      "style": "Text",
-                      "type": "core://Button"
-                    }
-                  ],
-                  "padding_h_dp": 20,
-                  "padding_v_dp": 4,
-                  "spacing_dp": 8,
-                  "type": "core://Row"
-                },
-                "type": "core://Conditional",
-                "value": "${local://screen#error}"
-              },
-              {
-                "content": {
-                  "children": [
-                    {
-                      "align": "Center",
-                      "children": [
-                        {
-                          "content_description": "$item.title",
-                          "shape": "Rounded",
-                          "size_dp": 88,
-                          "type": "core://Image",
-                          "url": "$item.thumb"
-                        },
-                        {
-                          "children": [
-                            {
-                              "caps": true,
-                              "max_lines": 1,
-                              "style": "Caption",
-                              "type": "core://Text",
-                              "value_expr": "$item.brand",
-                              "weight": "SemiBold"
-                            },
-                            {
-                              "max_lines": 2,
-                              "style": "Title",
-                              "type": "core://Text",
-                              "value_expr": "$item.title"
-                            },
-                            {
-                              "style": "Body",
-                              "type": "core://Text",
-                              "value_expr": "$item.price_text"
-                            }
-                          ],
-                          "spacing_dp": 2,
-                          "type": "core://Column"
-                        }
-                      ],
-                      "spacing_dp": 12,
-                      "type": "core://Row"
-                    },
-                    {
-                      "children": [
-                        {
-                          "content": {
-                            "label": "Buy at $item.host",
-                            "on_click": {
-                              "intent": "action.link.open",
-                              "url": "$item.buy_url"
-                            },
-                            "type": "core://Button"
-                          },
-                          "type": "core://Conditional",
-                          "value": "$item.buy_url"
-                        },
-                        {
-                          "type": "core://Spacer"
-                        },
-                        {
-                          "content": {
-                            "label": "Liked",
-                            "on_click": {
-                              "also": [
-                                {
-                                  "field": "skipped",
-                                  "value_expr": "false"
-                                }
-                              ],
-                              "endpoint": "/v1/taste/react",
-                              "entity_uri": "$item.uri",
-                              "field": "liked",
-                              "intent": "action.mutation.optimistic",
-                              "payload": {
-                                "id": "$item.id",
-                                "liked": "$value"
-                              },
-                              "rollback_value": false,
-                              "value_expr": "false"
-                            },
-                            "size": "Small",
-                            "type": "core://Button"
-                          },
-                          "equals": "true",
-                          "type": "core://Conditional",
-                          "value": "$item.liked"
-                        },
-                        {
-                          "content": {
-                            "label": "Like",
-                            "on_click": {
-                              "also": [
-                                {
-                                  "field": "skipped",
-                                  "value_expr": "false"
-                                }
-                              ],
-                              "endpoint": "/v1/taste/react",
-                              "entity_uri": "$item.uri",
-                              "field": "liked",
-                              "intent": "action.mutation.optimistic",
-                              "payload": {
-                                "id": "$item.id",
-                                "liked": "$value"
-                              },
-                              "rollback_value": false,
-                              "value_expr": "true"
-                            },
-                            "size": "Small",
-                            "style": "Secondary",
-                            "type": "core://Button"
-                          },
-                          "equals": "true",
-                          "not": true,
-                          "type": "core://Conditional",
-                          "value": "$item.liked"
-                        },
-                        {
-                          "label": "Dislike",
-                          "on_click": {
-                            "also": [
-                              {
-                                "field": "liked",
-                                "value_expr": "false"
-                              }
-                            ],
-                            "endpoint": "/v1/taste/react",
-                            "entity_uri": "$item.uri",
-                            "field": "skipped",
-                            "intent": "action.mutation.optimistic",
-                            "payload": {
-                              "id": "$item.id",
-                              "skipped": "$value"
-                            },
-                            "rollback_value": false,
-                            "value_expr": "true"
-                          },
-                          "size": "Small",
-                          "style": "Text",
-                          "type": "core://Button"
-                        }
-                      ],
-                      "spacing_dp": 6,
-                      "type": "core://Row"
-                    },
-                    {
-                      "children": [
-                        {
-                          "size_dp": 14,
-                          "type": "core://Spacer"
-                        },
-                        {
-                          "content": {
-                            "style": "Label",
-                            "type": "core://Text",
-                            "value_expr": "Similar"
-                          },
-                          "content_color": "${local://theme#muted_text}",
-                          "padding_h_dp": 4,
-                          "type": "core://Box"
-                        },
-                        {
-                          "size_dp": 8,
-                          "type": "core://Spacer"
-                        },
-                        {
-                          "columns": 3,
-                          "empty_text": "Nothing close to it.",
-                          "item_template": {
-                            "content": {
-                              "children": [
-                                {
-                                  "aspect_ratio": 0.8,
-                                  "content_description": "$item.title",
-                                  "shape": "Rounded",
-                                  "type": "core://Image",
-                                  "url": "$item.thumb"
-                                },
-                                {
-                                  "caps": true,
-                                  "max_lines": 1,
-                                  "style": "Caption",
-                                  "type": "core://Text",
-                                  "value_expr": "$item.brand"
-                                },
-                                {
-                                  "max_lines": 2,
-                                  "style": "Secondary",
-                                  "type": "core://Text",
-                                  "value_expr": "$item.title"
-                                }
-                              ],
-                              "spacing_dp": 4,
-                              "type": "core://Column"
-                            },
-                            "content_description": "Open $item.title",
-                            "on_click": {
-                              "intent": "action.navigation.open",
-                              "presentation": "Sheet",
-                              "target_uri": "taste://items/$item.key"
-                            },
-                            "type": "core://Tappable"
-                          },
-                          "query_key": "taste:similar:$route.key",
-                          "spacing_dp": 12,
-                          "type": "core://List"
-                        }
-                      ],
-                      "type": "core://Column"
-                    },
-                    {
-                      "size_dp": 16,
-                      "type": "core://Spacer"
-                    }
-                  ],
-                  "padding_h_dp": 20,
-                  "padding_v_dp": 8,
-                  "spacing_dp": 14,
-                  "type": "core://Column"
-                },
-                "type": "core://Scroll"
-              }
-            ],
-            "type": "core://Column"
-          },
-          "fill": true,
-          "type": "core://Box"
-        },
-        "route": "taste://items/{key}",
-        "title": "Piece"
-      },
       {
         "data": "/v1/taste/screens/point?n=$route.n",
         "id": "point",
@@ -1818,9 +1528,21 @@
                             },
                             "content_description": "Open $item.title",
                             "on_click": {
-                              "intent": "action.navigation.open",
-                              "presentation": "Sheet",
-                              "target_uri": "taste://items/$item.key"
+                              "intent": "action.sequence",
+                              "steps": [
+                                {
+                                  "intent": "action.navigation.open",
+                                  "layout": "taste_item",
+                                  "params": {
+                                    "key": "$item.key"
+                                  },
+                                  "presentation": "Sheet"
+                                },
+                                {
+                                  "intent": "action.data.load",
+                                  "path": "/v1/taste/screens/item?key=$item.key"
+                                }
+                              ]
                             },
                             "type": "core://Tappable"
                           },
@@ -1973,9 +1695,21 @@
                         },
                         "content_description": "Open $item.title",
                         "on_click": {
-                          "intent": "action.navigation.open",
-                          "presentation": "Sheet",
-                          "target_uri": "taste://items/$item.key"
+                          "intent": "action.sequence",
+                          "steps": [
+                            {
+                              "intent": "action.navigation.open",
+                              "layout": "taste_item",
+                              "params": {
+                                "key": "$item.key"
+                              },
+                              "presentation": "Sheet"
+                            },
+                            {
+                              "intent": "action.data.load",
+                              "path": "/v1/taste/screens/item?key=$item.key"
+                            }
+                          ]
                         },
                         "type": "core://Tappable"
                       },
@@ -2133,9 +1867,21 @@
                         },
                         "content_description": "Open $item.title",
                         "on_click": {
-                          "intent": "action.navigation.open",
-                          "presentation": "Sheet",
-                          "target_uri": "taste://items/$item.key"
+                          "intent": "action.sequence",
+                          "steps": [
+                            {
+                              "intent": "action.navigation.open",
+                              "layout": "taste_item",
+                              "params": {
+                                "key": "$item.key"
+                              },
+                              "presentation": "Sheet"
+                            },
+                            {
+                              "intent": "action.data.load",
+                              "path": "/v1/taste/screens/item?key=$item.key"
+                            }
+                          ]
                         },
                         "type": "core://Tappable"
                       },
@@ -2445,9 +2191,21 @@
                                 },
                                 "content_description": "Open $item.title",
                                 "on_click": {
-                                  "intent": "action.navigation.open",
-                                  "presentation": "Sheet",
-                                  "target_uri": "taste://items/$item.key"
+                                  "intent": "action.sequence",
+                                  "steps": [
+                                    {
+                                      "intent": "action.navigation.open",
+                                      "layout": "taste_item",
+                                      "params": {
+                                        "key": "$item.key"
+                                      },
+                                      "presentation": "Sheet"
+                                    },
+                                    {
+                                      "intent": "action.data.load",
+                                      "path": "/v1/taste/screens/item?key=$item.key"
+                                    }
+                                  ]
                                 },
                                 "type": "core://Tappable"
                               },
@@ -2754,7 +2512,7 @@
                             },
                             "on_tap": {
                               "intent": "action.navigation.open",
-                              "presentation": "Sheet",
+                              "presentation": "Push",
                               "target_uri": "taste://points/$point.index"
                             },
                             "points": "$item.points",
@@ -3185,9 +2943,21 @@
                         },
                         "content_description": "Open $item.title",
                         "on_click": {
-                          "intent": "action.navigation.open",
-                          "presentation": "Sheet",
-                          "target_uri": "taste://items/$item.key"
+                          "intent": "action.sequence",
+                          "steps": [
+                            {
+                              "intent": "action.navigation.open",
+                              "layout": "taste_item",
+                              "params": {
+                                "key": "$item.key"
+                              },
+                              "presentation": "Sheet"
+                            },
+                            {
+                              "intent": "action.data.load",
+                              "path": "/v1/taste/screens/item?key=$item.key"
+                            }
+                          ]
                         },
                         "type": "core://Tappable"
                       },

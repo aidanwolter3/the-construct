@@ -164,13 +164,15 @@ pub const MANIFEST: SourceManifest = SourceManifest {
         PathSpec {
             pattern: "/v1/taste/screens/item?key={key}",
             query_keys: &[
-                "taste:item:{key}",
                 "taste:similar:{key}",
                 "taste:contrast:{key}",
+                bundle::SHEET_SIMILAR,
             ],
-            doc: "One item (taste://items/<key>, also as the list of one taste:item:<key>), its \
-                  similar pieces and its opposites (the same kind of garment, as different as \
-                  the catalog has).",
+            doc: "One item (taste://items/<key>), its similar pieces and its opposites (the same \
+                  kind of garment, as different as the catalog has); and the similar pieces \
+                  again as taste:sheet:similar, copies (taste://sheet-similar/<key>/<n>) whose \
+                  field of is <key>, for a layout that filters them by its route \
+                  (where of equals $route.key).",
         },
         PathSpec {
             pattern: "/v1/taste/screens/steer?key={key}&q={q}",
@@ -1077,12 +1079,12 @@ async fn item_route(
     let mut b = DataBundle::default();
     bundle::put_items(&mut b, &format!("taste:similar:{}", q.key), &similar);
     bundle::put_items(&mut b, &format!("taste:contrast:{}", q.key), &contrast);
-    // The item itself last, so its own fields win over a list's copy; and
-    // as a list of one (taste:item:<key>), for the piece's sheet (the
-    // `taste_item` core layout), which has no $item of its own.
-    if let Some(uri) = bundle::put_item(&mut b, &item) {
-        b.queries.insert(format!("taste:item:{}", q.key), vec![uri]);
-    }
+    // The piece's sheet (the `taste_item` core layout) reads its similar
+    // pieces from one query of fixed name, each a copy tagged with the piece
+    // it is like (`of`): a layout's list can't name a query by its route.
+    bundle::put_sheet_similar(&mut b, &q.key, &similar);
+    // The item itself last, so its own fields win over a list's copy.
+    bundle::put_item(&mut b, &item);
     Json(b).into_response()
 }
 
