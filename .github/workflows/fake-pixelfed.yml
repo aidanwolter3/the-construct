@@ -47,6 +47,10 @@ jobs:
     needs: test
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    # FLY_API_TOKEN_FAKE is a secret of the `staging` Environment, which only `main` may deploy from (#437).
+    environment:
+      name: staging
+      url: https://the-construct-fake-pixelfed.fly.dev
     concurrency:
       group: deploy-fake-pixelfed
       cancel-in-progress: false

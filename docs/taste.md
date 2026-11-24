@@ -27,6 +27,7 @@ with `CONSTRUCT_TASTE_PRIVATE_HOSTS=1`.
 | Data path | `/v1/taste/screens/search?q={q}` | `taste:search` and `taste://search/pod` |
 | Data path | `/v1/taste/screens/likes` | `taste:likes` |
 | Data path | `/v1/taste/screens/taste` | `taste:tastes`, their pieces `taste:taste_items` (each with its `taste`) and `taste://summary/pod` |
+| Data path | `/v1/taste/screens/one-taste?n={n}` | One taste to browse: `taste://tastes/<n>` (with `count_text`) and `taste:one-taste:<n>`, its likes (`liked` true) then the nearest pieces not judged yet, up to 60 |
 | Data path | `/v1/taste/screens/map?area={area}` | The taste map over an area (`taste://areas/<area>`) as 4 × 4 tiles, `taste:tiles:<area>` |
 | Data path | `/v1/taste/screens/area?area={area}` | `taste:area:<area>`: pieces inside an area of the map |
 | Action | `/v1/taste/react` | `{id, liked}`, `{id, skipped}` or `{id, kind}`: passed to the service |
@@ -105,6 +106,21 @@ scroll of its own). Nothing in the vocabulary sizes a photo by the screen's heig
 phone under its system bars and leaves room on a 390 × 844 one (the simulator scenario checks both). On a shorter
 screen the card's bottom is cut off rather than scrolled.
 
+Since `layouts/taste/0006.json`: the phone card's text block (brand, two lines of title, price, six lines of
+description) is a box of fixed height (184 dp), so every card in the deck is as tall as the longest. Before, a card
+behind the top one with a longer description was taller and its last line showed below the top card; now only its
+edge peeks out, and a short text leaves its room at the bottom of the card.
+
+Since `layouts/taste/0007.json`: each taste on Your taste has a Browse button (its title opens it too) that pushes
+`taste://tastes/{n}`, a screen with the taste's words, brands and kinds of garment over a scrolling grid of its pieces
+(two columns on a phone, more on a wide window): its likes first, marked ♥, then the catalog's pieces nearest the taste
+that haven't been liked or disliked. A piece opens the piece sheet. Since `layouts/taste_item/0002.json` the sheet
+leads with the piece's photos, a full-width carousel paged by tapping its left or right third (at most 380 dp wide),
+then its brand, title, price, Buy, Like and Dislike, its description and the similar pieces; the deck's swipe up, the
+Likes, Search and area grids open the same sheet. A carousel can't name a piece by the sheet's route, so the item's
+data path also answers it as `taste:sheet:piece`, which the sheet lists where `key` equals `$route.key`, paging
+`$item.photos`.
+
 Use it whole from a pod's layout, `{"type": "core://Use", "ref": "@core/taste"}` with the feed `["taste", "feed"]`,
 and link that from home; `taste:status`'s `counts_text` (12 liked · 30 disliked) makes a one-line summary there.
 
@@ -112,7 +128,8 @@ and link that from home; `taste:status`'s `counts_text` (12 liked · 30 disliked
 
 What the source calls, each with `Authorization: Bearer <token>`: `GET /api/feed?n=`, `POST /api/event {id, kind}`,
 `GET /api/item/<id>` and its `/similar`, `/contrast` and `/steer?q=`, `GET /api/search?q=`, `GET /api/likes`,
-`GET /api/taste`, `POST /api/taste/summary`, `GET /api/map` (`{ids, xy, cluster, thumb, liked, skipped, p}`: every
+`GET /api/taste`, `GET /api/taste/<n>?n=` (one taste: `{index, size, attributes, brands, categories, items, more}`,
+404 for no such taste), `POST /api/taste/summary`, `GET /api/map` (`{ids, xy, cluster, thumb, liked, skipped, p}`: every
 item's place, the liked and skipped ones by index and each one's chance or null), `GET /api/map/tiles?x0=&y0=&x1=&y1=&n=` (`{bounds, n, tiles}`, each tile
 `{i, j, x0, y0, x1, y1, count, likes, skips, p, color, item}`, row by row) and `GET /api/map/items?x0=&y0=&x1=&y1=&n=`.
 Items may carry `description`, `worn` (the first photo shows someone wearing it) and `p` (the chance the user likes

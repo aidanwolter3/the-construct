@@ -3,8 +3,9 @@ name: Release
 # The Construct's installable builds (decision `rust-clients`):
 #   - Android: scripts/android_native.sh --release --unsigned builds a release APK (not debuggable) with no signing
 #     secrets; the android-sign job, which runs no cargo and restores no cache, signs it with scripts/android_sign.sh
-#     (#442). Signed with the release key when these repository secrets are set, else with a throwaway debug key (and a
-#     warning; pull requests never get the release key):
+#     (#442). Signed with the release key when these secrets of the `release` Environment are set (#437: only `v*`
+#     tags may use it, with the developer's approval), else with a throwaway debug key (and a warning; pull requests
+#     never get the release key):
 #       ANDROID_KEYSTORE_BASE64     the keystore file (.jks or .p12), base64 on one line
 #       ANDROID_KEYSTORE_PASSWORD   its password
 #       ANDROID_KEY_ALIAS           the key's alias in it
@@ -110,13 +111,14 @@ jobs:
           retention-days: 1
 
   # Signs the APK: only apksigner (scripts/android_sign.sh), no cargo, no cache. The keystore is written to the runner's
-  # temp directory just before signing and deleted right after. When the `release` Environment exists (#437), this is
-  # the job to put behind it.
+  # temp directory just before signing and deleted right after. Only this job uses the `release` Environment, which
+  # holds the signing secrets (#437); a pull request's run uses no Environment and signs with a debug key.
   android-sign:
     name: Android release APK
     needs: [version, android]
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    environment: ${{ github.event_name != 'pull_request' && 'release' || '' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:

@@ -420,7 +420,7 @@ fn taste_deals_a_deck_maps_the_taste_and_shows_the_tastes() {
                  assert-no-text Details; assert-no-text Sign out of the taste service; \
                  assert-no-text 14 liked; assert-text Swipe up for similar; \
                  swipe-up Swipe up for pieces like Waxed Chore Coat in Olive; \
-                 assert-text Buy at shop0.example; assert-text Similar; assert-text Canvas Work Jacket; \
+                 assert-text Buy at shop0.example; scroll-to Similar; assert-text Similar; assert-text Canvas Work Jacket; \
                  assert-no-text Opposite; assert-no-text This, but; back; \
                  swipe-right Waxed Chore Coat in Olive by Fernhill Supply: swipe right to like, left to dislike, up for similar; \
                  assert-no-text Waxed Chore Coat in Olive by; assert-text Loose Pleated Trousers; \
@@ -751,4 +751,28 @@ fn a_layout_cant_move_the_app_to_another_server() {
     );
     assert_ok(&results);
     assert!(runner.switched.is_empty(), "{:?}", runner.switched);
+}
+
+#[test]
+fn taste_browses_a_taste_and_opens_a_piece_with_a_big_photo() {
+    std::thread::Builder::new()
+        .stack_size(16 * 1024 * 1024)
+        .spawn(|| {
+            // Your taste → Browse a taste: its words and a grid of its pieces,
+            // likes marked; a piece opens the sheet led by its photos.
+            let (_, results) = run(
+                "taste",
+                "click Taste; assert-text rugged workwear · waxed cotton · olive green · utilitarian; \
+                 click Browse; wait-text 3000 9 pieces: your likes first; assert-text Ripstop Field Jacket; \
+                 assert-text ♥ liked; scroll-to Waxed Chore Coat in Olive; \
+                 click Open Waxed Chore Coat in Olive; wait-text 3000 Photo 1 of 3; \
+                 tap-photo right Photo 1 of Waxed Chore Coat in Olive; assert-text Photo 2 of 3; \
+                 scroll-to Buy at shop0.example; assert-text Buy at shop0.example",
+                &out_dir("taste-browse"),
+            );
+            assert_ok(&results);
+        })
+        .unwrap()
+        .join()
+        .unwrap();
 }

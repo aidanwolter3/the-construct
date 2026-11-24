@@ -73,6 +73,9 @@ pub const TASTE_PATH: &str = "/v1/taste/screens/taste";
 pub const MAP_PATH: &str = "/v1/taste/screens/map";
 pub const AREA_PATH: &str = "/v1/taste/screens/area";
 pub const SCATTER_PATH: &str = "/v1/taste/screens/scatter";
+pub const ONE_TASTE_PATH: &str = "/v1/taste/screens/one-taste";
+/// The most pieces a taste's grid holds.
+pub const TASTE_GRID: usize = 60;
 pub const POINT_PATH: &str = "/v1/taste/screens/point";
 /// How long the pod keeps the whole map before asking for it again.
 pub const MAP_KEEP: std::time::Duration = std::time::Duration::from_secs(30 * 60);
@@ -167,12 +170,15 @@ pub const MANIFEST: SourceManifest = SourceManifest {
                 "taste:similar:{key}",
                 "taste:contrast:{key}",
                 bundle::SHEET_SIMILAR,
+                bundle::SHEET_PIECE,
             ],
             doc: "One item (taste://items/<key>), its similar pieces and its opposites (the same \
                   kind of garment, as different as the catalog has); and the similar pieces \
                   again as taste:sheet:similar, copies (taste://sheet-similar/<key>/<n>) whose \
                   field of is <key>, for a layout that filters them by its route \
-                  (where of equals $route.key).",
+                  (where of equals $route.key); and the item again as taste:sheet:piece, for a \
+                  sheet's photo carousel (a list where key equals $route.key, paging \
+                  $item.photos).",
         },
         PathSpec {
             pattern: "/v1/taste/screens/steer?key={key}&q={q}",
@@ -232,6 +238,14 @@ pub const MANIFEST: SourceManifest = SourceManifest {
                   describing words and brands; their pieces (taste:taste_items, each with the \
                   taste n it belongs to: a list in a taste's template filters where taste \
                   equals $item.n); and the written summary (taste://summary/pod).",
+        },
+        PathSpec {
+            pattern: "/v1/taste/screens/one-taste?n={n}",
+            query_keys: &["taste:one-taste:{n}"],
+            doc: "One taste to browse (n: its place in taste:tastes): taste://tastes/<n> (title, \
+                  size_text, attributes_text, brands_text, categories_text, count_text) and its \
+                  pieces, taste:one-taste:<n>: all its likes (liked true), closest to the taste \
+                  first, then the catalog's nearest pieces not liked or disliked yet, up to 60.",
         },
     ],
     actions: &[
@@ -498,6 +512,7 @@ impl Source for TasteAdapter {
             .route(SEARCH_PATH, get(search_route))
             .route(LIKES_PATH, get(likes_route))
             .route(TASTE_PATH, get(taste_route))
+            .route(ONE_TASTE_PATH, get(one_taste_route))
             .route(MAP_PATH, get(map_route))
             .route(AREA_PATH, get(area_route))
             .route(SCATTER_PATH, get(scatter_route))
@@ -1086,6 +1101,7 @@ async fn item_route(
     // pieces from one query of fixed name, each a copy tagged with the piece
     // it is like (`of`): a layout's list can't name a query by its route.
     bundle::put_sheet_similar(&mut b, &q.key, &similar);
+    bundle::put_sheet_piece(&mut b, &item);
     // The item itself last, so its own fields win over a list's copy.
     bundle::put_item(&mut b, &item);
     Json(b).into_response()
@@ -1341,6 +1357,41 @@ async fn taste_route(State(pod): State<Pod>, headers: HeaderMap) -> Response {
         Ok(v) => {
             let mut b = DataBundle::default();
             bundle::tastes(&mut b, &v);
+            Json(b).into_response()
+        }
+        Err(e) => service_error(e),
+    }
+}
+
+#[derive(serde::Deserialize)]
+struct TasteQuery {
+    #[serde(default)]
+    n: Option<usize>,
+}
+
+async fn one_taste_route(
+    State(pod): State<Pod>,
+    headers: HeaderMap,
+    Query(q): Query<TasteQuery>,
+) -> Response {
+    if let Err(r) = check_caller(&pod, &headers).await {
+        return r;
+    }
+    let Some(n) = q.n.filter(|n| *n < 12) else {
+        return refuse(
+            StatusCode::BAD_REQUEST,
+            "invalid_request",
+            "\"n\" is a taste's place in the list, 0 to 11",
+        );
+    };
+    let (a, service) = match signed_in(&pod).await {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    match api::one_taste(&a.client, &service, n, TASTE_GRID).await {
+        Ok(v) => {
+            let mut b = DataBundle::default();
+            bundle::one_taste(&mut b, n, &v);
             Json(b).into_response()
         }
         Err(e) => service_error(e),

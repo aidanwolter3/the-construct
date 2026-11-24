@@ -217,6 +217,11 @@ async fn screens_answer_their_lists() {
             .len(),
         3
     );
+    // The piece itself for the sheet's photo carousel, under one fixed name.
+    assert_eq!(
+        b["queries"]["taste:sheet:piece"],
+        json!(["taste://items/shop0_example__1000"])
+    );
     // The similar pieces again for the piece's sheet (the taste_item core
     // layout), under one fixed name, each a copy tagged with the piece.
     let sheet = b["queries"]["taste:sheet:similar"].as_array().unwrap();
@@ -301,6 +306,47 @@ async fn screens_answer_their_lists() {
         b["entities"]["taste://summary/pod"]["written_text"],
         "Written at 2 likes"
     );
+
+    // One taste to browse: its likes (marked liked) first, then the nearest pieces.
+    let (status, b) = call(
+        &pod,
+        "GET",
+        "/v1/taste/screens/one-taste?n=0",
+        Some("phone"),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(b["entities"]["taste://tastes/0"]["count_text"], "5 pieces");
+    assert_eq!(
+        b["entities"]["taste://tastes/0"]["attributes_text"],
+        "rugged workwear · earth tones"
+    );
+    let grid = b["queries"]["taste:one-taste:0"].as_array().unwrap();
+    assert_eq!(grid.len(), 5);
+    let liked: Vec<bool> = grid
+        .iter()
+        .map(|u| b["entities"][u.as_str().unwrap()]["liked"] == true)
+        .collect();
+    assert_eq!(liked, vec![true, true, false, false, false]);
+    let (status, _) = call(
+        &pod,
+        "GET",
+        "/v1/taste/screens/one-taste?n=3",
+        Some("phone"),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    let (status, _) = call(
+        &pod,
+        "GET",
+        "/v1/taste/screens/one-taste?n=x",
+        Some("phone"),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
 
     let (status, _) = call(
         &pod,

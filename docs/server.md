@@ -326,8 +326,11 @@ Nothing copies the data off Fly automatically yet: that needs object storage (a 
 The repository deploys a staging server to [Fly.io](https://fly.io): `deploy/pod.Dockerfile` builds the server image,
 and `deploy/fly/pod.toml` configures the app (`the-construct-pod`), its volume, health check and metrics. The image
 is Debian slim with Chromium for rendered fillers (decision `rendered-fetches`), on a 1 GB machine. CI deploys
-it on every push to `main` once the Rust job passes, and every Monday, when the repository secret
-`FLY_API_TOKEN_POD` is set. Each deploy passes the ISO week as `CHROMIUM_REFRESH`, so the image's Chromium and
+it on every push to `main` once the Rust job passes, and every Monday, when `FLY_API_TOKEN_POD` is set as a secret
+of the `staging` Environment (Settings → Environments; deployment branch `main` only, so no other ref's run can read
+it; decision `protected-paths-and-environments`). Make it a deploy-only token (`fly tokens create deploy -a
+the-construct-pod`), not an org or SSH-capable one; the fake Pixelfed's `FLY_API_TOKEN_FAKE` lives in the same
+Environment. Each deploy passes the ISO week as `CHROMIUM_REFRESH`, so the image's Chromium and
 Debian packages are reinstalled at least weekly rather than kept in a cached layer (decision `browser-sandbox`). The
 web client's build waits for the server's: run at once on Fly's remote builder, the two release builds ran it out of
 memory. By hand, from the repository root:

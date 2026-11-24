@@ -60,43 +60,59 @@
           "content": {
             "children": [
               {
-                "align": "Center",
                 "children": [
                   {
-                    "content_description": "${taste://items/$route.key#title}",
-                    "shape": "Rounded",
-                    "size_dp": 88,
-                    "type": "core://Image",
-                    "url": "${taste://items/$route.key#thumb}"
-                  },
-                  {
-                    "children": [
-                      {
-                        "caps": true,
-                        "max_lines": 1,
-                        "style": "Caption",
-                        "type": "core://Text",
-                        "value_expr": "${taste://items/$route.key#brand}",
-                        "weight": "SemiBold"
+                    "empty_text": "",
+                    "item_template": {
+                      "aspect_ratio": 0.8,
+                      "item_template": {
+                        "aspect_ratio": 0.8,
+                        "content_description": "Photo $item.n of $item.title",
+                        "shape": "Rounded",
+                        "type": "core://Image",
+                        "url": "$item.url"
                       },
+                      "items": "$item.photos",
+                      "tap_paging": true,
+                      "type": "core://Carousel"
+                    },
+                    "query_key": "taste:sheet:piece",
+                    "type": "core://List",
+                    "where": [
                       {
-                        "max_lines": 2,
-                        "style": "Title",
-                        "type": "core://Text",
-                        "value_expr": "${taste://items/$route.key#title}"
-                      },
-                      {
-                        "style": "Body",
-                        "type": "core://Text",
-                        "value_expr": "${taste://items/$route.key#price_text}"
+                        "equals": "$route.key",
+                        "field": "key"
                       }
-                    ],
-                    "spacing_dp": 2,
-                    "type": "core://Column"
+                    ]
                   }
                 ],
-                "spacing_dp": 12,
-                "type": "core://Row"
+                "max_width_dp": 380,
+                "type": "core://Column"
+              },
+              {
+                "children": [
+                  {
+                    "caps": true,
+                    "max_lines": 1,
+                    "style": "Caption",
+                    "type": "core://Text",
+                    "value_expr": "${taste://items/$route.key#brand}",
+                    "weight": "SemiBold"
+                  },
+                  {
+                    "max_lines": 2,
+                    "style": "Title",
+                    "type": "core://Text",
+                    "value_expr": "${taste://items/$route.key#title}"
+                  },
+                  {
+                    "style": "Body",
+                    "type": "core://Text",
+                    "value_expr": "${taste://items/$route.key#price_text}"
+                  }
+                ],
+                "spacing_dp": 2,
+                "type": "core://Column"
               },
               {
                 "children": [
@@ -200,6 +216,15 @@
                 ],
                 "spacing_dp": 6,
                 "type": "core://Row"
+              },
+              {
+                "content": {
+                  "style": "Secondary",
+                  "type": "core://Text",
+                  "value_expr": "${taste://items/$route.key#description}"
+                },
+                "type": "core://Conditional",
+                "value": "${taste://items/$route.key#description}"
               },
               {
                 "children": [
