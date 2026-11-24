@@ -494,8 +494,10 @@ pub fn ramp_color(ramp: &[Rgba; 3], t: f32) -> Rgba {
 /// laid out again (a data change elsewhere on the screen) finds them here.
 fn decoded_points(packed: &str) -> Arc<[protocol::scatter::Point]> {
     use std::hash::{Hash, Hasher};
+    /// A packed string's hash and length, and its points.
+    type Decoded = (u64, usize, Arc<[protocol::scatter::Point]>);
     thread_local! {
-        static DECODED: std::cell::RefCell<Vec<(u64, usize, Arc<[protocol::scatter::Point]>)>> =
+        static DECODED: std::cell::RefCell<Vec<Decoded>> =
             const { std::cell::RefCell::new(Vec::new()) };
     }
     let mut h = std::collections::hash_map::DefaultHasher::new();

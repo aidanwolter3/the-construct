@@ -280,6 +280,7 @@ fn layers(scene: &Scene, images: Option<&crate::images::ImageStore>) -> Layers {
                     texts.push(Vec::new());
                     icons.push(Vec::new());
                 }
+                quads[l].reserve(run.dots.len());
                 run.for_each_quad(|q| quads[l].push(q));
                 placed_q.push((e, l));
             }
@@ -887,7 +888,6 @@ impl HeadlessSurface {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
     use std::time::Instant;
 
     use super::layers;
