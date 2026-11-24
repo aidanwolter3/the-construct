@@ -354,8 +354,13 @@ pub fn bundle(
     }
     let cells = cells(devices, &all_days, day_keys, zone, now);
     // The releases in the days shown: (build, day, hours into it).
+    // Only releases a device ran (in the days shown) and the server's
+    // own: staging releases on every merge, most of which no device ever
+    // runs, and each would take a line, a legend row and a colour.
+    let ran = |b: &str| b == server || cells.iter().any(|c| c.build.as_deref() == Some(b));
     let shown_releases: Vec<(&str, &String, f64)> = releases
         .iter()
+        .filter(|(build, _)| ran(build))
         .filter_map(|(build, at)| {
             day_keys.iter().find_map(|day| {
                 let (start, end) = day_bounds(day, zone)?;
@@ -786,8 +791,11 @@ mod tests {
             .collect();
         // The server's build came out at 18:00; an older one before the
         // days shown.
+        // And one at 9:00 no device ever ran: no line, no legend row.
+        let unused = "0.6.0+20261117100000.0dd1e57";
         let releases = vec![
             (old.to_owned(), midnight - 20 * 86_400),
+            (unused.to_owned(), midnight + 9 * 3600),
             (SERVER.to_owned(), midnight + 18 * 3600),
         ];
         let b = bundle(
@@ -805,6 +813,12 @@ mod tests {
         assert_eq!(release["bar"], "2026-11-19");
         assert_eq!(release["hours"], 18.0);
         assert_eq!(release["series"], "1");
+        assert!(
+            b.queries[BUILDS_QUERY]
+                .iter()
+                .all(|u| b.entities[u].0["build"] != unused),
+            "a release no device ran isn't in the legend"
+        );
         let cells: Vec<&serde_json::Map<String, Value>> = b.queries[DEVICE_CELLS_QUERY]
             .iter()
             .map(|u| &b.entities[u].0)

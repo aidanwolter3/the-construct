@@ -38,7 +38,9 @@ Decision:
   a dashed vertical line down the whole grid, from the first row's label to the last row's cells, at a moment in
   its column (one layer over the rows, laid out as the cells are). The feed's `monitor:releases` are the server
   builds the pod ran (`server_builds`), at the moment the pod first ran each, coloured as the build, so a line
-  shows where devices could switch to that colour. That is when the pod first saw the deploy (its first request
+  shows where devices could switch to that colour. Only releases a device ran in the days shown, and the
+  server's own build, are shown: staging releases on every merge, and the rest would each take a line, a legend
+  row and a colour. That is when the pod first saw the deploy (its first request
   after it), not the deploy itself.
 - **Server health 0003** draws the grid, filtered by the kind chips, and a tap shows that device's day.
 
