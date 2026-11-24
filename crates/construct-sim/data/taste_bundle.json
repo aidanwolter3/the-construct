@@ -907,54 +907,58 @@
                                         "type": "core://Row"
                                       },
                                       {
-                                        "children": [
-                                          {
-                                            "caps": true,
-                                            "max_lines": 1,
-                                            "style": "Caption",
-                                            "type": "core://Text",
-                                            "value_expr": "$item.brand",
-                                            "weight": "SemiBold"
-                                          },
-                                          {
-                                            "max_lines": 2,
-                                            "style": "Label",
-                                            "type": "core://Text",
-                                            "value_expr": "$item.title"
-                                          },
-                                          {
-                                            "children": [
-                                              {
-                                                "style": "Body",
-                                                "type": "core://Text",
-                                                "value_expr": "$item.price_text"
-                                              },
-                                              {
-                                                "type": "core://Spacer"
-                                              },
-                                              {
-                                                "style": "Caption",
-                                                "type": "core://Text",
-                                                "value_expr": "$item.chance_text"
-                                              }
-                                            ],
-                                            "spacing_dp": 6,
-                                            "type": "core://Row"
-                                          },
-                                          {
-                                            "content": {
-                                              "max_lines": 6,
-                                              "style": "Secondary",
+                                        "content": {
+                                          "children": [
+                                            {
+                                              "caps": true,
+                                              "max_lines": 1,
+                                              "style": "Caption",
                                               "type": "core://Text",
-                                              "value_expr": "$item.description"
+                                              "value_expr": "$item.brand",
+                                              "weight": "SemiBold"
                                             },
-                                            "type": "core://Conditional",
-                                            "value": "$item.description"
-                                          }
-                                        ],
-                                        "padding_h_dp": 2,
-                                        "spacing_dp": 3,
-                                        "type": "core://Column"
+                                            {
+                                              "max_lines": 2,
+                                              "style": "Label",
+                                              "type": "core://Text",
+                                              "value_expr": "$item.title"
+                                            },
+                                            {
+                                              "children": [
+                                                {
+                                                  "style": "Body",
+                                                  "type": "core://Text",
+                                                  "value_expr": "$item.price_text"
+                                                },
+                                                {
+                                                  "type": "core://Spacer"
+                                                },
+                                                {
+                                                  "style": "Caption",
+                                                  "type": "core://Text",
+                                                  "value_expr": "$item.chance_text"
+                                                }
+                                              ],
+                                              "spacing_dp": 6,
+                                              "type": "core://Row"
+                                            },
+                                            {
+                                              "content": {
+                                                "max_lines": 6,
+                                                "style": "Secondary",
+                                                "type": "core://Text",
+                                                "value_expr": "$item.description"
+                                              },
+                                              "type": "core://Conditional",
+                                              "value": "$item.description"
+                                            }
+                                          ],
+                                          "padding_h_dp": 2,
+                                          "spacing_dp": 3,
+                                          "type": "core://Column"
+                                        },
+                                        "height_dp": 184,
+                                        "type": "core://Box"
                                       }
                                     ],
                                     "spacing_dp": 8,

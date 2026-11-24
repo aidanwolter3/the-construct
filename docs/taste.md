@@ -105,6 +105,11 @@ scroll of its own). Nothing in the vocabulary sizes a photo by the screen's heig
 phone under its system bars and leaves room on a 390 × 844 one (the simulator scenario checks both). On a shorter
 screen the card's bottom is cut off rather than scrolled.
 
+Since `layouts/taste/0006.json`: the phone card's text block (brand, two lines of title, price, six lines of
+description) is a box of fixed height (184 dp), so every card in the deck is as tall as the longest. Before, a card
+behind the top one with a longer description was taller and its last line showed below the top card; now only its
+edge peeks out, and a short text leaves its room at the bottom of the card.
+
 Use it whole from a pod's layout, `{"type": "core://Use", "ref": "@core/taste"}` with the feed `["taste", "feed"]`,
 and link that from home; `taste:status`'s `counts_text` (12 liked · 30 disliked) makes a one-line summary there.
 

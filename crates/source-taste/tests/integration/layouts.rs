@@ -98,4 +98,10 @@ fn the_deck_has_no_buttons_and_does_not_scroll() {
         signed_in.to_string().contains("\"stack\":true"),
         "the deck is still a stack"
     );
+    // Every phone card is the same height, so the card behind the top one never shows its
+    // text below it: the text block (brand, title, price, description) has a fixed height.
+    assert!(
+        signed_in.to_string().contains("\"height_dp\":184"),
+        "the phone card's text block has no fixed height"
+    );
 }
