@@ -4063,24 +4063,6 @@ impl Session {
                         out.push(Effect::NotSent {
                             intent: intent.clone(),
                         });
-                    } else if let Some(frame) = match intent["presentation"].as_str() {
-                        // A screen of this layout presented over it, as a
-                        // layout can be: a Sheet from the bottom, a Panel
-                        // from the start, an Overlay from its edge.
-                        Some("Sheet") => Some(Frame::Edge(protocol::Edge::Bottom)),
-                        Some("Panel") => Some(Frame::Edge(protocol::Edge::Start)),
-                        Some("Overlay") => Some(Frame::Edge(
-                            serde_json::from_value(intent["edge"].clone()).unwrap_or_default(),
-                        )),
-                        _ => None,
-                    } {
-                        let ti = self.top_index();
-                        let e = &mut self.stack[ti];
-                        e.frame = frame;
-                        e.in_frame = true;
-                        if let Some(v) = intent["size_dp"].as_f64() {
-                            e.size = Some(v as f32);
-                        }
                     }
                 } else {
                     out.push(Effect::NotSent {
