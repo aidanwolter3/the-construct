@@ -124,6 +124,8 @@ pub struct ImageStore {
 
 /// Custom glyph ids below this are icons (`crate::icons::id`).
 pub const FIRST_GLYPH_ID: u16 = 256;
+/// Marks a glyph key's radius as a stand-in's ([`ImageStore::stand_in`]).
+const STAND_IN: u32 = 1 << 31;
 /// Most cut versions kept (the least recently used goes first).
 const MAX_CUT: usize = 64;
 /// Most bytes of decoded images kept at once (about sixteen of the largest,
@@ -304,9 +306,58 @@ impl ImageStore {
         false
     }
 
+    /// Whether a cut is being made on another thread ([`Self::prepare`]).
+    pub fn cutting(&self) -> bool {
+        !self.lock().cutting.is_empty()
+    }
+
+    /// Whether some cut of `url` is ready (at any size), to stand in for
+    /// one that isn't cut yet ([`ImageStore::stand_in_glyph_id`]).
+    pub fn has_cut(&self, url: &str) -> bool {
+        self.lock().cut.keys().any(|k| k.0 == url)
+    }
+
+    /// The cut of `url` nearest `w` × `h` pixels (preferring `radius`
+    /// corners), scaled to `w` × `h` quickly (nearest pixel): what draws
+    /// for a frame or two while the exact cut is made on another thread,
+    /// so an image that has loaded never shows as a blank box when the
+    /// size it is drawn at changes (a deck's next card taking the top).
+    pub fn stand_in(&self, url: &str, w: u32, h: u32, radius: u32) -> Option<RgbaImage> {
+        let near = {
+            let g = self.lock();
+            g.cut
+                .iter()
+                .filter(|(k, _)| k.0 == url)
+                .min_by_key(|(k, _)| {
+                    (
+                        k.3 != radius,
+                        k.1.abs_diff(w) as u64 + k.2.abs_diff(h) as u64,
+                    )
+                })
+                .map(|(_, v)| v.0.clone())?
+        };
+        Some(image::imageops::resize(
+            near.as_ref(),
+            w.max(1),
+            h.max(1),
+            image::imageops::FilterType::Nearest,
+        ))
+    }
+
     /// A stable custom-glyph id for `url` drawn with `radius` pixel corners.
     pub fn glyph_id(&self, url: &str, radius: f32) -> u16 {
-        let key = (url.to_owned(), radius.max(0.0).round() as u32);
+        self.id_for(url, radius.max(0.0).round() as u32)
+    }
+
+    /// A stable custom-glyph id for a stand-in of `url` ([`Self::stand_in`]):
+    /// apart from [`Self::glyph_id`]'s, so the atlas never keeps a stand-in
+    /// in place of the exact cut.
+    pub fn stand_in_glyph_id(&self, url: &str, radius: f32) -> u16 {
+        self.id_for(url, radius.max(0.0).round() as u32 | STAND_IN)
+    }
+
+    fn id_for(&self, url: &str, radius: u32) -> u16 {
+        let key = (url.to_owned(), radius);
         let mut g = self.lock();
         if let Some(id) = g.ids.get(&key) {
             return *id;
@@ -317,12 +368,13 @@ impl ImageStore {
         id
     }
 
-    /// The url and corner radius (pixels) of a glyph id.
-    pub fn glyph(&self, id: u16) -> Option<(String, u32)> {
+    /// The url and corner radius (pixels) of a glyph id, and whether it is
+    /// a stand-in's ([`Self::stand_in_glyph_id`]).
+    pub fn glyph(&self, id: u16) -> Option<(String, u32, bool)> {
         let g = self.lock();
         g.by_id
             .get(id.checked_sub(FIRST_GLYPH_ID)? as usize)
-            .cloned()
+            .map(|(u, r)| (u.clone(), r & !STAND_IN, r & STAND_IN != 0))
     }
 }
 
@@ -402,9 +454,32 @@ mod tests {
         assert!(id >= FIRST_GLYPH_ID);
         assert_eq!(
             store.glyph(id),
-            Some(("https://img.example/a.jpg".into(), 2))
+            Some(("https://img.example/a.jpg".into(), 2, false))
         );
         assert_eq!(store.glyph_id("https://img.example/a.jpg", 2.0), id);
+        // A stand-in's id is another, for the same image and corners.
+        let stand = store.stand_in_glyph_id("https://img.example/a.jpg", 2.0);
+        assert_ne!(stand, id);
+        assert_eq!(
+            store.glyph(stand),
+            Some(("https://img.example/a.jpg".into(), 2, true))
+        );
+    }
+
+    /// A cut at another size stands in for one not made yet, at the size
+    /// asked for; an image never cut has none.
+    #[test]
+    fn a_cut_at_another_size_stands_in() {
+        let store = ImageStore::new();
+        let url = "https://img.example/a.jpg";
+        store.insert(url, Some(RgbaImage::new(80, 100)));
+        assert!(!store.has_cut(url));
+        assert!(store.stand_in(url, 30, 40, 0).is_none());
+        store.cut(url, 20, 25, 0.0).unwrap();
+        assert!(store.has_cut(url));
+        let s = store.stand_in(url, 30, 40, 0).unwrap();
+        assert_eq!((s.width(), s.height()), (30, 40));
+        assert!(!store.has_cut("https://img.example/b.jpg"));
     }
 
     /// Decoded images stay under the budget: the least recently drawn goes

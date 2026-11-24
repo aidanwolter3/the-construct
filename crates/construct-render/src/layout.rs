@@ -314,6 +314,9 @@ struct Elem {
     /// A tap-paged carousel's frame: its page count and the page showing,
     /// drawn as bars over the top of its photo after its pages.
     page_bars: Option<(usize, usize)>,
+    /// The card waiting under a deck's top one (`core://List` `stack`):
+    /// [`STACK_INSET`] narrower each side until it becomes the top card.
+    deck_behind: bool,
 }
 
 /// What a laid-out `core://Scatter` draws and runs (feature `scatter`).
@@ -1344,6 +1347,7 @@ impl<'i> Build<'_, 'i> {
             card: None,
             field: None,
             tap_pager: false,
+            deck_behind: false,
             scatter: None,
             page_bars: None,
         });
@@ -1723,6 +1727,7 @@ impl<'i> Build<'_, 'i> {
             card: None,
             field: None,
             tap_pager: false,
+            deck_behind: false,
             scatter: None,
             page_bars: None,
         });
@@ -3265,6 +3270,7 @@ impl<'i> Build<'_, 'i> {
                         f(&mut s);
                         this.restyle(node, s);
                     };
+                    self.elems[behind].deck_behind = true;
                     restyle(self, behind, &|s| {
                         s.flex_basis = percent(1.0);
                         s.flex_shrink = 1.0;
@@ -5087,7 +5093,19 @@ impl Laid {
     fn collect_prefetch(&mut self) {
         let mut prefetch = Vec::new();
         let mut tap_pagers = BTreeMap::new();
-        for e in &self.elems {
+        // The elements inside a deck's card behind the top one.
+        let mut behind = vec![false; self.elems.len()];
+        let mut walk = vec![(self.root, false)];
+        while let Some((i, under)) = walk.pop() {
+            let under = under || self.elems[i].deck_behind;
+            behind[i] = under;
+            walk.extend(self.elems[i].kids.iter().map(|&k| (k, under)));
+        }
+        // Their first page's photos are also cut at the size they'll have on
+        // top ([`STACK_INSET`] wider each side, the same shape), so taking
+        // over from the card swiped away never shows a blank.
+        let mut promoted = Vec::new();
+        for (ei, e) in self.elems.iter().enumerate() {
             let Some(id) = &e.pager else {
                 continue;
             };
@@ -5109,6 +5127,23 @@ impl Laid {
                             h,
                             radius: radius.min(w.min(h) / 2.0),
                         });
+                        if behind[ei] && pages.is_empty() && w > 0.0 {
+                            // As tall as the top card's (a card stretched to
+                            // the deck's height), or the same shape (one
+                            // whose height follows its width): both, so
+                            // either layout finds its cut made.
+                            let w2 = w + 2.0 * STACK_INSET;
+                            let shaped = (h * w2 / w).round();
+                            let heights: &[f32] = if shaped == h { &[h] } else { &[h, shaped] };
+                            for &h2 in heights {
+                                promoted.push(Prefetch {
+                                    url: url.clone(),
+                                    w: w2,
+                                    h: h2,
+                                    radius: radius.min(w2.min(h2) / 2.0),
+                                });
+                            }
+                        }
                     }
                     stack.extend(el.kids.iter().rev());
                 }
@@ -5118,6 +5153,8 @@ impl Laid {
                 tap_pagers.insert(id.clone(), pages);
             }
         }
+        // After every page's own (the tap pagers index into those).
+        prefetch.extend(promoted);
         self.prefetch = prefetch;
         self.tap_pagers = tap_pagers;
     }
