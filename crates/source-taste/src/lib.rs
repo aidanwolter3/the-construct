@@ -163,9 +163,14 @@ pub const MANIFEST: SourceManifest = SourceManifest {
     data_paths: &[
         PathSpec {
             pattern: "/v1/taste/screens/item?key={key}",
-            query_keys: &["taste:similar:{key}", "taste:contrast:{key}"],
-            doc: "One item (taste://items/<key>), its similar pieces and its opposites (the same \
-                  kind of garment, as different as the catalog has).",
+            query_keys: &[
+                "taste:item:{key}",
+                "taste:similar:{key}",
+                "taste:contrast:{key}",
+            ],
+            doc: "One item (taste://items/<key>, also as the list of one taste:item:<key>), its \
+                  similar pieces and its opposites (the same kind of garment, as different as \
+                  the catalog has).",
         },
         PathSpec {
             pattern: "/v1/taste/screens/steer?key={key}&q={q}",
@@ -377,8 +382,28 @@ pub const APP: CoreLayoutInfo = CoreLayoutInfo {
     feeds: &[(NAME, FEED)],
 };
 
-// `FILES`: every `layouts/*.json` of this crate, in number order (`build.rs`).
+/// The `taste_item` core layout's id: one piece as a sheet (its photo,
+/// brand, title, price, Buy, like or dislike, and the pieces like it), which
+/// the `taste` layout opens with params `{key}` and then loads the piece's
+/// data path into.
+pub const ITEM_ID: &str = "taste_item";
+
+pub const ITEM: CoreLayoutInfo = CoreLayoutInfo {
+    id: ITEM_ID,
+    title: "Piece",
+    icon: "favorite",
+    dev: false,
+    auth: AuthPolicy::Public,
+    feeds: &[(NAME, FEED)],
+};
+
+// `TASTE_FILES` and `ITEM_FILES`: every `layouts/taste/*.json` and
+// `layouts/taste_item/*.json`, in number order (`build.rs`).
 include!(concat!(env!("OUT_DIR"), "/layout_files.rs"));
+
+/// Every layout file of the source's core layouts.
+pub static FILES: std::sync::LazyLock<Vec<LayoutSource>> =
+    std::sync::LazyLock::new(|| TASTE_FILES.iter().chain(ITEM_FILES).copied().collect());
 
 /// The env var that lets the service live on a private address (local
 /// development and tests only).
@@ -439,11 +464,11 @@ impl Source for TasteAdapter {
     }
 
     fn core_layouts(&self) -> Vec<CoreLayoutInfo> {
-        vec![APP]
+        vec![APP, ITEM]
     }
 
     fn layout_files(&self) -> &'static [LayoutSource] {
-        FILES
+        &FILES
     }
 
     fn migrations(&self) -> &'static [Step] {
@@ -1052,8 +1077,12 @@ async fn item_route(
     let mut b = DataBundle::default();
     bundle::put_items(&mut b, &format!("taste:similar:{}", q.key), &similar);
     bundle::put_items(&mut b, &format!("taste:contrast:{}", q.key), &contrast);
-    // The item itself last, so its own fields win over a list's copy.
-    bundle::put_item(&mut b, &item);
+    // The item itself last, so its own fields win over a list's copy; and
+    // as a list of one (taste:item:<key>), for the piece's sheet (the
+    // `taste_item` core layout), which has no $item of its own.
+    if let Some(uri) = bundle::put_item(&mut b, &item) {
+        b.queries.insert(format!("taste:item:{}", q.key), vec![uri]);
+    }
     Json(b).into_response()
 }
 
