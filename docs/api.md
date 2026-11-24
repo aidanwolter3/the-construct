@@ -125,7 +125,7 @@ a page saying sharing is paused, and the copies stay stored. A page address with
 |---|---|
 | `GET /s/<link>` *public* | The web client's page for the copy, titled with its title (`og:title`, `noindex`). |
 | `GET /s/<link>/view` *public* | The copy, as stored: `{format: 2, layout, title, node, data, item?, params?, layouts?}`, the plumbing a visitor's page draws (the root and, by id, the layouts it opens and embeds) and the rows they show. A copy without `format` is format 1 (`{title, node, data, item?}`). 404 once revoked. |
-| `GET /s/<link>/image?url=<url>` *public* | An image the copy names, passed on as `/web/image` does; a URL the copy doesn't name is 404. |
+| `GET /s/<link>/image?url=<url>` *public* | An image the copy names, passed on as `/web/image` does; a URL the copy doesn't name is 404. 429 `rate_limited` past 120 tries a minute per pod, counted apart from its own devices' `/web/image` and `/v1/image`. |
 
 Pods make and revoke them with the MCP tools `share_publicly`, `list_public_links` and `unshare_publicly`
 ([building.md](building.md#public-links-for-people-without-a-pod)).
