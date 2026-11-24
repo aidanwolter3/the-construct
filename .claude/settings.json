@@ -12,7 +12,8 @@
     "the-construct": {
       "source": {
         "source": "github",
-        "repo": "aidanwolter3/the-construct"
+        "repo": "aidanwolter3/the-construct",
+        "ref": "1f8c4eb03b3a80ac16d64d7c43ae2c53f3b25277"
       }
     }
   },

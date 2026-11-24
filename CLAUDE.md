@@ -119,8 +119,12 @@ Habits that avoid known traps:
 
 **Plugins**: the repo is also a Claude Code plugin marketplace (`.claude-plugin/marketplace.json`, plugins in
 `plugins/`). `.claude/settings.json` enables them for sessions in this repo, cloud ones included; `afk` gives
-`/afk` (keep working without the developer, then summarize). On a Mac, install once for every project with
-`/plugin marketplace add aidanwolter3/the-construct` and `/plugin install afk@the-construct`.
+`/afk` (keep working without the developer, then summarize). The marketplace is pinned to a commit (`ref` in
+`.claude/settings.json`, a full SHA; Claude Code 2.1.324 or later), so a merge to `main` doesn't change the plugins
+any session or Mac loads (issue #452). To ship a plugin change: merge it, then in a second PR set `ref` to that
+merge commit's full SHA (`git rev-parse origin/main`); both PRs need the developer's review. On a Mac, install once
+for every project with `/plugin marketplace add aidanwolter3/the-construct#<that SHA>` and
+`/plugin install afk@the-construct`; after a bump, remove and re-add the marketplace with the new SHA.
 
 **Staging** needs a pod token: make a temporary one with
 `curl -fsS -X POST -H "X-Construct-Client: claude-session $CLAUDE_CODE_SESSION_ID" https://the-construct-pod.fly.dev/v1/pods/temporary | jq -r .session_token`
