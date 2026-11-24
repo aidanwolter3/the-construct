@@ -147,6 +147,9 @@ connector); a new session started after that sees the new tools.
 - **Ask before a change that needs a client build** (a new node type, intent or field, or an engine store change):
   say so before starting, and offer a ticket instead if it wasn't part of the request. Every PR's summary says
   plainly whether a new desktop or Android build is needed.
+- **Protected paths** (`.github/CODEOWNERS`: workflows, `deploy/`, plugins, `.claude/`, this file, the signing and
+  cloud setup scripts) need the developer's approving review before they merge; the `ship` skill opens, greens and
+  waits on such a PR instead of merging it (decision `protected-paths-and-environments`).
 - Sessions started for tickets (`ticket` skill, "Starting sessions") each own their PR through to merged; the
   session that started them tracks them but doesn't watch their PRs.
 - Pushes to `main` deploy staging.
