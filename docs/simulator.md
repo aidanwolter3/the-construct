@@ -90,6 +90,10 @@ word is the command and the rest of the entry, as written, its argument: `click 
 | `type <target> <text>` | Replaces a text field's text (`field:<name>`, `tag:textfield:<name>`, its placeholder, or the field's name). |
 | `swipe-left <target>` / `swipe-right <target>` | Scrolls a chip row (`tag:chips:<field>`) by 60% of the screen's width, else throws a `core://SwipeCard` off that way (its intent runs), else pages a carousel, else runs the `core://Gesture`'s `on_swipe_left` / `on_swipe_right` there. |
 | `drag-card <points> <target>` | Moves the `core://SwipeCard` there sideways by that much (negative: left) and holds it, for a shot of it mid-drag; `release` lets go (past its threshold it flies off and its intent runs, else it springs back). |
+| `tap-photo left\|right <target>` | A tap on the left or right third of the tap-paged `core://Carousel` at the target (a photo's description), then waits for the page to turn. |
+| `scatter-zoom <factor> <target>` | Zooms the `core://Scatter` at the target about its middle. |
+| `scatter-tap <x> <y> <target>` | A tap at data point (`x`, `y`) (0..1) of the scatter: its `on_tap` runs for the nearest point. |
+| `scatter-box <x0> <y0> <x1> <y1> <target>` / `scatter-select …` | Drags a box between data points on the scatter: `scatter-box` holds it (drawn, for a shot) until `release`, which runs `on_select`; `scatter-select` lets go at once. |
 | `swipe-down <target>` / `swipe-up <target>` | A flick: closes a sheet from its handle (`tag:sheet-handle`), else runs the gesture's `on_swipe_down` / `on_swipe_up`. |
 | `drag-down <points> <target>` | Drags a sheet's handle down and lets go without a fling (it closes past a quarter of its height), else scrolls the view there up by that much. |
 | `scroll-to <target>` | Scrolls until the node is on screen. |

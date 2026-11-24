@@ -135,7 +135,10 @@ footer's Send, makes it follow its content to the end once that has grown, while
 `SceneBuilder` can be given another with `today`), List (`where`, `filter`, `group_by`, `columns`, `focus`, `indent`, `empty_text`), ChoiceChips (a row as wide as its place; chips past its
 edge scroll sideways under a finger, a sideways wheel or trackpad, or Shift and the wheel), TextField
 (with its Send button beside it when it has `on_submit`), Switch, Progress, Dock, Layout (inline, from the layouts
-given), Carousel (pages side by side, an "n/N" badge and dots; a sideways drag pages it, snapping to a page), and
+given), Carousel (pages side by side, an "n/N" badge and dots; a sideways drag pages it, snapping to a page; with
+`tap_paging`, bars over the page instead, taps on its outer thirds turn it, and a turn waits for the next page's
+photo with the current one showing: `interact/gallery.rs`), Scatter (its points as small quads, plain ones first and
+highlighted ones on top, in the zoom and pan kept among the screen's offsets, and the box being selected), and
 every named icon (`icons.rs`: Material path data, rasterized with zeno; on the GPU they are glyphon
 custom glyphs). Images draw once loaded (over a placeholder in the blurhash's colour; only live sessions load them;
 in a window they are cut to their box on a background thread; `file://` ones, staged photos, are read from disk, only
@@ -398,7 +401,11 @@ Windows place a laid-out frame again on scroll without laying it out (`Laid::emi
 that scrolls flings on release and slows down each frame; one that scrolls nothing, past 48 points, is a swipe that
 runs the `core://Gesture` under its start (`on_swipe_*`). A sideways drag that starts on a `core://SwipeCard` moves
 it instead (`Session::drag_card`, an offset at `card:<id>` that only places the frame again); `release_card` throws
-it off (then its intent runs, from `take_swiped`, which the window calls each frame) or springs it back. A `core://Progress` spinner is an arc with a fading tail
+it off (then its intent runs, from `take_swiped`, which the window calls each frame) or springs it back. A pointer
+that goes down on a `core://Scatter` is its gesture (`ScatterGesture`): a drag pans, two fingers pinch, the wheel
+zooms, a long press (or the plot's `select`) makes the drag draw a box that runs `on_select` on release, and one
+that doesn't move is a tap on the nearest point. Every image a layout lays out but may not draw yet (a carousel's
+other pages, the card behind a deck's top one) is asked for before those drawn (`Session::prefetch`). A `core://Progress` spinner is an arc with a fading tail
 that turns once a second; a window draws every frame while one is on screen, and previews and the simulator draw it
 still. Text fields are edited by the engine itself, as Android's
 own fields behave, and on Android the keyboard edits them too (below): a tap puts the cursor where
