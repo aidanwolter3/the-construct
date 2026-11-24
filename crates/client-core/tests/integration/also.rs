@@ -48,13 +48,16 @@ fn fast_config() -> EngineConfig {
 
 /// Scriptable server: `bundle` for layout `feed` (by name: home is a
 /// blank page), POST statuses popped from `statuses` (200 when empty);
-/// records POST (path, body, status).
+/// records POST (path, body, status). While [`Script::hold`] is on, POSTs
+/// wait for an answer, so a test can see the optimistic state before the
+/// outbox hears back.
 #[derive(Clone)]
 struct Script {
     bundle: Arc<Mutex<String>>,
     construct: Arc<crate::construct_stub::Construct>,
     statuses: Arc<Mutex<VecDeque<u16>>>,
     posts: Arc<Mutex<Vec<(String, Value, u16)>>>,
+    held: Arc<std::sync::atomic::AtomicBool>,
 }
 
 impl Script {
@@ -64,7 +67,13 @@ impl Script {
             construct: Arc::default(),
             statuses: Arc::new(Mutex::new(statuses.iter().copied().collect())),
             posts: Arc::default(),
+            held: Arc::default(),
         }
+    }
+
+    /// Hold POSTs unanswered (`true`) or let them through (`false`).
+    fn hold(&self, on: bool) {
+        self.held.store(on, std::sync::atomic::Ordering::SeqCst);
     }
 
     fn posts(&self) -> Vec<(String, Value, u16)> {
@@ -115,6 +124,9 @@ impl Script {
                     let (status, resp) = if let Some(answer) = construct {
                         answer
                     } else if method == "POST" {
+                        while script.held.load(std::sync::atomic::Ordering::SeqCst) {
+                            thread::sleep(Duration::from_millis(5));
+                        }
                         let status = script.statuses.lock().unwrap().pop_front().unwrap_or(200);
                         let sent = serde_json::from_slice(&body).unwrap_or(Value::Null);
                         script
@@ -298,8 +310,11 @@ fn rejected_like_restores_both_fields() {
         let s = engine.snapshot();
         s.is_online && s.workspace_json != "null"
     });
+    // Held, so the 403 can't roll the like back before it is seen.
+    script.hold(true);
     engine.dispatch(LIKE);
     assert_eq!(post1(&engine.snapshot()), (true, 6));
+    script.hold(false);
     wait_until("rejected row removed", || {
         engine.snapshot().pending_actions == 0 && !script.posts().is_empty()
     });
