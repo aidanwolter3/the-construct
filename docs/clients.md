@@ -184,7 +184,7 @@ previous one. The APK is built unsigned (`scripts/android_native.sh --release --
 signing secret, since it runs every dependency's build script and restores a cache; a second job that runs no cargo
 signs it with `scripts/android_sign.sh`, writing the keystore just before and deleting it right after. It is signed
 with the release key from these repository secrets (without them, and always on pull requests, with a throwaway debug
-key and a warning):
+key and a warning). The release carries only the signed APK and the `.dmg`, never the unsigned build:
 
 | Secret | What |
 |---|---|
