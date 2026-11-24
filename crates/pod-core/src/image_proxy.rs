@@ -11,7 +11,9 @@
 //!
 //! Answers are kept for a while ([`ImageCache`]: [`CACHE_TTL`], at most
 //! [`CACHE_BYTES`] in all), so a photo paged back to, or a card seen again on
-//! another device, isn't fetched from its site again.
+//! another device, isn't fetched from its site again. An entry costs its
+//! url and a fixed overhead as well as its bytes, and there are at most
+//! [`CACHE_ENTRIES`], so empty images at long urls can't grow it unbounded.
 
 use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
@@ -41,6 +43,10 @@ pub const CACHE_TTL: Duration = Duration::from_secs(60 * 60);
 pub const CACHE_BYTES: usize = 64 << 20;
 /// An image larger than this isn't kept (it would push out many others).
 const CACHE_ONE_MAX: usize = 4 << 20;
+/// The most images kept, however small.
+pub const CACHE_ENTRIES: usize = 4096;
+/// What an entry costs besides its url and bytes (counted in [`CACHE_BYTES`]).
+const ENTRY_OVERHEAD: usize = 256;
 
 /// Images fetched lately, by url: their type and bytes, when fetched and
 /// when last served. Shared by every pod of the server (the images are
@@ -70,7 +76,7 @@ impl ImageCache {
             .is_some_and(|e| now.duration_since(e.fetched) < CACHE_TTL);
         if !fresh {
             if let Some(e) = self.entries.remove(url) {
-                self.used -= e.bytes.len();
+                self.used -= cost(url, &e.bytes);
             }
             return None;
         }
@@ -86,9 +92,9 @@ impl ImageCache {
         }
         self.tick += 1;
         if let Some(old) = self.entries.remove(url) {
-            self.used -= old.bytes.len();
+            self.used -= cost(url, &old.bytes);
         }
-        self.used += bytes.len();
+        self.used += cost(url, &bytes);
         self.entries.insert(
             url.to_owned(),
             CachedImage {
@@ -98,7 +104,7 @@ impl ImageCache {
                 used: self.tick,
             },
         );
-        while self.used > CACHE_BYTES {
+        while self.used > CACHE_BYTES || self.entries.len() > CACHE_ENTRIES {
             let Some(oldest) = self
                 .entries
                 .iter()
@@ -108,15 +114,30 @@ impl ImageCache {
                 break;
             };
             if let Some(e) = self.entries.remove(&oldest) {
-                self.used -= e.bytes.len();
+                self.used -= cost(&oldest, &e.bytes);
             }
         }
     }
 
-    /// Bytes kept.
+    /// What the kept images cost, urls and overhead included.
     pub fn bytes(&self) -> usize {
         self.used
     }
+
+    /// How many images are kept.
+    pub fn len(&self) -> usize {
+        self.entries.len()
+    }
+
+    /// Whether none are.
+    pub fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
+}
+
+/// What keeping `bytes` at `url` costs.
+fn cost(url: &str, bytes: &Bytes) -> usize {
+    url.len() + bytes.len() + ENTRY_OVERHEAD
 }
 
 fn cache() -> &'static Mutex<ImageCache> {
@@ -309,6 +330,39 @@ mod tests {
             c.get(&format!("https://a.example/{}", n - 1), now)
                 .is_some()
         );
+    }
+
+    #[test]
+    fn empty_images_at_long_urls_stay_within_the_budget() {
+        let now = Instant::now();
+        let mut c = ImageCache::default();
+        let path = "a".repeat(8 << 10);
+        for i in 0..(CACHE_BYTES / (8 << 10) + 100) {
+            c.put(
+                &format!("https://a.example/{i}/{path}"),
+                "image/png",
+                Bytes::new(),
+                now,
+            );
+        }
+        assert!(c.bytes() <= CACHE_BYTES, "{}", c.bytes());
+        assert!(c.len() < CACHE_BYTES / (8 << 10), "{}", c.len());
+        // Many tiny ones at short urls: at most CACHE_ENTRIES.
+        let mut c = ImageCache::default();
+        for i in 0..(CACHE_ENTRIES + 10) {
+            c.put(
+                &format!("https://a.example/{i}"),
+                "image/png",
+                Bytes::from_static(b"x"),
+                now,
+            );
+        }
+        assert_eq!(c.len(), CACHE_ENTRIES);
+        assert!(
+            c.get(&format!("https://a.example/{}", CACHE_ENTRIES + 9), now)
+                .is_some()
+        );
+        assert!(c.get("https://a.example/0", now).is_none());
     }
 
     #[test]
