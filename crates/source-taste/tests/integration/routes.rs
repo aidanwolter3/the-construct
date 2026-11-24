@@ -302,6 +302,47 @@ async fn screens_answer_their_lists() {
         "Written at 2 likes"
     );
 
+    // One taste to browse: its likes (marked liked) first, then the nearest pieces.
+    let (status, b) = call(
+        &pod,
+        "GET",
+        "/v1/taste/screens/one-taste?n=0",
+        Some("phone"),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(b["entities"]["taste://tastes/0"]["count_text"], "5 pieces");
+    assert_eq!(
+        b["entities"]["taste://tastes/0"]["attributes_text"],
+        "rugged workwear · earth tones"
+    );
+    let grid = b["queries"]["taste:one-taste:0"].as_array().unwrap();
+    assert_eq!(grid.len(), 5);
+    let liked: Vec<bool> = grid
+        .iter()
+        .map(|u| b["entities"][u.as_str().unwrap()]["liked"] == true)
+        .collect();
+    assert_eq!(liked, vec![true, true, false, false, false]);
+    let (status, _) = call(
+        &pod,
+        "GET",
+        "/v1/taste/screens/one-taste?n=3",
+        Some("phone"),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    let (status, _) = call(
+        &pod,
+        "GET",
+        "/v1/taste/screens/one-taste?n=x",
+        Some("phone"),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+
     let (status, _) = call(
         &pod,
         "GET",

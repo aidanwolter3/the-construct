@@ -188,6 +188,23 @@ pub async fn taste(c: &OutboundClient, s: &Service) -> Result<Value, ApiError> {
     Ok(v)
 }
 
+/// `GET /api/taste/<index>?n=<n>`: one taste to browse (its likes, then the
+/// catalog's nearest pieces not yet liked or disliked, up to `n` in all).
+pub async fn one_taste(
+    c: &OutboundClient,
+    s: &Service,
+    index: usize,
+    n: usize,
+) -> Result<Value, ApiError> {
+    get(
+        c,
+        s,
+        &["taste", &index.to_string()],
+        &[("n", n.to_string())],
+    )
+    .await
+}
+
 /// `GET /api/feed?n=<n>`: the next page.
 pub async fn feed(c: &OutboundClient, s: &Service, n: usize) -> Result<Vec<Value>, ApiError> {
     items(get(c, s, &["feed"], &[("n", n.to_string())]).await?)

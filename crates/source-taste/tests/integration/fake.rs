@@ -285,6 +285,34 @@ async fn taste(State(f): State<Arc<Fake>>, headers: HeaderMap) -> Response {
     .into_response()
 }
 
+/// One taste to browse: its two likes, then the nearest pieces; only taste 0.
+async fn one_taste(
+    State(f): State<Arc<Fake>>,
+    headers: HeaderMap,
+    Path(index): Path<String>,
+) -> Response {
+    if let Err(r) = check(&f, &headers) {
+        return r;
+    }
+    if index != "0" {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(json!({"detail": "no such taste"})),
+        )
+            .into_response();
+    }
+    let mut likes = vec![product(0, 1), product(0, 2)];
+    for l in &mut likes {
+        l["liked"] = json!(true);
+    }
+    Json(json!({
+        "index": 0, "size": 2, "attributes": ["rugged workwear", "earth tones"],
+        "brands": ["Fernhill Supply"], "categories": ["jacket"],
+        "items": likes, "more": [product(6, 0), product(6, 1), product(6, 2)],
+    }))
+    .into_response()
+}
+
 async fn summary(State(f): State<Arc<Fake>>, headers: HeaderMap) -> Response {
     if let Err(r) = check(&f, &headers) {
         return r;
@@ -303,6 +331,7 @@ pub async fn serve(fake: Arc<Fake>) -> String {
         .route("/api/likes", get(likes))
         .route("/api/taste", get(taste))
         .route("/api/taste/summary", post(summary))
+        .route("/api/taste/{index}", get(one_taste))
         .route("/api/map", get(map))
         .route("/api/map/tiles", get(map_tiles))
         .route("/api/map/items", get(map_items))

@@ -411,31 +411,7 @@ pub fn tastes(b: &mut DataBundle, v: &Value) {
         .unwrap_or_default();
     for (n, t) in list.iter().take(12).enumerate() {
         let uri = format!("taste://tastes/{n}");
-        let words = |k: &str, max: usize| {
-            t.get(k)
-                .and_then(Value::as_array)
-                .map(|a| {
-                    a.iter()
-                        .filter_map(Value::as_str)
-                        .take(max)
-                        .map(|s| clean(s, 40))
-                        .collect::<Vec<_>>()
-                        .join(" · ")
-                })
-                .unwrap_or_default()
-        };
-        let size = t.get("size").and_then(Value::as_i64).unwrap_or(0);
-        let rec = json!({
-            "n": n.to_string(),
-            "title": format!("Taste {}", n + 1),
-            "size_text": if size == 1 { "1 like".to_owned() } else { format!("{size} likes") },
-            "attributes_text": words("attributes", 6),
-            "brands_text": words("brands", 5),
-            "categories_text": words("categories", 5),
-        });
-        if let Value::Object(m) = rec {
-            b.entities.insert(uri.clone(), EntityRecord(m));
-        }
+        b.entities.insert(uri.clone(), taste_record(n, t));
         // Each taste's pieces as entities of their own (`taste` says whose),
         // all in one query a list inside a taste's template filters.
         for v in t
@@ -460,6 +436,81 @@ pub fn tastes(b: &mut DataBundle, v: &Value) {
     b.queries.insert(TASTE_ITEMS_QUERY.into(), pieces);
     let likes = v.get("likes").and_then(Value::as_i64).unwrap_or(0);
     summary(b, v.get("summary").filter(|s| s.is_object()), likes);
+}
+
+/// A taste as an entity (`taste://tastes/<n>`): its title, size and words.
+fn taste_record(n: usize, t: &Value) -> EntityRecord {
+    let words = |k: &str, max: usize| {
+        t.get(k)
+            .and_then(Value::as_array)
+            .map(|a| {
+                a.iter()
+                    .filter_map(Value::as_str)
+                    .take(max)
+                    .map(|s| clean(s, 40))
+                    .collect::<Vec<_>>()
+                    .join(" · ")
+            })
+            .unwrap_or_default()
+    };
+    let size = t.get("size").and_then(Value::as_i64).unwrap_or(0);
+    let mut m = serde_json::Map::new();
+    m.insert("n".into(), json!(n.to_string()));
+    m.insert("title".into(), json!(format!("Taste {}", n + 1)));
+    m.insert(
+        "size_text".into(),
+        json!(if size == 1 {
+            "1 like".to_owned()
+        } else {
+            format!("{size} likes")
+        }),
+    );
+    m.insert("attributes_text".into(), json!(words("attributes", 6)));
+    m.insert("brands_text".into(), json!(words("brands", 5)));
+    m.insert("categories_text".into(), json!(words("categories", 5)));
+    EntityRecord(m)
+}
+
+/// The query of one taste's pieces to browse (taste `n`'s likes, then the
+/// nearest pieces not yet judged).
+pub fn one_taste_query(n: usize) -> String {
+    format!("taste:one-taste:{n}")
+}
+
+/// One taste to browse, from `GET /api/taste/<n>`: the taste's entity (with
+/// `count_text`, how many pieces the grid holds) and its pieces in order,
+/// likes first; a like's `liked` is true, so a grid can mark it.
+pub fn one_taste(b: &mut DataBundle, n: usize, v: &Value) {
+    let mut rec = taste_record(n, v);
+    let likes: Vec<Value> = v
+        .get("items")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let more: Vec<Value> = v
+        .get("more")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let mut all = Vec::with_capacity(likes.len() + more.len());
+    for mut l in likes {
+        // The service lists a taste's likes as liked; say so whatever it sent.
+        if let Value::Object(m) = &mut l {
+            m.insert("liked".into(), Value::Bool(true));
+        }
+        all.push(l);
+    }
+    all.extend(more);
+    let total = all.len();
+    rec.0.insert(
+        "count_text".into(),
+        json!(match total {
+            1 => "1 piece".to_owned(),
+            t => format!("{t} pieces"),
+        }),
+    );
+    b.entities.insert(format!("taste://tastes/{n}"), rec);
+    put_items(b, &one_taste_query(n), &all);
 }
 
 /// The summary entity from `{text, likes}` (or none written yet).
