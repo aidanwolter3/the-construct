@@ -380,7 +380,7 @@
                                               "align": "Center",
                                               "background": "${local://theme#accent}",
                                               "border_color": "${local://theme#accent}",
-                                              "content_color": "#FFFFFF",
+                                              "content_color": "${local://theme#page}",
                                               "content": {
                                                 "type": "core://IconButton",
                                                 "icon": "favorite",
@@ -596,7 +596,7 @@
                                       "align": "Center",
                                       "background": "${local://theme#accent}",
                                       "border_color": "${local://theme#accent}",
-                                      "content_color": "#FFFFFF",
+                                      "content_color": "${local://theme#page}",
                                       "content": {
                                         "type": "core://IconButton",
                                         "icon": "favorite",

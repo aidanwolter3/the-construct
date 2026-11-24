@@ -879,7 +879,7 @@
                                                           "size_dp": 26,
                                                           "type": "core://IconButton"
                                                         },
-                                                        "content_color": "#FFFFFF",
+                                                        "content_color": "${local://theme#page}",
                                                         "corner_dp": 28,
                                                         "height_dp": 56,
                                                         "type": "core://Box",
@@ -1103,7 +1103,7 @@
                                                   "size_dp": 26,
                                                   "type": "core://IconButton"
                                                 },
-                                                "content_color": "#FFFFFF",
+                                                "content_color": "${local://theme#page}",
                                                 "corner_dp": 28,
                                                 "height_dp": 56,
                                                 "type": "core://Box",
