@@ -50,7 +50,7 @@ async fn the_feed_is_kept_and_fetched_only_when_asked() {
     let ws = workspace(&pod, &app).await;
     let status = &ws["entities"]["taste://status/pod"];
     assert_eq!(status["signed_in"], true, "{ws}");
-    assert_eq!(status["counts_text"], "2 liked · 1 skipped");
+    assert_eq!(status["counts_text"], "2 liked · 1 disliked");
     let feed = ws["queries"]["taste:feed"].as_array().unwrap().clone();
     assert_eq!(feed.len(), 6);
     let first = &ws["entities"][feed[0].as_str().unwrap()];
@@ -149,7 +149,7 @@ async fn reactions_reach_the_service_and_stick() {
     );
     assert_eq!(
         ws["entities"]["taste://status/pod"]["counts_text"],
-        "1 liked · 1 skipped"
+        "1 liked · 1 disliked"
     );
     let mut topped = false;
     for _ in 0..100 {
@@ -468,7 +468,7 @@ async fn the_scatter_is_the_whole_map_packed_and_kept() {
     assert_eq!(status, StatusCode::OK, "{b}");
     let map = &b["entities"]["taste://maps/catalog"];
     assert_eq!(map["count"], 5);
-    assert_eq!(map["reactions_text"], "1 liked · 1 skipped");
+    assert_eq!(map["reactions_text"], "1 liked · 1 disliked");
     assert_eq!(map["modelled"], true);
     let points = decode(map["points"].as_str().unwrap()).unwrap();
     assert_eq!(points.len(), 5);

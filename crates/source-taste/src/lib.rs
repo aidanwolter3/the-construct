@@ -112,7 +112,10 @@ const ITEM_FIELDS: &[(&str, &str)] = &[
     ("image_large", "the same 1600 px wide"),
     ("thumb", "the same 360 px wide"),
     ("liked", "true once liked"),
-    ("skipped", "true once disliked (a left swipe; the field keeps this name)"),
+    (
+        "skipped",
+        "true once disliked (a left swipe; the field keeps this name)",
+    ),
     (
         "why_text",
         "feed items: why it is there, Near your taste · 2, Adjacent or Exploring",
