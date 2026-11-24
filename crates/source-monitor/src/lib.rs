@@ -273,7 +273,7 @@ pub const MANIFEST: SourceManifest = SourceManifest {
         },
         EntityDoc {
             uri: "monitor://releases/{n}",
-            doc: "A server build the pod ran, at the moment it first ran it, in the days shown (monitor:releases): a core://Bars grid's marks with at: \"hours\".",
+            doc: "A server build the pod ran, at the moment it first ran it, in the days shown, when a device ran it too or it is the server's own (monitor:releases): a core://Bars grid's marks with at: \"hours\".",
             fields: &[
                 ("build", "the server's build"),
                 ("build_label", "e.g. Nov 18 · c41d9e2"),
