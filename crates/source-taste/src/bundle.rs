@@ -273,6 +273,18 @@ pub fn put_item(b: &mut DataBundle, v: &Value) -> Option<String> {
 /// name a query by its route.
 pub const SHEET_SIMILAR: &str = "taste:sheet:similar";
 
+/// The query of the piece a sheet shows, for its photo carousel: one fixed
+/// name (a layout's carousel can't name a piece by its route), so the
+/// sheet lists it where key equals $route.key and pages `$item.photos`.
+pub const SHEET_PIECE: &str = "taste:sheet:piece";
+
+/// The piece `item` as [`SHEET_PIECE`] (its own entity, put by the caller).
+pub fn put_sheet_piece(b: &mut DataBundle, item: &Value) {
+    if let Some((uri, _)) = self::item(item) {
+        b.queries.insert(SHEET_PIECE.to_owned(), vec![uri]);
+    }
+}
+
 /// `items` (the pieces like the one keyed `key`) as [`SHEET_SIMILAR`]:
 /// copies at `taste://sheet-similar/<key>/<n>`, each with `of` set to
 /// `key`, so a sheet shows only its own piece's (`where of equals

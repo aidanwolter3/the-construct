@@ -71,6 +71,10 @@ assert-text Nov 14 · 9be03a1 · 19:00–22:30; shot device-day; mode dark; shot
 scenario server-health-off server_health_off \
   "assert-text Server monitoring is off for this pod; assert-no-text Checks; assert-text Devices per day; \
 shot light; mode dark; shot dark"
+scenario taste-browse taste \
+  "click Taste; shot taste; click Browse; wait-text 3000 pieces; shot grid; scroll-to Waxed Chore Coat in Olive; \
+click Open Waxed Chore Coat in Olive; wait-text 3000 Photo 1 of 3; shot sheet; \
+tap-photo right Photo 1 of Waxed Chore Coat in Olive; shot sheet-photo-2; mode dark; shot sheet-dark"
 scenario taste taste \
   "assert-text Waxed Chore Coat in Olive; assert-text On the edge; assert-text blanket lining; shot deck; \
 screen 360x740; insets 36 0 24 0; shot deck-small; screen phone; insets 0 0 0 0; \

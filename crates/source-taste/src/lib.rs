@@ -170,12 +170,15 @@ pub const MANIFEST: SourceManifest = SourceManifest {
                 "taste:similar:{key}",
                 "taste:contrast:{key}",
                 bundle::SHEET_SIMILAR,
+                bundle::SHEET_PIECE,
             ],
             doc: "One item (taste://items/<key>), its similar pieces and its opposites (the same \
                   kind of garment, as different as the catalog has); and the similar pieces \
                   again as taste:sheet:similar, copies (taste://sheet-similar/<key>/<n>) whose \
                   field of is <key>, for a layout that filters them by its route \
-                  (where of equals $route.key).",
+                  (where of equals $route.key); and the item again as taste:sheet:piece, for a \
+                  sheet's photo carousel (a list where key equals $route.key, paging \
+                  $item.photos).",
         },
         PathSpec {
             pattern: "/v1/taste/screens/steer?key={key}&q={q}",
@@ -1098,6 +1101,7 @@ async fn item_route(
     // pieces from one query of fixed name, each a copy tagged with the piece
     // it is like (`of`): a layout's list can't name a query by its route.
     bundle::put_sheet_similar(&mut b, &q.key, &similar);
+    bundle::put_sheet_piece(&mut b, &item);
     // The item itself last, so its own fields win over a list's copy.
     bundle::put_item(&mut b, &item);
     Json(b).into_response()

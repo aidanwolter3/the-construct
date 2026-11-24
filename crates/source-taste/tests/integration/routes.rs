@@ -217,6 +217,11 @@ async fn screens_answer_their_lists() {
             .len(),
         3
     );
+    // The piece itself for the sheet's photo carousel, under one fixed name.
+    assert_eq!(
+        b["queries"]["taste:sheet:piece"],
+        json!(["taste://items/shop0_example__1000"])
+    );
     // The similar pieces again for the piece's sheet (the taste_item core
     // layout), under one fixed name, each a copy tagged with the piece.
     let sheet = b["queries"]["taste:sheet:similar"].as_array().unwrap();

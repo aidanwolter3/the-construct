@@ -149,6 +149,7 @@ fn the_piece_sheet_shows_a_big_photo() {
         "no photo carousel"
     );
     assert!(text.contains("\"tap_paging\":true"));
-    assert!(text.contains("${taste://items/$route.key#photos}"));
+    assert!(text.contains("\"query_key\":\"taste:sheet:piece\""));
+    assert!(text.contains("\"items\":\"$item.photos\""));
     assert!(text.contains("${taste://items/$route.key#description}"));
 }

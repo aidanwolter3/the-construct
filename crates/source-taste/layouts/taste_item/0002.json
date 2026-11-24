@@ -14,20 +14,31 @@
       "children": [
         {
           "type": "core://Column",
-          "max_width_dp": 520,
+          "max_width_dp": 380,
           "children": [
             {
-              "type": "core://Carousel",
-              "items": "${taste://items/$route.key#photos}",
-              "tap_paging": true,
-              "aspect_ratio": 0.8,
+              "type": "core://List",
+              "query_key": "taste:sheet:piece",
+              "where": [
+                {
+                  "field": "key",
+                  "equals": "$route.key"
+                }
+              ],
               "item_template": {
-                "type": "core://Image",
-                "url": "$item.url",
+                "type": "core://Carousel",
+                "items": "$item.photos",
+                "tap_paging": true,
                 "aspect_ratio": 0.8,
-                "shape": "Rounded",
-                "content_description": "Photo $item.n of $item.title"
-              }
+                "item_template": {
+                  "type": "core://Image",
+                  "url": "$item.url",
+                  "aspect_ratio": 0.8,
+                  "shape": "Rounded",
+                  "content_description": "Photo $item.n of $item.title"
+                }
+              },
+              "empty_text": ""
             }
           ]
         },
