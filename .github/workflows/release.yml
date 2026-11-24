@@ -196,10 +196,16 @@ jobs:
     permissions:
       contents: write # create the release
     steps:
+      # Only the signed APK and the .dmg: never `android-unsigned`, the
+      # output of the job that runs every crate's build scripts.
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
+          name: android
           path: dist
-          merge-multiple: true
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: macos
+          path: dist
       - name: Publish
         env:
           GH_TOKEN: ${{ github.token }}
