@@ -701,6 +701,137 @@ mod tests {
         assert_eq!(s.tap_page(&id), 2);
     }
 
+    /// The deck of [`deck`] with a third piece, so a card stays behind
+    /// once the top one has gone; a swipe takes the first piece out of the
+    /// list, as the app's optimistic reaction does.
+    fn deck_of_three() -> (UiNode, DataBundle) {
+        let (_, mut data) = deck();
+        let root: UiNode = serde_json::from_value(json!({
+            "type": "core://List", "query_key": "q:deck", "stack": true,
+            "where": {"field": "gone", "equals": "false"},
+            "item_template": {
+                "type": "core://SwipeCard",
+                "on_swipe_left": {"intent": "action.local.set", "entity_uri": "x://pieces/a",
+                                  "field": "gone", "value_expr": "true"},
+                "content": {
+                    "type": "core://Carousel", "items": "$item.photos", "tap_paging": true,
+                    "aspect_ratio": 0.8,
+                    "item_template": {"type": "core://Image", "url": "$item.url"}
+                }
+            }
+        }))
+        .unwrap();
+        for piece in ["a", "b"] {
+            if let Some(e) = data.entities.get_mut(&format!("x://pieces/{piece}")) {
+                e.0.insert("gone".into(), json!(false));
+            }
+        }
+        let photos: Vec<String> = (0..3).map(|k| format!("x://photos/c{k}")).collect();
+        for (k, uri) in photos.iter().enumerate() {
+            data.entities.insert(
+                uri.clone(),
+                entity(json!({"url": format!("https://img.example/c{k}.jpg")})),
+            );
+        }
+        data.entities.insert(
+            "x://pieces/c".into(),
+            entity(json!({"photos": photos, "gone": false})),
+        );
+        data.queries
+            .get_mut("q:deck")
+            .unwrap()
+            .push("x://pieces/c".into());
+        (root, data)
+    }
+
+    /// The photo of `piece` the deck shows: the one of its images that the
+    /// carousel's clip doesn't cut away (the track holds every page).
+    fn showing(s: &mut Session, piece: &str) -> Vec<String> {
+        let scene = s.scene().unwrap().clone();
+        scene
+            .draws
+            .iter()
+            .filter_map(|d| match d {
+                crate::scene::Draw::Image(i)
+                    if i.url.contains(&format!("/{piece}"))
+                        && i.rect[0] + i.rect[2] / 2.0 > i.clip[0]
+                        && i.rect[0] + i.rect[2] / 2.0 < i.clip[0] + i.clip[2] =>
+                {
+                    Some(i.url.rsplit('/').next().unwrap_or_default().to_owned())
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// Swipes the deck's top card off, as the app does (it leaves the list).
+    fn swipe_top_off(s: &mut Session) {
+        let top = s
+            .scene()
+            .unwrap()
+            .semantics
+            .iter()
+            .find(|n| n.gestures.contains_key("swipe_left"))
+            .map(|n| n.id.clone())
+            .expect("a swipe card");
+        for x in [-40.0, -120.0, -200.0] {
+            s.drag_card(&top, x);
+            s.scene().unwrap();
+        }
+        s.release_card(&top, -800.0);
+        let mut swiped = Vec::new();
+        for _ in 0..200 {
+            s.scene().unwrap();
+            swiped.extend(s.take_swiped());
+            if !swiped.is_empty() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        assert_eq!(swiped.len(), 1, "the card flew off");
+    }
+
+    /// The next card shows the same photo through a swipe: the one it showed
+    /// waiting behind (its first) is the one it shows on top, whether or not
+    /// the card that left had been tapped to a later photo. (Its page was
+    /// kept by its place in the list, so it took the page of the card that
+    /// left: the photo jumped.)
+    #[test]
+    fn the_next_card_keeps_its_photo_when_it_comes_to_the_top() {
+        for tapped in [false, true] {
+            let (root, data) = deck_of_three();
+            let (mut s, _) = session(root, data);
+            s.animate = false;
+            if tapped {
+                let id = pager_id(&mut s);
+                let [x, y, w, h] = bounds(&mut s, &id);
+                for _ in 0..2 {
+                    s.tap(&Target::Point(x + w * 0.9, y + h / 2.0)).unwrap();
+                    s.scene().unwrap();
+                }
+                assert_eq!(s.tap_page(&id), 2);
+                assert_eq!(showing(&mut s, "a"), ["a2.jpg"]);
+            }
+            let behind = showing(&mut s, "b");
+            assert_eq!(behind, ["b0.jpg"], "waiting behind (tapped: {tapped})");
+            s.animate = true;
+            swipe_top_off(&mut s);
+            s.animate = false;
+            assert_eq!(
+                showing(&mut s, "b"),
+                behind,
+                "on top, the same photo (tapped: {tapped})"
+            );
+            let id = pager_id(&mut s);
+            assert_eq!(s.tap_page(&id), 0, "its own first page (tapped: {tapped})");
+            // Tapping it turns its own pages, from its first.
+            let [x, y, w, h] = bounds(&mut s, &id);
+            s.tap(&Target::Point(x + w * 0.9, y + h / 2.0)).unwrap();
+            s.scene().unwrap();
+            assert_eq!(showing(&mut s, "b"), ["b1.jpg"]);
+        }
+    }
+
     #[test]
     fn a_page_waits_for_its_photo_with_the_current_one_showing() {
         let (root, data) = deck();

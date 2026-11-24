@@ -10,13 +10,22 @@ use crate::fake::{pod, taste_layout, workspace};
 
 #[test]
 fn every_layout_file_is_embedded() {
-    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("layouts/taste");
-    let mut on_disk: Vec<String> = std::fs::read_dir(&dir)
-        .unwrap()
-        .map(|e| e.unwrap().file_name().into_string().unwrap())
+    let mut on_disk = Vec::new();
+    for layout in ["taste", "taste_item"] {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("layouts")
+            .join(layout);
+        let mut files: Vec<String> = std::fs::read_dir(&dir)
+            .unwrap()
+            .map(|e| format!("{layout}/{}", e.unwrap().file_name().into_string().unwrap()))
+            .collect();
+        files.sort();
+        on_disk.extend(files);
+    }
+    let embedded: Vec<String> = FILES
+        .iter()
+        .map(|f| format!("{}/{}.json", f.app_id, f.name))
         .collect();
-    on_disk.sort();
-    let embedded: Vec<String> = FILES.iter().map(|f| format!("{}.json", f.name)).collect();
     assert_eq!(on_disk, embedded);
 }
 
@@ -24,8 +33,10 @@ fn every_layout_file_is_embedded() {
 fn layout_files_parse_and_validate() {
     let adapters: Vec<Arc<dyn Source>> = vec![Arc::new(TasteAdapter::default())];
     let catalog = Catalog::new(adapters).unwrap();
-    let core = pod_core::construct::core::load_with(&catalog, FILES).unwrap();
-    assert_eq!(core.names["@core/taste"].len(), FILES.len());
+    let core = pod_core::construct::core::load_with(&catalog, &FILES).unwrap();
+    let taste = FILES.iter().filter(|f| f.app_id == "taste").count();
+    assert_eq!(core.names["@core/taste"].len(), taste);
+    assert_eq!(core.names["@core/taste_item"].len(), FILES.len() - taste);
 }
 
 #[test]

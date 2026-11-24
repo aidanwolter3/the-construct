@@ -1,0 +1,229 @@
+{
+  "note": "A piece of the taste feed as a sheet: its photo, brand, title and price, Buy, like or dislike, and the pieces like it (each opens its own sheet). Opened by the taste layout with params {key}, then the item's data path loaded.",
+  "layout": {
+    "type": "core://Page",
+    "id": "taste_item",
+    "title": "Piece",
+    "root": {
+      "type": "core://Use",
+      "component": "core:screen_scaffold",
+      "args": {
+        "title": "Piece",
+        "spacing": 14
+      },
+      "children": [
+        {
+          "type": "core://Row",
+          "spacing_dp": 12,
+          "align": "Center",
+          "children": [
+            {
+              "type": "core://Image",
+              "url": "${taste://items/$route.key#thumb}",
+              "size_dp": 88,
+              "shape": "Rounded",
+              "content_description": "${taste://items/$route.key#title}"
+            },
+            {
+              "type": "core://Column",
+              "spacing_dp": 2,
+              "children": [
+                {
+                  "type": "core://Text",
+                  "value_expr": "${taste://items/$route.key#brand}",
+                  "style": "Caption",
+                  "caps": true,
+                  "weight": "SemiBold",
+                  "max_lines": 1
+                },
+                {
+                  "type": "core://Text",
+                  "value_expr": "${taste://items/$route.key#title}",
+                  "style": "Title",
+                  "max_lines": 2
+                },
+                {
+                  "type": "core://Text",
+                  "value_expr": "${taste://items/$route.key#price_text}",
+                  "style": "Body"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "core://Row",
+          "children": [
+            {
+              "type": "core://Use",
+              "component": "core:link_button",
+              "args": {
+                "label": "Buy at ${taste://items/$route.key#host}",
+                "url": "${taste://items/$route.key#buy_url}"
+              }
+            },
+            {
+              "type": "core://Spacer"
+            },
+            {
+              "type": "core://Conditional",
+              "value": "${taste://items/$route.key#liked}",
+              "content": {
+                "type": "core://Button",
+                "label": "Liked",
+                "on_click": {
+                  "intent": "action.mutation.optimistic",
+                  "entity_uri": "taste://items/$route.key",
+                  "field": "liked",
+                  "value_expr": "false",
+                  "rollback_value": false,
+                  "endpoint": "/v1/taste/react",
+                  "payload": {
+                    "id": "${taste://items/$route.key#id}",
+                    "liked": "$value"
+                  },
+                  "also": [
+                    {
+                      "field": "skipped",
+                      "value_expr": "false"
+                    }
+                  ]
+                },
+                "style": "Primary",
+                "size": "Small"
+              },
+              "equals": "true"
+            },
+            {
+              "type": "core://Conditional",
+              "value": "${taste://items/$route.key#liked}",
+              "content": {
+                "type": "core://Button",
+                "label": "Like",
+                "on_click": {
+                  "intent": "action.mutation.optimistic",
+                  "entity_uri": "taste://items/$route.key",
+                  "field": "liked",
+                  "value_expr": "true",
+                  "rollback_value": false,
+                  "endpoint": "/v1/taste/react",
+                  "payload": {
+                    "id": "${taste://items/$route.key#id}",
+                    "liked": "$value"
+                  },
+                  "also": [
+                    {
+                      "field": "skipped",
+                      "value_expr": "false"
+                    }
+                  ]
+                },
+                "style": "Secondary",
+                "size": "Small"
+              },
+              "equals": "true",
+              "not": true
+            },
+            {
+              "type": "core://Button",
+              "label": "Dislike",
+              "on_click": {
+                "intent": "action.mutation.optimistic",
+                "entity_uri": "taste://items/$route.key",
+                "field": "skipped",
+                "value_expr": "true",
+                "rollback_value": false,
+                "endpoint": "/v1/taste/react",
+                "payload": {
+                  "id": "${taste://items/$route.key#id}",
+                  "skipped": "$value"
+                },
+                "also": [
+                  {
+                    "field": "liked",
+                    "value_expr": "false"
+                  }
+                ]
+              },
+              "style": "Text",
+              "size": "Small"
+            }
+          ],
+          "spacing_dp": 6
+        },
+        {
+          "type": "core://Use",
+          "component": "core:titled_section",
+          "args": {
+            "text": "Similar"
+          },
+          "children": [
+            {
+              "type": "core://List",
+              "query_key": "taste:sheet:similar",
+              "item_template": {
+                "type": "core://Tappable",
+                "content_description": "Open $item.title",
+                "on_click": {
+                  "intent": "action.sequence",
+                  "steps": [
+                    {
+                      "intent": "action.navigation.back"
+                    },
+                    {
+                      "intent": "action.navigation.open",
+                      "layout": "taste_item",
+                      "presentation": "Sheet",
+                      "params": {
+                        "key": "$item.key"
+                      }
+                    },
+                    {
+                      "intent": "action.data.load",
+                      "path": "/v1/taste/screens/item?key=$item.key"
+                    }
+                  ]
+                },
+                "content": {
+                  "type": "core://Column",
+                  "children": [
+                    {
+                      "type": "core://Image",
+                      "url": "$item.thumb",
+                      "aspect_ratio": 0.8,
+                      "shape": "Rounded",
+                      "content_description": "$item.title"
+                    },
+                    {
+                      "type": "core://Text",
+                      "value_expr": "$item.brand",
+                      "style": "Caption",
+                      "caps": true,
+                      "max_lines": 1
+                    },
+                    {
+                      "type": "core://Text",
+                      "value_expr": "$item.title",
+                      "style": "Secondary",
+                      "max_lines": 2
+                    }
+                  ],
+                  "spacing_dp": 4
+                }
+              },
+              "spacing_dp": 12,
+              "empty_text": "Nothing close to it.",
+              "columns": 3,
+              "where": [
+                {
+                  "field": "of",
+                  "equals": "$route.key"
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  }
+}

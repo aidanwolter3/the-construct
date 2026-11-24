@@ -200,7 +200,7 @@ pub fn layout_files() -> Vec<layouts::LayoutSource> {
     files.extend_from_slice(source_shell::SETTINGS_FILES);
     files.extend_from_slice(source_shell::INBOX_FILES);
     files.extend_from_slice(source_agents::FILES);
-    files.extend_from_slice(source_taste::FILES);
+    files.extend_from_slice(&source_taste::FILES);
     files
 }
 

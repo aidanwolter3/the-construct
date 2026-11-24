@@ -112,7 +112,10 @@ const ITEM_FIELDS: &[(&str, &str)] = &[
     ("image_large", "the same 1600 px wide"),
     ("thumb", "the same 360 px wide"),
     ("liked", "true once liked"),
-    ("skipped", "true once skipped"),
+    (
+        "skipped",
+        "true once disliked (a left swipe; the field keeps this name)",
+    ),
     (
         "why_text",
         "feed items: why it is there, Near your taste · 2, Adjacent or Exploring",
@@ -150,7 +153,7 @@ pub const MANIFEST: SourceManifest = SourceManifest {
     feeds: &[FeedSpec {
         name: FEED,
         query_keys: &[bundle::STATUS_QUERY, bundle::FEED_QUERY],
-        doc: "The taste feed as the pod keeps it (taste:feed): the pieces not liked or skipped \
+        doc: "The taste feed as the pod keeps it (taste:feed): the pieces not liked or disliked \
               yet, in order, each with why (On the edge of the user's taste, Exploring, Probably \
               yours), a deck: a reaction takes a piece out, and the pod fetches the next page \
               itself when few are left; More appends one, Refresh starts again. taste:status: \
@@ -160,9 +163,16 @@ pub const MANIFEST: SourceManifest = SourceManifest {
     data_paths: &[
         PathSpec {
             pattern: "/v1/taste/screens/item?key={key}",
-            query_keys: &["taste:similar:{key}", "taste:contrast:{key}"],
+            query_keys: &[
+                "taste:similar:{key}",
+                "taste:contrast:{key}",
+                bundle::SHEET_SIMILAR,
+            ],
             doc: "One item (taste://items/<key>), its similar pieces and its opposites (the same \
-                  kind of garment, as different as the catalog has).",
+                  kind of garment, as different as the catalog has); and the similar pieces \
+                  again as taste:sheet:similar, copies (taste://sheet-similar/<key>/<n>) whose \
+                  field of is <key>, for a layout that filters them by its route \
+                  (where of equals $route.key).",
         },
         PathSpec {
             pattern: "/v1/taste/screens/steer?key={key}&q={q}",
@@ -274,8 +284,8 @@ pub const MANIFEST: SourceManifest = SourceManifest {
                 ("host", "the service's host"),
                 ("status_text", "e.g. Connected to taste.example"),
                 ("likes", "how many pieces are liked"),
-                ("skips", "how many are skipped"),
-                ("counts_text", "e.g. 12 liked · 30 skipped"),
+                ("skips", "how many are disliked"),
+                ("counts_text", "e.g. 12 liked · 30 disliked"),
                 ("error", "the last call's failure in words, or empty"),
                 (
                     "loading",
@@ -323,7 +333,7 @@ pub const MANIFEST: SourceManifest = SourceManifest {
                 ("title", "Your taste map, or Zoomed in ×16"),
                 ("whole", "true for the whole map"),
                 ("count_text", "e.g. 1,204 pieces"),
-                ("reactions_text", "e.g. 12 liked · 30 skipped here"),
+                ("reactions_text", "e.g. 12 liked · 30 disliked here"),
             ],
         },
         EntityDoc {
@@ -374,8 +384,28 @@ pub const APP: CoreLayoutInfo = CoreLayoutInfo {
     feeds: &[(NAME, FEED)],
 };
 
-// `FILES`: every `layouts/*.json` of this crate, in number order (`build.rs`).
+/// The `taste_item` core layout's id: one piece as a sheet (its photo,
+/// brand, title, price, Buy, like or dislike, and the pieces like it), which
+/// the `taste` layout opens with params `{key}` and then loads the piece's
+/// data path into.
+pub const ITEM_ID: &str = "taste_item";
+
+pub const ITEM: CoreLayoutInfo = CoreLayoutInfo {
+    id: ITEM_ID,
+    title: "Piece",
+    icon: "favorite",
+    dev: false,
+    auth: AuthPolicy::Public,
+    feeds: &[(NAME, FEED)],
+};
+
+// `TASTE_FILES` and `ITEM_FILES`: every `layouts/taste/*.json` and
+// `layouts/taste_item/*.json`, in number order (`build.rs`).
 include!(concat!(env!("OUT_DIR"), "/layout_files.rs"));
+
+/// Every layout file of the source's core layouts.
+pub static FILES: std::sync::LazyLock<Vec<LayoutSource>> =
+    std::sync::LazyLock::new(|| TASTE_FILES.iter().chain(ITEM_FILES).copied().collect());
 
 /// The env var that lets the service live on a private address (local
 /// development and tests only).
@@ -414,17 +444,17 @@ impl Default for TasteAdapter {
 struct FeedLock(tokio::sync::Mutex<()>);
 
 const INSTRUCTIONS: &str = "The taste source shows the user's taste feed: clothes from their own \
-taste service, which learns what they like from likes and skips and keeps showing them things \
-they haven't seen, looking for the edges of their taste. Feed feed: taste:feed (a deck of the \
-pieces not reacted to yet, each with why_text: On the edge, Exploring or Probably yours, its \
-photos image_0..image_5 and description) and taste:status (signed_in, counts_text). Data paths: \
-an item screen with similar and opposite pieces, \"this, but...\" steering, search, likes, the \
-taste page and the taste map (tiles to zoom into, and an area's pieces). Actions: \
+taste service, which learns what they like from likes and dislikes (a dislike is sent as \
+skipped) and keeps showing them things they haven't seen, looking for the edges of their taste. \
+Feed feed: taste:feed (a deck of the pieces not reacted to yet, each with why_text: On the edge, \
+Exploring or Probably yours, its photos image_0..image_5 and description) and taste:status \
+(signed_in, counts_text). Data paths: an item with its similar pieces (the core layout shows it \
+as a sheet: a swipe up on a card), search, likes, the taste page and the taste map. Actions: \
 /v1/taste/react {id, liked} or {id, skipped}, /v1/taste/more, /v1/taste/refresh, \
 /v1/taste/summary. The core layout taste is the whole thing: use it whole ({type: core://Use, \
 ref: @core/taste}) as a layout and link it from home, where taste:status's counts_text makes a \
-one-line summary. The pod signs in to the service from that layout's form (its URL and token): \
-never ask for the token in the conversation.";
+one-line summary. The pod signs in to the service from that layout's form (its URL and token) \
+and signs out from Settings (the taste jack): never ask for the token in the conversation.";
 
 impl Source for TasteAdapter {
     fn element_catalog(&self) -> &'static str {
@@ -436,11 +466,11 @@ impl Source for TasteAdapter {
     }
 
     fn core_layouts(&self) -> Vec<CoreLayoutInfo> {
-        vec![APP]
+        vec![APP, ITEM]
     }
 
     fn layout_files(&self) -> &'static [LayoutSource] {
-        FILES
+        &FILES
     }
 
     fn migrations(&self) -> &'static [Step] {
@@ -529,9 +559,9 @@ impl Source for TasteAdapter {
         vec![pod_core::jacks::JackSpec {
             id: JACK,
             title: "Taste service",
-            summary: "The user's taste service: a feed of clothes that learns what they like, \
-                      with similar and opposite pieces, search and their taste in words (the \
-                      taste core layout and source).",
+            summary: "Your taste service: a feed of clothes that learns what you like from \
+                      what you like and dislike, with similar pieces, search and your taste in \
+                      words (the taste core layout and source).",
             kind: pod_core::jacks::JackKind::Account {
                 how: "sign in from the Taste layout's form (the service's https:// URL and its \
                       token; never ask for the token in the conversation)",
@@ -1049,6 +1079,10 @@ async fn item_route(
     let mut b = DataBundle::default();
     bundle::put_items(&mut b, &format!("taste:similar:{}", q.key), &similar);
     bundle::put_items(&mut b, &format!("taste:contrast:{}", q.key), &contrast);
+    // The piece's sheet (the `taste_item` core layout) reads its similar
+    // pieces from one query of fixed name, each a copy tagged with the piece
+    // it is like (`of`): a layout's list can't name a query by its route.
+    bundle::put_sheet_similar(&mut b, &q.key, &similar);
     // The item itself last, so its own fields win over a list's copy.
     bundle::put_item(&mut b, &item);
     Json(b).into_response()
