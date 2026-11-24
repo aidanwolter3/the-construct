@@ -578,6 +578,10 @@ mod tests {
 
     /// A piece with three photos, in a deck of two such pieces (the second
     /// card is laid out behind the first), each card a tap-paged carousel.
+    pub fn deck_for_probe() -> (UiNode, DataBundle) {
+        deck()
+    }
+
     fn deck() -> (UiNode, DataBundle) {
         let root: UiNode = serde_json::from_value(json!({
             "type": "core://List", "query_key": "q:deck", "stack": true,
@@ -865,5 +869,20 @@ mod tests {
         assert!(v.x + 1.0 / v.zoom <= 1.0 + 1e-4 && v.y + 1.0 / v.zoom <= 1.0 + 1e-4);
         s.scatter_reset(&id);
         assert_eq!(s.scatter_view(&id).zoom, 1.0);
+    }
+}
+
+#[cfg(test)]
+mod dots_probe {
+    #[test]
+    fn probe() {
+        let (root, data) = super::tests::deck_for_probe();
+        let mut s = super::super::Session::new("home", root, data, super::super::Viewport::PHONE);
+        let scene = s.scene().unwrap();
+        for n in &scene.semantics {
+            if n.node_type == "dots" || n.id.contains("carousel") || n.node_type.contains("arousel") {
+                eprintln!("PROBE {} {} {:?}", n.node_type, n.id, n.bounds);
+            }
+        }
     }
 }
