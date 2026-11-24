@@ -1,6 +1,8 @@
 //! What a laid-out layout draws: rounded SDF quads, text runs and the
 //! semantic tree (ids, bounds, text, what a tap does) agents and tests read.
 
+use std::sync::Arc;
+
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -161,6 +163,92 @@ pub enum Draw {
     Text(TextRun),
     Icon(IconRun),
     Image(ImageRun),
+    /// A scatter's points, drawn as dots through a view.
+    Points(PointsRun),
+}
+
+/// How a scatter dot is drawn.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DotKind {
+    Plain,
+    /// Smaller and faint (e.g. skipped).
+    Muted,
+    /// Larger, ringed, on top (e.g. liked).
+    Highlight,
+}
+
+/// One dot of a scatter: where it is in the data square (0..1) and its
+/// final colour.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Dot {
+    pub x: f32,
+    pub y: f32,
+    pub color: [f32; 4],
+    pub kind: DotKind,
+}
+
+/// The radius of a plain scatter dot at `zoom` (points): it grows a little
+/// as the view zooms in.
+pub fn dot_radius(zoom: f32) -> f32 {
+    (1.7 * zoom.sqrt()).clamp(1.7, 5.0)
+}
+
+/// A scatter's points as one draw: the dots are prepared once per layout
+/// (in paint order: plain, muted, highlighted) and shared, so a scene holds
+/// them for the price of a pointer, and a pan or pinch only changes `view`
+/// (decision `scatter-and-tap-paging`, Update). The renderers turn it into
+/// circles at draw time, culled to `clip`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PointsRun {
+    /// The scatter's semantic id.
+    pub id: String,
+    pub dots: Arc<[Dot]>,
+    /// The plot area (the data square on screen at zoom 1).
+    pub area: [f32; 4],
+    /// Zoom, then the data point at the area's top left.
+    pub view: [f32; 3],
+    /// Nothing outside it is drawn.
+    pub clip: [f32; 4],
+}
+
+impl PointsRun {
+    /// The region its dots can cover.
+    pub fn extent(&self) -> [f32; 4] {
+        self.clip
+    }
+
+    /// Each dot inside the clip as the quad it is drawn as, in paint order.
+    pub fn for_each_quad(&self, mut f: impl FnMut(QuadInstance)) {
+        let [zoom, vx, vy] = self.view;
+        let [ax, ay, aw, ah] = self.area;
+        let [cx, cy, cw, ch] = self.clip;
+        let r = dot_radius(zoom);
+        let (sx, sy) = (zoom * aw, zoom * ah);
+        let margin = r + 4.0;
+        let (x0, y0, x1, y1) = (cx - margin, cy - margin, cx + cw + margin, cy + ch + margin);
+        for d in self.dots.iter() {
+            let x = ax + (d.x - vx) * sx;
+            let y = ay + (d.y - vy) * sy;
+            if x < x0 || x > x1 || y < y0 || y > y1 {
+                continue;
+            }
+            let c = Rgba(d.color);
+            let mut q = match d.kind {
+                DotKind::Plain => QuadInstance::fill([x - r, y - r, 2.0 * r, 2.0 * r], c, r),
+                DotKind::Muted => {
+                    let m = (r * 0.9).max(1.5);
+                    QuadInstance::fill([x - m, y - m, 2.0 * m, 2.0 * m], c, m)
+                }
+                DotKind::Highlight => {
+                    let h = r + 3.0;
+                    QuadInstance::fill([x - h, y - h, 2.0 * h, 2.0 * h], c, h)
+                        .border(Rgba::rgb(255, 255, 255), 1.5)
+                }
+            };
+            q.clip = self.clip;
+            f(q);
+        }
+    }
 }
 
 /// What a tap on a node does.

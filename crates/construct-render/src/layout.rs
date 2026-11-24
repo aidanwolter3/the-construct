@@ -16,7 +16,7 @@ use taffy::{LayoutInput, LayoutOutput, compute_leaf_layout};
 use crate::bind::{Ctx, ReadLog, Reads, fold, render};
 use crate::markdown::{self, Block, Inline, Mark};
 use crate::scene::{
-    Draw, IconRun, ImageRun, NO_CLIP, QuadInstance, Scene, SemanticNode, Tap, TextRun,
+    Draw, IconRun, ImageRun, NO_CLIP, PointsRun, QuadInstance, Scene, SemanticNode, Tap, TextRun,
 };
 use crate::style::{CHIP_LABEL, LABEL_LARGE, Rgba, Theme, Type, type_for};
 use crate::text::{RichSpan, TextEngine};
@@ -321,7 +321,10 @@ struct Elem {
 pub struct ScatterPlot {
     /// Its semantic id: its view (zoom, pan) and selection are kept under it.
     pub id: String,
-    pub points: Vec<protocol::scatter::Point>,
+    pub points: Arc<[protocol::scatter::Point]>,
+    /// The points as drawn (colour, kind), in paint order, shared with
+    /// every scene that draws them.
+    pub dots: Arc<[crate::scene::Dot]>,
     /// The value ramp: low, middle, high.
     pub ramp: [Rgba; 3],
     pub none: Rgba,
@@ -438,7 +441,7 @@ impl ScatterView {
 
     /// The radius of a plain point at this zoom (points).
     pub fn dot(&self) -> f32 {
-        (1.7 * self.zoom.sqrt()).clamp(1.7, 5.0)
+        crate::scene::dot_radius(self.zoom)
     }
 }
 
@@ -485,6 +488,77 @@ pub fn ramp_color(ramp: &[Rgba; 3], t: f32) -> Rgba {
         a.0[2] + (b.0[2] - a.0[2]) * f,
         a.0[3] + (b.0[3] - a.0[3]) * f,
     ])
+}
+
+/// The points of a packed `core://Scatter` string, decoded once: a layout
+/// laid out again (a data change elsewhere on the screen) finds them here.
+fn decoded_points(packed: &str) -> Arc<[protocol::scatter::Point]> {
+    use std::hash::{Hash, Hasher};
+    thread_local! {
+        static DECODED: std::cell::RefCell<Vec<(u64, usize, Arc<[protocol::scatter::Point]>)>> =
+            const { std::cell::RefCell::new(Vec::new()) };
+    }
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    packed.hash(&mut h);
+    let key = (h.finish(), packed.len());
+    DECODED.with(|c| {
+        let mut c = c.borrow_mut();
+        if let Some(i) = c.iter().position(|(k, n, _)| (*k, *n) == key) {
+            let hit = c.remove(i);
+            let pts = hit.2.clone();
+            c.push(hit);
+            return pts;
+        }
+        let pts: Arc<[protocol::scatter::Point]> =
+            protocol::scatter::decode(packed).unwrap_or_default().into();
+        c.push((key.0, key.1, pts.clone()));
+        // A few plots at most are on screen at once.
+        if c.len() > 4 {
+            c.remove(0);
+        }
+        pts
+    })
+}
+
+/// A scatter's points as drawn: coloured, in paint order (plain, muted,
+/// highlighted, so the highlighted ones are on top).
+fn prepare_dots(
+    points: &[protocol::scatter::Point],
+    ramp: &[Rgba; 3],
+    none: Rgba,
+    highlight: Rgba,
+    muted: Rgba,
+) -> Arc<[crate::scene::Dot]> {
+    use crate::scene::{Dot, DotKind};
+    use protocol::scatter::Mark;
+    let mut dots = Vec::with_capacity(points.len());
+    for pass in [Mark::Plain, Mark::Muted, Mark::Highlight] {
+        for p in points.iter().filter(|p| p.mark == pass) {
+            let (color, kind) = match pass {
+                Mark::Plain => {
+                    let mut c = match p.value {
+                        Some(v) => ramp_color(ramp, v),
+                        None => none,
+                    };
+                    c.0[3] *= 0.8;
+                    (c, DotKind::Plain)
+                }
+                Mark::Muted => {
+                    let mut c = muted;
+                    c.0[3] *= 0.55;
+                    (c, DotKind::Muted)
+                }
+                Mark::Highlight => (highlight, DotKind::Highlight),
+            };
+            dots.push(Dot {
+                x: p.x,
+                y: p.y,
+                color: color.0,
+                kind,
+            });
+        }
+    }
+    dots.into()
 }
 
 /// What a text field's text element knows of its field.
@@ -2015,7 +2089,7 @@ impl<'i> Build<'_, 'i> {
                 Some(t) => ctx.text(t),
                 None => b.path.clone(),
             };
-            let pts = protocol::scatter::decode(&ctx.text(points)).unwrap_or_default();
+            let pts = decoded_points(&ctx.text(points));
             let col =
                 |c: &Option<String>, d: Rgba| c.as_deref().and_then(|c| ctx.color(c)).unwrap_or(d);
             let ramp_default = [
@@ -2031,16 +2105,21 @@ impl<'i> Build<'_, 'i> {
                     }
                 }
             }
+            let none = col(none_color, self.theme.muted_text);
+            let highlight = col(
+                highlight_color,
+                Rgba::hex("#E8554A").unwrap_or(self.theme.on_background),
+            );
+            let muted = col(muted_color, self.theme.on_background);
+            let dots = prepare_dots(&pts, &ramp, none, highlight, muted);
             let plot = ScatterPlot {
                 id: id.clone(),
                 points: pts,
+                dots,
                 ramp,
-                none: col(none_color, self.theme.muted_text),
-                highlight: col(
-                    highlight_color,
-                    Rgba::hex("#E8554A").unwrap_or(self.theme.on_background),
-                ),
-                muted: col(muted_color, self.theme.on_background),
+                none,
+                highlight,
+                muted,
                 selecting: select.as_deref().is_some_and(|s| ctx.shows(s, None)),
                 on_tap: on_tap.as_ref().map(|i| bind_intent(i, ctx)),
                 on_select: on_select.as_ref().map(|i| bind_intent(i, ctx)),
@@ -4542,6 +4621,10 @@ fn stretch_content(
                 i.rect = shift(i.rect);
                 i.clip = clipped(i.clip);
             }
+            Draw::Points(p) => {
+                p.area = grow(p.area);
+                p.clip = clipped(p.clip);
+            }
             Draw::Text(t) => {
                 t.rect = shift(t.rect);
                 t.clip = clipped(t.clip);
@@ -5048,48 +5131,18 @@ impl Laid {
         scroll: &BTreeMap<String, f32>,
         scene: &mut Scene,
     ) {
-        use protocol::scatter::Mark;
         let view = ScatterView::of(scroll, &plot.id);
         let a = ScatterView::area(rect);
         let clip = intersect(clip, [a[0] - 6.0, a[1] - 6.0, a[2] + 12.0, a[3] + 12.0]);
-        let r = view.dot();
-        let inside = |x: f32, y: f32, m: f32| {
-            x >= clip[0] - m
-                && x <= clip[0] + clip[2] + m
-                && y >= clip[1] - m
-                && y <= clip[1] + clip[3] + m
-        };
-        for pass in [Mark::Plain, Mark::Muted, Mark::Highlight] {
-            for p in plot.points.iter().filter(|p| p.mark == pass) {
-                let (x, y) = view.to_screen(a, p.x, p.y);
-                if !inside(x, y, 8.0) {
-                    continue;
-                }
-                let mut q = match pass {
-                    Mark::Plain => {
-                        let mut c = match p.value {
-                            Some(v) => ramp_color(&plot.ramp, v),
-                            None => plot.none,
-                        };
-                        c.0[3] *= 0.8;
-                        QuadInstance::fill([x - r, y - r, 2.0 * r, 2.0 * r], c, r)
-                    }
-                    Mark::Muted => {
-                        let m = (r * 0.9).max(1.5);
-                        let mut c = plot.muted;
-                        c.0[3] *= 0.55;
-                        QuadInstance::fill([x - m, y - m, 2.0 * m, 2.0 * m], c, m)
-                    }
-                    Mark::Highlight => {
-                        let h = r + 3.0;
-                        QuadInstance::fill([x - h, y - h, 2.0 * h, 2.0 * h], plot.highlight, h)
-                            .border(Rgba::rgb(255, 255, 255), 1.5)
-                    }
-                };
-                q.clip = clip;
-                scene.draws.push(Draw::Quad(q));
-            }
-        }
+        // One draw for every point: a pan or pinch changes only its view
+        // (`Session::set_scatter_view`), and the renderers cull and draw it.
+        scene.draws.push(Draw::Points(PointsRun {
+            id: plot.id.clone(),
+            dots: plot.dots.clone(),
+            area: a,
+            view: [view.zoom, view.x, view.y],
+            clip,
+        }));
         // The box being selected, in data coordinates.
         let sel = |k: &str| scroll.get(&format!("scattersel:{}:{k}", plot.id)).copied();
         if let (Some(x0), Some(y0), Some(x1), Some(y1)) =
@@ -5704,6 +5757,7 @@ mod tests {
             Draw::Image(i) => i.rect,
             Draw::Text(t) => t.rect,
             Draw::Icon(i) => i.rect,
+            Draw::Points(p) => p.area,
         }
     }
 

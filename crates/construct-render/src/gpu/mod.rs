@@ -258,6 +258,31 @@ fn layers(scene: &Scene, images: Option<&crate::images::ImageStore>) -> Layers {
     let mut placed_t: Vec<([f32; 4], usize)> = Vec::new();
     for d in &scene.draws {
         match d {
+            // A scatter's points go in one layer, placed by their extent as
+            // one: placing each of thousands of dots against everything
+            // placed before it was quadratic (the taste map's lag).
+            Draw::Points(run) => {
+                let e = run.extent();
+                let l = placed_t
+                    .iter()
+                    .filter(|(r, _)| overlaps(*r, e))
+                    .map(|(_, l)| l + 1)
+                    .chain(
+                        placed_q
+                            .iter()
+                            .filter(|(r, _)| overlaps(*r, e))
+                            .map(|(_, l)| *l),
+                    )
+                    .max()
+                    .unwrap_or(0);
+                while quads.len() <= l {
+                    quads.push(Vec::new());
+                    texts.push(Vec::new());
+                    icons.push(Vec::new());
+                }
+                run.for_each_quad(|q| quads[l].push(q));
+                placed_q.push((e, l));
+            }
             Draw::Quad(q) => {
                 let e = q.extent();
                 let l = placed_t
@@ -857,5 +882,87 @@ impl HeadlessSurface {
         }
         self.readback.unmap();
         Ok(img)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+    use std::time::Instant;
+
+    use super::layers;
+    use crate::scene::{Dot, DotKind, PointsRun, QuadInstance, Scene};
+    use crate::style::Rgba;
+
+    fn dots(n: usize) -> Vec<Dot> {
+        let mut seed = 11u64;
+        let mut rnd = || {
+            seed = seed
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            ((seed >> 40) as f32) / (1u64 << 24) as f32
+        };
+        (0..n)
+            .map(|i| Dot {
+                x: rnd(),
+                y: rnd(),
+                color: [0.5, 0.6, 0.7, 0.8],
+                kind: if i % 200 == 0 {
+                    DotKind::Highlight
+                } else {
+                    DotKind::Plain
+                },
+            })
+            .collect()
+    }
+
+    fn run(dots: Vec<Dot>) -> PointsRun {
+        PointsRun {
+            id: "plot".into(),
+            dots: dots.into(),
+            area: [20.0, 100.0, 350.0, 350.0],
+            view: [1.0, 0.0, 0.0],
+            clip: [14.0, 94.0, 362.0, 362.0],
+        }
+    }
+
+    /// A plot's points take one layer, under what is drawn over them, and
+    /// every dot inside the clip is drawn.
+    #[test]
+    fn a_plot_is_layered_as_one() {
+        let mut scene = Scene::default();
+        scene.draws.push(crate::scene::Draw::Points(run(dots(500))));
+        scene
+            .draws
+            .push(crate::scene::Draw::Quad(QuadInstance::fill(
+                [0.0, 0.0, 390.0, 600.0],
+                Rgba::rgb(0, 0, 0),
+                0.0,
+            )));
+        let (quads, _, _) = layers(&scene, None);
+        assert_eq!(quads[0].len(), 501, "the dots and the quad over them");
+        assert_eq!(quads[0].last().unwrap().rect, [0.0, 0.0, 390.0, 600.0]);
+    }
+
+    /// Layering the taste map's points (run with `--ignored --nocapture`):
+    /// as one run, and as the separate quads drawn before.
+    #[test]
+    #[ignore]
+    fn time_layering_a_big_plot() {
+        let r = run(dots(32_233));
+        let mut one = Scene::default();
+        one.draws.push(crate::scene::Draw::Points(r.clone()));
+        let mut each = Scene::default();
+        r.for_each_quad(|q| each.draws.push(crate::scene::Draw::Quad(q)));
+        let t = Instant::now();
+        let _ = layers(&one, None);
+        let fast = t.elapsed();
+        let t = Instant::now();
+        let _ = layers(&each, None);
+        let slow = t.elapsed();
+        eprintln!(
+            "layering 32,233 dots: as one run {fast:?}; as {} separate quads {slow:?}",
+            each.draws.len()
+        );
     }
 }
