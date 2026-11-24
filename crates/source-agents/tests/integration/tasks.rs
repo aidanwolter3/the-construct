@@ -797,3 +797,71 @@ async fn a_collection_linked_before_gets_waiting_and_stage() {
     })
     .await;
 }
+
+/// `tools/call` as a pod host forwards an MCP credential with `access`
+/// (decision `mcp-access-levels`): `(is_error, result)`.
+async fn mcp_tool(pod: &Pod, access: &str, name: &str, args: Value) -> (bool, Value) {
+    use axum::body::Body;
+    use http_body_util::BodyExt;
+    use tower::ServiceExt;
+    let body = json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+                      "params": {"name": name, "arguments": args}});
+    let req = axum::http::Request::post("/v1/mcp")
+        .header("content-type", "application/json")
+        .header(pod_core::CREDENTIAL_HEADER, "mcp")
+        .header(pod_core::mcp::ACCESS_HEADER, access)
+        .body(Body::from(body.to_string()))
+        .unwrap();
+    let resp = pod_core::app(pod.clone()).oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+    let v: Value = serde_json::from_slice(&bytes).unwrap();
+    let r = &v["result"];
+    (
+        r["isError"] == true,
+        serde_json::from_str(r["content"][0]["text"].as_str().unwrap()).unwrap(),
+    )
+}
+
+#[tokio::test]
+async fn claude_queues_a_run_only_with_outward_access() {
+    let (pod, fake, _) = signed_in().await;
+    linked(&pod, json!(["todo", "queued"])).await;
+    pod.set_hosted();
+
+    // Below outward access, a row Claude queues is Claude's: no run.
+    let (err, out) = mcp_tool(
+        &pod,
+        "edit",
+        "add_row",
+        json!({"collection": "tasks", "values": {"title": "Tidy the footer", "status": "queued"}}),
+    )
+    .await;
+    assert!(!err, "{out}");
+    let id = out["id"].as_str().unwrap().to_owned();
+    let why = refused(&pod, &id).await;
+    assert!(why.contains("Claude"), "{why}");
+    assert!(fake.sent("start_run").is_empty());
+    // Nor can it reopen a run, or link the collection again.
+    let (err, out) = mcp_tool(
+        &pod,
+        "edit",
+        "agents_link_tasks",
+        json!({"collection": "tasks", "workspace": "sample-repo"}),
+    )
+    .await;
+    assert!(err && out["error"] == "access_too_low", "{out}");
+
+    // With outward access, it starts.
+    let (err, out) = mcp_tool(
+        &pod,
+        "outward",
+        "add_row",
+        json!({"collection": "tasks", "values": {"title": "Fix the header", "status": "queued"}}),
+    )
+    .await;
+    assert!(!err, "{out}");
+    let id = out["id"].as_str().unwrap().to_owned();
+    started(&pod, &id).await;
+    assert_eq!(fake.sent("start_run").len(), 1);
+}

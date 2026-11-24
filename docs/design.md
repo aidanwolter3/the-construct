@@ -416,7 +416,10 @@ one spot rather than left to each feature.
 #### Secrets
 
 Pod tokens are stored as hashes. Upstream tokens and jack secrets are sealed at rest with the server's key
-(`CONSTRUCT_SECRETS_KEY`) and never sent to a device. A credential issued to an agent reaches only `/v1/mcp`.
+(`CONSTRUCT_SECRETS_KEY`) and never sent to a device. A credential issued to an agent reaches only `/v1/mcp`, and
+only at the access its owner gave it: read, edit, or outward (sharing publicly, starting agent runs, reaching new
+hosts, deleting). Every tool is checked against it before it runs, and rows the agent writes below outward count as
+the agent's, not the owner's (decision `mcp-access-levels`).
 
 #### Outbound requests
 

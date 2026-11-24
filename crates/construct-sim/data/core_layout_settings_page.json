@@ -1229,7 +1229,7 @@
                     {
                       "style": "Secondary",
                       "type": "core://Text",
-                      "value_expr": "Apps you connected with your pod code, such as Claude. Each can read your pod's layouts and data and edit your own layouts. Disconnect any you don't recognise; changing the pod code doesn't disconnect them."
+                      "value_expr": "Apps you connected with your pod code, such as Claude. Each can do what its access allows: read only, edit your layouts and data, or also act outward (share publicly, start agent runs, reach new sites, delete). Disconnect any you don't recognise; changing the pod code doesn't disconnect them."
                     }
                   ],
                   "padding_h_dp": 16,
@@ -1261,6 +1261,11 @@
                                   "style": "Secondary",
                                   "type": "core://Text",
                                   "value_expr": "$item.expiry"
+                                },
+                                {
+                                  "style": "Secondary",
+                                  "type": "core://Text",
+                                  "value_expr": "$item.access_label"
                                 }
                               ],
                               "orientation": "Vertical",
@@ -1297,6 +1302,110 @@
                           "padding_v_dp": 10,
                           "spacing_dp": 8,
                           "type": "core://Row"
+                        },
+                        {
+                          "children": [
+                            {
+                              "content": {
+                                "label": "Read only",
+                                "on_click": {
+                                  "also": [
+                                    {
+                                      "field": "access_label",
+                                      "value_expr": "\"Read only. Look only: read your layouts and data.\""
+                                    }
+                                  ],
+                                  "endpoint": "/v1/connected-apps/access",
+                                  "entity_uri": "connected_apps://$item.id",
+                                  "field": "access",
+                                  "intent": "action.mutation.optimistic",
+                                  "payload": {
+                                    "access": "read",
+                                    "id": "$item.id"
+                                  },
+                                  "rollback_value": null,
+                                  "value_expr": "\"read\""
+                                },
+                                "style": "Secondary",
+                                "type": "core://Button"
+                              },
+                              "equals": "read",
+                              "not": true,
+                              "type": "core://Conditional",
+                              "value": "$item.access"
+                            },
+                            {
+                              "content": {
+                                "label": "Edit",
+                                "on_click": {
+                                  "also": [
+                                    {
+                                      "field": "access_label",
+                                      "value_expr": "\"Edit. Change your layouts, components, collections and rows.\""
+                                    }
+                                  ],
+                                  "endpoint": "/v1/connected-apps/access",
+                                  "entity_uri": "connected_apps://$item.id",
+                                  "field": "access",
+                                  "intent": "action.mutation.optimistic",
+                                  "payload": {
+                                    "access": "edit",
+                                    "id": "$item.id"
+                                  },
+                                  "rollback_value": null,
+                                  "value_expr": "\"edit\""
+                                },
+                                "style": "Secondary",
+                                "type": "core://Button"
+                              },
+                              "equals": "edit",
+                              "not": true,
+                              "type": "core://Conditional",
+                              "value": "$item.access"
+                            },
+                            {
+                              "content": {
+                                "label": "Allow outward",
+                                "on_click": {
+                                  "confirm_label": "Allow",
+                                  "intent": "action.confirm",
+                                  "message": "It could then share your data publicly, start agent runs, reach new sites and delete things, without asking you first. Allow it only for an app you trust with that.",
+                                  "then": {
+                                    "also": [
+                                      {
+                                        "field": "access_label",
+                                        "value_expr": "\"Edit and act outward. Also share or publish publicly, schedule or queue agent runs, add fillers and fetch from new sites, call other MCP servers, plug jacks, set secrets, watch devices, delete.\""
+                                      }
+                                    ],
+                                    "endpoint": "/v1/connected-apps/access",
+                                    "entity_uri": "connected_apps://$item.id",
+                                    "field": "access",
+                                    "intent": "action.mutation.optimistic",
+                                    "payload": {
+                                      "access": "outward",
+                                      "id": "$item.id"
+                                    },
+                                    "rollback_value": null,
+                                    "value_expr": "\"outward\""
+                                  },
+                                  "title": "Let this app act outward?"
+                                },
+                                "style": "Secondary",
+                                "type": "core://Button"
+                              },
+                              "equals": "outward",
+                              "not": true,
+                              "type": "core://Conditional",
+                              "value": "$item.access"
+                            }
+                          ],
+                          "padding_h_dp": 16,
+                          "spacing_dp": 8,
+                          "type": "core://Row"
+                        },
+                        {
+                          "size_dp": 8,
+                          "type": "core://Spacer"
                         },
                         {
                           "type": "core://Divider"

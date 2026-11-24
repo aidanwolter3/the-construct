@@ -121,15 +121,30 @@ pub const WRITER_MODEL: &str = "model";
 /// a filler's or a model's writes are (issue #289).
 pub const WRITER_DERIVED: &str = "derived";
 
+/// The writer of what Claude writes through an MCP connection below
+/// outward access (decision `mcp-access-levels`): untrusted like a model's,
+/// so a row it queued doesn't start an agent run, and text it copied from a
+/// filler's rows doesn't become a person's.
+pub const WRITER_CLAUDE: &str = "claude";
+
+/// Who a person-side write (a layout's, an MCP tool's) counts as right now:
+/// [`WRITER_CLAUDE`] inside an MCP call below outward access, else `None`,
+/// a person (the owner's devices, or Claude with outward access). Read it
+/// before the write moves to a blocking thread.
+pub fn current_writer() -> Option<&'static str> {
+    pod_core::mcp::below_outward().then_some(WRITER_CLAUDE)
+}
+
 /// The writer [`note_writes`] records for filler `id`'s writes.
 pub fn filler_writer(id: &str) -> String {
     format!("filler:{id}")
 }
 
 /// Record who wrote the fields of `after` that differ from `before` (none:
-/// a new row). `writer` is a filler ([`filler_writer`]) or a model
-/// ([`WRITER_MODEL`]); `None` is a person (or Claude through MCP), whose
-/// write clears the field's record. A field with no record was last written
+/// a new row). `writer` is a filler ([`filler_writer`]), a model
+/// ([`WRITER_MODEL`]) or Claude below outward access ([`WRITER_CLAUDE`]);
+/// `None` is a person (or Claude with outward access), whose write clears
+/// the field's record. A field with no record was last written
 /// by a person (decision `agents-cap-v3`).
 pub fn note_writes(
     tx: &Connection,

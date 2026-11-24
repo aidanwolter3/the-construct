@@ -83,20 +83,28 @@ Each pod has an MCP endpoint, `POST /v1/mcp`, so Claude can read the pod's sourc
 Writes are validated and appear in each name's history as written by Claude.
 
 - **Claude apps (web, desktop, mobile):** add a custom connector with the URL `https://<server>/v1/mcp`. Claude
-  discovers the server's OAuth endpoints, registers itself and opens a page where you type your pod code. The
-  credential it gets reaches only that pod's `/v1/mcp`: no other routes, sign-ins or pod settings.
+  discovers the server's OAuth endpoints, registers itself and opens a page where you type your pod code and choose
+  its access. The credential it gets reaches only that pod's `/v1/mcp`: no other routes, sign-ins or pod settings.
+- **Access** (decision [`mcp-access-levels`](decisions/mcp-access-levels.md)): **Read only** looks; **Edit** (the
+  default) also changes layouts, components, collections and rows; **Edit and act outward** also shares or publishes
+  publicly, schedules or queues agent runs, adds fillers and fetches from new sites, calls other MCP servers, plugs
+  jacks, sets secrets, watches devices and deletes. A tool that needs more answers `access_too_low`, and nothing
+  happens. Rows Claude adds or changes below outward count as Claude's, not yours: a task row it queues doesn't start
+  an agent run until you (or an outward connection) set it.
 - **Apps that ask for a client ID and secret** (e.g. Gemini): set `CONSTRUCT_OAUTH_CLIENT_ID`,
   `CONSTRUCT_OAUTH_CLIENT_SECRET` and the app's callback in `CONSTRUCT_OAUTH_CLIENT_REDIRECT_URIS`
   ([server.md](server.md)), and enter the same ID and secret in the app. You still type your pod code to connect.
-- **Claude Code:** `server pods mcp <name>` prints a credential, then:
+- **Claude Code:** `server pods mcp <name> [--access read|edit|outward]` prints a credential (edit by default), then:
 
   ```bash
   claude mcp add --transport http construct https://<server>/v1/mcp --header "Authorization: Bearer cmcp_…"
   ```
 
 - **Disconnect:** in the app, Settings → Connected apps lists each connection (its name, where it signed in, when it
-  was last used) with a Disconnect button (`GET /v1/connected-apps/screen`, `POST /v1/connected-apps/revoke`, answered
-  by the host; decision [`connected-apps`](decisions/connected-apps.md)); or `server pods revoke-mcp <name>` for all.
+  was last used, its access) with buttons to change its access and to disconnect it (`GET
+  /v1/connected-apps/screen`, `POST /v1/connected-apps/access` and `/v1/connected-apps/revoke`, answered by the host;
+  decisions [`connected-apps`](decisions/connected-apps.md), [`mcp-access-levels`](decisions/mcp-access-levels.md));
+  or `server pods revoke-mcp <name>` for all.
   Rotating the pod code keeps them connected unless `server pods rotate <name> --revoke-mcp`. A connection unused for
   90 days ends by itself.
 

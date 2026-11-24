@@ -145,7 +145,9 @@ server pods rotate <name> [--revoke-mcp]       # new code; the old one stops wor
                                                # (--revoke-mcp: connected apps are disconnected too)
 server pods delete <name>                      # stops now; files deleted within 5 minutes
 server pods notify-test <name>                 # a test notification to the inbox and the pod's devices
-server pods mcp <name> [label]                 # a credential for Claude Code that reaches only /v1/mcp
+server pods mcp <name> [label] [--access read|edit|outward]
+                                               # a credential for Claude Code that reaches only /v1/mcp,
+                                               # with that access (default edit; decision `mcp-access-levels`)
 server pods revoke-mcp <name>                  # disconnect every connected app (MCP credential) of the pod
 server pods monitoring <name> on|off           # let this pod's layouts read server-wide monitoring data
 server pods gaps [name]                        # what agents said was missing while building (MCP note_gap)
@@ -227,6 +229,11 @@ does when it finishes.
   else they are a page (no open redirect). An MCP credential unused for 90 days stops working and is deleted.
   Users see and disconnect their connected apps in Settings → Connected apps; `rotate` keeps them unless
   `--revoke-mcp`.
+- MCP access levels (decision [`mcp-access-levels`](decisions/mcp-access-levels.md)): each MCP credential is `read`,
+  `edit` or `outward`, chosen on the connect page (default `edit`) or with `server pods mcp --access`, and changed
+  in Settings → Connected apps. The host sends the level to the pod in `x-construct-mcp-access` (dropped from any
+  request that comes in); the pod checks every tool against it before it runs, and a tool nobody placed needs
+  `outward`. Rows Claude writes below `outward` are recorded as Claude's, so they don't start agent runs.
 
 ## Monitoring
 

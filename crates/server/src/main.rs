@@ -15,9 +15,11 @@
 //! - `pods delete <name>`: stop a pod now; its files go at the next sweep.
 //! - `pods notify-test <name>`: send the pod a test notification (stored in
 //!   its inbox and sent by Web Push to its devices).
-//! - `pods mcp <name> [label]`: a credential for Claude Code to reach the
-//!   pod's MCP endpoint (`/v1/mcp` only; decision `mcp-connector`); printed
-//!   once. Claude on the web connects through OAuth instead.
+//! - `pods mcp <name> [label] [--access read|edit|outward]`: a credential
+//!   for Claude Code to reach the pod's MCP endpoint (`/v1/mcp` only;
+//!   decision `mcp-connector`) with that access (default edit; decision
+//!   `mcp-access-levels`); printed once. Claude on the web connects through
+//!   OAuth instead.
 //! - `pods revoke-mcp <name>`: disconnect Claude (every MCP credential).
 //! - `pods monitoring <name> on|off`: whether the pod's apps may read the
 //!   server's monitoring data (the `monitor` source; decision `server-monitoring`).
@@ -148,7 +150,7 @@ fn main() -> std::process::ExitCode {
                  server pods adopt <name> <path/to/server.db>\n       server pods remove-adopted [dir]\n       \
                  server pods rotate <name> [--revoke-mcp]\n       \
                  server pods delete <name>\n       server pods notify-test <name>\n       \
-                 server pods mcp <name> [label]\n       server pods revoke-mcp <name>\n       \
+                 server pods mcp <name> [label] [--access read|edit|outward]\n       server pods revoke-mcp <name>\n       \
                  server pods monitoring <name> on|off\n       server pods list\n       \
                  server backup <dir>   (a consistent copy of the data; docs/server.md)"
             );
@@ -267,14 +269,30 @@ fn pods(args: &[&str]) -> Result<(), String> {
             let title = host.notify_test(name)?;
             println!("Sent \"{title}\" to pod '{name}'.");
         }
-        ["mcp", name, label @ ..] => {
-            let label = match label {
-                [] => "Claude Code",
-                [l] => l,
-                _ => return Err("usage: server pods mcp <name> [label]".into()),
-            };
-            let token = host.issue_mcp(name, label)?;
-            println!("An MCP credential for pod '{name}' ({label}), shown only now:");
+        ["mcp", name, rest @ ..] => {
+            let usage =
+                || "usage: server pods mcp <name> [label] [--access read|edit|outward]".to_owned();
+            // Decision `mcp-access-levels`: edit unless asked.
+            let (mut label, mut access) = (None, pod_core::mcp::Access::Edit);
+            let mut it = rest.iter();
+            while let Some(a) = it.next() {
+                if *a == "--access" {
+                    access = it
+                        .next()
+                        .and_then(|v| pod_core::mcp::Access::from_id(v))
+                        .ok_or_else(usage)?;
+                } else if label.is_none() {
+                    label = Some(*a);
+                } else {
+                    return Err(usage());
+                }
+            }
+            let label = label.unwrap_or("Claude Code");
+            let token = host.issue_mcp(name, label, access)?;
+            println!(
+                "An MCP credential for pod '{name}' ({label}, {} access), shown only now:",
+                access.id()
+            );
             println!();
             println!("    {token}");
             println!();

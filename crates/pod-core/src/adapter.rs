@@ -449,6 +449,17 @@ pub trait Source: Any + Send + Sync {
         None
     }
 
+    /// The access an MCP connection needs to run tool `tool` (one of
+    /// [`Self::mcp_tools`]) with `args` (decision `mcp-access-levels`):
+    /// [`crate::mcp::Access::Read`] for a look, `Edit` for a change to the
+    /// pod's own things, `Outward` for anything that acts outside the pod
+    /// or can't be undone. `None` for a tool it doesn't have; a tool of its
+    /// own it leaves at `None` needs `Outward`. Default: none.
+    fn mcp_access(&self, tool: &str, args: &serde_json::Value) -> Option<crate::mcp::Access> {
+        let _ = (tool, args);
+        None
+    }
+
     /// Run MCP tool `tool` (one of [`Self::mcp_tools`]) with `args`: the
     /// result, or an error body (`{"error": ..., "detail": ...}`) that
     /// becomes an `isError` tool result. `None` for a tool it doesn't have.

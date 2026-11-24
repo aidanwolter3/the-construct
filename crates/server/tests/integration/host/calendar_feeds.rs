@@ -28,9 +28,12 @@ async fn tool(env: &Env, key: &str, name: &str, args: Value) -> Value {
 
 async fn mcp_key(env: &Env, pod: &str) -> String {
     let (host, pod) = (env.host.clone(), pod.to_owned());
-    tokio::task::spawn_blocking(move || host.issue_mcp(&pod, "test").unwrap())
-        .await
-        .unwrap()
+    tokio::task::spawn_blocking(move || {
+        host.issue_mcp(&pod, "test", pod_core::mcp::Access::Outward)
+            .unwrap()
+    })
+    .await
+    .unwrap()
 }
 
 /// A server that serves public links (and so calendar feeds).

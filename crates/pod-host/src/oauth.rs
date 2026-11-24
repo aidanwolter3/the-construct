@@ -10,7 +10,8 @@
 //!   `POST /oauth/authorize`: checks it (rate-limited like the code screen)
 //!   and redirects back with a single-use code (PKCE S256 required, 5 min).
 //! - `POST /oauth/token`: the code (with its verifier) for an access token:
-//!   a new `mcp` credential of that pod (`cmcp_…`), good only for the pod's
+//!   a new `mcp` credential of that pod (`cmcp_…`) with the access the user
+//!   chose on the page (decision `mcp-access-levels`), good only for the pod's
 //!   `/v1/mcp` until revoked (Settings' Connected apps, `server pods
 //!   revoke-mcp`) or unused for 90 days (decision `connected-apps`).
 //!
@@ -41,6 +42,7 @@ use axum::{
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use pod_core::json_error;
+use pod_core::mcp::Access;
 use pod_core::metrics;
 use pod_core::session::session_hash;
 use serde_json::{Value, json};
@@ -629,6 +631,20 @@ fn page(
         .map(|(k, v)| format!("<input type=\"hidden\" name=\"{k}\" value=\"{}\">", esc(v)))
         .collect();
         let host = destination(origin);
+        let picked = chosen_access(params);
+        let choices: String = Access::ALL
+            .iter()
+            .map(|a| {
+                format!(
+                    "<label class=\"choice\"><input type=\"radio\" name=\"access\" value=\"{}\"{}> \
+                     <b>{}</b>: {}</label>",
+                    a.id(),
+                    if *a == picked { " checked" } else { "" },
+                    access_title(*a),
+                    esc(access_summary(*a))
+                )
+            })
+            .collect();
         let warning = if trusted {
             String::new()
         } else {
@@ -642,11 +658,11 @@ fn page(
         };
         body = format!(
             "<p>Your pod code is about to go to</p><p class=\"dest\">{}</p>{warning}\
-             <p><b>{}</b> (the name the app gave itself) wants to read your pod's apps and data \
-             sources, and to create and edit your <b>custom apps</b>. It can't use your apps' \
-             accounts or change built-in apps.</p>\
+             <p><b>{}</b> (the name the app gave itself) wants to connect to your pod. It can't use \
+             your apps' accounts or change built-in layouts. Choose what it may do:</p>\
              {}\
              <form method=\"post\" action=\"/oauth/authorize\">{hidden}\
+             <fieldset><legend>Access</legend>{choices}</fieldset>\
              <label>Your pod code<br><input name=\"pod_code\" type=\"password\" autocomplete=\"off\" \
              placeholder=\"cpod_…\" required></label>\
              <div class=\"row\"><button name=\"decision\" value=\"allow\">Connect</button>\
@@ -668,6 +684,8 @@ fn page(
          input{{width:100%;padding:.6rem;font:inherit;border:1px solid #79747e;border-radius:8px;box-sizing:border-box}}\
          button{{padding:.6rem 1.2rem;font:inherit;border-radius:20px;border:0;background:#6750a4;color:#fff;margin-right:.5rem}}\
          .secondary{{background:#e8def8;color:#1d192b}}.row{{margin-top:1rem}}\
+         fieldset{{border:1px solid #cac4d0;border-radius:8px;margin:0 0 1rem;padding:.5rem .8rem}}\
+         .choice{{display:block;margin:.4rem 0}}.choice input{{width:auto;margin-right:.3rem}}\
          .dest{{font-size:1.4rem;font-weight:700;word-break:break-all;margin:.25rem 0 1rem}}\
          .warn{{background:#fce8e6;color:#8c1d18;padding:.6rem .8rem;border-radius:8px}}.error{{color:#b3261e}}.small{{font-size:.85rem;color:#49454f}}\
          </style></head><body><h1>The Construct</h1><p>{}</p>{body}</body></html>",
@@ -683,6 +701,35 @@ fn page(
     r.headers_mut()
         .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
     r
+}
+
+/// The access the consent form chose (decision `mcp-access-levels`):
+/// [`Access::Edit`] when it says none or one this build doesn't know.
+fn chosen_access(p: &HashMap<String, String>) -> Access {
+    p.get("access")
+        .and_then(|a| Access::from_id(a))
+        .unwrap_or(Access::Edit)
+}
+
+/// An access level's name on the consent page and in Settings.
+pub(crate) fn access_title(a: Access) -> &'static str {
+    match a {
+        Access::Read => "Read only",
+        Access::Edit => "Edit",
+        Access::Outward => "Edit and act outward",
+    }
+}
+
+/// What a level allows, in a few words (the consent page, Settings).
+pub(crate) fn access_summary(a: Access) -> &'static str {
+    match a {
+        Access::Read => "Look only: read your layouts and data.",
+        Access::Edit => "Change your layouts, components, collections and rows.",
+        Access::Outward => {
+            "Also share or publish publicly, schedule or queue agent runs, add fillers and fetch \
+             from new sites, call other MCP servers, plug jacks, set secrets, watch devices, delete."
+        }
+    }
 }
 
 /// Who gets the code, for the consent page: the redirect's host (the
@@ -768,6 +815,7 @@ pub(crate) async fn authorize_submit(State(host): State<Arc<Host>>, req: Request
         pod_id,
         redirect_uri: r.redirect_uri.clone(),
         challenge: r.challenge.clone(),
+        access: chosen_access(&p),
     };
     let hash = session_hash(&code);
     match host
@@ -898,10 +946,11 @@ pub(crate) async fn token(State(host): State<Arc<Host>>, req: Request) -> Respon
     let pod_id = c.pod_id.clone();
     let stored = label.clone();
     let via = redirect_host(&c.redirect_uri).map(|(_, h)| h);
+    let level = c.access;
     match host
         .blocking(move |h| {
             h.store
-                .insert_mcp_credential(&pod_id, &access_hash, &stored, via.as_deref())
+                .insert_mcp_credential(&pod_id, &access_hash, &stored, via.as_deref(), level)
         })
         .await
     {
@@ -914,7 +963,7 @@ pub(crate) async fn token(State(host): State<Arc<Host>>, req: Request) -> Respon
             );
         }
     }
-    tracing::info!(client = %label, "OAuth: MCP credential issued");
+    tracing::info!(client = %label, access = level.id(), "OAuth: MCP credential issued");
     metrics::inc(metrics::CREDENTIALS_ISSUED, &[("kind", "mcp")]);
     (
         StatusCode::OK,

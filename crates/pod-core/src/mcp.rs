@@ -73,6 +73,160 @@ async fn authorized(pod: &Pod, headers: &HeaderMap) -> Result<(), Box<Response>>
     }
 }
 
+/// How much an MCP connection may do (decision `mcp-access-levels`, issue
+/// #438), chosen by the owner when it connects and changed in Settings'
+/// Connected apps. Ordered: each level can do what the ones below can.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Access {
+    /// Look only: list, read, describe, preview.
+    Read,
+    /// Also change the pod's own things: layouts, components, collections,
+    /// rows, the theme.
+    Edit,
+    /// Also act outward or irreversibly: share or publish publicly, schedule
+    /// or queue agent runs, reach new hosts (fillers, fetches), call other
+    /// MCP servers, plug jacks, set secrets, watch devices, delete.
+    Outward,
+}
+
+impl Access {
+    pub const ALL: [Access; 3] = [Access::Read, Access::Edit, Access::Outward];
+
+    /// Its id in the store, [`ACCESS_HEADER`] and the tools' errors.
+    pub fn id(self) -> &'static str {
+        match self {
+            Access::Read => "read",
+            Access::Edit => "edit",
+            Access::Outward => "outward",
+        }
+    }
+
+    /// The level `id` names, if it is one.
+    pub fn from_id(id: &str) -> Option<Access> {
+        Access::ALL.into_iter().find(|a| a.id() == id)
+    }
+
+    /// The level `id` names; anything unknown is the narrowest,
+    /// [`Access::Read`], never more.
+    pub fn parse(id: &str) -> Access {
+        Access::from_id(id).unwrap_or(Access::Read)
+    }
+}
+
+/// Request header a pod host sets beside [`crate::CREDENTIAL_HEADER`]` =
+/// mcp`: the credential's [`Access`]. The host removes any value a client
+/// sent; trusted only by a hosted pod, and only with that credential.
+pub const ACCESS_HEADER: &str = "x-construct-mcp-access";
+
+/// The access of the caller of the endpoint: an MCP credential's, as its
+/// host says ([`ACCESS_HEADER`]; none said: [`Access::Read`]); the pod
+/// token's own session can do everything.
+pub fn connection_access(pod: &Pod, headers: &HeaderMap) -> Access {
+    if pod.host_credential(headers).as_deref() == Some("mcp") {
+        headers
+            .get(ACCESS_HEADER)
+            .and_then(|v| v.to_str().ok())
+            .map_or(Access::Read, Access::parse)
+    } else {
+        Access::Outward
+    }
+}
+
+tokio::task_local! {
+    /// The access of the MCP call this task is running ([`call_tool`]).
+    static CALL_ACCESS: Access;
+}
+
+/// The access of the MCP tool call the current task runs for, `None`
+/// outside one (a device's or the pod's own request). Requests a tool makes
+/// through the pod's router run in the same task, so they see it too; read
+/// it before moving work to a blocking thread.
+pub fn call_access() -> Option<Access> {
+    CALL_ACCESS.try_with(|a| *a).ok()
+}
+
+/// Whether the current task runs an MCP call below [`Access::Outward`]:
+/// what it writes is Claude's, not the owner's (Collections records it so,
+/// and Agents won't start a run from it).
+pub fn below_outward() -> bool {
+    call_access().is_some_and(|a| a < Access::Outward)
+}
+
+/// The access tool `name` needs with `args` (decision `mcp-access-levels`):
+/// a `list_`, `get_` or `describe_` tool only reads; the core places its own
+/// tools ([`core_tool_needs`]) and each source its own
+/// ([`crate::Source::mcp_access`]). Default-deny: a tool nobody placed needs
+/// [`Access::Outward`], so a new tool is safe until it is placed.
+pub fn tool_needs(pod: &Pod, name: &str, args: &Value) -> Access {
+    if name.starts_with("list_") || name.starts_with("get_") || name.starts_with("describe_") {
+        return Access::Read;
+    }
+    if let Some(a) = core_tool_needs(name, args) {
+        return a;
+    }
+    pod.catalog()
+        .adapters()
+        .iter()
+        .find_map(|a| a.mcp_access(name, args))
+        .unwrap_or(Access::Outward)
+}
+
+/// The access the core's own tools need; `None` for one it doesn't place
+/// (a source's, or an outward one: those fall to the default).
+fn core_tool_needs(name: &str, _args: &Value) -> Option<Access> {
+    Some(match name {
+        "guide"
+        | "expand"
+        | "find_elements"
+        | "validate_layout"
+        | "sample_data"
+        | "render_layout_preview"
+        | "mcp_servers"
+        | "note_gap" => Access::Read,
+        "create_layout"
+        | "update_layout"
+        | "rename_layout"
+        | "restore_version"
+        | "define_component"
+        | "update_component"
+        | "copy_component"
+        | "restore_component"
+        | "set_theme"
+        | "set_time_zone"
+        | "rename_device"
+        | "adopt"
+        | "update_adoption"
+        | "dispatch_virtual_interaction"
+        | "unshare_publicly"
+        | "revoke_publication"
+        | "revoke_calendar_feed"
+        | "unplug_jack"
+        | "mcp_disconnect" => Access::Edit,
+        // Outward (and the default): share_publicly, publish, set_handle,
+        // set_calendar_feed, rotate_calendar_feed, mcp_connect, mcp_call_tool,
+        // plug_jack, watch_device, delete_layout, delete_component.
+        _ => return None,
+    })
+}
+
+/// The refusal of a call that needs more access than the connection has.
+fn access_too_low(name: &str, needs: Access, has: Access) -> Value {
+    json!({
+        "error": "access_too_low",
+        "tool": name,
+        "needs": needs.id(),
+        "has": has.id(),
+        "detail": format!(
+            "This connection to the pod has {} access and {name} needs {}. Tell the user: they can \
+             raise it in the app's Settings, Connected apps, or connect again and choose {}. Don't \
+             try to get around it.",
+            has.id(),
+            needs.id(),
+            needs.id()
+        ),
+    })
+}
+
 /// The scope of the credential calling the endpoint ([`authorized`]): an
 /// MCP credential's, else the pod token's session's.
 pub(crate) fn credential_scope(pod: &Pod, headers: &HeaderMap) -> crate::session::Scope {
@@ -122,7 +276,7 @@ async fn handle(State(pod): State<Pod>, headers: HeaderMap, body: Bytes) -> Resp
     };
     let params = obj.get("params").cloned().unwrap_or(Value::Null);
     let answer = match method {
-        "initialize" => Ok(initialize(&pod, &params)),
+        "initialize" => Ok(initialize(&pod, &params, connection_access(&pod, &headers))),
         "ping" => Ok(json!({})),
         "tools/list" => Ok(json!({ "tools": all_tools(&pod) })),
         "tools/call" => Ok(call_tool(&pod, &headers, &params).await),
@@ -141,7 +295,7 @@ fn rpc_error(id: Value, code: i64, message: &str) -> Value {
     json!({ "jsonrpc": "2.0", "id": id, "error": { "code": code, "message": message } })
 }
 
-fn initialize(pod: &Pod, params: &Value) -> Value {
+fn initialize(pod: &Pod, params: &Value, access: Access) -> Value {
     let asked = params["protocolVersion"].as_str().unwrap_or("");
     let version = PROTOCOL_VERSIONS
         .iter()
@@ -152,7 +306,7 @@ fn initialize(pod: &Pod, params: &Value) -> Value {
         "protocolVersion": version,
         "capabilities": { "tools": { "listChanged": false } },
         "serverInfo": { "name": "the-construct-pod", "title": "The Construct", "version": env!("CARGO_PKG_VERSION") },
-        "instructions": instructions(pod),
+        "instructions": instructions(pod, access),
     })
 }
 
@@ -160,12 +314,16 @@ fn initialize(pod: &Pod, params: &Value) -> Value {
 /// names of the guide's topics. Kept short on purpose: a client may show
 /// only the start of it (decision `element-roles-and-reuse`), so the detail
 /// is in [`guide`], read by topic.
-fn instructions(pod: &Pod) -> String {
+fn instructions(pod: &Pod, access: Access) -> String {
     let topics: Vec<String> = guide_topics(pod)
         .iter()
         .map(|t| format!("{} ({})", t.id, t.summary))
         .collect();
-    format!("{INSTRUCTIONS} {}.", topics.join("; "))
+    format!(
+        "{INSTRUCTIONS} {}. This connection's access: {}.",
+        topics.join("; "),
+        access.id()
+    )
 }
 
 /// The longest [`instructions`] may be, in characters.
@@ -598,10 +756,24 @@ fn str_arg<'a>(args: &'a Value, k: &str) -> Result<&'a str, Value> {
 
 async fn call_tool(pod: &Pod, headers: &HeaderMap, params: &Value) -> Value {
     let name = params["name"].as_str().unwrap_or("");
-    let mut args = params
+    let args = params
         .get("arguments")
         .cloned()
         .unwrap_or_else(|| json!({}));
+    // What this connection may do (decision `mcp-access-levels`): checked
+    // before anything runs, and kept for the call so what it writes is
+    // recorded as Claude's below outward.
+    let access = connection_access(pod, headers);
+    let needs = tool_needs(pod, name, &args);
+    if needs > access {
+        return tool_result(Err(access_too_low(name, needs, access)));
+    }
+    CALL_ACCESS
+        .scope(access, run_tool(pod, headers, name, args))
+        .await
+}
+
+async fn run_tool(pod: &Pod, headers: &HeaderMap, name: &str, mut args: Value) -> Value {
     // Layout tools name the layout `id` (decision `layouts-not-apps`); the
     // code below reads `app`, which older callers still send.
     if args["app"].is_null()

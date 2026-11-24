@@ -3,6 +3,7 @@
 use std::path::Path;
 use std::sync::Mutex;
 
+use pod_core::mcp::Access;
 use pod_core::migrations::{self, Counter, Step};
 use pod_core::util::now_secs;
 use rusqlite::{Connection, OptionalExtension, params};
@@ -217,6 +218,16 @@ const MIGRATIONS: &[Step] = &[
     // links already given out keep working: lookups hash what they are
     // given.
     Step::rust("hash_link_tokens", hash_link_tokens),
+    // 14 (decision `mcp-access-levels`, issue #438): each MCP credential's
+    // access, read, edit or outward, chosen when it connects (carried on its
+    // authorization code) and changed in Connected apps. Existing ones get
+    // edit: the owner raises one to outward deliberately.
+    Step::sql(
+        "mcp_access",
+        "ALTER TABLE credentials ADD COLUMN access TEXT;
+     UPDATE credentials SET access = 'edit' WHERE kind = 'mcp';
+     ALTER TABLE oauth_codes ADD COLUMN access TEXT;",
+    ),
 ];
 
 pub(crate) fn hash_link_tokens(tx: &rusqlite::Transaction<'_>) -> rusqlite::Result<()> {
@@ -268,6 +279,8 @@ pub struct ConnectedApp {
     pub redirect_host: Option<String>,
     pub created_at: i64,
     pub last_used_at: i64,
+    /// What it may do (decision `mcp-access-levels`).
+    pub access: Access,
 }
 
 /// What a credential is for (`credentials.kind`).
@@ -310,6 +323,9 @@ pub struct OAuthCode {
     pub pod_id: String,
     pub redirect_uri: String,
     pub challenge: String,
+    /// The access the owner chose for the MCP credential it becomes
+    /// (decision `mcp-access-levels`).
+    pub access: Access,
 }
 
 /// Who a pod is for.
@@ -471,6 +487,21 @@ impl HostStore {
         Ok(Some((pod, kind)))
     }
 
+    /// The access of the MCP credential with hash `token_hash` (decision
+    /// `mcp-access-levels`); [`Access::Read`] when it has none recorded or
+    /// one this build doesn't know, never more.
+    pub fn mcp_access(&self, token_hash: &str) -> rusqlite::Result<Access> {
+        let found: Option<Option<String>> = self
+            .conn()
+            .query_row(
+                "SELECT access FROM credentials WHERE token_hash = ?1 AND kind = 'mcp'",
+                [token_hash],
+                |r| r.get(0),
+            )
+            .optional()?;
+        Ok(found.flatten().map_or(Access::Read, |a| Access::parse(&a)))
+    }
+
     /// Add an MCP credential to a pod.
     /// [`Self::insert_mcp_credential`], doing nothing when that credential
     /// already exists.
@@ -479,14 +510,15 @@ impl HostStore {
         pod_id: &str,
         token_hash: &str,
         label: &str,
+        access: Access,
     ) -> rusqlite::Result<()> {
         // A local key that sat unused past the idle limit works again.
         self.conn().execute(
-            "INSERT INTO credentials (token_hash, pod_id, kind, created_at, label, last_used_at)
-             VALUES (?1, ?2, 'mcp', ?3, ?4, ?3)
+            "INSERT INTO credentials (token_hash, pod_id, kind, created_at, label, last_used_at, access)
+             VALUES (?1, ?2, 'mcp', ?3, ?4, ?3, ?5)
              ON CONFLICT (token_hash) DO UPDATE SET last_used_at = excluded.last_used_at
              WHERE credentials.kind = 'mcp' AND credentials.pod_id = excluded.pod_id",
-            params![token_hash, pod_id, now_secs(), label],
+            params![token_hash, pod_id, now_secs(), label, access.id()],
         )?;
         Ok(())
     }
@@ -548,12 +580,20 @@ impl HostStore {
         token_hash: &str,
         label: &str,
         redirect_host: Option<&str>,
+        access: Access,
     ) -> rusqlite::Result<()> {
         self.conn().execute(
             "INSERT INTO credentials
-                 (token_hash, pod_id, kind, created_at, label, last_used_at, redirect_host)
-             VALUES (?1, ?2, 'mcp', ?3, ?4, ?3, ?5)",
-            params![token_hash, pod_id, now_secs(), label, redirect_host],
+                 (token_hash, pod_id, kind, created_at, label, last_used_at, redirect_host, access)
+             VALUES (?1, ?2, 'mcp', ?3, ?4, ?3, ?5, ?6)",
+            params![
+                token_hash,
+                pod_id,
+                now_secs(),
+                label,
+                redirect_host,
+                access.id()
+            ],
         )?;
         Ok(())
     }
@@ -564,7 +604,7 @@ impl HostStore {
         let conn = self.conn();
         let mut stmt = conn.prepare(
             "SELECT substr(token_hash, 1, ?3), COALESCE(label, ''), redirect_host, created_at,
-                    COALESCE(last_used_at, created_at) AS used
+                    COALESCE(last_used_at, created_at) AS used, COALESCE(access, '')
              FROM credentials WHERE pod_id = ?1 AND kind = 'mcp' AND used > ?2
              ORDER BY used DESC, created_at DESC",
         )?;
@@ -581,6 +621,7 @@ impl HostStore {
                     redirect_host: r.get(2)?,
                     created_at: r.get(3)?,
                     last_used_at: r.get(4)?,
+                    access: Access::parse(&r.get::<_, String>(5)?),
                 })
             },
         )?
@@ -598,6 +639,24 @@ impl HostStore {
             "DELETE FROM credentials WHERE pod_id = ?1 AND kind = 'mcp'
              AND substr(token_hash, 1, ?3) = ?2",
             params![pod_id, id, CONNECTED_APP_ID_LEN as i64],
+        )
+    }
+
+    /// Set the access of one of a pod's MCP credentials by its Connected
+    /// apps id; how many changed (0: no such credential).
+    pub fn set_connected_app_access(
+        &self,
+        pod_id: &str,
+        id: &str,
+        access: Access,
+    ) -> rusqlite::Result<usize> {
+        if id.len() != CONNECTED_APP_ID_LEN || !id.bytes().all(|b| b.is_ascii_hexdigit()) {
+            return Ok(0);
+        }
+        self.conn().execute(
+            "UPDATE credentials SET access = ?4 WHERE pod_id = ?1 AND kind = 'mcp'
+             AND substr(token_hash, 1, ?3) = ?2",
+            params![pod_id, id, CONNECTED_APP_ID_LEN as i64, access.id()],
         )
     }
 
@@ -679,15 +738,17 @@ impl HostStore {
         let conn = self.conn();
         conn.execute("DELETE FROM oauth_codes WHERE expires_at <= ?1", [now])?;
         conn.execute(
-            "INSERT INTO oauth_codes (code_hash, client_id, pod_id, redirect_uri, challenge, expires_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            "INSERT INTO oauth_codes
+                 (code_hash, client_id, pod_id, redirect_uri, challenge, expires_at, access)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
             params![
                 code_hash,
                 c.client_id,
                 c.pod_id,
                 c.redirect_uri,
                 c.challenge,
-                now + ttl_secs
+                now + ttl_secs,
+                c.access.id()
             ],
         )?;
         Ok(())
@@ -699,8 +760,8 @@ impl HostStore {
         let tx = conn.transaction()?;
         let found = tx
             .query_row(
-                "SELECT client_id, pod_id, redirect_uri, challenge FROM oauth_codes
-                 WHERE code_hash = ?1 AND expires_at > ?2",
+                "SELECT client_id, pod_id, redirect_uri, challenge, COALESCE(access, '')
+                 FROM oauth_codes WHERE code_hash = ?1 AND expires_at > ?2",
                 params![code_hash, now_secs()],
                 |r| {
                     Ok(OAuthCode {
@@ -708,6 +769,7 @@ impl HostStore {
                         pod_id: r.get(1)?,
                         redirect_uri: r.get(2)?,
                         challenge: r.get(3)?,
+                        access: Access::parse(&r.get::<_, String>(4)?),
                     })
                 },
             )
@@ -972,10 +1034,10 @@ mod tests {
         let a = "a".repeat(64);
         let b = "b".repeat(64);
         store
-            .insert_mcp_credential("p1", &a, "Claude", Some("claude.ai"))
+            .insert_mcp_credential("p1", &a, "Claude", Some("claude.ai"), Access::Edit)
             .unwrap();
         store
-            .insert_mcp_credential("p1", &b, "Other", None)
+            .insert_mcp_credential("p1", &b, "Other", None, Access::Edit)
             .unwrap();
         let apps = store.connected_apps("p1").unwrap();
         assert_eq!(apps.len(), 2);
@@ -1018,6 +1080,87 @@ mod tests {
     }
 
     #[test]
+    fn mcp_access_is_kept_changed_and_old_credentials_get_edit() {
+        // A host.db from before access levels, with one MCP credential.
+        let mut conn = Connection::open_in_memory().unwrap();
+        migrations::run(
+            &mut conn,
+            "host",
+            MIGRATIONS,
+            Counter::UserVersion,
+            MIGRATIONS.len() - 1,
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO pods (id, name, kind, created_at) VALUES ('p1', 'mine', 'admin', 1)",
+            [],
+        )
+        .unwrap();
+        let old = "c".repeat(64);
+        conn.execute(
+            "INSERT INTO credentials (token_hash, pod_id, kind, created_at, last_used_at)
+             VALUES (?1, 'p1', 'mcp', 1, ?2)",
+            params![old, now_secs()],
+        )
+        .unwrap();
+        let store = HostStore::init(conn).unwrap();
+        assert_eq!(store.mcp_access(&old).unwrap(), Access::Edit);
+
+        let new = "d".repeat(64);
+        store
+            .insert_mcp_credential("p1", &new, "Claude", None, Access::Read)
+            .unwrap();
+        assert_eq!(store.mcp_access(&new).unwrap(), Access::Read);
+        let id = "d".repeat(CONNECTED_APP_ID_LEN);
+        let listed = |s: &HostStore| {
+            s.connected_apps("p1")
+                .unwrap()
+                .into_iter()
+                .find(|a| a.id == id)
+                .unwrap()
+                .access
+        };
+        assert_eq!(listed(&store), Access::Read);
+        // Raised from Connected apps; another pod's id changes nothing.
+        assert_eq!(
+            store
+                .set_connected_app_access("p2", &id, Access::Outward)
+                .unwrap(),
+            0
+        );
+        assert_eq!(
+            store
+                .set_connected_app_access("p1", &id, Access::Outward)
+                .unwrap(),
+            1
+        );
+        assert_eq!(store.mcp_access(&new).unwrap(), Access::Outward);
+        assert_eq!(listed(&store), Access::Outward);
+        // A value this build doesn't know is the narrowest, never more.
+        store
+            .conn()
+            .execute(
+                "UPDATE credentials SET access = 'admin' WHERE token_hash = ?1",
+                [&new],
+            )
+            .unwrap();
+        assert_eq!(store.mcp_access(&new).unwrap(), Access::Read);
+        // A pod token has no MCP access at all.
+        assert_eq!(store.mcp_access("nope").unwrap(), Access::Read);
+
+        // The authorization code carries the owner's choice.
+        let code = OAuthCode {
+            client_id: "c".into(),
+            pod_id: "p1".into(),
+            redirect_uri: "https://claude.ai/cb".into(),
+            challenge: "x".into(),
+            access: Access::Outward,
+        };
+        store.insert_code("k1", &code, 300).unwrap();
+        assert_eq!(store.take_code("k1").unwrap(), Some(code));
+    }
+
+    #[test]
     fn migration_3_keeps_pod_tokens_and_adds_mcp_credentials() {
         // A host.db as staging has it: migrations 1 and 2, one pod token.
         let conn = Connection::open_in_memory().unwrap();
@@ -1041,7 +1184,7 @@ mod tests {
         let store = HostStore::init(conn).unwrap();
         assert_eq!(store.pod_for_token("h1").unwrap().as_deref(), Some("p1"));
         store
-            .insert_mcp_credential("p1", "m1", "Claude", None)
+            .insert_mcp_credential("p1", "m1", "Claude", None, Access::Edit)
             .unwrap();
         assert_eq!(
             store.credential("m1").unwrap(),
@@ -1071,6 +1214,7 @@ mod tests {
             pod_id: pod.into(),
             redirect_uri: "https://claude.ai/cb".into(),
             challenge: "x".into(),
+            access: Access::Edit,
         };
         for (hash, pod) in [("k1", "p1"), ("k2", "p1"), ("k3", "p2")] {
             store.insert_code(hash, &code(pod), 300).unwrap();

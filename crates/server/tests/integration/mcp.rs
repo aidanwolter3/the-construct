@@ -3,6 +3,7 @@
 //! scoped credential (only `/v1/mcp`), every tool against a pod with the
 //! made-up test dishes, and that rotation keeps and revocation ends the connection.
 
+mod access;
 mod construct;
 mod guide;
 mod previews;
@@ -181,7 +182,14 @@ impl Env {
         json!({ "workspace": node, "entities": data["entities"], "queries": data["queries"] })
     }
 
+    /// [`Self::connect_with`] outward access: every tool works.
     async fn connect(&self, pod_code: &str) -> String {
+        self.connect_with(pod_code, "outward").await
+    }
+
+    /// The whole OAuth flow, choosing `access` on the consent page
+    /// (decision `mcp-access-levels`): the access token.
+    async fn connect_with(&self, pod_code: &str, access: &str) -> String {
         let redirect = "http://localhost:9999/cb";
         let reg: Value = client()
             .post(format!("{}/oauth/register", self.url))
@@ -205,6 +213,7 @@ impl Env {
                 ("code_challenge_method", "S256"),
                 ("state", "st"),
                 ("pod_code", pod_code),
+                ("access", access),
                 ("decision", "allow"),
             ])
             .send()
@@ -671,9 +680,12 @@ async fn connected_apps_are_listed_and_revoked_and_odd_clients_get_no_redirects(
         .unwrap();
     let access = tok["access_token"].as_str().unwrap().to_owned();
     let host = env.host.clone();
-    let cli = tokio::task::spawn_blocking(move || host.issue_mcp("mine", "Claude Code").unwrap())
-        .await
-        .unwrap();
+    let cli = tokio::task::spawn_blocking(move || {
+        host.issue_mcp("mine", "Claude Code", pod_core::mcp::Access::Outward)
+            .unwrap()
+    })
+    .await
+    .unwrap();
 
     // Settings' list, for the pod's own sessions only.
     let (status, screen) = env.get("/v1/connected-apps/screen", &pod_code).await;

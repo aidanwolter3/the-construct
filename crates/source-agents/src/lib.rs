@@ -830,6 +830,22 @@ impl Source for AgentsAdapter {
         Some(INSTRUCTIONS)
     }
 
+    /// Decision `mcp-access-levels`: runs act outside the pod with a
+    /// workspace's access, so linking tasks and making or changing a
+    /// schedule are outward; listing reads and pausing only stops runs.
+    fn mcp_access(&self, tool: &str, args: &Value) -> Option<pod_core::mcp::Access> {
+        use pod_core::mcp::Access;
+        match tool {
+            "agents_link_tasks" => Some(Access::Outward),
+            "agents_schedules" => Some(match args["op"].as_str().unwrap_or("list") {
+                "list" => Access::Read,
+                "pause" => Access::Edit,
+                _ => Access::Outward,
+            }),
+            _ => None,
+        }
+    }
+
     fn mcp_call<'a>(
         &'a self,
         pod: &'a Pod,
@@ -1274,6 +1290,17 @@ async fn resume_schedule_route(
 }
 
 async fn reopen_route(State(pod): State<Pod>, headers: HeaderMap, body: Bytes) -> Response {
+    // Starting a run is outward (decision `mcp-access-levels`): an MCP
+    // connection with less access can't, even through a layout's button in
+    // a preview.
+    if pod_core::mcp::below_outward() {
+        return refuse(
+            StatusCode::FORBIDDEN,
+            "access_too_low",
+            "starting an agent run needs outward access; the user can raise this connection in \
+             Settings, Connected apps",
+        );
+    }
     let body = match body_of(&pod, &headers, &body).await {
         Ok(b) => b,
         Err(r) => return r,

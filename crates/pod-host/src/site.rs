@@ -365,6 +365,8 @@ pub(crate) async fn sign_in_submit(State(host): State<Arc<Host>>, req: Request) 
         pod_id,
         redirect_uri: ask.redirect_uri(),
         challenge: ask.challenge.clone(),
+        // A site's sign-in makes a browser's credential, never an MCP one.
+        access: pod_core::mcp::Access::Read,
     };
     let hash = session_hash(&code);
     let stored = host
