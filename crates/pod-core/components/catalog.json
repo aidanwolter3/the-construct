@@ -119,6 +119,10 @@
     "category": "primitive",
     "use_when": "A small tag with text: a status, a date, a count, a category."
   },
+  "pinned_bar": {
+    "category": "container",
+    "use_when": "A search field or view chips pinned at the top while the page scrolls under them. Use it instead of a core://Sticky around a page-coloured Box."
+  },
   "screen": {
     "category": "scaffold",
     "use_when": "A screen with the app's old chrome: Back, title, spinner, error with Try again, scrolling content and a footer."
