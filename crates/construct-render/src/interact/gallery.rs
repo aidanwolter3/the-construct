@@ -15,6 +15,7 @@ use serde_json::Value;
 
 use super::{Outcome, Session};
 use crate::layout::{ScatterView, scatter_hit};
+use crate::scene::Draw;
 use crate::time::{Duration, Instant};
 
 /// The longest a tap waits for the next page's photo before showing it
@@ -231,7 +232,24 @@ impl Session {
         s.insert(format!("scatter:{id}:z"), v.zoom);
         s.insert(format!("scatter:{id}:x"), v.x);
         s.insert(format!("scatter:{id}:y"), v.y);
-        self.scene = None;
+        // A pan or pinch step changes only the plot's view: patch it into
+        // the scene drawn now rather than building the screen again (once
+        // per pointer move, which made the taste map lag).
+        let patched = self.scene.as_mut().is_some_and(|scene| {
+            let mut found = false;
+            for d in scene.draws.iter_mut() {
+                if let Draw::Points(run) = d
+                    && run.id == id
+                {
+                    run.view = [v.zoom, v.x, v.y];
+                    found = true;
+                }
+            }
+            found
+        });
+        if !patched {
+            self.scene = None;
+        }
     }
 
     /// Whether a drag on the scatter selects a box (its `select` is on).
@@ -834,6 +852,119 @@ mod tests {
         let p = v.to_screen(a, 0.5, 0.5);
         s.scatter_select(&id, p, (p.0 + 0.5, p.1 + 0.5));
         assert!(s.scatter_select_end(&id).is_err());
+    }
+
+    /// A plot of `n` points spread over the square, like the taste map.
+    fn big_plot(n: usize) -> (UiNode, DataBundle) {
+        let mut seed = 7u64;
+        let mut rnd = || {
+            seed = seed
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            ((seed >> 33) as f32) / (u32::MAX >> 1) as f32
+        };
+        let points: Vec<Point> = (0..n)
+            .map(|i| Point {
+                x: rnd(),
+                y: rnd(),
+                value: Some(rnd()),
+                mark: match i % 200 {
+                    0 => Mark::Highlight,
+                    1..=4 => Mark::Muted,
+                    _ => Mark::Plain,
+                },
+            })
+            .collect();
+        let root: UiNode = serde_json::from_value(json!({
+            "type": "core://Column", "children": [
+                {"type": "core://Text", "value_expr": "Your taste map", "style": "Title"},
+                {"type": "core://Scatter", "points": "${x://maps/m#points}", "tag": "plot"}
+            ]
+        }))
+        .unwrap();
+        let mut data = DataBundle::default();
+        data.entities.insert(
+            "x://maps/m".into(),
+            entity(json!({"points": encode(&points)})),
+        );
+        (root, data)
+    }
+
+    /// A pan or pinch step moves the drawn points without building the
+    /// screen again, and the plot is one draw however many points it has.
+    #[test]
+    fn a_pan_step_patches_the_drawn_plot() {
+        let (root, data) = big_plot(2_000);
+        let (mut s, _) = session(root, data);
+        let points = |s: &mut Session| {
+            s.scene()
+                .unwrap()
+                .draws
+                .iter()
+                .filter_map(|d| match d {
+                    crate::scene::Draw::Points(p) => Some((p.view, p.dots.len())),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(points(&mut s).len(), 1, "one draw for the plot");
+        assert_eq!(points(&mut s)[0].1, 2_000);
+        let id = "plot".to_string();
+        let a = crate::layout::ScatterView::area(bounds(&mut s, &id));
+        let _ = s.take_work();
+        s.scatter_zoom(&id, 2.0, a[0] + a[2] / 2.0, a[1] + a[3] / 2.0);
+        s.scatter_pan(&id, 10.0, 5.0);
+        let v = s.scatter_view(&id);
+        assert_eq!(
+            points(&mut s)[0].0,
+            [v.zoom, v.x, v.y],
+            "drawn with the new view"
+        );
+        let w = s.take_work();
+        assert_eq!(w.laid_out, 0, "nothing laid out again");
+        assert_eq!(
+            w.build,
+            std::time::Duration::ZERO,
+            "the scene wasn't built again"
+        );
+    }
+
+    /// Timings for the taste map's size (run with `--ignored --nocapture`).
+    #[test]
+    #[ignore]
+    fn time_a_big_plot() {
+        let (root, data) = big_plot(32_233);
+        let (mut s, _) = session(root, data);
+        let t = std::time::Instant::now();
+        s.scene().unwrap();
+        let first = t.elapsed();
+        let id = "plot".to_string();
+        let a = crate::layout::ScatterView::area(bounds(&mut s, &id));
+        // Zoomed out, every point drawn: a pinch step of 1.01.
+        let t = std::time::Instant::now();
+        for _ in 0..20 {
+            s.scatter_zoom(&id, 1.001, a[0] + a[2] / 2.0, a[1] + a[3] / 2.0);
+            s.scene().unwrap();
+        }
+        let whole = t.elapsed() / 20;
+        let whole_draws = s.scene().unwrap().draws.len();
+        s.scatter_zoom(&id, 3.0, a[0] + a[2] / 2.0, a[1] + a[3] / 2.0);
+        s.scene().unwrap();
+        let _ = s.take_work();
+        let steps = 60;
+        let t = std::time::Instant::now();
+        for k in 0..steps {
+            s.scatter_pan(&id, if k % 2 == 0 { 3.0 } else { -3.0 }, 1.0);
+            s.scene().unwrap();
+        }
+        let per = t.elapsed() / steps;
+        let w = s.take_work();
+        eprintln!(
+            "big plot: first scene {first:?}; zoomed-out pinch step + scene {whole:?} ({whole_draws} draws); \
+             pan step + scene at 3x {per:?}; laid out {} times in {steps} steps; draws {}",
+            w.laid_out,
+            s.scene().unwrap().draws.len()
+        );
     }
 
     #[test]
