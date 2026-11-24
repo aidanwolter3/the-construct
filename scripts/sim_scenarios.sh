@@ -73,6 +73,7 @@ scenario server-health-off server_health_off \
 shot light; mode dark; shot dark"
 scenario taste taste \
   "assert-text Waxed Chore Coat in Olive; assert-text On the edge; assert-text blanket lining; shot deck; \
+screen 360x740; insets 36 0 24 0; shot deck-small; screen phone; insets 0 0 0 0; \
 tap-photo right Photo 1 of Waxed Chore Coat in Olive; assert-text Photo 2 of 3; shot photo-2; \
 tap-photo left Photo 2 of Waxed Chore Coat in Olive; assert-text Photo 1 of 3; shot photo-back; \
 swipe-up Swipe up for pieces like Waxed Chore Coat in Olive; assert-text Buy at shop0.example; shot sheet; \

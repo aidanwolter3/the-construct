@@ -340,7 +340,8 @@ fn server_health_shows_checks_and_devices_and_says_when_monitoring_is_off() {
 
 /// The `taste` source's core layout over made-up answers of a taste service:
 /// a deck of one piece at a time (its photos turned by taps on either side,
-/// its description under it without scrolling, swiped off), a swipe up to
+/// its whole description under it with no buttons and nothing to scroll,
+/// swiped off right or left), a swipe up to
 /// the piece's sheet (Buy and similar pieces), the taste map as a scatter (zoomed, a dot opened, a box selected)
 /// and as a grid, and the taste page.
 #[test]
@@ -355,16 +356,43 @@ fn taste_deals_a_deck_maps_the_taste_and_shows_the_tastes() {
                 &out_dir("taste"),
             );
             assert_ok(&results);
-            // The description and the buttons are on the phone's screen as
-            // it opens: no scrolling to read them.
+            // The whole description is on the phone's screen as it opens,
+            // with no buttons under it and nothing to scroll: on a 390 x 844
+            // phone and on a 360 x 740 one, under their system bars.
+            let description_bottom = |runner: &mut construct_sim::run::Runner| {
+                let scene = runner.session.scene().unwrap();
+                assert!(
+                    !scene.semantics.iter().any(|n| {
+                        matches!(
+                            n.text_content.as_deref(),
+                            Some("Like Waxed Chore Coat in Olive" | "Dislike Waxed Chore Coat in Olive")
+                        )
+                    }),
+                    "no like or dislike button on the deck"
+                );
+                let d = scene
+                    .semantics
+                    .iter()
+                    .find(|n| {
+                        n.text_content
+                            .as_deref()
+                            .is_some_and(|t| t.ends_with("Made in a small workshop in Portugal."))
+                    })
+                    .expect("the whole description")
+                    .bounds;
+                d[1] + d[3]
+            };
+            for (screen, height) in [("phone", 844.0), ("360x740", 740.0)] {
+                let results = runner
+                    .run(&construct_sim::script::parse(&format!("screen {screen}; insets 36 0 24 0")).unwrap());
+                assert_ok(&results);
+                let bottom = description_bottom(&mut runner);
+                assert!(bottom <= height - 24.0, "on {screen} the description ends at {bottom}");
+            }
+            let results = runner
+                .run(&construct_sim::script::parse("screen phone; insets 0 0 0 0").unwrap());
+            assert_ok(&results);
             let scene = runner.session.scene().unwrap();
-            let like = scene
-                .semantics
-                .iter()
-                .find(|n| n.text_content.as_deref() == Some("Like Waxed Chore Coat in Olive"))
-                .expect("a Like button")
-                .bounds;
-            assert!(like[1] + like[3] <= 844.0, "Like is on screen: {like:?}");
             // The photo's page bars lie inside the photo.
             for n in scene.semantics.iter().filter(|n| n.node_type == "dots") {
                 let frame = scene.find_node(n.id.strip_prefix("dots:").unwrap()).unwrap().bounds;

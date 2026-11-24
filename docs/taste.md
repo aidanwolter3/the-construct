@@ -96,6 +96,15 @@ presentation: Sheet, params: {key}}, {intent: action.data.load, path: /v1/taste/
 its piece as `${taste://items/$route.key#<field>}` and its similar pieces from `taste:sheet:similar` (copies tagged
 `of: <key>`, listed `where of equals $route.key`).
 
+Since `layouts/taste/0005.json` (layouts only, no new build): the deck's card has no ✕ and ♥ buttons; it is liked by
+swiping it right and disliked by swiping it left (the sheet keeps its Like and Dislike buttons), and the description
+takes their room, six lines on a phone. The main view doesn't scroll: the root is a header (`core:page_header`, with
+the refresh action) over a plain column, not the scrolling `core:screen_scaffold` (the signed-out form keeps a
+scroll of its own). Nothing in the vocabulary sizes a photo by the screen's height, so the phone card's photo is
+0.88 wide for its height: with the longest description the service sends (300 characters) the card fits a 360 × 740
+phone under its system bars and leaves room on a 390 × 844 one (the simulator scenario checks both). On a shorter
+screen the card's bottom is cut off rather than scrolled.
+
 Use it whole from a pod's layout, `{"type": "core://Use", "ref": "@core/taste"}` with the feed `["taste", "feed"]`,
 and link that from home; `taste:status`'s `counts_text` (12 liked · 30 disliked) makes a one-line summary there.
 

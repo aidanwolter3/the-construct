@@ -59,3 +59,43 @@ async fn a_signed_out_pod_shows_the_sign_in() {
         "the sign-in form is in the layout"
     );
 }
+
+/// The newest Taste layout's deck: no like and dislike buttons (the card is
+/// swiped right or left) and a main view that doesn't scroll (no scrolling
+/// screen scaffold, and no core://Scroll but the signed-out form's).
+#[test]
+fn the_deck_has_no_buttons_and_does_not_scroll() {
+    let newest = FILES
+        .iter()
+        .filter(|f| f.app_id == "taste")
+        .max_by_key(|f| f.name)
+        .unwrap();
+    let page: serde_json::Value = serde_json::from_str(newest.text).unwrap();
+    let root = &page["layout"]["root"];
+    let text = root.to_string();
+    assert!(
+        !text.contains("core:screen_scaffold"),
+        "the main view scrolls"
+    );
+    assert!(
+        !text.contains("Dislike $item.title"),
+        "a dislike button on the deck"
+    );
+    assert!(
+        !text.contains("\"Like $item.title"),
+        "a like button on the deck"
+    );
+    let children = root["content"]["children"].as_array().unwrap();
+    let signed_in = children
+        .iter()
+        .find(|c| c["equals"] == "true" && c["value"] == "${taste://status/pod#signed_in}")
+        .expect("the signed-in view");
+    assert!(
+        !signed_in.to_string().contains("core://Scroll"),
+        "the deck view scrolls"
+    );
+    assert!(
+        signed_in.to_string().contains("\"stack\":true"),
+        "the deck is still a stack"
+    );
+}
