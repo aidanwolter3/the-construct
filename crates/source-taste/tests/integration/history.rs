@@ -99,14 +99,29 @@ async fn a_service_that_lost_the_history_is_sent_it_again() {
     // and goes through.
     let (status, body) = react(&pod, "shop0.example:1002", true).await;
     assert_eq!(status, StatusCode::OK, "{body}");
+    // The deck's background top-up may have hit the lost history first and
+    // sent it too: what counts is that the service holds all of it again.
+    let log = last_tag(&fake).split('/').next().unwrap().to_owned();
+    let held: Vec<(String, String)> = fake.states.lock().unwrap()[&log]
+        .iter()
+        .map(|e| {
+            (
+                e["id"].as_str().unwrap().to_owned(),
+                e["kind"].as_str().unwrap().to_owned(),
+            )
+        })
+        .collect();
+    let want = [
+        ("shop9.example:1", "like"),
+        ("shop9.example:2", "skip"),
+        ("shop0.example:1001", "skip"),
+        ("shop0.example:1002", "like"),
+    ];
+    assert_eq!(held, want.map(|(i, k)| (i.to_owned(), k.to_owned())));
     let uploads = fake.uploads.lock().unwrap().clone();
-    assert_eq!(uploads.len(), 2);
-    let events = uploads[1]["events"].as_array().unwrap();
-    assert_eq!(events.len(), 4, "the reaction being sent is already in it");
-    assert_eq!(events[2]["id"], "shop0.example:1001");
-    assert_eq!(events[3]["kind"], "like");
+    assert!(uploads.len() >= 2);
     // The feed's pages count as served.
-    assert_eq!(uploads[1]["served"]["shop0.example:1000"], 1);
+    assert_eq!(uploads.last().unwrap()["served"]["shop0.example:1000"], 1);
 }
 
 #[tokio::test]
