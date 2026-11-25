@@ -145,7 +145,7 @@ server pods rotate <name> [--revoke-mcp]       # new code; the old one stops wor
                                                # (--revoke-mcp: connected apps are disconnected too)
 server pods delete <name>                      # stops now; files deleted within 5 minutes
 server pods notify-test <name>                 # a test notification to the inbox and the pod's devices
-server pods mcp <name> [label] [--access read|edit|outward]
+server pods mcp <name> [label] [--access read|edit|outward] [--grant <file.json>]
                                                # a credential for Claude Code that reaches only /v1/mcp,
                                                # with that access (default edit; decision `mcp-access-levels`)
 server pods revoke-mcp <name>                  # disconnect every connected app (MCP credential) of the pod
@@ -234,6 +234,15 @@ does when it finishes.
   in Settings → Connected apps. The host sends the level to the pod in `x-construct-mcp-access` (dropped from any
   request that comes in); the pod checks every tool against it before it runs, and a tool nobody placed needs
   `outward`. Rows Claude writes below `outward` are recorded as Claude's, so they don't start agent runs.
+- MCP grants (decision [`mcp-grants`](decisions/mcp-grants.md)): `server pods mcp --grant <file.json>` gives a
+  credential a narrower scope on top of its level, for an unattended job (docs/anticipate.md). A grant names:
+  - `tools`;
+  - `rows` and `deletes`: the data sets (collections) it may write rows of and delete in (or `no_delete`);
+  - `protected_names`.
+
+  The host stores it with the credential, sends it as `x-construct-mcp-grant` (dropped from any request that comes
+  in) and keeps it when Connected apps changes the access. The pod refuses any tool, row write or edit group
+  outside it.
 
 ## Monitoring
 

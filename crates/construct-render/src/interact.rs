@@ -743,6 +743,12 @@ pub trait Loader: Send {
     /// reconnects now and catches up on the changes it missed. Must not
     /// block.
     fn foregrounded(&self) {}
+    /// How the owner uses their screens (decision `usage-trails`): a screen
+    /// opened, a tap, a Back, with names from the layout only (never bound
+    /// text, values or ids). Only the engine records them, for the pod's
+    /// `usage` jack; a preview's, a walk's or the simulator's loader leaves
+    /// this to its default and records nothing. Must not block.
+    fn usage(&self, _event: &protocol::usage::UsageEvent) {}
 }
 
 /// Something a frame draws ([`Loader::visible`]).
@@ -3570,7 +3576,95 @@ impl Session {
     }
 
     /// A tap on `target`.
+    /// A tap at `target`: what it does, as [`Outcome`]; how the owner uses
+    /// their screens goes to the loader ([`Loader::usage`]).
     pub fn tap(&mut self, target: &Target) -> Result<Outcome, String> {
+        let before = self.usage_place();
+        let out = self.tap_inner(target);
+        if let Ok(o) = &out {
+            self.report_usage(&before, o, true);
+        }
+        out
+    }
+
+    /// Run an intent from the platform (keyboard, notification, system
+    /// Back); usage is reported as for [`Session::tap`].
+    pub fn dispatch(&mut self, intent: &Value) -> Result<Outcome, String> {
+        let before = self.usage_place();
+        let out = self.dispatch_inner(intent);
+        if let Ok(o) = &out {
+            self.report_usage(&before, o, false);
+        }
+        out
+    }
+
+    /// Where the owner is before an interaction: the top layout, its route
+    /// name and when it opened.
+    fn usage_place(&self) -> (String, Option<String>, Instant) {
+        let e = &self.stack[self.top_index()];
+        (e.id.clone(), None, e.opened)
+    }
+
+    /// Tell the loader what an interaction did (decision `usage-trails`).
+    fn report_usage(&self, before: &(String, Option<String>, Instant), o: &Outcome, tap: bool) {
+        use protocol::usage::{UsageEvent, node_identity, now_secs};
+        let Some(loader) = self.loader.as_ref() else {
+            return;
+        };
+        let (from, route, opened) = before;
+        let at = now_secs();
+        if tap && let Some(n) = &o.node {
+            let intent = match &n.tap {
+                Some(crate::scene::Tap::Intent { intent }) => Some(intent),
+                _ => None,
+            };
+            let effect = if o.effects.iter().any(|e| {
+                matches!(
+                    e,
+                    Effect::Opened { .. } | Effect::OpenedScreen { .. } | Effect::Back
+                )
+            }) {
+                "navigated"
+            } else if o
+                .effects
+                .iter()
+                .any(|e| matches!(e, Effect::Sent { .. } | Effect::NotSent { .. }))
+            {
+                "sent"
+            } else if o.effects.iter().all(|e| matches!(e, Effect::Nothing)) {
+                "none"
+            } else {
+                "changed"
+            };
+            loader.usage(&UsageEvent::tap(
+                at,
+                from,
+                &node_identity(&n.id),
+                intent.and_then(|i| i["intent"].as_str()),
+                intent,
+                effect,
+            ));
+        }
+        for e in &o.effects {
+            match e {
+                Effect::Opened { layout } => {
+                    loader.usage(&UsageEvent::screen(at, layout, None, from))
+                }
+                Effect::OpenedScreen { screen } => {
+                    loader.usage(&UsageEvent::screen(at, self.current(), Some(screen), from))
+                }
+                Effect::Back => loader.usage(&UsageEvent::back(
+                    at,
+                    from,
+                    route.as_deref(),
+                    opened.elapsed().as_millis() as u64,
+                )),
+                _ => {}
+            }
+        }
+    }
+
+    fn tap_inner(&mut self, target: &Target) -> Result<Outcome, String> {
         if let Target::Point(x, y) = *target {
             // A scatter picks the point nearest the tap.
             if let Some(out) = self.scatter_tap(x, y) {
@@ -3718,7 +3812,7 @@ impl Session {
     }
 
     /// Runs an intent as a tap would (system Back, a test).
-    pub fn dispatch(&mut self, intent: &Value) -> Result<Outcome, String> {
+    fn dispatch_inner(&mut self, intent: &Value) -> Result<Outcome, String> {
         let mut effects = Vec::new();
         let (focused, merges) = (self.focused.clone(), self.merges);
         let mut moved_only = false;

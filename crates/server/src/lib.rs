@@ -126,6 +126,7 @@ pub fn temporary_pod_settings() -> Vec<(String, String)> {
         pod_core::jacks::WEB,
         pod_core::jacks::WEB_SEARCH,
         pod_core::jacks::MCP,
+        pod_core::usage::JACK,
         source_agents::JACK,
         source_taste::JACK,
     ]));

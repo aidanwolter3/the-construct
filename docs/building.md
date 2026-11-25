@@ -120,6 +120,29 @@ and `entities` try a row with made-up data, `full_height` draws a long screen wh
 [rendering.md](rendering.md#agent-previews-mcp)). `get_layout` takes `expanded: true`. Layouts are named `id` (`app` is still accepted).
 After a change to the tools, the Claude connector needs "Refresh tools list" in its settings.
 
+**Journeys, edit groups and usage** (the Anticipate job's pieces, [anticipate.md](anticipate.md)):
+
+- `walk_journey {script, start?, group?, journey?, shots?}` replays a script of the simulator's commands on the
+  owner's real screens and answers pass or fail per step (`ok`, `broken`, `data`, `unverified`). Taps that write
+  are dry runs: the pod runs the write and rolls it back, and the rows it would write join the walk;
+  `expect-write <collection> {fields}` checks them. The walk is stored with its construct hash (decision
+  [`journeys-and-dry-runs`](decisions/journeys-and-dry-runs.md)).
+- `stage_edit_group {title, why?, walk_id?, changes}` stages writes to the pod's own layouts and `@me/` components
+  without making them live. Its report says whether the change is `additive`. `walk_journey {group}` walks the
+  staged screens. `apply_edit_group {id}` makes them live in one step (after a checkpoint), and
+  `revert_edit_group {id | since}` undoes them. `list_edit_groups`, `list_checkpoints` and `restore_checkpoint {id,
+  dry_run?}` cover the rest (decision [`edit-groups`](decisions/edit-groups.md)). The app can undo, apply and
+  restore too: Settings' manifest declares `/v1/edit-groups/screen`, `/v1/edit-groups/apply|revert` and
+  `/v1/checkpoints/restore`.
+- `usage_report {layout | start_layout + done_collection, days?}` and `usage_paths {days?, min_count?}` give
+  totals of how the owner uses their screens, while the `usage` jack is plugged (decision
+  [`usage-trails`](decisions/usage-trails.md)).
+- A credential made with `server pods mcp --grant <file>` is held to its grant (decision
+  [`mcp-grants`](decisions/mcp-grants.md)):
+  - only its `tools`;
+  - rows only of the data sets its `rows` names, deletes only where `deletes` allows;
+  - its edit groups never touch `protected_names`.
+
 **Outside text is marked** (decision [`untrusted-tool-content`](decisions/untrusted-tool-content.md)): text other
 people wrote comes back as `{"untrusted": {"from", "content"}}`, and the instructions say it is data, never
 instructions. That covers `sample_data`'s entities, `mcp_servers`' tool descriptions, schemas and last error,
@@ -521,7 +544,8 @@ work its `model` jack (decision [`jacks`](decisions/jacks.md)); all are locked o
 A pod's **jacks** are the abilities it is plugged into (decision [`jacks`](decisions/jacks.md)): `model` and `web`
 (switches, on by default), `web_search` (config: `provider` `brave` with the pod's own `api_key`, `searxng` with a
 `base_url` (`https://` on a public host name, never an IP address or an internal name), or `duckduckgo`), and
-`mcp` (a switch, on by default: calling the MCP servers the pod is connected to), and
+`mcp` (a switch, on by default: calling the MCP servers the pod is connected to), `usage` (a switch, off until
+the owner plugs it: keeping how they use their screens, decision [`usage-trails`](decisions/usage-trails.md)), and
 accounts sources declare: `pixelfed`, `agent_runner` and `taste` (plugged by their own sign-in). Claude uses `list_jacks`, `plug_jack` and `unplug_jack`; `GET /v1/jacks` lists them. People plug them in the app
 too: Settings → Jacks lists each with its state, and a config jack's screen takes its provider and its key in a hidden
 field, sent straight to the pod (`GET /v1/jacks/screen`, `POST /v1/jacks/plug` and `/unplug`; decision

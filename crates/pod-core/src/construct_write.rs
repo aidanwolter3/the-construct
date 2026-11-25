@@ -807,6 +807,50 @@ pub async fn mcp(pod: &Pod, name: &str, args: &Value) -> Option<Result<Value, Va
         "restore_component" => Some(run_write(pod, args, restore_component).await),
         "delete_component" => Some(run_write(pod, args, delete_component).await),
         "expand" => Some(run(pod, args, expand).await),
+        // Edit groups and checkpoints (decision `edit-groups`): a scoped
+        // credential's grant holds inside them too.
+        "stage_edit_group" => {
+            let g = crate::grant::current();
+            Some(run_write(pod, args, move |p, c, a| super::edit_groups::stage(p, c, a, g.as_ref())).await)
+        }
+        "apply_edit_group" => {
+            let g = crate::grant::current();
+            Some(run_write(pod, args, move |p, c, a| super::edit_groups::apply(p, c, a, g.as_ref())).await)
+        }
+        "revert_edit_group" => Some(
+            run_write(pod, args, |p, c, a| {
+                if a["since"].is_i64() {
+                    super::edit_groups::revert_since(p, c, a)
+                } else {
+                    super::edit_groups::revert(p, c, a)
+                }
+            })
+            .await,
+        ),
+        "list_edit_groups" => Some(
+            run(pod, args, |_, c, _| {
+                Ok(json!({ "groups": super::edit_groups::list(c).map_err(store_err)? }))
+            })
+            .await,
+        ),
+        "list_checkpoints" => Some(
+            run(pod, args, |_, c, _| {
+                Ok(json!({ "checkpoints": super::edit_groups::list_checkpoints(c).map_err(store_err)? }))
+            })
+            .await,
+        ),
+        "restore_checkpoint" => {
+            if args["dry_run"] == true {
+                Some(
+                    run(pod, args, |p, c, a| {
+                        super::edit_groups::restore_checkpoint(p, c, a).map(|(v, _)| v)
+                    })
+                    .await,
+                )
+            } else {
+                Some(run_write(pod, args, super::edit_groups::restore_checkpoint).await)
+            }
+        }
         _ => None,
     }
 }
@@ -1533,7 +1577,7 @@ fn check_examples(conn: &Connection, el: &Value) -> Result<(), Value> {
     Ok(())
 }
 
-fn put_component(
+pub(crate) fn put_component(
     pod: &Pod,
     conn: &Connection,
     args: &Value,

@@ -218,7 +218,7 @@
       "position": 2
     },
     {
-      "body": "Pod tokens are stored as hashes. Upstream tokens and jack secrets are sealed at rest with the server's key (`CONSTRUCT_SECRETS_KEY`) and never sent to a device. A credential issued to an agent reaches only `/v1/mcp`, and only at the access its owner gave it: read, edit, or outward (sharing publicly, starting agent runs, reaching new hosts, deleting). Every tool is checked against it before it runs, and rows the agent writes below outward count as the agent's, not the owner's (decision `mcp-access-levels`).",
+      "body": "Pod tokens are stored as hashes. Upstream tokens and jack secrets are sealed at rest with the server's key (`CONSTRUCT_SECRETS_KEY`) and never sent to a device. A credential issued to an agent reaches only `/v1/mcp`, and only at the access its owner gave it: read, edit, or outward (sharing publicly, starting agent runs, reaching new hosts, deleting). Every tool is checked against it before it runs, and rows the agent writes below outward count as the agent's, not the owner's (decision `mcp-access-levels`). A credential for an unattended job can carry a **grant** as well: its exact tools, the collections whose rows it may write, where it may delete, and screens it may never change. The pod enforces it inside every write transaction (decision `mcp-grants`).",
       "heading": "Secrets",
       "key": "security-by-construction/1",
       "lesson": "security-by-construction",
@@ -428,7 +428,7 @@
       "position": 1
     },
     {
-      "body": "Agents (`crates/source-agents`) mirrors an external **agent runner** that runs Claude Code on cloud sandboxes, over the runner's protocol (CAP v3: a snapshot, a resumable event stream, actions). The pod owns the work (Tasks rows, schedules) and notifications; the runner owns the runs and their outcomes. It keeps its pod open to follow the stream ([agents.md](https://github.com/aidanwolter3/the-construct/blob/main/docs/agents.md)).",
+      "body": "Agents (`crates/source-agents`) mirrors an external **agent runner** that runs Claude Code on cloud sandboxes, over the runner's protocol (CAP v3: a snapshot, a resumable event stream, actions). The pod owns the work (Tasks rows, schedules) and notifications; the runner owns the runs and their outcomes. It keeps its pod open to follow the stream ([agents.md](https://github.com/aidanwolter3/the-construct/blob/main/docs/agents.md)).\n\nTwo of the pod's schedules are **Anticipate**: every morning one reads the day ahead and one walks the owner's journeys through their real screens. Writes in those walks are dry runs. A fix is staged as an edit group, walked staged, and applied only when the server finds it additive and unprotected; the owner can undo it in one tap ([anticipate.md](https://github.com/aidanwolter3/the-construct/blob/main/docs/anticipate.md)).",
       "heading": "Agents",
       "key": "events-agents-taste-and-the-small-sources/2",
       "lesson": "events-agents-taste-and-the-small-sources",
@@ -554,7 +554,7 @@
       "position": 2
     },
     {
-      "body": "| Job | Tools |\n|---|---|\n| Look around | `list_layouts`, `get_layout`, `find_elements`, `list_data_sources`, `sample_data`, `describe_vocabulary`, `guide` |\n| Build screens | `create_layout`, `update_layout` (whole or JSON Patch), `validate_layout`, `define_component`, `copy_component`, `set_theme`, `restore_version` |\n| Look at them | `render_layout_preview`, `dispatch_virtual_interaction`, `expand` |\n| Keep data | `define_collection`, `apply_change`, `edit_rows`, `add_row`, `describe_collection`, fillers (`collections_preview`, `collections_refresh`, `collections_status`), `undo_edit` |\n| Abilities | `list_jacks`, `plug_jack`, `mcp_connect`, `mcp_servers` |\n| Share | `publish`, `adopt`, `share_publicly`, `set_calendar_feed` |\n\nSources add their own (`agents_schedules`, `agents_link_tasks`). After the tool list changes, a Claude connector needs \"Refresh tools list\".",
+      "body": "| Job | Tools |\n|---|---|\n| Look around | `list_layouts`, `get_layout`, `find_elements`, `list_data_sources`, `sample_data`, `describe_vocabulary`, `guide` |\n| Build screens | `create_layout`, `update_layout` (whole or JSON Patch), `validate_layout`, `define_component`, `copy_component`, `set_theme`, `restore_version` |\n| Look at them | `render_layout_preview`, `dispatch_virtual_interaction`, `expand`, `walk_journey` (a whole journey replayed, writes as dry runs) |\n| Change safely | `stage_edit_group`, `apply_edit_group`, `revert_edit_group`, `restore_checkpoint`, `usage_report`, `usage_paths` |\n| Keep data | `define_collection`, `apply_change`, `edit_rows`, `add_row`, `describe_collection`, fillers (`collections_preview`, `collections_refresh`, `collections_status`), `undo_edit` |\n| Abilities | `list_jacks`, `plug_jack`, `mcp_connect`, `mcp_servers` |\n| Share | `publish`, `adopt`, `share_publicly`, `set_calendar_feed` |\n\nSources add their own (`agents_schedules`, `agents_link_tasks`). After the tool list changes, a Claude connector needs \"Refresh tools list\".",
       "heading": "The tools by job",
       "key": "the-pods-mcp-server/1",
       "lesson": "the-pods-mcp-server",

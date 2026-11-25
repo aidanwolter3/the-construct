@@ -449,6 +449,17 @@ pub trait Source: Any + Send + Sync {
         None
     }
 
+    /// Whether a `POST` to `path` (one of this source's routes) can run as
+    /// a dry run (decision `journeys-and-dry-runs`): with
+    /// [`crate::dryrun::active`] set, it runs its real write path in a
+    /// transaction it rolls back, records the rows it leaves and fires
+    /// nothing that follows a commit. Default: no, and the walk never sends
+    /// it.
+    fn dry_runs(&self, path: &str) -> bool {
+        let _ = path;
+        false
+    }
+
     /// The access an MCP connection needs to run tool `tool` (one of
     /// [`Self::mcp_tools`]) with `args` (decision `mcp-access-levels`):
     /// [`crate::mcp::Access::Read`] for a look, `Edit` for a change to the

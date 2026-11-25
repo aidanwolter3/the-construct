@@ -17,6 +17,7 @@ Start with [design.md](design.md), the whole system from the top down (also a co
 | [pixelfed.md](pixelfed.md) | The Pixelfed source: sign-in, instances, its endpoints |
 | [posting.md](posting.md) | How photo posting works across client, engine, pod and source |
 | [notifications.md](notifications.md) | How notifications travel from an upstream to a device |
+| [anticipate.md](anticipate.md) | The Anticipate morning job: journeys and walks, dry runs, edit groups and checkpoints, grants, usage trails, its prompts and setup |
 | [agents.md](agents.md) | The Agents source: runs from an agent runner (CAP v3), the pod's schedules, its core layout, notifications and Tasks wiring |
 | [taste.md](taste.md) | The Taste source: a feed of clothes from the owner's taste service, likes and skips, its core layout |
 

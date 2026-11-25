@@ -84,7 +84,8 @@ async fn the_screen_lists_every_jack_flattened() {
             "jacks://model",
             "jacks://web",
             "jacks://web_search",
-            "jacks://mcp"
+            "jacks://mcp",
+            "jacks://usage"
         ]
     );
     let model = &v["entities"]["jacks://model"];

@@ -783,6 +783,12 @@ impl Loader for PodEngine {
         self.engine.app_foregrounded();
     }
 
+    /// How the owner uses their screens goes to the engine, which keeps it
+    /// and sends it to the pod in batches (decision `usage-trails`).
+    fn usage(&self, event: &protocol::usage::UsageEvent) {
+        self.engine.record_usage(event);
+    }
+
     fn visible(&self, shown: &[crate::interact::Shown]) {
         use crate::interact::Shown;
         let keys = shown

@@ -228,6 +228,14 @@ const MIGRATIONS: &[Step] = &[
      UPDATE credentials SET access = 'edit' WHERE kind = 'mcp';
      ALTER TABLE oauth_codes ADD COLUMN access TEXT;",
     ),
+    // 15 (decision `mcp-grants`): an MCP credential's grant, a narrower
+    // scope on top of its access (the tools, rows and names an unattended
+    // job may touch), as JSON; none: no grant. Set with `server pods mcp
+    // --grant`, kept when Connected apps changes the access.
+    Step::sql(
+        "mcp_grants",
+        "ALTER TABLE credentials ADD COLUMN grant_json TEXT;",
+    ),
 ];
 
 pub(crate) fn hash_link_tokens(tx: &rusqlite::Transaction<'_>) -> rusqlite::Result<()> {
@@ -281,6 +289,8 @@ pub struct ConnectedApp {
     pub last_used_at: i64,
     /// What it may do (decision `mcp-access-levels`).
     pub access: Access,
+    /// Its narrower scope, if it has one (decision `mcp-grants`).
+    pub grant: Option<pod_core::grant::Grant>,
 }
 
 /// What a credential is for (`credentials.kind`).
@@ -502,6 +512,39 @@ impl HostStore {
         Ok(found.flatten().map_or(Access::Read, |a| Access::parse(&a)))
     }
 
+    /// The grant of the MCP credential with hash `token_hash` (decision
+    /// `mcp-grants`); `None`: it has none. One that no longer parses allows
+    /// nothing ([`pod_core::grant::Grant::nothing`]), never more.
+    pub fn mcp_grant(&self, token_hash: &str) -> rusqlite::Result<Option<pod_core::grant::Grant>> {
+        let found: Option<Option<String>> = self
+            .conn()
+            .query_row(
+                "SELECT grant_json FROM credentials WHERE token_hash = ?1 AND kind = 'mcp'",
+                [token_hash],
+                |r| r.get(0),
+            )
+            .optional()?;
+        Ok(found.flatten().map(|j| {
+            serde_json::from_str(&j)
+                .ok()
+                .and_then(|v| pod_core::grant::Grant::from_json(&v).ok())
+                .unwrap_or_else(pod_core::grant::Grant::nothing)
+        }))
+    }
+
+    /// Set (or clear) the grant of the MCP credential with hash
+    /// `token_hash`.
+    pub fn set_mcp_grant(
+        &self,
+        token_hash: &str,
+        grant: Option<&pod_core::grant::Grant>,
+    ) -> rusqlite::Result<usize> {
+        self.conn().execute(
+            "UPDATE credentials SET grant_json = ?2 WHERE token_hash = ?1 AND kind = 'mcp'",
+            params![token_hash, grant.map(|g| g.to_json().to_string())],
+        )
+    }
+
     /// Add an MCP credential to a pod.
     /// [`Self::insert_mcp_credential`], doing nothing when that credential
     /// already exists.
@@ -604,7 +647,7 @@ impl HostStore {
         let conn = self.conn();
         let mut stmt = conn.prepare(
             "SELECT substr(token_hash, 1, ?3), COALESCE(label, ''), redirect_host, created_at,
-                    COALESCE(last_used_at, created_at) AS used, COALESCE(access, '')
+                    COALESCE(last_used_at, created_at) AS used, COALESCE(access, ''), grant_json
              FROM credentials WHERE pod_id = ?1 AND kind = 'mcp' AND used > ?2
              ORDER BY used DESC, created_at DESC",
         )?;
@@ -622,6 +665,12 @@ impl HostStore {
                     created_at: r.get(3)?,
                     last_used_at: r.get(4)?,
                     access: Access::parse(&r.get::<_, String>(5)?),
+                    grant: r.get::<_, Option<String>>(6)?.map(|j| {
+                        serde_json::from_str(&j)
+                            .ok()
+                            .and_then(|v| pod_core::grant::Grant::from_json(&v).ok())
+                            .unwrap_or_else(pod_core::grant::Grant::nothing)
+                    }),
                 })
             },
         )?
@@ -1083,14 +1132,8 @@ mod tests {
     fn mcp_access_is_kept_changed_and_old_credentials_get_edit() {
         // A host.db from before access levels, with one MCP credential.
         let mut conn = Connection::open_in_memory().unwrap();
-        migrations::run(
-            &mut conn,
-            "host",
-            MIGRATIONS,
-            Counter::UserVersion,
-            MIGRATIONS.len() - 1,
-        )
-        .unwrap();
+        let before = migrations::position(MIGRATIONS, "mcp_access").unwrap() - 1;
+        migrations::run(&mut conn, "host", MIGRATIONS, Counter::UserVersion, before).unwrap();
         conn.execute(
             "INSERT INTO pods (id, name, kind, created_at) VALUES ('p1', 'mine', 'admin', 1)",
             [],

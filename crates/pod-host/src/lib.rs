@@ -603,6 +603,18 @@ impl Host {
         label: &str,
         access: pod_core::mcp::Access,
     ) -> Result<String, String> {
+        self.issue_mcp_scoped(name, label, access, None)
+    }
+
+    /// [`Self::issue_mcp`] with a grant (decision `mcp-grants`): the tools,
+    /// rows and names the credential may touch, for an unattended job.
+    pub fn issue_mcp_scoped(
+        &self,
+        name: &str,
+        label: &str,
+        access: pod_core::mcp::Access,
+        grant: Option<&pod_core::grant::Grant>,
+    ) -> Result<String, String> {
         let pod = self
             .store
             .pod_by_name(name)
@@ -616,6 +628,11 @@ impl Host {
         self.store
             .insert_mcp_credential(&pod.id, &session_hash(&token), label, None, access)
             .map_err(|e| e.to_string())?;
+        if grant.is_some() {
+            self.store
+                .set_mcp_grant(&session_hash(&token), grant)
+                .map_err(|e| e.to_string())?;
+        }
         Ok(token)
     }
 
@@ -1492,6 +1509,7 @@ fn set_prefix(headers: &mut HeaderMap, pod_id: &str) {
 fn strip_host_headers(headers: &mut axum::http::HeaderMap) {
     headers.remove(pod_core::CREDENTIAL_HEADER);
     headers.remove(pod_core::mcp::ACCESS_HEADER);
+    headers.remove(pod_core::grant::GRANT_HEADER);
     headers.remove(pod_core::session::INTERNAL_HEADER);
 }
 
@@ -1529,10 +1547,28 @@ async fn dispatch(State(host): State<Arc<Host>>, mut req: Request) -> Response {
             // What it may do (decision `mcp-access-levels`), for the pod to
             // check per tool.
             let hash = token.as_deref().map(session_hash).unwrap_or_default();
-            let access = match host.blocking(move |h| h.store.mcp_access(&hash)).await {
-                Ok(Ok(a)) => a,
-                _ => pod_core::mcp::Access::Read,
+            // And its grant (decision `mcp-grants`); a lookup that fails
+            // reads as one that allows nothing, never as none.
+            let (access, grant) = match host
+                .blocking(move |h| {
+                    Ok::<_, rusqlite::Error>((
+                        h.store.mcp_access(&hash)?,
+                        h.store.mcp_grant(&hash)?,
+                    ))
+                })
+                .await
+            {
+                Ok(Ok(found)) => found,
+                _ => (
+                    pod_core::mcp::Access::Read,
+                    Some(pod_core::grant::Grant::nothing()),
+                ),
             };
+            if let Some(g) = grant
+                && let Ok(v) = HeaderValue::from_str(&g.header_value())
+            {
+                req.headers_mut().insert(pod_core::grant::GRANT_HEADER, v);
+            }
             req.headers_mut().remove(header::AUTHORIZATION);
             req.headers_mut()
                 .insert(pod_core::CREDENTIAL_HEADER, HeaderValue::from_static("mcp"));

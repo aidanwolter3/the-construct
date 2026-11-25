@@ -436,6 +436,9 @@ impl Runner {
                 self.device_data(&pod);
                 done("")
             }
+            Step::ExpectWrite { .. } => Err(
+                "'expect-write' runs in the pod's journey walks (walk_journey) only: the simulator sends its writes".into(),
+            ),
             Step::Construct(file) => {
                 let pod = fixture_pod.expect("fixture mode");
                 let root = crate::fixture::repo_root(&std::env::current_dir().unwrap_or_default())
@@ -916,59 +919,5 @@ fn slide_ancestor(scene: &Scene, node: &SemanticNode) -> Option<SemanticNode> {
     None
 }
 
-/// The semantic ids the Compose simulator's test tags stood for (scripts
-/// written for it still run).
-fn tag_alias(tag: &str) -> String {
-    if let Some(f) = tag.strip_prefix("textfield-send:") {
-        format!("send:{f}")
-    } else if let Some(f) = tag.strip_prefix("textfield:") {
-        format!("field:{f}")
-    } else {
-        tag.to_owned()
-    }
-}
-
-/// The node a target names: `tag:<id>` (exact id, else the first id
-/// containing it), else text: exact (tappable nodes first), then contained.
-/// Quotes around a target are dropped.
-pub fn find(scene: &Scene, target: &str) -> Option<SemanticNode> {
-    if let Some(tag) = target.strip_prefix("tag:") {
-        let id = tag_alias(tag);
-        return scene
-            .semantics
-            .iter()
-            .find(|n| n.id == id)
-            .or_else(|| scene.semantics.iter().find(|n| n.id.contains(&id)))
-            .cloned();
-    }
-    let text = target
-        .strip_prefix('"')
-        .and_then(|t| t.strip_suffix('"'))
-        .unwrap_or(target);
-    let has = |n: &&SemanticNode, exact: bool| {
-        n.text_content
-            .as_deref()
-            .is_some_and(|t| if exact { t == text } else { t.contains(text) })
-    };
-    let all = &scene.semantics;
-    all.iter()
-        .find(|n| has(n, true) && (n.interactive || n.tap.is_some()))
-        .or_else(|| all.iter().find(|n| has(n, true)))
-        .or_else(|| all.iter().find(|n| has(n, false)))
-        .cloned()
-}
-
-/// The texts on screen, for a failure's message.
-fn texts(scene: &Scene) -> String {
-    let mut seen: Vec<&str> = Vec::new();
-    for n in &scene.semantics {
-        if let Some(t) = n.text_content.as_deref()
-            && !t.is_empty()
-            && !seen.contains(&t)
-        {
-            seen.push(t);
-        }
-    }
-    let shown: Vec<String> = seen.iter().take(40).map(|t| format!("\"{t}\"")).collect();
-    format!("[{}]", shown.join(", "))
-}
+pub use construct_render::script::find;
+use construct_render::script::texts;

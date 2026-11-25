@@ -20,12 +20,24 @@
         "title": "Claude Code",
         "access": "outward",
         "access_label": "Edit and act outward. Also share or publish publicly, schedule or queue agent runs, add fillers and fetch from new sites, call other MCP servers, plug jacks, set secrets, watch devices, delete."
+      },
+      "connected_apps://5e6f7a8b9c0d1e2f": {
+        "connected": true,
+        "detail": "made on the server (server pods mcp) · connected 2 days ago · last used today",
+        "expiry": "Ends by itself if unused for 90 more days.",
+        "host": "made on the server (server pods mcp)",
+        "id": "5e6f7a8b9c0d1e2f",
+        "title": "Anticipate build",
+        "access": "edit",
+        "access_label": "Edit. Change your layouts, components, collections and rows.",
+        "grant_text": "Scoped: 23 tools · rows of anticipate_needs, anticipations, journeys · deletes in anticipations · 3 protected screens"
       }
     },
     "queries": {
       "connected_apps": [
         "connected_apps://0a1b2c3d4e5f6a7b",
-        "connected_apps://9f8e7d6c5b4a3f2e"
+        "connected_apps://9f8e7d6c5b4a3f2e",
+        "connected_apps://5e6f7a8b9c0d1e2f"
       ]
     }
   }

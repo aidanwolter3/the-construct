@@ -6,5 +6,7 @@
 
 pub mod fixture;
 pub mod run;
-pub mod screen;
-pub mod script;
+/// The script language and screen sizes, shared with the pod's journey
+/// walks (they live in `construct-render`).
+pub use construct_render::script;
+pub use construct_render::script::screen;

@@ -270,10 +270,13 @@ fn pods(args: &[&str]) -> Result<(), String> {
             println!("Sent \"{title}\" to pod '{name}'.");
         }
         ["mcp", name, rest @ ..] => {
-            let usage =
-                || "usage: server pods mcp <name> [label] [--access read|edit|outward]".to_owned();
+            let usage = || {
+                "usage: server pods mcp <name> [label] [--access read|edit|outward] [--grant <file.json>]"
+                    .to_owned()
+            };
             // Decision `mcp-access-levels`: edit unless asked.
             let (mut label, mut access) = (None, pod_core::mcp::Access::Edit);
+            let mut grant = None;
             let mut it = rest.iter();
             while let Some(a) = it.next() {
                 if *a == "--access" {
@@ -281,6 +284,16 @@ fn pods(args: &[&str]) -> Result<(), String> {
                         .next()
                         .and_then(|v| pod_core::mcp::Access::from_id(v))
                         .ok_or_else(usage)?;
+                } else if *a == "--grant" {
+                    // Decision `mcp-grants`: a narrower scope for an
+                    // unattended job, from a JSON file.
+                    let path = it.next().ok_or_else(usage)?;
+                    let text = std::fs::read_to_string(path)
+                        .map_err(|e| format!("can't read {path}: {e}"))?;
+                    grant = Some(
+                        pod_core::grant::Grant::from_text(&text)
+                            .map_err(|e| format!("{path}: {e}"))?,
+                    );
                 } else if label.is_none() {
                     label = Some(*a);
                 } else {
@@ -288,10 +301,14 @@ fn pods(args: &[&str]) -> Result<(), String> {
                 }
             }
             let label = label.unwrap_or("Claude Code");
-            let token = host.issue_mcp(name, label, access)?;
+            let token = host.issue_mcp_scoped(name, label, access, grant.as_ref())?;
             println!(
-                "An MCP credential for pod '{name}' ({label}, {} access), shown only now:",
-                access.id()
+                "An MCP credential for pod '{name}' ({label}, {} access{}), shown only now:",
+                access.id(),
+                grant
+                    .as_ref()
+                    .map(|g| format!(", scoped: {}", g.summary()))
+                    .unwrap_or_default()
             );
             println!();
             println!("    {token}");

@@ -451,6 +451,37 @@ pub const STEPS: &[Step] = &[
          DROP TABLE client_days;
          ALTER TABLE client_days_new RENAME TO client_days;",
     ),
+    // Decision `usage-trails`: how the owner uses their screens, as their
+    // devices report it, kept while the `usage` jack is plugged: the raw
+    // events 14 days, daily totals 180.
+    Step::sql(
+        "usage_trails",
+        "CREATE TABLE usage_events (
+             device      TEXT NOT NULL,
+             at          INTEGER NOT NULL,
+             kind        TEXT NOT NULL,
+             layout      TEXT NOT NULL,
+             route       TEXT,
+             from_layout TEXT,
+             node        TEXT,
+             intent      TEXT,
+             target      TEXT,
+             collection  TEXT,
+             effect      TEXT,
+             dwell_ms    INTEGER
+         );
+         CREATE INDEX usage_events_at ON usage_events (at);
+         CREATE TABLE usage_daily (
+             day    TEXT NOT NULL,
+             kind   TEXT NOT NULL,
+             layout TEXT NOT NULL,
+             node   TEXT NOT NULL,
+             target TEXT NOT NULL,
+             effect TEXT NOT NULL,
+             n      INTEGER NOT NULL,
+             PRIMARY KEY (day, kind, layout, node, target, effect)
+         ) WITHOUT ROWID;",
+    ),
 ];
 
 /// Whether the old layout system's tables are still there (dropped by

@@ -1186,6 +1186,140 @@ pub struct Changed {
     pub existed: bool,
 }
 
+/// A dry run's rows (decision `journeys-and-dry-runs`): put back the rows
+/// earlier steps of the walk would have written, as they were stored, so
+/// this write reads them as if they existed. In the dry run's transaction,
+/// which is rolled back.
+pub fn put_overlay(conn: &Connection, rows: &[pod_core::dryrun::Row]) -> rusqlite::Result<()> {
+    for r in rows {
+        let s = &r.stored;
+        conn.execute(
+            "INSERT OR REPLACE INTO collections_rows
+                 (collection, id, client_id, values_json, created_at, updated_at, deleted_at, filler)
+             VALUES (?1, ?2, NULL, ?3, ?4, ?5, ?6, ?7)",
+            params![
+                r.collection,
+                r.id,
+                s["values_json"].as_str().unwrap_or("{}"),
+                s["created_at"].as_i64().unwrap_or(0),
+                s["updated_at"].as_i64().unwrap_or(0),
+                s["deleted_at"].as_i64(),
+                s["filler"].as_str(),
+            ],
+        )?;
+    }
+    Ok(())
+}
+
+/// The rows written at or after `since` (unix seconds): what a dry run's
+/// transaction touched, whichever step of it settled them.
+pub fn rows_touched_since(
+    conn: &Connection,
+    since: i64,
+) -> rusqlite::Result<std::collections::BTreeMap<String, std::collections::BTreeSet<String>>> {
+    let mut out: std::collections::BTreeMap<String, std::collections::BTreeSet<String>> =
+        Default::default();
+    let mut stmt = conn.prepare(
+        "SELECT collection, id FROM collections_rows
+         WHERE updated_at >= ?1 OR created_at >= ?1 OR COALESCE(deleted_at, 0) >= ?1",
+    )?;
+    for r in stmt.query_map([since], |r| {
+        Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+    })? {
+        let (c, id) = r?;
+        out.entry(c).or_default().insert(id);
+    }
+    Ok(out)
+}
+
+/// A row as stored: values JSON, created, updated, deleted, filler.
+type StoredRow = (String, i64, i64, Option<i64>, Option<String>);
+
+/// Record, for a dry run, every row the transaction changed and the live
+/// ids of each collection they are in.
+pub fn record_dry_run(
+    conn: &Connection,
+    rows: &std::collections::BTreeMap<String, std::collections::BTreeSet<String>>,
+    dry: &pod_core::dryrun::DryRun,
+) -> rusqlite::Result<()> {
+    for (collection, ids) in rows {
+        let def = latest_def(conn, collection)?.map(|(_, d)| d);
+        for id in ids {
+            let stored: Option<StoredRow> = conn
+                .query_row(
+                    "SELECT values_json, created_at, updated_at, deleted_at, filler
+                     FROM collections_rows WHERE collection = ?1 AND id = ?2",
+                    params![collection, id],
+                    |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)),
+                )
+                .optional()?;
+            let Some((values_json, created_at, updated_at, deleted_at, filler)) = stored else {
+                continue;
+            };
+            // By name, as the row's entity has them.
+            let values = (deleted_at.is_none())
+                .then(|| serde_json::from_str::<Map<String, Value>>(&values_json).ok())
+                .flatten()
+                .map(|v| match &def {
+                    Some(d) => crate::model::by_name(d, &v),
+                    None => v,
+                });
+            dry.record(pod_core::dryrun::Row {
+                collection: collection.clone(),
+                id: id.clone(),
+                uri: format!("collections://{collection}/{id}"),
+                values,
+                stored: serde_json::json!({ "values_json": values_json, "created_at": created_at,
+                    "updated_at": updated_at, "deleted_at": deleted_at, "filler": filler }),
+            });
+        }
+        let live: Vec<String> = {
+            let mut stmt = conn.prepare_cached(
+                "SELECT id FROM collections_rows WHERE collection = ?1 AND deleted_at IS NULL
+                 ORDER BY created_at, id",
+            )?;
+            stmt.query_map([collection], |r| r.get(0))?
+                .collect::<rusqlite::Result<_>>()?
+        };
+        dry.record_list(collection, live);
+    }
+    Ok(())
+}
+
+/// What a scoped credential's grant (decision `mcp-grants`) refuses among
+/// the rows this transaction changed so far: a row of a collection it may
+/// not write, or a row deleted where it may not delete. Read before the
+/// computes that follow run (their writes are derived, not the call's).
+pub fn grant_refusal(
+    conn: &Connection,
+    grant: &pod_core::grant::Grant,
+) -> rusqlite::Result<Option<String>> {
+    conn.prepare_cached(CHANGED)?.execute([])?;
+    let changed: Vec<(String, String, Option<String>)> = {
+        let mut stmt = conn.prepare_cached(
+            "SELECT collection, id, before_json FROM temp.collections_changed ORDER BY rowid",
+        )?;
+        stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?
+            .collect::<rusqlite::Result<_>>()?
+    };
+    for (collection, id, before) in changed {
+        if !grant.allows_rows(&collection) {
+            return Ok(Some(format!("writing rows of {collection}")));
+        }
+        let was_live = before
+            .and_then(|b| serde_json::from_str::<Value>(&b).ok())
+            .is_some_and(|s| s["deleted_at"].is_null());
+        if was_live && !grant.allows_delete(&collection) {
+            let gone =
+                row(conn, &collection, &id)?.is_none_or(|r| r.state()["deleted_at"].is_number());
+            if gone {
+                return Ok(Some(format!("deleting rows of {collection}")));
+            }
+        }
+    }
+    Ok(None)
+}
+
 /// The rows changed since the last call (and forget them).
 pub fn take_changed(conn: &Connection) -> rusqlite::Result<Vec<Changed>> {
     conn.prepare_cached(CHANGED)?.execute([])?;
