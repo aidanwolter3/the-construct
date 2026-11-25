@@ -935,3 +935,49 @@ fn band_above_a_pinned_node_is_the_page_background() {
     // Between the view's top and the pinned filters (resting at 18 points).
     assert_eq!(img.get_pixel(20, 10).0, [0, 255, 0, 255]);
 }
+
+/// A pod stand-in serving a tab layout that embeds another inline, as a
+/// "Food" tab embeds its "History" view.
+struct NestedPod;
+
+impl construct_render::interact::Loader for NestedPod {
+    fn layout(&self, id: &str) -> Result<(protocol::UiNode, protocol::DataBundle), String> {
+        let root = match id {
+            "c-food" => {
+                json!({ "type": "core://Page", "id": "c-food", "root": { "type": "core://Column", "children": [
+                { "type": "core://Text", "value_expr": "Food tab", "style": "Body" },
+                { "type": "core://Layout", "presentation": "Inline", "layout": "c-history" } ] } })
+            }
+            "c-history" => json!({ "type": "core://Page", "id": "c-history", "root":
+                { "type": "core://Text", "value_expr": "Cooked last week", "style": "Body" } }),
+            _ => return Err(format!("no layout {id}")),
+        };
+        Ok((
+            serde_json::from_value(root).map_err(|e| e.to_string())?,
+            Default::default(),
+        ))
+    }
+
+    fn data(&self, path: &str) -> Result<protocol::DataBundle, String> {
+        Err(format!("no data {path}"))
+    }
+}
+
+#[test]
+fn a_layout_embedded_inside_an_embedded_layout_is_loaded() {
+    // Home embeds the tab, the tab embeds the view: neither was opened
+    // before, so both come from the loader on the first draw.
+    let home: protocol::UiNode = serde_json::from_value(json!({
+        "type": "core://Page", "id": "home", "root":
+            { "type": "core://Layout", "presentation": "Inline", "layout": "c-food" } }))
+    .unwrap();
+    let mut s = Session::new("home", home, Default::default(), Viewport::PHONE);
+    s.loader = Some(Box::new(NestedPod));
+    let scene = s.scene().unwrap();
+    assert!(scene.find_text("Food tab").is_some());
+    assert!(
+        scene.find_text("Cooked last week").is_some(),
+        "the view inside the tab is drawn, not a placeholder"
+    );
+    assert!(scene.find_text("Layout c-history").is_none());
+}
