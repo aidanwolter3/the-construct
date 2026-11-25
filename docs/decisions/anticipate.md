@@ -50,3 +50,6 @@ Since then (the owner, the same day): no confirming. Anticipate decides which jo
   regressions. An owner-written `mode` row only overrides it.
 - **What's lost:** the owner's tick no longer stops Build from weakening a script. The prompt forbids it, the
   skeptic sees the diff, and every script change is listed on the card.
+- **A starting set.** The pod starts with about 10 journeys assumed important, established from day 1 (the
+  owner's call: waiting two weeks of usage was too slow). Build writes their scripts on its first run, and usage
+  retires the ones the owner doesn't use.
