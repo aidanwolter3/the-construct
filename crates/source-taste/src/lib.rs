@@ -457,6 +457,85 @@ impl Default for TasteAdapter {
 #[derive(Default)]
 struct FeedLock(tokio::sync::Mutex<()>);
 
+/// One change to the owner's taste history at a time (a reaction, taking
+/// the service's history over), so the version a request names is the one
+/// the pod holds.
+#[derive(Default)]
+struct HistoryLock(tokio::sync::Mutex<()>);
+
+/// When the pod last asked a service for its history and couldn't have it:
+/// asked again only after [`TAKE_OVER_AGAIN`].
+#[derive(Default)]
+struct TakeOverTried(std::sync::Mutex<Option<std::time::Instant>>);
+
+const TAKE_OVER_AGAIN: std::time::Duration = std::time::Duration::from_secs(600);
+
+/// `service` naming the pod's history at `h`, with the way to read the
+/// whole of it when the service doesn't hold that version.
+fn link(pod: &Pod, service: Service, h: &db::History) -> Service {
+    let pod = pod.clone();
+    Service {
+        state: Some(api::StateLink {
+            tag: h.tag(),
+            whole: std::sync::Arc::new(move || {
+                let pod = pod.clone();
+                Box::pin(async move { pod.blocking(db::whole).await.ok() })
+            }),
+        }),
+        ..service
+    }
+}
+
+/// `service` naming the pod's history. The first time, the pod takes over
+/// the history the service built for it before the pod kept its own (`GET
+/// /api/state`); until a service can answer that (one from before), the
+/// service's own history stays in use and requests name none.
+async fn with_history(pod: &Pod, a: &TasteAdapter, service: Service) -> Service {
+    let h = match pod.blocking(db::history).await {
+        Ok(h) => h,
+        Err(_) => return service,
+    };
+    if h.taken_over {
+        return link(pod, service, &h);
+    }
+    let tried = pod.local::<TakeOverTried>();
+    if tried
+        .0
+        .lock()
+        .ok()
+        .and_then(|t| *t)
+        .is_some_and(|t| t.elapsed() < TAKE_OVER_AGAIN)
+    {
+        return service;
+    }
+    let lock = pod.local::<HistoryLock>();
+    let _held = lock.0.lock().await;
+    if let Ok(h) = pod.blocking(db::history).await
+        && h.taken_over
+    {
+        return link(pod, service, &h);
+    }
+    match api::own_state(&a.client, &service).await {
+        Ok(theirs) => match pod.blocking(move |s| db::take_over(s, &theirs)).await {
+            Ok(h) => {
+                tracing::info!(
+                    reactions = h.version,
+                    "took the taste history over from the service"
+                );
+                link(pod, service, &h)
+            }
+            Err(_) => service,
+        },
+        Err(e) => {
+            tracing::debug!(error = %e, "the taste service can't hand its history over yet");
+            if let Ok(mut t) = tried.0.lock() {
+                *t = Some(std::time::Instant::now());
+            }
+            service
+        }
+    }
+}
+
 const INSTRUCTIONS: &str = "The taste source shows the user's taste feed: clothes from their own \
 taste service, which learns what they like from likes and dislikes (a dislike is sent as \
 skipped) and keeps showing them things they haven't seen, looking for the edges of their taste. \
@@ -468,7 +547,9 @@ as a sheet: a swipe up on a card), search, likes, the taste page and the taste m
 /v1/taste/summary. The core layout taste is the whole thing: use it whole ({type: core://Use, \
 ref: @core/taste}) as a layout and link it from home, where taste:status's counts_text makes a \
 one-line summary. The pod signs in to the service from that layout's form (its URL and token) \
-and signs out from Settings (the taste jack): never ask for the token in the conversation.";
+and signs out from Settings (the taste jack): never ask for the token in the conversation. The \
+owner's likes and dislikes are kept in the pod and survive signing out; the service only \
+caches them.";
 
 impl Source for TasteAdapter {
     fn element_catalog(&self) -> &'static str {
@@ -545,7 +626,8 @@ impl Source for TasteAdapter {
                 Err(e) => return Hydration::Error(e.into_response()),
             };
             if items.is_empty() {
-                match next_page(pod, self, &account.service, Fetch::First).await {
+                let service = with_history(pod, self, account.service.clone()).await;
+                match next_page(pod, self, &service, Fetch::First).await {
                     Ok(page) => {
                         items = page;
                         error = None;
@@ -674,7 +756,15 @@ async fn next_page(
         }
     };
     let replace = fetch == Fetch::Refresh;
+    let owned = service.state.is_some();
     pod.blocking(move |s| {
+        if owned {
+            let ids: Vec<String> = page
+                .iter()
+                .filter_map(|i| i.get("id").and_then(Value::as_str).map(str::to_owned))
+                .collect();
+            db::served(s, &ids)?;
+        }
         db::append(s, &page, replace)?;
         db::set_error(s, None)?;
         db::waiting(s)
@@ -775,7 +865,7 @@ async fn signed_in(pod: &Pod) -> Result<(&TasteAdapter, Service), Response> {
         ));
     };
     match pod.blocking(db::service).await {
-        Ok(Some(s)) => Ok((a, s)),
+        Ok(Some(s)) => Ok((a, with_history(pod, a, s).await)),
         Ok(None) => Err(refuse(
             StatusCode::CONFLICT,
             "not_signed_in",
@@ -831,7 +921,7 @@ async fn sign_in_route(State(pod): State<Pod>, headers: HeaderMap, body: Bytes) 
         }
         Err(r) => return r,
     };
-    let service = Service { url, token };
+    let service = Service::new(url, token);
     let taste = match api::taste(&a.client, &service).await {
         Ok(t) => t,
         Err(ApiError::Unauthorized) => {
@@ -916,7 +1006,26 @@ async fn react_route(State(pod): State<Pod>, headers: HeaderMap, body: Bytes) ->
         Ok(v) => v,
         Err(r) => return r,
     };
-    let counts = match api::event(&a.client, &service, &id, kind).await {
+    // The pod's history takes the reaction first and the request names the
+    // version it makes; one the service doesn't take is taken back out.
+    let lock = pod.local::<HistoryLock>();
+    let held = lock.0.lock().await;
+    let (service, recorded) = if service.state.is_some() {
+        let (rid, rkind) = (id.clone(), kind.to_owned());
+        let t = now_ms() as f64 / 1000.0;
+        match pod.blocking(move |s| db::record(s, &rid, &rkind, t)).await {
+            Ok(h) => (link(&pod, service, &h), true),
+            Err(e) => return e.into_response(),
+        }
+    } else {
+        (service, false)
+    };
+    let sent = api::event(&a.client, &service, &id, kind).await;
+    if sent.is_err() && recorded {
+        let _ = pod.blocking(db::take_back_last).await;
+    }
+    drop(held);
+    let counts = match sent {
         Ok(c) => Some(c),
         // The service no longer has the piece (its catalog changed under
         // the kept deck): it leaves the deck all the same, rather than
@@ -968,6 +1077,7 @@ fn top_up(pod: &Pod) {
         let Ok(Some(service)) = pod.blocking(db::service).await else {
             return;
         };
+        let service = with_history(&pod, a, service).await;
         match next_page(&pod, a, &service, Fetch::TopUp).await {
             Ok(_) => pod.publish_data_all(NAME),
             Err(e) => tracing::warn!(error = %e, "topping up the taste deck failed"),
