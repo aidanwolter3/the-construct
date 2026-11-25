@@ -1,20 +1,50 @@
 #!/usr/bin/env bash
 # Runs the simulator scenarios CI screenshots (docs/simulator.md), in fixture mode, into <out>/<scenario>/.
 # The same scenarios are crates/construct-sim/tests/integration/scenarios.rs, with stronger checks.
+# They run in parallel, one per core (SIM_JOBS to change it), each into its own log, printed in order at the end.
 #   scripts/sim_scenarios.sh [out dir, default target/sim/scenarios]
 set -euo pipefail
 cd "$(dirname "$0")/.."
 out=${1:-target/sim/scenarios}
 cargo build -q -p construct-sim
 sim=target/debug/construct-sim
+jobs=${SIM_JOBS:-$(nproc)}
+logs=$(mktemp -d)
+trap 'rm -rf "$logs"' EXIT
+names=()
 
-status=0
-scenario() {
-  local name=$1 workspace=$2 script=$3
-  echo "== $name"
-  "$sim" --workspace "$workspace" --screen phone --out "$out/$name" --script "$script" || status=1
+# Runs `"$sim" <args>` for scenario <name> in the background, once a slot is free; a failure is noted in its log.
+run() {
+  local name=$1
+  shift
+  names+=("$name")
+  while [ "$(jobs -rp | wc -l)" -ge "$jobs" ]; do wait -n || true; done
+  { echo "== $name"; "$@" 2>&1 || echo "FAILED $name"; } >"$logs/$name.log" &
 }
 
+scenario() {
+  local name=$1 workspace=$2 script=$3
+  run "$name" "$sim" --workspace "$workspace" --screen phone --out "$out/$name" --script "$script"
+}
+
+# The longest first, so it isn't the last one still running.
+scenario taste taste \
+  "assert-text Waxed Chore Coat in Olive; assert-text On the edge; assert-text blanket lining; shot deck; \
+screen 360x740; insets 36 0 24 0; shot deck-small; screen phone; insets 0 0 0 0; \
+tap-photo right Photo 1 of Waxed Chore Coat in Olive; assert-text Photo 2 of 3; shot photo-2; \
+tap-photo left Photo 2 of Waxed Chore Coat in Olive; assert-text Photo 1 of 3; shot photo-back; \
+swipe-up Swipe up for pieces like Waxed Chore Coat in Olive; assert-text Buy at shop0.example; shot sheet; \
+scroll-to Similar; shot sheet-similar; back; \
+drag-card 140 Waxed Chore Coat in Olive by Fernhill Supply: swipe right to like, left to dislike, up for similar; shot swiping; release; \
+assert-text Loose Pleated Trousers; shot next; \
+click Map; assert-text 2,400 pieces; shot map; scatter-zoom 2.5 Map of 2,400 pieces, tap a dot to open it; shot map-zoomed; \
+scatter-tap 0.5 0.5 Map of 2,400 pieces, tap a dot to open it; assert-text Buy at shop0.example; shot point; back; \
+click Select an area; scatter-box 0.2 0.2 0.45 0.45 Map of 2,400 pieces, tap a dot to open it; shot selecting; release; assert-text Pieces here; \
+shot area; back; click Grid view; assert-text 10,533 pieces; shot grid; back; back; \
+click Likes; shot likes; back; \
+click Taste; assert-text rugged workwear · waxed cotton · olive green · utilitarian; shot taste; back; \
+screen desktop; shot desktop; click Map; shot desktop-map; back; screen phone; mode dark; shot dark; \
+click Map; shot dark-map"
 scenario like pixelfed_sample_no_login \
   "shot feed; click Like; assert-text Unlike; assert-text 90; shot liked; offline; shot offline"
 scenario layouts pixelfed \
@@ -75,23 +105,6 @@ scenario taste-browse taste \
   "click Taste; shot taste; click Browse; wait-text 3000 pieces; shot grid; scroll-to Waxed Chore Coat in Olive; \
 click Open Waxed Chore Coat in Olive; wait-text 3000 Photo 1 of 3; shot sheet; \
 tap-photo right Photo 1 of Waxed Chore Coat in Olive; shot sheet-photo-2; mode dark; shot sheet-dark"
-scenario taste taste \
-  "assert-text Waxed Chore Coat in Olive; assert-text On the edge; assert-text blanket lining; shot deck; \
-screen 360x740; insets 36 0 24 0; shot deck-small; screen phone; insets 0 0 0 0; \
-tap-photo right Photo 1 of Waxed Chore Coat in Olive; assert-text Photo 2 of 3; shot photo-2; \
-tap-photo left Photo 2 of Waxed Chore Coat in Olive; assert-text Photo 1 of 3; shot photo-back; \
-swipe-up Swipe up for pieces like Waxed Chore Coat in Olive; assert-text Buy at shop0.example; shot sheet; \
-scroll-to Similar; shot sheet-similar; back; \
-drag-card 140 Waxed Chore Coat in Olive by Fernhill Supply: swipe right to like, left to dislike, up for similar; shot swiping; release; \
-assert-text Loose Pleated Trousers; shot next; \
-click Map; assert-text 2,400 pieces; shot map; scatter-zoom 2.5 Map of 2,400 pieces, tap a dot to open it; shot map-zoomed; \
-scatter-tap 0.5 0.5 Map of 2,400 pieces, tap a dot to open it; assert-text Buy at shop0.example; shot point; back; \
-click Select an area; scatter-box 0.2 0.2 0.45 0.45 Map of 2,400 pieces, tap a dot to open it; shot selecting; release; assert-text Pieces here; \
-shot area; back; click Grid view; assert-text 10,533 pieces; shot grid; back; back; \
-click Likes; shot likes; back; \
-click Taste; assert-text rugged workwear · waxed cotton · olive green · utilitarian; shot taste; back; \
-screen desktop; shot desktop; click Map; shot desktop-map; back; screen phone; mode dark; shot dark; \
-click Map; shot dark-map"
 scenario tiles-home tiles_home \
   "shot top; scroll-to Photos; assert-text Read more; shot tiles"
 scenario screen-sizes screen_sizes \
@@ -100,10 +113,16 @@ screen desktop; assert-text Shown only on a wide window; shot desktop"
 scenario list-trailing list_trailing \
   "assert-text No extras yet; shot light; mode dark; shot dark"
 for page in home groceries log; do
-  echo "== theme-$page"
   for mode in light dark; do
-    "$sim" --workspace "theme_$page" --fixture "crates/construct-sim/data/theme_${page}_bundle.json" --screen phone \
-      --out "$out/theme-$page" --script "mode $mode; shot $mode" || status=1
+    run "theme-$page-$mode" "$sim" --workspace "theme_$page" --fixture "crates/construct-sim/data/theme_${page}_bundle.json" \
+      --screen phone --out "$out/theme-$page" --script "mode $mode; shot $mode"
   done
+done
+
+wait
+status=0
+for name in "${names[@]}"; do
+  cat "$logs/$name.log"
+  grep -q "^FAILED $name$" "$logs/$name.log" && status=1
 done
 exit $status

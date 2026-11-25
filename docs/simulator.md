@@ -16,7 +16,8 @@ step: `index`, `command`, `arg`, `status`, `message`, `file`, `elapsed_ms`). The
 and saves the screen as `<NN>-FAILED.png`; a failed text check lists the texts on screen.
 
 CI runs `scripts/sim_scenarios.sh` in the Rust job and uploads the PNGs as the `simulator` artifact; those are the
-screenshots PRs embed. The same scenarios, with stronger checks, are `crates/construct-sim/tests/integration/scenarios.rs`.
+screenshots PRs embed. The script runs the scenarios in parallel, one per core (`SIM_JOBS` to change it), and prints
+each one's log in order when all are done; a new long scenario goes first, so it isn't the last still running. The same scenarios, with stronger checks, are `crates/construct-sim/tests/integration/scenarios.rs`.
 
 ## Modes
 

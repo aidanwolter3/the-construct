@@ -45,8 +45,12 @@ rusqlite = { version = "0.41", features = ["bundled"] }
 [profile.dev]
 debug = "line-tables-only"
 
+# Dependencies are built optimized (opt-level 1): the tests spend most of their time in serde_json, memchr and
+# the like, which unoptimized run several times slower (decision `ci-speed`). They are built once and cached; the
+# workspace's own crates stay unoptimized, so a change still builds fast.
 [profile.dev.package."*"]
 debug = false
+opt-level = 1
 
 # The web client's build (scripts/web_build.sh, decision `web-gpu`): optimized for size, since a browser
 # downloads it.
