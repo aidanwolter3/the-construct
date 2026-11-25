@@ -529,6 +529,7 @@ fn intent_features(intent: &ActionIntent, out: &mut BTreeSet<&'static str>) {
         }
         ActionIntent::OpenLink { .. } => add(feature::OPEN_LINK),
         ActionIntent::FormClear { .. } => add(feature::FORM_CLEAR),
+        ActionIntent::ConstructSwap { .. } => add(feature::CONSTRUCT_SWAP),
         ActionIntent::Device { command, .. } => {
             add(feature::DEVICE_ACTION);
             let c = command.as_str();

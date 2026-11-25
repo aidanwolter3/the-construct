@@ -169,6 +169,12 @@ async fn post_objects(State(pod): State<Pod>, headers: HeaderMap, body: Bytes) -
             };
             if let Some((_, names)) = construct_elements::manifest_names(&v) {
                 queue.extend(names.into_values().filter(|h| !seen.contains(h)));
+                // Its swaps' elements too: a device swaps without a request.
+                queue.extend(
+                    construct_elements::manifest_swap_ids(&v)
+                        .into_iter()
+                        .filter(|h| !seen.contains(h)),
+                );
             }
             construct_elements::refs::visit(&v["node"], &mut |r, _| {
                 if let Some(e) = &r.el

@@ -934,6 +934,12 @@ impl State {
         self.workspace_uris = Some(uris);
     }
 
+    /// Draw home as `workspace` at once, keeping its data (an instant swap,
+    /// decision `instant-swap`; the pod's next answer replaces it).
+    fn swap_home(&mut self, workspace: UiNode) {
+        self.workspace = Some(workspace);
+    }
+
     /// Keep another layout's fetched workspace, cached for the next launch
     /// (its data is the `layout:<id>` data load).
     fn apply_layout(&mut self, id: &str, workspace: UiNode) {
@@ -2105,6 +2111,26 @@ impl ConstructEngine {
                 eprintln!("[ConstructEngine] cannot start a layout load thread: {e}");
             }
         }
+    }
+
+    /// `action.construct.swap {group, to}` (decision `instant-swap`): show
+    /// edit group `group`'s screens before it or after it from the elements
+    /// the device holds, at once. Answers whether it swapped (false: no such
+    /// group in the manifest, or an element not here; the pod's next root
+    /// draws the change instead). The snapshot and a reload of the swapped
+    /// layouts' data run off the caller's thread.
+    pub fn swap_construct(&self, group: &str, to: &str) -> bool {
+        let Some(changed) = self.inner.construct_swap(group, to) else {
+            return false;
+        };
+        let inner = Arc::clone(&self.inner);
+        let spawned = thread::Builder::new()
+            .name("construct-swap".into())
+            .spawn(move || inner.redraw_swapped(&changed));
+        if let Err(e) = spawned {
+            eprintln!("[ConstructEngine] cannot start a swap thread: {e}");
+        }
+        true
     }
 
     /// One layout as the engine has it now, without a snapshot (which

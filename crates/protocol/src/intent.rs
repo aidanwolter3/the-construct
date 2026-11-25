@@ -165,6 +165,13 @@ pub enum ActionIntent {
     #[serde(rename = "action.link.open")]
     OpenLink { url: String },
 
+    /// Feature `construct_swap`: show edit group `group`'s screens as they
+    /// were (`to: "before"`) or as the group made them (`"after"`) at once,
+    /// from elements the device already holds (the manifest's `swaps`).
+    /// Nothing is sent: the Undo or Redo that tells the pod goes beside it.
+    #[serde(rename = "action.construct.swap")]
+    ConstructSwap { group: String, to: String },
+
     /// Feature `form_clear`: empty the form values `$form.<field>` of
     /// `fields` on this device (a field that was never set stays unset),
     /// and with `focus` put the cursor in that field so typing goes on
