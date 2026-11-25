@@ -3616,12 +3616,13 @@ impl Session {
 
     /// Tell the loader what an interaction did (decision `usage-trails`).
     fn report_usage(&self, before: &(String, Option<String>, Instant), o: &Outcome, tap: bool) {
-        use protocol::usage::{UsageEvent, node_identity, now_secs};
+        use protocol::usage::{UsageEvent, node_identity};
         let Some(loader) = self.loader.as_ref() else {
             return;
         };
         let (from, route, opened) = before;
-        let at = now_secs();
+        // The renderer's clock, not protocol's (std's panics in a web build).
+        let at = crate::device_data::now_secs();
         if tap && let Some(n) = &o.node {
             let intent = match &n.tap {
                 Some(crate::scene::Tap::Intent { intent }) => Some(intent),

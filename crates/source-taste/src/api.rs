@@ -14,25 +14,79 @@
 //!   tile `{i, j, x0, y0, x1, y1, count, likes, skips, p, color, item}`;
 //!   `GET /api/map/items?x0=&y0=&x1=&y1=&n=`: `{items}` inside the box.
 //!
+//! - `PUT /api/state {log, events, served}`, `GET /api/state`: the pod's
+//!   history whole (decision `taste-history-in-the-pod`).
+//!
+//! Every request names the pod's history, `X-Taste-State: <log>/<n>` (n:
+//! the reactions in it), once the pod keeps its own ([`StateLink`]). The
+//! service answers from its copy when it holds exactly that version and 409
+//! `state_unknown` when it doesn't: then the pod sends the whole history and
+//! asks again, once ([`send`]).
+//!
 //! Everything it sends is read leniently and treated as untrusted display
 //! text ([`crate::bundle`]).
 
+use std::future::Future;
+use std::pin::Pin;
+use std::sync::Arc;
 use std::time::Duration;
 
-use pod_core::net::{OutboundClient, OutboundError, OutboundResponse};
+use pod_core::net::{OutboundClient, OutboundError, OutboundRequest, OutboundResponse};
 use serde_json::{Value, json};
 
-/// The service the pod is signed in to: its base URL and the pod's token.
+/// The service the pod is signed in to: its base URL and the pod's token,
+/// and the pod's history to name on each request (`None`: the service's own
+/// state, before the pod has taken its history over).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Service {
     pub url: String,
     pub token: String,
+    pub state: Option<StateLink>,
 }
+
+impl Service {
+    pub fn new(url: impl Into<String>, token: impl Into<String>) -> Self {
+        Service {
+            url: url.into(),
+            token: token.into(),
+            state: None,
+        }
+    }
+}
+
+/// Reads the pod's whole history (`None`: it couldn't be read).
+pub type ReadHistory =
+    Arc<dyn Fn() -> Pin<Box<dyn Future<Output = Option<Value>> + Send>> + Send + Sync>;
+
+/// The pod's history as a request names it: `<log>/<n>`, and how to read
+/// the whole of it when the service doesn't hold that version.
+#[derive(Clone)]
+pub struct StateLink {
+    pub tag: String,
+    pub whole: ReadHistory,
+}
+
+impl std::fmt::Debug for StateLink {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("StateLink").field("tag", &self.tag).finish()
+    }
+}
+
+impl PartialEq for StateLink {
+    fn eq(&self, other: &Self) -> bool {
+        self.tag == other.tag
+    }
+}
+
+impl Eq for StateLink {}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ApiError {
     /// The service refused the token (401).
     Unauthorized,
+    /// The service doesn't hold the history the request named (409
+    /// `state_unknown`), even after it was sent.
+    StateUnknown,
     /// Another refusal: its status and the service's words.
     Status(u16, String),
     /// No answer, or one that can't be read.
@@ -43,6 +97,9 @@ impl std::fmt::Display for ApiError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             ApiError::Unauthorized => write!(f, "the taste service refused the pod's token"),
+            ApiError::StateUnknown => {
+                write!(f, "the taste service didn't take the pod's history")
+            }
             ApiError::Status(s, d) if d.is_empty() => write!(f, "the taste service answered {s}"),
             ApiError::Status(s, d) => write!(f, "the taste service answered {s}: {d}"),
             ApiError::Unreachable(e) => write!(f, "the taste service can't be reached: {e}"),
@@ -148,6 +205,9 @@ async fn answer_capped(
         let body = json_capped(resp, MAX_ERROR_BODY)
             .await
             .unwrap_or(Value::Null);
+        if status == 409 && body.get("error").and_then(Value::as_str) == Some("state_unknown") {
+            return Err(ApiError::StateUnknown);
+        }
         let detail = body
             .get("detail")
             .or_else(|| body.get("error"))
@@ -167,6 +227,74 @@ fn items(v: Value) -> Result<Vec<Value>, ApiError> {
     }
 }
 
+/// Send the request `build` makes, with the token and the pod's history
+/// named. When the service doesn't hold that history, send it the whole of
+/// it and ask again, once.
+async fn send(
+    c: &OutboundClient,
+    s: &Service,
+    max: usize,
+    build: impl Fn() -> OutboundRequest,
+) -> Result<Value, ApiError> {
+    let named = |r: OutboundRequest| {
+        let r = r.bearer_auth(&s.token);
+        match &s.state {
+            Some(link) => r.header("x-taste-state", link.tag.as_str()),
+            None => r,
+        }
+    };
+    match answer_capped(named(build()).send().await, max).await {
+        Err(ApiError::StateUnknown) if s.state.is_some() => {
+            let whole = s.state.as_ref().map(|l| (l.whole)());
+            let Some(history) = (match whole {
+                Some(f) => f.await,
+                None => None,
+            }) else {
+                return Err(ApiError::Unreachable(
+                    "the pod couldn't read its taste history".into(),
+                ));
+            };
+            put_state(c, s, &history).await?;
+            answer_capped(named(build()).send().await, max).await
+        }
+        other => other,
+    }
+}
+
+/// `PUT /api/state`: the pod's history whole (`{log, events, served}`).
+pub async fn put_state(c: &OutboundClient, s: &Service, history: &Value) -> Result<(), ApiError> {
+    let u = url(s, &["state"])?;
+    answer(
+        c.request(reqwest::Method::PUT, u)
+            .timeout(SUMMARY_TIMEOUT)
+            .json(history)
+            .bearer_auth(&s.token)
+            .send()
+            .await,
+    )
+    .await
+    .map(|_| ())
+}
+
+/// `GET /api/state` without naming a history: the service's own, which the
+/// pod takes over once ([`crate::db::take_over`]).
+pub async fn own_state(c: &OutboundClient, s: &Service) -> Result<Value, ApiError> {
+    let u = url(s, &["state"])?;
+    let v = answer_capped(
+        c.get(u)
+            .timeout(SUMMARY_TIMEOUT)
+            .bearer_auth(&s.token)
+            .send()
+            .await,
+        MAX_MAP_BODY,
+    )
+    .await?;
+    if !v.get("events").is_some_and(Value::is_array) {
+        return Err(ApiError::Unreachable("not a taste history".into()));
+    }
+    Ok(v)
+}
+
 async fn get(
     c: &OutboundClient,
     s: &Service,
@@ -174,7 +302,7 @@ async fn get(
     query: &[(&str, String)],
 ) -> Result<Value, ApiError> {
     let u = url(s, segments)?;
-    answer(c.get(u).query(query).bearer_auth(&s.token).send().await).await
+    send(c, s, MAX_BODY, || c.get(u.clone()).query(query)).await
 }
 
 /// `GET /api/taste`: also how a sign-in checks the URL and token.
@@ -218,14 +346,8 @@ pub async fn event(
     kind: &str,
 ) -> Result<(i64, i64), ApiError> {
     let u = url(s, &["event"])?;
-    let v = answer(
-        c.post(u)
-            .json(&json!({"id": id, "kind": kind}))
-            .bearer_auth(&s.token)
-            .send()
-            .await,
-    )
-    .await?;
+    let body = json!({"id": id, "kind": kind});
+    let v = send(c, s, MAX_BODY, || c.post(u.clone()).json(&body)).await?;
     let n = |k: &str| v.get(k).and_then(Value::as_i64).unwrap_or(0);
     Ok((n("likes"), n("skips")))
 }
@@ -376,7 +498,7 @@ impl MapData {
 /// `GET /api/map`: the whole map ([`MapData`]).
 pub async fn map(c: &OutboundClient, s: &Service) -> Result<MapData, ApiError> {
     let u = url(s, &["map"])?;
-    let v = answer_capped(c.get(u).bearer_auth(&s.token).send().await, MAX_MAP_BODY).await?;
+    let v = send(c, s, MAX_MAP_BODY, || c.get(u.clone())).await?;
     MapData::from_json(&v).ok_or_else(|| ApiError::Unreachable("not a map".into()))
 }
 
@@ -411,13 +533,9 @@ pub async fn map_items(
 /// `POST /api/taste/summary`: `{text, likes}`.
 pub async fn summary(c: &OutboundClient, s: &Service) -> Result<Value, ApiError> {
     let u = url(s, &["taste", "summary"])?;
-    answer(
-        c.post(u)
-            .timeout(SUMMARY_TIMEOUT)
-            .bearer_auth(&s.token)
-            .send()
-            .await,
-    )
+    send(c, s, MAX_BODY, || {
+        c.post(u.clone()).timeout(SUMMARY_TIMEOUT)
+    })
     .await
 }
 
@@ -442,10 +560,7 @@ mod tests {
 
     #[test]
     fn urls_encode_item_ids() {
-        let s = Service {
-            url: "https://taste.example".into(),
-            token: "t".into(),
-        };
+        let s = Service::new("https://taste.example", "t");
         let u = url(&s, &["item", "shop.example:12 3", "similar"]).unwrap();
         assert_eq!(
             u.as_str(),

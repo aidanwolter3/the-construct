@@ -791,7 +791,8 @@ stores to find the edges of what they like. The pod signs in to it with a URL an
 keeps the feed it was served (the service answers a new page every time it is asked, and a layout's feed is fetched
 again after every data event) and deals it as a deck of swipe cards, passing likes and skips on and fetching the
 next page itself when few are left; the item, search, taste and map screens are read from the service when they
-are shown. The map is a scatter of the whole catalog (`core://Scatter`, decision `scatter-and-tap-paging`): tap a
+are shown. The owner's likes and dislikes are the pod's: every request names the pod's history, the service keeps a
+copy of it, and a service that lacks the version named is sent it whole (decision `taste-history-in-the-pod`). The map is a scatter of the whole catalog (`core://Scatter`, decision `scatter-and-tap-paging`): tap a
 dot to open its piece, drag a box to list the pieces in it; a tile grid stays for clients without it
 ([taste.md](taste.md)).
 

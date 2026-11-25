@@ -38,6 +38,72 @@ pub struct Fake {
     pub maps: AtomicUsize,
     /// Pieces the service no longer has: a reaction to one answers 404.
     pub gone: Mutex<Vec<String>>,
+    /// Behave like a service that caches each pod's history (decision
+    /// `taste-history-in-the-pod`); otherwise like one from before, which
+    /// has no `/api/state` and ignores `X-Taste-State`.
+    pub keeps_states: AtomicBool,
+    /// The service's own history (no header): what a pod takes over.
+    pub own: Mutex<Vec<Value>>,
+    /// The histories it holds, by log: each reaction in order.
+    pub states: Mutex<std::collections::HashMap<String, Vec<Value>>>,
+    /// Every `PUT /api/state` body.
+    pub uploads: Mutex<Vec<Value>>,
+    /// Every `X-Taste-State` sent.
+    pub tags: Mutex<Vec<String>>,
+}
+
+impl Fake {
+    /// Lose every history it held, like a service on a new machine.
+    pub fn forget(&self) {
+        self.states.lock().unwrap().clear();
+    }
+}
+
+fn state_unknown() -> Response {
+    (
+        StatusCode::CONFLICT,
+        Json(json!({"error": "state_unknown", "detail": "send it"})),
+    )
+        .into_response()
+}
+
+/// The `X-Taste-State` a request names, noted: `(log, n)`.
+fn named(f: &Fake, headers: &HeaderMap) -> Option<(String, usize)> {
+    let raw = headers.get("x-taste-state")?.to_str().ok()?.to_owned();
+    f.tags.lock().unwrap().push(raw.clone());
+    let (log, n) = raw.split_once('/')?;
+    Some((log.to_owned(), n.parse().ok()?))
+}
+
+async fn get_state(State(f): State<Arc<Fake>>, headers: HeaderMap) -> Response {
+    if !f.keeps_states.load(Ordering::SeqCst) {
+        return (StatusCode::NOT_FOUND, Json(json!({"detail": "Not Found"}))).into_response();
+    }
+    if let Err(r) = check(&f, &headers) {
+        return r;
+    }
+    let own = f.own.lock().unwrap().clone();
+    Json(json!({"version": own.len(), "events": own, "served": {"shop0.example:1003": 2}}))
+        .into_response()
+}
+
+async fn put_state(
+    State(f): State<Arc<Fake>>,
+    headers: HeaderMap,
+    Json(body): Json<Value>,
+) -> Response {
+    if !f.keeps_states.load(Ordering::SeqCst) {
+        return (StatusCode::NOT_FOUND, Json(json!({"detail": "Not Found"}))).into_response();
+    }
+    if !authorized(&headers) {
+        return (StatusCode::UNAUTHORIZED, Json(json!({"detail": "no"}))).into_response();
+    }
+    let log = body["log"].as_str().unwrap_or_default().to_owned();
+    let events = body["events"].as_array().cloned().unwrap_or_default();
+    let version = events.len();
+    f.states.lock().unwrap().insert(log, events);
+    f.uploads.lock().unwrap().push(body);
+    Json(json!({"ok": true, "version": version})).into_response()
 }
 
 /// The whole map: five made-up pieces of page 0 along a diagonal, the
@@ -102,6 +168,13 @@ fn check(f: &Fake, headers: &HeaderMap) -> Result<(), Response> {
     }
     if f.down.load(Ordering::SeqCst) {
         return Err((StatusCode::BAD_GATEWAY, Json(json!({"detail": "down"}))).into_response());
+    }
+    // A history named must be one it holds at exactly that version.
+    if f.keeps_states.load(Ordering::SeqCst)
+        && let Some((log, n)) = named(f, headers)
+        && f.states.lock().unwrap().get(&log).map(Vec::len) != Some(n)
+    {
+        return Err(state_unknown());
     }
     Ok(())
 }
@@ -191,8 +264,35 @@ async fn event(
     headers: HeaderMap,
     Json(body): Json<Value>,
 ) -> Response {
-    if let Err(r) = check(&f, &headers) {
-        return r;
+    if !authorized(&headers) {
+        return (StatusCode::UNAUTHORIZED, Json(json!({"detail": "no"}))).into_response();
+    }
+    if f.down.load(Ordering::SeqCst) {
+        return (StatusCode::BAD_GATEWAY, Json(json!({"detail": "down"}))).into_response();
+    }
+    // A reaction names the version it makes: taken when the service holds
+    // one fewer, a repeat when it holds that many already.
+    if f.keeps_states.load(Ordering::SeqCst)
+        && let Some((log, n)) = named(&f, &headers)
+    {
+        let mut states = f.states.lock().unwrap();
+        let Some(history) = states.get_mut(&log) else {
+            return state_unknown();
+        };
+        let repeat = history.len() == n
+            && history
+                .last()
+                .is_some_and(|l| l["id"] == body["id"] && l["kind"] == body["kind"]);
+        if !repeat && history.len() + 1 != n {
+            return state_unknown();
+        }
+        if !repeat
+            && !body["id"]
+                .as_str()
+                .is_some_and(|id| f.gone.lock().unwrap().iter().any(|g| g == id))
+        {
+            history.push(json!({"id": body["id"], "kind": body["kind"], "t": 0}));
+        }
     }
     if body["id"]
         .as_str()
@@ -335,6 +435,7 @@ pub async fn serve(fake: Arc<Fake>) -> String {
         .route("/api/map", get(map))
         .route("/api/map/tiles", get(map_tiles))
         .route("/api/map/items", get(map_items))
+        .route("/api/state", get(get_state).put(put_state))
         .with_state(fake);
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
