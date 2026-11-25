@@ -54,7 +54,8 @@ pub struct UsageEvent {
     pub dwell_ms: Option<u64>,
 }
 
-/// Unix seconds now.
+/// Unix seconds now, on std's clock: it panics in a web build (wasm32), so
+/// the renderer uses its own (`construct_render::device_data::now_secs`).
 pub fn now_secs() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)

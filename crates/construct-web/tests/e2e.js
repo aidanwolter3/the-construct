@@ -117,9 +117,9 @@ function check(ok, what) {
   }
 
   // Signing in to the fake Pixelfed (decision `web-upstream-sign-in`): Settings' "Sign in to Pixelfed" goes to its
-  // authorize page and Authorize comes back to /web, signed in. Where the blank home (1280 x 800) draws Settings'
-  // gear and the panel its button.
-  await page.mouse.click(91, 431);
+  // authorize page and Authorize comes back to /web, signed in. Where the blank home (1280 x 800) draws its
+  // Settings button and the panel its Sign in.
+  await page.mouse.click(703, 533);
   await page.waitForTimeout(3000);
   await page.mouse.click(100, 157);
   await page.waitForURL((u) => u.pathname === '/oauth/authorize', { timeout: 15000 });
@@ -134,7 +134,7 @@ function check(ok, what) {
   check((signIns.sign_ins || []).some((s) => s.id === 'pixelfed'),
     'back on /web (the code taken off the address), the session is signed in to Pixelfed');
   const home = await page.screenshot();
-  await page.mouse.click(91, 431);
+  await page.mouse.click(703, 533);
   await page.waitForTimeout(3000);
   await page.screenshot({ path: out + '/web-signed-in.png' });
 
@@ -148,7 +148,7 @@ function check(ok, what) {
   const closed = await page.screenshot({ path: out + '/web-back-closed.png' });
   require('fs').writeFileSync(out + '/web-back-before.png', home);
   check(Buffer.compare(home, closed) === 0, "and it closed Settings, home as before");
-  await page.mouse.click(91, 431);
+  await page.mouse.click(703, 533);
   await page.waitForTimeout(1500);
   await page.keyboard.press('Escape');
   await page.waitForTimeout(1500);
