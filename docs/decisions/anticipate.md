@@ -62,3 +62,19 @@ Since then (the owner, the same day): no confirming. Anticipate decides which jo
 - **Trust and restyling.** Changes may restyle, not only add, under the server's `safe` check. The first week's
   changes are trials on the real screen (Undo, Redo, Keep), undone the next morning unless kept; after that they
   go live directly. Only Settings is protected.
+
+Since then (the owner, 2026-11-25, after Build's first run changed nothing):
+
+- **Today is shaped every morning.** Fixes wait for something to break, and the first run found nothing broken,
+  so it changed no screen. The owner most wants Today fitted to the day and the week, so Build now stages one
+  group on Today every morning, quiet day or not: it reorders, regroups, restyles and brings in what other screens
+  already bind, under the same server `safe` check. Its skeptic asks "is this a better Today for this owner
+  today?", not whether it is the smallest fix. It is always a trial: undone the next morning unless kept, and
+  reshaped from the kept base. Shapes don't count toward the 3 fixes or toward stepping back to trials (a daily
+  shape undone each morning would otherwise keep Build in trials forever).
+- **Home and Today are never protected.** Only Settings is: protecting Today would stop the shape.
+- **Dead taps count on the current screen.** A tap's node is resolved against the layout as it is now; only taps
+  whose node is gone are dropped. Build tags the tappable nodes it adds or moves so their taps survive edits.
+- **The prompt carries the gate.** The schedule's prompt no longer reads `docs/anticipate.md` from a checkout
+  (the runner's workspace refused the `git pull`); the gate is in the prompt.
+
