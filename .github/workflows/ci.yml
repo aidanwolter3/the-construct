@@ -168,7 +168,11 @@ jobs:
           persist-credentials: false # no job pushes; keep GITHUB_TOKEN out of .git/config
       - name: The pinned Rust (rust-toolchain.toml; the image has it)
         run: rustup toolchain install
+      # The root Cargo.toml (its [profile]s) is in the key: rust-cache hashes only Cargo.lock and the members'
+      # manifests, so a profile change would restore the old build on a full match and never save the new one.
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          key: ${{ hashFiles('Cargo.toml') }}
       # construct-render's GPU tests draw on the image's lavapipe (Mesa's software Vulkan), and must
       # (CONSTRUCT_REQUIRE_GPU below fails them instead of skipping when no adapter is found).
       - run: scripts/check_decisions.sh
@@ -229,9 +233,11 @@ jobs:
           java-version: "21"
       - name: Install the pinned Rust (rust-toolchain.toml) and the Android target
         run: rustup toolchain install && rustup target add aarch64-linux-android
+      # The root Cargo.toml (its [profile]s) is in the key: rust-cache hashes only Cargo.lock and the members'
+      # manifests, so a profile change would restore the old build on a full match and never save the new one.
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
-          key: android
+          key: android-${{ hashFiles('Cargo.toml') }}
       - name: Install cargo-ndk
         run: command -v cargo-ndk >/dev/null || cargo install --locked cargo-ndk --version 4.1.2
       # The jars android_native.sh takes from Maven Central, kept between runs: Maven Central answers runners'
@@ -265,9 +271,11 @@ jobs:
           persist-credentials: false # no job pushes; keep GITHUB_TOKEN out of .git/config
       - name: Install the pinned Rust (rust-toolchain.toml) and the wasm32 target
         run: rustup toolchain install && rustup target add wasm32-unknown-unknown
+      # The root Cargo.toml (its [profile]s) is in the key: rust-cache hashes only Cargo.lock and the members'
+      # manifests, so a profile change would restore the old build on a full match and never save the new one.
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
-          key: web
+          key: web-${{ hashFiles('Cargo.toml') }}
       - name: Install the wasm-bindgen CLI at Cargo.lock's version
         run: |
           v=$(grep -A1 '^name = "wasm-bindgen"$' Cargo.lock | grep version | cut -d'"' -f2)
