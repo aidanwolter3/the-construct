@@ -135,9 +135,10 @@ impl Default for Caps {
         Self {
             collections: 100,
             fields: 40,
-            rows: 5_000,
-            bytes: 4 * 1024 * 1024,
-            // As many as a pod holds: one import is one preview and one edit.
+            rows: 20_000,
+            bytes: 16 * 1024 * 1024,
+            // One import's preview is kept in memory for an hour; a larger
+            // import is several calls.
             edit_rows: 5_000,
             text_chars: 4_000,
             fill_items: 200,
