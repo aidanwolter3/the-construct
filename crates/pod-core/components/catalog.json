@@ -99,6 +99,10 @@
     "category": "row",
     "use_when": "A plain row: a title and a quiet value at the end (a version, a count)."
   },
+  "loading_spinner": {
+    "category": "primitive",
+    "use_when": "A spinner while the screen's data loads, in a header you draw yourself. @core/page_header has one (loading), and @core/screen and @core/screen_scaffold draw their own."
+  },
   "message_page": {
     "category": "scaffold",
     "use_when": "A whole page that only says something: a welcome, an empty pod, an error with Try again."

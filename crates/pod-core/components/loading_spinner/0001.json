@@ -1,0 +1,34 @@
+{
+  "note": "First version: the small spinner a header shows while its screen's data loads, which layouts wrote as a core://Conditional around a core://Progress",
+  "component": {
+    "doc": "A small spinner shown only while the screen's data loads (local://screen#loading), and nothing otherwise: among a header's actions or beside its title, so a pushed screen says it is still fetching. 16 dp across by default. core:page_header draws one itself with loading.",
+    "params": [
+      {
+        "name": "size",
+        "type": "number",
+        "doc": "Its diameter in dp.",
+        "default": 16
+      }
+    ],
+    "template": {
+      "type": "core://Conditional",
+      "value": "${local://screen#loading}",
+      "content": {
+        "type": "core://Progress",
+        "size_dp": "$arg.size"
+      }
+    },
+    "examples": [
+      {
+        "args": {},
+        "note": "at the end of a pushed screen's header, while its post loads"
+      },
+      {
+        "args": {
+          "size": 20
+        },
+        "note": "beside a settings screen's title, a little larger"
+      }
+    ]
+  }
+}
