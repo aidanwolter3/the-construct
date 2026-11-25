@@ -668,8 +668,8 @@ fn base_tools() -> Vec<Value> {
         ),
         tool(
             "apply_edit_group",
-            "Make a staged edit group live, as one write: refused if a name moved since it was staged (stage again), or, for a scoped credential, if it isn't additive or touches a protected name. Records a checkpoint of home first.",
-            json!({ "id": { "type": "string" } }),
+            "Make a staged edit group live, as one write: refused if a name moved since it was staged (stage again), or, for a scoped credential, if it isn't safe (a restyle may move or restyle anything, but nothing the screen showed or could do may go, and nothing new may be done) or touches a protected name. Records a checkpoint of home first. trial: true makes it a trial the owner keeps (apply it again, or Keep in the app) or undoes. On an undone group it redoes it (the same elements again).",
+            json!({ "id": { "type": "string" }, "trial": { "type": "boolean" } }),
             &["id"],
         ),
         tool(

@@ -1463,6 +1463,18 @@ impl<'a> Caps<'a> {
                     }
                 }
             }
+            "action.construct.swap" => {
+                // Decision `instant-swap`: an edit group, and which way.
+                let group = map.get("group").and_then(Value::as_str).unwrap_or("");
+                let to = map.get("to").and_then(Value::as_str).unwrap_or("");
+                if group.is_empty() || !(to == "before" || to == "after" || to.contains('$')) {
+                    return Err(LayoutError::new(
+                        at,
+                        "action.construct.swap needs group (an edit group's id) and to: before or after".to_owned(),
+                    )
+                    .allowing([r#"{"intent": "action.construct.swap", "group": "$item.edit_group", "to": "before"}"#.to_owned()]));
+                }
+            }
             "action.form.clear" => {
                 let named = |k: &str| match map.get(k) {
                     Some(Value::Array(a)) => !a.is_empty(),
@@ -2103,6 +2115,26 @@ mod tests {
         let err = custom_layout("home", &layout(json!({"intent": "action.form.clear"})), &[])
             .unwrap_err();
         assert!(err.message.contains("names no field"), "{err:?}");
+    }
+
+    #[test]
+    fn a_construct_swap_names_a_group_and_a_side() {
+        let layout = |swap: Value| {
+            json!({"type": "core://Page", "id": "home", "root": {"type": "core://Button",
+                "label": "Undo", "on_click": {"intent": "action.sequence", "steps": [swap]}}})
+        };
+        for to in ["before", "after", "$item.side"] {
+            let ok =
+                json!({"intent": "action.construct.swap", "group": "$item.edit_group", "to": to});
+            assert!(custom_layout("home", &layout(ok), &[]).is_ok(), "{to}");
+        }
+        for bad in [
+            json!({"intent": "action.construct.swap", "to": "before"}),
+            json!({"intent": "action.construct.swap", "group": "eg_1", "to": "sideways"}),
+        ] {
+            let err = custom_layout("home", &layout(bad), &[]).unwrap_err();
+            assert!(err.message.contains("group"), "{err:?}");
+        }
     }
 
     #[test]
