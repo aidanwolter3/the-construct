@@ -29,6 +29,11 @@ Measured in a 4-core cloud session: the workspace tests went from about 1960 s o
 Not done: splitting the Rust job across runners (nextest partitions). Worth it if the tests grow slow again; each
 runner then compiles the tests too, so it pays only while the tests take much longer than their build.
 
+**The cache key follows the root `Cargo.toml`** (2026-11-25, the same day). rust-cache keys a cache by Cargo.lock
+and the members' manifests, not the root manifest that holds the `[profile]`s: after the opt-level change every run
+restored the old build on a full key match, rebuilt every dependency (about 5 minutes) and saved nothing, since the key
+already existed. Each workflow's rust-cache step now adds `hashFiles('Cargo.toml')` to its key.
+
 **Main's runs don't wait for each other** (2026-11-25). The workflow's concurrency group was one per ref, so a push to
 main waited for the run before it to finish (one waited 21 minutes before starting). Now only a pull request's runs
 share a group, and a new push cancels the old run; every other run has a group of its own. Deploys still go one at a

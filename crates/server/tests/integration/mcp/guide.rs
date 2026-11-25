@@ -185,27 +185,32 @@ async fn find_elements_answers_what_exists_by_what_it_is_for() {
     assert!(names(&home).contains(&"home"), "{home}");
 
     // Every core component and layout says where it belongs and when to
-    // use it: the catalog files keep up with what ships.
-    let (_, all) = env
-        .tool(
-            &access,
-            "find_elements",
-            json!({"scope": "core", "limit": 60}),
-        )
-        .await;
-    let listed = all["elements"].as_array().unwrap();
-    assert_eq!(
-        all["total"].as_u64().unwrap() as usize,
-        listed.len(),
-        "{all}"
-    );
-    assert!(listed.len() > 35, "{all}");
-    for e in listed {
-        assert!(
-            e["category"].is_string() && e["use_when"].as_str().is_some_and(|u| u.len() > 20),
-            "{e} needs an entry in its crate's catalog.json"
+    // use it: the catalog files keep up with what ships. Listed a role at a
+    // time, as each fits under the tool's limit.
+    let mut count = 0;
+    for role in ["component", "layout"] {
+        let (_, all) = env
+            .tool(
+                &access,
+                "find_elements",
+                json!({"scope": "core", "role": role, "limit": 60}),
+            )
+            .await;
+        let listed = all["elements"].as_array().unwrap();
+        assert_eq!(
+            all["total"].as_u64().unwrap() as usize,
+            listed.len(),
+            "{all}"
         );
+        count += listed.len();
+        for e in listed {
+            assert!(
+                e["category"].is_string() && e["use_when"].as_str().is_some_and(|u| u.len() > 20),
+                "{e} needs an entry in its crate's catalog.json"
+            );
+        }
     }
+    assert!(count > 35, "{count}");
 }
 
 #[tokio::test]
