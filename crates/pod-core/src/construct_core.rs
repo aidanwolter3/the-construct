@@ -299,6 +299,68 @@ pub fn load(catalog: &Catalog) -> Result<Core, String> {
     load_with(catalog, catalog.files())
 }
 
+/// [`load`], built once per process for each catalog: every pod of a server
+/// opens with the same build's files, and building them is most of what
+/// opening a pod costs (seconds in a debug build, so most of a server
+/// test). A catalog's files are `'static`, so it is known by where they
+/// are and by what its sources declare ([`catalog_key`]).
+pub fn load_shared(catalog: &Catalog) -> Result<Arc<Core>, String> {
+    static BUILT: std::sync::Mutex<BTreeMap<String, Arc<Core>>> =
+        std::sync::Mutex::new(BTreeMap::new());
+    let key = catalog_key(catalog);
+    if let Some(core) = BUILT.lock().unwrap_or_else(|e| e.into_inner()).get(&key) {
+        return Ok(core.clone());
+    }
+    // Built outside the lock: two pods opening at once may both build it.
+    let core = Arc::new(load(catalog)?);
+    BUILT
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .entry(key)
+        .or_insert(core.clone());
+    Ok(core)
+}
+
+/// Everything [`load`] reads from `catalog`: each file by its place and
+/// its text's address (texts are `'static`, so one address is one text),
+/// and each source's manifest, core layouts and jacks.
+fn catalog_key(catalog: &Catalog) -> String {
+    use std::fmt::Write;
+    let mut k = String::new();
+    for f in catalog.component_files() {
+        let _ = write!(
+            k,
+            "c:{}/{}/{}@{:p}+{};",
+            f.dir,
+            f.name,
+            f.file,
+            f.text.as_ptr(),
+            f.text.len()
+        );
+    }
+    for f in catalog.files() {
+        let _ = write!(
+            k,
+            "l:{}/{}/{}@{:p}+{};",
+            f.dir,
+            f.app_id,
+            f.name,
+            f.text.as_ptr(),
+            f.text.len()
+        );
+    }
+    for (id, m) in catalog.sources() {
+        let _ = write!(k, "s:{id}:{m:?};");
+        if let Some((a, _)) = catalog.source(id) {
+            let _ = write!(k, "j:{:?};", a.jacks());
+        }
+    }
+    for info in catalog.core_layouts() {
+        let _ = write!(k, "a:{info:?};");
+    }
+    k
+}
+
 /// [`load`] with these core layout files instead of the catalog's (tests).
 pub fn load_with(catalog: &Catalog, sources: &[LayoutSource]) -> Result<Core, String> {
     let mut defs: BTreeMap<String, (i64, Value, String)> = BTreeMap::new();

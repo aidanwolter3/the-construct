@@ -25,6 +25,11 @@ file as a `mod` there, not as a new `tests/*.rs` (linking one binary per file wa
 file's tests with a filter, e.g. `cargo test -p server --test integration fixtures::`. The tests of a crate share a
 process under `cargo test`, so don't assume process-wide state (such as the server's metrics counters) starts empty.
 
+Keep the tests fast (decision `ci-speed`): most of a server test's time used to be opening pods, each building this
+build's core layouts again. A process now builds them once (`construct::core::load_shared`) and dev builds optimize
+dependencies (`Cargo.toml`), so a test that opens several pods costs about one. A new test that is slow on its own
+(nextest reports it as `SLOW` past 60 s) is worth a look before it merges.
+
 The Rust rendering engine (`crates/construct-render`) has golden frames: CPU frames are compared with
 `tests/data/goldens/`, and GPU frames with the same files when a wgpu adapter exists (CI's image has lavapipe,
 `mesa-vulkan-drivers`, and CI sets `CONSTRUCT_REQUIRE_GPU=1`). See [rendering.md](rendering.md#tests).

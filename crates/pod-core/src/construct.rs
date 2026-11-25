@@ -114,7 +114,7 @@ pub fn open(
     store: &Store,
     catalog: &crate::Catalog,
 ) -> Result<Option<crate::migrations::layout_system::Report>, String> {
-    let built = core::load(catalog)?;
+    let built = core::load_shared(catalog)?;
     let report = crate::migrations::layout_system::open(store, catalog).map_err(|e| {
         tracing::error!(error = %e, "the pod could not be moved to the construct; it stays closed and its old tables are kept");
         e
