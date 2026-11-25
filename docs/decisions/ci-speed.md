@@ -28,3 +28,8 @@ Measured in a 4-core cloud session: the workspace tests went from about 1960 s o
 
 Not done: splitting the Rust job across runners (nextest partitions). Worth it if the tests grow slow again; each
 runner then compiles the tests too, so it pays only while the tests take much longer than their build.
+
+**The cache key follows the root `Cargo.toml`** (2026-11-25, the same day). rust-cache keys a cache by Cargo.lock
+and the members' manifests, not the root manifest that holds the `[profile]`s: after the opt-level change every run
+restored the old build on a full key match, rebuilt every dependency (about 5 minutes) and saved nothing, since the key
+already existed. Each workflow's rust-cache step now adds `hashFiles('Cargo.toml')` to its key.
