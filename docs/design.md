@@ -782,7 +782,8 @@ stream ([agents.md](agents.md)).
 Two of the pod's schedules are **Anticipate**: every morning one reads the day ahead and one walks the owner's
 journeys through their real screens. Writes in those walks are dry runs. A fix is staged as an edit group, walked
 staged, and applied only when the server finds it safe (nothing lost, nothing new done) and unprotected; the owner
-undoes or redoes it in one tap, and the device swaps the screen at once from both versions the manifest lists
+undoes or redoes it in one tap, and the device swaps the screen at once from both versions the manifest lists.
+Every morning it also reshapes the owner's Today for the day and the week, as a one-day trial they can keep
 ([anticipate.md](anticipate.md)).
 
 #### Taste
