@@ -12,7 +12,8 @@ it was served.
 The `taste` core layout opens on a form for the service's address (`https://…`) and its token (the service's
 `TASTE_TOKEN`). `POST /v1/taste/sign-in {url, token}` checks them with `GET /api/taste` and stores the token sealed.
 Settings shows the `taste` jack as plugged once signed in; unplugging it (Settings signs out there), or
-`/v1/taste/sign-out`, forgets the service, the kept feed and the kept map; a new sign-in forgets the map too. Temporary pods have the jack locked.
+`/v1/taste/sign-out`, forgets the service, the kept feed and the kept map; a new sign-in forgets the map too. Neither
+forgets the owner's taste history (below), which the next service is given. Temporary pods have the jack locked.
 
 The address must be `https://` on a public host. For a service on this machine (development, tests), run the server
 with `CONSTRUCT_TASTE_PRIVATE_HOSTS=1`.
@@ -60,6 +61,19 @@ together), `0..1` each way. The pod names an area of it by its box in millionths
 there, cool where they skip, grey where it doesn't know), a photo from it, `count_text`, `reactions_text` (♥ 2 · ✕ 1)
 and `opens`, what a tap opens: a finer map of the tile, or its pieces (`taste://area/<area>`) when it holds six or
 fewer, or nothing for an empty tile.
+
+## The taste history
+
+The owner's likes and dislikes are the pod's (decision `taste-history-in-the-pod`): `taste_reactions` holds every
+reaction in order, `taste_served` how often each piece has been served, and `taste_history` the history's name (`log`,
+made once per pod). The service keeps only a cache of it. Every request names it, `X-Taste-State: <log>/<n>` (n: the
+reactions in it); when the service doesn't hold that version it answers 409 `state_unknown`, and the pod sends the
+whole history with `PUT /api/state` and asks again. A reaction is added to the history first and sent naming the
+version it makes; one the service refuses is taken back out. Each page fetched counts its pieces as served.
+
+The first time a pod meets a service that can hand its own history over (`GET /api/state`, no header), it takes that
+history over, once: how a pod keeps the reactions made before it owned them. Until then, and with a service from
+before (no `/api/state`, asked again every ten minutes), requests name no history and the service uses its own.
 
 ## The core layout
 
@@ -126,7 +140,10 @@ and link that from home; `taste:status`'s `counts_text` (12 liked · 30 disliked
 
 ## The service's API
 
-What the source calls, each with `Authorization: Bearer <token>`: `GET /api/feed?n=`, `POST /api/event {id, kind}`,
+What the source calls, each with `Authorization: Bearer <token>` and, once the pod owns its history,
+`X-Taste-State: <log>/<n>`: `PUT /api/state {log, events: [{id, kind, t}], served: {id: n}}` after a 409
+`state_unknown`, `GET /api/state` (no header: the service's own history, taken over once), `GET /api/feed?n=`,
+`POST /api/event {id, kind}`,
 `GET /api/item/<id>` and its `/similar`, `/contrast` and `/steer?q=`, `GET /api/search?q=`, `GET /api/likes`,
 `GET /api/taste`, `GET /api/taste/<n>?n=` (one taste: `{index, size, attributes, brands, categories, items, more}`,
 404 for no such taste), `POST /api/taste/summary`, `GET /api/map` (`{ids, xy, cluster, thumb, liked, skipped, p}`: every

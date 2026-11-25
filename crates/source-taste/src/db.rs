@@ -6,6 +6,12 @@
 //!   service sent it, with the reactions made since. The service answers a
 //!   new page for every `/api/feed`, so the feed is fetched only when it is
 //!   empty, on More and on Refresh, never on a data fetch.
+//! - `taste_reactions`, `taste_served`, `taste_history`: the owner's taste
+//!   history, which the pod owns and the service only caches (decision
+//!   `taste-history-in-the-pod`): every reaction in order, how often each
+//!   piece has been served, and the history's name (`log`, made once) and
+//!   whether the service's own history has been taken over. Signing out
+//!   keeps them: they're the owner's, not the service's.
 
 use pod_core::store::{Step, Store};
 use rusqlite::{OptionalExtension, params};
@@ -30,9 +36,28 @@ CREATE TABLE taste_items (
 );
 ";
 
+const HISTORY: &str = "
+CREATE TABLE taste_reactions (
+    seq INTEGER PRIMARY KEY AUTOINCREMENT,
+    item_id TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    t REAL NOT NULL
+);
+CREATE TABLE taste_served (
+    item_id TEXT PRIMARY KEY,
+    n INTEGER NOT NULL
+);
+CREATE TABLE taste_history (
+    id INTEGER PRIMARY KEY CHECK (id = 1),
+    log TEXT NOT NULL,
+    taken_over INTEGER NOT NULL DEFAULT 0
+);
+INSERT INTO taste_history (id, log) VALUES (1, lower(hex(randomblob(16))));
+";
+
 /// By name: add steps at the end; never rename, edit or remove one that
 /// shipped.
-pub static MIGRATIONS: &[Step] = &[Step::sql("schema", SCHEMA)];
+pub static MIGRATIONS: &[Step] = &[Step::sql("schema", SCHEMA), Step::sql("history", HISTORY)];
 
 const TOKEN_CONTEXT: &str = "taste_account.token:1";
 
@@ -63,7 +88,7 @@ pub fn account(store: &Store) -> rusqlite::Result<Option<Account>> {
     Ok(row.and_then(|(url, sealed, likes, skips, last_error)| {
         match store.secrets().open(TOKEN_CONTEXT, &sealed) {
             Ok(token) => Some(Account {
-                service: Service { url, token },
+                service: Service::new(url, token),
                 likes,
                 skips,
                 last_error,
@@ -262,6 +287,148 @@ pub fn react(store: &Store, id: &str, liked: bool, skipped: bool) -> rusqlite::R
     })
 }
 
+/// The owner's taste history as a request names it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct History {
+    /// Its name, made once per pod.
+    pub log: String,
+    /// The reactions in it: its version.
+    pub version: i64,
+    /// Whether the service's own history has been taken over (until then
+    /// requests don't name the pod's).
+    pub taken_over: bool,
+}
+
+impl History {
+    /// `<log>/<version>`, the `X-Taste-State` header.
+    pub fn tag(&self) -> String {
+        format!("{}/{}", self.log, self.version)
+    }
+}
+
+pub fn history(store: &Store) -> rusqlite::Result<History> {
+    store.with_conn(|c| {
+        let (log, taken_over): (String, bool) = c.query_row(
+            "SELECT log, taken_over FROM taste_history WHERE id = 1",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )?;
+        let version = c.query_row("SELECT COUNT(*) FROM taste_reactions", [], |r| r.get(0))?;
+        Ok(History {
+            log,
+            version,
+            taken_over,
+        })
+    })
+}
+
+/// Add a reaction (`like`, `skip` or `clear`) at `t` (seconds); the history
+/// after it.
+pub fn record(store: &Store, id: &str, kind: &str, t: f64) -> rusqlite::Result<History> {
+    store.with_conn(|c| {
+        c.execute(
+            "INSERT INTO taste_reactions (item_id, kind, t) VALUES (?1, ?2, ?3)",
+            params![id, kind, t],
+        )
+        .map(|_| ())
+    })?;
+    history(store)
+}
+
+/// Take the newest reaction back out (the service didn't take it).
+pub fn take_back_last(store: &Store) -> rusqlite::Result<()> {
+    store.with_conn(|c| {
+        c.execute(
+            "DELETE FROM taste_reactions WHERE seq = (SELECT MAX(seq) FROM taste_reactions)",
+            [],
+        )
+        .map(|_| ())
+    })
+}
+
+/// Count `ids` as served once more each.
+pub fn served(store: &Store, ids: &[String]) -> rusqlite::Result<()> {
+    store.transaction(|tx| {
+        for id in ids {
+            tx.execute(
+                "INSERT INTO taste_served (item_id, n) VALUES (?1, 1)
+                 ON CONFLICT (item_id) DO UPDATE SET n = n + 1",
+                [id],
+            )?;
+        }
+        Ok(())
+    })
+}
+
+/// The whole history, as `PUT /api/state` takes it: `{log, events: [{id,
+/// kind, t}], served: {id: n}}`.
+pub fn whole(store: &Store) -> rusqlite::Result<Value> {
+    let h = history(store)?;
+    store.with_conn(|c| {
+        let mut st = c.prepare("SELECT item_id, kind, t FROM taste_reactions ORDER BY seq")?;
+        let events = st
+            .query_map([], |r| {
+                Ok(serde_json::json!({
+                    "id": r.get::<_, String>(0)?,
+                    "kind": r.get::<_, String>(1)?,
+                    "t": r.get::<_, f64>(2)?,
+                }))
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        let mut st = c.prepare("SELECT item_id, n FROM taste_served")?;
+        let served = st
+            .query_map([], |r| {
+                Ok((r.get::<_, String>(0)?, Value::from(r.get::<_, i64>(1)?)))
+            })?
+            .collect::<rusqlite::Result<serde_json::Map<String, Value>>>()?;
+        Ok(serde_json::json!({"log": h.log, "events": events, "served": served}))
+    })
+}
+
+/// Take over the service's own history (`GET /api/state` with no history
+/// named: `{events, served}`) in place of the pod's, once. Reactions that
+/// aren't `{id, kind, t}` are left out.
+pub fn take_over(store: &Store, theirs: &Value) -> rusqlite::Result<History> {
+    let events: Vec<(String, String, f64)> = theirs
+        .get("events")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|e| {
+            let id = e.get("id")?.as_str()?.to_owned();
+            let kind = e.get("kind")?.as_str()?.to_owned();
+            let t = e.get("t")?.as_f64()?;
+            matches!(kind.as_str(), "like" | "skip" | "clear" | "flag" | "unflag")
+                .then_some((id, kind, t))
+        })
+        .collect();
+    let served: Vec<(String, i64)> = theirs
+        .get("served")
+        .and_then(Value::as_object)
+        .into_iter()
+        .flatten()
+        .filter_map(|(k, v)| Some((k.clone(), v.as_i64().filter(|n| *n > 0)?)))
+        .collect();
+    store.transaction(|tx| {
+        tx.execute_batch("DELETE FROM taste_reactions; DELETE FROM taste_served;")?;
+        for (id, kind, t) in &events {
+            tx.execute(
+                "INSERT INTO taste_reactions (item_id, kind, t) VALUES (?1, ?2, ?3)",
+                params![id, kind, t],
+            )?;
+        }
+        for (id, n) in &served {
+            tx.execute(
+                "INSERT INTO taste_served (item_id, n) VALUES (?1, ?2)",
+                params![id, n],
+            )?;
+        }
+        tx.execute("UPDATE taste_history SET taken_over = 1 WHERE id = 1", [])?;
+        Ok(())
+    })?;
+    history(store)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -287,12 +454,40 @@ mod tests {
     }
 
     #[test]
+    fn the_history_is_named_once_kept_and_taken_over_once() {
+        let store = store();
+        let h = history(&store).unwrap();
+        assert_eq!(h.log.len(), 32);
+        assert_eq!((h.version, h.taken_over), (0, false));
+        let theirs = json!({
+            "events": [{"id": "a", "kind": "like", "t": 1.0}, {"id": "b", "kind": "love", "t": 2.0},
+                       {"id": "c", "kind": "skip", "t": 3.0}],
+            "served": {"a": 2, "z": 0},
+        });
+        let h = take_over(&store, &theirs).unwrap();
+        assert_eq!(
+            (h.version, h.taken_over),
+            (2, true),
+            "a reaction of no known kind is left out"
+        );
+        let h = record(&store, "d", "like", 4.0).unwrap();
+        assert_eq!(h.tag(), format!("{}/3", h.log));
+        served(&store, &["a".into(), "d".into()]).unwrap();
+        take_back_last(&store).unwrap();
+        let all = whole(&store).unwrap();
+        assert_eq!(all["log"], h.log);
+        assert_eq!(all["events"].as_array().unwrap().len(), 2);
+        assert_eq!(all["served"], json!({"a": 3, "d": 1}));
+        // Signing out forgets the service, not the history.
+        sign_in(&store, &Service::new("https://taste.example", "t"), 0, 0, 1).unwrap();
+        sign_out(&store).unwrap();
+        assert_eq!(history(&store).unwrap().version, 2);
+    }
+
+    #[test]
     fn the_token_is_sealed_and_signing_out_forgets_the_feed() {
         let store = store();
-        let s = Service {
-            url: "https://taste.example".into(),
-            token: "secret-token".into(),
-        };
+        let s = Service::new("https://taste.example", "secret-token");
         sign_in(&store, &s, 3, 4, 1).unwrap();
         let raw: String = store
             .with_conn(|c| c.query_row("SELECT token FROM taste_account", [], |r| r.get(0)))

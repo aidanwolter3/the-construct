@@ -5,5 +5,6 @@
 #![allow(clippy::result_large_err)]
 
 mod fake;
+mod history;
 mod layouts;
 mod routes;
