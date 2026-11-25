@@ -1266,6 +1266,15 @@
                                   "style": "Secondary",
                                   "type": "core://Text",
                                   "value_expr": "$item.access_label"
+                                },
+                                {
+                                  "content": {
+                                    "style": "Secondary",
+                                    "type": "core://Text",
+                                    "value_expr": "$item.grant_text"
+                                  },
+                                  "type": "core://Conditional",
+                                  "value": "$item.grant_text"
                                 }
                               ],
                               "orientation": "Vertical",
