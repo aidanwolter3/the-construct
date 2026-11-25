@@ -496,22 +496,17 @@ async fn with_refresh_every_a_row_is_researched_again_only_when_its_interval_has
     )
     .await;
     // The fill set_filler starts has nothing to research; wait it out.
-    while matches!(
-        fill::fill(&pod, "options", &filler, false).await,
-        Outcome::Busy
-    ) {
-        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-    }
+    fill_when_free(&pod, &filler, false).await;
     let lamp = create(&pod, "items", json!({"name": "Lamp"})).await;
     *agent.answers.lock().unwrap() = vec![
         ("Lamp".into(), vec![option("lamps", 40)]),
         ("Rug".into(), vec![option("rugs", 90)]),
     ];
-    fill::fill(&pod, "options", &filler, false).await;
+    fill_when_free(&pod, &filler, false).await;
     assert_eq!(agent.asked.lock().unwrap().len(), 1);
     // A new row is researched; the lamp, researched just now, isn't.
     create(&pod, "items", json!({"name": "Rug"})).await;
-    fill::fill(&pod, "options", &filler, false).await;
+    fill_when_free(&pod, &filler, false).await;
     {
         let asked = agent.asked.lock().unwrap();
         assert_eq!(asked.len(), 2, "{asked:?}");
@@ -519,11 +514,23 @@ async fn with_refresh_every_a_row_is_researched_again_only_when_its_interval_has
     }
     // A changed row is researched at once.
     update(&pod, "items", json!({"id": lamp, "notes": "Brass"})).await;
-    fill::fill(&pod, "options", &filler, false).await;
+    fill_when_free(&pod, &filler, false).await;
     assert_eq!(agent.asked.lock().unwrap().len(), 3);
     // A refresh asks for every row again.
-    fill::fill(&pod, "options", &filler, true).await;
+    fill_when_free(&pod, &filler, true).await;
     assert_eq!(agent.asked.lock().unwrap().len(), 5);
+}
+
+/// Runs a fill of `options`, waiting while another holds it: writing a row
+/// starts a fill in the background, and a fill asked for meanwhile answers
+/// `Busy` without researching anything.
+async fn fill_when_free(pod: &Pod, filler: &str, refresh: bool) {
+    while matches!(
+        fill::fill(pod, "options", filler, refresh).await,
+        Outcome::Busy
+    ) {
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
 }
 
 /// A fill that runs past its time still spent the model calls it made:

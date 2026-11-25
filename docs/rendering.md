@@ -333,8 +333,10 @@ once (decision `hold-changes-during-transitions`). On a pod switched to the cons
 and the engine's edge graph comes with the roots (`Loader::edges`): an entry the one below it no longer reaches
 closes, back to the deepest entry that still resolves, each with its own transition; `action.navigation.pop_to` and
 `pop_to_root` close entries the same way. There a vertical scroll also keeps its first visible row in place: before an
-entry is laid out again it notes, per scroll, the entity of the first row showing and how far the view is past
-its top, and after the new layout it scrolls so that row sits where it was (rows added above don't move it); if the
+entry is laid out again it notes, per scroll, the entity of the row at the view's top (the last row starting at or
+above it) and how far the view is past that row's top, and after the new layout it scrolls so that row sits where it
+was (rows added above don't move it). While the view's top is above every row (a search box over a list, the view at
+its top) nothing is noted and the offset stays, so results appearing under the box don't scroll it away. If the
 row is gone, the next one still there (else the one before) keeps its place, and with none the offset stays. A row
 drawn more than once in a view (a preview list above the full one) is told apart by which time it is drawn there,
 so the view stays on the copy it was on (if it is drawn fewer times now, its last copy before that). A

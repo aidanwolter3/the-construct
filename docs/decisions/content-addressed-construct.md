@@ -167,7 +167,9 @@ Added on 2026-11-16, for switched pods only (a pod that isn't switched answers a
 - **Scroll anchors.** On a switched pod each vertical scroll of a stack entry keeps its first visible row (its
   entity URI) and how far the view is past that row's top; after the entry's data or element changes the offset
   is set so that row stays where it was, falling back to the nearest row still there (the next, else the one
-  before), else the offset.
+  before), else the offset. The row noted is the one at the view's top (the last starting at or above it); while
+  the top is above every row (a search box over a list) nothing is noted, so rows appearing under the box don't
+  scroll it away.
 - **Kept objects.** The engine keeps the objects it fetched in its store (`construct_objects`, per app), reads them
   when a session is on the construct, and fetches nothing when the root it is given reaches only objects it has;
   client GC deletes from the store what the current and previous root (and layouts opened by name) don't reach.
