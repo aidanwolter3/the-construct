@@ -102,7 +102,17 @@ pub fn ensure(conn: &Connection) -> rusqlite::Result<()> {
              owner TEXT NOT NULL,
              PRIMARY KEY (hash, owner)
          );",
-    )
+    )?;
+    // A group applied as a trial (the owner keeps it, or it is undone).
+    let has_trial: bool = conn.query_row(
+        "SELECT EXISTS (SELECT 1 FROM pragma_table_info('edit_groups') WHERE name = 'trial')",
+        [],
+        |r| r.get(0),
+    )?;
+    if !has_trial {
+        conn.execute_batch("ALTER TABLE edit_groups ADD COLUMN trial INTEGER NOT NULL DEFAULT 0;")?;
+    }
+    Ok(())
 }
 
 /// The element hashes groups and checkpoints keep from garbage collection
@@ -119,6 +129,64 @@ pub fn pinned(conn: &Connection) -> rusqlite::Result<Vec<String>> {
     }
     let mut stmt = conn.prepare_cached("SELECT DISTINCT hash FROM construct_pins")?;
     stmt.query_map([], |r| r.get(0))?.collect()
+}
+
+/// How long a group's screens are listed in the manifest's swaps.
+pub const SWAP_SECS: i64 = 7 * 86_400;
+/// The most groups the manifest's swaps list.
+pub const SWAP_GROUPS: usize = 8;
+
+/// The manifest's swaps (decision `instant-swap`): for each group applied in
+/// the last week (a trial, kept or undone; newest [`SWAP_GROUPS`]), each name
+/// it wrote with the element it had before and the one the group wrote, both
+/// as a manifest's devices are sent them ([`construct_elements::stripped`],
+/// stored). A device holds both and swaps at once on Undo or Redo. Empty
+/// when there are none or the tables don't exist yet.
+pub fn swaps(conn: &Connection) -> rusqlite::Result<Map<String, Value>> {
+    let exists: bool = conn.query_row(
+        "SELECT EXISTS (SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'edit_groups')",
+        [],
+        |r| r.get(0),
+    )?;
+    let mut out = Map::new();
+    if !exists {
+        return Ok(out);
+    }
+    let rows: Vec<(String, String)> = {
+        let mut stmt = conn.prepare_cached(
+            "SELECT id, entries FROM edit_groups
+             WHERE state IN ('trial', 'applied', 'reverted') AND applied_at >= ?1
+             ORDER BY applied_at DESC LIMIT ?2",
+        )?;
+        stmt.query_map(params![now_secs() - SWAP_SECS, SWAP_GROUPS as i64], |r| {
+            Ok((r.get(0)?, r.get(1)?))
+        })?
+        .collect::<rusqlite::Result<_>>()?
+    };
+    let sent = |hash: &str| -> rusqlite::Result<Option<String>> {
+        let Some((el, features)) = cstore::object(conn, hash)? else {
+            return Ok(None);
+        };
+        let v = construct_elements::stripped(&el);
+        let id = construct_elements::object_id(&v);
+        cstore::put_object(conn, &id, &v, &features)?;
+        Ok(Some(id))
+    };
+    for (id, entries) in rows {
+        let mut names = Map::new();
+        for e in entries_of(&entries) {
+            let (Some(b), Some(a)) = (&e.before, &e.after) else {
+                continue;
+            };
+            if let (Some(b), Some(a)) = (sent(b)?, sent(a)?) {
+                names.insert(e.name.clone(), json!([b, a]));
+            }
+        }
+        if !names.is_empty() {
+            out.insert(id, Value::Object(names));
+        }
+    }
+    Ok(out)
 }
 
 fn pin(conn: &Connection, hash: &str, owner: &str) -> rusqlite::Result<()> {
@@ -187,6 +255,8 @@ struct Entry {
     before: Option<String>,
     after: Option<String>,
     applied_seq: Option<i64>,
+    /// The seq its revert wrote: a redo needs the name still there.
+    reverted_seq: Option<i64>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -254,6 +324,7 @@ impl Entry {
             before,
             after: None,
             applied_seq: None,
+            reverted_seq: None,
         })
     }
 
@@ -266,6 +337,7 @@ impl Entry {
             "before": self.before,
             "after": self.after,
             "applied_seq": self.applied_seq,
+            "reverted_seq": self.reverted_seq,
         })
     }
 
@@ -282,6 +354,7 @@ impl Entry {
             before: v["before"].as_str().map(str::to_owned),
             after: v["after"].as_str().map(str::to_owned),
             applied_seq: v["applied_seq"].as_i64(),
+            reverted_seq: v["reverted_seq"].as_i64(),
         })
     }
 
@@ -634,6 +707,81 @@ pub fn additive(before: &Value, after: &Value, failing: &Failing) -> Diff {
     out
 }
 
+/// What a screen lets the owner see and do: every endpoint it calls, every
+/// layout or screen it opens, every list it shows and every value it binds
+/// from their data (theme colours aside). A restyle may move, regroup or
+/// restyle anything, but must keep all of these.
+fn affordances(v: &Value, out: &mut BTreeSet<String>) {
+    match v {
+        Value::Object(o) => {
+            for (k, x) in o {
+                match (k.as_str(), x) {
+                    ("endpoint", Value::String(e)) => {
+                        out.insert(format!("calls {e}"));
+                    }
+                    ("ref", Value::Object(r)) => {
+                        if let Some(n) = r.get("name").and_then(Value::as_str) {
+                            out.insert(format!("opens {n}"));
+                        }
+                        continue;
+                    }
+                    ("target_uri", Value::String(t)) => {
+                        out.insert(format!("opens {t}"));
+                    }
+                    ("query_key", Value::String(q)) => {
+                        out.insert(format!("lists {q}"));
+                    }
+                    (_, Value::String(t))
+                        if !t.starts_with("${local://theme")
+                            && (t.contains("$item.")
+                                || t.contains("${")
+                                || t.contains("$route.")
+                                || t.contains("$form.")) =>
+                    {
+                        out.insert(format!("shows {t}"));
+                    }
+                    _ => {}
+                }
+                affordances(x, out);
+            }
+        }
+        Value::Array(a) => a.iter().for_each(|x| affordances(x, out)),
+        _ => {}
+    }
+}
+
+/// The restyle check of `before` → `after` (expanded trees of one layout or
+/// component), decision `edit-groups`: anything may move, regroup or change
+/// style, but nothing the screen showed from the owner's data, no button,
+/// link or list it had may go, and nothing new may be done (no endpoint the
+/// pod's screens don't already call, no link to a new host, no delete, no
+/// text bound to an agent's rows). The reasons it isn't safe; empty: it is.
+pub fn safe(before: &Value, after: &Value, failing: &Failing) -> Vec<String> {
+    let mut out = Vec::new();
+    let (mut had, mut has) = (BTreeSet::new(), BTreeSet::new());
+    affordances(before, &mut had);
+    affordances(after, &mut has);
+    for lost in had.difference(&has) {
+        out.push(format!("it {lost} no more"));
+    }
+    let mut calls = Calls::default();
+    collect_calls(before, &mut calls);
+    if let Some(prefix) = &failing.endpoint {
+        calls.allowed = failing
+            .known
+            .iter()
+            .filter(|e| {
+                e.split(['/', '?']).any(|seg| seg == prefix.as_str()) && !e.ends_with("/delete")
+            })
+            .cloned()
+            .collect();
+    }
+    if let Some(why) = new_behaviour(after, &calls) {
+        out.push(why);
+    }
+    out
+}
+
 /// The failing step of a stored walk (`journey_walks`, written by
 /// `walk_journey`); default when there is none.
 fn failing_of(conn: &Connection, walk_id: Option<&str>) -> rusqlite::Result<Failing> {
@@ -772,6 +920,7 @@ pub fn stage(
     // The report: the additive check per authored layout, what re-seals,
     // and what the grant protects.
     let mut violations: Vec<String> = Vec::new();
+    let mut safe_violations: Vec<String> = Vec::new();
     let mut diffs = Map::new();
     for e in &entries {
         let f = if failing.layout.as_deref() == Some(e.name.as_str()) {
@@ -784,6 +933,8 @@ pub fn stage(
             }
         };
         let d = additive(&befores[&e.name], &afters[&e.name], &f);
+        let unsafe_why = safe(&befores[&e.name], &afters[&e.name], &f);
+        safe_violations.extend(unsafe_why.iter().map(|v| format!("{}: {v}", e.name)));
         violations.extend(d.violations.iter().map(|v| format!("{}: {v}", e.name)));
         diffs.insert(
             e.name.clone(),
@@ -791,6 +942,7 @@ pub fn stage(
         );
         if protected.contains(&e.name) {
             violations.push(format!("{} is protected", e.name));
+            safe_violations.push(format!("{} is protected", e.name));
         }
     }
     let followers: Vec<&String> = moved_names
@@ -800,6 +952,8 @@ pub fn stage(
     let report = json!({
         "additive": violations.is_empty(),
         "violations": violations,
+        "safe": safe_violations.is_empty(),
+        "safe_violations": safe_violations,
         "diff": diffs,
         "followers": followers,
         "staged_root": staged_names.get(crate::HOME_APP),
@@ -879,12 +1033,13 @@ struct Group {
     entries: Vec<Entry>,
     report: Value,
     staged_root: Option<String>,
+    trial: bool,
 }
 
 fn group(conn: &Connection, id: &str) -> Result<Group, Value> {
     ensure(conn).map_err(store_err)?;
     conn.query_row(
-        "SELECT id, title, state, entries, report, staged_root FROM edit_groups WHERE id = ?1",
+        "SELECT id, title, state, entries, report, staged_root, trial FROM edit_groups WHERE id = ?1",
         [id],
         |r| {
             Ok(Group {
@@ -894,6 +1049,7 @@ fn group(conn: &Connection, id: &str) -> Result<Group, Value> {
                 entries: entries_of(&r.get::<_, String>(3)?),
                 report: serde_json::from_str(&r.get::<_, String>(4)?).unwrap_or(Value::Null),
                 staged_root: r.get(5)?,
+                trial: r.get::<_, i64>(6)? != 0,
             })
         },
     )
@@ -960,29 +1116,57 @@ pub fn apply(
         .as_str()
         .ok_or_else(|| refuse("invalid_arguments", "\"id\" is required"))?;
     let mut g = group(conn, id)?;
-    if g.state != "proposed" {
-        return Err(refuse(
-            "not_proposed",
-            format!("the group is {}: only a proposed group is applied", g.state),
-        ));
+    match g.state.as_str() {
+        "proposed" => {}
+        // Keep: a trial becomes the owner's.
+        "trial" => {
+            conn.execute(
+                "UPDATE edit_groups SET state = 'applied', trial = 0 WHERE id = ?1",
+                [&g.id],
+            )
+            .map_err(store_err)?;
+            return Ok((
+                json!({ "ok": true, "id": g.id, "state": "applied", "kept": true }),
+                Vec::new(),
+            ));
+        }
+        // Redo: the same elements again.
+        "reverted" => return redo(pod, conn, g),
+        // Already the owner's: a second Keep changes nothing.
+        "applied" => {
+            return Ok((
+                json!({ "ok": true, "id": g.id, "state": "applied", "already": true }),
+                Vec::new(),
+            ));
+        }
+        other => {
+            return Err(refuse(
+                "not_proposed",
+                format!(
+                    "the group is {other}: a proposed group is applied, a trial kept, an undone one redone"
+                ),
+            ));
+        }
     }
     // Under a grant the server holds the gate (decision `mcp-grants`):
-    // additive, nothing protected.
+    // safe (restyles allowed, nothing lost, nothing new done), nothing
+    // protected.
     if let Some(gr) = grant {
         let protected = protected_closure(conn, gr).map_err(store_err)?;
         if let Some(e) = g.entries.iter().find(|e| protected.contains(&e.name)) {
             return Err(refuse("protected", format!("{} is protected", e.name)));
         }
-        if g.report["additive"] != true {
+        if g.report["safe"] != true {
             return Err(refuse(
-                "not_additive",
+                "not_safe",
                 format!(
-                    "this connection's grant applies only additive groups: {}",
-                    g.report["violations"]
+                    "this connection's grant applies only safe groups: {}",
+                    g.report["safe_violations"]
                 ),
             ));
         }
     }
+    let trial = args["trial"] == true;
     let root = home_hash(conn)?;
     if g.staged_root.as_deref().is_some_and(|s| s != root) {
         return Err(refuse(
@@ -1010,8 +1194,9 @@ pub fn apply(
         }
     }
     let after = home_hash(conn)?;
+    let state = if trial { "trial" } else { "applied" };
     conn.execute(
-        "UPDATE edit_groups SET state = 'applied', applied_at = ?2, entries = ?3,
+        "UPDATE edit_groups SET state = ?7, trial = ?8, applied_at = ?2, entries = ?3,
              root_before = ?4, root_after = ?5, checkpoint = ?6 WHERE id = ?1",
         params![
             g.id,
@@ -1019,14 +1204,67 @@ pub fn apply(
             Value::Array(g.entries.iter().map(Entry::to_json).collect()).to_string(),
             root,
             after,
-            ckpt
+            ckpt,
+            state,
+            trial as i64
         ],
     )
     .map_err(store_err)?;
     pin(conn, &after, &g.id).map_err(store_err)?;
     Ok((
-        json!({ "ok": true, "id": g.id, "state": "applied", "checkpoint": ckpt,
+        json!({ "ok": true, "id": g.id, "state": state, "checkpoint": ckpt,
                 "names": g.entries.iter().map(|e| json!({ "name": e.name, "version": e.applied_seq })).collect::<Vec<_>>() }),
+        moved,
+    ))
+}
+
+/// Redo an undone group: each authored name to the element the group wrote,
+/// its references sealed again to what they name now. The elements are the
+/// ones devices already hold, so swapping back and forth is fast. Only while
+/// each name is still where the undo left it.
+fn redo(pod: &Pod, conn: &Connection, mut g: Group) -> Result<(Value, Vec<(String, i64)>), Value> {
+    for e in &g.entries {
+        let written = newest_written_seq(conn, &e.name).map_err(store_err)?;
+        if Some(written) != e.reverted_seq {
+            conn.execute(
+                "UPDATE edit_groups SET state = 'conflict' WHERE id = ?1",
+                [&g.id],
+            )
+            .map_err(store_err)?;
+            return Ok((
+                json!({ "ok": false, "id": g.id, "state": "conflict", "name": e.name,
+                        "detail": format!("{} was changed since the undo", e.name) }),
+                Vec::new(),
+            ));
+        }
+    }
+    let mut moved = Vec::new();
+    for e in &mut g.entries {
+        let Some(after) = e.after.clone() else {
+            continue;
+        };
+        moved.extend(put_back(
+            pod,
+            conn,
+            &e.name,
+            &after,
+            &format!("{NOTE_PREFIX} {}", g.title),
+        )?);
+        e.applied_seq = Some(newest_written_seq(conn, &e.name).map_err(store_err)?);
+    }
+    let state = if g.trial { "trial" } else { "applied" };
+    conn.execute(
+        "UPDATE edit_groups SET state = ?2, entries = ?3, applied_at = ?4 WHERE id = ?1",
+        params![
+            g.id,
+            state,
+            Value::Array(g.entries.iter().map(Entry::to_json).collect()).to_string(),
+            now_secs()
+        ],
+    )
+    .map_err(store_err)?;
+    Ok((
+        json!({ "ok": true, "id": g.id, "state": state, "redone": true }),
         moved,
     ))
 }
@@ -1056,8 +1294,8 @@ pub fn revert(
     let id = args["id"]
         .as_str()
         .ok_or_else(|| refuse("invalid_arguments", "\"id\" is required"))?;
-    let g = group(conn, id)?;
-    if g.state != "applied" {
+    let mut g = group(conn, id)?;
+    if g.state != "applied" && g.state != "trial" {
         return Err(refuse(
             "not_applied",
             format!("the group is {}: only an applied group is undone", g.state),
@@ -1079,19 +1317,27 @@ pub fn revert(
         }
     }
     let mut moved = Vec::new();
-    for e in g.entries.iter().rev() {
-        let Some(before) = &e.before else { continue };
+    for e in g.entries.iter_mut().rev() {
+        let Some(before) = e.before.clone() else {
+            continue;
+        };
         moved.extend(put_back(
             pod,
             conn,
             &e.name,
-            before,
+            &before,
             &format!("{REVERT_PREFIX} {}", g.title),
         )?);
+        // Where the undo left it: a redo needs it still there.
+        e.reverted_seq = Some(newest_written_seq(conn, &e.name).map_err(store_err)?);
     }
     conn.execute(
-        "UPDATE edit_groups SET state = 'reverted', reverted_at = ?2 WHERE id = ?1",
-        params![g.id, now_secs()],
+        "UPDATE edit_groups SET state = 'reverted', reverted_at = ?2, entries = ?3 WHERE id = ?1",
+        params![
+            g.id,
+            now_secs(),
+            Value::Array(g.entries.iter().map(Entry::to_json).collect()).to_string()
+        ],
     )
     .map_err(store_err)?;
     Ok((
@@ -1155,6 +1401,8 @@ pub fn list(conn: &Connection) -> rusqlite::Result<Vec<Value>> {
             "reverted_at": r.get::<_, Option<i64>>(6)?,
             "additive": report["additive"],
             "violations": report["violations"],
+            "safe": report["safe"],
+            "safe_violations": report["safe_violations"],
             "followers": report["followers"],
             "names": entries.iter().map(|e| e.name.clone()).collect::<Vec<_>>(),
             "checkpoint": r.get::<_, Option<String>>(9)?,
@@ -1411,6 +1659,7 @@ pub fn screen(conn: &Connection) -> rusqlite::Result<Value> {
         let state_text = match state.as_str() {
             "applied" => format!("Changed {}", ago(now - when)),
             "proposed" => "Waiting for you".to_owned(),
+            "trial" => format!("Trying it since {}", ago(now - when)),
             "reverted" => "Undone".to_owned(),
             "conflict" => "You've changed this screen since: undo it from its history".to_owned(),
             other => other.to_owned(),
@@ -1419,8 +1668,10 @@ pub fn screen(conn: &Connection) -> rusqlite::Result<Value> {
         entities.insert(uri.clone(), json!({
             "id": id, "title": g["title"], "why": g["why"], "state": state,
             "state_text": state_text,
-            "can_undo": state == "applied",
-            "can_apply": state == "proposed" && g["additive"] == true,
+            "can_undo": state == "applied" || state == "trial",
+            "can_keep": state == "trial",
+            "can_redo": state == "reverted",
+            "can_apply": state == "proposed" && g["safe"] == true,
             "names_text": g["names"].as_array().map(|n| n.iter().filter_map(Value::as_str).collect::<Vec<_>>().join(", ")).unwrap_or_default(),
         }));
         groups.push(json!(uri));
@@ -1621,6 +1872,36 @@ mod tests {
                 .violations
                 .is_empty()
         );
+    }
+
+    #[test]
+    fn a_restyle_is_safe_and_losing_data_or_a_button_is_not() {
+        let before = json!({ "type": "core://Column", "children": [
+            { "type": "core://Text", "style": "Title", "value_expr": "$item.name" },
+            button("Cooked", "/v1/notes/meals/update"),
+        ]});
+        // Restyled and regrouped: a card, a new style, the button moved first.
+        let restyled = json!({ "type": "core://Box", "background": "${local://theme#card}", "corner_dp": 16,
+            "content": { "type": "core://Row", "children": [
+                button("Cooked", "/v1/notes/meals/update"),
+                { "type": "core://Text", "style": "Display", "value_expr": "$item.name" } ]}});
+        assert!(safe(&before, &restyled, &Failing::default()).is_empty());
+        assert!(
+            !additive(&before, &restyled, &Failing::default())
+                .violations
+                .is_empty()
+        );
+        // The name is gone; the button is gone; a new call.
+        let no_name = json!({ "type": "core://Column", "children": [button("Cooked", "/v1/notes/meals/update")]});
+        assert!(!safe(&before, &no_name, &Failing::default()).is_empty());
+        let no_button =
+            json!({ "type": "core://Text", "style": "Title", "value_expr": "$item.name" });
+        assert!(!safe(&before, &no_button, &Failing::default()).is_empty());
+        let new_call = json!({ "type": "core://Column", "children": [
+            { "type": "core://Text", "style": "Title", "value_expr": "$item.name" },
+            button("Cooked", "/v1/notes/meals/update"),
+            button("Clear", "/v1/notes/meals/actions/purge") ]});
+        assert!(!safe(&before, &new_call, &Failing::default()).is_empty());
     }
 
     #[test]

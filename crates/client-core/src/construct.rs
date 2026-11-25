@@ -19,7 +19,9 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use construct_elements::refs::{EdgeRef, Site};
-use construct_elements::{Objects, instance_id, manifest_names, materialize_with};
+use construct_elements::{
+    Objects, instance_id, manifest_names, manifest_swap_ids, manifest_swaps, materialize_with,
+};
 use protocol::{DataBundle, WorkspaceSpec};
 use serde_json::{Map, Value, json};
 
@@ -67,6 +69,12 @@ pub struct Construct {
     /// What a root asked for with home changed besides home: the keys whose
     /// element changed and those gone, drawn again once home's fetch is done.
     pub redraw: Option<(Vec<String>, Vec<String>)>,
+    /// The root manifest's swaps (decision `instant-swap`): each recent edit
+    /// group's names, each with its element before the group and after.
+    pub swaps: BTreeMap<String, BTreeMap<String, [String; 2]>>,
+    /// Names swapped on this device ([`Inner::construct_swap`]) until the
+    /// pod's root moves: name → the element drawn for it instead.
+    pub overrides: BTreeMap<String, String>,
 }
 
 /// The device's objects, and the names its manifests resolve.
@@ -128,7 +136,34 @@ impl Construct {
                 missing.insert(root);
                 return missing;
             }
-            Some(Some((home, names))) => {
+            Some(Some((home, mut names))) => {
+                self.swaps = self
+                    .objects
+                    .get(&root)
+                    .map(|v| manifest_swaps(v))
+                    .unwrap_or_default();
+                // Fetched with the root, so a swap needs no request: the
+                // swaps' elements and what they reference by hash.
+                for id in self.swaps.values().flat_map(|n| n.values().flatten()) {
+                    match self.objects.get(id) {
+                        None => {
+                            missing.insert(id.clone());
+                        }
+                        Some(v) => construct_elements::refs::visit(&v["node"], &mut |r, _| {
+                            if let Some(e) = &r.el
+                                && !self.objects.contains_key(e)
+                            {
+                                missing.insert(e.clone());
+                            }
+                        }),
+                    }
+                }
+                // What this device swapped, until the pod's root moves.
+                for (n, el) in &self.overrides {
+                    if self.objects.contains_key(el) {
+                        names.insert(n.clone(), el.clone());
+                    }
+                }
                 let id = names.get(&home).cloned();
                 // An element's own hash no longer says what it draws: what
                 // it references moves with the names. So what was expanded
@@ -145,6 +180,7 @@ impl Construct {
             }
             Some(None) => {
                 self.names.clear();
+                self.swaps.clear();
                 root
             }
         };
@@ -304,6 +340,7 @@ impl Construct {
             .iter()
             .chain(self.previous.iter())
             .chain(self.extra.values())
+            .chain(self.overrides.values())
             .cloned()
             .collect();
         while let Some(id) = queue.pop_front() {
@@ -315,6 +352,7 @@ impl Construct {
                 // its references point at (by hash, or through the names).
                 if let Some((_, names)) = manifest_names(v) {
                     queue.extend(names.into_values());
+                    queue.extend(manifest_swap_ids(v));
                 }
                 construct_elements::refs::visit(&v["node"], &mut |r, _| {
                     let to = r.el.clone().or_else(|| {
@@ -405,6 +443,66 @@ impl Inner {
             }
         }
         Ok(())
+    }
+
+    /// `action.construct.swap {group, to}` (decision `instant-swap`): draw
+    /// edit group `group`'s names as they were (`to: "before"`) or as the
+    /// group made them (`"after"`), from the elements the device holds (the
+    /// manifest's swaps), until the pod's root moves. The layouts shown that
+    /// change are replaced in the state at once, keeping their data; the
+    /// keys changed are answered (for a reload of their data), or `None`
+    /// when the device can't swap (no such group, an element not here): the
+    /// pod's next root draws the change instead. Never blocks on the network.
+    pub(crate) fn construct_swap(&self, group: &str, to: &str) -> Option<Vec<String>> {
+        let side = match to {
+            "before" => 0,
+            "after" => 1,
+            _ => return None,
+        };
+        let mut c = lock(&self.construct);
+        let names = c.swaps.get(group)?.clone();
+        if names.values().any(|p| !c.objects.contains_key(&p[side])) {
+            return None;
+        }
+        let before = c.instances();
+        let kept = c.overrides.clone();
+        for (n, p) in names {
+            c.overrides.insert(n, p[side].clone());
+        }
+        c.rebuild();
+        let now = c.instances();
+        let changed: Vec<String> = now
+            .iter()
+            .filter(|(k, inst)| before.get(*k) != Some(*inst))
+            .map(|(k, _)| k.clone())
+            .collect();
+        let nodes: Vec<(String, Value)> = changed
+            .iter()
+            .filter_map(|k| c.layout(k).map(|(_, _, node)| (k.clone(), node)))
+            .collect();
+        if nodes.len() != changed.len() {
+            // Something a swapped element uses isn't here: as it was.
+            c.overrides = kept;
+            c.rebuild();
+            return None;
+        }
+        let json = c.snapshot_json();
+        drop(c);
+        let mut st = lock(&self.state);
+        st.construct_json = json;
+        for (k, node) in nodes {
+            let Ok(ws) = serde_json::from_value::<protocol::UiNode>(node) else {
+                continue;
+            };
+            if k == crate::DEFAULT_WORKSPACE_ID || k == self.workspace_id {
+                st.swap_home(ws);
+            } else if let Some(l) = st.layouts.get_mut(&k) {
+                l.workspace = Some(ws);
+                l.gone = false;
+            }
+        }
+        st.seq += 1;
+        Some(changed)
     }
 
     /// Draw again what [`Inner::construct_current`] found changed besides
@@ -521,6 +619,8 @@ impl Inner {
             if moved {
                 c.previous = c.root.take();
                 c.root = Some(root.to_owned());
+                // The pod's new root says what each name is now.
+                c.overrides.clear();
             }
             (before, c.rebuild(), moved)
         };
@@ -698,6 +798,12 @@ impl Inner {
             gone.len()
         );
         self.redraw(&changed, gone);
+    }
+
+    /// After a swap: the snapshot at once, then the swapped layouts' data
+    /// from the pod (a swapped element may read other queries).
+    pub(crate) fn redraw_swapped(&self, changed: &[String]) {
+        self.redraw(changed, Vec::new());
     }
 
     /// Draw again the layouts this device holds whose element changed, and

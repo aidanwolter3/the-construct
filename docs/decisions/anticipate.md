@@ -39,3 +39,20 @@ Decision:
 
 Not done: repository fixes (they are text for the owner to ticket; Build has no GitHub access); other owners' pods
 (the pieces are generic, the prompts are not).
+
+Since then (the owner, the same day): no confirming. Anticipate decides which journeys matter from usage:
+
+- **Established journeys.** A journey walked at least 3 times in 14 days is established. One unused for 30 days
+  drops out. Only established journeys form the regression suite.
+- **What a fix needs.** A fix needs a need of confidence 0.6 or more, or a regression to repair. Every
+  established journey must still pass after it.
+- **The mode** is automatic: `propose` for the first 7 days, then `apply`, stepping down after reverts or
+  regressions. An owner-written `mode` row only overrides it.
+- **What's lost:** the owner's tick no longer stops Build from weakening a script. The prompt forbids it, the
+  skeptic sees the diff, and every script change is listed on the card.
+- **A starting set.** The pod starts with about 10 journeys assumed important, established from day 1 (the
+  owner's call: waiting two weeks of usage was too slow). Build writes their scripts on its first run, and usage
+  retires the ones the owner doesn't use.
+- **Trust and restyling.** Changes may restyle, not only add, under the server's `safe` check. The first week's
+  changes are trials on the real screen (Undo, Redo, Keep), undone the next morning unless kept; after that they
+  go live directly. Only Settings is protected.

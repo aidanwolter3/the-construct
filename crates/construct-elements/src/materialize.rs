@@ -114,6 +114,40 @@ pub fn manifest_names(v: &Value) -> Option<(String, BTreeMap<String, String>)> {
     Some((v["home"].as_str()?.to_owned(), names))
 }
 
+/// The swaps of manifest `v` (feature `construct_swap`, decision
+/// `instant-swap`): each recent edit group's names, each with the element it
+/// had before the group and the one the group wrote (`[before, after]`), so
+/// a device holds both and swaps between them without a request. Empty when
+/// `v` lists none.
+pub fn manifest_swaps(v: &Value) -> BTreeMap<String, BTreeMap<String, [String; 2]>> {
+    let Some(groups) = v["swaps"].as_object() else {
+        return BTreeMap::new();
+    };
+    groups
+        .iter()
+        .filter_map(|(g, names)| {
+            let names: BTreeMap<String, [String; 2]> = names
+                .as_object()?
+                .iter()
+                .filter_map(|(n, pair)| {
+                    let b = pair.get(0)?.as_str()?.to_owned();
+                    let a = pair.get(1)?.as_str()?.to_owned();
+                    Some((n.clone(), [b, a]))
+                })
+                .collect();
+            (!names.is_empty()).then(|| (g.clone(), names))
+        })
+        .collect()
+}
+
+/// Every element a manifest's swaps name ([`manifest_swaps`]).
+pub fn manifest_swap_ids(v: &Value) -> Vec<String> {
+    manifest_swaps(v)
+        .into_values()
+        .flat_map(|n| n.into_values().flatten())
+        .collect()
+}
+
 /// Element `v` as a client with a manifest is sent it: every reference that
 /// follows its name without the hash it was sealed with, and no examples
 /// (a device expands a component, it doesn't try it). What is left changes

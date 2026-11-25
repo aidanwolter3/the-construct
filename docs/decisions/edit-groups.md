@@ -46,3 +46,20 @@ Decision:
   client build.
 
 Not done: groups over collection definitions; a restore that also rolls rows back.
+
+Since then (the owner, the same day): restyles, trials and redo.
+
+- **Safe, not only additive.** `stage_edit_group` also reports `safe`. A safe change may move, regroup or restyle
+  anything, as long as everything the screen had stays: every endpoint it called, every layout or screen it opened,
+  every list and every value it bound from the owner's data (theme colours aside). Its new nodes still do nothing
+  new. A grant's `apply_edit_group` now requires `safe` instead of `additive`.
+- **Trials.** `apply_edit_group {id, trial: true}` makes it live as a trial. Applying a trial again (the app's
+  Keep, the same route) makes it the owner's.
+- **Redo.** Applying an undone group redoes it: each authored name goes back to the element the group wrote, only
+  while it is still where the undo left it (else `conflict`). Undo and redo move names between the same elements,
+  which devices already hold, so swapping back and forth to compare is fast. The app's routes are the same
+  (`/v1/edit-groups/apply` applies, keeps or redoes; `/revert` undoes); the screen entity gains `can_keep` and
+  `can_redo`.
+
+Later the same day: devices hold both versions of a recent group's screens and swap between them on Undo and Redo
+without a request (decision [instant-swap](instant-swap.md)).

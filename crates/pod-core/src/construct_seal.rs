@@ -302,6 +302,15 @@ pub fn manifest_of(
     if !scale.is_empty() {
         manifest["scale"] = Value::Object(scale);
     }
+    // Each recent edit group's screens before and after it, for a device
+    // that swaps between them at once (feature `construct_swap`, decision
+    // `instant-swap`).
+    if client.features.contains(protocol::feature::CONSTRUCT_SWAP) {
+        let swaps = super::edit_groups::swaps(conn)?;
+        if !swaps.is_empty() {
+            manifest["swaps"] = Value::Object(swaps);
+        }
+    }
     let id = object_id(&manifest);
     cstore::put_object(conn, &id, &manifest, "")?;
     Ok(Some(id))
