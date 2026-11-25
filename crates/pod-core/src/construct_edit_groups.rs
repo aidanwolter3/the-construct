@@ -1074,6 +1074,13 @@ pub fn apply(
         }
         // Redo: the same elements again.
         "reverted" => return redo(pod, conn, g),
+        // Already the owner's: a second Keep changes nothing.
+        "applied" => {
+            return Ok((
+                json!({ "ok": true, "id": g.id, "state": "applied", "already": true }),
+                Vec::new(),
+            ));
+        }
         other => {
             return Err(refuse(
                 "not_proposed",
