@@ -29,6 +29,7 @@ mod phone_width;
 mod reuse;
 mod screen_sizes;
 mod scroll_thumb;
+mod swap;
 mod swipe_cards;
 mod system_bars;
 mod text_styles;

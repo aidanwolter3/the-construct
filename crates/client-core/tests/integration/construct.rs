@@ -584,3 +584,61 @@ fn a_cached_layout_the_root_no_longer_reaches_is_forgotten() {
     drop(again);
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// Decision `instant-swap`: the manifest lists an edit group's screens before
+/// and after it, the device fetches both with the root, and a swap draws the
+/// other one at once, with no request; the pod's next root replaces it.
+#[test]
+fn an_edit_group_swaps_back_and_forth_without_a_request() {
+    let p = pod();
+    build(&p);
+    let home_version = tool(&p, "get_layout", json!({"app": "home"}))["version"]
+        .as_i64()
+        .unwrap();
+    let staged = tool(
+        &p,
+        "stage_edit_group",
+        json!({"title": "Show a tip", "changes": [{"id": "home", "base_version": home_version,
+            "json_patch": [{"op": "add", "path": "/root/children/1",
+                "value": {"type": "core://Text", "style": "Body", "value_expr": "A tip"}}]}]}),
+    );
+    let group = staged["id"].as_str().unwrap().to_owned();
+    let applied = tool(&p, "apply_edit_group", json!({"id": group, "trial": true}));
+    assert_eq!(applied["state"], "trial", "{applied}");
+
+    let e = engine(&p.base);
+    wait_until("home with the tip", || home_json(&e).contains("A tip"));
+    let fetched = e.construct_status().fetched.clone();
+    let root = e.construct_status().root;
+
+    // Before, after, before: each drawn as soon as it is asked, from the
+    // objects the device holds.
+    assert!(e.swap_construct(&group, "before"));
+    assert!(!home_json(&e).contains("A tip"), "{}", home_json(&e));
+    assert!(home_json(&e).contains("Home"));
+    assert!(e.swap_construct(&group, "after"));
+    assert!(home_json(&e).contains("A tip"));
+    assert!(e.swap_construct(&group, "before"));
+    assert!(!home_json(&e).contains("A tip"));
+    let s = e.construct_status();
+    assert_eq!(s.root, root, "a swap doesn't move the root");
+    assert_eq!(s.fetched, fetched, "nothing fetched: {s:?}");
+    assert!(!e.swap_construct("eg_none", "before"), "no such group");
+    assert!(!e.swap_construct(&group, "sideways"));
+
+    // The pod's undo moves the root: the device draws it, and the swap is
+    // over (home is as the pod says, without the tip). Shown with the tip
+    // until then, so home without it is the pod's answer.
+    assert!(e.swap_construct(&group, "after"));
+    tool(&p, "revert_edit_group", json!({"id": group}));
+    wait_until("the root after the undo", || {
+        e.construct_status().root != root
+    });
+    wait_until("home as the pod has it", || {
+        let h = home_json(&e);
+        h.contains("Home") && !h.contains("A tip")
+    });
+    // Still listed (undone in the last week): Redo swaps at once too.
+    assert!(e.swap_construct(&group, "after"));
+    assert!(home_json(&e).contains("A tip"));
+}

@@ -789,6 +789,12 @@ impl Loader for PodEngine {
         self.engine.record_usage(event);
     }
 
+    /// An edit group's screens before or after it, from the elements the
+    /// engine already holds (decision `instant-swap`).
+    fn swap(&self, group: &str, to: &str) -> bool {
+        self.engine.swap_construct(group, to)
+    }
+
     fn visible(&self, shown: &[crate::interact::Shown]) {
         use crate::interact::Shown;
         let keys = shown

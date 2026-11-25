@@ -85,10 +85,8 @@ async fn stage_apply_revert_and_restore() {
     let ckpts = ok(&env, &owner, "list_checkpoints", json!({})).await;
     let ckpt = ckpts["checkpoints"][0]["id"].as_str().unwrap().to_owned();
     // Applying twice does nothing more.
-    let (err, again) = env
-        .tool(&owner, "apply_edit_group", json!({ "id": group }))
-        .await;
-    assert!(err && again["error"] == "not_proposed", "{again}");
+    let again = ok(&env, &owner, "apply_edit_group", json!({ "id": group })).await;
+    assert_eq!(again["already"], true, "{again}");
 
     // Reverted: back as it was.
     let reverted = ok(&env, &owner, "revert_edit_group", json!({ "id": group })).await;
@@ -181,21 +179,50 @@ async fn a_grant_applies_only_additive_unprotected_groups() {
     ]);
     let job = scoped(&env, json!({ "tools": tools })).await;
 
-    // Removing the title isn't additive: staged, but not applied.
+    // Dropping the list loses what the screen showed: staged, not applied.
     let v = version(&env, &owner, &id).await;
     let staged = ok(
         &env,
         &job,
         "stage_edit_group",
-        json!({ "title": "Drop the title", "changes": [{ "id": id, "base_version": v,
-                "json_patch": [{ "op": "remove", "path": "/root/children/0" }] }] }),
+        json!({ "title": "Drop the list", "changes": [{ "id": id, "base_version": v,
+                "json_patch": [{ "op": "remove", "path": "/root/children/1" }] }] }),
     )
     .await;
-    assert_eq!(staged["report"]["additive"], false, "{staged}");
+    assert_eq!(staged["report"]["safe"], false, "{staged}");
     let (err, out) = env
         .tool(&job, "apply_edit_group", json!({ "id": staged["id"] }))
         .await;
-    assert!(err && out["error"] == "not_additive", "{out}");
+    assert!(err && out["error"] == "not_safe", "{out}");
+
+    // A restyle (a bigger title) is safe, though not additive: applied, then
+    // undone so the rest of the test starts from the same screen.
+    let staged = ok(
+        &env,
+        &job,
+        "stage_edit_group",
+        json!({ "title": "A bigger title", "changes": [{ "id": id, "base_version": v,
+                "json_patch": [{ "op": "replace", "path": "/root/children/0/style", "value": "Display" }] }] }),
+    )
+    .await;
+    assert_eq!(staged["report"]["safe"], true, "{staged}");
+    assert_eq!(staged["report"]["additive"], false, "{staged}");
+    let out = ok(
+        &env,
+        &job,
+        "apply_edit_group",
+        json!({ "id": staged["id"] }),
+    )
+    .await;
+    assert_eq!(out["state"], "applied", "{out}");
+    ok(
+        &env,
+        &job,
+        "revert_edit_group",
+        json!({ "id": staged["id"] }),
+    )
+    .await;
+    let v = version(&env, &owner, &id).await;
 
     // A protected layout isn't changed even additively.
     let guarded = scoped(&env, json!({ "tools": tools, "protected_names": [id] })).await;
@@ -315,4 +342,169 @@ async fn the_app_lists_and_undoes_a_group_and_only_the_owner_may() {
         .unwrap();
     assert!(resp.status().is_success(), "{:?}", resp.text().await);
     assert!(!texts(&env, &owner, &id).await.contains("\"Tip\""));
+}
+
+#[tokio::test]
+async fn a_trial_swaps_back_and_forth_and_is_kept() {
+    let env = env().await;
+    let pod_code = env.pod("mine").await;
+    let owner = env.connect_with(&pod_code, "outward").await;
+    let id = ok(
+        &env,
+        &owner,
+        "create_layout",
+        json!({"title": "Recipe", "icon": "recipe", "feeds": [["collections", "dishes"]],
+               "layout": recipe_layout()}),
+    )
+    .await["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let v = version(&env, &owner, &id).await;
+    let group = ok(
+        &env,
+        &owner,
+        "stage_edit_group",
+        json!({ "title": "Show a tip", "changes": [{ "id": id, "base_version": v,
+                "json_patch": add_text("Tip") }] }),
+    )
+    .await["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let out = ok(
+        &env,
+        &owner,
+        "apply_edit_group",
+        json!({ "id": group, "trial": true }),
+    )
+    .await;
+    assert_eq!(out["state"], "trial", "{out}");
+    let with_tip = texts(&env, &owner, &id).await;
+    assert!(with_tip.contains("\"Tip\""));
+
+    // Undo, redo, undo, redo from the app: the same two screens each time.
+    async fn post(env: &Env, code: &str, path: &str, group: &str) {
+        let r = super::client()
+            .post(format!("{}{path}", env.url))
+            .bearer_auth(code)
+            .json(&json!({ "id": group }))
+            .send()
+            .await
+            .unwrap();
+        assert!(r.status().is_success(), "{path}: {:?}", r.text().await);
+    }
+    post(&env, &pod_code, "/v1/edit-groups/revert", &group).await;
+    let without = texts(&env, &owner, &id).await;
+    assert!(!without.contains("\"Tip\""));
+    post(&env, &pod_code, "/v1/edit-groups/apply", &group).await;
+    assert_eq!(texts(&env, &owner, &id).await, with_tip);
+    post(&env, &pod_code, "/v1/edit-groups/revert", &group).await;
+    assert_eq!(texts(&env, &owner, &id).await, without);
+    post(&env, &pod_code, "/v1/edit-groups/apply", &group).await;
+    assert_eq!(texts(&env, &owner, &id).await, with_tip);
+
+    // The redo kept it a trial; Keep (apply again) makes it the owner's.
+    let (_, screen) = env.get("/v1/edit-groups/screen", &pod_code).await;
+    let e = &screen["entities"][format!("edit_groups://{group}")];
+    assert_eq!(e["can_keep"], true, "{screen}");
+    post(&env, &pod_code, "/v1/edit-groups/apply", &group).await;
+    let (_, screen) = env.get("/v1/edit-groups/screen", &pod_code).await;
+    let e = &screen["entities"][format!("edit_groups://{group}")];
+    assert_eq!(e["state"], "applied", "{screen}");
+    assert_eq!(e["can_undo"], true, "{screen}");
+}
+
+/// Decision `instant-swap`: the manifest a swapping client is sent lists a
+/// trial's screens before and after it, both served with the root; a client
+/// that doesn't swap is sent no swaps.
+#[tokio::test]
+async fn the_manifest_lists_a_groups_screens_for_a_swapping_client() {
+    let env = env().await;
+    let pod_code = env.pod("mine").await;
+    let owner = env.connect_with(&pod_code, "outward").await;
+    let id = ok(
+        &env,
+        &owner,
+        "create_layout",
+        json!({"title": "Recipe", "icon": "recipe", "feeds": [["collections", "dishes"]],
+               "layout": recipe_layout()}),
+    )
+    .await["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let v = version(&env, &owner, &id).await;
+    let group = ok(
+        &env,
+        &owner,
+        "stage_edit_group",
+        json!({ "title": "Show a tip", "changes": [{ "id": id, "base_version": v,
+                "json_patch": add_text("Tip") }] }),
+    )
+    .await["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    ok(
+        &env,
+        &owner,
+        "apply_edit_group",
+        json!({ "id": group, "trial": true }),
+    )
+    .await;
+
+    async fn manifest(env: &Env, code: &str, features: &str) -> Value {
+        let get = |path: String| {
+            super::client()
+                .get(format!("{}{path}", env.url))
+                .bearer_auth(code)
+                .header(protocol::FEATURES_HEADER, features)
+                .header(protocol::ROOT_HEADER, protocol::ROOT_MANIFEST)
+        };
+        let root: Value = get("/v1/construct".into())
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        let id = root["root"].as_str().unwrap().to_owned();
+        get(format!("/v1/objects/{id}"))
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap()
+    }
+    let swapping = manifest(&env, &pod_code, &protocol::features_header()).await;
+    let pair = &swapping["swaps"][&group][&id];
+    let (before, after) = (pair[0].as_str().unwrap(), pair[1].as_str().unwrap());
+    assert_ne!(before, after, "{swapping}");
+
+    // Both are served with the root, in one fetch from it.
+    let root_id = construct_elements::object_id(&swapping);
+    let r: Value = super::client()
+        .post(format!("{}/v1/objects", env.url))
+        .bearer_auth(&pod_code)
+        .header(protocol::FEATURES_HEADER, protocol::features_header())
+        .json(&json!({ "have": [], "want": [root_id] }))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert!(r["objects"].get(before).is_some(), "{r}");
+    assert!(!r["objects"][before].to_string().contains("\"Tip\""), "{r}");
+    assert!(r["objects"][after].to_string().contains("\"Tip\""), "{r}");
+
+    let old: Vec<&str> = protocol::FEATURES
+        .iter()
+        .copied()
+        .filter(|f| *f != protocol::feature::CONSTRUCT_SWAP)
+        .collect();
+    let plain = manifest(&env, &pod_code, &old.join(",")).await;
+    assert!(plain.get("swaps").is_none(), "{plain}");
 }

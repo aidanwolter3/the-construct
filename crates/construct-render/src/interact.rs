@@ -749,6 +749,15 @@ pub trait Loader: Send {
     /// `usage` jack; a preview's, a walk's or the simulator's loader leaves
     /// this to its default and records nothing. Must not block.
     fn usage(&self, _event: &protocol::usage::UsageEvent) {}
+    /// Show edit group `group`'s screens as they were (`to: "before"`) or as
+    /// it made them (`"after"`) at once, from what the loader already holds
+    /// (feature `construct_swap`, decision `instant-swap`); its next
+    /// [`Loader::changes`] carry the swapped layouts. False: this loader
+    /// can't (the session does nothing; the Undo or Redo beside it still
+    /// goes to the pod).
+    fn swap(&self, _group: &str, _to: &str) -> bool {
+        false
+    }
 }
 
 /// Something a frame draws ([`Loader::visible`]).
@@ -4092,6 +4101,22 @@ impl Session {
                         });
                     }
                 }
+            }
+            "action.construct.swap" => {
+                // Feature `construct_swap` (decision `instant-swap`): the
+                // engine repoints the group's names at the elements it
+                // holds and redraws; nothing is sent.
+                let group = intent["group"].as_str().unwrap_or("");
+                let to = intent["to"].as_str().unwrap_or("");
+                let swapped =
+                    !group.is_empty() && self.loader.as_ref().is_some_and(|l| l.swap(group, to));
+                out.push(if swapped {
+                    Effect::Device {
+                        command: format!("construct_swap {to}"),
+                    }
+                } else {
+                    Effect::Nothing
+                });
             }
             "action.form.clear" => {
                 // Feature `form_clear`: the boxes empty after an Add, and
