@@ -33,3 +33,10 @@ runner then compiles the tests too, so it pays only while the tests take much lo
 and the members' manifests, not the root manifest that holds the `[profile]`s: after the opt-level change every run
 restored the old build on a full key match, rebuilt every dependency (about 5 minutes) and saved nothing, since the key
 already existed. Each workflow's rust-cache step now adds `hashFiles('Cargo.toml')` to its key.
+
+**Main's runs don't wait for each other** (2026-11-25). The workflow's concurrency group was one per ref, so a push to
+main waited for the run before it to finish (one waited 21 minutes before starting). Now only a pull request's runs
+share a group, and a new push cancels the old run; every other run has a group of its own. Deploys still go one at a
+time through the deploy job's own group (`deploy-staging`), and the deploy job first checks that its commit is still
+main's head: if a newer commit landed, its run deploys that one instead, so a slower run of an older commit can't put
+staging back. A run whose newer successor fails its checks leaves staging where it was, as a red main does anyway.

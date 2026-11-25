@@ -21,8 +21,12 @@ on:
   schedule:
     - cron: "17 9 * * 1"
 
+# A pull request's new push cancels its run in progress. Every other run (main's pushes, the weekly and manual runs)
+# has a group of its own and starts at once: one waited 21 minutes behind the run before it. Deploys still go one at a
+# time (the deploy job's own group), and a run whose commit is no longer main's head skips its deploy, so an older
+# commit can't replace a newer one on staging.
 concurrency:
-  group: ci-${{ github.ref }}
+  group: ci-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 # Least privilege for GITHUB_TOKEN; a job that needs more grants it itself.
@@ -315,6 +319,19 @@ jobs:
         env:
           HAS_POD: ${{ secrets.FLY_API_TOKEN_POD != '' }}
         run: echo "pod=$HAS_POD" >> "$GITHUB_OUTPUT"
+      # Main's runs run side by side, so a newer commit's run may have deployed already: only main's head deploys.
+      # Checked once this job holds the deploy group, so a run that waited behind another deploy checks afresh.
+      - name: Is this commit still main's head?
+        id: head
+        run: |
+          head=$(git ls-remote "https://github.com/$GITHUB_REPOSITORY" refs/heads/main | cut -f1)
+          [ -n "$head" ] || { echo "::error::Could not read main's head."; exit 1; }
+          if [ "$head" = "$GITHUB_SHA" ]; then
+            echo "deploy=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "deploy=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::main is at $head now; its run deploys that, so this run ($GITHUB_SHA) doesn't."
+          fi
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
@@ -322,7 +339,7 @@ jobs:
         with:
           version: 0.4.123
       - name: Deploy pod
-        if: steps.secrets.outputs.pod == 'true'
+        if: steps.secrets.outputs.pod == 'true' && steps.head.outputs.deploy == 'true'
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN_POD }}
         # The ISO week: Chromium's apt layer is rebuilt once a week (decision `browser-sandbox`). The build id:
@@ -332,7 +349,7 @@ jobs:
           --build-arg CHROMIUM_REFRESH="$(date -u +%G-W%V)"
           --build-arg CONSTRUCT_BUILD="$(scripts/build_id.sh)"
       - name: Smoke test
-        if: steps.secrets.outputs.pod == 'true'
+        if: steps.secrets.outputs.pod == 'true' && steps.head.outputs.deploy == 'true'
         run: |
           for i in $(seq 1 20); do
             code=$(curl -s -o /dev/null -w '%{http_code}' https://the-construct-pod.fly.dev/healthz) && [ "$code" = 200 ] && break
@@ -363,5 +380,5 @@ jobs:
           curl -fsS -H "Authorization: Bearer $token" "$pod/v1/construct/data/$root" \
             | jq -e '(.entities | length) > 0'
       - name: Note skipped deploy
-        if: steps.secrets.outputs.pod != 'true'
+        if: steps.secrets.outputs.pod != 'true' && steps.head.outputs.deploy == 'true'
         run: echo "::warning::FLY_API_TOKEN_POD secret missing; the deploy and smoke test were skipped."
