@@ -54,12 +54,16 @@ impl Service {
     }
 }
 
+/// Reads the pod's whole history (`None`: it couldn't be read).
+pub type ReadHistory =
+    Arc<dyn Fn() -> Pin<Box<dyn Future<Output = Option<Value>> + Send>> + Send + Sync>;
+
 /// The pod's history as a request names it: `<log>/<n>`, and how to read
 /// the whole of it when the service doesn't hold that version.
 #[derive(Clone)]
 pub struct StateLink {
     pub tag: String,
-    pub whole: Arc<dyn Fn() -> Pin<Box<dyn Future<Output = Option<Value>> + Send>> + Send + Sync>,
+    pub whole: ReadHistory,
 }
 
 impl std::fmt::Debug for StateLink {
