@@ -31,9 +31,15 @@ Decision:
   traceable, covered, proven by walking the staged group, drawn, a skeptic's yes, and the mode. The owner sets a
   ceiling (`propose` at first); Build steps itself down when changes are reverted or regress. Memory is counters
   read from what the pod holds, never model-written lessons.
-- **Surface.** It shows on the owner's Today copy, which is what home reaches. That card is the owner's layout part,
-  not a core layout. It shows journey health first, then fixes with Undo, ideas with Apply, and at most 3
-  reminders.
+- **Surface.** It shows on the owner's Today copy, which is what home reaches. That copy is the owner's layout,
+  not a core layout. Today reads as a list to clear:
+  - a one-line summary;
+  - cards to acknowledge: fixes with Undo, ideas with Apply, questions with two answers, things to know;
+  - broken journeys;
+  - one to-do list where Anticipate's to-dos sit beside the owner's workouts, lesson, events and errands.
+
+  An answer is a row the next Build run reads. It acts on it within its grant, or turns it into a to-do. The
+  owner's goal tiles moved to the Week tab.
 - **What ships.** This repo ships the generic pieces and docs/anticipate.md (prompts, setup). The collections, the
   card and the schedules are set up on the owner's pod with the owner.
 
