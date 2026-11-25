@@ -143,7 +143,8 @@ collection definition must change, a proposal in words.
    (seeded at setup from the screens home reaches). Build writes and walks their scripts on its first run, then
    adds journeys from `usage_paths` and retires the ones the owner doesn't use. Nothing to confirm.
 5. **Week 1:** every change is a trial: the owner sees it on the real screen and swaps back and forth with Undo
-   and Redo (both versions already exist on the pod, so a swap is a pointer move). Keep commits it; an unkept one
+   and Redo (both versions already exist on the pod, so a swap is a pointer move, and on the device too: the
+   manifest lists both and the card's buttons swap the screen at once, decision `instant-swap`). Keep commits it; an unkept one
    is undone the next morning. After that changes go live directly, with no step from the owner.
 
 ## The Sense prompt

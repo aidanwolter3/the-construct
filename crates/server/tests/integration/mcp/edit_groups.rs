@@ -414,3 +414,97 @@ async fn a_trial_swaps_back_and_forth_and_is_kept() {
     assert_eq!(e["state"], "applied", "{screen}");
     assert_eq!(e["can_undo"], true, "{screen}");
 }
+
+/// Decision `instant-swap`: the manifest a swapping client is sent lists a
+/// trial's screens before and after it, both served with the root; a client
+/// that doesn't swap is sent no swaps.
+#[tokio::test]
+async fn the_manifest_lists_a_groups_screens_for_a_swapping_client() {
+    let env = env().await;
+    let pod_code = env.pod("mine").await;
+    let owner = env.connect_with(&pod_code, "outward").await;
+    let id = ok(
+        &env,
+        &owner,
+        "create_layout",
+        json!({"title": "Recipe", "icon": "recipe", "feeds": [["collections", "dishes"]],
+               "layout": recipe_layout()}),
+    )
+    .await["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let v = version(&env, &owner, &id).await;
+    let group = ok(
+        &env,
+        &owner,
+        "stage_edit_group",
+        json!({ "title": "Show a tip", "changes": [{ "id": id, "base_version": v,
+                "json_patch": add_text("Tip") }] }),
+    )
+    .await["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    ok(
+        &env,
+        &owner,
+        "apply_edit_group",
+        json!({ "id": group, "trial": true }),
+    )
+    .await;
+
+    async fn manifest(env: &Env, code: &str, features: &str) -> Value {
+        let get = |path: String| {
+            super::client()
+                .get(format!("{}{path}", env.url))
+                .bearer_auth(code)
+                .header(protocol::FEATURES_HEADER, features)
+                .header(protocol::ROOT_HEADER, protocol::ROOT_MANIFEST)
+        };
+        let root: Value = get("/v1/construct".into())
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        let id = root["root"].as_str().unwrap().to_owned();
+        get(format!("/v1/objects/{id}"))
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap()
+    }
+    let swapping = manifest(&env, &pod_code, &protocol::features_header()).await;
+    let pair = &swapping["swaps"][&group][&id];
+    let (before, after) = (pair[0].as_str().unwrap(), pair[1].as_str().unwrap());
+    assert_ne!(before, after, "{swapping}");
+
+    // Both are served with the root, in one fetch from it.
+    let root_id = construct_elements::object_id(&swapping);
+    let r: Value = super::client()
+        .post(format!("{}/v1/objects", env.url))
+        .bearer_auth(&pod_code)
+        .header(protocol::FEATURES_HEADER, protocol::features_header())
+        .json(&json!({ "have": [], "want": [root_id] }))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert!(r["objects"].get(before).is_some(), "{r}");
+    assert!(!r["objects"][before].to_string().contains("\"Tip\""), "{r}");
+    assert!(r["objects"][after].to_string().contains("\"Tip\""), "{r}");
+
+    let old: Vec<&str> = protocol::FEATURES
+        .iter()
+        .copied()
+        .filter(|f| *f != protocol::feature::CONSTRUCT_SWAP)
+        .collect();
+    let plain = manifest(&env, &pod_code, &old.join(",")).await;
+    assert!(plain.get("swaps").is_none(), "{plain}");
+}

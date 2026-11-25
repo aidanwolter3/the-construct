@@ -60,3 +60,6 @@ Since then (the owner, the same day): restyles, trials and redo.
   which devices already hold, so swapping back and forth to compare is fast. The app's routes are the same
   (`/v1/edit-groups/apply` applies, keeps or redoes; `/revert` undoes); the screen entity gains `can_keep` and
   `can_redo`.
+
+Later the same day: devices hold both versions of a recent group's screens and swap between them on Undo and Redo
+without a request (decision [instant-swap](instant-swap.md)).

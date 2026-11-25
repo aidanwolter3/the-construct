@@ -131,6 +131,64 @@ pub fn pinned(conn: &Connection) -> rusqlite::Result<Vec<String>> {
     stmt.query_map([], |r| r.get(0))?.collect()
 }
 
+/// How long a group's screens are listed in the manifest's swaps.
+pub const SWAP_SECS: i64 = 7 * 86_400;
+/// The most groups the manifest's swaps list.
+pub const SWAP_GROUPS: usize = 8;
+
+/// The manifest's swaps (decision `instant-swap`): for each group applied in
+/// the last week (a trial, kept or undone; newest [`SWAP_GROUPS`]), each name
+/// it wrote with the element it had before and the one the group wrote, both
+/// as a manifest's devices are sent them ([`construct_elements::stripped`],
+/// stored). A device holds both and swaps at once on Undo or Redo. Empty
+/// when there are none or the tables don't exist yet.
+pub fn swaps(conn: &Connection) -> rusqlite::Result<Map<String, Value>> {
+    let exists: bool = conn.query_row(
+        "SELECT EXISTS (SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'edit_groups')",
+        [],
+        |r| r.get(0),
+    )?;
+    let mut out = Map::new();
+    if !exists {
+        return Ok(out);
+    }
+    let rows: Vec<(String, String)> = {
+        let mut stmt = conn.prepare_cached(
+            "SELECT id, entries FROM edit_groups
+             WHERE state IN ('trial', 'applied', 'reverted') AND applied_at >= ?1
+             ORDER BY applied_at DESC LIMIT ?2",
+        )?;
+        stmt.query_map(params![now_secs() - SWAP_SECS, SWAP_GROUPS as i64], |r| {
+            Ok((r.get(0)?, r.get(1)?))
+        })?
+        .collect::<rusqlite::Result<_>>()?
+    };
+    let sent = |hash: &str| -> rusqlite::Result<Option<String>> {
+        let Some((el, features)) = cstore::object(conn, hash)? else {
+            return Ok(None);
+        };
+        let v = construct_elements::stripped(&el);
+        let id = construct_elements::object_id(&v);
+        cstore::put_object(conn, &id, &v, &features)?;
+        Ok(Some(id))
+    };
+    for (id, entries) in rows {
+        let mut names = Map::new();
+        for e in entries_of(&entries) {
+            let (Some(b), Some(a)) = (&e.before, &e.after) else {
+                continue;
+            };
+            if let (Some(b), Some(a)) = (sent(b)?, sent(a)?) {
+                names.insert(e.name.clone(), json!([b, a]));
+            }
+        }
+        if !names.is_empty() {
+            out.insert(id, Value::Object(names));
+        }
+    }
+    Ok(out)
+}
+
 fn pin(conn: &Connection, hash: &str, owner: &str) -> rusqlite::Result<()> {
     if hash.is_empty() {
         return Ok(());
