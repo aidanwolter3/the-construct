@@ -5262,34 +5262,66 @@ impl Session {
         }
     }
 
-    /// Loads the layouts inline `core://Layout`s of the top entry draw.
+    /// Loads the layouts inline `core://Layout`s of the top entry draw,
+    /// and the ones those draw inline in turn (a tab's layout embedding
+    /// its views): each loaded layout's own inline embeds are looked at
+    /// too, until nothing new can be loaded.
     fn load_inline_layouts(&mut self) {
         if self.loader.is_none() {
             return;
         }
+        let mut ignored = Vec::new();
+        loop {
+            let missing = self.missing_inline_layouts();
+            if missing.is_empty() {
+                return;
+            }
+            let mut loaded = false;
+            for id in missing {
+                loaded |= self.layout_root(&id, &mut ignored).is_some();
+            }
+            // A layout that failed to load is asked for again next time,
+            // not in a loop here.
+            if !loaded {
+                return;
+            }
+        }
+    }
+
+    /// The inline layouts the top entry draws, directly or inside the
+    /// inline layouts and panels it draws, that aren't loaded yet.
+    fn missing_inline_layouts(&self) -> Vec<String> {
         let top = &self.stack[self.top_index()];
-        let panels = top
-            .panels
-            .values()
-            .flatten()
-            .filter_map(|p| self.layouts.get(&p.layout));
-        let wanted: Vec<String> = std::iter::once(&top.root)
-            .chain(panels)
-            .flat_map(UiNode::walk)
-            .filter_map(|n| match n {
-                UiNode::Layout {
+        let mut roots: Vec<&UiNode> = std::iter::once(&top.root)
+            .chain(
+                top.panels
+                    .values()
+                    .flatten()
+                    .filter_map(|p| self.layouts.get(&p.layout)),
+            )
+            .collect();
+        let mut seen = std::collections::HashSet::new();
+        let mut missing = Vec::new();
+        while let Some(root) = roots.pop() {
+            for n in root.walk() {
+                let UiNode::Layout {
                     layout,
                     presentation: protocol::EmbedPresentation::Inline,
                     ..
-                } if !layout.contains('$') => Some(layout.clone()),
-                _ => None,
-            })
-            .filter(|l| !self.layouts.contains_key(l))
-            .collect();
-        let mut ignored = Vec::new();
-        for id in wanted {
-            self.layout_root(&id, &mut ignored);
+                } = n
+                else {
+                    continue;
+                };
+                if layout.contains('$') || !seen.insert(layout.as_str()) {
+                    continue;
+                }
+                match self.layouts.get(layout) {
+                    Some(r) => roots.push(r),
+                    None => missing.push(layout.clone()),
+                }
+            }
         }
+        missing
     }
 
     /// The field a tap focused, for platforms that show a keyboard.
