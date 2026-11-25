@@ -85,10 +85,8 @@ async fn stage_apply_revert_and_restore() {
     let ckpts = ok(&env, &owner, "list_checkpoints", json!({})).await;
     let ckpt = ckpts["checkpoints"][0]["id"].as_str().unwrap().to_owned();
     // Applying twice does nothing more.
-    let (err, again) = env
-        .tool(&owner, "apply_edit_group", json!({ "id": group }))
-        .await;
-    assert!(err && again["error"] == "not_proposed", "{again}");
+    let again = ok(&env, &owner, "apply_edit_group", json!({ "id": group })).await;
+    assert_eq!(again["already"], true, "{again}");
 
     // Reverted: back as it was.
     let reverted = ok(&env, &owner, "revert_edit_group", json!({ "id": group })).await;
