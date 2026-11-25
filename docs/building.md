@@ -128,9 +128,11 @@ After a change to the tools, the Claude connector needs "Refresh tools list" in 
   `expect-write <collection> {fields}` checks them. The walk is stored with its construct hash (decision
   [`journeys-and-dry-runs`](decisions/journeys-and-dry-runs.md)).
 - `stage_edit_group {title, why?, walk_id?, changes}` stages writes to the pod's own layouts and `@me/` components
-  without making them live. Its report says whether the change is `additive`. `walk_journey {group}` walks the
-  staged screens. `apply_edit_group {id}` makes them live in one step (after a checkpoint), and
-  `revert_edit_group {id | since}` undoes them. `list_edit_groups`, `list_checkpoints` and `restore_checkpoint {id,
+  without making them live. Its report says whether the change is `additive` and whether it is `safe` (a restyle
+  that keeps everything the screen showed and could do). `walk_journey {group}` walks the staged screens.
+  `apply_edit_group {id, trial?}` makes them live in one step (after a checkpoint), as a trial if asked;
+  applying a trial again keeps it, and applying an undone group redoes it. `revert_edit_group {id | since}`
+  undoes them. `list_edit_groups`, `list_checkpoints` and `restore_checkpoint {id,
   dry_run?}` cover the rest (decision [`edit-groups`](decisions/edit-groups.md)). The app can undo, apply and
   restore too: Settings' manifest declares `/v1/edit-groups/screen`, `/v1/edit-groups/apply|revert` and
   `/v1/checkpoints/restore`.

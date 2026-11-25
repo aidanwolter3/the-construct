@@ -181,21 +181,50 @@ async fn a_grant_applies_only_additive_unprotected_groups() {
     ]);
     let job = scoped(&env, json!({ "tools": tools })).await;
 
-    // Removing the title isn't additive: staged, but not applied.
+    // Dropping the list loses what the screen showed: staged, not applied.
     let v = version(&env, &owner, &id).await;
     let staged = ok(
         &env,
         &job,
         "stage_edit_group",
-        json!({ "title": "Drop the title", "changes": [{ "id": id, "base_version": v,
-                "json_patch": [{ "op": "remove", "path": "/root/children/0" }] }] }),
+        json!({ "title": "Drop the list", "changes": [{ "id": id, "base_version": v,
+                "json_patch": [{ "op": "remove", "path": "/root/children/1" }] }] }),
     )
     .await;
-    assert_eq!(staged["report"]["additive"], false, "{staged}");
+    assert_eq!(staged["report"]["safe"], false, "{staged}");
     let (err, out) = env
         .tool(&job, "apply_edit_group", json!({ "id": staged["id"] }))
         .await;
-    assert!(err && out["error"] == "not_additive", "{out}");
+    assert!(err && out["error"] == "not_safe", "{out}");
+
+    // A restyle (a bigger title) is safe, though not additive: applied, then
+    // undone so the rest of the test starts from the same screen.
+    let staged = ok(
+        &env,
+        &job,
+        "stage_edit_group",
+        json!({ "title": "A bigger title", "changes": [{ "id": id, "base_version": v,
+                "json_patch": [{ "op": "replace", "path": "/root/children/0/style", "value": "Display" }] }] }),
+    )
+    .await;
+    assert_eq!(staged["report"]["safe"], true, "{staged}");
+    assert_eq!(staged["report"]["additive"], false, "{staged}");
+    let out = ok(
+        &env,
+        &job,
+        "apply_edit_group",
+        json!({ "id": staged["id"] }),
+    )
+    .await;
+    assert_eq!(out["state"], "applied", "{out}");
+    ok(
+        &env,
+        &job,
+        "revert_edit_group",
+        json!({ "id": staged["id"] }),
+    )
+    .await;
+    let v = version(&env, &owner, &id).await;
 
     // A protected layout isn't changed even additively.
     let guarded = scoped(&env, json!({ "tools": tools, "protected_names": [id] })).await;
@@ -315,4 +344,75 @@ async fn the_app_lists_and_undoes_a_group_and_only_the_owner_may() {
         .unwrap();
     assert!(resp.status().is_success(), "{:?}", resp.text().await);
     assert!(!texts(&env, &owner, &id).await.contains("\"Tip\""));
+}
+
+#[tokio::test]
+async fn a_trial_swaps_back_and_forth_and_is_kept() {
+    let env = env().await;
+    let pod_code = env.pod("mine").await;
+    let owner = env.connect_with(&pod_code, "outward").await;
+    let id = ok(
+        &env,
+        &owner,
+        "create_layout",
+        json!({"title": "Recipe", "icon": "recipe", "feeds": [["collections", "dishes"]],
+               "layout": recipe_layout()}),
+    )
+    .await["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let v = version(&env, &owner, &id).await;
+    let group = ok(
+        &env,
+        &owner,
+        "stage_edit_group",
+        json!({ "title": "Show a tip", "changes": [{ "id": id, "base_version": v,
+                "json_patch": add_text("Tip") }] }),
+    )
+    .await["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let out = ok(
+        &env,
+        &owner,
+        "apply_edit_group",
+        json!({ "id": group, "trial": true }),
+    )
+    .await;
+    assert_eq!(out["state"], "trial", "{out}");
+    let with_tip = texts(&env, &owner, &id).await;
+    assert!(with_tip.contains("\"Tip\""));
+
+    // Undo, redo, undo, redo from the app: the same two screens each time.
+    async fn post(env: &Env, code: &str, path: &str, group: &str) {
+        let r = super::client()
+            .post(format!("{}{path}", env.url))
+            .bearer_auth(code)
+            .json(&json!({ "id": group }))
+            .send()
+            .await
+            .unwrap();
+        assert!(r.status().is_success(), "{path}: {:?}", r.text().await);
+    }
+    post(&env, &pod_code, "/v1/edit-groups/revert", &group).await;
+    let without = texts(&env, &owner, &id).await;
+    assert!(!without.contains("\"Tip\""));
+    post(&env, &pod_code, "/v1/edit-groups/apply", &group).await;
+    assert_eq!(texts(&env, &owner, &id).await, with_tip);
+    post(&env, &pod_code, "/v1/edit-groups/revert", &group).await;
+    assert_eq!(texts(&env, &owner, &id).await, without);
+    post(&env, &pod_code, "/v1/edit-groups/apply", &group).await;
+    assert_eq!(texts(&env, &owner, &id).await, with_tip);
+
+    // The redo kept it a trial; Keep (apply again) makes it the owner's.
+    let (_, screen) = env.get("/v1/edit-groups/screen", &pod_code).await;
+    let e = &screen["entities"][format!("edit_groups://{group}")];
+    assert_eq!(e["can_keep"], true, "{screen}");
+    post(&env, &pod_code, "/v1/edit-groups/apply", &group).await;
+    let (_, screen) = env.get("/v1/edit-groups/screen", &pod_code).await;
+    let e = &screen["entities"][format!("edit_groups://{group}")];
+    assert_eq!(e["state"], "applied", "{screen}");
+    assert_eq!(e["can_undo"], true, "{screen}");
 }

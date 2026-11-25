@@ -53,3 +53,6 @@ Since then (the owner, the same day): no confirming. Anticipate decides which jo
 - **A starting set.** The pod starts with about 10 journeys assumed important, established from day 1 (the
   owner's call: waiting two weeks of usage was too slow). Build writes their scripts on its first run, and usage
   retires the ones the owner doesn't use.
+- **Trust and restyling.** Changes may restyle, not only add, under the server's `safe` check. The first week's
+  changes are trials on the real screen (Undo, Redo, Keep), undone the next morning unless kept; after that they
+  go live directly. Only Settings is protected.
