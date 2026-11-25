@@ -385,7 +385,7 @@ never writes code: it declares typed fields (`text`, `number`, `bool`, `date`, `
   ref's row by a unique field). A preview checks the whole set and lists every invalid edit by `/edits/<i>` or the
   file's line (decision [`bulk-row-edits`](decisions/bulk-row-edits.md)). `add_row` writes one row the user just
   asked for at once, undoable the same way (decision [`collections-add-row`](decisions/collections-add-row.md)).
-- **Limits per pod:** 50 collections (decision `more-collections-per-pod`), 40 fields each, 5,000 rows and 4 MiB of values in all, 5,000 rows per edit or action call (8 MiB per imported file, refused as soon as it holds more rows or a CSV line over 1,000 cells),
+- **Limits per pod:** 100 collections (decision `collections-cap-100`), 40 fields each, 5,000 rows and 4 MiB of values in all, 5,000 rows per edit or action call (8 MiB per imported file, refused as soon as it holds more rows or a CSV line over 1,000 cells),
   4,000 characters per text value.
 
 - **Retention.** A collection may keep only its newest rows (`keep: {rows, days}` in its definition): when a write

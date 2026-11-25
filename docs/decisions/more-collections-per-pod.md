@@ -1,5 +1,7 @@
 # A pod may have 50 collections
 
+Superseded by [collections-cap-100](collections-cap-100.md).
+
 Date: 2026-11-17. Related: [collections](collections.md) (its Limits), [pod-storage-limits](pod-storage-limits.md).
 
 A pod that keeps most of its life in collections (meals, recipes and their lines, groceries, workouts, a log, a
