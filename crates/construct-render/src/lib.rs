@@ -26,6 +26,7 @@ pub mod perf;
 pub mod platform;
 pub mod public;
 pub mod scene;
+pub mod script;
 pub mod scroll;
 pub mod style;
 pub mod text;

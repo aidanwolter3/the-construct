@@ -15,6 +15,7 @@ pub mod intent;
 pub mod notify;
 pub mod public_rows;
 pub mod scatter;
+pub mod usage;
 
 pub use ast::{
     Align, BarsMarks, BorderStyle, ButtonSize, ButtonStyle, CAPS_TRACKING, ChoiceOption,

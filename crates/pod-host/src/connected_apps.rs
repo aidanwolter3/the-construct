@@ -75,6 +75,9 @@ pub fn entity(a: &ConnectedApp, now: i64) -> Value {
         "connected": true,
         "access": a.access.id(),
         "access_label": access_label(a.access),
+        // A scoped credential's grant in one line (decision `mcp-grants`);
+        // empty without one.
+        "grant_text": a.grant.as_ref().map(|g| format!("Scoped: {}", g.summary())).unwrap_or_default(),
     })
 }
 
@@ -225,6 +228,7 @@ mod tests {
             created_at: now - 3 * 86_400,
             last_used_at: now - 10,
             access: Access::Edit,
+            grant: None,
         };
         let s = screen(std::slice::from_ref(&a), None, now);
         let e = &s["entities"]["connected_apps://0123456789abcdef"];

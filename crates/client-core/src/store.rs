@@ -206,7 +206,19 @@ const MIGRATIONS: &[(&str, &str)] = &[
     ("construct_objects", MIGRATION_CONSTRUCT_OBJECTS),
     ("drop_pinned_versions", MIGRATION_DROP_PINNED_VERSIONS),
     ("failing_since", MIGRATION_FAILING_SINCE),
+    ("usage_events", MIGRATION_USAGE_EVENTS),
 ];
+
+/// How the owner uses their screens, kept until the pod has it (decision
+/// `usage-trails`): one JSON event a row, oldest first.
+const MIGRATION_USAGE_EVENTS: &str = "
+CREATE TABLE IF NOT EXISTS usage_events (
+    seq   INTEGER PRIMARY KEY AUTOINCREMENT,
+    event TEXT NOT NULL
+);";
+
+/// The most usage events a device keeps (the oldest go first).
+pub const USAGE_KEPT: i64 = 5_000;
 
 /// Notifications kept in the cache (the newest ids).
 pub const NOTIFICATIONS_KEPT: usize = 200;
@@ -1383,6 +1395,41 @@ impl Store {
     /// (zeroed by `secure_delete`) no longer survive as old WAL frames.
     /// Returns whether the checkpoint completed (false if another
     /// connection's reader kept it from finishing). A no-op in memory.
+    /// Keep a usage event (decision `usage-trails`), dropping the oldest
+    /// past [`USAGE_KEPT`].
+    pub fn push_usage(&self, event: &str) -> StoreResult<()> {
+        self.conn
+            .execute("INSERT INTO usage_events (event) VALUES (?1)", [event])?;
+        self.conn.execute(
+            "DELETE FROM usage_events WHERE seq <= (SELECT MAX(seq) FROM usage_events) - ?1",
+            [USAGE_KEPT],
+        )?;
+        Ok(())
+    }
+
+    /// The oldest `limit` usage events, with the last one's seq.
+    pub fn usage_batch(&self, limit: usize) -> StoreResult<(Vec<String>, i64)> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT seq, event FROM usage_events ORDER BY seq LIMIT ?1")?;
+        let rows: Vec<(i64, String)> = stmt
+            .query_map([limit as i64], |r| Ok((r.get(0)?, r.get(1)?)))?
+            .collect::<Result<_, _>>()?;
+        let last = rows.last().map_or(0, |(s, _)| *s);
+        Ok((rows.into_iter().map(|(_, e)| e).collect(), last))
+    }
+
+    /// Forget the usage events up to `seq` (the pod has them), or all.
+    pub fn drop_usage(&self, upto: Option<i64>) -> StoreResult<()> {
+        match upto {
+            Some(seq) => self
+                .conn
+                .execute("DELETE FROM usage_events WHERE seq <= ?1", [seq])?,
+            None => self.conn.execute("DELETE FROM usage_events", [])?,
+        };
+        Ok(())
+    }
+
     pub fn checkpoint_truncate(&self) -> StoreResult<bool> {
         let busy: i64 = self
             .conn
@@ -1441,6 +1488,21 @@ mod tests {
         assert_eq!(split_uri("core://counters/home"), ("core", "counters"));
         assert_eq!(split_uri("core://x"), ("core", "x"));
         assert_eq!(split_uri("nope"), ("", ""));
+    }
+
+    #[test]
+    fn usage_is_kept_in_order_and_dropped_once_sent() {
+        let store = Store::open_in_memory().unwrap();
+        for i in 0..3 {
+            store.push_usage(&format!("{{\"n\":{i}}}")).unwrap();
+        }
+        let (batch, upto) = store.usage_batch(2).unwrap();
+        assert_eq!(batch, vec!["{\"n\":0}", "{\"n\":1}"]);
+        store.drop_usage(Some(upto)).unwrap();
+        let (rest, _) = store.usage_batch(10).unwrap();
+        assert_eq!(rest, vec!["{\"n\":2}"]);
+        store.drop_usage(None).unwrap();
+        assert!(store.usage_batch(10).unwrap().0.is_empty());
     }
 
     #[test]

@@ -173,7 +173,7 @@ fn error(v: Value) -> Value {
 /// core layout's name): 1 to 64 lowercase letters, digits, `_` or `-`.
 /// Nothing else goes into the internal request path, where a `/`, `?` or
 /// space would reach another route or make no valid request.
-fn is_layout_id(id: &str) -> bool {
+pub(crate) fn is_layout_id(id: &str) -> bool {
     (1..=64).contains(&id.len())
         && id
             .bytes()
@@ -202,7 +202,7 @@ fn is_data_path(pod: &Pod, path: &str) -> bool {
 
 /// The JSON a pod path answers its owner (`GET`, through the pod's own
 /// router, as the owner's device would ask).
-async fn get(pod: &Pod, headers: &HeaderMap, path: &str) -> Result<Value, Value> {
+pub(crate) async fn get(pod: &Pod, headers: &HeaderMap, path: &str) -> Result<Value, Value> {
     let mut req = Request::builder()
         .method(Method::GET)
         .uri(path)
@@ -247,7 +247,7 @@ async fn get(pod: &Pod, headers: &HeaderMap, path: &str) -> Result<Value, Value>
 
 /// The headers a preview's reads carry: the caller's, without its
 /// credentials (reads act as the owner, [`get`]).
-fn forwarded(headers: &HeaderMap) -> HeaderMap {
+pub(crate) fn forwarded(headers: &HeaderMap) -> HeaderMap {
     let mut h = headers.clone();
     h.remove(header::AUTHORIZATION);
     h.remove(crate::CREDENTIAL_HEADER);
@@ -255,7 +255,7 @@ fn forwarded(headers: &HeaderMap) -> HeaderMap {
 }
 
 /// `s` percent-encoded for a query string.
-fn query_value(s: &str) -> String {
+pub(crate) fn query_value(s: &str) -> String {
     s.bytes()
         .map(|b| match b {
             b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'-' | b'_' | b'.' => (b as char).to_string(),
@@ -317,7 +317,7 @@ pub(crate) async fn fetch(
 /// ([`Loader`]): layouts a tap opens, screens' data paths, device data and
 /// a layout's versions. It never writes: every write a [`Loader`] could
 /// take is left to its default, which the session reports as not sent.
-struct Reader {
+pub(crate) struct Reader {
     pod: Pod,
     headers: HeaderMap,
     rt: tokio::runtime::Handle,
@@ -328,7 +328,7 @@ struct Reader {
 }
 
 impl Reader {
-    fn new(pod: &Pod, headers: &HeaderMap, rt: tokio::runtime::Handle) -> Reader {
+    pub(crate) fn new(pod: &Pod, headers: &HeaderMap, rt: tokio::runtime::Handle) -> Reader {
         let base = headers
             .get(header::HOST)
             .and_then(|h| h.to_str().ok())
@@ -362,7 +362,7 @@ impl Reader {
 
     /// The titles of the pod's layouts and core layouts, for device data rows
     /// (a notification's or channel's layout).
-    fn layouts(&self) {
+    pub(crate) fn layouts(&self) {
         let mut titles: HashMap<String, String> = self
             .pod
             .catalog()
@@ -376,7 +376,7 @@ impl Reader {
     }
 
     /// The rest of the device data for what `needs` (layouts' JSON) binds.
-    fn device(&self, needs: &str) -> DataBundle {
+    pub(crate) fn device(&self, needs: &str) -> DataBundle {
         let titles = self.titles.lock().map(|t| t.clone()).unwrap_or_default();
         let mut d = device_data::device(&self.base, needs, &titles, |p| self.get(p));
         // A preview stands for a phone with notifications allowed.
@@ -416,7 +416,7 @@ impl Loader for Reader {
     }
 }
 
-fn record(v: Value) -> EntityRecord {
+pub(crate) fn record(v: Value) -> EntityRecord {
     serde_json::from_value(v).unwrap_or_default()
 }
 
@@ -443,7 +443,7 @@ async fn home_feed_data(pod: &Pod, headers: &HeaderMap, data: &mut DataBundle) {
 }
 
 /// Layouts a tree embeds inline or opens, by id.
-fn linked_layouts(root: &UiNode) -> Vec<String> {
+pub(crate) fn linked_layouts(root: &UiNode) -> Vec<String> {
     let mut out = Vec::new();
     for n in root.walk() {
         if let UiNode::Layout { layout, .. } = n {
@@ -520,7 +520,7 @@ pub(crate) fn draw(
 }
 
 /// Adds what `into` lacks (what it has stays).
-fn merge(
+pub(crate) fn merge(
     into: &mut DataBundle,
     entities: BTreeMap<String, protocol::EntityRecord>,
     queries: BTreeMap<String, Vec<String>>,
@@ -607,7 +607,7 @@ fn route_params(args: &Value) -> Result<BTreeMap<String, String>, Value> {
     }
 }
 
-fn viewport(args: &Value) -> Viewport {
+pub(crate) fn viewport(args: &Value) -> Viewport {
     let v = &args["viewport"];
     let pick = |k: &str, d: f32, max: f32| {
         v[k].as_f64()
@@ -774,7 +774,7 @@ fn nodes(scene: &Scene, mode: NodesMode) -> Vec<Value> {
         .collect()
 }
 
-fn effect_line(e: &Effect) -> String {
+pub(crate) fn effect_line(e: &Effect) -> String {
     match e {
         Effect::FormSet { field, value } => format!("form {field} set to {value:?}"),
         Effect::Focused { field } => format!("field {field} focused"),
@@ -1065,7 +1065,7 @@ const RENDER_STACK: usize = 64 * 1024 * 1024;
 
 /// Run `f` (blocking: it loads and draws) on a thread of its own with
 /// [`RENDER_STACK`], and wait for it without holding a runtime worker.
-async fn on_render_thread<T: Send + 'static>(
+pub(crate) async fn on_render_thread<T: Send + 'static>(
     f: impl FnOnce() -> T + Send + 'static,
 ) -> Result<T, String> {
     let (tx, rx) = tokio::sync::oneshot::channel();

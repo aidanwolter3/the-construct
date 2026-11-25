@@ -100,6 +100,7 @@ word is the command and the rest of the entry, as written, its argument: `click 
 | `hover <target>` | Rests the mouse over the node's centre (a `core://Tappable` there is drawn hovered, as on desktop and the web) until another `hover`. |
 | `back` | A system Back press. |
 | `wait <ms>` / `idle` | Keeps drawing for that long / waits until no load or write is out. |
+| `expect-write <collection> {"field": value}` | A journey walk's (the pod's `walk_journey`) check that a dry-run write would put a row like that in the collection; the simulator sends its writes, so it refuses this command. |
 | `assert-text <text>` / `assert-no-text <text>` | Some node's text or content description contains (or doesn't contain) the text; retries 2 s. |
 | `wait-text <ms> <text>` | `assert-text` with a longer timeout. |
 | `assert-link <text>` | An `action.link.open` opened a link containing the text. |
@@ -121,7 +122,8 @@ word is the command and the rest of the entry, as written, its argument: `click 
 
 A step whose tap or intent fails (a load the pod refuses, an intent nothing in this mode runs) fails.
 
-A `<target>` is `tag:<id>`, a single word, or `"quoted text"`. `tag:<id>` is a semantic id
+A `<target>` is `tag:<id>`, a single word, or `"quoted text"`; `<target> in tag:<id>` looks only inside that node
+(a stable target in a list that changes). `tag:<id>` is a semantic id
 ([rendering.md](rendering.md#semantic-ids)): exact, else the first id containing it; the old Compose
 simulator's tags `textfield:<f>` and `textfield-send:<f>` stand for `field:<f>` and `send:<f>`. Text is matched exactly (tappable
 nodes first), then as a substring, against texts and content descriptions. The engine leaves what is off screen out
@@ -142,3 +144,7 @@ Examples:
 # Notifications
 --script 'notify pixelfed likes Bob liked your post; open-inbox; shot inbox; click @bob commented on your post; shot thread'
 ```
+
+The script language and target lookup live in `construct_render::script`, shared with the pod's journey walks
+(`walk_journey`, decision [`journeys-and-dry-runs`](decisions/journeys-and-dry-runs.md)). A journey is written in
+these commands and replayed on the owner's real screens, with its writes run as dry runs.

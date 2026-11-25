@@ -1,6 +1,6 @@
 //! Screen sizes: the simulator's presets, in points (dp).
 
-use construct_render::Viewport;
+use crate::Viewport;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Screen {

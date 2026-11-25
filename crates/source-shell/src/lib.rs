@@ -92,7 +92,7 @@ fn empty() -> WorkspaceSpec {
 /// `/v1/connected-apps/access`, decision `mcp-access-levels`).
 pub const SETTINGS_MANIFEST: SourceManifest = SourceManifest {
     feeds: pod_core::static_app::FEEDS,
-    entity_schemes: &["jacks", "connected_apps"],
+    entity_schemes: &["jacks", "connected_apps", "edit_groups", "checkpoints"],
     data_paths: &[
         PathSpec {
             pattern: "/v1/jacks/screen",
@@ -113,6 +113,14 @@ pub const SETTINGS_MANIFEST: SourceManifest = SourceManifest {
             pattern: "/v1/connected-apps/screen?id={id}",
             query_keys: &[],
             doc: "One connected app (connected_apps://<id>).",
+        },
+        PathSpec {
+            pattern: pod_core::construct::edit_groups::SCREEN_PATH,
+            query_keys: &[
+                pod_core::construct::edit_groups::GROUPS_QUERY,
+                pod_core::construct::edit_groups::CHECKPOINTS_QUERY,
+            ],
+            doc: "The edit groups of the last 30 days (edit_groups://<id>) and the checkpoints kept (checkpoints://<id>), newest first (decision edit-groups).",
         },
     ],
     actions: &[
@@ -136,6 +144,21 @@ pub const SETTINGS_MANIFEST: SourceManifest = SourceManifest {
             query_keys: &[],
             doc: "{id, access}: what that app may do: read, edit or outward (decision mcp-access-levels).",
         },
+        PathSpec {
+            pattern: pod_core::construct::edit_groups::APPLY_PATH,
+            query_keys: &[],
+            doc: "{id}: make a proposed edit group live, exactly as it was staged (refused if its screens moved since).",
+        },
+        PathSpec {
+            pattern: pod_core::construct::edit_groups::REVERT_PATH,
+            query_keys: &[],
+            doc: "{id} or {since}: undo an applied edit group, or every one since a time (your own edits stay).",
+        },
+        PathSpec {
+            pattern: pod_core::construct::edit_groups::RESTORE_PATH,
+            query_keys: &[],
+            doc: "{id}: put every screen back as it was at that checkpoint (core layouts stay current; rows untouched). Confirm first.",
+        },
     ],
     entities: &[
         EntityDoc {
@@ -152,6 +175,32 @@ pub const SETTINGS_MANIFEST: SourceManifest = SourceManifest {
                 ("connected", "true until it is disconnected"),
                 ("access", "what it may do: read, edit or outward"),
                 ("access_label", "its access and what that allows, in words"),
+                (
+                    "grant_text",
+                    "a scoped credential's limits in words (decision mcp-grants); empty without",
+                ),
+            ],
+        },
+        EntityDoc {
+            uri: "edit_groups://{id}",
+            doc: "A change an agent staged or made to the owner's screens, undoable in one step (decision edit-groups).",
+            fields: &[
+                ("title", "what it does, in a line"),
+                ("why", "why it was made"),
+                ("state", "proposed, applied, reverted or conflict"),
+                ("state_text", "the state in words (\"Changed 3 h ago\")"),
+                ("can_undo", "true while it is applied"),
+                ("can_apply", "true while it is proposed and additive"),
+                ("names_text", "the layouts and components it changes"),
+            ],
+        },
+        EntityDoc {
+            uri: "checkpoints://{id}",
+            doc: "Home as it was before an applied edit group, to go back to.",
+            fields: &[
+                ("note", "what came after it"),
+                ("when_text", "when, in words"),
+                ("restore_text", "the restore button's line"),
             ],
         },
         EntityDoc {

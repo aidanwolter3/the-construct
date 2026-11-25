@@ -5,9 +5,13 @@
 
 mod access;
 mod construct;
+mod edit_groups;
+mod grants;
 mod guide;
+mod journeys;
 mod previews;
 mod sharing;
+mod usage;
 mod watches;
 
 use std::sync::Arc;

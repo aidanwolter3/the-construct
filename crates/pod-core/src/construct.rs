@@ -22,6 +22,8 @@
 pub mod adopted;
 #[path = "construct_core.rs"]
 pub mod core;
+#[path = "construct_edit_groups.rs"]
+pub mod edit_groups;
 #[path = "construct_events.rs"]
 pub mod events;
 #[path = "construct_http.rs"]

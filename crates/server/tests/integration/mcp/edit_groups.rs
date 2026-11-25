@@ -1,0 +1,318 @@
+//! Edit groups and checkpoints (decision `edit-groups`), through the real
+//! host: a staged group changes nothing live, apply makes it live with a
+//! checkpoint first, revert undoes it (or says conflict when someone changed
+//! the screen since), a scoped credential's grant holds the additive and
+//! protected rules at apply, and a checkpoint restores the screens.
+
+use serde_json::{Value, json};
+
+use super::{Env, env};
+
+fn recipe_layout() -> Value {
+    json!({"type": "core://Page", "title": "Recipe", "root": {"type": "core://Column", "children": [
+        {"type": "core://Text", "style": "Title", "value_expr": "Recipe"},
+        {"type": "core://List", "query_key": "collection:dishes",
+         "item_template": {"type": "core://Text", "style": "Body", "value_expr": "$item.title"}}
+    ]}})
+}
+
+async fn ok(env: &Env, key: &str, tool: &str, args: Value) -> Value {
+    let (err, out) = env.tool(key, tool, args).await;
+    assert!(!err, "{tool}: {out}");
+    out
+}
+
+async fn version(env: &Env, key: &str, id: &str) -> i64 {
+    ok(env, key, "get_layout", json!({ "id": id })).await["version"]
+        .as_i64()
+        .unwrap()
+}
+
+async fn texts(env: &Env, key: &str, id: &str) -> String {
+    ok(env, key, "get_layout", json!({ "id": id })).await["layout"].to_string()
+}
+
+fn add_text(text: &str) -> Value {
+    json!([{ "op": "add", "path": "/root/children/1",
+             "value": { "type": "core://Text", "style": "Body", "value_expr": text } }])
+}
+
+async fn scoped(env: &Env, grant: Value) -> String {
+    let host = env.host.clone();
+    tokio::task::spawn_blocking(move || {
+        let g = pod_core::grant::Grant::from_json(&grant).unwrap();
+        host.issue_mcp_scoped("mine", "Anticipate", pod_core::mcp::Access::Edit, Some(&g))
+            .unwrap()
+    })
+    .await
+    .unwrap()
+}
+
+#[tokio::test]
+async fn stage_apply_revert_and_restore() {
+    let env = env().await;
+    let pod_code = env.pod("mine").await;
+    let owner = env.connect_with(&pod_code, "outward").await;
+    let created = ok(
+        &env,
+        &owner,
+        "create_layout",
+        json!({"title": "Recipe", "icon": "recipe", "feeds": [["collections", "dishes"]],
+               "layout": recipe_layout()}),
+    )
+    .await;
+    let id = created["id"].as_str().unwrap().to_owned();
+    let v0 = version(&env, &owner, &id).await;
+
+    // Staged: nothing live, an additive report.
+    let staged = ok(
+        &env,
+        &owner,
+        "stage_edit_group",
+        json!({ "title": "Show a tip", "changes": [{ "id": id, "base_version": v0,
+                "json_patch": add_text("Tip: cook it the day before") }] }),
+    )
+    .await;
+    assert_eq!(staged["report"]["additive"], true, "{staged}");
+    let group = staged["id"].as_str().unwrap().to_owned();
+    assert_eq!(version(&env, &owner, &id).await, v0);
+    assert!(!texts(&env, &owner, &id).await.contains("Tip:"));
+
+    // Applied: live, with a checkpoint.
+    let applied = ok(&env, &owner, "apply_edit_group", json!({ "id": group })).await;
+    assert_eq!(applied["state"], "applied", "{applied}");
+    assert!(texts(&env, &owner, &id).await.contains("Tip:"));
+    let ckpts = ok(&env, &owner, "list_checkpoints", json!({})).await;
+    let ckpt = ckpts["checkpoints"][0]["id"].as_str().unwrap().to_owned();
+    // Applying twice does nothing more.
+    let (err, again) = env
+        .tool(&owner, "apply_edit_group", json!({ "id": group }))
+        .await;
+    assert!(err && again["error"] == "not_proposed", "{again}");
+
+    // Reverted: back as it was.
+    let reverted = ok(&env, &owner, "revert_edit_group", json!({ "id": group })).await;
+    assert_eq!(reverted["state"], "reverted", "{reverted}");
+    assert!(!texts(&env, &owner, &id).await.contains("Tip:"));
+
+    // A revert after the owner changed the screen is a conflict.
+    let v = version(&env, &owner, &id).await;
+    let g2 = ok(
+        &env,
+        &owner,
+        "stage_edit_group",
+        json!({ "title": "Show a tip", "changes": [{ "id": id, "base_version": v,
+                "json_patch": add_text("Tip: rest the dough") }] }),
+    )
+    .await["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    ok(&env, &owner, "apply_edit_group", json!({ "id": g2 })).await;
+    let v = version(&env, &owner, &id).await;
+    ok(
+        &env,
+        &owner,
+        "update_layout",
+        json!({ "id": id, "base_version": v, "json_patch": add_text("My own note") }),
+    )
+    .await;
+    let conflict = ok(&env, &owner, "revert_edit_group", json!({ "id": g2 })).await;
+    assert_eq!(conflict["state"], "conflict", "{conflict}");
+    assert!(texts(&env, &owner, &id).await.contains("My own note"));
+
+    // The first checkpoint brings it back as it was then, saying first that
+    // it undoes the owner's own note.
+    let dry = ok(
+        &env,
+        &owner,
+        "restore_checkpoint",
+        json!({ "id": ckpt, "dry_run": true }),
+    )
+    .await;
+    let would = &dry["would"];
+    assert!(
+        would["moves"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|m| m == &json!(id)),
+        "{dry}"
+    );
+    assert!(
+        would["undoes_your_edits"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|e| e["name"] == json!(id)),
+        "{dry}"
+    );
+    let restored = ok(&env, &owner, "restore_checkpoint", json!({ "id": ckpt })).await;
+    assert_eq!(restored["ok"], true, "{restored}");
+    let now = texts(&env, &owner, &id).await;
+    assert!(
+        !now.contains("My own note") && !now.contains("Tip:"),
+        "{now}"
+    );
+}
+
+#[tokio::test]
+async fn a_grant_applies_only_additive_unprotected_groups() {
+    let env = env().await;
+    let pod_code = env.pod("mine").await;
+    let owner = env.connect_with(&pod_code, "outward").await;
+    let id = ok(
+        &env,
+        &owner,
+        "create_layout",
+        json!({"title": "Recipe", "icon": "recipe", "feeds": [["collections", "dishes"]],
+               "layout": recipe_layout()}),
+    )
+    .await["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let tools = json!([
+        "get_layout",
+        "stage_edit_group",
+        "apply_edit_group",
+        "revert_edit_group",
+        "list_edit_groups"
+    ]);
+    let job = scoped(&env, json!({ "tools": tools })).await;
+
+    // Removing the title isn't additive: staged, but not applied.
+    let v = version(&env, &owner, &id).await;
+    let staged = ok(
+        &env,
+        &job,
+        "stage_edit_group",
+        json!({ "title": "Drop the title", "changes": [{ "id": id, "base_version": v,
+                "json_patch": [{ "op": "remove", "path": "/root/children/0" }] }] }),
+    )
+    .await;
+    assert_eq!(staged["report"]["additive"], false, "{staged}");
+    let (err, out) = env
+        .tool(&job, "apply_edit_group", json!({ "id": staged["id"] }))
+        .await;
+    assert!(err && out["error"] == "not_additive", "{out}");
+
+    // A protected layout isn't changed even additively.
+    let guarded = scoped(&env, json!({ "tools": tools, "protected_names": [id] })).await;
+    let staged = ok(
+        &env,
+        &guarded,
+        "stage_edit_group",
+        json!({ "title": "Show a tip", "changes": [{ "id": id, "base_version": v,
+                "json_patch": add_text("Tip") }] }),
+    )
+    .await;
+    let (err, out) = env
+        .tool(&guarded, "apply_edit_group", json!({ "id": staged["id"] }))
+        .await;
+    assert!(err && out["error"] == "protected", "{out}");
+
+    // Additive and unprotected: applied.
+    let staged = ok(
+        &env,
+        &job,
+        "stage_edit_group",
+        json!({ "title": "Show a tip", "changes": [{ "id": id, "base_version": v,
+                "json_patch": add_text("Tip") }] }),
+    )
+    .await;
+    let out = ok(
+        &env,
+        &job,
+        "apply_edit_group",
+        json!({ "id": staged["id"] }),
+    )
+    .await;
+    assert_eq!(out["state"], "applied", "{out}");
+
+    // A group staged before the screens moved is stale.
+    let v = version(&env, &owner, &id).await;
+    let stale = ok(
+        &env,
+        &job,
+        "stage_edit_group",
+        json!({ "title": "Another tip", "changes": [{ "id": id, "base_version": v,
+                "json_patch": add_text("Tip 2") }] }),
+    )
+    .await;
+    ok(
+        &env,
+        &owner,
+        "update_layout",
+        json!({ "id": id, "base_version": v, "json_patch": add_text("Owner") }),
+    )
+    .await;
+    let (err, out) = env
+        .tool(&job, "apply_edit_group", json!({ "id": stale["id"] }))
+        .await;
+    assert!(
+        err && (out["error"] == "stale_stage" || out["error"] == "stale_base"),
+        "{out}"
+    );
+}
+
+#[tokio::test]
+async fn the_app_lists_and_undoes_a_group_and_only_the_owner_may() {
+    let env = env().await;
+    let pod_code = env.pod("mine").await;
+    let owner = env.connect_with(&pod_code, "outward").await;
+    let id = ok(
+        &env,
+        &owner,
+        "create_layout",
+        json!({"title": "Recipe", "icon": "recipe", "feeds": [["collections", "dishes"]],
+               "layout": recipe_layout()}),
+    )
+    .await["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let v = version(&env, &owner, &id).await;
+    let group = ok(
+        &env,
+        &owner,
+        "stage_edit_group",
+        json!({ "title": "Show a tip", "changes": [{ "id": id, "base_version": v,
+                "json_patch": add_text("Tip") }] }),
+    )
+    .await["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    ok(&env, &owner, "apply_edit_group", json!({ "id": group })).await;
+
+    let (status, screen) = env.get("/v1/edit-groups/screen", &pod_code).await;
+    assert!(status.is_success(), "{screen}");
+    let e = &screen["entities"][format!("edit_groups://{group}")];
+    assert_eq!(e["can_undo"], true, "{screen}");
+    assert_eq!(
+        screen["queries"]["checkpoints"].as_array().unwrap().len(),
+        1,
+        "{screen}"
+    );
+
+    // An MCP credential can't call the app's route.
+    let resp = super::client()
+        .post(format!("{}/v1/edit-groups/revert", env.url))
+        .bearer_auth(&owner)
+        .json(&json!({ "id": group }))
+        .send()
+        .await
+        .unwrap();
+    assert!(!resp.status().is_success());
+    // The owner's device can.
+    let resp = super::client()
+        .post(format!("{}/v1/edit-groups/revert", env.url))
+        .bearer_auth(&pod_code)
+        .json(&json!({ "id": group }))
+        .send()
+        .await
+        .unwrap();
+    assert!(resp.status().is_success(), "{:?}", resp.text().await);
+    assert!(!texts(&env, &owner, &id).await.contains("\"Tip\""));
+}

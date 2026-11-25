@@ -333,6 +333,9 @@ pub fn collect_garbage(conn: &Connection) -> rusqlite::Result<usize> {
         stmt.query_map([], |r| r.get::<_, String>(0))?
             .collect::<rusqlite::Result<_>>()?
     };
+    // Checkpoints and edit groups keep what they need to go back to
+    // (decision `edit-groups`), past the names' trimmed histories.
+    queue.extend(super::edit_groups::pinned(conn)?);
     while let Some(id) = queue.pop_front() {
         if !keep.insert(id.clone()) {
             continue;

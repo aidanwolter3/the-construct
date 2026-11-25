@@ -201,7 +201,20 @@ fn core_tool_needs(name: &str, _args: &Value) -> Option<Access> {
         | "revoke_publication"
         | "revoke_calendar_feed"
         | "unplug_jack"
-        | "mcp_disconnect" => Access::Edit,
+        | "mcp_disconnect"
+        | "walk_journey"
+        | "usage_report"
+        | "usage_paths"
+        | "stage_edit_group"
+        | "apply_edit_group"
+        | "revert_edit_group" => Access::Edit,
+        "restore_checkpoint" => {
+            if _args["dry_run"] == true {
+                Access::Read
+            } else {
+                Access::Edit
+            }
+        }
         // Outward (and the default): share_publicly, publish, set_handle,
         // set_calendar_feed, rotate_calendar_feed, mcp_connect, mcp_call_tool,
         // plug_jack, watch_device, delete_layout, delete_component.
@@ -278,7 +291,19 @@ async fn handle(State(pod): State<Pod>, headers: HeaderMap, body: Bytes) -> Resp
     let answer = match method {
         "initialize" => Ok(initialize(&pod, &params, connection_access(&pod, &headers))),
         "ping" => Ok(json!({})),
-        "tools/list" => Ok(json!({ "tools": all_tools(&pod) })),
+        "tools/list" => {
+            // A scoped credential sees only the tools its grant allows.
+            let grant = crate::grant::connection_grant(&pod, &headers);
+            let tools: Vec<Value> = all_tools(&pod)
+                .into_iter()
+                .filter(|t| {
+                    grant
+                        .as_ref()
+                        .is_none_or(|g| g.allows_tool(t["name"].as_str().unwrap_or("")))
+                })
+                .collect();
+            Ok(json!({ "tools": tools }))
+        }
         "tools/call" => Ok(call_tool(&pod, &headers, &params).await),
         "resources/list" => Ok(json!({ "resources": [] })),
         "prompts/list" => Ok(json!({ "prompts": [] })),
@@ -532,6 +557,8 @@ fn tools() -> Vec<Value> {
     let mut out = base_tools();
     out.extend(crate::construct::share::tool_specs());
     out.extend(crate::preview::tools());
+    out.extend(crate::journey::tools());
+    out.extend(crate::usage::tools());
     out.extend(crate::mcp_servers::tools());
     out.extend(crate::devices::tool_specs());
     out
@@ -629,6 +656,45 @@ fn base_tools() -> Vec<Value> {
             "Move a layout back to an earlier entry of its name's history (get_layout lists it); the move is recorded too.",
             json!({ "id": id, "version": { "type": "integer" }, "note": note }),
             &["id", "version"],
+        ),
+        tool(
+            "stage_edit_group",
+            "Stage a change to the pod's own layouts and @me/ components as one edit group (decision edit-groups): the writes are made and rolled back, so nothing is live; the answer is the report (diff, additive, followers re-sealed, what a grant protects). walk_journey {group} walks the staged screens; apply_edit_group makes them live; revert_edit_group undoes it in one step. walk_id: the failing walk it fixes (a binding or target may change only inside that walk's failing node).",
+            json!({ "title": { "type": "string", "description": "What it does, in a line the owner reads" },
+                    "why": { "type": "string" },
+                    "walk_id": { "type": "string" },
+                    "changes": { "type": "array", "items": { "type": "object", "description": "{id (a layout) | component (an @me/ name), base_version, layout | json_patch | definition}" } } }),
+            &["title", "changes"],
+        ),
+        tool(
+            "apply_edit_group",
+            "Make a staged edit group live, as one write: refused if a name moved since it was staged (stage again), or, for a scoped credential, if it isn't additive or touches a protected name. Records a checkpoint of home first.",
+            json!({ "id": { "type": "string" } }),
+            &["id"],
+        ),
+        tool(
+            "revert_edit_group",
+            "Undo an applied edit group (id), or every group applied since a time (since: unix seconds), newest first. Each name goes back to what it was, embedding what it names now; a name changed since by someone else makes the group 'conflict' and nothing moves.",
+            json!({ "id": { "type": "string" }, "since": { "type": "integer" } }),
+            &[],
+        ),
+        tool(
+            "list_edit_groups",
+            "The edit groups of the last 30 days, newest first: title, state (proposed, applied, reverted, conflict), additive, the names changed, the checkpoint taken before.",
+            json!({}),
+            &[],
+        ),
+        tool(
+            "list_checkpoints",
+            "Checkpoints of home taken before each applied edit group (kept 90 days or the newest 30): restore_checkpoint puts the screens back as they were.",
+            json!({}),
+            &[],
+        ),
+        tool(
+            "restore_checkpoint",
+            "Put every screen home reached at a checkpoint back as it was (core layouts stay current, rows untouched). dry_run: true answers what it would move, which of the owner's own edits it would undo and what home would no longer reach: show it to the user first.",
+            json!({ "id": { "type": "string" }, "dry_run": { "type": "boolean" } }),
+            &["id"],
         ),
         tool(
             "rename_layout",
@@ -768,8 +834,20 @@ async fn call_tool(pod: &Pod, headers: &HeaderMap, params: &Value) -> Value {
     if needs > access {
         return tool_result(Err(access_too_low(name, needs, access)));
     }
-    CALL_ACCESS
-        .scope(access, run_tool(pod, headers, name, args))
+    // A scoped credential's grant (decision `mcp-grants`): its tools, and
+    // for the call (and the router requests its tools make) the rows and
+    // names it may touch.
+    let grant = crate::grant::connection_grant(pod, headers);
+    if let Some(g) = &grant
+        && !g.allows_tool(name)
+    {
+        return tool_result(Err(crate::grant::refusal(&format!("the tool {name}"))));
+    }
+    crate::grant::CALL_GRANT
+        .scope(
+            grant,
+            CALL_ACCESS.scope(access, run_tool(pod, headers, name, args)),
+        )
         .await
 }
 
@@ -790,6 +868,26 @@ async fn run_tool(pod: &Pod, headers: &HeaderMap, name: &str, mut args: Value) -
         }
         "dispatch_virtual_interaction" => {
             return crate::preview::dispatch_virtual_interaction(pod, &args).await;
+        }
+        "walk_journey" => {
+            return crate::journey::walk(pod, headers, &args).await;
+        }
+        "usage_report" | "usage_paths" => {
+            let (n, a) = (name.to_owned(), args.clone());
+            let r = crate::blocking(pod, move |s| {
+                Ok(s.with_conn(|c| {
+                    Ok::<_, rusqlite::Error>(if n == "usage_report" {
+                        crate::usage::report(c, &a)
+                    } else {
+                        crate::usage::paths(c, &a)
+                    })
+                }))
+            })
+            .await;
+            return tool_result(match r {
+                Ok(Ok(v)) => v,
+                _ => Err(json!({ "error": "store_error" })),
+            });
         }
         _ => {}
     }

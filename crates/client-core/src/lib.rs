@@ -1501,6 +1501,11 @@ struct Inner {
     attachments_dir: PathBuf,
     /// The pod's construct ([`construct`]).
     construct: Mutex<construct::Construct>,
+    /// The pod has no usage route (an older server): stop keeping usage
+    /// (decision `usage-trails`).
+    usage_off: std::sync::atomic::AtomicBool,
+    /// Send the kept usage now (the app came to the foreground).
+    usage_wake: Arc<std::sync::atomic::AtomicBool>,
 }
 
 impl Drop for Inner {
@@ -1866,6 +1871,8 @@ impl ConstructEngine {
             stream_wake: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             attachments_dir,
             construct: Mutex::new(construct::Construct::default()),
+            usage_off: std::sync::atomic::AtomicBool::new(false),
+            usage_wake: Arc::new(std::sync::atomic::AtomicBool::new(true)),
         });
 
         // Both background threads hold only a Weak reference between
@@ -1932,6 +1939,15 @@ impl ConstructEngine {
             eprintln!("[ConstructEngine] failed to spawn the events thread: {e}");
         }
 
+        // Usage goes to the pod in batches (decision `usage-trails`).
+        let usage: Weak<Inner> = Arc::downgrade(&inner);
+        let spawned = thread::Builder::new()
+            .name("construct-engine-usage".into())
+            .spawn(move || usage_worker(usage));
+        if let Err(e) = spawned {
+            eprintln!("[ConstructEngine] failed to spawn the usage thread: {e}");
+        }
+
         Self { inner }
     }
 
@@ -1972,6 +1988,32 @@ impl ConstructEngine {
         self.inner
             .stream_wake
             .store(true, std::sync::atomic::Ordering::SeqCst);
+        self.inner
+            .usage_wake
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    /// Keep a usage event for the pod (decision `usage-trails`); it is sent
+    /// in batches every [`USAGE_EVERY`] and when the app comes back. Never
+    /// blocks for long: one row in the store.
+    pub fn record_usage(&self, event: &protocol::usage::UsageEvent) {
+        if self
+            .inner
+            .usage_off
+            .load(std::sync::atomic::Ordering::Relaxed)
+            || !event.valid()
+        {
+            return;
+        }
+        let Ok(json) = serde_json::to_string(event) else {
+            return;
+        };
+        let st = lock(&self.inner.state);
+        if let Some(store) = st.store.as_ref()
+            && let Err(e) = store.push_usage(&json)
+        {
+            eprintln!("[ConstructEngine] usage: cannot keep an event: {e}");
+        }
     }
 
     /// The current snapshot. Before the first fetch (and with no cached
@@ -2673,6 +2715,28 @@ impl Inner {
                 }
                 // The session changed during the POST: retry with the new one.
                 continue;
+            }
+            // The write's outcome, for usage (decision `usage-trails`).
+            let outcome = match &result {
+                FlushResult::Accepted(_) => Some("ok"),
+                FlushResult::Rejected(..) => Some("refused"),
+                FlushResult::Network(_) => None,
+                _ => Some("failed"),
+            };
+            if let Some(o) = outcome
+                && !self.usage_off.load(std::sync::atomic::Ordering::Relaxed)
+            {
+                let ev = protocol::usage::UsageEvent::result(
+                    protocol::usage::now_secs(),
+                    &row.endpoint,
+                    o,
+                );
+                if let Ok(json) = serde_json::to_string(&ev) {
+                    let st = lock(&self.state);
+                    if let Some(store) = st.store.as_ref() {
+                        let _ = store.push_usage(&json);
+                    }
+                }
             }
             let (snap, failed) = self.apply_flush_result(&row, &url, result);
             drop(net);
@@ -4428,6 +4492,96 @@ fn recover_sign_in(
 
 /// The sync worker thread: runs flush passes until the engine is dropped.
 /// Holds only a `Weak<Inner>` while waiting.
+/// How often kept usage is sent to the pod.
+pub const USAGE_EVERY: Duration = Duration::from_secs(15 * 60);
+
+/// Sends kept usage to the pod (decision `usage-trails`): every
+/// [`USAGE_EVERY`], and soon after the app comes back to the foreground.
+/// A pod without the route (404, 405: an older server) turns usage off for
+/// this engine and forgets what was kept; a refusal (401, 403) drops the
+/// batch; a network error keeps it for the next pass.
+fn usage_worker(engine: Weak<Inner>) {
+    let Ok(client) = reqwest::blocking::Client::builder()
+        .connect_timeout(Duration::from_secs(5))
+        .timeout(Duration::from_secs(20))
+        .build()
+    else {
+        return;
+    };
+    let mut last = Instant::now();
+    loop {
+        thread::sleep(Duration::from_secs(10));
+        let Some(inner) = engine.upgrade() else {
+            return;
+        };
+        if inner.signal.is_shut_down() {
+            return;
+        }
+        let woke = inner
+            .usage_wake
+            .swap(false, std::sync::atomic::Ordering::SeqCst);
+        if !woke && last.elapsed() < USAGE_EVERY {
+            continue;
+        }
+        last = Instant::now();
+        inner.send_usage(&client);
+    }
+}
+
+impl Inner {
+    /// One batch of kept usage to the pod.
+    fn send_usage(&self, client: &reqwest::blocking::Client) {
+        use std::sync::atomic::Ordering;
+        if self.usage_off.load(Ordering::Relaxed) {
+            return;
+        }
+        let (batch, token) = {
+            let st = lock(&self.state);
+            if !st.is_online {
+                return;
+            }
+            let Some(token) = st.session.as_ref().map(|s| s.token.clone()) else {
+                return;
+            };
+            let Some(store) = st.store.as_ref() else {
+                return;
+            };
+            match store.usage_batch(protocol::usage::MAX_BATCH) {
+                Ok(b) if !b.0.is_empty() => (b, token),
+                _ => return,
+            }
+        };
+        let (events, upto) = batch;
+        let body = format!("{{\"events\":[{}]}}", events.join(","));
+        let url = format!("{}{}", self.base_url, protocol::usage::USAGE_PATH);
+        let sent = client
+            .post(&url)
+            .header(reqwest::header::CONTENT_TYPE, "application/json")
+            .header(protocol::DEVICE_HEADER, self.device_id.as_str())
+            .headers(identity::headers())
+            .bearer_auth(token)
+            .body(body)
+            .send();
+        let st = lock(&self.state);
+        let Some(store) = st.store.as_ref() else {
+            return;
+        };
+        match sent.map(|r| r.status().as_u16()) {
+            Ok(200..=299) => {
+                let _ = store.drop_usage(Some(upto));
+            }
+            Ok(404 | 405 | 501) => {
+                self.usage_off.store(true, Ordering::Relaxed);
+                let _ = store.drop_usage(None);
+            }
+            Ok(400..=499) => {
+                let _ = store.drop_usage(Some(upto));
+            }
+            _ => {}
+        }
+    }
+}
+
 fn sync_worker(engine: Weak<Inner>, signal: Arc<WorkerSignal>) {
     let client = match reqwest::blocking::Client::builder()
         .connect_timeout(Duration::from_secs(5))

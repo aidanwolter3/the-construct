@@ -143,6 +143,9 @@ Schedule definitions were files in the runner's repository before CAP v3; they m
 decision). A schedule's prompt runs unattended with its workspace's access, so only a signed-in pod session or the
 pod's owner through MCP can write one.
 
+A schedule can run with a scoped pod credential of its own workspace's (a grant, decision
+[`mcp-grants`](decisions/mcp-grants.md)): the Anticipate job's two runs do ([anticipate.md](anticipate.md)).
+
 ## The Agents core layout
 
 `agents` (`crates/source-agents/layouts/agents/`): the sign-in form until the pod is signed in; then a summary card

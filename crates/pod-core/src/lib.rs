@@ -16,10 +16,13 @@ pub mod components;
 pub mod construct;
 pub mod devices;
 pub mod disk;
+pub mod dryrun;
+pub mod grant;
 pub mod hints;
 pub mod ical;
 pub mod image_proxy;
 pub mod jacks;
+pub mod journey;
 pub mod layouts;
 pub mod mcp;
 pub mod mcp_servers;
@@ -41,6 +44,7 @@ pub mod store;
 pub mod testing;
 pub mod tz;
 pub mod uploads;
+pub mod usage;
 pub mod util;
 pub mod validate;
 
@@ -647,6 +651,8 @@ pub fn app(state: Pod) -> Router {
         .merge(session::router())
         .merge(notify::router())
         .merge(construct::http::router())
+        .merge(construct::edit_groups::router())
+        .merge(usage::router())
         .merge(mcp::router())
         .merge(image_proxy::router())
         .route("/v1/jacks", get(get_jacks))
@@ -695,7 +701,7 @@ async fn scope_layer(State(pod): State<Pod>, req: Request, next: Next) -> Respon
 
 /// `None` for a session of the pod (jacks are its owner's: any device
 /// that opened the pod with its code), else the answer to send instead.
-async fn refuse_unless_signed(pod: &Pod, headers: &HeaderMap) -> Option<Response> {
+pub(crate) async fn refuse_unless_signed(pod: &Pod, headers: &HeaderMap) -> Option<Response> {
     match pod.caller(headers).await {
         Ok(Caller::Signed(_)) => None,
         Ok(_) => Some(json_error(
@@ -776,7 +782,18 @@ pub async fn blocking<T: Send + 'static>(
     f: impl FnOnce(&Store) -> rusqlite::Result<T> + Send + 'static,
 ) -> Result<T, ApiError> {
     let state = state.clone();
-    match tokio::task::spawn_blocking(move || f(&state.store)).await {
+    // An MCP call's grant (decision `mcp-grants`) holds on the blocking
+    // thread too, so the store code a source runs there can check it.
+    let grant = grant::current();
+    // So does a journey walk's dry run (decision `journeys-and-dry-runs`).
+    let dry = dryrun::current();
+    match tokio::task::spawn_blocking(move || {
+        let _held = grant::enter(grant);
+        let _dry = dryrun::enter(dry);
+        f(&state.store)
+    })
+    .await
+    {
         Ok(Ok(v)) => Ok(v),
         Ok(Err(e)) if store::is_full(&e) => {
             tracing::warn!("write refused: the pod's storage is full");

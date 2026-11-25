@@ -150,6 +150,8 @@ fn dangerous_endpoint(path: &str) -> Option<&'static str> {
     match first {
         "agents" => return Some("agents"),
         "jacks" => return Some("jacks"),
+        // Undoing or restoring the owner's screens (decision `edit-groups`).
+        "edit-groups" | "checkpoints" => return Some("construct"),
         "auth" | "oauth" | "sessions" | "pods" | "devices" | "sign-in" | "signin" => {
             return Some("auth");
         }
@@ -507,6 +509,10 @@ mod tests {
             Some("delete")
         );
         assert_eq!(dangerous_endpoint("/v1/notes/chores/update"), None);
+        assert_eq!(
+            dangerous_endpoint("/v1/edit-groups/revert"),
+            Some("construct")
+        );
     }
 
     #[test]

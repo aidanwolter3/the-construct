@@ -958,6 +958,7 @@ fn temporary_pods_fetch_nothing_and_ask_no_model() {
         pod_core::jacks::WEB,
         pod_core::jacks::WEB_SEARCH,
         pod_core::jacks::MCP,
+        pod_core::usage::JACK,
         server::agents::JACK,
         server::taste::JACK,
     ] {

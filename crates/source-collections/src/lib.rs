@@ -648,6 +648,15 @@ impl Source for CollectionsAdapter {
         mcp::tools()
     }
 
+    fn dry_runs(&self, path: &str) -> bool {
+        // Row writes and actions run their write path in a rolled-back
+        // transaction under a dry run (decision `journeys-and-dry-runs`).
+        MANIFEST
+            .mcp_actions
+            .iter()
+            .any(|p| pod_core::source::path_matches(p, path))
+    }
+
     fn mcp_access(&self, tool: &str, args: &Value) -> Option<pod_core::mcp::Access> {
         mcp::access(tool, args)
     }
@@ -719,7 +728,48 @@ async fn refusable_followed<T: Send + 'static>(
     let caps = adapter(pod).caps;
     let r = pod
         .blocking(move |s| {
+            // A journey walk's dry run (decision `journeys-and-dry-runs`):
+            // the rows earlier steps would have written go back first, and
+            // whatever happens the transaction is rolled back.
+            let dry = pod_core::dryrun::active();
+            if let Some(d) = &dry {
+                let d = d.clone();
+                let refused = refused.clone();
+                return s.transaction(move |tx| {
+                    db::put_overlay(tx, &d.overlay)?;
+                    db::take_changed(tx)?;
+                    let started = pod_core::util::now_secs();
+                    let body = match f(tx)? {
+                        Ok(_) => {
+                            let mut rows =
+                                follow::settle(tx, pod_core::util::now_secs(), caps)?.rows;
+                            // An action settles its own writes: take every
+                            // row the transaction wrote.
+                            for (c, ids) in db::rows_touched_since(tx, started)? {
+                                rows.entry(c).or_default().extend(ids);
+                            }
+                            db::record_dry_run(tx, &rows, &d)?;
+                            json!({ "error": "dry_run", "status": 409,
+                                    "detail": "a dry run: nothing was written" })
+                        }
+                        Err(body) => body,
+                    };
+                    *refused.lock().unwrap_or_else(|e| e.into_inner()) = Some(body);
+                    Err(rusqlite::Error::QueryReturnedNoRows)
+                });
+            }
             s.transaction(|tx| match f(tx)? {
+                // A scoped credential's grant (decision `mcp-grants`) holds
+                // for every row the call wrote, whichever collection.
+                Ok(_)
+                    if let Some(g) = pod_core::grant::active()
+                        && let Some(what) = db::grant_refusal(tx, &g)? =>
+                {
+                    let mut body = pod_core::grant::refusal(&what);
+                    body["status"] = json!(403);
+                    *refused.lock().unwrap_or_else(|e| e.into_inner()) = Some(body);
+                    Err(rusqlite::Error::QueryReturnedNoRows)
+                }
                 // The rows it changed move the computes that read them.
                 Ok(v) => Ok((v, follow::settle(tx, pod_core::util::now_secs(), caps)?)),
                 Err(body) => {

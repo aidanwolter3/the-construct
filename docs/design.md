@@ -419,7 +419,9 @@ Pod tokens are stored as hashes. Upstream tokens and jack secrets are sealed at 
 (`CONSTRUCT_SECRETS_KEY`) and never sent to a device. A credential issued to an agent reaches only `/v1/mcp`, and
 only at the access its owner gave it: read, edit, or outward (sharing publicly, starting agent runs, reaching new
 hosts, deleting). Every tool is checked against it before it runs, and rows the agent writes below outward count as
-the agent's, not the owner's (decision `mcp-access-levels`).
+the agent's, not the owner's (decision `mcp-access-levels`). A credential for an unattended job can carry a
+**grant** as well: its exact tools, the collections whose rows it may write, where it may delete, and screens it may
+never change. The pod enforces it inside every write transaction (decision `mcp-grants`).
 
 #### Outbound requests
 
@@ -776,6 +778,11 @@ the runner's protocol (CAP v3: a snapshot, a resumable event stream, actions). T
 schedules) and notifications; the runner owns the runs and their outcomes. It keeps its pod open to follow the
 stream ([agents.md](agents.md)).
 
+Two of the pod's schedules are **Anticipate**: every morning one reads the day ahead and one walks the owner's
+journeys through their real screens. Writes in those walks are dry runs. A fix is staged as an edit group, walked
+staged, and applied only when the server finds it additive and unprotected; the owner can undo it in one tap
+([anticipate.md](anticipate.md)).
+
 #### Taste
 
 Taste (`crates/source-taste`) shows the feed of the owner's own **taste service**, which ranks clothes from real
@@ -1032,7 +1039,8 @@ endpoint.
 |---|---|
 | Look around | `list_layouts`, `get_layout`, `find_elements`, `list_data_sources`, `sample_data`, `describe_vocabulary`, `guide` |
 | Build screens | `create_layout`, `update_layout` (whole or JSON Patch), `validate_layout`, `define_component`, `copy_component`, `set_theme`, `restore_version` |
-| Look at them | `render_layout_preview`, `dispatch_virtual_interaction`, `expand` |
+| Look at them | `render_layout_preview`, `dispatch_virtual_interaction`, `expand`, `walk_journey` (a whole journey replayed, writes as dry runs) |
+| Change safely | `stage_edit_group`, `apply_edit_group`, `revert_edit_group`, `restore_checkpoint`, `usage_report`, `usage_paths` |
 | Keep data | `define_collection`, `apply_change`, `edit_rows`, `add_row`, `describe_collection`, fillers (`collections_preview`, `collections_refresh`, `collections_status`), `undo_edit` |
 | Abilities | `list_jacks`, `plug_jack`, `mcp_connect`, `mcp_servers` |
 | Share | `publish`, `adopt`, `share_publicly`, `set_calendar_feed` |

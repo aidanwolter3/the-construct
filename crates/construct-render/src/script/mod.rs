@@ -1,8 +1,16 @@
 //! The script language (docs/simulator.md): commands separated by `;` or
 //! newlines, `#` comments, the first word the command and the rest of the
 //! entry its argument (`click Count: 2` clicks "Count: 2").
+//!
+//! Shared by the simulator (`construct-sim`) and the pod's journey walks
+//! (`walk_journey`, decision `journeys-and-dry-runs`), so a journey is
+//! written in the commands the simulator runs. [`find`] is how both find the
+//! node a target names.
 
-use crate::screen::Screen;
+pub mod screen;
+
+use crate::scene::{Scene, SemanticNode};
+use screen::Screen;
 
 /// Upper bound for `wait` and every timeout, 10 minutes.
 pub const MAX_WAIT_MS: u64 = 600_000;
@@ -130,6 +138,13 @@ pub enum Step {
         title: String,
     },
     ToggleChannel(String),
+    /// `expect-write <collection> {field: value, ...}`: a write the journey
+    /// made (dry-run, never sent) put a row like that in the collection
+    /// (`walk_journey` only, decision `journeys-and-dry-runs`).
+    ExpectWrite {
+        collection: String,
+        fields: serde_json::Map<String, serde_json::Value>,
+    },
     /// Fixture mode: the pod's construct moves to the one in this file
     /// (decision `content-addressed-construct`): `{"layouts": {key: page},
     /// "reach": {key: [keys]}, "data"?: {entities, queries}}`.
@@ -181,6 +196,7 @@ impl Step {
             Step::Notify { .. } => "notify",
             Step::ToggleChannel(_) => "toggle-channel",
             Step::Construct(_) => "construct",
+            Step::ExpectWrite { .. } => "expect-write",
         }
     }
 
@@ -208,7 +224,7 @@ pub struct Line {
 
 const COMMANDS: &str = "shot, click, type, pick, swipe-left, swipe-right, swipe-down, swipe-up, drag-down, \
     drag-card, scroll-to, back, wait, idle, assert-text, assert-no-text, wait-text, assert-link, wait-images, screen, \
-    offline, online, publish-version, open-layout, open-settings, open-inbox, notify, toggle-channel";
+    offline, online, publish-version, open-layout, open-settings, open-inbox, notify, toggle-channel, expect-write";
 
 /// Parses a script; the error names the entry and what it needs.
 pub fn parse(script: &str) -> Result<Vec<Line>, String> {
@@ -421,7 +437,7 @@ pub fn parse(script: &str) -> Result<Vec<Line>, String> {
                 }
             }
             "clock" => Step::Clock(
-                construct_render::dates::wall_time(&need("a time YYYY-MM-DDTHH:MM")?)
+                crate::dates::wall_time(&need("a time YYYY-MM-DDTHH:MM")?)
                     .ok_or_else(|| format!("{}: 'clock' takes a time YYYY-MM-DDTHH:MM", at()))?,
             ),
             "offline" => none(Step::Offline)?,
@@ -446,6 +462,25 @@ pub fn parse(script: &str) -> Result<Vec<Line>, String> {
                 Step::OpenLayout {
                     layout: parts[0].to_owned(),
                     how,
+                }
+            }
+            "expect-write" => {
+                let a = need("'<collection> {field: value, ...}'")?;
+                let (c, f) = a.split_once(char::is_whitespace).unwrap_or((&a, "{}"));
+                let fields = serde_json::from_str::<serde_json::Value>(f.trim())
+                    .ok()
+                    .and_then(|v| v.as_object().cloned());
+                match fields {
+                    Some(fields) if !c.is_empty() => Step::ExpectWrite {
+                        collection: c.to_owned(),
+                        fields,
+                    },
+                    _ => {
+                        return Err(format!(
+                            "{}: 'expect-write' needs '<collection> {{\"field\": value, ...}}' (JSON)",
+                            at()
+                        ));
+                    }
                 }
             }
             "open-settings" => none(Step::OpenSettings)?,
@@ -527,4 +562,82 @@ pub fn split_paths(arg: &str) -> Option<Vec<String>> {
         }
     }
     (!out.is_empty()).then_some(out)
+}
+
+/// The semantic ids the Compose simulator's test tags stood for (scripts
+/// written for it still run).
+fn tag_alias(tag: &str) -> String {
+    if let Some(f) = tag.strip_prefix("textfield-send:") {
+        format!("send:{f}")
+    } else if let Some(f) = tag.strip_prefix("textfield:") {
+        format!("field:{f}")
+    } else {
+        tag.to_owned()
+    }
+}
+
+/// The node a target names: `tag:<id>` (exact id, else the first id
+/// containing it), else text: exact (tappable nodes first), then contained.
+/// Quotes around a target are dropped. `<target> in tag:<id>` looks only
+/// inside that node's bounds (a stable target in a list that changes daily).
+pub fn find(scene: &Scene, target: &str) -> Option<SemanticNode> {
+    if let Some((inner, parent)) = target.rsplit_once(" in tag:") {
+        let p = find(scene, &format!("tag:{parent}"))?;
+        let [px, py, pw, ph] = p.bounds;
+        let inside = Scene {
+            semantics: scene
+                .semantics
+                .iter()
+                .filter(|n| {
+                    let [x, y, w, h] = n.bounds;
+                    x >= px - 0.5
+                        && y >= py - 0.5
+                        && x + w <= px + pw + 0.5
+                        && y + h <= py + ph + 0.5
+                })
+                .cloned()
+                .collect(),
+            ..scene.clone()
+        };
+        return find(&inside, inner.trim());
+    }
+    if let Some(tag) = target.strip_prefix("tag:") {
+        let id = tag_alias(tag);
+        return scene
+            .semantics
+            .iter()
+            .find(|n| n.id == id)
+            .or_else(|| scene.semantics.iter().find(|n| n.id.contains(&id)))
+            .cloned();
+    }
+    let text = target
+        .strip_prefix('"')
+        .and_then(|t| t.strip_suffix('"'))
+        .unwrap_or(target);
+    let has = |n: &&SemanticNode, exact: bool| {
+        n.text_content
+            .as_deref()
+            .is_some_and(|t| if exact { t == text } else { t.contains(text) })
+    };
+    let all = &scene.semantics;
+    all.iter()
+        .find(|n| has(n, true) && (n.interactive || n.tap.is_some()))
+        .or_else(|| all.iter().find(|n| has(n, true)))
+        .or_else(|| all.iter().find(|n| has(n, false)))
+        .cloned()
+}
+
+/// The texts on screen, for a failure's message.
+pub fn texts(scene: &Scene) -> String {
+    let mut seen: Vec<&str> = Vec::new();
+    for n in &scene.semantics {
+        if let Some(t) = n.text_content.as_deref()
+            && !t.is_empty()
+            && !seen.contains(&t)
+        {
+            seen.push(t);
+        }
+    }
+    let shown: Vec<String> = seen.iter().take(40).map(|t| format!("\"{t}\"")).collect();
+    format!("[{}]", shown.join(", "))
 }

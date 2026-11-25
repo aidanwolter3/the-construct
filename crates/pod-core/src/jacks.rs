@@ -170,6 +170,15 @@ pub fn core_jacks() -> Vec<JackSpec> {
                       or off.",
             kind: JackKind::Switch { default_on: true },
         },
+        JackSpec {
+            id: crate::usage::JACK,
+            title: "Usage",
+            summary: "Keeping how you use your screens, as your devices report it (screens \
+                      opened, taps, Backs; names only, never what they show), so the \
+                      Anticipate job can see which journeys you use and where they fall \
+                      apart (decision usage-trails). Off until you plug it.",
+            kind: JackKind::Switch { default_on: false },
+        },
     ]
 }
 

@@ -502,6 +502,12 @@ cargo test --release -p construct-render --test integration bench -- --ignored -
 
 ## Agent previews (MCP)
 
+`walk_journey` (decision [`journeys-and-dry-runs`](decisions/journeys-and-dry-runs.md), `pod_core::journey`) runs a
+whole script of the simulator's commands on one such preview session. Its loader dry-runs each write through the
+pod's router and merges the rows the write would leave into the session; with `group` it serves a staged edit
+group's elements. The session tells its loader what the owner did (`Loader::usage`, decision
+[`usage-trails`](decisions/usage-trails.md)), but only the engine's loader records it: previews and walks don't.
+
 `render_layout_preview` (`id`, or a draft `layout` drawn with `data_from`'s data and every feed of home's;
 `viewport`, `form`, `dark`) answers an image (`image/webp`, lossless) and a text: a summary line, then JSON with
 `preview_id`, `state`, timing and the nodes (id, type, bounds, text, tap, selected). `dispatch_virtual_interaction`
