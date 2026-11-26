@@ -32,4 +32,11 @@ action's target, the second collection of a two-collection edit, child rows), be
 and refuses the whole transaction (`grant_refuses`). `apply_edit_group` refuses protected names and groups that
 aren't additive.
 
+Since then (2026-11-26, security audit): the protected names hold on every write of a group's names, not only its
+first apply. Under a grant, a redo (`apply_edit_group` on an undone group) is held to apply's checks (safe, nothing
+protected); `revert_edit_group` (by id, or every group `since`, refused whole) and `restore_checkpoint` refuse
+when they would move a protected name; and Keep (`apply_edit_group` on a trial) is the owner's alone
+(`owner_keeps`), so a scoped job can't turn off a trial's next-morning undo. Undoing an unprotected trial stays
+allowed: Build undoes its unkept trials each morning.
+
 Not done: grants chosen on the OAuth consent page (the CLI makes them); a grant for row values (which fields).

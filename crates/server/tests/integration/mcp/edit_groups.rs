@@ -283,6 +283,141 @@ async fn a_grant_applies_only_additive_unprotected_groups() {
     );
 }
 
+/// The grant holds on every way a group's names are written, not only a
+/// first apply: a redo, an undo (one group or every group since), a
+/// checkpoint restore; and only the owner keeps a trial.
+#[tokio::test]
+async fn a_grant_holds_on_redo_undo_keep_and_restore() {
+    let env = env().await;
+    let pod_code = env.pod("mine").await;
+    let owner = env.connect_with(&pod_code, "outward").await;
+    let id = ok(
+        &env,
+        &owner,
+        "create_layout",
+        json!({"title": "Recipe", "icon": "recipe", "feeds": [["collections", "dishes"]],
+               "layout": recipe_layout()}),
+    )
+    .await["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let guarded = scoped(
+        &env,
+        json!({ "tools": ["apply_edit_group", "revert_edit_group", "restore_checkpoint",
+                          "list_edit_groups", "list_checkpoints"],
+                "protected_names": [id] }),
+    )
+    .await;
+    let refused = |out: &Value, error: &str| out["error"] == error;
+
+    // The owner's own group on the protected layout, applied then undone.
+    let v = version(&env, &owner, &id).await;
+    let group = ok(
+        &env,
+        &owner,
+        "stage_edit_group",
+        json!({ "title": "Show a tip", "changes": [{ "id": id, "base_version": v,
+                "json_patch": add_text("Tip") }] }),
+    )
+    .await["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    ok(&env, &owner, "apply_edit_group", json!({ "id": group })).await;
+    let ckpt = ok(&env, &owner, "list_checkpoints", json!({})).await["checkpoints"][0]["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    ok(&env, &owner, "revert_edit_group", json!({ "id": group })).await;
+    let undone = texts(&env, &owner, &id).await;
+
+    // Redo: refused, and nothing moved.
+    let (err, out) = env
+        .tool(&guarded, "apply_edit_group", json!({ "id": group }))
+        .await;
+    assert!(err && refused(&out, "protected"), "{out}");
+    assert_eq!(texts(&env, &owner, &id).await, undone);
+
+    // Undo, by id or every group since: refused.
+    ok(&env, &owner, "apply_edit_group", json!({ "id": group })).await;
+    let redone = texts(&env, &owner, &id).await;
+    let (err, out) = env
+        .tool(&guarded, "revert_edit_group", json!({ "id": group }))
+        .await;
+    assert!(err && refused(&out, "protected"), "{out}");
+    let (err, out) = env
+        .tool(&guarded, "revert_edit_group", json!({ "since": 0 }))
+        .await;
+    assert!(err && refused(&out, "protected"), "{out}");
+    assert_eq!(texts(&env, &owner, &id).await, redone);
+
+    // A checkpoint restore that would move it: refused (a dry run still answers).
+    let out = ok(
+        &env,
+        &guarded,
+        "restore_checkpoint",
+        json!({ "id": ckpt, "dry_run": true }),
+    )
+    .await;
+    assert_eq!(out["dry_run"], true, "{out}");
+    let (err, out) = env
+        .tool(&guarded, "restore_checkpoint", json!({ "id": ckpt }))
+        .await;
+    assert!(err && refused(&out, "protected"), "{out}");
+    assert_eq!(texts(&env, &owner, &id).await, redone);
+
+    // Keep: the owner's alone, even on an unprotected layout.
+    ok(&env, &owner, "revert_edit_group", json!({ "id": group })).await;
+    let other = ok(
+        &env,
+        &owner,
+        "create_layout",
+        json!({"title": "Other", "icon": "recipe", "feeds": [["collections", "dishes"]],
+               "layout": recipe_layout()}),
+    )
+    .await["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let v = version(&env, &owner, &other).await;
+    let trial = ok(
+        &env,
+        &owner,
+        "stage_edit_group",
+        json!({ "title": "Show a tip", "changes": [{ "id": other, "base_version": v,
+                "json_patch": add_text("Tip") }] }),
+    )
+    .await["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    ok(
+        &env,
+        &owner,
+        "apply_edit_group",
+        json!({ "id": trial, "trial": true }),
+    )
+    .await;
+    let (err, out) = env
+        .tool(&guarded, "apply_edit_group", json!({ "id": trial }))
+        .await;
+    assert!(err && refused(&out, "owner_keeps"), "{out}");
+    let groups = ok(&env, &owner, "list_edit_groups", json!({})).await;
+    let state = groups["groups"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|g| g["id"] == trial.as_str())
+        .unwrap()["state"]
+        .clone();
+    assert_eq!(state, "trial", "{groups}");
+
+    // Undoing its trial on an unprotected layout is still allowed.
+    let out = ok(&env, &guarded, "revert_edit_group", json!({ "id": trial })).await;
+    assert_eq!(out["state"], "reverted", "{out}");
+}
+
 #[tokio::test]
 async fn the_app_lists_and_undoes_a_group_and_only_the_owner_may() {
     let env = env().await;
