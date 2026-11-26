@@ -95,6 +95,20 @@ async fn guide(State(s): State<Arc<Store>>) -> Html<&'static str> {
     Html(GUIDE_PAGE)
 }
 
+/// A store that refuses a server's plain fetch (403) but serves a browser.
+async fn picky(headers: axum::http::HeaderMap) -> axum::response::Response {
+    use axum::response::IntoResponse;
+    let ua = headers
+        .get(axum::http::header::USER_AGENT)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+    if ua.contains("Mozilla") {
+        Html(ITEM_PAGE).into_response()
+    } else {
+        (axum::http::StatusCode::FORBIDDEN, "no robots").into_response()
+    }
+}
+
 async fn serve_store() -> (String, Arc<Store>) {
     let s = Arc::new(Store::default());
     let app = Router::new()
@@ -102,6 +116,7 @@ async fn serve_store() -> (String, Arc<Store>) {
         .route("/products/plain", get(|| async { Html(PLAIN_PAGE) }))
         .route("/products/plain-too", get(|| async { Html(PLAIN_PAGE) }))
         .route("/pages/size-guide", get(guide))
+        .route("/products/picky", get(picky))
         .with_state(s.clone());
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
@@ -110,9 +125,17 @@ async fn serve_store() -> (String, Arc<Store>) {
 }
 
 fn pod(model: Arc<Model>) -> Pod {
+    pod_with(model, None)
+}
+
+fn pod_with(model: Arc<Model>, browser: Option<web_extract::render::Browser>) -> Pod {
     let agent = construct_agent::Agent::new(model, Some("cheap".into()), "capable".into());
     let pod: Pod = Arc::new(AppState::in_memory(vec![
-        Arc::new(TasteAdapter::new(true).with_agent(Some(Arc::new(agent)))),
+        Arc::new(
+            TasteAdapter::new(true)
+                .with_agent(Some(Arc::new(agent)))
+                .with_browser(browser),
+        ),
         Arc::new(source_collections::CollectionsAdapter::new()),
         source_shell::adapter(),
     ]));
@@ -162,7 +185,7 @@ async fn checked(
     ids: &[&str],
 ) -> std::collections::HashMap<String, (String, Option<Value>)> {
     let ids: Vec<String> = ids.iter().map(|s| (*s).to_owned()).collect();
-    for _ in 0..200 {
+    for _ in 0..1200 {
         let want = ids.clone();
         let kept = pod.blocking(move |s| db::fits(s, &want)).await.unwrap();
         if kept.len() == ids.len() {
@@ -226,6 +249,39 @@ async fn without_a_chart_the_brands_guide_is_read_once() {
     assert_eq!(kept["shop.example:3"].0, "brand");
     assert_eq!(s.guide_reads.load(Ordering::SeqCst), 1);
     assert_eq!(model.calls.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn a_store_that_refuses_a_plain_fetch_is_read_in_the_browser() {
+    let (store, _) = serve_store().await;
+    let url = format!("{store}/products/picky");
+    // Without a browser the refusal is kept as an error (no badge).
+    let model = Arc::new(Model::default());
+    let pod = pod(model.clone());
+    targets(&pod).await;
+    fit::schedule(&pod, vec![piece("shop.example:6", &url)], true);
+    let kept = checked(&pod, &["shop.example:6"]).await;
+    assert_eq!(kept["shop.example:6"].0, "error");
+    assert_eq!(model.calls.load(Ordering::SeqCst), 0);
+    // With one, the page is rendered and its chart read. Skipped (passing)
+    // on a machine without Chromium.
+    let Some(browser) = web_extract::render::Browser::from_env(true) else {
+        eprintln!("no headless browser: skipping the rendered half");
+        return;
+    };
+    let model = Arc::new(Model::default());
+    let pod = pod_with(model.clone(), Some(browser));
+    targets(&pod).await;
+    let p = piece("shop.example:7", &url);
+    fit::schedule(&pod, vec![p.clone()], true);
+    let kept = checked(&pod, &["shop.example:7"]).await;
+    assert_eq!(kept["shop.example:7"].0, "item", "{kept:?}");
+    let out = fit::annotate(pod.store(), &[p]);
+    assert_eq!(
+        out[0]["fit"]["text"], "Won't fit: sleeves 33 in",
+        "{}",
+        out[0]
+    );
 }
 
 #[tokio::test]
