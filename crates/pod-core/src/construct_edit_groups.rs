@@ -487,6 +487,41 @@ pub fn screen_hosts(conn: &Connection) -> rusqlite::Result<BTreeSet<String>> {
     Ok(calls.hosts)
 }
 
+/// Where the pod's live screens go (`crate::grant::Nav`): the row fields a
+/// screen opens as a `target_uri` bound to `$item.<field>`, and every
+/// screen's route.
+pub fn screen_nav(conn: &Connection) -> rusqlite::Result<crate::grant::Nav> {
+    fn walk(v: &Value, nav: &mut crate::grant::Nav) {
+        match v {
+            Value::Object(o) => {
+                if let Some(f) = o
+                    .get("target_uri")
+                    .and_then(Value::as_str)
+                    .and_then(|t| t.strip_prefix("$item."))
+                    .filter(|f| f.chars().all(|c| c.is_ascii_alphanumeric() || c == '_'))
+                {
+                    nav.fields.insert(f.to_owned());
+                }
+                if let Some(screens) = o.get("screens").and_then(Value::as_array) {
+                    for s in screens {
+                        if let Some(r) = s["route"].as_str() {
+                            nav.routes.insert(r.to_owned());
+                        }
+                    }
+                }
+                o.values().for_each(|x| walk(x, nav));
+            }
+            Value::Array(a) => a.iter().for_each(|x| walk(x, nav)),
+            _ => {}
+        }
+    }
+    let mut nav = crate::grant::Nav::default();
+    for l in write::live_layouts(conn)? {
+        walk(&l.node, &mut nav);
+    }
+    Ok(nav)
+}
+
 /// The web hosts `after` names that `before` didn't.
 fn new_hosts(before: &Value, after: &Value) -> BTreeSet<String> {
     let (mut b, mut a) = (Calls::default(), Calls::default());

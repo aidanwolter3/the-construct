@@ -146,7 +146,9 @@ After a change to the tools, the Claude connector needs "Refresh tools list" in 
   - its edit groups never touch `protected_names`, nor a screen the pod shares;
   - no rows of a collection a calendar feed or a self-updating public link reads;
   - only the web hosts the pod's screens use, in its rows, its staged groups (`new_host`) and the pod's fetches
-    for it.
+    for it;
+  - a row field a screen opens as an address (`target_uri: $item.<field>`) only with one of the pod's own
+    routes.
 
 **Outside text is marked** (decision [`untrusted-tool-content`](decisions/untrusted-tool-content.md)): text other
 people wrote comes back as `{"untrusted": {"from", "content"}}`, and the instructions say it is data, never

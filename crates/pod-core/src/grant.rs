@@ -90,6 +90,45 @@ pub struct Grant {
     /// pod's screens use, the only ones a row it writes may name and the pod
     /// fetches from for it. `None`: not computed (no limit).
     pub hosts: Option<Arc<BTreeSet<String>>>,
+    /// Set per call ([`for_call`]), never from the header: the row fields the
+    /// pod's screens open as an address (`target_uri` bound to `$item.<f>`)
+    /// and the routes of their screens. A row it writes may set such a field
+    /// only to an address one of the pod's own screens opens. `None`: not
+    /// computed (no limit).
+    pub nav: Option<Arc<Nav>>,
+}
+
+/// Where the pod's screens can go: the fields a row opens by ([`Grant::nav`])
+/// and the routes of every screen.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Nav {
+    /// Row fields a screen opens as `target_uri` (`$item.<field>`).
+    pub fields: BTreeSet<String>,
+    /// Every screen's `route` (`collections://events/{id}`).
+    pub routes: BTreeSet<String>,
+}
+
+impl Nav {
+    /// Whether `uri` opens one of the screens, matched as clients match a
+    /// route: each `{name}` one segment of letters, digits, `_` or `-` (at
+    /// most 64), every other segment exactly.
+    pub fn opens_a_screen(&self, uri: &str) -> bool {
+        let u: Vec<&str> = uri.split('/').collect();
+        self.routes.iter().any(|route| {
+            let p: Vec<&str> = route.split('/').collect();
+            p.len() == u.len()
+                && p.iter().zip(&u).all(|(a, b)| {
+                    if a.starts_with('{') && a.ends_with('}') {
+                        !b.is_empty()
+                            && b.len() <= 64
+                            && b.chars()
+                                .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+                    } else {
+                        a == b
+                    }
+                })
+        })
+    }
 }
 
 fn name_set(v: &Value, key: &str) -> Result<Option<BTreeSet<String>>, String> {
@@ -229,6 +268,7 @@ impl Grant {
             keep_from: BTreeSet::new(),
             shared_rows: BTreeSet::new(),
             hosts: Some(Arc::new(BTreeSet::new())),
+            nav: Some(Arc::new(Nav::default())),
         }
     }
 
@@ -545,11 +585,19 @@ pub async fn for_call(pod: &crate::Pod, mut grant: Grant) -> Grant {
     grant
         .shared_rows
         .extend(crate::ical::feed_row_sets(pod).await);
-    let hosts = pod
-        .blocking(|s| s.with_conn(crate::construct::edit_groups::screen_hosts))
+    let (hosts, nav) = pod
+        .blocking(|s| {
+            s.with_conn(|c| {
+                Ok((
+                    crate::construct::edit_groups::screen_hosts(c)?,
+                    crate::construct::edit_groups::screen_nav(c)?,
+                ))
+            })
+        })
         .await
         .unwrap_or_default();
     grant.hosts = Some(Arc::new(hosts));
+    grant.nav = Some(Arc::new(nav));
     grant
 }
 
