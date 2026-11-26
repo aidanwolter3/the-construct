@@ -138,7 +138,8 @@ data path also answers it as `taste:sheet:piece`, which the sheet lists where `k
 Since `layouts/taste/0008.json` and `layouts/taste_item/0003.json` (decision `taste-fit-check`; layouts only, no
 new build): a garment's card says whether it fits, a pill beside its reason (in place of the swipe hint) and, above
 the description, the size it was judged on with its measurements; the sheet shows both and where the chart came from.
-See [Fit](#fit).
+Since `layouts/taste/0010.json`, Your taste says it too: a strip's thumbnail carries Fits or Won't fit (no room for
+Not sure), and a taste's own grid (Browse) the whole verdict under the price. See [Fit](#fit).
 
 Use it whole from a pod's layout, `{"type": "core://Use", "ref": "@core/taste"}` with the feed `["taste", "feed"]`,
 and link that from home; `taste:status`'s `counts_text` (12 liked · 30 disliked) makes a one-line summary there.
@@ -151,7 +152,8 @@ width; length; shoulder; sleeve, from the centre of the back; waist; rise; thigh
 body waist for charts of body sizes) and `low` and `high` in inches, a garment laid flat (either may be empty: shorts
 take `inseam` low 7.5 and borrow the trousers' waist, rise and thigh). With no rows for a kind there is no check.
 
-Which pieces: the deck's next four and any piece whose sheet opens (first), when they are garments (from `category`
+Which pieces: the deck's next four, any piece whose sheet opens (first) and the first eight of a taste's grid when it
+opens (Browse on Your taste; the taste page itself only shows verdicts already kept), when they are garments (from `category`
 and the title: shoes, bags, hats and the like are not; long sleeves are told from the kind and the title). Each is
 checked in the background, one at a time per pod, and its entity reloaded (a scoped data event) when kept:
 

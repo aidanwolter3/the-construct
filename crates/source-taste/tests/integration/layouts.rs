@@ -138,6 +138,18 @@ fn a_taste_opens_a_grid_of_its_pieces() {
         grid.contains("\"layout\":\"taste_item\""),
         "a piece doesn't open the sheet"
     );
+    // Both say whether a piece fits, each pill with its tone written in.
+    let pill = |tone: &str| format!("\"equals\":\"{tone}\"");
+    let strip = taste.to_string();
+    for tone in ["success", "error"] {
+        assert!(strip.contains(&pill(tone)), "Your taste has no {tone} pill");
+    }
+    for tone in ["success", "error", "muted"] {
+        assert!(
+            grid.contains(&pill(tone)),
+            "a taste's grid has no {tone} pill"
+        );
+    }
 }
 
 #[test]

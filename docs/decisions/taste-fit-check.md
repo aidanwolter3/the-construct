@@ -29,7 +29,9 @@ Decision:
   served, so new targets show at once. Three states: fits (with the size), won't fit (with the measure that misses,
   e.g. sleeves 33 in) and not sure (what the chart doesn't list, with what does fit), its pill green, red or grey. Each says where its chart came
   from; one from the brand's guide is called a guess.
-- **What is checked:** the next few pieces of the deck and any piece opened; each at most once a month (a page with no
+- **What is checked:** the next few pieces of the deck, any piece opened and the first eight of a taste's grid when
+  it is browsed (added the same day, when the owner looked for the badge on Your taste, whose pieces carry the
+  verdicts already kept); each at most once a month (a page with no
   chart once a week, a page that failed after six hours), and a page text the model has read is never sent again.
 - **Built on existing vocabulary:** new item fields (`fit_text`, `fit_tone`, `fit_note`, ...) and new versions of the
   `taste` and `taste_item` core layouts. No client build.

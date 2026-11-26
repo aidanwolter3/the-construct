@@ -2281,6 +2281,50 @@
                                       "shape": "Rounded",
                                       "type": "core://Image",
                                       "url": "$item.thumb"
+                                    },
+                                    {
+                                      "content": {
+                                        "content": {
+                                          "background": "${local://theme#success_surface}",
+                                          "content": {
+                                            "style": "Caption",
+                                            "type": "core://Text",
+                                            "value_expr": "Fits"
+                                          },
+                                          "content_color": "${local://theme#success}",
+                                          "corner_dp": 8,
+                                          "padding_h_dp": 8,
+                                          "padding_v_dp": 3,
+                                          "type": "core://Box"
+                                        },
+                                        "type": "core://Conditional",
+                                        "value": "$item.fit_text"
+                                      },
+                                      "equals": "success",
+                                      "type": "core://Conditional",
+                                      "value": "$item.fit_tone"
+                                    },
+                                    {
+                                      "content": {
+                                        "content": {
+                                          "background": "${local://theme#error_surface}",
+                                          "content": {
+                                            "style": "Caption",
+                                            "type": "core://Text",
+                                            "value_expr": "Won't fit"
+                                          },
+                                          "content_color": "${local://theme#error}",
+                                          "corner_dp": 8,
+                                          "padding_h_dp": 8,
+                                          "padding_v_dp": 3,
+                                          "type": "core://Box"
+                                        },
+                                        "type": "core://Conditional",
+                                        "value": "$item.fit_text"
+                                      },
+                                      "equals": "error",
+                                      "type": "core://Conditional",
+                                      "value": "$item.fit_tone"
                                     }
                                   ],
                                   "spacing_dp": 4,
@@ -2544,6 +2588,72 @@
                               "style": "Caption",
                               "type": "core://Text",
                               "value_expr": "$item.price_text"
+                            },
+                            {
+                              "content": {
+                                "content": {
+                                  "background": "${local://theme#success_surface}",
+                                  "content": {
+                                    "style": "Caption",
+                                    "type": "core://Text",
+                                    "value_expr": "$item.fit_text"
+                                  },
+                                  "content_color": "${local://theme#success}",
+                                  "corner_dp": 8,
+                                  "padding_h_dp": 8,
+                                  "padding_v_dp": 3,
+                                  "type": "core://Box"
+                                },
+                                "type": "core://Conditional",
+                                "value": "$item.fit_text"
+                              },
+                              "equals": "success",
+                              "type": "core://Conditional",
+                              "value": "$item.fit_tone"
+                            },
+                            {
+                              "content": {
+                                "content": {
+                                  "background": "${local://theme#error_surface}",
+                                  "content": {
+                                    "style": "Caption",
+                                    "type": "core://Text",
+                                    "value_expr": "$item.fit_text"
+                                  },
+                                  "content_color": "${local://theme#error}",
+                                  "corner_dp": 8,
+                                  "padding_h_dp": 8,
+                                  "padding_v_dp": 3,
+                                  "type": "core://Box"
+                                },
+                                "type": "core://Conditional",
+                                "value": "$item.fit_text"
+                              },
+                              "equals": "error",
+                              "type": "core://Conditional",
+                              "value": "$item.fit_tone"
+                            },
+                            {
+                              "content": {
+                                "content": {
+                                  "background": "${local://theme#muted_surface}",
+                                  "content": {
+                                    "style": "Caption",
+                                    "type": "core://Text",
+                                    "value_expr": "$item.fit_text"
+                                  },
+                                  "content_color": "${local://theme#muted_text}",
+                                  "corner_dp": 8,
+                                  "padding_h_dp": 8,
+                                  "padding_v_dp": 3,
+                                  "type": "core://Box"
+                                },
+                                "type": "core://Conditional",
+                                "value": "$item.fit_text"
+                              },
+                              "equals": "muted",
+                              "type": "core://Conditional",
+                              "value": "$item.fit_tone"
                             }
                           ],
                           "spacing_dp": 4,
