@@ -57,7 +57,37 @@ INSERT INTO taste_history (id, log) VALUES (1, lower(hex(randomblob(16))));
 
 /// By name: add steps at the end; never rename, edit or remove one that
 /// shipped.
-pub static MIGRATIONS: &[Step] = &[Step::sql("schema", SCHEMA), Step::sql("history", HISTORY)];
+pub static MIGRATIONS: &[Step] = &[
+    Step::sql("schema", SCHEMA),
+    Step::sql("history", HISTORY),
+    Step::sql("fit", FIT),
+];
+
+/// The fit checks (decision `taste-fit-check`, [`crate::fit`]): per piece
+/// where its chart came from (`item`, `brand`, `none` or `error`) and the
+/// chart, kept in inches; per site and kind of garment the brand's size
+/// guide (or none found); and every page text read, by hash, with the
+/// chart it held, so a text is read by the model once.
+const FIT: &str = "
+CREATE TABLE taste_fit (
+    item_id TEXT PRIMARY KEY,
+    source TEXT NOT NULL,
+    chart TEXT,
+    checked_at INTEGER NOT NULL
+);
+CREATE TABLE taste_fit_brands (
+    host TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    chart TEXT,
+    fetched_at INTEGER NOT NULL,
+    PRIMARY KEY (host, kind)
+);
+CREATE TABLE taste_fit_reads (
+    hash TEXT PRIMARY KEY,
+    chart TEXT,
+    read_at INTEGER NOT NULL
+);
+";
 
 const TOKEN_CONTEXT: &str = "taste_account.token:1";
 
@@ -427,6 +457,148 @@ pub fn take_over(store: &Store, theirs: &Value) -> rusqlite::Result<History> {
         Ok(())
     })?;
     history(store)
+}
+
+/// The kept checks of `ids`: source and chart.
+pub fn fits(
+    store: &Store,
+    ids: &[String],
+) -> rusqlite::Result<std::collections::HashMap<String, (String, Option<Value>)>> {
+    store.with_conn(|c| {
+        let mut q = c.prepare_cached("SELECT source, chart FROM taste_fit WHERE item_id = ?1")?;
+        let mut out = std::collections::HashMap::new();
+        for id in ids {
+            if let Some((source, chart)) = q
+                .query_row([id], |r| {
+                    Ok((r.get::<_, String>(0)?, r.get::<_, Option<String>>(1)?))
+                })
+                .optional()?
+            {
+                let chart = chart.and_then(|j| serde_json::from_str(&j).ok());
+                out.insert(id.clone(), (source, chart));
+            }
+        }
+        Ok(out)
+    })
+}
+
+/// Which of `ids` are due a check at `now` (seconds): never checked, or
+/// kept longer than their source keeps ([`crate::fit`]'s days).
+pub fn fits_due(
+    store: &Store,
+    ids: &[String],
+    now: i64,
+) -> rusqlite::Result<std::collections::HashSet<String>> {
+    store.with_conn(|c| {
+        let mut q =
+            c.prepare_cached("SELECT source, checked_at FROM taste_fit WHERE item_id = ?1")?;
+        let mut due = std::collections::HashSet::new();
+        for id in ids {
+            let kept = q
+                .query_row([id], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))
+                .optional()?;
+            let fresh = kept.is_some_and(|(source, at)| {
+                let keep = match source.as_str() {
+                    "error" => crate::fit::ERROR_HOURS * 3_600,
+                    "none" => crate::fit::NONE_DAYS * 86_400,
+                    _ => crate::fit::CHART_DAYS * 86_400,
+                };
+                now - at < keep
+            });
+            if !fresh {
+                due.insert(id.clone());
+            }
+        }
+        Ok(due)
+    })
+}
+
+pub fn keep_fit(
+    store: &Store,
+    id: &str,
+    source: &str,
+    chart: Option<&Value>,
+    now: i64,
+) -> rusqlite::Result<()> {
+    store.with_conn(|c| {
+        c.execute(
+            "INSERT INTO taste_fit (item_id, source, chart, checked_at) VALUES (?1, ?2, ?3, ?4)
+             ON CONFLICT(item_id) DO UPDATE SET source = ?2, chart = ?3, checked_at = ?4",
+            params![id, source, chart.map(Value::to_string), now],
+        )
+        .map(|_| ())
+    })
+}
+
+/// The brand's chart for a site and kind, if looked for: the chart (or
+/// none found) and when.
+pub fn brand_chart(
+    store: &Store,
+    host: &str,
+    kind: &str,
+) -> rusqlite::Result<Option<(Option<Value>, i64)>> {
+    store.with_conn(|c| {
+        c.query_row(
+            "SELECT chart, fetched_at FROM taste_fit_brands WHERE host = ?1 AND kind = ?2",
+            params![host, kind],
+            |r| Ok((r.get::<_, Option<String>>(0)?, r.get::<_, i64>(1)?)),
+        )
+        .optional()
+        .map(|o| o.map(|(j, at)| (j.and_then(|j| serde_json::from_str(&j).ok()), at)))
+    })
+}
+
+pub fn keep_brand_chart(
+    store: &Store,
+    host: &str,
+    kind: &str,
+    chart: Option<&Value>,
+    now: i64,
+) -> rusqlite::Result<()> {
+    store.with_conn(|c| {
+        c.execute(
+            "INSERT INTO taste_fit_brands (host, kind, chart, fetched_at) VALUES (?1, ?2, ?3, ?4)
+             ON CONFLICT(host, kind) DO UPDATE SET chart = ?3, fetched_at = ?4",
+            params![host, kind, chart.map(Value::to_string), now],
+        )
+        .map(|_| ())
+    })
+}
+
+/// A text read before, by hash: `Some(chart)` (`Some(None)`: it held none).
+pub fn read_of(store: &Store, hash: &str) -> rusqlite::Result<Option<Option<Value>>> {
+    store.with_conn(|c| {
+        c.query_row(
+            "SELECT chart FROM taste_fit_reads WHERE hash = ?1",
+            [hash],
+            |r| r.get::<_, Option<String>>(0),
+        )
+        .optional()
+        .map(|o| o.map(|j| j.and_then(|j| serde_json::from_str(&j).ok())))
+    })
+}
+
+/// The most texts kept: the oldest go past it.
+pub const MAX_READS: i64 = 2_000;
+
+pub fn keep_read(
+    store: &Store,
+    hash: &str,
+    chart: Option<&Value>,
+    now: i64,
+) -> rusqlite::Result<()> {
+    store.with_conn(|c| {
+        c.execute(
+            "INSERT OR REPLACE INTO taste_fit_reads (hash, chart, read_at) VALUES (?1, ?2, ?3)",
+            params![hash, chart.map(Value::to_string), now],
+        )?;
+        c.execute(
+            "DELETE FROM taste_fit_reads WHERE hash IN (SELECT hash FROM taste_fit_reads
+             ORDER BY read_at DESC LIMIT -1 OFFSET ?1)",
+            [MAX_READS],
+        )
+        .map(|_| ())
+    })
 }
 
 #[cfg(test)]

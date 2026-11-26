@@ -11,6 +11,13 @@
       "category": "jacket",
       "chance_text": "52% your taste",
       "description": "A boxy chore coat in waxed cotton that darkens and creases with wear. Corduroy collar, three patch pockets and a blanket lining for colder days. Cut roomy through the body to layer over knitwear, with a two-way brass zip under the storm flap and a hanging loop. Made in a small workshop in Portugal.",
+      "fit_checked": true,
+      "fit_note": "Item chart · L: length 30 ✓ · sleeves 33 (2½ short) · pits 21½ ✓",
+      "fit_noted": true,
+      "fit_source_text": "From this piece's own size chart",
+      "fit_state": "no",
+      "fit_text": "Won't fit: sleeves 33 in",
+      "fit_tone": "error",
       "host": "shop0.example",
       "id": "shop0.example:2000",
       "image": "https://cdn.shop0.example/storage/portrait-5.png?v=1&width=720",
@@ -53,6 +60,13 @@
       "category": "t-shirt",
       "chance_text": "81% your taste",
       "description": "A 9 oz cotton tee with a chest pocket, cut square and short in the body.",
+      "fit_checked": true,
+      "fit_note": "Item chart · M: length 29½ ✓ · pits 19¾ ✓ · shoulders 17½ ✓",
+      "fit_noted": true,
+      "fit_source_text": "From this piece's own size chart",
+      "fit_state": "fits",
+      "fit_text": "Fits in M",
+      "fit_tone": "success",
       "host": "shop0.example",
       "id": "shop0.example:2003",
       "image": "https://cdn.shop0.example/storage/carousel-2.png?v=1&width=720",
@@ -94,6 +108,13 @@
       "category": "jeans",
       "chance_text": "77% your taste",
       "description": "Fourteen-ounce selvedge denim with a slim, tapered leg.",
+      "fit_checked": false,
+      "fit_note": "",
+      "fit_noted": false,
+      "fit_source_text": "",
+      "fit_state": "",
+      "fit_text": "",
+      "fit_tone": "muted",
       "host": "shop0.example",
       "id": "shop0.example:2006",
       "image": "https://cdn.shop0.example/storage/portrait-5.png?v=1&width=720",
@@ -135,6 +156,13 @@
       "category": "overshirt",
       "chance_text": "47% your taste",
       "description": "Brushed cotton flannel, cut a little roomy, with a two-button cuff and a single chest pocket.",
+      "fit_checked": true,
+      "fit_note": "Brand chart, a guess · M: length 29½ ✓ · sleeves 35 ✓ · pits 20½ ✓",
+      "fit_noted": true,
+      "fit_source_text": "From the brand's size guide (this piece's page has no chart), so a guess",
+      "fit_state": "fits",
+      "fit_text": "Fits in M",
+      "fit_tone": "success",
       "host": "shop1.example",
       "id": "shop1.example:2001",
       "image": "https://cdn.shop1.example/storage/carousel-1.png?v=1&width=720",
@@ -176,6 +204,13 @@
       "category": "cardigan",
       "chance_text": "55% your taste",
       "description": "A chunky lambswool cardigan with a shawl collar and horn buttons.",
+      "fit_checked": false,
+      "fit_note": "",
+      "fit_noted": false,
+      "fit_source_text": "",
+      "fit_state": "",
+      "fit_text": "",
+      "fit_tone": "muted",
       "host": "shop1.example",
       "id": "shop1.example:2004",
       "image": "https://cdn.shop1.example/storage/reblog-6.png?v=1&width=720",
@@ -218,6 +253,13 @@
       "category": "boots",
       "chance_text": "49% your taste",
       "description": "Unlined suede chukkas on a crepe sole.",
+      "fit_checked": false,
+      "fit_note": "",
+      "fit_noted": false,
+      "fit_source_text": "",
+      "fit_state": "",
+      "fit_text": "",
+      "fit_tone": "muted",
       "host": "shop1.example",
       "id": "shop1.example:2007",
       "image": "https://cdn.shop1.example/storage/carousel-1.png?v=1&width=720",
@@ -258,6 +300,13 @@
       "category": "trousers",
       "chance_text": "",
       "description": "High-rise trousers with two forward pleats and a wide, straight leg in a soft wool twill.",
+      "fit_checked": true,
+      "fit_note": "Item chart · 32: waist 17½ ✓ · rise 10½ ✓",
+      "fit_noted": true,
+      "fit_source_text": "From this piece's own size chart",
+      "fit_state": "unsure",
+      "fit_text": "Not sure: no inseam listed",
+      "fit_tone": "muted",
       "host": "shop2.example",
       "id": "shop2.example:2002",
       "image": "https://cdn.shop2.example/storage/landscape-4.png?v=1&width=720",
@@ -298,6 +347,13 @@
       "category": "jacket",
       "chance_text": "12% your taste",
       "description": "A canvas work jacket with a corduroy collar, triple stitched.",
+      "fit_checked": false,
+      "fit_note": "",
+      "fit_noted": false,
+      "fit_source_text": "",
+      "fit_state": "",
+      "fit_text": "",
+      "fit_tone": "muted",
       "host": "shop2.example",
       "id": "shop2.example:2005",
       "image": "https://cdn.shop2.example/storage/carousel-3.png?v=1&width=720",
@@ -750,12 +806,34 @@
                                                     "value": "$item.why_text"
                                                   },
                                                   {
+                                                    "content": {
+                                                      "background": "${local://theme#accent_surface}",
+                                                      "content": {
+                                                        "style": "Caption",
+                                                        "type": "core://Text",
+                                                        "value_expr": "$item.fit_text"
+                                                      },
+                                                      "content_color": "${local://theme#accent}",
+                                                      "corner_dp": 8,
+                                                      "padding_h_dp": 8,
+                                                      "padding_v_dp": 3,
+                                                      "type": "core://Box"
+                                                    },
+                                                    "type": "core://Conditional",
+                                                    "value": "$item.fit_text"
+                                                  },
+                                                  {
                                                     "type": "core://Spacer"
                                                   },
                                                   {
-                                                    "style": "Caption",
-                                                    "type": "core://Text",
-                                                    "value_expr": "⌃ Swipe up for similar"
+                                                    "content": {
+                                                      "style": "Caption",
+                                                      "type": "core://Text",
+                                                      "value_expr": "⌃ Swipe up for similar"
+                                                    },
+                                                    "not": true,
+                                                    "type": "core://Conditional",
+                                                    "value": "$item.fit_text"
                                                   }
                                                 ],
                                                 "padding_h_dp": 2,
@@ -796,6 +874,16 @@
                                                     ],
                                                     "spacing_dp": 6,
                                                     "type": "core://Row"
+                                                  },
+                                                  {
+                                                    "content": {
+                                                      "max_lines": 1,
+                                                      "style": "Caption",
+                                                      "type": "core://Text",
+                                                      "value_expr": "$item.fit_note"
+                                                    },
+                                                    "type": "core://Conditional",
+                                                    "value": "$item.fit_noted"
                                                   },
                                                   {
                                                     "content": {
@@ -894,12 +982,34 @@
                                             "value": "$item.why_text"
                                           },
                                           {
+                                            "content": {
+                                              "background": "${local://theme#accent_surface}",
+                                              "content": {
+                                                "style": "Caption",
+                                                "type": "core://Text",
+                                                "value_expr": "$item.fit_text"
+                                              },
+                                              "content_color": "${local://theme#accent}",
+                                              "corner_dp": 8,
+                                              "padding_h_dp": 8,
+                                              "padding_v_dp": 3,
+                                              "type": "core://Box"
+                                            },
+                                            "type": "core://Conditional",
+                                            "value": "$item.fit_text"
+                                          },
+                                          {
                                             "type": "core://Spacer"
                                           },
                                           {
-                                            "style": "Caption",
-                                            "type": "core://Text",
-                                            "value_expr": "⌃ Swipe up for similar"
+                                            "content": {
+                                              "style": "Caption",
+                                              "type": "core://Text",
+                                              "value_expr": "⌃ Swipe up for similar"
+                                            },
+                                            "not": true,
+                                            "type": "core://Conditional",
+                                            "value": "$item.fit_text"
                                           }
                                         ],
                                         "padding_h_dp": 2,
@@ -944,13 +1054,42 @@
                                             },
                                             {
                                               "content": {
-                                                "max_lines": 6,
-                                                "style": "Secondary",
+                                                "max_lines": 1,
+                                                "style": "Caption",
                                                 "type": "core://Text",
-                                                "value_expr": "$item.description"
+                                                "value_expr": "$item.fit_note"
                                               },
                                               "type": "core://Conditional",
-                                              "value": "$item.description"
+                                              "value": "$item.fit_noted"
+                                            },
+                                            {
+                                              "content": {
+                                                "content": {
+                                                  "max_lines": 5,
+                                                  "style": "Secondary",
+                                                  "type": "core://Text",
+                                                  "value_expr": "$item.description"
+                                                },
+                                                "type": "core://Conditional",
+                                                "value": "$item.description"
+                                              },
+                                              "type": "core://Conditional",
+                                              "value": "$item.fit_noted"
+                                            },
+                                            {
+                                              "content": {
+                                                "content": {
+                                                  "max_lines": 6,
+                                                  "style": "Secondary",
+                                                  "type": "core://Text",
+                                                  "value_expr": "$item.description"
+                                                },
+                                                "type": "core://Conditional",
+                                                "value": "$item.description"
+                                              },
+                                              "not": true,
+                                              "type": "core://Conditional",
+                                              "value": "$item.fit_noted"
                                             }
                                           ],
                                           "padding_h_dp": 2,

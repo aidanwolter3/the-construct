@@ -18,7 +18,14 @@
       "why": "boundary",
       "description": "A boxy chore coat in waxed cotton that darkens and creases with wear. Corduroy collar, three patch pockets and a blanket lining for colder days. Cut roomy through the body to layer over knitwear, with a two-way brass zip under the storm flap and a hanging loop. Made in a small workshop in Portugal.",
       "p": 0.52,
-      "worn": true
+      "worn": true,
+      "fit": {
+        "state": "no",
+        "text": "Won't fit: sleeves 33 in",
+        "tone": "error",
+        "note": "Item chart · L: length 30 ✓ · sleeves 33 (2½ short) · pits 21½ ✓",
+        "source_text": "From this piece's own size chart"
+      }
     },
     {
       "id": "shop1.example:2001",
@@ -37,7 +44,14 @@
       "why": "boundary",
       "description": "Brushed cotton flannel, cut a little roomy, with a two-button cuff and a single chest pocket.",
       "p": 0.47,
-      "worn": false
+      "worn": false,
+      "fit": {
+        "state": "fits",
+        "text": "Fits in M",
+        "tone": "success",
+        "note": "Brand chart, a guess · M: length 29½ ✓ · sleeves 35 ✓ · pits 20½ ✓",
+        "source_text": "From the brand's size guide (this piece's page has no chart), so a guess"
+      }
     },
     {
       "id": "shop2.example:2002",
@@ -55,7 +69,14 @@
       "why": "explore",
       "description": "High-rise trousers with two forward pleats and a wide, straight leg in a soft wool twill.",
       "p": null,
-      "worn": true
+      "worn": true,
+      "fit": {
+        "state": "unsure",
+        "text": "Not sure: no inseam listed",
+        "tone": "muted",
+        "note": "Item chart · 32: waist 17½ ✓ · rise 10½ ✓",
+        "source_text": "From this piece's own size chart"
+      }
     },
     {
       "id": "shop0.example:2003",
@@ -74,7 +95,14 @@
       "why": "likely",
       "description": "A 9 oz cotton tee with a chest pocket, cut square and short in the body.",
       "p": 0.81,
-      "worn": false
+      "worn": false,
+      "fit": {
+        "state": "fits",
+        "text": "Fits in M",
+        "tone": "success",
+        "note": "Item chart · M: length 29½ ✓ · pits 19¾ ✓ · shoulders 17½ ✓",
+        "source_text": "From this piece's own size chart"
+      }
     },
     {
       "id": "shop1.example:2004",
@@ -176,7 +204,14 @@
         "description": "A boxy chore coat in waxed cotton that darkens and creases with wear. Corduroy collar, three patch pockets and a blanket lining for colder days.",
         "p": 0.52,
         "worn": true,
-        "why": "boundary"
+        "why": "boundary",
+        "fit": {
+          "state": "no",
+          "text": "Won't fit: sleeves 33 in",
+          "tone": "error",
+          "note": "Item chart · L: length 30 ✓ · sleeves 33 (2½ short) · pits 21½ ✓",
+          "source_text": "From this piece's own size chart"
+        }
       },
       "similar": [
         {
@@ -205,7 +240,14 @@
             "https://cdn.shop1.example/storage/carousel-1.png?v=1"
           ],
           "liked": true,
-          "skipped": false
+          "skipped": false,
+          "fit": {
+            "state": "fits",
+            "text": "Fits in M",
+            "tone": "success",
+            "note": "Brand chart, a guess · M: length 29½ ✓ · sleeves 35 ✓ · pits 20½ ✓",
+            "source_text": "From the brand's size guide (this piece's page has no chart), so a guess"
+          }
         },
         {
           "id": "shop0.example:2006",
@@ -235,7 +277,14 @@
             "https://cdn.shop0.example/storage/carousel-2.png?v=1"
           ],
           "liked": false,
-          "skipped": false
+          "skipped": false,
+          "fit": {
+            "state": "fits",
+            "text": "Fits in M",
+            "tone": "success",
+            "note": "Item chart · M: length 29½ ✓ · pits 19¾ ✓ · shoulders 17½ ✓",
+            "source_text": "From this piece's own size chart"
+          }
         },
         {
           "id": "shop1.example:2004",
@@ -281,7 +330,14 @@
         "https://cdn.shop1.example/storage/carousel-1.png?v=1"
       ],
       "liked": true,
-      "skipped": false
+      "skipped": false,
+      "fit": {
+        "state": "fits",
+        "text": "Fits in M",
+        "tone": "success",
+        "note": "Brand chart, a guess · M: length 29½ ✓ · sleeves 35 ✓ · pits 20½ ✓",
+        "source_text": "From the brand's size guide (this piece's page has no chart), so a guess"
+      }
     },
     {
       "id": "shop2.example:300",
@@ -359,7 +415,14 @@
               "https://cdn.shop1.example/storage/carousel-1.png?v=1"
             ],
             "liked": true,
-            "skipped": false
+            "skipped": false,
+            "fit": {
+              "state": "fits",
+              "text": "Fits in M",
+              "tone": "success",
+              "note": "Brand chart, a guess · M: length 29½ ✓ · sleeves 35 ✓ · pits 20½ ✓",
+              "source_text": "From the brand's size guide (this piece's page has no chart), so a guess"
+            }
           },
           {
             "id": "shop2.example:300",
@@ -453,7 +516,14 @@
               "https://cdn.shop0.example/storage/portrait-5.png?v=1",
               "https://cdn.shop0.example/storage/carousel-1.png?v=1",
               "https://cdn.shop0.example/storage/landscape-4.png?v=1"
-            ]
+            ],
+            "fit": {
+              "state": "no",
+              "text": "Won't fit: sleeves 33 in",
+              "tone": "error",
+              "note": "Item chart · L: length 30 ✓ · sleeves 33 (2½ short) · pits 21½ ✓",
+              "source_text": "From this piece's own size chart"
+            }
           }
         },
         {
@@ -475,7 +545,14 @@
             "images": [
               "https://cdn.shop1.example/storage/carousel-1.png?v=1",
               "https://cdn.shop1.example/storage/landscape-4.png?v=1"
-            ]
+            ],
+            "fit": {
+              "state": "fits",
+              "text": "Fits in M",
+              "tone": "success",
+              "note": "Brand chart, a guess · M: length 29½ ✓ · sleeves 35 ✓ · pits 20½ ✓",
+              "source_text": "From the brand's size guide (this piece's page has no chart), so a guess"
+            }
           }
         },
         {
@@ -496,7 +573,14 @@
             "brand": "Northgate Workshop",
             "images": [
               "https://cdn.shop2.example/storage/landscape-4.png?v=1"
-            ]
+            ],
+            "fit": {
+              "state": "unsure",
+              "text": "Not sure: no inseam listed",
+              "tone": "muted",
+              "note": "Item chart · 32: waist 17½ ✓ · rise 10½ ✓",
+              "source_text": "From this piece's own size chart"
+            }
           }
         },
         {
@@ -620,7 +704,14 @@
               "https://cdn.shop0.example/storage/portrait-5.png?v=1",
               "https://cdn.shop0.example/storage/carousel-1.png?v=1",
               "https://cdn.shop0.example/storage/landscape-4.png?v=1"
-            ]
+            ],
+            "fit": {
+              "state": "no",
+              "text": "Won't fit: sleeves 33 in",
+              "tone": "error",
+              "note": "Item chart · L: length 30 ✓ · sleeves 33 (2½ short) · pits 21½ ✓",
+              "source_text": "From this piece's own size chart"
+            }
           }
         },
         {
@@ -642,7 +733,14 @@
             "images": [
               "https://cdn.shop1.example/storage/carousel-1.png?v=1",
               "https://cdn.shop1.example/storage/landscape-4.png?v=1"
-            ]
+            ],
+            "fit": {
+              "state": "fits",
+              "text": "Fits in M",
+              "tone": "success",
+              "note": "Brand chart, a guess · M: length 29½ ✓ · sleeves 35 ✓ · pits 20½ ✓",
+              "source_text": "From the brand's size guide (this piece's page has no chart), so a guess"
+            }
           }
         },
         {
@@ -663,7 +761,14 @@
             "brand": "Northgate Workshop",
             "images": [
               "https://cdn.shop2.example/storage/landscape-4.png?v=1"
-            ]
+            ],
+            "fit": {
+              "state": "unsure",
+              "text": "Not sure: no inseam listed",
+              "tone": "muted",
+              "note": "Item chart · 32: waist 17½ ✓ · rise 10½ ✓",
+              "source_text": "From this piece's own size chart"
+            }
           }
         },
         {
@@ -685,7 +790,14 @@
             "images": [
               "https://cdn.shop0.example/storage/carousel-2.png?v=1",
               "https://cdn.shop0.example/storage/reblog-6.png?v=1"
-            ]
+            ],
+            "fit": {
+              "state": "fits",
+              "text": "Fits in M",
+              "tone": "success",
+              "note": "Item chart · M: length 29½ ✓ · pits 19¾ ✓ · shoulders 17½ ✓",
+              "source_text": "From this piece's own size chart"
+            }
           }
         },
         {
@@ -799,7 +911,14 @@
             "images": [
               "https://cdn.shop0.example/storage/carousel-2.png?v=1",
               "https://cdn.shop0.example/storage/reblog-6.png?v=1"
-            ]
+            ],
+            "fit": {
+              "state": "fits",
+              "text": "Fits in M",
+              "tone": "success",
+              "note": "Item chart · M: length 29½ ✓ · pits 19¾ ✓ · shoulders 17½ ✓",
+              "source_text": "From this piece's own size chart"
+            }
           }
         },
         {
@@ -901,7 +1020,14 @@
               "https://cdn.shop0.example/storage/portrait-5.png?v=1",
               "https://cdn.shop0.example/storage/carousel-1.png?v=1",
               "https://cdn.shop0.example/storage/landscape-4.png?v=1"
-            ]
+            ],
+            "fit": {
+              "state": "no",
+              "text": "Won't fit: sleeves 33 in",
+              "tone": "error",
+              "note": "Item chart · L: length 30 ✓ · sleeves 33 (2½ short) · pits 21½ ✓",
+              "source_text": "From this piece's own size chart"
+            }
           }
         },
         {
@@ -923,7 +1049,14 @@
             "images": [
               "https://cdn.shop1.example/storage/carousel-1.png?v=1",
               "https://cdn.shop1.example/storage/landscape-4.png?v=1"
-            ]
+            ],
+            "fit": {
+              "state": "fits",
+              "text": "Fits in M",
+              "tone": "success",
+              "note": "Brand chart, a guess · M: length 29½ ✓ · sleeves 35 ✓ · pits 20½ ✓",
+              "source_text": "From the brand's size guide (this piece's page has no chart), so a guess"
+            }
           }
         },
         {
@@ -944,7 +1077,14 @@
             "brand": "Northgate Workshop",
             "images": [
               "https://cdn.shop2.example/storage/landscape-4.png?v=1"
-            ]
+            ],
+            "fit": {
+              "state": "unsure",
+              "text": "Not sure: no inseam listed",
+              "tone": "muted",
+              "note": "Item chart · 32: waist 17½ ✓ · rise 10½ ✓",
+              "source_text": "From this piece's own size chart"
+            }
           }
         },
         {
@@ -966,7 +1106,14 @@
             "images": [
               "https://cdn.shop0.example/storage/carousel-2.png?v=1",
               "https://cdn.shop0.example/storage/reblog-6.png?v=1"
-            ]
+            ],
+            "fit": {
+              "state": "fits",
+              "text": "Fits in M",
+              "tone": "success",
+              "note": "Item chart · M: length 29½ ✓ · pits 19¾ ✓ · shoulders 17½ ✓",
+              "source_text": "From this piece's own size chart"
+            }
           }
         },
         {
@@ -1089,7 +1236,14 @@
             "images": [
               "https://cdn.shop1.example/storage/carousel-1.png?v=1",
               "https://cdn.shop1.example/storage/landscape-4.png?v=1"
-            ]
+            ],
+            "fit": {
+              "state": "fits",
+              "text": "Fits in M",
+              "tone": "success",
+              "note": "Brand chart, a guess · M: length 29½ ✓ · sleeves 35 ✓ · pits 20½ ✓",
+              "source_text": "From the brand's size guide (this piece's page has no chart), so a guess"
+            }
           }
         },
         {
@@ -1110,7 +1264,14 @@
             "brand": "Northgate Workshop",
             "images": [
               "https://cdn.shop2.example/storage/landscape-4.png?v=1"
-            ]
+            ],
+            "fit": {
+              "state": "unsure",
+              "text": "Not sure: no inseam listed",
+              "tone": "muted",
+              "note": "Item chart · 32: waist 17½ ✓ · rise 10½ ✓",
+              "source_text": "From this piece's own size chart"
+            }
           }
         }
       ]
@@ -1136,7 +1297,14 @@
         "why": "boundary",
         "description": "A boxy chore coat in waxed cotton that darkens and creases with wear. Corduroy collar, three patch pockets and a blanket lining for colder days.",
         "p": 0.52,
-        "worn": true
+        "worn": true,
+        "fit": {
+          "state": "no",
+          "text": "Won't fit: sleeves 33 in",
+          "tone": "error",
+          "note": "Item chart · L: length 30 ✓ · sleeves 33 (2½ short) · pits 21½ ✓",
+          "source_text": "From this piece's own size chart"
+        }
       },
       {
         "id": "shop1.example:2001",
@@ -1155,7 +1323,14 @@
         "why": "boundary",
         "description": "Brushed cotton flannel, cut a little roomy, with a two-button cuff and a single chest pocket.",
         "p": 0.47,
-        "worn": false
+        "worn": false,
+        "fit": {
+          "state": "fits",
+          "text": "Fits in M",
+          "tone": "success",
+          "note": "Brand chart, a guess · M: length 29½ ✓ · sleeves 35 ✓ · pits 20½ ✓",
+          "source_text": "From the brand's size guide (this piece's page has no chart), so a guess"
+        }
       },
       {
         "id": "shop2.example:2002",
@@ -1173,7 +1348,14 @@
         "why": "explore",
         "description": "High-rise trousers with two forward pleats and a wide, straight leg in a soft wool twill.",
         "p": null,
-        "worn": true
+        "worn": true,
+        "fit": {
+          "state": "unsure",
+          "text": "Not sure: no inseam listed",
+          "tone": "muted",
+          "note": "Item chart · 32: waist 17½ ✓ · rise 10½ ✓",
+          "source_text": "From this piece's own size chart"
+        }
       },
       {
         "id": "shop0.example:2003",
@@ -1192,7 +1374,14 @@
         "why": "likely",
         "description": "A 9 oz cotton tee with a chest pocket, cut square and short in the body.",
         "p": 0.81,
-        "worn": false
+        "worn": false,
+        "fit": {
+          "state": "fits",
+          "text": "Fits in M",
+          "tone": "success",
+          "note": "Item chart · M: length 29½ ✓ · pits 19¾ ✓ · shoulders 17½ ✓",
+          "source_text": "From this piece's own size chart"
+        }
       },
       {
         "id": "shop1.example:2004",

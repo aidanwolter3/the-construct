@@ -424,7 +424,7 @@ fn taste_deals_a_deck_maps_the_taste_and_shows_the_tastes() {
                  tap-photo right Photo 3 of Waxed Chore Coat in Olive; assert-text Photo 1 of 3; \
                  tap-photo left Photo 1 of Waxed Chore Coat in Olive; assert-text Photo 3 of 3; \
                  assert-no-text Details; assert-no-text Sign out of the taste service; \
-                 assert-no-text 14 liked; assert-text Swipe up for similar; \
+                 assert-no-text 14 liked; assert-text Won't fit: sleeves 33 in; assert-no-text Swipe up for similar; \
                  swipe-up Swipe up for pieces like Waxed Chore Coat in Olive; \
                  assert-text Buy at shop0.example; scroll-to Similar; assert-text Similar; assert-text Canvas Work Jacket; \
                  assert-no-text Opposite; assert-no-text This, but; back; \

@@ -135,8 +135,44 @@ Likes, Search and area grids open the same sheet. A carousel can't name a piece 
 data path also answers it as `taste:sheet:piece`, which the sheet lists where `key` equals `$route.key`, paging
 `$item.photos`.
 
+Since `layouts/taste/0008.json` and `layouts/taste_item/0003.json` (decision `taste-fit-check`; layouts only, no
+new build): a garment's card says whether it fits, a pill beside its reason (in place of the swipe hint) and, above
+the description, the size it was judged on with its measurements; the sheet shows both and where the chart came from.
+See [Fit](#fit).
+
 Use it whole from a pod's layout, `{"type": "core://Use", "ref": "@core/taste"}` with the feed `["taste", "feed"]`,
 and link that from home; `taste:status`'s `counts_text` (12 liked · 30 disliked) makes a one-line summary there.
+
+## Fit
+
+Whether a piece fits the owner (decision `taste-fit-check`, `src/fit.rs`). Their measurements are rows of the
+collection `fit_targets`: `kind` (knit top, woven top, jacket, trousers, shorts), `measure` (chest, the pit to pit
+width; length; shoulder; sleeve, from the centre of the back; waist; rise; thigh; inseam; leg opening; body chest and
+body waist for charts of body sizes) and `low` and `high` in inches, a garment laid flat (either may be empty: shorts
+take `inseam` low 7.5 and borrow the trousers' waist, rise and thigh). With no rows for a kind there is no check.
+
+Which pieces: the deck's next four and any piece whose sheet opens (first), when they are garments (from `category`
+and the title: shoes, bags, hats and the like are not; long sleeves are told from the kind and the title). Each is
+checked in the background, one at a time per pod, and its entity reloaded (a scoped data event) when kept:
+
+1. The piece's own page (`buy_url`) is fetched through the web module (host spacing, daily caps and backoff; no
+   search). The lines around its size words, when they look like a chart (a size word near two lines of numbers), go
+   to the cheap model with a JSON schema (feature `taste_fit`, 200 calls a day), which answers the chart as numbers.
+2. With no chart there, the first same-site link that looks like a size guide is read the same way, and kept as the
+   brand's chart for that site and kind (`taste_fit_brands`, 30 days; none found, 7).
+3. The chart is kept (`taste_fit`) in inches, flat across (an all-round chest, waist, thigh or leg opening halved),
+   sleeves from the centre back (half the shoulders added to a seam-to-cuff sleeve, which is also assumed of a long
+   sleeve under 30 inches). A piece is checked again after 30 days, a page without a chart after 7, a failed fetch after
+   6 hours; a page text the model has read is kept by hash (`taste_fit_reads`) and never sent again.
+
+The verdict is worked out whenever a list is served, against the targets as they are then, on the size with the
+fewest misses (¼ inch of slack): `fits` (Fits in M), `no` (Won't fit: sleeves 33 in, the first miss of length,
+sleeves, pits, shoulders; or waist, rise, inseam, thigh, leg opening) or `unsure` (Not sure: no length listed, when a
+measure that decides it is missing: length, sleeves and pits for tops, waist and inseam for bottoms; a body chart says
+the size it suggests; No size chart when there is none). Items then carry `fit_state`, `fit_checked`, `fit_text`,
+`fit_tone` (success, error, muted), `fit_note` (Item chart · M: length 29½ ✓ · sleeves 35 ✓ · pits 20 ✓; Brand chart,
+a guess, from a size guide) with `fit_noted`, and `fit_source_text`. The pod needs the `model` and `web` jacks plugged
+and a cheap model configured; without them nothing is checked.
 
 ## The service's API
 
