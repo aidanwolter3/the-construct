@@ -42,9 +42,9 @@ What App Links need, and the choices made:
 **Debug vs release signing.** Verification compares the installed APK's signing certificate with the fingerprints in
 `assetlinks.json`, so each signing key that should get App Links must be listed:
 
-- *Release*: the developer's release (or Play App Signing) key. Its fingerprint is only known to the developer, so it
-  is not in the repo; add it to `CONSTRUCT_ANDROID_CERT_SHA256` in `deploy/fly/pod.toml` (fingerprints are not
-  secret: every APK carries its certificate).
+- *Release*: the developer's release (or Play App Signing) key, first in `CONSTRUCT_ANDROID_CERT_SHA256` in
+  `deploy/fly/pod.toml` (fingerprints are not secret: every APK carries its certificate). A new release key goes in
+  front; keep the old key's fingerprint until the builds signed with it are replaced.
 - *Debug*: each machine's `~/.android/debug.keystore` has its own key. List the developer's debug fingerprint too to
   test App Links with `installDebug`. A debug build whose key is not listed is simply not verified: on Android 12+ it
   keeps `construct://oauth` (as before this decision); on 8-11 it gets the chooser.

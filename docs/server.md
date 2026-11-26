@@ -84,7 +84,7 @@ address or pod, 503 `too_many_streams` when the server (or its temporary pods to
 | `PIXELFED_EXTRA_REDIRECTS` | unset | Extra OAuth redirect URIs accepted, e.g. `https://<host>/oauth/android` for the Android App Link. |
 | `PIXELFED_OWNER_ACCOUNT_ID` | unset | The only account allowed on the default instance. Unset: the first account to sign in is pinned. |
 | `PIXELFED_ALLOW_ACCOUNT_CHANGE` | unset | `1`: any account may sign in and replace the stored one (not for `*` instances). |
-| `CONSTRUCT_ANDROID_CERT_SHA256` | unset | SHA-256 fingerprints of Android signing certificates allowed to open `https://<host>/oauth/android`, served at `/.well-known/assetlinks.json` (decision [`android-app-link-sign-in-redirect`](decisions/android-app-link-sign-in-redirect.md)). Not secret. |
+| `CONSTRUCT_ANDROID_CERT_SHA256` | unset | Comma-separated SHA-256 fingerprints of Android signing certificates allowed to open `https://<host>/oauth/android`, served at `/.well-known/assetlinks.json` (decision [`android-app-link-sign-in-redirect`](decisions/android-app-link-sign-in-redirect.md)). Not secret. |
 | `CONSTRUCT_ANDROID_PACKAGE` | `org.theconstruct.android` | The package `assetlinks.json` names. |
 
 ### Notifications
