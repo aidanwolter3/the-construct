@@ -65,10 +65,12 @@ Since then (the owner, the same day): no confirming. Anticipate decides which jo
 
 Since then (the owner, 2026-11-25, after Build's first run changed nothing):
 
-- **Today is shaped every morning.** Fixes wait for something to break, and the first run found nothing broken,
-  so it changed no screen. The owner most wants Today fitted to the day and the week, so Build now stages one
-  group on Today every morning, quiet day or not: it reorders, regroups, restyles and brings in what other screens
-  already bind, under the same server `safe` check. Its skeptic asks "is this a better Today for this owner
+- **Today is shaped when the day calls for it.** Fixes wait for something to break, and the first run found
+  nothing broken, so it changed no screen. The owner most wants Today fitted to the day and the week, so every
+  morning Build asks whether Today still serves the day. When it doesn't (a holiday, travel, a busy stretch), Build
+  stages one group on Today, sized to what the day warrants: it reorders, regroups, restyles and brings in what
+  other screens already bind, under the same server `safe` check. On an ordinary day it changes nothing: change is
+  applied when it makes sense, not forced. Its skeptic asks "is this a better Today for this owner
   today?", not whether it is the smallest fix. It is always a trial: undone the next morning unless kept, and
   reshaped from the kept base. Shapes don't count toward the 3 fixes or toward stepping back to trials (a daily
   shape undone each morning would otherwise keep Build in trials forever).

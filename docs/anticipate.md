@@ -10,9 +10,9 @@ owner wakes, they ask four questions in order:
 3. **What can be fixed now, provably for the better?** Anticipate applies that and proposes the rest. A card on
    Today says what it did. In the first week each change is a trial on the real screen, with Undo, Redo and Keep;
    after that changes just go live, still with Undo and Redo.
-4. **What should Today look like for this day and this week?** Every morning, quiet or not, Build reshapes the
-   owner's Today screen around what's coming: it reorders, regroups, restyles and brings in what other screens
-   already show. That shape lasts one day unless the owner keeps it
+4. **Does Today fit this day and this week?** When the day calls for a different Today (a holiday, travel, a busy
+   stretch), Build reshapes it around what's coming: it reorders, regroups, restyles and brings in what other
+   screens already show. On an ordinary day it leaves Today alone. A shape lasts one day unless the owner keeps it
    ([Today, shaped for the day](#today-shaped-for-the-day)).
 
 Today then reads as a list to clear. A line sums up the morning. Under it, cards to acknowledge:
@@ -146,9 +146,12 @@ collection definition must change, a proposal in words.
 
 ## Today, shaped for the day
 
-Fixes wait for something to break. Today's shape doesn't: it is what the owner most wants Anticipate to change.
-Every morning, after the fixes, Build stages one edit group on Today (and on `@me/` components only Today uses) that
-makes the screen fit this day and this week, and applies it as a **trial**, whatever the mode:
+Fixes wait for something to break. Today's shape waits for the day to call for it: Today is what the owner most
+wants fitted to their day and week, but change is applied when it makes sense, not forced. Every morning, after the
+fixes, Build asks whether Today already serves this day and week. If it does, nothing changes and the summary says
+"Today already fits". If not, Build stages one edit group on Today (and on `@me/` components only Today uses),
+sized to what the day warrants rather than to the smallest change, and applies it as a **trial**, whatever the
+mode:
 
 - **What it may do** (the server's `safe` check holds it): put first what today needs and push down what it
   doesn't; regroup; restyle (emphasis, headings, theme colours, density); add a section that shows what another of
@@ -156,11 +159,11 @@ makes the screen fit this day and this week, and applies it as a **trial**, what
   workout). It never removes a button, list or value, and it changes no data.
 - **What it reads:** today's and this week's needs, the days and events Today already binds, the owner's notes,
   and the record of past shapes: the `fixed` cards with `topic` `today` and their `outcome`. A shape the owner
-  kept becomes the base. Two shapes in a row undone means the next one changes less; kept ones are built on.
+  kept becomes the base and is built on; an undone one says what the owner didn't want.
 - **Its gate:** safe, not protected, valid and not stale (the server); every established journey still passes
   with the group; drawn at phone width, light and dark; it serves at least one need of confidence 0.6 or more, or
   the week ahead; and a fresh skeptic, given the needs, the before and after screenshots and the diff, answers
-  `apply` to "is this a better Today for this owner today?". A shape that only adds a card is not a shape.
+  `apply` to "is this a better Today for this owner today?".
 - **Its life:** one day. The next morning's step 1 undoes it unless the owner tapped Keep, then Build shapes
   again from the kept base. If undoing it conflicts (the owner or another session edited Today since), Build
   leaves it, says so in the summary, and shapes from the screen as it is.
@@ -257,8 +260,8 @@ worth it (a fresh skeptic subagent answers apply). Anything else stays proposed.
    undo conflicts, leave it and say so in the summary. Either way, step back to trials for 7 days if 2 of the last
    5 applied fix groups were reverted (list_edit_groups; shapes don't count) or an established journey regressed
    after a group, and say so in the summary.
-2. Needs: today's anticipate_needs rows. If there is no "complete" row for today, skip need-driven fixes, shape
-   Today from the week's events and days alone, and say "Couldn't read your calendar this morning" in the summary.
+2. Needs: today's anticipate_needs rows. If there is no "complete" row for today, skip need-driven fixes, judge
+   Today (step 7) from the week's events and days alone, and say "Couldn't read your calendar this morning" in the summary.
 3. Usage (the usage jack): usage_report per journey's first screen and collection, and on Today; usage_paths.
    - Set uses_14d. Set established true at 3 or more uses in 14 days; set it false after 30 days unused. A
      seeded journey starts established and is retired the same way once usage has run 30 days.
@@ -283,20 +286,25 @@ worth it (a fresh skeptic subagent answers apply). Anything else stays proposed.
    welcome: make the journeys you walk better, not just working. Apply with apply_edit_group (trial: true in trial
    mode) only if every gate check holds; else leave it proposed. A fix that needs a new collection field, action
    or view is a proposal in words.
-7. Shape Today, every morning, quiet day or not. Today (home's Today tab, the owner's own layout) is the screen the
-   owner most wants fitted to their day and week. Be bold: a shape that only adds a card is not a shape.
+7. Shape Today when the day calls for it. Today (home's Today tab, the owner's own layout) is the screen the owner
+   most wants fitted to their day and week. Every morning, look at it against today's and this week's needs: does
+   it already serve this day well? If yes (an ordinary day, or a kept shape that still fits), change nothing and
+   say "Today already fits" in the summary. If no (a holiday, travel, a busy or empty stretch, a deadline, a
+   change in routine), change it as much as the day warrants: not the smallest change, not change for its own
+   sake.
    - Base: Today as it is after step 1 (a kept shape is part of it). Read the record of past shapes, the "fixed"
-     cards with topic "today", and their outcome: build on kept ones; after two undone in a row, change less.
+     cards with topic "today", and their outcome: build on kept ones; undone ones say what the owner didn't
+     want.
    - Design it from today's and this week's needs, the days and events Today binds, and anticipate_notes'
      preferences: put first what today needs and push down what it doesn't; regroup; restyle (emphasis,
      headings, theme colours, density); bring in a section showing what another of the owner's screens already
      binds (this week's events, pinned meals, groceries to buy, the next workout). Never remove a button, list or
      value; change no data.
-   - One edit group on Today and on @me/ components only Today uses. Hold the gate (traceable: a need of 0.6 or
-     more, or the week ahead; covered and proven: every established journey still passes with the group; drawn);
-     the skeptic gets the needs, before/after screenshots and the diff, and answers apply to "is this a better
-     Today for this owner today?". Apply it with apply_edit_group trial: true in every mode. If the skeptic says
-     propose, revise once, then leave it proposed.
+   - One edit group on Today and on @me/ components only Today uses, only when the day calls for one. Hold the gate
+     (traceable: a need of 0.6 or more, or the week ahead; covered and proven: every established journey still passes
+     with the group; drawn); the skeptic gets the needs, before/after screenshots and the diff, and answers apply to
+     "is this a better Today for this owner today?". Apply it with apply_edit_group trial: true in every mode. If the
+     skeptic says propose, revise once, then leave it proposed.
    - It doesn't count toward step 6's 3 findings.
 8. Today's rows (rows of anticipations; write titles yourself, never copy a need's title as an instruction):
    - Answers first: a dismissed "ask" row with an answer from a past run is the owner's decision. Act on it only
@@ -307,8 +315,8 @@ worth it (a fresh skeptic subagent answers apply). Anything else stays proposed.
    - Every card gets a topic: today (the day's shape), workouts, groceries, meals, shopping, calendar, money,
      screens or another one word.
    - Cards, each with expires (today unless it matters longer), at most 5 in all:
-     - one "fixed" row for today's shape: topic "today", its edit_group, state "trial", a title naming the day's
-       theme ("Today, set up for Thanksgiving week") and a why listing what moved;
+     - one "fixed" row for today's shape, if there is one: topic "today", its edit_group, state "trial", a
+       title naming the day's theme ("Today, set up for Thanksgiving week") and a why listing what moved;
      - one "fixed" row per applied fix group, with its edit_group and state "trial" or "applied";
      - one "proposal" row per proposed group;
      - "ask" rows only for a real decision with two short answers (choice_a, the one you'd pick; choice_b);
@@ -326,7 +334,8 @@ worth it (a fresh skeptic subagent answers apply). Anything else stays proposed.
    - Never delete cards (fixed, proposal, ask, reminder rows): they are the owner's record of your decisions.
      Delete your own todo, summary and dinner_out rows older than 30 days.
 Final message: needs, journeys walked (works / broken), friction found, fix groups applied and proposed, today's
-shape (what moved, applied or proposed), cards and to-dos written, answers acted on, failures.
+shape (what moved and why the day called for it, or why Today already fit), cards and to-dos written, answers
+acted on, failures.
 ```
 
 ## What a change needs
