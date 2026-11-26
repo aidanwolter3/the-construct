@@ -61,6 +61,7 @@ pub static MIGRATIONS: &[Step] = &[
     Step::sql("schema", SCHEMA),
     Step::sql("history", HISTORY),
     Step::sql("fit", FIT),
+    Step::sql("fit_retry", FIT_RETRY),
 ];
 
 /// The fit checks (decision `taste-fit-check`, [`crate::fit`]): per piece
@@ -88,6 +89,10 @@ CREATE TABLE taste_fit_reads (
     read_at INTEGER NOT NULL
 );
 ";
+
+/// Pieces whose page failed before refused fetches were read in the browser
+/// are read again now rather than after their six hours (run once).
+const FIT_RETRY: &str = "DELETE FROM taste_fit WHERE source = 'error';";
 
 const TOKEN_CONTEXT: &str = "taste_account.token:1";
 
