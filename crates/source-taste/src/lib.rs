@@ -77,6 +77,8 @@ pub const SCATTER_PATH: &str = "/v1/taste/screens/scatter";
 pub const ONE_TASTE_PATH: &str = "/v1/taste/screens/one-taste";
 /// The most pieces a taste's grid holds.
 pub const TASTE_GRID: usize = 60;
+/// How many of a taste's grid ([`TASTE_GRID`]) are fit-checked when it opens.
+pub const TASTE_CHECKED: usize = 8;
 pub const POINT_PATH: &str = "/v1/taste/screens/point";
 /// How long the pod keeps the whole map before asking for it again.
 pub const MAP_KEEP: std::time::Duration = std::time::Duration::from_secs(30 * 60);
@@ -1534,7 +1536,16 @@ async fn taste_route(State(pod): State<Pod>, headers: HeaderMap) -> Response {
         Err(r) => return r,
     };
     match api::taste(&a.client, &service).await {
-        Ok(v) => {
+        Ok(mut v) => {
+            // Each taste's pieces carry the fits already kept, so a strip's
+            // thumbnail can say Fits or Won't fit; nothing is checked here.
+            if let Some(tastes) = v.get_mut("tastes").and_then(Value::as_array_mut) {
+                for t in tastes.iter_mut() {
+                    if let Some(items) = t.get("items").and_then(Value::as_array).cloned() {
+                        t["items"] = Value::Array(fit::with_fit(&pod, items).await);
+                    }
+                }
+            }
             let mut b = DataBundle::default();
             bundle::tastes(&mut b, &v);
             Json(b).into_response()
@@ -1570,6 +1581,14 @@ async fn one_taste_route(
     };
     match api::one_taste(&a.client, &service, n, TASTE_GRID).await {
         Ok(mut v) => {
+            // The grid's first pieces, the ones on screen, are checked.
+            if let Some(items) = v.get("items").and_then(Value::as_array) {
+                fit::schedule(
+                    &pod,
+                    items.iter().take(TASTE_CHECKED).cloned().collect(),
+                    false,
+                );
+            }
             for list in ["items", "more"] {
                 if let Some(items) = v.get(list).and_then(Value::as_array).cloned() {
                     v[list] = Value::Array(fit::with_fit(&pod, items).await);
