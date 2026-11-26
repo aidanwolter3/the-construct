@@ -1516,6 +1516,7 @@ fn strip_host_headers(headers: &mut axum::http::HeaderMap) {
     headers.remove(pod_core::CREDENTIAL_HEADER);
     headers.remove(pod_core::mcp::ACCESS_HEADER);
     headers.remove(pod_core::grant::GRANT_HEADER);
+    headers.remove(pod_core::call_log::LABEL_HEADER);
     headers.remove(pod_core::session::INTERNAL_HEADER);
 }
 
@@ -1555,11 +1556,14 @@ async fn dispatch(State(host): State<Arc<Host>>, mut req: Request) -> Response {
             let hash = token.as_deref().map(session_hash).unwrap_or_default();
             // And its grant (decision `mcp-grants`); a lookup that fails
             // reads as one that allows nothing, never as none.
-            let (access, grant) = match host
+            // And its label, which the pod's call log records it by
+            // (decision `mcp-call-log`).
+            let (access, grant, label) = match host
                 .blocking(move |h| {
                     Ok::<_, rusqlite::Error>((
                         h.store.mcp_access(&hash)?,
                         h.store.mcp_grant(&hash)?,
+                        h.store.mcp_label(&hash)?,
                     ))
                 })
                 .await
@@ -1568,8 +1572,13 @@ async fn dispatch(State(host): State<Arc<Host>>, mut req: Request) -> Response {
                 _ => (
                     pod_core::mcp::Access::Read,
                     Some(pod_core::grant::Grant::nothing()),
+                    String::new(),
                 ),
             };
+            if let Ok(v) = HeaderValue::from_str(&pod_core::call_log::label_header_value(&label)) {
+                req.headers_mut()
+                    .insert(pod_core::call_log::LABEL_HEADER, v);
+            }
             if let Some(g) = grant
                 && let Ok(v) = HeaderValue::from_str(&g.header_value())
             {

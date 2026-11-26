@@ -1838,7 +1838,7 @@ async fn answer(r: Result<Value, Value>) -> axum::response::Response {
 
 /// Only the owner's own sessions (a device of the pod) undo, apply or
 /// restore from the app; an MCP credential uses the tools, under its grant.
-async fn owner_body(
+pub(crate) async fn owner_body(
     pod: &Pod,
     headers: &axum::http::HeaderMap,
     body: &[u8],

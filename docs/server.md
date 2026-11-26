@@ -248,6 +248,9 @@ does when it finishes.
   writes rows a calendar feed or a self-updating public link reads, and it reaches only the web hosts the pod's
   screens use: in the rows it writes, the edit groups it stages, and every fetch the pod makes for it. A row
   field a screen opens as an address (`target_uri: $item.<field>`) it sets only to one of the pod's own routes.
+- MCP call log (decision [`mcp-call-log`](decisions/mcp-call-log.md)): the host also sends the credential's label
+  in `x-construct-mcp-label` (base64url; dropped from any request that comes in), and the pod logs every call under
+  it in `mcp_calls` (30 days).
 
   The host stores it with the credential, sends it as `x-construct-mcp-grant` (dropped from any request that comes
   in) and keeps it when Connected apps changes the access. The pod refuses any tool, row write or edit group

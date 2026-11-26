@@ -79,6 +79,13 @@ pub enum Notice {
         last: String,
         key: String,
     },
+    /// A background agent's credential was refused by its grant again and
+    /// again (decision `mcp-call-log`): once a day per credential.
+    GrantRefused {
+        credential: String,
+        count: i64,
+        key: String,
+    },
     /// The runner refused an occurrence for good.
     Refused {
         schedule: String,
@@ -205,6 +212,21 @@ pub async fn tick(pod: &Pod, clients: &Clients, runner: Option<&Runner>, now: i6
         return pass;
     };
     pass.notices = notices;
+    // Repeated refusals of a background agent's credential (the pod's call
+    // log): a runner warning, at most once a day each.
+    if let Ok(refused) = pod
+        .blocking(move |s| s.with_conn(|c| pod_core::call_log::refused_recently(c, now / 1000)))
+        .await
+    {
+        for (credential, count) in refused {
+            let short: String = credential.chars().take(80).collect();
+            pass.notices.push(Notice::GrantRefused {
+                key: format!("grant_refused:{short}:{}", now / 86_400_000),
+                credential,
+                count,
+            });
+        }
+    }
     let mut changed = false;
     for o in pending {
         let Some(s) = schedules.iter().find(|s| s.id == o.schedule_id) else {
@@ -555,6 +577,28 @@ pub async fn set_enabled(pod: &Pod, args: &Value, enabled: bool) -> Result<Value
     put(pod, s, now).await
 }
 
+/// Pause every schedule: the kill switch (decision `mcp-call-log`). Runs
+/// going now go on and nothing is revoked; each schedule resumes by name.
+pub async fn pause_all(pod: &Pod) -> Result<Value, Refusal> {
+    let now = crate::follower::now_ms();
+    let list = pod
+        .blocking(db::schedules)
+        .await
+        .map_err(|_| store_failed())?;
+    let mut paused = Vec::new();
+    for mut s in list.into_iter().filter(|s| s.enabled) {
+        s.enabled = false;
+        s.looked_until = now;
+        s.updated_at = now;
+        let id = s.id.clone();
+        let _ = pod.blocking(move |st| db::drop_pending(st, &id)).await;
+        paused.push(s.name.clone());
+        let _ = put(pod, s, now).await?;
+    }
+    pod.publish_data_all(crate::NAME);
+    Ok(json!({"ok": true, "paused": paused}))
+}
+
 /// Delete the schedule `args` names (its runs go on).
 pub async fn delete(pod: &Pod, args: &Value) -> Result<Value, Refusal> {
     let s = named(pod, args).await?;
@@ -587,6 +631,7 @@ pub async fn tool(pod: &Pod, args: &Value) -> Result<Value, Value> {
         "update" => update(pod, args).await,
         "delete" => delete(pod, args).await,
         "pause" => set_enabled(pod, args, false).await,
+        "pause_all" => pause_all(pod).await,
         "resume" => set_enabled(pod, args, true).await,
         "run" => {
             let s = named(pod, args).await.map_err(|(_, e)| e)?;
@@ -609,7 +654,7 @@ pub async fn tool(pod: &Pod, args: &Value) -> Result<Value, Value> {
         }
         _ => Err((
             400,
-            bad("\"op\" is list, create, update, delete, pause, resume or run"),
+            bad("\"op\" is list, create, update, delete, pause, pause_all, resume or run"),
         )),
     };
     out.map_err(|(_, e)| e)

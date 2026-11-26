@@ -29,6 +29,7 @@ The primitive is the **journey**: a stored, replayable walk through the owner's 
 
 - edit groups and checkpoints ([`edit-groups`](decisions/edit-groups.md));
 - credential grants ([`mcp-grants`](decisions/mcp-grants.md));
+- the call log and undo this morning ([`mcp-call-log`](decisions/mcp-call-log.md));
 - usage trails ([`usage-trails`](decisions/usage-trails.md)).
 
 The jobs themselves are prompts: schedules on the agent runner ([agents.md](agents.md)).
@@ -42,6 +43,9 @@ The jobs themselves are prompts: schedules on the agent runner ([agents.md](agen
 | Edit groups | pod MCP, Settings' manifest | Stage, walk staged, apply in one step, undo in one tap; checkpoints to restore a whole morning. |
 | Grants | host, pod | A credential's exact tools, row collections, deletes and protected screens, enforced by the server; shared screens, feed rows and unknown web hosts stay out of reach whatever it lists. |
 | Usage trails | engine, pod | Devices report screens opened, taps and Backs (names only) while the `usage` jack is plugged. |
+| Call log | pod | Every call each credential makes (tool, target, allowed or refused); a Runner warning at 3 refusals in an hour. |
+| Undo this morning | pod MCP, Settings' manifest | One step back to the checkpoint before Build's first group, and every row edit the granted runs made today undone. |
+| Pause background agents | Agents | Pauses every schedule; nothing is revoked. |
 
 ## The two runs
 
@@ -57,6 +61,12 @@ reads needs only through `export_collection`, as data. Both grants withhold what
 `untrusted` envelope from a filler, a model or a web page comes back as `withheld: written by others` (numbers, dates
 and times stay), so neither run reads stranger text through the owner's collections. Values Claude wrote (Sense's need
 titles, Build's journeys) stay, in their envelope.
+
+What both runs did is in the pod's call log (`call_log`), under each credential's name, refusals included; three
+refusals within an hour raise a "Refused" Runner warning. **Undo this morning** (`undo_background`, or a button on
+Today's summary card through `/v1/background/undo`) puts the screens back to the checkpoint before Build's first
+group and undoes every row edit either run made today; it also undoes the owner's own screen edits since that
+checkpoint, so it asks first. **Pause background agents** on the Agents screen stops every schedule until resumed.
 
 Both run sandboxed on the Foreman (its decision `sandboxed-workspaces`): each run starts from a clean checkpoint of
 its own Sprite, reaches only the model API, the pod and (Sense) the Proton connector, has no shell, file or web

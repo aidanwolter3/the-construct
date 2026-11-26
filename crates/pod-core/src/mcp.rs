@@ -182,6 +182,7 @@ fn core_tool_needs(name: &str, _args: &Value) -> Option<Access> {
         | "sample_data"
         | "render_layout_preview"
         | "mcp_servers"
+        | "call_log"
         | "note_gap" => Access::Read,
         "create_layout"
         | "update_layout"
@@ -208,6 +209,13 @@ fn core_tool_needs(name: &str, _args: &Value) -> Option<Access> {
         | "stage_edit_group"
         | "apply_edit_group"
         | "revert_edit_group" => Access::Edit,
+        "undo_background" => {
+            if _args["dry_run"] == true {
+                Access::Read
+            } else {
+                Access::Edit
+            }
+        }
         "restore_checkpoint" => {
             if _args["dry_run"] == true {
                 Access::Read
@@ -697,6 +705,20 @@ fn base_tools() -> Vec<Value> {
             &["id"],
         ),
         tool(
+            "call_log",
+            "The pod's record of every MCP tool call each connected credential made (decision mcp-call-log), which no caller can write: time, credential, tool, target, and whether it was allowed, refused by the credential's access or grant, or failed. credential narrows it to one (its name in Settings, Connected apps), since (unix seconds; default the start of today), refused: true only refusals, limit (default 100). Use it to see what a background agent did or tried.",
+            json!({ "credential": { "type": "string" }, "since": { "type": "integer" },
+                    "refused": { "type": "boolean" }, "limit": { "type": "integer" } }),
+            &[],
+        ),
+        tool(
+            "undo_background",
+            "Undo what the pod's background agents (credentials with a grant, or the one named) did since a time (default the start of today): the screens go back to the checkpoint taken before the first edit group they applied (which also undoes the owner's own screen edits since: dry_run: true lists them, show the user first), and every row edit they made is undone, newest first. Only for the owner: a connection with a grant can't. A second undo starts after the first. Today's summary card does the same.",
+            json!({ "credential": { "type": "string" }, "since": { "type": "integer" },
+                    "dry_run": { "type": "boolean" } }),
+            &[],
+        ),
+        tool(
             "rename_layout",
             "Change a layout's title or icon. feeds: feeds to add to home's; on home itself, home's whole feeds list (a feed may go once no layout shows it).",
             json!({ "id": id, "title": { "type": "string" }, "icon": { "type": "string", "enum": crate::layouts::LAYOUT_ICONS }, "feeds": feeds }),
@@ -826,6 +848,30 @@ async fn call_tool(pod: &Pod, headers: &HeaderMap, params: &Value) -> Value {
         .get("arguments")
         .cloned()
         .unwrap_or_else(|| json!({}));
+    // The call log (decision `mcp-call-log`): every call an MCP credential
+    // makes, allowed or not, recorded where it can't write.
+    let caller = crate::call_log::caller(pod, headers);
+    let granted = crate::grant::connection_grant(pod, headers).is_some();
+    let logged = caller.as_ref().map(|_| args.clone());
+    let out = call_tool_checked(pod, headers, name, args).await;
+    if let (Some(credential), Some(args)) = (caller, logged) {
+        let call = crate::call_log::entry(
+            &credential,
+            granted,
+            name,
+            &args,
+            &out,
+            crate::util::now_secs(),
+        );
+        let _ = crate::blocking(pod, move |s| {
+            s.with_conn(|c| crate::call_log::record(c, &call))
+        })
+        .await;
+    }
+    out
+}
+
+async fn call_tool_checked(pod: &Pod, headers: &HeaderMap, name: &str, args: Value) -> Value {
     // What this connection may do (decision `mcp-access-levels`): checked
     // before anything runs, and kept for the call so what it writes is
     // recorded as Claude's below outward.
@@ -922,6 +968,12 @@ async fn run_tool(pod: &Pod, headers: &HeaderMap, name: &str, mut args: Value) -
         }
         "walk_journey" => {
             return crate::journey::walk(pod, headers, &args).await;
+        }
+        "call_log" => {
+            return tool_result(crate::call_log::tool(pod, &args).await);
+        }
+        "undo_background" => {
+            return tool_result(crate::call_log::undo(pod, &args).await);
         }
         "usage_report" | "usage_paths" => {
             let (n, a) = (name.to_owned(), args.clone());

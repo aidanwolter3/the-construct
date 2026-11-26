@@ -540,6 +540,21 @@ impl HostStore {
         Ok(found.flatten().map_or(Access::Read, |a| Access::parse(&a)))
     }
 
+    /// The label of the MCP credential with hash `token_hash` (what Settings,
+    /// Connected apps calls it): the name the pod's call log records it by
+    /// (decision `mcp-call-log`). Empty when it has none.
+    pub fn mcp_label(&self, token_hash: &str) -> rusqlite::Result<String> {
+        let found: Option<Option<String>> = self
+            .conn()
+            .query_row(
+                "SELECT label FROM credentials WHERE token_hash = ?1 AND kind = 'mcp'",
+                [token_hash],
+                |r| r.get(0),
+            )
+            .optional()?;
+        Ok(found.flatten().unwrap_or_default())
+    }
+
     /// The grant of the MCP credential with hash `token_hash` (decision
     /// `mcp-grants`); `None`: it has none. One that no longer parses allows
     /// nothing ([`pod_core::grant::Grant::nothing`]), never more.

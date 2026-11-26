@@ -4,6 +4,7 @@
 //! made-up test dishes, and that rotation keeps and revocation ends the connection.
 
 mod access;
+mod call_log;
 mod construct;
 mod edit_groups;
 mod grants;

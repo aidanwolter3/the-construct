@@ -59,7 +59,7 @@ pub fn channels(app: &str) -> Vec<NotificationChannel> {
         ch(
             WARNINGS,
             "Runner warnings",
-            "When a run is lost, doesn't start, runs too long, expires or fails; a sandbox goes down or keeps failing its disk; a scheduled run is missed; or a security check on the runner warns",
+            "When a run is lost, doesn't start, runs too long, expires or fails; a sandbox goes down or keeps failing its disk; a scheduled run is missed; a security check on the runner warns; or a background agent's credential keeps being refused",
             Importance::High,
         ),
     ]
@@ -241,6 +241,22 @@ pub fn notifications(
                     format!("{count} runs (the last due {last}) weren't sent in time, so they were skipped.")
                 }
                 },
+                None,
+                false,
+            ),
+            Notice::GrantRefused {
+                credential,
+                count,
+                key,
+            } => n(
+                WARNINGS,
+                key,
+                format!("Refused: {}", text::clean(credential, 120)),
+                format!(
+                    "Its grant refused {count} of its calls in the last hour. A background agent that keeps \
+                     trying what it may not do may have been steered by something it read: the call log \
+                     (call_log) shows what it tried, and Pause background agents stops every schedule."
+                ),
                 None,
                 false,
             ),
