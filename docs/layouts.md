@@ -410,6 +410,7 @@ The server components:
 | `@core/callout` | `title`, `text`, `tone`, `background`, `color`, `corner`; children | A tinted panel that says one thing in a tone: a heading in the tone's colour, a text, then its children. |
 | `@core/empty_state` | `title`, `text`, `icon`, `tone`, `corner`; children | What a list or screen shows with nothing in it yet: a tinted icon, a title, one sentence on why or when it fills, then its children (one action), centred in a card. |
 | `@core/counted_list` | `count`, `empty`, `corner`; children: the list | A list that is its rows in a `@core/grouped_list` while `count` (the list's `{query_key, where?}`) has rows, and the `empty` line while it has none. |
+| `@core/check_circle` | `done` | A 24 dp circle saying whether something is done: an empty ring outlined in the muted text colour, or (`done`) a filled accent circle with a tick. For the start of a row you wire yourself; `@core/checkable_row` is the whole row. |
 | `@core/checkable_row` | `title`, `field`, `endpoint`, `meta`, `description`, `tint`; children: at the end | A row that ticks a yes/no field of `$item` at a tap (`{id, <field>}` to the endpoint): a ring, or a filled tick with the title struck through. |
 | `@core/choice_chip` | `label`, `value`, `chosen`, `on_click`, `tint`, `on_tint`, `description` | One choice among several: filled while `chosen` (a binding) equals `value`, outlined otherwise; `on_click` chooses it (a mutation of a row's field, or `action.local.set` for a draft). |
 
