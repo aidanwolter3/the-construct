@@ -4966,6 +4966,7 @@ name = "source-taste"
 version = "0.1.0"
 dependencies = [
  "axum",
+ "construct-agent",
  "http-body-util",
  "pod-core",
  "protocol",
@@ -4973,10 +4974,12 @@ dependencies = [
  "rusqlite",
  "serde",
  "serde_json",
+ "source-collections",
  "source-shell",
  "tokio",
  "tower",
  "tracing",
+ "web-extract",
 ]
 
 [[package]]

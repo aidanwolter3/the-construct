@@ -381,6 +381,7 @@ impl Default for Budgets {
                 ("fill_page", 500),
                 ("fill_agent", 150),
                 ("web_pick", 300),
+                ("taste_fit", 200),
             ],
             per_pod: 3_000,
             tokens_per_pod: DEFAULT_POD_TOKENS_PER_DAY,

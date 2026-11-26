@@ -213,6 +213,21 @@ pub fn item(v: &Value) -> Option<(String, EntityRecord)> {
             .collect::<Vec<_>>(),
         "photo_url": sized(image, PHOTO_WIDTH),
     });
+    // The fit check's verdict ([`crate::fit`]), empty until there is one.
+    let fit = v.get("fit");
+    let fit_text = |k: &str| fit.map(|f| text(f, k, 200)).unwrap_or_default();
+    let state = fit_text("state");
+    record["fit_state"] = json!(state);
+    record["fit_checked"] = json!(!state.is_empty());
+    record["fit_text"] = json!(fit_text("text"));
+    record["fit_tone"] = json!(match fit_text("tone").as_str() {
+        t @ ("success" | "error" | "muted") => t.to_owned(),
+        _ => "muted".to_owned(),
+    });
+    let note = fit_text("note");
+    record["fit_noted"] = json!(!note.is_empty());
+    record["fit_note"] = json!(note);
+    record["fit_source_text"] = json!(fit_text("source_text"));
     // A card shows one photo at a time: `image_<k>` is photo k, and a tap on
     // photo k sets the device-only field `photo` to `next_<k>` (wrapping), so
     // the layout needs no arithmetic. `photo` is never served: a reload shows

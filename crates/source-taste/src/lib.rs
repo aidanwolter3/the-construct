@@ -25,6 +25,7 @@
 pub mod api;
 pub mod bundle;
 pub mod db;
+pub mod fit;
 
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -141,6 +142,32 @@ const ITEM_FIELDS: &[(&str, &str)] = &[
         "photo k 720 px wide (someone wearing it first), or empty past photo_count",
     ),
     ("photo_count", "how many photos (0 to 6)"),
+    (
+        "fit_state",
+        "the fit check (garments, once the owner's fit_targets collection has rows for its \
+         kind): fits, no or unsure; empty until checked",
+    ),
+    ("fit_checked", "true once fit_state is set"),
+    (
+        "fit_text",
+        "the badge: Fits in M, Won't fit: sleeves 33 in, Not sure: no length listed, No size \
+         chart",
+    ),
+    (
+        "fit_tone",
+        "a pill tone for fit_text: success, error or muted",
+    ),
+    (
+        "fit_note",
+        "the size judged and its measurements, e.g. Item chart · M: length 29½ ✓ · pits 21 ✓ \
+         (Brand chart, a guess when it came from the brand's size guide)",
+    ),
+    ("fit_noted", "true when fit_note has text"),
+    (
+        "fit_source_text",
+        "where the chart came from in words (this piece's own chart, or the brand's guide: a \
+         guess)",
+    ),
     ("photos_many", "true with more than one photo"),
     (
         "next_0 .. next_5",
@@ -428,9 +455,14 @@ pub const PRIVATE_HOSTS_VAR: &str = "CONSTRUCT_TASTE_PRIVATE_HOSTS";
 #[derive(Debug, Clone)]
 pub struct TasteAdapter {
     /// The service on any address over http or https (tests, local
-    /// development); otherwise https on public hosts only.
+    /// development); otherwise https on public hosts only. Stores' pages
+    /// read for a fit check too.
     pub allow_private_hosts: bool,
     pub client: OutboundClient,
+    /// Stores' pages, for the fit check ([`fit`]): through the web module.
+    pub web: OutboundClient,
+    /// The model that reads size charts ([`fit`]); none, no fit check.
+    pub agent: Option<Arc<construct_agent::Agent>>,
 }
 
 impl TasteAdapter {
@@ -438,11 +470,24 @@ impl TasteAdapter {
         Self {
             allow_private_hosts,
             client: api::client(allow_private_hosts),
+            web: OutboundClient::builder(web_extract::fetch::FETCH_TIMEOUT)
+                .private(allow_private_hosts)
+                .web()
+                .body_cap(web_extract::fetch::MAX_BODY)
+                .build(),
+            agent: None,
         }
+    }
+
+    /// With a model for the fit check.
+    pub fn with_agent(mut self, agent: Option<Arc<construct_agent::Agent>>) -> Self {
+        self.agent = agent;
+        self
     }
 
     pub fn from_env() -> Self {
         Self::new(std::env::var(PRIVATE_HOSTS_VAR).as_deref() == Ok("1"))
+            .with_agent(construct_agent::Agent::from_env())
     }
 }
 
@@ -549,7 +594,13 @@ ref: @core/taste}) as a layout and link it from home, where taste:status's count
 one-line summary. The pod signs in to the service from that layout's form (its URL and token) \
 and signs out from Settings (the taste jack): never ask for the token in the conversation. The \
 owner's likes and dislikes are kept in the pod and survive signing out; the service only \
-caches them.";
+caches them. Fit: garments carry fit_text (Fits in M, Won't fit: sleeves 33 in, Not sure: no \
+length listed) and fit_note, from the piece's own size chart (or the brand's size guide, a guess) \
+against the owner's measurements, the rows of the collection fit_targets: kind (knit top, woven \
+top, jacket, trousers, shorts), measure (chest as pit to pit, length, shoulder, sleeve from the \
+centre back, waist, rise, thigh, inseam, leg opening), low and high, in inches laid flat. Make \
+that collection (text fields kind and measure, number fields low and high, optional) when the \
+owner gives their measurements; with no rows for a kind nothing is checked.";
 
 impl Source for TasteAdapter {
     fn element_catalog(&self) -> &'static str {
@@ -645,6 +696,8 @@ impl Source for TasteAdapter {
                     error,
                 },
             );
+            fit::schedule(pod, items.iter().take(fit::AHEAD).cloned().collect(), false);
+            let items = fit::with_fit(pod, items).await;
             bundle::put_items(&mut b, bundle::FEED_QUERY, &items);
             Hydration::Data(b)
         })
@@ -875,7 +928,7 @@ async fn signed_in(pod: &Pod) -> Result<(&TasteAdapter, Service), Response> {
     }
 }
 
-fn now_ms() -> i64 {
+pub(crate) fn now_ms() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_millis() as i64)
@@ -1140,12 +1193,15 @@ struct KeyQuery {
     q: String,
 }
 
-/// `items` with the kept feed's reasons filled in ([`bundle::with_why`]).
+/// `items` with the kept feed's reasons filled in ([`bundle::with_why`])
+/// and their fits ([`fit::with_fit`]): the device keeps one copy of each
+/// piece, so every list that puts one carries both.
 async fn with_why(pod: &Pod, items: Vec<Value>) -> Vec<Value> {
-    match pod.blocking(db::items).await {
+    let items = match pod.blocking(db::items).await {
         Ok(kept) => bundle::with_why(&items, &kept),
         Err(_) => items,
-    }
+    };
+    fit::with_fit(pod, items).await
 }
 
 fn valid_key(key: &str) -> bool {
@@ -1201,6 +1257,8 @@ async fn item_route(
         Ok(i) => i,
         Err(e) => return service_error(e),
     };
+    // The piece opened is checked first.
+    fit::schedule(&pod, vec![item.clone()], true);
     let similar = with_why(&pod, similar.unwrap_or_default()).await;
     let contrast = with_why(&pod, contrast.unwrap_or_default()).await;
     let item = with_why(&pod, vec![item]).await.remove(0);
@@ -1499,7 +1557,12 @@ async fn one_taste_route(
         Err(r) => return r,
     };
     match api::one_taste(&a.client, &service, n, TASTE_GRID).await {
-        Ok(v) => {
+        Ok(mut v) => {
+            for list in ["items", "more"] {
+                if let Some(items) = v.get(list).and_then(Value::as_array).cloned() {
+                    v[list] = Value::Array(fit::with_fit(&pod, items).await);
+                }
+            }
             let mut b = DataBundle::default();
             bundle::one_taste(&mut b, n, &v);
             Json(b).into_response()

@@ -9,6 +9,9 @@ publish.workspace = true
 
 [dependencies]
 pod-core = { path = "../pod-core" }
+construct-agent = { path = "../agent" }
+source-collections = { path = "../source-collections" }
+web-extract = { path = "../web-extract" }
 protocol = { workspace = true }
 serde_json.workspace = true
 serde.workspace = true
@@ -19,6 +22,9 @@ tokio = { version = "1", features = ["rt", "time", "sync", "macros"] }
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 
 [dev-dependencies]
+construct-agent = { path = "../agent" }
+source-collections = { path = "../source-collections" }
+axum = { version = "0.8", features = ["http2"] }
 source-shell = { path = "../source-shell" }
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "time", "net", "sync"] }
 tower = { version = "0.5", features = ["util"] }
