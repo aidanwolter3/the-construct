@@ -44,5 +44,12 @@ Decision:
   those values as untrusted, and text an action copies keeps the mark. Agents' reopen action refuses a call below
   `outward`. With `outward`, Claude's writes count as the owner's, as before.
 
+Since then (2026-11-26, security audit): a per-row filler (`url_field`) fetched every row's URL whoever wrote it,
+so an `edit` connection could reach any host by writing a row (`add_row`, `edit_rows`, `run_action`) and calling
+`collections_refresh`, with the URL carrying what it read from the pod. A URL whose field Claude wrote below
+`outward` (writer `claude`) is now fetched only from a host the filler already reaches: one a person's row names,
+or one it filled a row from. Other rows wait, and `collections_status` says why. `query_field` searches go to the
+pod's own search provider, a host it already reaches, so they are unchanged.
+
 Not done: per-action approval on a device (the other option) and per-tool grants. A connection at `outward` is as
 trusted as before this decision, so the owner should give it only to an app they trust with that.

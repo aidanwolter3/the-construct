@@ -1410,6 +1410,9 @@ enum Fetch {
         items: usize,
         skipped: usize,
         failed: Vec<String>,
+        /// Rows not fetched: Claude wrote their URL below outward access,
+        /// on a host the filler doesn't reach yet.
+        held: usize,
     },
     /// `for_each`: each researched row's answer, `(row id, items, source
     /// key)`; the rows that exist there (live), for removing the rows of
@@ -1861,12 +1864,40 @@ async fn run_fetch(
     }
     let name = def.name.clone();
     let fid = filler.id.clone();
-    let (rows, marks) = pod
+    let (rows, marks, writers) = pod
         .blocking(move |s| {
-            s.with_conn(|c| Ok((db::all_rows(c, &name, false)?, row_marks(c, &name, &fid)?)))
+            s.with_conn(|c| {
+                Ok((
+                    db::all_rows(c, &name, false)?,
+                    row_marks(c, &name, &fid)?,
+                    db::field_writers(c, &name)?,
+                ))
+            })
         })
         .await
         .unwrap_or_default();
+    // A URL Claude wrote below outward access (decision
+    // `mcp-access-levels`) is fetched only from a host this filler already
+    // reaches: one a person's row names, or one it filled a row from.
+    // Reaching a new host is outward, so such a row waits (`held`).
+    let by_claude = |r: &db::Row| {
+        writers
+            .get(&r.id)
+            .and_then(|w| w.get(field))
+            .is_some_and(|w| w == db::WRITER_CLAUDE)
+    };
+    let known_hosts: HashSet<String> = if searching {
+        HashSet::new()
+    } else {
+        rows.iter()
+            .filter(|r| !by_claude(r))
+            .filter_map(|r| r.values.get(field).and_then(Value::as_str))
+            .chain(marks.values().map(|(s, _, _)| s.as_str()))
+            .map(|u| web_extract::fetch::host_of(u.trim()))
+            .filter(|h| !h.is_empty())
+            .collect()
+    };
+    let mut held = 0;
     let refresh = filler.refresh();
     let force_all = force || state.fingerprint != filler.fingerprint();
     let mut out = Vec::new();
@@ -1899,6 +1930,11 @@ async fn run_fetch(
     rows.sort_by_key(|r| filled_at(r).map_or((0, 0), |at| (1, at)));
     for r in rows.into_iter().take(caps.fill_urls) {
         let src = src_of(&r);
+        if !searching && by_claude(&r) && !known_hosts.contains(&web_extract::fetch::host_of(&src))
+        {
+            held += 1;
+            continue;
+        }
         let prev_key = marks
             .get(&r.id)
             .filter(|(s, _, _)| *s == src)
@@ -2101,8 +2137,13 @@ async fn run_fetch(
         items,
         skipped,
         failed,
+        held,
     }
 }
+
+/// Why a per-row filler held rows back (after their count).
+const HELD: &str = "rows wait: Claude wrote their URL without outward access, on a host this filler hasn't \
+reached yet. A row on that host the owner adds (or Claude with outward access adds) lets them be filled.";
 
 /// What each row of a per-row filler was last filled from: `row id ->
 /// (source, content key, when)`.
@@ -3008,6 +3049,7 @@ pub async fn fill(pod: &Pod, collection: &str, filler_id: &str, force: bool) -> 
             items,
             skipped,
             failed,
+            held,
         } => {
             let (d2, f2) = (def.clone(), filler.clone());
             let total = rows.len() + failed.len();
@@ -3075,6 +3117,13 @@ pub async fn fill(pod: &Pod, collection: &str, filler_id: &str, force: bool) -> 
                             300,
                         )
                     });
+                    if held > 0 {
+                        let note = format!("{held} {HELD}");
+                        st.last_error = Some(match st.last_error.take() {
+                            Some(e) => web_extract::html::truncate(&format!("{note}; {e}"), 300),
+                            None => note,
+                        });
+                    }
                     st.next_at = scheduled;
                     st.fingerprint = fingerprint.clone();
                     st.last_rows = Some(items as i64);
