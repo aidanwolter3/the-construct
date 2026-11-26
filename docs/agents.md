@@ -130,8 +130,15 @@ when none is given), a workspace, a model (empty: the sandbox's default), a max 
 - **Pause** drops what waits to be sent; **Resume**, or a new cron or zone, starts from now, so nothing paused counts
   as missed. **Run now** sends an occurrence named by this minute (`request_id` ending `_now`): a second tap in the
   same minute answers the same run.
+- **Following another** (`after`, decision [`chained-schedules`](decisions/chained-schedules.md)): a schedule can
+  name another it follows. Once the run of the other's newest cron time ends, however it ended (reported, failed,
+  stopped, timed out), the follower's first time after that time, if it is within a day and still to come, is taken
+  up and sent at once. Its own cron is the fallback: the early start and the cron's time are one occurrence with one
+  `request_id`, so it runs once for that time, and at its cron time when the other never ran or never ended. Run now
+  of the other doesn't start it. A schedule can't follow itself or one that follows it; a rename carries its
+  followers along, and deleting a schedule leaves them only their own times.
 - Actions: `/v1/agents/schedules/create {name, cron, timezone?, workspace, prompt, model?, max_runtime_min?,
-  enabled?}`, `/update {name, new_name?, …}` (blank fields keep their value; `model: "default"` clears it),
+  enabled?, after?}`, `/update {name, new_name?, …}` (blank fields keep their value; `model: "default"` and `after: "none"` clear theirs),
   `/delete {name}`, `/run`, `/pause`, `/resume {name}` and `/pause_all` (every enabled schedule, revoking
   nothing: decision [`mcp-call-log`](decisions/mcp-call-log.md)). The MCP tool `agents_schedules {op: list |
   create | update | delete | pause | pause_all | resume | run, …}` does the same for Claude.

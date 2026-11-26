@@ -12,6 +12,12 @@
 //! waits to be sent; resuming, or changing the cron or zone, starts from
 //! now (nothing paused is "missed").
 //!
+//! A schedule can follow another (decision `chained-schedules`): once
+//! the run of the other's newest time ends (however it ended), the
+//! follower's first time after it starts, within a day, is taken up at once
+//! ([`chain`]). Its cron is the fallback: the early start and the cron's
+//! time share one occurrence and one request id, so it runs once.
+//!
 //! The timer runs in the follower (every pass, connected or not) and in
 //! the source's notification poll, so it runs from server start for every
 //! pod signed in to a runner (`Source::keeps_open`).
@@ -168,6 +174,65 @@ pub fn look(store: &pod_core::store::Store, now: i64) -> rusqlite::Result<Vec<No
     Ok(notices)
 }
 
+/// How long after a schedule's time a follower's time may be and still
+/// follow it (ms).
+pub const CHAIN_WITHIN_MS: i64 = 24 * 3600 * 1000;
+
+/// Take up early the times of schedules that follow another whose run
+/// ended (decision `chained-schedules`): for each schedule on with `after`,
+/// when the run of the newest cron time of the schedule it follows has
+/// ended, its own first time after that time (within [`CHAIN_WITHIN_MS`],
+/// and not yet come) is taken up now. The number taken up. Blocking.
+pub fn chain(store: &pod_core::store::Store, now: i64) -> rusqlite::Result<usize> {
+    let all = db::schedules(store)?;
+    if !all.iter().any(|s| s.enabled && !s.after.is_empty()) {
+        return Ok(0);
+    }
+    let Some((state, _)) = db::state(store)? else {
+        return Ok(0);
+    };
+    let mut taken = 0;
+    for s in all.iter().filter(|s| s.enabled && !s.after.is_empty()) {
+        let Some(up) = all.iter().find(|u| u.name == s.after && u.id != s.id) else {
+            continue;
+        };
+        let Some(last) = db::last_sent(store, &up.id)? else {
+            continue;
+        };
+        let ended = state
+            .runs
+            .get(&last.run_id)
+            .is_some_and(|r| r.state == crate::state::ENDED);
+        let (Ok(c), Ok(from)) = (
+            Cron::parse(&s.cron),
+            Timestamp::from_millisecond(last.due_at),
+        ) else {
+            continue;
+        };
+        let Some((name, at)) = c.next_after(&zone(s), from) else {
+            continue;
+        };
+        let at = at.as_millisecond();
+        if !ended || at <= now || at - last.due_at > CHAIN_WITHIN_MS {
+            continue;
+        }
+        let o = Occurrence {
+            schedule_id: s.id.clone(),
+            request_id: request_id(&s.id, &name, false),
+            occurrence: name,
+            due_at: now,
+            state: db::OCC_PENDING.into(),
+            run_id: String::new(),
+            manual: false,
+            updated_at: now,
+        };
+        if db::take_up_one(store, &o)? {
+            taken += 1;
+        }
+    }
+    Ok(taken)
+}
+
 /// The `start_run` of occurrence `o` of schedule `s`.
 pub fn command(s: &Schedule, o: &Occurrence) -> Command {
     Command::StartRun(StartRun {
@@ -206,7 +271,11 @@ pub async fn tick(pod: &Pod, clients: &Clients, runner: Option<&Runner>, now: i6
         return pass;
     };
     let Ok((notices, pending, schedules)) = pod
-        .blocking(move |s| Ok((look(s, now)?, db::pending(s)?, db::schedules(s)?)))
+        .blocking(move |s| {
+            let notices = look(s, now)?;
+            chain(s, now)?;
+            Ok((notices, db::pending(s)?, db::schedules(s)?))
+        })
         .await
     else {
         return pass;
@@ -375,7 +444,7 @@ fn valid_name(n: &str) -> bool {
 }
 
 /// A schedule from `args` (`name, cron, timezone, workspace, model,
-/// max_runtime_min, enabled, prompt`), on top of `existing` for an edit
+/// max_runtime_min, enabled, prompt, after`; `after: none` clears it), on top of `existing` for an edit
 /// (blank or absent fields keep their value; `new_name` renames).
 /// `pod_zone`: the zone a new schedule without one takes.
 pub fn from_input(
@@ -449,6 +518,15 @@ pub fn from_input(
         }
         s.prompt = p.to_owned();
     }
+    if let Some(a) = input(args, "after") {
+        if a == "none" {
+            s.after.clear();
+        } else if !valid_name(a) {
+            return Err(bad("\"after\" names a schedule, or is none"));
+        } else {
+            s.after = a.to_owned();
+        }
+    }
     if let Some(e) = flag(args, "enabled") {
         moved |= e && !s.enabled;
         s.enabled = e;
@@ -463,6 +541,9 @@ pub fn from_input(
             return Err(bad(format!("a schedule needs \"{k}\"")));
         }
     }
+    if s.after == s.name {
+        return Err(bad("a schedule can't follow itself"));
+    }
     if s.timezone.is_empty() {
         s.timezone = "UTC".into();
     }
@@ -474,12 +555,40 @@ pub fn from_input(
     Ok(s)
 }
 
+/// Whether `s` may follow the schedule it names, among `others` (every
+/// other schedule, as they will be): that schedule exists, and following
+/// the chain from it never comes back to `s`.
+pub fn check_after(s: &Schedule, others: &[Schedule]) -> Result<(), Value> {
+    if s.after.is_empty() {
+        return Ok(());
+    }
+    let find = |name: &str| others.iter().find(|o| o.name == name && o.id != s.id);
+    if find(&s.after).is_none() {
+        return Err(bad(format!("no schedule '{}' to follow", s.after)));
+    }
+    let mut next = s.after.as_str();
+    for _ in 0..=MAX_SCHEDULES {
+        if next == s.name {
+            return Err(bad(format!(
+                "'{}' already follows '{}', so it can't follow back",
+                s.after, s.name
+            )));
+        }
+        match find(next) {
+            Some(o) if !o.after.is_empty() => next = &o.after,
+            _ => return Ok(()),
+        }
+    }
+    Ok(())
+}
+
 /// A schedule as the MCP tool and the routes answer it.
 pub fn describe(s: &Schedule, now: i64) -> Value {
     json!({
         "id": s.id, "name": s.name, "cron": s.cron, "timezone": s.timezone,
         "workspace": s.workspace, "model": s.model, "max_runtime_min": s.max_runtime_min,
         "enabled": s.enabled, "prompt": s.prompt,
+        "after": (!s.after.is_empty()).then_some(&s.after),
         "next_run": next_run(s, now).map(|(n, _)| n),
     })
 }
@@ -517,22 +626,23 @@ async fn named(pod: &Pod, args: &Value) -> Result<Schedule, Refusal> {
 /// Create a schedule from `args`.
 pub async fn create(pod: &Pod, args: &Value) -> Result<Value, Refusal> {
     let now = crate::follower::now_ms();
-    let (zone, count) = pod
+    let (zone, list) = pod
         .blocking(|s| {
             Ok((
                 pod_core::tz::time_zone_name(s)?.unwrap_or_else(|| "UTC".into()),
-                db::schedules(s)?.len(),
+                db::schedules(s)?,
             ))
         })
         .await
         .map_err(|_| store_failed())?;
-    if count >= MAX_SCHEDULES {
+    if list.len() >= MAX_SCHEDULES {
         return Err((
             409,
             json!({"error": "too_many", "detail": "a pod keeps at most 50 schedules"}),
         ));
     }
     let s = from_input(args, None, &zone, now).map_err(|e| (400, e))?;
+    check_after(&s, &list).map_err(|e| (400, e))?;
     put(pod, s, now).await
 }
 
@@ -557,7 +667,26 @@ pub async fn update(pod: &Pod, args: &Value) -> Result<Value, Refusal> {
     let now = crate::follower::now_ms();
     let old = named(pod, args).await?;
     let s = from_input(args, Some(&old), "UTC", now).map_err(|e| (400, e))?;
-    put(pod, s, now).await
+    // A rename carries the schedules that follow it along.
+    let mut others = pod
+        .blocking(db::schedules)
+        .await
+        .map_err(|_| store_failed())?;
+    others.retain(|o| o.id != s.id);
+    let mut followers = Vec::new();
+    if old.name != s.name {
+        for o in others.iter_mut().filter(|o| o.after == old.name) {
+            o.after = s.name.clone();
+            o.updated_at = now;
+            followers.push(o.clone());
+        }
+    }
+    check_after(&s, &others).map_err(|e| (400, e))?;
+    let answer = put(pod, s, now).await?;
+    for f in followers {
+        let _ = pod.blocking(move |st| db::put_schedule(st, &f)).await;
+    }
+    Ok(answer)
 }
 
 /// Pause or resume the schedule `args` names. Pausing drops what waits to
@@ -602,10 +731,18 @@ pub async fn pause_all(pod: &Pod) -> Result<Value, Refusal> {
 /// Delete the schedule `args` names (its runs go on).
 pub async fn delete(pod: &Pod, args: &Value) -> Result<Value, Refusal> {
     let s = named(pod, args).await?;
-    let id = s.id.clone();
-    pod.blocking(move |st| db::delete_schedule(st, &id))
-        .await
-        .map_err(|_| store_failed())?;
+    let (id, name) = (s.id.clone(), s.name.clone());
+    pod.blocking(move |st| {
+        db::delete_schedule(st, &id)?;
+        // Those that followed it keep only their own times.
+        for mut f in db::schedules(st)?.into_iter().filter(|f| f.after == name) {
+            f.after.clear();
+            db::put_schedule(st, &f)?;
+        }
+        Ok(())
+    })
+    .await
+    .map_err(|_| store_failed())?;
     pod.publish_data_all(crate::NAME);
     Ok(json!({"ok": true, "deleted": s.name}))
 }
@@ -708,5 +845,26 @@ mod tests {
         ] {
             assert!(from_input(&bad, None, "UTC", 0).is_err(), "{bad}");
         }
+    }
+
+    #[test]
+    fn a_schedule_follows_one_that_is_there_and_never_back() {
+        let sc = |id: &str, name: &str, after: &str| Schedule {
+            id: id.into(),
+            name: name.into(),
+            after: after.into(),
+            ..Default::default()
+        };
+        let others = [sc("a", "sense", ""), sc("b", "build", "sense")];
+        assert!(check_after(&sc("c", "publish", "build"), &others).is_ok());
+        assert!(check_after(&sc("c", "publish", "gone"), &others).is_err());
+        assert!(check_after(&sc("a", "sense", "build"), &others[1..]).is_err());
+        let args = json!({"name": "x", "cron": "0 3 * * *", "workspace": "w", "prompt": "p"});
+        let s = from_input(&args, None, "UTC", 0).unwrap();
+        let e = from_input(&json!({"after": "sense"}), Some(&s), "UTC", 0).unwrap();
+        assert_eq!(e.after, "sense");
+        let e = from_input(&json!({"after": "none"}), Some(&e), "UTC", 0).unwrap();
+        assert!(e.after.is_empty());
+        assert!(from_input(&json!({"after": "x"}), Some(&s), "UTC", 0).is_err());
     }
 }

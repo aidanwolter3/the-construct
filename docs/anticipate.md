@@ -51,7 +51,7 @@ The jobs themselves are prompts: schedules on the agent runner ([agents.md](agen
 
 | | `anticipate-sense` | `anticipate-build` |
 |---|---|---|
-| When | 05:07 America/Denver, at most 20 min | 05:37 America/Denver, at most 60 min |
+| When | 05:07 America/Denver, at most 20 min | as soon as Sense's run ends (it follows `anticipate-sense`), at 06:30 if it hasn't started by then; at most 60 min |
 | Reads | Proton mail and calendar (read-only by construction), the collections its grant lists | the collections its grant lists, layouts, usage; no mail or calendar connector |
 | Pod credential | `edit` with the *sense* grant | `edit` with the *build* grant |
 | Writes | rows of `anticipate_needs` | edit groups on unprotected screens; rows of `anticipations`, `journeys`, `anticipate_needs` |
