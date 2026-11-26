@@ -817,16 +817,19 @@ pub async fn mcp(pod: &Pod, name: &str, args: &Value) -> Option<Result<Value, Va
             let g = crate::grant::current();
             Some(run_write(pod, args, move |p, c, a| super::edit_groups::apply(p, c, a, g.as_ref())).await)
         }
-        "revert_edit_group" => Some(
-            run_write(pod, args, |p, c, a| {
-                if a["since"].is_i64() {
-                    super::edit_groups::revert_since(p, c, a)
-                } else {
-                    super::edit_groups::revert(p, c, a)
-                }
-            })
-            .await,
-        ),
+        "revert_edit_group" => {
+            let g = crate::grant::current();
+            Some(
+                run_write(pod, args, move |p, c, a| {
+                    if a["since"].is_i64() {
+                        super::edit_groups::revert_since(p, c, a, g.as_ref())
+                    } else {
+                        super::edit_groups::revert(p, c, a, g.as_ref())
+                    }
+                })
+                .await,
+            )
+        }
         "list_edit_groups" => Some(
             run(pod, args, |_, c, _| {
                 Ok(json!({ "groups": super::edit_groups::list(c).map_err(store_err)? }))
@@ -840,15 +843,22 @@ pub async fn mcp(pod: &Pod, name: &str, args: &Value) -> Option<Result<Value, Va
             .await,
         ),
         "restore_checkpoint" => {
+            let g = crate::grant::current();
             if args["dry_run"] == true {
                 Some(
+                    // A dry run writes nothing, so no grant is needed.
                     run(pod, args, |p, c, a| {
-                        super::edit_groups::restore_checkpoint(p, c, a).map(|(v, _)| v)
+                        super::edit_groups::restore_checkpoint(p, c, a, None).map(|(v, _)| v)
                     })
                     .await,
                 )
             } else {
-                Some(run_write(pod, args, super::edit_groups::restore_checkpoint).await)
+                Some(
+                    run_write(pod, args, move |p, c, a| {
+                        super::edit_groups::restore_checkpoint(p, c, a, g.as_ref())
+                    })
+                    .await,
+                )
             }
         }
         _ => None,
