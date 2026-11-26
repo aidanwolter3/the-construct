@@ -120,17 +120,58 @@
                     {
                       "children": [
                         {
-                          "background": "${local://theme#accent_surface}",
                           "content": {
-                            "style": "Caption",
-                            "type": "core://Text",
-                            "value_expr": "${taste://items/$route.key#fit_text}"
+                            "background": "${local://theme#success_surface}",
+                            "content": {
+                              "style": "Caption",
+                              "type": "core://Text",
+                              "value_expr": "${taste://items/$route.key#fit_text}"
+                            },
+                            "content_color": "${local://theme#success}",
+                            "corner_dp": 8,
+                            "padding_h_dp": 8,
+                            "padding_v_dp": 3,
+                            "type": "core://Box"
                           },
-                          "content_color": "${local://theme#accent}",
-                          "corner_dp": 8,
-                          "padding_h_dp": 8,
-                          "padding_v_dp": 3,
-                          "type": "core://Box"
+                          "equals": "success",
+                          "type": "core://Conditional",
+                          "value": "${taste://items/$route.key#fit_tone}"
+                        },
+                        {
+                          "content": {
+                            "background": "${local://theme#error_surface}",
+                            "content": {
+                              "style": "Caption",
+                              "type": "core://Text",
+                              "value_expr": "${taste://items/$route.key#fit_text}"
+                            },
+                            "content_color": "${local://theme#error}",
+                            "corner_dp": 8,
+                            "padding_h_dp": 8,
+                            "padding_v_dp": 3,
+                            "type": "core://Box"
+                          },
+                          "equals": "error",
+                          "type": "core://Conditional",
+                          "value": "${taste://items/$route.key#fit_tone}"
+                        },
+                        {
+                          "content": {
+                            "background": "${local://theme#muted_surface}",
+                            "content": {
+                              "style": "Caption",
+                              "type": "core://Text",
+                              "value_expr": "${taste://items/$route.key#fit_text}"
+                            },
+                            "content_color": "${local://theme#muted_text}",
+                            "corner_dp": 8,
+                            "padding_h_dp": 8,
+                            "padding_v_dp": 3,
+                            "type": "core://Box"
+                          },
+                          "equals": "muted",
+                          "type": "core://Conditional",
+                          "value": "${taste://items/$route.key#fit_tone}"
                         },
                         {
                           "type": "core://Spacer"

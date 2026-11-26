@@ -23,11 +23,11 @@ Decision:
   chart per site and kind of garment, for 30 days. A store that refuses the plain fetch (403 or 429) is read in the
   server's headless browser instead (decision `rendered-fetches`), at most 40 pages a day per pod, so most of the
   pod's renders stay with its collections; only a refusal there too backs the host off. (Added the same day: on
-  staging every store in the owner's feed answered the server's plain fetch with 429, so no card got a badge.)
+  staging every store in the owner's feed answered the server's plain fetch with 429, so no card got a badge; pieces whose read had failed before then are read again once, not after their six hours.)
 - **The pod does the arithmetic, not the model.** Charts are kept in inches, flat across, sleeves from the centre back
   (centimetres, all-round chests and seam-to-cuff sleeves are converted); a verdict is worked out each time a list is
   served, so new targets show at once. Three states: fits (with the size), won't fit (with the measure that misses,
-  e.g. sleeves 33 in) and not sure (what the chart doesn't list, with what does fit). Each says where its chart came
+  e.g. sleeves 33 in) and not sure (what the chart doesn't list, with what does fit), its pill green, red or grey. Each says where its chart came
   from; one from the brand's guide is called a guess.
 - **What is checked:** the next few pieces of the deck and any piece opened; each at most once a month (a page with no
   chart once a week, a page that failed after six hours), and a page text the model has read is never sent again.
