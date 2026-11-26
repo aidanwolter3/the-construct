@@ -1105,6 +1105,15 @@ fn prune(conn: &Connection) -> rusqlite::Result<()> {
     Ok(())
 }
 
+/// Refuse `g` under `grant` if it writes a name the grant protects.
+fn refuse_protected(conn: &Connection, grant: &Grant, g: &Group) -> Result<(), Value> {
+    let protected = protected_closure(conn, grant).map_err(store_err)?;
+    match g.entries.iter().find(|e| protected.contains(&e.name)) {
+        Some(e) => Err(refuse("protected", format!("{} is protected", e.name))),
+        None => Ok(()),
+    }
+}
+
 /// `apply_edit_group {id}`: make a staged group live.
 pub fn apply(
     pod: &Pod,
@@ -1116,6 +1125,33 @@ pub fn apply(
         .as_str()
         .ok_or_else(|| refuse("invalid_arguments", "\"id\" is required"))?;
     let mut g = group(conn, id)?;
+    // Under a grant the server holds the gate (decision `mcp-grants`) for
+    // every way a group goes live: applied or redone, it is safe (restyles
+    // allowed, nothing lost, nothing new done) and touches nothing
+    // protected; and only the owner keeps a trial.
+    if let Some(gr) = grant {
+        match g.state.as_str() {
+            "proposed" | "reverted" => {
+                refuse_protected(conn, gr, &g)?;
+                if g.report["safe"] != true {
+                    return Err(refuse(
+                        "not_safe",
+                        format!(
+                            "this connection's grant applies only safe groups: {}",
+                            g.report["safe_violations"]
+                        ),
+                    ));
+                }
+            }
+            "trial" => {
+                return Err(refuse(
+                    "owner_keeps",
+                    "only the owner keeps a trial (Keep in the app); this connection's grant can't",
+                ));
+            }
+            _ => {}
+        }
+    }
     match g.state.as_str() {
         "proposed" => {}
         // Keep: a trial becomes the owner's.
@@ -1144,24 +1180,6 @@ pub fn apply(
                 "not_proposed",
                 format!(
                     "the group is {other}: a proposed group is applied, a trial kept, an undone one redone"
-                ),
-            ));
-        }
-    }
-    // Under a grant the server holds the gate (decision `mcp-grants`):
-    // safe (restyles allowed, nothing lost, nothing new done), nothing
-    // protected.
-    if let Some(gr) = grant {
-        let protected = protected_closure(conn, gr).map_err(store_err)?;
-        if let Some(e) = g.entries.iter().find(|e| protected.contains(&e.name)) {
-            return Err(refuse("protected", format!("{} is protected", e.name)));
-        }
-        if g.report["safe"] != true {
-            return Err(refuse(
-                "not_safe",
-                format!(
-                    "this connection's grant applies only safe groups: {}",
-                    g.report["safe_violations"]
                 ),
             ));
         }
@@ -1290,6 +1308,7 @@ pub fn revert(
     pod: &Pod,
     conn: &Connection,
     args: &Value,
+    grant: Option<&Grant>,
 ) -> Result<(Value, Vec<(String, i64)>), Value> {
     let id = args["id"]
         .as_str()
@@ -1300,6 +1319,10 @@ pub fn revert(
             "not_applied",
             format!("the group is {}: only an applied group is undone", g.state),
         ));
+    }
+    // An undo writes the group's names too: under a grant, no protected one.
+    if let Some(gr) = grant {
+        refuse_protected(conn, gr, &g)?;
     }
     for e in &g.entries {
         let written = newest_written_seq(conn, &e.name).map_err(store_err)?;
@@ -1352,6 +1375,7 @@ pub fn revert_since(
     pod: &Pod,
     conn: &Connection,
     args: &Value,
+    grant: Option<&Grant>,
 ) -> Result<(Value, Vec<(String, i64)>), Value> {
     ensure(conn).map_err(store_err)?;
     let since = args["since"].as_i64().unwrap_or(0);
@@ -1364,10 +1388,16 @@ pub fn revert_since(
             .collect::<rusqlite::Result<_>>()
             .map_err(store_err)?
     };
+    // Under a grant, refused whole if any of them is protected.
+    if let Some(gr) = grant {
+        for id in &ids {
+            refuse_protected(conn, gr, &group(conn, id)?)?;
+        }
+    }
     let mut moved = Vec::new();
     let mut done = Vec::new();
     for id in ids {
-        let (out, m) = revert(pod, conn, &json!({ "id": id }))?;
+        let (out, m) = revert(pod, conn, &json!({ "id": id }), grant)?;
         moved.extend(m);
         let ok = out["ok"] == true;
         done.push(out);
@@ -1465,6 +1495,7 @@ pub fn restore_checkpoint(
     pod: &Pod,
     conn: &Connection,
     args: &Value,
+    grant: Option<&Grant>,
 ) -> Result<(Value, Vec<(String, i64)>), Value> {
     ensure(conn).map_err(store_err)?;
     let id = args["id"]
@@ -1535,6 +1566,13 @@ pub fn restore_checkpoint(
             json!({ "ok": true, "dry_run": true, "would": summary }),
             Vec::new(),
         ));
+    }
+    // Under a grant, a restore that would move a protected name is refused.
+    if let Some(gr) = grant {
+        let protected = protected_closure(conn, gr).map_err(store_err)?;
+        if let Some((n, _)) = moves.iter().find(|(n, _)| protected.contains(n)) {
+            return Err(refuse("protected", format!("{n} is protected")));
+        }
     }
     // Restoring can itself be undone: a checkpoint of now first.
     let before = checkpoint(conn, &format!("Before restoring {id}"), None)?;
@@ -1775,9 +1813,9 @@ async fn post_revert(
     answer(
         write::run_write(&pod, &args, |p, c, a| {
             if a["since"].is_i64() {
-                revert_since(p, c, a)
+                revert_since(p, c, a, None)
             } else {
-                revert(p, c, a)
+                revert(p, c, a, None)
             }
         })
         .await,
@@ -1794,7 +1832,7 @@ async fn post_restore(
         Ok(a) => a,
         Err(r) => return *r,
     };
-    answer(write::run_write(&pod, &args, restore_checkpoint).await).await
+    answer(write::run_write(&pod, &args, |p, c, a| restore_checkpoint(p, c, a, None)).await).await
 }
 
 #[cfg(test)]
