@@ -11,6 +11,10 @@
 //!   from it until the backoff ends (an hour, doubling to a day, at least
 //!   its `Retry-After`).
 //!
+//! - **A scoped credential's limit:** a call made for one (and a filler it
+//!   started) reaches only the hosts the pod's screens use
+//!   ([`pod_core::grant::fetch_refusal`]).
+//!
 //! The state is the pod's own (`Pod::local`), in memory: a restart forgets
 //! it, which only means one more try.
 
@@ -66,6 +70,11 @@ impl Hosts {
     /// daily cap is spent.
     pub async fn admit(&self, url: &str) -> Result<(), String> {
         let host = crate::fetch::host_of(url);
+        // For a scoped credential's call (and the fillers it starts), only
+        // the hosts the pod's screens use (decision `mcp-grants`).
+        if let Some(why) = pod_core::grant::fetch_refusal(&host) {
+            return Err(why);
+        }
         let wait = {
             let mut m = self.0.lock().await;
             let now = Instant::now();

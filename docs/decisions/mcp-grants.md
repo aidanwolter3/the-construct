@@ -56,4 +56,24 @@ model-written fields), and a write-only limit let it read every collection.
 - Previews and journey walks still draw screens with whatever they bind: `reads` holds the tools that answer rows,
   not the screens a job is shaping, and a preview is the pod's own picture of the owner's screen.
 
+Since then (2026-11-26, background agent security, step 3): a grant also closes the ways out that skip a job's
+sandbox, the pod's own fetches and the screens others see. Each call widens the grant, read fresh
+(`grant::for_call`), so no grant file has to list them and none can leave them out:
+
+- **Shared screens are protected.** A live publication's name and a live public link's layout join
+  `protected_names` (with every component they use), so a job can't pull the owner's rows onto a page others read.
+- **Shared rows aren't written.** A collection a calendar feed reads, or one whose rows a public link that publishes
+  new rows shows, is written by no grant (`shared_rows`), so a job can't put text in front of subscribers.
+- **Hosts are the screens' hosts.** The web hosts the pod's live screens use (every address in them, components
+  expanded) are the only ones a granted call's rows may name (a new address on another host is refused; one the row
+  had stays), and the only ones the pod fetches from for the call: `Hosts::admit` (fillers, the agent's fetch,
+  search, the page renderer), a web client's requests and their redirects. The limit is a task-local, carried into
+  the fillers, research and computed fields the call starts; a filler's later scheduled run isn't the call's.
+- **The host check runs at stage.** The edit groups' check now reads every address in a value, whichever field
+  holds it (an image's `url`, a link's, a Markdown link in a text), and under a grant `stage_edit_group` refuses a
+  group that reaches a host its screen didn't (`new_host`), so a staged group is never previewed or walked with it.
+
+Considered: listing shared screens in each grant file (they change as the owner shares); a fetch limit on every
+outbound client (push and the pod's own connectors aren't steered by what a job writes).
+
 Not done: grants chosen on the OAuth consent page (the CLI makes them); a grant for row values (which fields).

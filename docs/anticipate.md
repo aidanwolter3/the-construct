@@ -40,7 +40,7 @@ The jobs themselves are prompts: schedules on the agent runner ([agents.md](agen
 | `walk_journey` | pod MCP | Replays a script of simulator commands on the real screens. Writes are dry runs; the walk is stored with its construct hash. |
 | Dry runs | Collections | Row writes and actions run in a rolled-back transaction and say what rows they would leave. |
 | Edit groups | pod MCP, Settings' manifest | Stage, walk staged, apply in one step, undo in one tap; checkpoints to restore a whole morning. |
-| Grants | host, pod | A credential's exact tools, row collections, deletes and protected screens, enforced by the server. |
+| Grants | host, pod | A credential's exact tools, row collections, deletes and protected screens, enforced by the server; shared screens, feed rows and unknown web hosts stay out of reach whatever it lists. |
 | Usage trails | engine, pod | Devices report screens opened, taps and Backs (names only) while the `usage` jack is plugged. |
 
 ## The two runs
@@ -128,7 +128,10 @@ A fix goes live only if all of these hold.
 
 - **Safe:** the change is safe (decision `edit-groups`): restyles, moves and regrouping are fine; losing
   something the screen showed or could do, or doing something new, is not.
-- **Protected:** no protected name is touched, nor a component a protected screen uses.
+- **Protected:** no protected name is touched, nor a component a protected screen uses. Screens the pod shares
+  (published or publicly linked) are protected whatever the grant lists.
+- **Known hosts:** nothing reaches a web host the screen didn't (refused at stage), and Build's rows and the pod's
+  fetches for it reach only hosts the pod's screens use.
 - **Valid:** the layout validates.
 - **Not stale:** neither the staged base nor the construct moved since staging.
 

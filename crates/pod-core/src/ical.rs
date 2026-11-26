@@ -292,6 +292,19 @@ async fn load(pod: &Pod) -> Result<Vec<Feed>, Value> {
         })
 }
 
+/// The collections the pod's calendar feeds read (each source's
+/// `collection`): others subscribe to them, so no grant writes their rows
+/// (`crate::grant::for_call`).
+pub async fn feed_row_sets(pod: &Pod) -> BTreeSet<String> {
+    load(pod)
+        .await
+        .unwrap_or_default()
+        .iter()
+        .flat_map(|f| f.sources.iter())
+        .filter_map(|s| s["collection"].as_str().map(str::to_owned))
+        .collect()
+}
+
 async fn save(pod: &Pod, feeds: Vec<Feed>) -> Result<(), Value> {
     let text = serde_json::to_string(&feeds).unwrap_or_else(|_| "[]".into());
     pod.blocking(move |s| s.set_pod_setting(SETTING, &text))

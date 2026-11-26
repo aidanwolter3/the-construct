@@ -573,3 +573,65 @@ async fn feeds_confirmed_at_once_keep_the_cap_and_stay_listed() {
         assert!(urls.contains(&&r["url"]), "{r} isn't listed: {listed}");
     }
 }
+
+/// Design `background-agent-security`, step 3: a collection a calendar feed
+/// reads is written by no scoped credential, whatever its grant lists, so an
+/// unattended job can't put text in front of subscribers.
+#[tokio::test]
+async fn a_scoped_credential_writes_no_rows_a_feed_reads() {
+    let (env, _files) = public_env().await;
+    env.create("plans").await;
+    let key = mcp_key(&env, "plans").await;
+    define(
+        &env,
+        &key,
+        "focus_days",
+        json!([{ "name": "date", "type": "date" }, { "name": "area", "type": "text" }]),
+    )
+    .await;
+    add(
+        &env,
+        &key,
+        "focus_days",
+        json!({ "date": "2030-03-09", "area": "House" }),
+    )
+    .await;
+    let scoped = {
+        let host = env.host.clone();
+        tokio::task::spawn_blocking(move || {
+            let g = pod_core::grant::Grant::from_json(&json!({
+                "tools": ["add_row"], "rows": ["focus_days"] }))
+            .unwrap();
+            host.issue_mcp_scoped("plans", "Anticipate", pod_core::mcp::Access::Edit, Some(&g))
+                .unwrap()
+        })
+        .await
+        .unwrap()
+    };
+    let row = json!({ "collection": "focus_days",
+                      "values": { "date": "2030-03-10", "area": "Garden" } });
+    // Before a feed reads it, the grant's own collection takes rows.
+    let r = tool(&env, &scoped, "add_row", row.clone()).await;
+    assert!(r.get("error").is_none(), "{r}");
+
+    let sources = json!([{ "collection": "focus_days", "start": "date", "title": "{area} day" }]);
+    let review = tool(
+        &env,
+        &key,
+        "set_calendar_feed",
+        json!({ "name": "mine", "sources": sources }),
+    )
+    .await;
+    let set = tool(
+        &env,
+        &key,
+        "set_calendar_feed",
+        json!({ "name": "mine", "sources": sources, "confirm": review["review_id"] }),
+    )
+    .await;
+    assert!(set.get("error").is_none(), "{set}");
+
+    let r = tool(&env, &scoped, "add_row", row).await;
+    assert_eq!(r["error"], "grant_refuses", "{r}");
+    assert!(r.to_string().contains("others see"), "{r}");
+}

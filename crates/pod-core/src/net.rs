@@ -250,6 +250,7 @@ impl OutboundBuilder {
     #[allow(clippy::disallowed_methods)] // the checked client is built here
     pub fn build(self) -> OutboundClient {
         let private = self.private;
+        let web = self.web;
         let filter = self.redirects;
         let mut b = fixed_host_builder(self.timeout).redirect(redirect::Policy::custom(
             move |attempt| {
@@ -257,6 +258,16 @@ impl OutboundBuilder {
                     return attempt.error("too many redirects");
                 }
                 let ok = private || is_public_https(attempt.url());
+                // A website a scoped credential's call reaches redirects only
+                // to hosts the pod's screens use (`crate::grant::fetch_refusal`).
+                if web
+                    && attempt
+                        .url()
+                        .host_str()
+                        .is_some_and(|h| crate::grant::fetch_refusal(h).is_some())
+                {
+                    return attempt.stop();
+                }
                 if ok && filter.as_ref().is_none_or(|f| f(attempt.url(), attempt.previous())) {
                     attempt.follow()
                 } else {
@@ -366,6 +377,13 @@ impl OutboundClient {
     pub fn check(&self, url: &str) -> Result<reqwest::Url, OutboundError> {
         let u = reqwest::Url::parse(url.trim())
             .map_err(|_| OutboundError::Refused("not a URL".into()))?;
+        // A website, for a scoped credential's call: only the hosts the pod's
+        // screens use (decision `mcp-grants`).
+        if self.web
+            && let Some(why) = u.host_str().and_then(crate::grant::fetch_refusal)
+        {
+            return Err(OutboundError::Refused(why));
+        }
         if self.allows(&u) {
             Ok(u)
         } else {
