@@ -32,8 +32,8 @@ scripts/sim_scenarios.sh /tmp/sim         # the simulator's scenarios (look at t
 # The web client (decision `web-client`): the browser-only code, its build, and Chromium driving it
 cargo clippy -p construct-web -p construct-render --no-default-features --target wasm32-unknown-unknown -- -D warnings
 scripts/web_build.sh && scripts/web_e2e.sh
-# Needs an Android SDK and NDK (not in cloud sessions; CI builds it): the APK, Java bridge and JNI names
-scripts/android_native.sh
+# Needs an Android SDK and NDK (not in cloud sessions; CI builds it, warnings denied): the APK, Java bridge and JNI names
+RUSTFLAGS="-D warnings" scripts/android_native.sh
 ```
 
 UI changes are checked with the [headless simulator](docs/simulator.md) (`cargo run -p construct-sim`; CI runs

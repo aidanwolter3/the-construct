@@ -16,7 +16,9 @@ use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::panic::{self, AssertUnwindSafe};
-use std::sync::{Arc, Mutex};
+#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+use std::sync::Arc;
+use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 use base64::Engine;

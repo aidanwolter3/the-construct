@@ -17,7 +17,9 @@ locally, build it from a directory holding only `rust-toolchain.toml`. CI runs `
 [cargo-nextest](https://nexte.st), which runs tests from different binaries in parallel, plus `cargo test --doc`,
 which nextest skips), a dependency advisory and sources check (`cargo-deny`; a failure also blocks the staging deploy), the simulator's scenarios
 (`scripts/sim_scenarios.sh`, screenshots uploaded as the `simulator` artifact), and a build of the Android APK
-(`scripts/android_native.sh`, uploaded as the `android-apk` artifact). The release workflow (`release.yml`) also
+(`scripts/android_native.sh`, uploaded as the `android-apk` artifact). The Android and web builds run with
+`RUSTFLAGS=-D warnings`, so a warning only those targets see (code behind a `target_os` or `target_arch` the Linux
+clippy skips) fails CI too; local builds and the release workflow leave warnings as warnings. The release workflow (`release.yml`) also
 builds the release APK and the Mac app on pull requests that change their build scripts.
 
 A crate's integration tests are one test binary, `tests/integration/main.rs`, with one module per file: add a test
