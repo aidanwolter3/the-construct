@@ -537,6 +537,7 @@ async fn serve_on(local: LocalPod) -> Result<(), String> {
         let h = host.clone();
         server::metrics::set_gauge_source(move || h.monitoring_gauges());
     }
+    pod_core::paid_use::set_server_ledger(host.paid_use_ledger());
     serve_metrics().await;
     {
         let h = host.clone();

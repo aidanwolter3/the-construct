@@ -31,6 +31,7 @@ use std::time::Duration;
 
 pub mod devices;
 pub mod errors;
+pub mod paid_use;
 
 use pod_core::layouts::LayoutSource;
 use pod_core::metrics::{self, Gauge, Series};
@@ -75,6 +76,7 @@ pub const APP: CoreLayoutInfo = CoreLayoutInfo {
         (NAME, OVERVIEW_FEED),
         (NAME, devices::DEVICES_FEED),
         (NAME, errors::ERRORS_FEED),
+        (NAME, paid_use::PAID_USE_FEED),
     ],
 };
 
@@ -120,6 +122,17 @@ pub const MANIFEST: SourceManifest = SourceManifest {
                   except 401 and 404), newest first: when, the route's pattern, the status, \
                   the error code and the device. Kept in memory since the server started. \
                   The pod's own data: no operator switch.",
+        },
+        FeedSpec {
+            name: paid_use::PAID_USE_FEED,
+            query_keys: &[paid_use::PAID_USE_QUERY],
+            doc: "This calendar month's use of services billed per use (decision \
+                  `monthly-paid-use`), counted since the server began counting: \
+                  monitor://paid_use/pod (this pod: its web search provider's requests, Brave \
+                  against its 1,000 free searches a month, and its model requests on the \
+                  server's key) always, and monitor://paid_use/server (every pod's model \
+                  requests on the server's key) only in pods the operator turned monitoring \
+                  on for. Counts, not dollars, except Brave's estimate.",
         },
     ],
     data_paths: &[],
@@ -324,6 +337,87 @@ pub const MANIFEST: SourceManifest = SourceManifest {
                 ("color", "its colour, #RRGGBB"),
             ],
         },
+        EntityDoc {
+            uri: "monitor://paid_use/pod",
+            doc: "This pod's paid use this month (monitor:paid_use, always first).",
+            fields: &[
+                ("scope", "pod"),
+                ("scope_text", "Pod, for a tag"),
+                ("month", "YYYY-MM (UTC)"),
+                ("month_text", "e.g. November"),
+                (
+                    "period_text",
+                    "e.g. November so far, or November, counted since Nov 26",
+                ),
+                (
+                    "search_provider",
+                    "brave, searxng, duckduckgo, or empty when unplugged",
+                ),
+                ("search_provider_text", "e.g. Searching with Brave"),
+                (
+                    "brave_show",
+                    "true when the pod searches with Brave or did this month",
+                ),
+                (
+                    "brave_searches",
+                    "Brave requests this month (cache hits aren't requests)",
+                ),
+                (
+                    "brave_max",
+                    "1000, the searches Brave's free monthly credit covers",
+                ),
+                ("brave_over", "true past the free searches"),
+                ("brave_text", "e.g. 350 of 1,000 free searches"),
+                (
+                    "brave_cost_text",
+                    "e.g. About $1.75 of the free $5.00 · 650 searches left",
+                ),
+                (
+                    "other_search_text",
+                    "free providers' requests, e.g. 2 SearXNG searches (free)",
+                ),
+                ("model_calls", "model requests this month"),
+                ("model_tokens", "input, output and cache-write tokens"),
+                ("model_cache_reads", "cache-read tokens (billed far lower)"),
+                ("model_web_searches", "the model's own web searches"),
+                ("model_web_fetches", "the model's own web fetches"),
+                (
+                    "model_text",
+                    "e.g. 35 requests · 75K tokens, or No model requests yet",
+                ),
+                ("model_detail", "e.g. 70K in · 5K out · 118K cache reads"),
+                (
+                    "model_web_text",
+                    "e.g. 9 web searches by the model, or empty",
+                ),
+            ],
+        },
+        EntityDoc {
+            uri: "monitor://paid_use/server",
+            doc: "The server's paid use this month: every pod's model requests on the \
+                  server's one key. Only where monitoring is on.",
+            fields: &[
+                ("scope", "server"),
+                ("scope_text", "Server, for a tag"),
+                ("month", "YYYY-MM (UTC)"),
+                ("month_text", "e.g. November"),
+                ("period_text", "e.g. November so far"),
+                ("model_calls", "model requests this month"),
+                ("model_tokens", "input, output and cache-write tokens"),
+                ("model_cache_reads", "cache-read tokens (billed far lower)"),
+                ("model_web_searches", "the model's own web searches"),
+                ("model_web_fetches", "the model's own web fetches"),
+                (
+                    "model_text",
+                    "e.g. 35 requests · 75K tokens, or No model requests yet",
+                ),
+                ("model_detail", "e.g. 70K in · 5K out · 118K cache reads"),
+                (
+                    "model_web_text",
+                    "e.g. 9 web searches by the model, or empty",
+                ),
+            ],
+        },
     ],
     dev: false,
 };
@@ -425,6 +519,9 @@ impl Source for MonitorAdapter {
             }
             if feed == errors::ERRORS_FEED {
                 return errors_feed(pod).await;
+            }
+            if feed == paid_use::PAID_USE_FEED {
+                return paid_use_feed(pod).await;
             }
             if feed != OVERVIEW_FEED {
                 return pod_core::unknown_feed(NAME, feed);
@@ -594,6 +691,35 @@ async fn devices_feed(pod: &Pod) -> Hydration {
             Ok(devices::bundle(
                 &all, &days, &keys, &releases, &zone, server, now,
             ))
+        })
+        .await;
+    match read {
+        Ok(b) => Hydration::Data(b),
+        Err(e) => Hydration::Error(axum::response::IntoResponse::into_response(e)),
+    }
+}
+
+/// The `paid_use` feed: the pod's month for any pod, the server's where
+/// monitoring is on.
+async fn paid_use_feed(pod: &Pod) -> Hydration {
+    let month = pod_core::paid_use::month_of(pod_core::util::now_secs());
+    let read = pod
+        .blocking(move |s| {
+            let mine = pod_core::paid_use::pod_month(s, &month)?;
+            let on = s.pod_setting(ENABLED_SETTING)?.as_deref() == Some("1");
+            // The server's ledger is host.db: off the async runtime too.
+            let server = on
+                .then(|| pod_core::paid_use::server_month(&month))
+                .flatten();
+            let provider = pod_core::jacks::config(s, pod_core::jacks::WEB_SEARCH)
+                .and_then(|c| c.get("provider").and_then(Value::as_str).map(str::to_owned));
+            let zone = pod_core::tz::time_zone(s)?;
+            Ok(paid_use::bundle(&paid_use::Input {
+                pod: &mine,
+                provider: provider.as_deref(),
+                server: server.as_ref(),
+                zone: &zone,
+            }))
         })
         .await;
     match read {

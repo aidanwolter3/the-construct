@@ -692,6 +692,7 @@ impl Agent {
                     let ok = (200..300).contains(&status);
                     metrics::record_llm(task.feature, ok, Some(&answer));
                     if ok {
+                        pod_core::paid_use::add_model_answer(store, &answer);
                         Ok(answer)
                     } else {
                         let msg = answer["error"]["message"].as_str().unwrap_or("");

@@ -236,6 +236,18 @@ const MIGRATIONS: &[Step] = &[
         "mcp_grants",
         "ALTER TABLE credentials ADD COLUMN grant_json TEXT;",
     ),
+    // 16 (decision `monthly-paid-use`): the model calls every pod made on
+    // the server's key, by UTC month ([`pod_core::paid_use`]).
+    Step::sql(
+        "paid_use",
+        "CREATE TABLE paid_use (
+         month    TEXT NOT NULL,
+         kind     TEXT NOT NULL,
+         n        INTEGER NOT NULL,
+         first_at INTEGER NOT NULL,
+         PRIMARY KEY (month, kind)
+     ) WITHOUT ROWID;",
+    ),
 ];
 
 pub(crate) fn hash_link_tokens(tx: &rusqlite::Transaction<'_>) -> rusqlite::Result<()> {
@@ -375,6 +387,22 @@ pub struct PodRow {
 }
 
 /// The host's own database (one connection; every call is short).
+/// The server's ledger of paid use: every pod's model calls (decision
+/// `monthly-paid-use`).
+impl pod_core::paid_use::ServerLedger for HostStore {
+    fn add(&self, month: &str, kind: &str, n: u64, now: i64) {
+        if let Err(e) = self.add_paid_use(month, kind, n, now) {
+            tracing::warn!(error = %e, kind, "paid use: the server's count failed");
+        }
+    }
+
+    fn month(&self, month: &str) -> Option<pod_core::paid_use::Month> {
+        self.paid_use_month(month)
+            .inspect_err(|e| tracing::warn!(error = %e, "paid use: the server's month failed"))
+            .ok()
+    }
+}
+
 pub struct HostStore {
     conn: Mutex<Connection>,
 }
@@ -876,6 +904,16 @@ impl HostStore {
             [now_secs()],
             |r| r.get(0),
         )
+    }
+
+    /// Add to the server's paid use (decision `monthly-paid-use`).
+    pub fn add_paid_use(&self, month: &str, kind: &str, n: u64, now: i64) -> rusqlite::Result<()> {
+        pod_core::paid_use::add_on(&self.conn(), month, kind, n, now)
+    }
+
+    /// The server's paid use in `month`.
+    pub fn paid_use_month(&self, month: &str) -> rusqlite::Result<pod_core::paid_use::Month> {
+        pod_core::paid_use::month_on(&self.conn(), month)
     }
 
     /// For monitoring (decision `server-monitoring`): live admin pods, live temporary

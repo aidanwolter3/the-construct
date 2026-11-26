@@ -2334,6 +2334,45 @@
       "title": "pods (temporary)",
       "total": 7
     },
+    "monitor://paid_use/pod": {
+      "brave_cost_text": "About $1.75 of the free $5.00 · 650 searches left",
+      "brave_max": 1000,
+      "brave_over": false,
+      "brave_searches": 350,
+      "brave_show": true,
+      "brave_text": "350 of 1,000 free searches",
+      "model_cache_reads": 118000,
+      "model_calls": 35,
+      "model_detail": "70K in · 5K out · 118K cache reads",
+      "model_text": "35 requests · 75K tokens",
+      "model_tokens": 75000,
+      "model_web_fetches": 0,
+      "model_web_searches": 9,
+      "model_web_text": "9 web searches by the model",
+      "month": "2026-11",
+      "month_text": "November",
+      "other_search_text": "2 SearXNG searches (free)",
+      "period_text": "November, counted since Nov 26",
+      "scope": "pod",
+      "scope_text": "Pod",
+      "search_provider": "brave",
+      "search_provider_text": "Searching with Brave"
+    },
+    "monitor://paid_use/server": {
+      "model_cache_reads": 1900000,
+      "model_calls": 212,
+      "model_detail": "480K in · 41K out · 22K cache writes · 1.9M cache reads",
+      "model_text": "212 requests · 543K tokens",
+      "model_tokens": 543000,
+      "model_web_fetches": 4,
+      "model_web_searches": 31,
+      "model_web_text": "31 web searches and 4 fetches by the model",
+      "month": "2026-11",
+      "month_text": "November",
+      "period_text": "November, counted since Nov 26",
+      "scope": "server",
+      "scope_text": "Server"
+    },
     "monitor://releases/1": {
       "bar": "2026-11-14",
       "build": "0.6.0+20261114100000.9be03a1",
@@ -2529,6 +2568,10 @@
       "monitor://metrics/llm_tokens",
       "monitor://metrics/pods_admin",
       "monitor://metrics/pods_temporary"
+    ],
+    "monitor:paid_use": [
+      "monitor://paid_use/pod",
+      "monitor://paid_use/server"
     ],
     "monitor:recent_errors": [
       "monitor://errors/0",
@@ -3172,6 +3215,388 @@
                   },
                   "count": {
                     "query_key": "monitor:recent_errors"
+                  },
+                  "type": "core://Conditional",
+                  "value": ""
+                },
+                {
+                  "content": {
+                    "children": [
+                      {
+                        "size_dp": 14,
+                        "type": "core://Spacer"
+                      },
+                      {
+                        "content": {
+                          "style": "Label",
+                          "type": "core://Text",
+                          "value_expr": "Usage this month"
+                        },
+                        "content_color": "${local://theme#muted_text}",
+                        "padding_h_dp": 4,
+                        "type": "core://Box"
+                      },
+                      {
+                        "size_dp": 8,
+                        "type": "core://Spacer"
+                      },
+                      {
+                        "children": [
+                          {
+                            "content": {
+                              "style": "Secondary",
+                              "type": "core://Text",
+                              "value_expr": "${monitor://paid_use/pod#period_text}"
+                            },
+                            "content_color": "${local://theme#muted_text}",
+                            "padding_h_dp": 4,
+                            "type": "core://Box"
+                          },
+                          {
+                            "content": {
+                              "content": {
+                                "style": "Label",
+                                "type": "core://Text",
+                                "value_expr": "Server"
+                              },
+                              "content_color": "${local://theme#muted_text}",
+                              "padding_h_dp": 4,
+                              "type": "core://Box"
+                            },
+                            "type": "core://Conditional",
+                            "value": "${monitor://paid_use/server#scope}"
+                          },
+                          {
+                            "content": {
+                              "background": "${local://theme#card}",
+                              "border_color": "${local://theme#card_border}",
+                              "content": {
+                                "children": [
+                                  {
+                                    "align": "Center",
+                                    "children": [
+                                      {
+                                        "style": "Body",
+                                        "type": "core://Text",
+                                        "value_expr": "Model key",
+                                        "weight": "SemiBold"
+                                      },
+                                      {
+                                        "type": "core://Spacer"
+                                      },
+                                      {
+                                        "background": "${local://theme#accent_surface}",
+                                        "content": {
+                                          "style": "Caption",
+                                          "type": "core://Text",
+                                          "value_expr": "${monitor://paid_use/server#scope_text}"
+                                        },
+                                        "content_color": "${local://theme#accent}",
+                                        "corner_dp": 8,
+                                        "padding_h_dp": 8,
+                                        "padding_v_dp": 3,
+                                        "type": "core://Box"
+                                      }
+                                    ],
+                                    "spacing_dp": 8,
+                                    "type": "core://Row"
+                                  },
+                                  {
+                                    "content": {
+                                      "style": "Secondary",
+                                      "type": "core://Text",
+                                      "value_expr": "${monitor://paid_use/server#model_text}"
+                                    },
+                                    "content_color": "${local://theme#muted_text}",
+                                    "type": "core://Box"
+                                  },
+                                  {
+                                    "content": {
+                                      "content": {
+                                        "style": "Caption",
+                                        "type": "core://Text",
+                                        "value_expr": "${monitor://paid_use/server#model_detail}"
+                                      },
+                                      "content_color": "${local://theme#muted_text}",
+                                      "type": "core://Box"
+                                    },
+                                    "type": "core://Conditional",
+                                    "value": "${monitor://paid_use/server#model_detail}"
+                                  },
+                                  {
+                                    "content": {
+                                      "content": {
+                                        "style": "Caption",
+                                        "type": "core://Text",
+                                        "value_expr": "${monitor://paid_use/server#model_web_text}"
+                                      },
+                                      "content_color": "${local://theme#muted_text}",
+                                      "type": "core://Box"
+                                    },
+                                    "type": "core://Conditional",
+                                    "value": "${monitor://paid_use/server#model_web_text}"
+                                  },
+                                  {
+                                    "content": {
+                                      "style": "Caption",
+                                      "type": "core://Text",
+                                      "value_expr": "Every pod's requests on the server's one key."
+                                    },
+                                    "content_color": "${local://theme#muted_text}",
+                                    "type": "core://Box"
+                                  }
+                                ],
+                                "spacing_dp": 6,
+                                "type": "core://Column"
+                              },
+                              "corner_dp": 14,
+                              "padding_h_dp": 14,
+                              "padding_v_dp": 12,
+                              "type": "core://Box"
+                            },
+                            "type": "core://Conditional",
+                            "value": "${monitor://paid_use/server#scope}"
+                          },
+                          {
+                            "content": {
+                              "style": "Label",
+                              "type": "core://Text",
+                              "value_expr": "This pod"
+                            },
+                            "content_color": "${local://theme#muted_text}",
+                            "padding_h_dp": 4,
+                            "type": "core://Box"
+                          },
+                          {
+                            "background": "${local://theme#card}",
+                            "border_color": "${local://theme#card_border}",
+                            "content": {
+                              "children": [
+                                {
+                                  "align": "Center",
+                                  "children": [
+                                    {
+                                      "style": "Body",
+                                      "type": "core://Text",
+                                      "value_expr": "Web search",
+                                      "weight": "SemiBold"
+                                    },
+                                    {
+                                      "type": "core://Spacer"
+                                    },
+                                    {
+                                      "background": "${local://theme#muted_surface}",
+                                      "content": {
+                                        "style": "Caption",
+                                        "type": "core://Text",
+                                        "value_expr": "${monitor://paid_use/pod#scope_text}"
+                                      },
+                                      "content_color": "${local://theme#muted_text}",
+                                      "corner_dp": 8,
+                                      "padding_h_dp": 8,
+                                      "padding_v_dp": 3,
+                                      "type": "core://Box"
+                                    }
+                                  ],
+                                  "spacing_dp": 8,
+                                  "type": "core://Row"
+                                },
+                                {
+                                  "content": {
+                                    "children": [
+                                      {
+                                        "content": {
+                                          "style": "Secondary",
+                                          "type": "core://Text",
+                                          "value_expr": "${monitor://paid_use/pod#brave_text}"
+                                        },
+                                        "content_color": "${local://theme#muted_text}",
+                                        "type": "core://Box"
+                                      },
+                                      {
+                                        "content": {
+                                          "max": "${monitor://paid_use/pod#brave_max}",
+                                          "size_dp": 8,
+                                          "type": "core://Progress",
+                                          "value": "${monitor://paid_use/pod#brave_searches}"
+                                        },
+                                        "equals": "true",
+                                        "not": true,
+                                        "type": "core://Conditional",
+                                        "value": "${monitor://paid_use/pod#brave_over}"
+                                      },
+                                      {
+                                        "content": {
+                                          "color": "${local://theme#error}",
+                                          "max": "${monitor://paid_use/pod#brave_max}",
+                                          "size_dp": 8,
+                                          "type": "core://Progress",
+                                          "value": "${monitor://paid_use/pod#brave_searches}"
+                                        },
+                                        "equals": "true",
+                                        "type": "core://Conditional",
+                                        "value": "${monitor://paid_use/pod#brave_over}"
+                                      },
+                                      {
+                                        "content": {
+                                          "style": "Caption",
+                                          "type": "core://Text",
+                                          "value_expr": "${monitor://paid_use/pod#brave_cost_text}"
+                                        },
+                                        "content_color": "${local://theme#muted_text}",
+                                        "type": "core://Box"
+                                      }
+                                    ],
+                                    "spacing_dp": 6,
+                                    "type": "core://Column"
+                                  },
+                                  "equals": "true",
+                                  "type": "core://Conditional",
+                                  "value": "${monitor://paid_use/pod#brave_show}"
+                                },
+                                {
+                                  "content": {
+                                    "content": {
+                                      "style": "Secondary",
+                                      "type": "core://Text",
+                                      "value_expr": "${monitor://paid_use/pod#search_provider_text}"
+                                    },
+                                    "content_color": "${local://theme#muted_text}",
+                                    "type": "core://Box"
+                                  },
+                                  "equals": "true",
+                                  "not": true,
+                                  "type": "core://Conditional",
+                                  "value": "${monitor://paid_use/pod#brave_show}"
+                                },
+                                {
+                                  "content": {
+                                    "content": {
+                                      "style": "Caption",
+                                      "type": "core://Text",
+                                      "value_expr": "${monitor://paid_use/pod#other_search_text}"
+                                    },
+                                    "content_color": "${local://theme#muted_text}",
+                                    "type": "core://Box"
+                                  },
+                                  "type": "core://Conditional",
+                                  "value": "${monitor://paid_use/pod#other_search_text}"
+                                }
+                              ],
+                              "spacing_dp": 6,
+                              "type": "core://Column"
+                            },
+                            "corner_dp": 14,
+                            "padding_h_dp": 14,
+                            "padding_v_dp": 12,
+                            "type": "core://Box"
+                          },
+                          {
+                            "background": "${local://theme#card}",
+                            "border_color": "${local://theme#card_border}",
+                            "content": {
+                              "children": [
+                                {
+                                  "align": "Center",
+                                  "children": [
+                                    {
+                                      "style": "Body",
+                                      "type": "core://Text",
+                                      "value_expr": "Model key",
+                                      "weight": "SemiBold"
+                                    },
+                                    {
+                                      "type": "core://Spacer"
+                                    },
+                                    {
+                                      "background": "${local://theme#muted_surface}",
+                                      "content": {
+                                        "style": "Caption",
+                                        "type": "core://Text",
+                                        "value_expr": "${monitor://paid_use/pod#scope_text}"
+                                      },
+                                      "content_color": "${local://theme#muted_text}",
+                                      "corner_dp": 8,
+                                      "padding_h_dp": 8,
+                                      "padding_v_dp": 3,
+                                      "type": "core://Box"
+                                    }
+                                  ],
+                                  "spacing_dp": 8,
+                                  "type": "core://Row"
+                                },
+                                {
+                                  "content": {
+                                    "style": "Secondary",
+                                    "type": "core://Text",
+                                    "value_expr": "${monitor://paid_use/pod#model_text}"
+                                  },
+                                  "content_color": "${local://theme#muted_text}",
+                                  "type": "core://Box"
+                                },
+                                {
+                                  "content": {
+                                    "content": {
+                                      "style": "Caption",
+                                      "type": "core://Text",
+                                      "value_expr": "${monitor://paid_use/pod#model_detail}"
+                                    },
+                                    "content_color": "${local://theme#muted_text}",
+                                    "type": "core://Box"
+                                  },
+                                  "type": "core://Conditional",
+                                  "value": "${monitor://paid_use/pod#model_detail}"
+                                },
+                                {
+                                  "content": {
+                                    "content": {
+                                      "style": "Caption",
+                                      "type": "core://Text",
+                                      "value_expr": "${monitor://paid_use/pod#model_web_text}"
+                                    },
+                                    "content_color": "${local://theme#muted_text}",
+                                    "type": "core://Box"
+                                  },
+                                  "type": "core://Conditional",
+                                  "value": "${monitor://paid_use/pod#model_web_text}"
+                                },
+                                {
+                                  "content": {
+                                    "style": "Caption",
+                                    "type": "core://Text",
+                                    "value_expr": "This pod's share of the server's key."
+                                  },
+                                  "content_color": "${local://theme#muted_text}",
+                                  "type": "core://Box"
+                                }
+                              ],
+                              "spacing_dp": 6,
+                              "type": "core://Column"
+                            },
+                            "corner_dp": 14,
+                            "padding_h_dp": 14,
+                            "padding_v_dp": 12,
+                            "type": "core://Box"
+                          },
+                          {
+                            "content": {
+                              "style": "Caption",
+                              "type": "core://Text",
+                              "value_expr": "Fly.io's hosting bill isn't counted here. It's on Fly's own dashboard."
+                            },
+                            "content_color": "${local://theme#muted_text}",
+                            "padding_h_dp": 4,
+                            "type": "core://Box"
+                          }
+                        ],
+                        "spacing_dp": 10,
+                        "type": "core://Column"
+                      }
+                    ],
+                    "type": "core://Column"
+                  },
+                  "count": {
+                    "query_key": "monitor:paid_use"
                   },
                   "type": "core://Conditional",
                   "value": ""

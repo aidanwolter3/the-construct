@@ -482,6 +482,18 @@ pub const STEPS: &[Step] = &[
              PRIMARY KEY (day, kind, layout, node, target, effect)
          ) WITHOUT ROWID;",
     ),
+    // Decision `monthly-paid-use`: what the pod spent of services billed
+    // per use (its search provider, the server's model key), by UTC month.
+    Step::sql(
+        "paid_use",
+        "CREATE TABLE paid_use (
+             month    TEXT NOT NULL,
+             kind     TEXT NOT NULL,
+             n        INTEGER NOT NULL,
+             first_at INTEGER NOT NULL,
+             PRIMARY KEY (month, kind)
+         ) WITHOUT ROWID;",
+    ),
 ];
 
 /// Whether the old layout system's tables are still there (dropped by

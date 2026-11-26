@@ -504,7 +504,8 @@ pub fn normalize_query(q: &str) -> String {
 }
 
 /// Search `query` with `provider`: at most `count` results, cached, through
-/// the host policy. `Err`: a sentence for a filler's status (a block, a
+/// the host policy; a request the provider answers is counted in `meter`'s
+/// paid use. `Err`: a sentence for a filler's status (a block, a
 /// spent cap, a refused key).
 pub async fn search(
     hosts: &crate::hosts::Hosts,
@@ -513,6 +514,7 @@ pub async fn search(
     provider: &Provider,
     query: &str,
     count: usize,
+    meter: Option<&pod_core::store::Store>,
 ) -> Result<Vec<SearchResult>, String> {
     let q = normalize_query(query);
     if q.is_empty() {
@@ -534,6 +536,11 @@ pub async fn search(
     let crate::fetch::Fetched::Body { bytes, .. } = fetched else {
         return Err("the search answered nothing".into());
     };
+    // The provider answered: a request billed to the pod's own key
+    // (decision `monthly-paid-use`).
+    if let Some(store) = meter {
+        pod_core::paid_use::add_search(store, provider.name());
+    }
     let results = provider.parse(&String::from_utf8_lossy(&bytes), MAX_RESULTS)?;
     cache.put(provider.name(), &q, results.clone()).await;
     Ok(results.into_iter().take(count).collect())
@@ -549,6 +556,7 @@ pub async fn search_images(
     provider: &Provider,
     query: &str,
     count: usize,
+    meter: Option<&pod_core::store::Store>,
 ) -> Result<Vec<ImageResult>, String> {
     let q = normalize_query(query);
     if q.is_empty() {
@@ -570,6 +578,11 @@ pub async fn search_images(
     let crate::fetch::Fetched::Body { bytes, .. } = fetched else {
         return Err("the search answered nothing".into());
     };
+    // The provider answered: a request billed to the pod's own key
+    // (decision `monthly-paid-use`).
+    if let Some(store) = meter {
+        pod_core::paid_use::add_search(store, provider.name());
+    }
     let results = provider.parse_images(&String::from_utf8_lossy(&bytes), MAX_RESULTS)?;
     keep(&cache.images, provider.name(), &q, results.clone()).await;
     Ok(results.into_iter().take(count).collect())

@@ -1,5 +1,5 @@
 {
-  "note": "Made-up data for the simulator's server_health fixtures: the monitor source's overview feed (one check warning), its devices feed (the device_versions devices) and its errors feed (two failed requests).",
+  "note": "Made-up data for the simulator's server_health fixtures: the monitor source's overview feed (one check warning), its devices feed (the device_versions devices) and its errors feed (two failed requests), and its paid_use feed (this month's Brave searches and model use; paid_use_pod_only is what a pod without monitoring gets).",
   "overview": {
     "entities": {
       "monitor://summary/server": {
@@ -2550,6 +2550,88 @@
         "monitor://errors/0",
         "monitor://errors/1",
         "monitor://errors/2"
+      ]
+    }
+  },
+  "paid_use": {
+    "entities": {
+      "monitor://paid_use/pod": {
+        "scope": "pod",
+        "scope_text": "Pod",
+        "month": "2026-11",
+        "month_text": "November",
+        "period_text": "November, counted since Nov 26",
+        "search_provider": "brave",
+        "search_provider_text": "Searching with Brave",
+        "brave_show": true,
+        "brave_searches": 350,
+        "brave_max": 1000,
+        "brave_over": false,
+        "brave_text": "350 of 1,000 free searches",
+        "brave_cost_text": "About $1.75 of the free $5.00 · 650 searches left",
+        "other_search_text": "2 SearXNG searches (free)",
+        "model_calls": 35,
+        "model_tokens": 75000,
+        "model_cache_reads": 118000,
+        "model_web_searches": 9,
+        "model_web_fetches": 0,
+        "model_text": "35 requests · 75K tokens",
+        "model_detail": "70K in · 5K out · 118K cache reads",
+        "model_web_text": "9 web searches by the model"
+      },
+      "monitor://paid_use/server": {
+        "scope": "server",
+        "scope_text": "Server",
+        "month": "2026-11",
+        "month_text": "November",
+        "period_text": "November, counted since Nov 26",
+        "model_calls": 212,
+        "model_tokens": 543000,
+        "model_cache_reads": 1900000,
+        "model_web_searches": 31,
+        "model_web_fetches": 4,
+        "model_text": "212 requests · 543K tokens",
+        "model_detail": "480K in · 41K out · 22K cache writes · 1.9M cache reads",
+        "model_web_text": "31 web searches and 4 fetches by the model"
+      }
+    },
+    "queries": {
+      "monitor:paid_use": [
+        "monitor://paid_use/pod",
+        "monitor://paid_use/server"
+      ]
+    }
+  },
+  "paid_use_pod_only": {
+    "entities": {
+      "monitor://paid_use/pod": {
+        "scope": "pod",
+        "scope_text": "Pod",
+        "month": "2026-11",
+        "month_text": "November",
+        "period_text": "November, counted since Nov 26",
+        "search_provider": "brave",
+        "search_provider_text": "Searching with Brave",
+        "brave_show": true,
+        "brave_searches": 350,
+        "brave_max": 1000,
+        "brave_over": false,
+        "brave_text": "350 of 1,000 free searches",
+        "brave_cost_text": "About $1.75 of the free $5.00 · 650 searches left",
+        "other_search_text": "2 SearXNG searches (free)",
+        "model_calls": 35,
+        "model_tokens": 75000,
+        "model_cache_reads": 118000,
+        "model_web_searches": 9,
+        "model_web_fetches": 0,
+        "model_text": "35 requests · 75K tokens",
+        "model_detail": "70K in · 5K out · 118K cache reads",
+        "model_web_text": "9 web searches by the model"
+      }
+    },
+    "queries": {
+      "monitor:paid_use": [
+        "monitor://paid_use/pod"
       ]
     }
   }

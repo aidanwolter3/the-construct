@@ -36,7 +36,7 @@ async fn a_session_from_before_v11_stays_signed_in() {
                      'notification_polls', 'devices', 'device_channel_prefs', 'notification_switches',
                      'pixelfed_notify_cursor', 'pixelfed_media_secret', 'custom_apps', 'components', 'jacks', 'agent_usage',
                      'mcp_servers', 'client_devices', 'client_days', 'server_builds',
-                     'device_watches', 'usage_events', 'usage_daily'))",
+                     'device_watches', 'usage_events', 'usage_daily', 'paid_use'))",
             )
             .unwrap()
             .query_map([], |r| r.get(0))

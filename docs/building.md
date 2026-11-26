@@ -612,7 +612,9 @@ runs, with stop, wake, start and schedule actions, notifications, and an opt-in 
 The **Server monitoring** source (`monitor`, `crates/source-monitor`) ships the core layout `server_health`: the
 server's status, its checks and every counter (feed `overview`, only in pods the operator turned monitoring on for)
 the user's devices with the build each runs (feed `devices`, every pod) and the pod's recent failed requests (feed
-`errors`, every pod: `monitor:recent_errors`, each with its route, status, error code and device). Nobody has to
+`errors`, every pod: `monitor:recent_errors`, each with its route, status, error code and device) and this month's
+paid use (feed `paid_use`: the pod's searches and model requests in every pod, the server's model requests where
+monitoring is on, decision `monthly-paid-use`). Nobody has to
 hand-write that screen: make a layout whose root is `{"type": "core://Use", "ref": "@core/server_health"}` with feeds
-`[["monitor","overview"],["monitor","devices"],["monitor","errors"]]`, or open it by reference from a row or a button. Where monitoring is
+`[["monitor","overview"],["monitor","devices"],["monitor","errors"],["monitor","paid_use"]]`, or open it by reference from a row or a button. Where monitoring is
 off it says so and shows the devices alone. See [server.md](server.md#monitoring).
