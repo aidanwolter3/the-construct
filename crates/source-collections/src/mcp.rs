@@ -334,6 +334,34 @@ pub fn call<'a>(
     args: &'a Value,
 ) -> Option<BoxFuture<'a, Result<Value, Value>>> {
     let caps = adapter.caps;
+    // A scoped credential's grant (decision `mcp-grants`): the tools that
+    // answer rows answer only those of the collections it may read (a write's
+    // preview shows rows too; the write itself is held to `rows` as well).
+    if matches!(
+        tool,
+        "describe_collection"
+            | "export_collection"
+            | "collections_status"
+            | "edit_rows"
+            | "add_row"
+            | "run_action"
+    ) && let Some(g) = pod_core::grant::current()
+        && g.reads.is_some()
+    {
+        let named = args["collection"].as_str().map(str::trim).unwrap_or("");
+        if named.is_empty() || !g.allows_read(named) {
+            let what = if named.is_empty() {
+                format!("{tool} without a collection it may read")
+            } else {
+                format!("reading the collection {named}")
+            };
+            return Some(Box::pin(async move {
+                let mut body = pod_core::grant::refusal(&what);
+                body["status"] = json!(403);
+                Err(body)
+            }));
+        }
+    }
     Some(match tool {
         "list_collections" => Box::pin(list(pod)),
         "define_collection" => Box::pin(define(pod, adapter, args)),
