@@ -784,8 +784,8 @@ the runner's protocol (CAP v3: a snapshot, a resumable event stream, actions). T
 schedules) and notifications; the runner owns the runs and their outcomes. It keeps its pod open to follow the
 stream ([agents.md](agents.md)).
 
-Two of the pod's schedules are **Anticipate**: every morning one reads the day ahead and one walks the owner's
-journeys through their real screens. Writes in those walks are dry runs. A fix is staged as an edit group, walked
+Two of the pod's schedules are **Anticipate**: every morning one reads the day ahead and, as soon as it ends (a
+schedule can follow another), one walks the owner's journeys through their real screens. Writes in those walks are dry runs. A fix is staged as an edit group, walked
 staged, and applied only when the server finds it safe (nothing lost, nothing new done) and unprotected; the owner
 undoes or redoes it in one tap, and the device swaps the screen at once from both versions the manifest lists.
 When the day calls for it, it also reshapes the owner's Today for the day and the week, as a one-day trial they

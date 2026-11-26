@@ -817,7 +817,9 @@ impl Source for AgentsAdapter {
             pod's), workspace, prompt, model?, max_runtime_min? (1-480, default 240), enabled?}. op update {name, \
             new_name?, and any of those}: what you leave out keeps its value. op delete, pause, resume and run (now) \
             take {name}; op pause_all pauses every schedule (the kill switch: runs going now go on, nothing is \
-            revoked; resume each by name). A time not sent within 2 h (the pod or runner was down) is skipped and the user is told. \
+            revoked; resume each by name). after names a schedule this one follows (none clears it): once that \
+            schedule's run for its time ends, however it ended, this one's next time within a day is sent at once, \
+            and its own cron is the fallback (it still runs once for that time). A time not sent within 2 h (the pod or runner was down) is skipped and the user is told. \
             Ask before creating or changing a schedule's prompt: it runs unattended with the workspace's access.",
                 "inputSchema": {"type": "object", "properties": {
                     "op": {"type": "string", "enum": ["list", "create", "update", "delete", "pause", "pause_all", "resume", "run"]},
@@ -829,7 +831,8 @@ impl Source for AgentsAdapter {
                     "prompt": {"type": "string"},
                     "model": {"type": "string"},
                     "max_runtime_min": {"type": "integer"},
-                    "enabled": {"type": "boolean"}},
+                    "enabled": {"type": "boolean"},
+                    "after": {"type": "string", "description": "The schedule this one follows, or none"}},
                     "required": ["op"]},
             }),
         ]

@@ -309,3 +309,116 @@ async fn a_paused_schedule_sends_nothing_and_resumes_from_now() {
     assert_eq!(s, StatusCode::OK, "{b}");
     assert_eq!(b["schedule"]["enabled"], false);
 }
+
+/// Decision `chained-schedules`: a schedule that follows another starts as
+/// soon as the other's run ends, once for its time (its cron is only the
+/// fallback); a rename carries it along, and following back is refused.
+#[tokio::test]
+async fn a_following_schedule_starts_when_the_other_run_ends() {
+    let (pod, fake, _) = signed_in().await;
+    let _app = agents_layout(&pod).await;
+    let (sense_cron, _, sense_at) = daily_at(20.minutes());
+    let (build_cron, build_minute, _) = daily_at((-180).minutes());
+    fake.next_runs.lock().unwrap().push_back("run_sense".into());
+    fake.next_runs.lock().unwrap().push_back("run_build".into());
+    let (s, b) = create(
+        &pod,
+        json!({"name": "sense", "cron": sense_cron, "timezone": "UTC", "workspace": "sample-repo",
+            "prompt": "Read the mail.", "enabled": false}),
+    )
+    .await;
+    assert_eq!(s, StatusCode::OK, "{b}");
+    let (s, b) = create(
+        &pod,
+        json!({"name": "build", "cron": build_cron, "timezone": "UTC", "workspace": "sample-repo",
+            "prompt": "Build the screens.", "after": "sense"}),
+    )
+    .await;
+    assert_eq!(s, StatusCode::OK, "{b}");
+    assert_eq!(b["schedule"]["after"], "sense");
+    let build_id = b["schedule"]["id"].as_str().unwrap().to_owned();
+    // Following back, or a schedule that isn't there, is refused.
+    let (s, b) = call(
+        &pod,
+        "POST",
+        "/v1/agents/schedules/update",
+        Some("phone"),
+        Some(json!({"name": "sense", "after": "build"})),
+    )
+    .await;
+    assert_eq!(s, StatusCode::BAD_REQUEST, "{b}");
+    let (s, _) = create(
+        &pod,
+        json!({"name": "other", "cron": "0 3 * * *", "workspace": "w", "prompt": "p",
+            "after": "nowhere"}),
+    )
+    .await;
+    assert_eq!(s, StatusCode::BAD_REQUEST);
+
+    looked_from(
+        &pod,
+        "sense",
+        sense_at.checked_sub(10.minutes()).unwrap(),
+        true,
+    );
+    until("sense sent", || async { fake.sent("start_run").len() == 1 }).await;
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert_eq!(fake.sent("start_run").len(), 1, "build waits for sense");
+    fake.run(
+        "run_sense",
+        json!({"state": "ended", "end_reason": "timed_out"}),
+    );
+    until("build sent", || async { fake.sent("start_run").len() == 2 }).await;
+    let sent = fake.sent("start_run").pop().unwrap();
+    assert_eq!(sent["title"], "build");
+    assert_eq!(
+        sent["occurrence"],
+        build_minute.as_str(),
+        "its own next time"
+    );
+    assert_eq!(
+        sent["request_id"],
+        schedules::request_id(&build_id, &build_minute, false)
+    );
+    tokio::time::sleep(Duration::from_millis(400)).await;
+    assert_eq!(fake.sent("start_run").len(), 2, "once");
+    // The cron's own time later takes up the same occurrence: nothing new.
+    let since = db::schedule(pod.store(), "build")
+        .unwrap()
+        .unwrap()
+        .looked_until;
+    assert!(
+        schedules::look(pod.store(), since + 4 * 3600 * 1000)
+            .unwrap()
+            .is_empty()
+    );
+    let last = db::last_occurrence(pod.store(), &build_id)
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        (last.occurrence.as_str(), last.state.as_str()),
+        (build_minute.as_str(), db::OCC_SENT)
+    );
+    assert!(db::pending(pod.store()).unwrap().is_empty());
+
+    // A rename carries the follower along; deleting lets it go.
+    let (s, b2) = call(
+        &pod,
+        "POST",
+        "/v1/agents/schedules/update",
+        Some("phone"),
+        Some(json!({"name": "sense", "new_name": "sense-mail"})),
+    )
+    .await;
+    assert_eq!(s, StatusCode::OK, "{b2}");
+    let b = db::schedule(pod.store(), "build").unwrap().unwrap();
+    assert_eq!(b.after, "sense-mail");
+    tool(
+        &pod,
+        "agents_schedules",
+        json!({"op": "delete", "name": "sense-mail"}),
+    )
+    .await;
+    let b = db::schedule(pod.store(), "build").unwrap().unwrap();
+    assert_eq!(b.after, "");
+}

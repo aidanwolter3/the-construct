@@ -63,7 +63,14 @@ pub static MIGRATIONS: &[Step] = &[
     Step::sql("cap_v2", CAP_V2),
     Step::sql("reviewed", REVIEWED),
     Step::rust("cap_v3", cap_v3),
+    Step::sql("chained", CHAINED),
 ];
+
+/// A schedule can start when another one's run ends (decision
+/// `chained-schedules`): the name of the schedule it follows.
+const CHAINED: &str = "
+ALTER TABLE agents_schedules ADD COLUMN after_schedule TEXT NOT NULL DEFAULT '';
+";
 
 const CAP_V3: &str = "
 ALTER TABLE agents_state ADD COLUMN cursor INTEGER NOT NULL DEFAULT 0;
@@ -414,6 +421,10 @@ pub struct Schedule {
     pub max_runtime_min: i64,
     pub enabled: bool,
     pub prompt: String,
+    /// The name of the schedule this one follows (decision
+    /// `chained-schedules`): its next time is sent early, as soon as that
+    /// schedule's run ends. Empty: none.
+    pub after: String,
     /// Milliseconds: occurrences up to here were taken up (sent, queued to
     /// send or skipped).
     pub looked_until: i64,
@@ -422,7 +433,7 @@ pub struct Schedule {
 }
 
 const SCHEDULE_COLS: &str = "id, name, cron, timezone, workspace, model, max_runtime_min, \
-    enabled, prompt, looked_until, created_at, updated_at";
+    enabled, prompt, looked_until, created_at, updated_at, after_schedule";
 
 fn schedule_from(r: &rusqlite::Row<'_>) -> rusqlite::Result<Schedule> {
     Ok(Schedule {
@@ -438,6 +449,7 @@ fn schedule_from(r: &rusqlite::Row<'_>) -> rusqlite::Result<Schedule> {
         looked_until: r.get(9)?,
         created_at: r.get(10)?,
         updated_at: r.get(11)?,
+        after: r.get(12)?,
     })
 }
 
@@ -480,7 +492,7 @@ pub fn put_schedule(store: &Store, s: &Schedule) -> rusqlite::Result<bool> {
         c.execute(
             &format!(
                 "INSERT OR REPLACE INTO agents_schedules ({SCHEDULE_COLS})
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)"
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)"
             ),
             params![
                 s.id,
@@ -494,7 +506,8 @@ pub fn put_schedule(store: &Store, s: &Schedule) -> rusqlite::Result<bool> {
                 s.prompt,
                 s.looked_until,
                 s.created_at,
-                s.updated_at
+                s.updated_at,
+                s.after
             ],
         )?;
         Ok(true)
@@ -576,6 +589,23 @@ pub fn last_occurrence(store: &Store, id: &str) -> rusqlite::Result<Option<Occur
     })
 }
 
+/// Schedule `id`'s newest occurrence from its cron (not Run now) that the
+/// runner answered with a run.
+pub fn last_sent(store: &Store, id: &str) -> rusqlite::Result<Option<Occurrence>> {
+    store.with_conn(|c| {
+        c.query_row(
+            &format!(
+                "SELECT {OCC_COLS} FROM agents_occurrences WHERE schedule_id = ?1
+                 AND manual = 0 AND state = 'sent' AND run_id != ''
+                 ORDER BY due_at DESC LIMIT 1"
+            ),
+            [id],
+            occurrence_from,
+        )
+        .optional()
+    })
+}
+
 /// Take up occurrences of schedule `id` and move its `looked_until` to
 /// `until`, in one transaction: an occurrence already taken up is kept as
 /// it is.
@@ -616,6 +646,29 @@ pub fn take_up(
             [id],
         )?;
         Ok(())
+    })
+}
+
+/// Take up one occurrence unless it was already: `Ok(true)` when it is new.
+pub fn take_up_one(store: &Store, o: &Occurrence) -> rusqlite::Result<bool> {
+    store.with_conn(|c| {
+        c.execute(
+            &format!(
+                "INSERT OR IGNORE INTO agents_occurrences ({OCC_COLS})
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)"
+            ),
+            params![
+                o.schedule_id,
+                o.occurrence,
+                o.due_at,
+                o.state,
+                o.request_id,
+                o.run_id,
+                o.manual as i64,
+                o.updated_at
+            ],
+        )
+        .map(|n| n > 0)
     })
 }
 
@@ -691,6 +744,7 @@ mod tests {
             })
             .unwrap();
         store.transaction(cap_v3).unwrap();
+        store.with_conn(|c| c.execute_batch(CHAINED)).unwrap();
         let (st, h) = state(&store).unwrap().unwrap();
         assert_eq!(st.cursor, 0, "a v3 snapshot is taken");
         assert!(st.runs.is_empty());
