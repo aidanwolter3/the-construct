@@ -115,6 +115,53 @@
                 "type": "core://Column"
               },
               {
+                "content": {
+                  "children": [
+                    {
+                      "children": [
+                        {
+                          "background": "${local://theme#accent_surface}",
+                          "content": {
+                            "style": "Caption",
+                            "type": "core://Text",
+                            "value_expr": "${taste://items/$route.key#fit_text}"
+                          },
+                          "content_color": "${local://theme#accent}",
+                          "corner_dp": 8,
+                          "padding_h_dp": 8,
+                          "padding_v_dp": 3,
+                          "type": "core://Box"
+                        },
+                        {
+                          "type": "core://Spacer"
+                        }
+                      ],
+                      "type": "core://Row"
+                    },
+                    {
+                      "content": {
+                        "max_lines": 3,
+                        "style": "Secondary",
+                        "type": "core://Text",
+                        "value_expr": "${taste://items/$route.key#fit_note}"
+                      },
+                      "type": "core://Conditional",
+                      "value": "${taste://items/$route.key#fit_noted}"
+                    },
+                    {
+                      "max_lines": 2,
+                      "style": "Caption",
+                      "type": "core://Text",
+                      "value_expr": "${taste://items/$route.key#fit_source_text}"
+                    }
+                  ],
+                  "spacing_dp": 4,
+                  "type": "core://Column"
+                },
+                "type": "core://Conditional",
+                "value": "${taste://items/$route.key#fit_checked}"
+              },
+              {
                 "children": [
                   {
                     "content": {
