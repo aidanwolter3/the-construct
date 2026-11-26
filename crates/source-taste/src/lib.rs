@@ -463,6 +463,9 @@ pub struct TasteAdapter {
     pub web: OutboundClient,
     /// The model that reads size charts ([`fit`]); none, no fit check.
     pub agent: Option<Arc<construct_agent::Agent>>,
+    /// The server's headless browser, for stores that refuse a plain
+    /// fetch of their pages ([`fit`]).
+    pub browser: Option<Arc<web_extract::render::Browser>>,
 }
 
 impl TasteAdapter {
@@ -476,6 +479,7 @@ impl TasteAdapter {
                 .body_cap(web_extract::fetch::MAX_BODY)
                 .build(),
             agent: None,
+            browser: None,
         }
     }
 
@@ -485,9 +489,17 @@ impl TasteAdapter {
         self
     }
 
+    /// With the server's browser for the fit check's pages.
+    pub fn with_browser(mut self, browser: Option<web_extract::render::Browser>) -> Self {
+        self.browser = browser.map(Arc::new);
+        self
+    }
+
     pub fn from_env() -> Self {
-        Self::new(std::env::var(PRIVATE_HOSTS_VAR).as_deref() == Ok("1"))
+        let private = std::env::var(PRIVATE_HOSTS_VAR).as_deref() == Ok("1");
+        Self::new(private)
             .with_agent(construct_agent::Agent::from_env())
+            .with_browser(web_extract::render::Browser::from_env(private))
     }
 }
 

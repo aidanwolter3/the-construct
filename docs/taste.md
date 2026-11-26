@@ -156,7 +156,9 @@ and the title: shoes, bags, hats and the like are not; long sleeves are told fro
 checked in the background, one at a time per pod, and its entity reloaded (a scoped data event) when kept:
 
 1. The piece's own page (`buy_url`) is fetched through the web module (host spacing, daily caps and backoff; no
-   search). The lines around its size words, when they look like a chart (a size word near two lines of numbers), go
+   search). A store that refuses the plain fetch (403 or 429: many shops refuse a server's address) is read in the
+   server's headless browser instead (decision `rendered-fetches`; at most 40 of the pod's renders a day), and its pages
+   go straight to the browser for 6 hours; only a refusal there backs the host off. The lines around its size words, when they look like a chart (a size word near two lines of numbers), go
    to the cheap model with a JSON schema (feature `taste_fit`, 200 calls a day), which answers the chart as numbers.
 2. With no chart there, the first same-site link that looks like a size guide is read the same way, and kept as the
    brand's chart for that site and kind (`taste_fit_brands`, 30 days; none found, 7).

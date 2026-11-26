@@ -20,7 +20,10 @@ Decision:
   (its host spacing, daily caps and backoff; no search) and keeps only the lines around its size words. When they look
   like a chart, the cheap model reads them into numbers (a JSON schema; its own daily budget, `taste_fit`). Only when
   the page has none does the pod follow a same-site size-guide link, read it the same way and keep it as the brand's
-  chart per site and kind of garment, for 30 days.
+  chart per site and kind of garment, for 30 days. A store that refuses the plain fetch (403 or 429) is read in the
+  server's headless browser instead (decision `rendered-fetches`), at most 40 pages a day per pod, so most of the
+  pod's renders stay with its collections; only a refusal there too backs the host off. (Added the same day: on
+  staging every store in the owner's feed answered the server's plain fetch with 429, so no card got a badge.)
 - **The pod does the arithmetic, not the model.** Charts are kept in inches, flat across, sleeves from the centre back
   (centimetres, all-round chests and seam-to-cuff sleeves are converted); a verdict is worked out each time a list is
   served, so new targets show at once. Three states: fits (with the size), won't fit (with the measure that misses,

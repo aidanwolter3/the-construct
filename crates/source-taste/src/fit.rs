@@ -41,6 +41,11 @@ pub const CHART_DAYS: i64 = 30;
 pub const NONE_DAYS: i64 = 7;
 /// A page that couldn't be read is tried again after this.
 pub const ERROR_HOURS: i64 = 6;
+/// Pages the fit check reads in the server's browser per pod per day (of
+/// the pod's own render cap), for stores that refuse a plain fetch.
+pub const RENDERS_PER_DAY: u32 = 40;
+/// How long a store that refused a plain fetch is read in the browser only.
+pub const REFUSED_HOURS: u64 = 6;
 
 /// A kind of garment, as the targets name it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -1102,14 +1107,89 @@ pub fn piece(v: &Value) -> Option<Garment> {
 
 /// A page's HTML, or why not.
 async fn page(a: &crate::TasteAdapter, pod: &Pod, url: &str) -> Result<String, String> {
+    use web_extract::fetch::Fetched;
     let url = web_extract::fetch::check_url(url, a.allow_private_hosts)?;
     let hosts = pod.local::<web_extract::hosts::Hosts>();
-    match web_extract::hosts::fetch(&hosts, &a.web, &url, None, None, &[]).await {
-        Ok(web_extract::fetch::Fetched::Body { bytes, .. }) => {
-            Ok(String::from_utf8_lossy(&bytes).into_owned())
+    let host = web_extract::fetch::host_of(&url);
+    let refused = pod.local::<Refused>();
+    if a.browser.is_none() || !refused.recent(&host) {
+        hosts.admit(&url).await?;
+        match web_extract::fetch::fetch(&a.web, &url, None, None, &[]).await {
+            Ok(Fetched::Body { bytes, .. }) => {
+                hosts.answered(&url).await;
+                return Ok(String::from_utf8_lossy(&bytes).into_owned());
+            }
+            Ok(_) => return Err("the page answered nothing".into()),
+            // Many stores refuse a server's plain fetch but serve a
+            // browser: the page is read in the server's browser instead,
+            // and the host's block is recorded only if that is refused too.
+            Err(e) if e.blocked && a.browser.is_some() => refused.note(&host),
+            Err(e) => {
+                if e.blocked {
+                    hosts.blocked(&url, e.retry_after).await;
+                }
+                return Err(e.message);
+            }
         }
+    }
+    let Some(browser) = a.browser.as_deref() else {
+        return Err("this server has no headless browser".into());
+    };
+    pod.local::<FitRenders>().take()?;
+    match web_extract::render::render(
+        browser,
+        &hosts,
+        &pod.local::<web_extract::render::Renders>(),
+        &url,
+        &web_extract::render::Options::default(),
+    )
+    .await
+    {
+        Ok(Fetched::Body { bytes, .. }) => Ok(String::from_utf8_lossy(&bytes).into_owned()),
         Ok(_) => Err("the page answered nothing".into()),
         Err(e) => Err(e.message),
+    }
+}
+
+/// Stores that refused a plain fetch lately: their pages go straight to
+/// the browser for [`REFUSED_HOURS`].
+#[derive(Default)]
+struct Refused(std::sync::Mutex<HashMap<String, std::time::Instant>>);
+
+impl Refused {
+    fn recent(&self, host: &str) -> bool {
+        let m = self.0.lock().unwrap_or_else(|e| e.into_inner());
+        m.get(host)
+            .is_some_and(|at| at.elapsed().as_secs() < REFUSED_HOURS * 3600)
+    }
+
+    fn note(&self, host: &str) {
+        self.0
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(host.to_owned(), std::time::Instant::now());
+    }
+}
+
+/// The fit check's renders today, so it leaves most of the pod's daily
+/// renders to its collections.
+#[derive(Default)]
+struct FitRenders(std::sync::Mutex<Option<(std::time::Instant, u32)>>);
+
+impl FitRenders {
+    fn take(&self) -> Result<(), String> {
+        let mut st = self.0.lock().unwrap_or_else(|e| e.into_inner());
+        let (start, count) = st.get_or_insert((std::time::Instant::now(), 0));
+        if start.elapsed().as_secs() >= 86_400 {
+            (*start, *count) = (std::time::Instant::now(), 0);
+        }
+        if *count >= RENDERS_PER_DAY {
+            return Err(format!(
+                "the fit check already read {RENDERS_PER_DAY} pages in the browser today"
+            ));
+        }
+        *count += 1;
+        Ok(())
     }
 }
 
