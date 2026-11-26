@@ -73,6 +73,12 @@ sandbox, the pod's own fetches and the screens others see. Each call widens the 
   holds it (an image's `url`, a link's, a Markdown link in a text), and under a grant `stage_edit_group` refuses a
   group that reaches a host its screen didn't (`new_host`), so a staged group is never previewed or walked with it.
 
+Since then (2026-11-26, step 4): **cards open the owner's screens.** A row field a live screen opens as an
+address (`target_uri` bound to `$item.<field>`) is written by a granted call only with an address one of the
+pod's screens' routes matches, as clients match it (`Grant::nav`): a card can't be pointed at a web page or a
+screen the pod doesn't have. Clients already open only routes their screens declare; this makes the limit the
+server's too, and refuses the write instead of leaving a dead tap.
+
 Considered: listing shared screens in each grant file (they change as the owner shares); a fetch limit on every
 outbound client (push and the pod's own connectors aren't steered by what a job writes).
 

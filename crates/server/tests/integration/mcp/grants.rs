@@ -425,3 +425,85 @@ async fn a_grant_reaches_only_the_screens_hosts_and_never_a_shared_screen() {
         "{out}"
     );
 }
+
+/// A field a screen opens as an address (`target_uri: $item.<field>`) is
+/// written by a grant only with an address one of the pod's own screens
+/// opens (decision `mcp-grants`): a card can't be pointed anywhere else.
+#[tokio::test]
+async fn a_grant_points_a_card_only_at_the_pods_own_screens() {
+    let env = env().await;
+    let pod_code = env.pod("mine").await;
+    let owner = env.connect_with(&pod_code, "outward").await;
+    let (err, out) = env
+        .tool(
+            &owner,
+            "define_collection",
+            json!({"name": "cards", "fields": [{"name": "title", "type": "text"},
+                   {"name": "target_uri", "type": "text", "optional": true}]}),
+        )
+        .await;
+    assert!(!err, "{out}");
+    let (err, made) = env
+        .tool(
+            &owner,
+            "create_layout",
+            json!({"title": "Today", "feeds": [["collections", "cards"]],
+            "layout": {"type": "core://Page", "title": "Today",
+              "screens": [{"id": "card", "route": "collections://cards/{id}",
+                           "root": {"type": "core://Text", "style": "Body", "value_expr": "A card"}}],
+              "root": {"type": "core://Column", "children": [
+                {"type": "core://Text", "style": "Body", "value_expr": "Shop at https://shop.example/"},
+                {"type": "core://List", "query_key": "collection:cards",
+                 "item_template": {"type": "core://Button", "label": "$item.title",
+                   "on_click": {"intent": "action.navigation.open", "presentation": "Push", "target_uri": "$item.target_uri"}}}
+              ]}}}),
+        )
+        .await;
+    assert!(!err, "{made}");
+    let id = made["id"].as_str().unwrap().to_owned();
+    let (err, out) = env
+        .tool(
+            &owner,
+            "update_layout",
+            json!({"app": "home", "layout": {"type": "core://Page", "title": "Home",
+            "root": {"type": "core://Column", "children": [{"type": "core://Layout", "ref": id}]}}}),
+        )
+        .await;
+    assert!(!err, "{out}");
+    let key = scoped(
+        &env,
+        pod_core::mcp::Access::Edit,
+        json!({ "tools": ["add_row"], "rows": ["cards"] }),
+    )
+    .await;
+    let add = |target: &str| json!({ "collection": "cards", "values": { "title": "Look", "target_uri": target } });
+    // A web address, even on a host the screens use, opens none of them.
+    let (err, out) = env
+        .tool(&key, "add_row", add("https://shop.example/verify"))
+        .await;
+    assert!(err && refused_by_grant(&out), "{out}");
+    assert!(out.to_string().contains("opens none"), "{out}");
+    // Neither does a route no screen has, nor a parameter clients wouldn't match.
+    for bad in ["collections://other/x", "collections://cards/a?b=c"] {
+        let (err, out) = env.tool(&key, "add_row", add(bad)).await;
+        assert!(err && refused_by_grant(&out), "{bad}: {out}");
+    }
+    // One of the pod's own screens is fine, and so is none.
+    let (err, out) = env
+        .tool(&key, "add_row", add("collections://cards/r-1"))
+        .await;
+    assert!(!err, "{out}");
+    let (err, out) = env
+        .tool(
+            &key,
+            "add_row",
+            json!({ "collection": "cards", "values": { "title": "No link" } }),
+        )
+        .await;
+    assert!(!err, "{out}");
+    // The owner isn't limited.
+    let (err, out) = env
+        .tool(&owner, "add_row", add("https://shop.example/verify"))
+        .await;
+    assert!(!err, "{out}");
+}

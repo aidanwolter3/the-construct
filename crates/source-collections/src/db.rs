@@ -1333,6 +1333,31 @@ pub fn grant_refusal(
                 )));
             }
         }
+        // A field a screen opens as an address opens one of the pod's own
+        // screens (decision `mcp-grants`): a card can't be pointed anywhere
+        // else. Values the row already had stay.
+        if let Some(nav) = &grant.nav
+            && let Some(now) = row(conn, &collection, &id)?
+        {
+            let had = before
+                .as_deref()
+                .and_then(|b| serde_json::from_str::<Value>(b).ok())
+                .unwrap_or_default();
+            let fields = latest_def(conn, &collection)?
+                .map(|(_, d)| d.fields)
+                .unwrap_or_default();
+            for field in fields.iter().filter(|f| nav.fields.contains(&f.name)) {
+                let (f, key) = (&field.name, &field.id);
+                let v = now.values.get(key).and_then(Value::as_str).unwrap_or("");
+                if v.is_empty() || had["values"][key].as_str() == Some(v) || nav.opens_a_screen(v) {
+                    continue;
+                }
+                return Ok(Some(format!(
+                    "writing a row of {collection} whose {f} {v:?} opens none of the pod's screens \
+                     (it may only open one of them)"
+                )));
+            }
+        }
         let was_live = before
             .and_then(|b| serde_json::from_str::<Value>(&b).ok())
             .is_some_and(|s| s["deleted_at"].is_null());

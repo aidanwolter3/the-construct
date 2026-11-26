@@ -423,7 +423,8 @@ the agent's, not the owner's (decision `mcp-access-levels`). A credential for an
 **grant** as well: its exact tools, the collections whose rows it may write, where it may delete, screens it may
 never change, the collections it may read, and whether its answers withhold what others wrote. The pod enforces it
 inside every write transaction and on every read tool, and adds what no grant may reach: screens the pod shares,
-rows a calendar feed reads, and any web host the pod's screens don't already use (decision `mcp-grants`).
+rows a calendar feed reads, any web host the pod's screens don't already use, and a card address that isn't one
+of the pod's own screens (decision `mcp-grants`).
 
 #### Outbound requests
 
