@@ -51,5 +51,11 @@ so an `edit` connection could reach any host by writing a row (`add_row`, `edit_
 or one it filled a row from. Other rows wait, and `collections_status` says why. `query_field` searches go to the
 pod's own search provider, a host it already reaches, so they are unchanged.
 
+Since then too (the same audit): writers were recorded only for values that changed, so a row Claude brought back
+below `outward` (`edit_rows` restore, `undo_edit`, `restore_collection`, a layout's undelete through `run_action`)
+kept counting as the owner's: a task the owner had deleted, or marked done, could come back `queued` and start an
+agent run. A row Claude brings back is now Claude's whole, every field, though its values are as they were; an
+`undo_edit` Claude makes marks every field of the rows it puts back.
+
 Not done: per-action approval on a device (the other option) and per-tool grants. A connection at `outward` is as
 trusted as before this decision, so the owner should give it only to an app they trust with that.

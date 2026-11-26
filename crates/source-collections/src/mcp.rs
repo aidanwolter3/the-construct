@@ -1813,6 +1813,9 @@ async fn delete(pod: &Pod, caps: Caps, args: &Value) -> Result<Value, Value> {
 async fn restore(pod: &Pod, caps: crate::Caps, args: &Value) -> Result<Value, Value> {
     let name = str_arg(args, "collection")?.to_owned();
     let target = name.clone();
+    // Rows Claude brings back below outward access are Claude's (decision
+    // `mcp-access-levels`).
+    let writer = db::current_writer();
     let (version, fillers) = refusable(pod, move |tx| {
         let Some((_, version, def)) = db::deleted_def(tx, &target)? else {
             return Ok(Err(json!({ "error": "collection_not_found", "collection": target, "status": 404,
@@ -1834,6 +1837,12 @@ async fn restore(pod: &Pod, caps: crate::Caps, args: &Value) -> Result<Value, Va
             return Ok(Err(e));
         }
         db::undelete(tx, &target)?;
+        if writer.is_some() {
+            let now = pod_core::util::now_secs();
+            for r in rows.iter().filter(|r| r.deleted_at.is_none()) {
+                db::note_writes(tx, &target, None, r, writer, now)?;
+            }
+        }
         Ok(Ok((version, !def.fillers.is_empty())))
     })
     .await?;
@@ -2199,10 +2208,16 @@ fn write_all(
             }
         } else {
             db::save_row(tx, name, after)?;
+            // A row Claude brings back is Claude's whole, though its values
+            // are as they were: else a row the owner put away comes back
+            // counting as theirs (decision `mcp-access-levels`).
+            let revived = writer.is_some()
+                && before.as_ref().is_some_and(|b| b.deleted_at.is_some())
+                && after.deleted_at.is_none();
             db::note_writes(
                 tx,
                 name,
-                before.as_ref().map(|b| &b.values),
+                before.as_ref().filter(|_| !revived).map(|b| &b.values),
                 after,
                 writer,
                 now,
@@ -2375,6 +2390,9 @@ async fn run_action(pod: &Pod, args: &Value) -> Result<Value, Value> {
 
 async fn undo_edit(pod: &Pod, args: &Value) -> Result<Value, Value> {
     let id = str_arg(args, "edit")?.to_owned();
+    // An undo Claude makes below outward access is Claude's write, though
+    // it puts back values someone else wrote (decision `mcp-access-levels`).
+    let writer = db::current_writer();
     let out = refusable(pod, move |tx| {
         let Some((_, undone, rows)) = db::edit(tx, &id)? else {
             return Ok(Err(
@@ -2419,6 +2437,9 @@ async fn undo_edit(pod: &Pod, args: &Value) -> Result<Value, Value> {
             }
             row.updated_at = now;
             db::save_row(tx, &collection, &row)?;
+            if writer.is_some() && row.deleted_at.is_none() {
+                db::note_writes(tx, &collection, None, &row, writer, now)?;
+            }
             restored += 1;
         }
         tx.execute(

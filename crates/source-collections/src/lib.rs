@@ -1025,6 +1025,7 @@ async fn write_row(
             compute::after_write(tx, &def, Some(&before_values), &mut row, &body, now, caps)?;
         // A computed field of the row changed: the writer doesn't know it.
         let computed = row.values != sent;
+        let was_deleted = row.deleted_at.is_some();
         match body.get("deleted") {
             Some(Value::Bool(true)) => row.deleted_at = row.deleted_at.or(Some(now)),
             Some(Value::Bool(false)) => {
@@ -1047,7 +1048,11 @@ async fn write_row(
         }
         row.updated_at = now;
         db::save_row(tx, &name, &row)?;
-        db::note_writes(tx, &name, Some(&before_values), &row, writer, now)?;
+        // A row Claude brings back is Claude's whole (decision
+        // `mcp-access-levels`), though its values are as they were.
+        let revived = writer.is_some() && was_deleted && row.deleted_at.is_none();
+        let prior = (!revived).then_some(&before_values);
+        db::note_writes(tx, &name, prior, &row, writer, now)?;
         Ok(Ok((json!({ "ok": true, "id": row.id }), jobs, computed)))
     })
     .await?;
