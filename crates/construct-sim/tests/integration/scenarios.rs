@@ -299,8 +299,9 @@ fn a_bar_chart_filters_and_picks_a_day() {
 }
 
 /// The `monitor` source's core layout `server_health`: the status, the checks,
-/// the devices grid (a tap shows a device's day) and list and the counters from core components; where
-/// monitoring is off (the source's 403) it says so and still shows the devices.
+/// the devices grid (a tap shows a device's day) and list, this month's paid use (the server's and the pod's)
+/// and the counters from core components; where monitoring is off (the source's 403) it says so and still
+/// shows the devices and the pod's own use.
 #[test]
 fn server_health_shows_checks_and_devices_and_says_when_monitoring_is_off() {
     // Components nest boxes in boxes: more stack than a test thread's 2 MB.
@@ -318,6 +319,9 @@ fn server_health_shows_checks_and_devices_and_says_when_monitoring_is_off() {
                  assert-text Nov 3 · 4a7e210 · 7:40–18:45; assert-text Nov 14 · 9be03a1 · 19:00–22:30; \
                  click Web; assert-no-text Studio MacBook; assert-no-text Pixel 9 · Mon Nov 16; \
                  shot devices; \
+                 scroll-to Usage this month; scroll-to 212 requests · 543K tokens; \
+                 scroll-to 350 of 1,000 free searches; scroll-to 35 requests · 75K tokens; \
+                 shot usage; \
                  scroll-to All counters; scroll-to pods (temporary); assert-text 7 now; \
                  mode dark; shot dark",
                 &out_dir("server-health"),
@@ -327,7 +331,9 @@ fn server_health_shows_checks_and_devices_and_says_when_monitoring_is_off() {
                 "server_health_off",
                 "assert-text Server monitoring is off for this pod; assert-no-text Checks; \
                  assert-no-text All clear; assert-no-text needs a look; assert-no-text All counters; \
-                 assert-text Devices per day; assert-text 5 devices; shot light; \
+                 shot light; scroll-to Usage this month; scroll-to 35 requests · 75K tokens; \
+                 assert-no-text 212 requests · 543K tokens; \
+                 scroll-to 5 devices; scroll-to Devices per day; \
                  scroll-to Studio MacBook; scroll-to Ahead of server; mode dark; shot dark",
                 &out_dir("server-health-off"),
             );

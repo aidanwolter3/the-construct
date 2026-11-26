@@ -31,6 +31,7 @@ pub mod migrations;
 pub mod net;
 pub mod notify;
 pub mod notify_store;
+pub mod paid_use;
 pub mod porcelain;
 pub mod preview;
 pub mod public_copy;

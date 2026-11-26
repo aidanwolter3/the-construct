@@ -411,6 +411,12 @@ impl Host {
         &self.config
     }
 
+    /// The server's ledger of paid use (decision `monthly-paid-use`), for
+    /// [`pod_core::paid_use::set_server_ledger`].
+    pub fn paid_use_ledger(&self) -> Arc<dyn pod_core::paid_use::ServerLedger> {
+        self.store.clone()
+    }
+
     pub fn store(&self) -> &HostStore {
         &self.store
     }

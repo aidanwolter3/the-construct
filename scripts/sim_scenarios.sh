@@ -97,10 +97,11 @@ scenario device-versions device_versions \
 scenario server-health server_health \
   "assert-text 1 check needs a look; assert-text Disk space; shot light; scroll-to Devices per day; click Web; \
 assert-no-text Studio MacBook; shot devices; click All; click Pixel 9 16; assert-text Pixel 9 · Mon Nov 16; \
-assert-text Nov 14 · 9be03a1 · 19:00–22:30; shot device-day; mode dark; shot dark"
+assert-text Nov 14 · 9be03a1 · 19:00–22:30; shot device-day; scroll-to Usage this month; \
+scroll-to 350 of 1,000 free searches; shot usage; mode dark; shot dark"
 scenario server-health-off server_health_off \
-  "assert-text Server monitoring is off for this pod; assert-no-text Checks; assert-text Devices per day; \
-shot light; mode dark; shot dark"
+  "assert-text Server monitoring is off for this pod; assert-no-text Checks; shot light; \
+scroll-to Devices per day; shot devices; mode dark; shot dark"
 scenario taste-browse taste \
   "click Taste; shot taste; click Browse; wait-text 3000 pieces; shot grid; scroll-to Waxed Chore Coat in Olive; \
 click Open Waxed Chore Coat in Olive; wait-text 3000 Photo 1 of 3; shot sheet; \

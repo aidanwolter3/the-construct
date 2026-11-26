@@ -1950,6 +1950,7 @@ async fn run_fetch(
                 &web.provider,
                 &src,
                 IMAGE_CANDIDATES,
+                web.meter(),
             )
             .await
             {
@@ -2019,6 +2020,7 @@ async fn run_fetch(
                 &web.provider,
                 &src,
                 8,
+                web.meter(),
             )
             .await
             {

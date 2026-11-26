@@ -90,6 +90,7 @@ pub async fn results(
             &web.provider,
             &query,
             MAX_RESULTS,
+            web.meter(),
         )
         .await
     {

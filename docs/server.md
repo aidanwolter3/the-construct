@@ -256,7 +256,7 @@ Counts live in memory and restart from zero.
   `server pods monitoring <name> on`. The built-in layout **Server health** (core layout `server_health`,
   `crates/source-monitor/layouts/server_health/`) shows it: the status, the checks, the devices (below) and every
   counter. Use it whole, `{"type": "core://Use", "ref": "@core/server_health"}` as a layout's root with feeds
-  `[["monitor","overview"],["monitor","devices"],["monitor","errors"]]`, or open it by reference (`action.navigation.open` with
+  `[["monitor","overview"],["monitor","devices"],["monitor","errors"],["monitor","paid_use"]]`, or open it by reference (`action.navigation.open` with
   `"ref": "@core/server_health"`); no agent has to write the screen. In a pod without monitoring it says that
   monitoring is off for this pod and shows the devices alone (it reads `${core://sources/monitor#error}`, `error 403`
   there).
@@ -286,6 +286,14 @@ Counts live in memory and restart from zero.
   moment the pod first ran each; other builds are grey) drawn as dashed lines down the grid. Over MCP, `list_devices`, `rename_device` and `watch_device` (run a source action or send a
   "Device updates" notification once a device draws a feature or runs a newer build; an MCP credential's watch runs
   only actions an MCP credential reaches, such as a collection's row writes or reopening an agent's run).
+- **Paid use by the month** (decision [`monthly-paid-use`](decisions/monthly-paid-use.md)): unlike the counters,
+  these are kept, by UTC calendar month (13 months). Each pod counts its web search provider's real requests (cache
+  hits cost nothing) and its model requests (calls, tokens by direction, the model's own web searches and fetches);
+  `host.db` counts every pod's model requests, since they share the server's key. The `monitor` source's `paid_use`
+  feed (`monitor:paid_use`) serves `monitor://paid_use/pod` in any pod and `monitor://paid_use/server` only where
+  monitoring is on; Server health shows them under "Usage this month", each card tagged Server or Pod, with Brave
+  as a bar against its 1,000 free searches a month and a dollar estimate. Fly.io's bill isn't shown (Fly has no
+  billing API).
 - **Prometheus:** with `CONSTRUCT_METRICS_ADDR`, `GET /metrics` on that address serves the same counters as
   `construct_*` metrics.
 

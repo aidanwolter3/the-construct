@@ -804,7 +804,9 @@ dot to open its piece, drag a box to list the pieces in it; a tile grid stays fo
 - **Monitor** (`crates/source-monitor`): the server's health counters and checks (feed `overview`, for pods the
   operator turned it on for), the user's devices with their builds (feed `devices`) and the pod's own recent
   failed requests (feed `errors`: route pattern, status, error code, device; kept in memory per pod by
-  `pod_core::recent_errors`, decision `recent-server-errors`), with the `server_health` core layout.
+  `pod_core::recent_errors`, decision `recent-server-errors`) and this month's paid use, the pod's and the
+  server's (feed `paid_use`, kept by `pod_core::paid_use`, decision `monthly-paid-use`), with the `server_health`
+  core layout.
 - **Dates** (`crates/source-dates`): the days around today in the pod's time zone (`dates:today`,
   `dates:this_week`, `dates:next_7`, …), so a layout that lists days needs no collection of dates. It tells devices
   to reload at the pod's midnight.

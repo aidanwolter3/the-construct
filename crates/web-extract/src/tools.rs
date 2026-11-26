@@ -50,6 +50,16 @@ pub struct Web {
     /// What `web_fetch` may read: seed it with the request's text
     /// ([`Seen::add_text`]); search results and fetched pages add theirs.
     pub seen: Seen,
+    /// The pod whose paid use counts the provider's requests (decision
+    /// `monthly-paid-use`); none counts nothing.
+    pub meter: Option<pod_core::Pod>,
+}
+
+impl Web {
+    /// The store that counts this pod's searches.
+    pub fn meter(&self) -> Option<&pod_core::store::Store> {
+        self.meter.as_ref().map(|p| p.store())
+    }
 }
 
 /// The URLs one research task has seen (link provenance): only these can
@@ -454,7 +464,8 @@ impl Tool for SearchTool {
             }
             let w = &self.web;
             let results =
-                crate::search::search(&w.hosts, &w.cache, &w.client, &w.provider, q, 8).await?;
+                crate::search::search(&w.hosts, &w.cache, &w.client, &w.provider, q, 8, w.meter())
+                    .await?;
             if results.is_empty() {
                 return Ok("No results.".into());
             }

@@ -172,6 +172,7 @@ pub fn pod_web(pod: &Pod) -> Option<web_extract::tools::Web> {
         provider,
         allow_private: adapter.allow_private_hosts(),
         seen: web_extract::tools::Seen::default(),
+        meter: Some(pod.clone()),
     })
 }
 
