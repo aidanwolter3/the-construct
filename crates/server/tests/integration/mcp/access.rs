@@ -293,6 +293,7 @@ async fn every_tool_has_the_level_the_decision_gives_it() {
         levels["read"],
         want(&[
             "agents_schedules",
+            "call_log",
             "collections_status",
             "describe_collection",
             "describe_publication",
@@ -368,6 +369,7 @@ async fn every_tool_has_the_level_the_decision_gives_it() {
             "set_theme",
             "set_time_zone",
             "stage_edit_group",
+            "undo_background",
             "undo_edit",
             "unplug_jack",
             "update_adoption",

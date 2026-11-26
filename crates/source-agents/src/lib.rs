@@ -86,6 +86,8 @@ pub const REPAIR_PATH: &str = "/v1/agents/sandboxes/repair";
 pub const START_PATH: &str = "/v1/agents/tasks/start";
 pub const RUN_SCHEDULE_PATH: &str = "/v1/agents/schedules/run";
 pub const PAUSE_SCHEDULE_PATH: &str = "/v1/agents/schedules/pause";
+/// The kill switch (decision `mcp-call-log`): pause every schedule.
+pub const PAUSE_ALL_PATH: &str = "/v1/agents/schedules/pause_all";
 pub const RESUME_SCHEDULE_PATH: &str = "/v1/agents/schedules/resume";
 pub const CREATE_SCHEDULE_PATH: &str = "/v1/agents/schedules/create";
 pub const UPDATE_SCHEDULE_PATH: &str = "/v1/agents/schedules/update";
@@ -208,6 +210,11 @@ pub const MANIFEST: SourceManifest = SourceManifest {
             doc: "Pause a schedule: {name}. Wrap it in action.confirm.",
         },
         PathSpec {
+            pattern: PAUSE_ALL_PATH,
+            query_keys: &[],
+            doc: "Pause background agents: {}: pause every schedule (runs going now go on; nothing is revoked). Wrap it in action.confirm.",
+        },
+        PathSpec {
             pattern: RESUME_SCHEDULE_PATH,
             query_keys: &[],
             doc: "Resume a paused schedule: {name}. It runs from its next time on.",
@@ -255,6 +262,10 @@ pub const MANIFEST: SourceManifest = SourceManifest {
                 ("working_count", "runs starting or working"),
                 ("needs_you_count", "runs waiting for you"),
                 ("queued_count", "runs waiting for a slot"),
+                (
+                    "can_pause_all",
+                    "true while any schedule is on: Pause background agents (pause_all) shows",
+                ),
                 ("color", "#RRGGBB for the summary"),
                 (
                     "updated_text",
@@ -608,6 +619,7 @@ impl Source for AgentsAdapter {
             .route(START_PATH, post(start_route))
             .route(RUN_SCHEDULE_PATH, post(run_schedule_route))
             .route(PAUSE_SCHEDULE_PATH, post(pause_schedule_route))
+            .route(PAUSE_ALL_PATH, post(pause_all_route))
             .route(RESUME_SCHEDULE_PATH, post(resume_schedule_route))
             .route(REOPEN_PATH, post(reopen_route))
             .route(CONTINUE_PATH, post(continue_route))
@@ -804,10 +816,11 @@ impl Source for AgentsAdapter {
             fields: minute hour day-of-month month day-of-week, e.g. 52 3 * * *), timezone (IANA, default the \
             pod's), workspace, prompt, model?, max_runtime_min? (1-480, default 240), enabled?}. op update {name, \
             new_name?, and any of those}: what you leave out keeps its value. op delete, pause, resume and run (now) \
-            take {name}. A time not sent within 2 h (the pod or runner was down) is skipped and the user is told. \
+            take {name}; op pause_all pauses every schedule (the kill switch: runs going now go on, nothing is \
+            revoked; resume each by name). A time not sent within 2 h (the pod or runner was down) is skipped and the user is told. \
             Ask before creating or changing a schedule's prompt: it runs unattended with the workspace's access.",
                 "inputSchema": {"type": "object", "properties": {
-                    "op": {"type": "string", "enum": ["list", "create", "update", "delete", "pause", "resume", "run"]},
+                    "op": {"type": "string", "enum": ["list", "create", "update", "delete", "pause", "pause_all", "resume", "run"]},
                     "name": {"type": "string"},
                     "new_name": {"type": "string"},
                     "cron": {"type": "string"},
@@ -839,7 +852,7 @@ impl Source for AgentsAdapter {
             "agents_link_tasks" => Some(Access::Outward),
             "agents_schedules" => Some(match args["op"].as_str().unwrap_or("list") {
                 "list" => Access::Read,
-                "pause" => Access::Edit,
+                "pause" | "pause_all" => Access::Edit,
                 _ => Access::Outward,
             }),
             _ => None,
@@ -1274,6 +1287,13 @@ async fn run_schedule_route(State(pod): State<Pod>, headers: HeaderMap, body: By
 async fn pause_schedule_route(State(pod): State<Pod>, headers: HeaderMap, body: Bytes) -> Response {
     match body_of(&pod, &headers, &body).await {
         Ok(b) => schedule_answer(schedules::set_enabled(&pod, &b, false).await),
+        Err(r) => r,
+    }
+}
+
+async fn pause_all_route(State(pod): State<Pod>, headers: HeaderMap, body: Bytes) -> Response {
+    match body_of(&pod, &headers, &body).await {
+        Ok(_) => schedule_answer(schedules::pause_all(&pod).await),
         Err(r) => r,
     }
 }

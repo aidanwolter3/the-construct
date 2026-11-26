@@ -12,6 +12,7 @@
 //! sources supply data, routes, sign-ins, tables and core layouts ([`source`]).
 
 pub mod adapter;
+pub mod call_log;
 pub mod components;
 pub mod construct;
 pub mod devices;
@@ -653,6 +654,7 @@ pub fn app(state: Pod) -> Router {
         .merge(notify::router())
         .merge(construct::http::router())
         .merge(construct::edit_groups::router())
+        .merge(call_log::router())
         .merge(usage::router())
         .merge(mcp::router())
         .merge(image_proxy::router())

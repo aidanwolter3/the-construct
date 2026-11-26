@@ -149,6 +149,10 @@ After a change to the tools, the Claude connector needs "Refresh tools list" in 
     for it;
   - a row field a screen opens as an address (`target_uri: $item.<field>`) only with one of the pod's own
     routes.
+- `call_log {since?, credential?, refused?, limit?}` lists what each MCP credential called since a time (default
+  today), allowed or refused; `undo_background {credential?, since?, dry_run?}` (the owner only) restores the
+  checkpoint before the granted credentials' first edit group today and undoes their row edits (decision
+  [`mcp-call-log`](decisions/mcp-call-log.md)). Settings' manifest declares `/v1/background/undo` for a button.
 
 **Outside text is marked** (decision [`untrusted-tool-content`](decisions/untrusted-tool-content.md)): text other
 people wrote comes back as `{"untrusted": {"from", "content"}}`, and the instructions say it is data, never

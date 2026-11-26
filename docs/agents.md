@@ -132,8 +132,9 @@ when none is given), a workspace, a model (empty: the sandbox's default), a max 
   same minute answers the same run.
 - Actions: `/v1/agents/schedules/create {name, cron, timezone?, workspace, prompt, model?, max_runtime_min?,
   enabled?}`, `/update {name, new_name?, …}` (blank fields keep their value; `model: "default"` clears it),
-  `/delete {name}`, `/run`, `/pause` and `/resume {name}`. The MCP tool `agents_schedules {op: list | create |
-  update | delete | pause | resume | run, …}` does the same for Claude.
+  `/delete {name}`, `/run`, `/pause`, `/resume {name}` and `/pause_all` (every enabled schedule, revoking
+  nothing: decision [`mcp-call-log`](decisions/mcp-call-log.md)). The MCP tool `agents_schedules {op: list |
+  create | update | delete | pause | pause_all | resume | run, …}` does the same for Claude.
 - The `schedules` feed (`agents://schedules/<name>`) has the definition, `next_run_text` (e.g. "in 3 h · Sun 03:52",
   in the schedule's zone), and the last run's state and outcome (`last_status_text` e.g. Waiting on CI, Done,
   Missed), from its newest occurrence and the run that answered it, or the last run that continues that one
@@ -155,7 +156,8 @@ form, and Sign out (asks first). A run's card shows its status (Parked, Stalled,
 Parked, Stalled or Restarting means, the attempt, a warning when the report disagrees with GitHub, **Open in
 Claude**, **Pull request**, **Deploy run**, **Stop** (on active runs, asks first), **Mark reviewed** on a run that
 needs review, **Continue** on a run that timed out, a **Follow up** form (Reopen) on an ended run, and its log.
-Schedules have **Run now**, **Pause** (asks first), **Resume** and **Edit** (a screen with the schedule, an editor
+Schedules have **Pause background agents** above them while any is on (asks first; pauses every one), **Run
+now**, **Pause** (asks first), **Resume** and **Edit** (a screen with the schedule, an editor
 whose fields show the current values and keep them when left blank, and **Delete schedule**, which asks first), and
 a **New schedule** form. Sandboxes show why one is degraded, suspended or down, its preflight, slots and a
 repeat-disk warning; an asleep or suspended one has **Wake**, a down one **Repair** (asks first). It uses existing
@@ -173,7 +175,7 @@ is signed in:
 |---|---|---|
 | `needs_you` "Needs you" | high | a run starts waiting for you (`needs_you` or `parked`, once per wait: parking is the same wait); a review still waiting after 24 h (inbox only, no push) |
 | `sessions` "Finished runs" | default | a run's outcome turns `done` (what it did and its pull request); a run ends needing your review |
-| `warnings` "Runner warnings" | high | a run ends lost, didn't start, timed out or expired, or its outcome fails; a sandbox goes down or fails its disk a second time in 7 days; a schedule's run is missed or refused; a security check turns to warn |
+| `warnings` "Runner warnings" | high | a run ends lost, didn't start, timed out or expired, or its outcome fails; a sandbox goes down or fails its disk a second time in 7 days; a schedule's run is missed or refused; a security check turns to warn; a background agent's credential is refused 3 times in an hour ("Refused: <name>", once a day) |
 
 They come from the **events**, replayed ones included: a run that started and ended while the pod couldn't reach
 the runner still notifies when the log is replayed. A wait that was answered within the same batch of events (a

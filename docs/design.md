@@ -424,7 +424,9 @@ the agent's, not the owner's (decision `mcp-access-levels`). A credential for an
 never change, the collections it may read, and whether its answers withhold what others wrote. The pod enforces it
 inside every write transaction and on every read tool, and adds what no grant may reach: screens the pod shares,
 rows a calendar feed reads, any web host the pod's screens don't already use, and a card address that isn't one
-of the pod's own screens (decision `mcp-grants`).
+of the pod's own screens (decision `mcp-grants`). The pod logs every call a credential makes, refusals included,
+where the job can't write; three refusals in an hour raise a warning, and the owner can undo a morning's background
+work in one step (decision `mcp-call-log`).
 
 #### Outbound requests
 

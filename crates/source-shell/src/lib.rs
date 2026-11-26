@@ -159,6 +159,11 @@ pub const SETTINGS_MANIFEST: SourceManifest = SourceManifest {
             query_keys: &[],
             doc: "{id}: put every screen back as it was at that checkpoint (core layouts stay current; rows untouched). Confirm first.",
         },
+        PathSpec {
+            pattern: pod_core::call_log::UNDO_PATH,
+            query_keys: &[],
+            doc: "{} (or {credential}): undo this morning: what the background agents (credentials with a grant) did today, screens back to the checkpoint before their first change and their row edits undone (decision mcp-call-log). Confirm first: it also undoes your own screen edits since.",
+        },
     ],
     entities: &[
         EntityDoc {

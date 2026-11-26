@@ -354,8 +354,14 @@ pub fn sessions(
     now_ms: i64,
 ) -> DataBundle {
     let mut b = DataBundle::default();
-    b.entities
-        .insert(STATUS_URI.into(), status(st, host, now_ms));
+    let mut st_rec = status(st, host, now_ms);
+    // The kill switch shows while any schedule would run (decision
+    // `mcp-call-log`).
+    st_rec.0.insert(
+        "can_pause_all".into(),
+        json!(st.is_some() && schedules.iter().any(|s| s.enabled)),
+    );
+    b.entities.insert(STATUS_URI.into(), st_rec);
     b.queries
         .insert(crate::STATUS_QUERY.into(), vec![STATUS_URI.into()]);
     let mut list: Vec<&Run> = st

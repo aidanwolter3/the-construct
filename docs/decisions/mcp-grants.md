@@ -83,3 +83,7 @@ Considered: listing shared screens in each grant file (they change as the owner 
 outbound client (push and the pod's own connectors aren't steered by what a job writes).
 
 Not done: grants chosen on the OAuth consent page (the CLI makes them); a grant for row values (which fields).
+
+Since then (2026-11-26, step 5): every call a credential makes is logged by the pod under the credential's name,
+with whether its grant or access refused it, a granted credential refused 3 times in an hour raises a Runner
+warning, and the owner can undo a morning's background work in one step (decision [`mcp-call-log`](mcp-call-log.md)).
