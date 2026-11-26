@@ -1,0 +1,56 @@
+{
+  "note": "First version: the 24 dp circle that marks something done or not, which layouts wrote as an outlined ring (not done) and a filled circle with a tick (done)",
+  "component": {
+    "doc": "A 24 dp circle that says whether something is done: an empty ring outlined in the muted text colour while it isn't, a filled accent circle with a tick once it is. Put it at the start of a row (a to-do, a reminder, a step), usually in a core://Tappable that ticks the item, and pick done from the item's field with two core://Conditional. For a whole row that ticks a field use @core/checkable_row.",
+    "params": [
+      {
+        "name": "done",
+        "type": "bool",
+        "doc": "Draw the filled circle with a tick (true) instead of the empty ring.",
+        "default": false
+      }
+    ],
+    "template": {
+      "type": "core://IfArg",
+      "arg": "done",
+      "then": {
+        "type": "core://Box",
+        "align": "Center",
+        "background": "${local://theme#accent}",
+        "content_color": "${local://theme#on_accent}",
+        "corner_dp": 12,
+        "width_dp": 24,
+        "height_dp": 24,
+        "content": {
+          "type": "core://Badge",
+          "icon": "check",
+          "text": ""
+        }
+      },
+      "else": {
+        "type": "core://Box",
+        "background": "${local://theme#card}",
+        "border_color": "${local://theme#muted_text}",
+        "corner_dp": 12,
+        "width_dp": 24,
+        "height_dp": 24,
+        "content": {
+          "type": "core://Spacer",
+          "size_dp": 0
+        }
+      }
+    },
+    "examples": [
+      {
+        "args": {},
+        "note": "a reminder not done yet, in a Tappable that marks it done"
+      },
+      {
+        "args": {
+          "done": true
+        },
+        "note": "a to-do already ticked off"
+      }
+    ]
+  }
+}

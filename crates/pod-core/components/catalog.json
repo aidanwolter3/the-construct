@@ -19,6 +19,10 @@
     "category": "container",
     "use_when": "One thing in a bordered card: an event, a site, an alert. For several rows in one card use @core/grouped_card."
   },
+  "check_circle": {
+    "category": "primitive",
+    "use_when": "The ring or ticked circle at the start of a row that says whether it is done, in a Tappable you wire yourself. For a whole row that ticks a field use @core/checkable_row."
+  },
   "checkable_row": {
     "category": "row",
     "use_when": "A row that ticks a yes/no field of its item at a tap: a to-do, a grocery item, a lesson done."
