@@ -1868,6 +1868,20 @@ fn same_shape(a: &Value, b: &Value) -> bool {
     shape(a) == shape(b)
 }
 
+/// The row sets a copy shows: the first segment of each row's entity URI
+/// (`<scheme>://<set>/<id>`). With new rows published as they come, others
+/// read a set's new rows, so no grant writes them (`crate::grant::for_call`).
+/// A source whose URIs aren't shaped so only over-protects.
+pub fn copy_row_sets(copy: &Value) -> BTreeSet<String> {
+    copy_rows(copy)
+        .iter()
+        .filter_map(|u| u.split_once("://").map(|(_, r)| r))
+        .filter_map(|r| r.split('/').next())
+        .filter(|c| !c.is_empty())
+        .map(str::to_owned)
+        .collect()
+}
+
 /// The rows (entity URIs) of a copy's data, not the theme or sources.
 fn copy_rows(copy: &Value) -> BTreeSet<String> {
     copy["data"]["entities"]

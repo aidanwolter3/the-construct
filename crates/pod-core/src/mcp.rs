@@ -857,12 +857,21 @@ async fn call_tool(pod: &Pod, headers: &HeaderMap, params: &Value) -> Value {
         .as_ref()
         .filter(|g| g.strip_untrusted)
         .map(|g| g.keep_from.clone());
-    let mut out = crate::grant::CALL_GRANT
-        .scope(
+    // Widened with what others can see, and the hosts the pod may fetch
+    // from for it (`crate::grant::for_call`).
+    let grant = match grant {
+        Some(g) => Some(crate::grant::for_call(pod, g).await),
+        None => None,
+    };
+    let limit = grant.as_ref().and_then(|g| g.hosts.clone());
+    let mut out = crate::grant::with_fetch_limit(
+        limit,
+        crate::grant::CALL_GRANT.scope(
             grant,
             CALL_ACCESS.scope(access, run_tool(pod, headers, name, args)),
-        )
-        .await;
+        ),
+    )
+    .await;
     if let Some(keep) = strip {
         strip_result(&mut out, &keep);
     }

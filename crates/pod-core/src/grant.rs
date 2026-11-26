@@ -32,9 +32,24 @@
 //! the requests the call's tools make through the pod's router are held to it
 //! too, and sources read it before a write moves to a blocking thread
 //! ([`current`]) and hold the blocking work to it ([`enter`], [`active`]).
+//!
+//! Each call also widens the grant with what others can see, read fresh
+//! ([`for_call`]), so a job can't reach them whatever its grant lists:
+//!
+//! - the layouts the pod shares (a live publication's name, a live public
+//!   link's layout) join `protected_names`, so they and every component they
+//!   use are protected;
+//! - the collections others read (a calendar feed's sources, the rows a
+//!   public link that publishes new rows shows) are written by no grant
+//!   ([`Grant::shared_rows`]);
+//! - the web hosts the pod's screens already use ([`Grant::hosts`]) are the
+//!   only ones its rows may name and the only ones the pod fetches from for
+//!   it, in the call and in the fillers it starts ([`fetch_limit`],
+//!   [`fetch_refusal`]).
 
 use std::cell::RefCell;
 use std::collections::BTreeSet;
+use std::sync::Arc;
 
 use axum::http::HeaderMap;
 use base64::Engine;
@@ -67,6 +82,14 @@ pub struct Grant {
     /// The writers (an envelope's `from`) whose values a stripped answer
     /// keeps, still in their envelope.
     pub keep_from: BTreeSet<String>,
+    /// Set per call ([`for_call`]), never from the header: collections
+    /// others read (a calendar feed's, a self-updating public link's), whose
+    /// rows no grant writes.
+    pub shared_rows: BTreeSet<String>,
+    /// Set per call ([`for_call`]), never from the header: the web hosts the
+    /// pod's screens use, the only ones a row it writes may name and the pod
+    /// fetches from for it. `None`: not computed (no limit).
+    pub hosts: Option<Arc<BTreeSet<String>>>,
 }
 
 fn name_set(v: &Value, key: &str) -> Result<Option<BTreeSet<String>>, String> {
@@ -139,6 +162,7 @@ impl Grant {
             reads: name_set(v, "reads")?,
             strip_untrusted,
             keep_from: name_set(v, "keep_from")?.unwrap_or_default(),
+            ..Grant::default()
         })
     }
 
@@ -203,6 +227,8 @@ impl Grant {
             reads: Some(BTreeSet::new()),
             strip_untrusted: true,
             keep_from: BTreeSet::new(),
+            shared_rows: BTreeSet::new(),
+            hosts: Some(Arc::new(BTreeSet::new())),
         }
     }
 
@@ -214,6 +240,7 @@ impl Grant {
     /// Whether it lets the connection write rows of `collection`.
     pub fn allows_rows(&self, collection: &str) -> bool {
         self.rows.as_ref().is_none_or(|c| c.contains(collection))
+            && !self.shared_rows.contains(collection)
     }
 
     /// Whether it lets the connection delete rows of `collection`.
@@ -419,6 +446,113 @@ pub fn strip_untrusted(v: &mut Value, keep: &BTreeSet<String>) {
     }
 }
 
+/// The web hosts in `s`: the host of every `http://` or `https://` address
+/// in it, wherever it stands (a field that is a URL, or an address inside a
+/// text), lowercased.
+pub fn url_hosts(s: &str) -> Vec<String> {
+    let lower = s.to_ascii_lowercase();
+    let mut out = Vec::new();
+    let mut at = 0;
+    while let Some(i) = lower[at..].find("http") {
+        let start = at + i;
+        let rest = &lower[start..];
+        let after = rest
+            .strip_prefix("https://")
+            .or_else(|| rest.strip_prefix("http://"));
+        at = start + 4;
+        let Some(after) = after else { continue };
+        let host: String = after
+            .chars()
+            .take_while(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_' | ':' | '@'))
+            .collect();
+        // `user@host:port`: the host alone.
+        let host = host.rsplit('@').next().unwrap_or("");
+        let host = host.split(':').next().unwrap_or("").trim_end_matches('.');
+        if !host.is_empty() {
+            out.push(host.to_owned());
+        }
+    }
+    out
+}
+
+tokio::task_local! {
+    /// The hosts the pod may fetch from for the granted call this task runs
+    /// (or a filler it started); `None`: no limit.
+    static FETCH_HOSTS: Option<Arc<BTreeSet<String>>>;
+}
+
+/// The fetch limit of the current task ([`with_fetch_limit`]): read it
+/// before starting background work for a call, and hold that work to it.
+pub fn fetch_limit() -> Option<Arc<BTreeSet<String>>> {
+    FETCH_HOSTS.try_with(|h| h.clone()).ok().flatten()
+}
+
+/// Run `f` with `limit` as its fetch limit ([`fetch_refusal`]).
+pub async fn with_fetch_limit<F: std::future::Future>(
+    limit: Option<Arc<BTreeSet<String>>>,
+    f: F,
+) -> F::Output {
+    FETCH_HOSTS.scope(limit, f).await
+}
+
+/// Why the pod may not fetch from `host` now: the task runs for a granted
+/// call (or a filler it started) and the pod's screens don't use `host`.
+/// `None`: it may.
+pub fn fetch_refusal(host: &str) -> Option<String> {
+    let limit = fetch_limit()?;
+    let host = host.trim().to_ascii_lowercase();
+    (!limit.contains(&host)).then(|| {
+        format!(
+            "{host} isn't a site the pod's screens use, and this was asked for by a scoped \
+             credential, which reaches only those"
+        )
+    })
+}
+
+/// `grant` widened for one call with what others can see, read now (the
+/// module doc): shared layouts protected, shared collections unwritable, and
+/// the hosts the pod's screens use.
+pub async fn for_call(pod: &crate::Pod, mut grant: Grant) -> Grant {
+    if let Some((me, shelf)) = pod.shelf().map(|(id, s)| (id.to_owned(), s.clone())) {
+        let shelf2 = shelf.clone();
+        let me2 = me.clone();
+        let shared = tokio::task::spawn_blocking(move || {
+            let mut layouts = BTreeSet::new();
+            let mut rows = BTreeSet::new();
+            for p in shelf2.of_pod(&me2).unwrap_or_default() {
+                if p.revoked_at.is_none() {
+                    layouts.insert(p.source);
+                }
+            }
+            for c in shelf2.public_of_pod(&me2).unwrap_or_default() {
+                if c.revoked_at.is_some() {
+                    continue;
+                }
+                let ask = crate::public_copy::Ask::from_key(&c.layout, &c.rows);
+                if ask.publish_new_rows {
+                    rows.extend(crate::public_copy::copy_row_sets(&c.copy));
+                }
+                layouts.insert(c.layout);
+            }
+            (layouts, rows)
+        })
+        .await
+        .unwrap_or_default();
+        grant.protected_names.extend(shared.0);
+        grant.shared_rows.extend(shared.1);
+        drop(shelf);
+    }
+    grant
+        .shared_rows
+        .extend(crate::ical::feed_row_sets(pod).await);
+    let hosts = pod
+        .blocking(|s| s.with_conn(crate::construct::edit_groups::screen_hosts))
+        .await
+        .unwrap_or_default();
+    grant.hosts = Some(Arc::new(hosts));
+    grant
+}
+
 /// The refusal of a call its grant doesn't allow.
 pub fn refusal(what: &str) -> Value {
     json!({
@@ -433,6 +567,34 @@ pub fn refusal(what: &str) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn url_hosts_finds_every_address_in_a_text() {
+        assert_eq!(
+            url_hosts("See [this](HTTPS://Evil.Example/a) or http://user@b.example:8080/x."),
+            vec!["evil.example".to_owned(), "b.example".to_owned()]
+        );
+        assert!(url_hosts("$item.photo and httpfoo and https://").is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_fetch_limit_holds_only_where_it_is_set() {
+        assert_eq!(fetch_refusal("a.example"), None);
+        let limit = Some(Arc::new(BTreeSet::from(["a.example".to_owned()])));
+        with_fetch_limit(limit, async {
+            assert_eq!(fetch_refusal("A.example"), None);
+            let why = fetch_refusal("b.example").unwrap();
+            assert!(why.contains("b.example"), "{why}");
+            // Background work started here keeps it.
+            let held = fetch_limit();
+            tokio::spawn(with_fetch_limit(held, async {
+                assert!(fetch_refusal("b.example").is_some());
+            }))
+            .await
+            .unwrap();
+        })
+        .await;
+    }
 
     #[test]
     fn round_trips_and_checks() {

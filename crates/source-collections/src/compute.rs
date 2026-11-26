@@ -911,7 +911,9 @@ pub fn spawn(pod: &Pod, collection: &str, jobs: Vec<Job>) {
     let caps = adapter.caps();
     let weak = Arc::downgrade(pod);
     let collection = collection.to_owned();
-    tokio::spawn(async move {
+    // Started by a scoped credential's call: held to its fetch limit.
+    let limit = pod_core::grant::fetch_limit();
+    tokio::spawn(pod_core::grant::with_fetch_limit(limit, async move {
         let Some(pod) = weak.upgrade() else { return };
         // Model work needs the pod's `model` jack (decision `jacks`).
         let allowed = pod_core::jacks::core_plugged(pod.store(), pod_core::jacks::MODEL);
@@ -941,7 +943,7 @@ pub fn spawn(pod: &Pod, collection: &str, jobs: Vec<Job>) {
                 return;
             }
         }
-    });
+    }));
 }
 
 /// Ask about `pending` inputs of field `field_id`, a batch at a time, and

@@ -40,7 +40,7 @@
 //!   restored or purged after [`crate::KEEP_SECS`].
 
 use std::cmp::Ordering;
-use std::collections::HashSet;
+use std::collections::{BTreeSet, HashSet};
 
 use pod_core::store::Step;
 use protocol::{DataBundle, EntityRecord};
@@ -1303,8 +1303,35 @@ pub fn grant_refusal(
             .collect::<rusqlite::Result<_>>()?
     };
     for (collection, id, before) in changed {
+        if grant.shared_rows.contains(&collection) {
+            return Ok(Some(format!(
+                "writing rows of {collection}, which others see (a calendar feed or a public link \
+                 shows them)"
+            )));
+        }
         if !grant.allows_rows(&collection) {
             return Ok(Some(format!("writing rows of {collection}")));
+        }
+        // An address it writes names a site the pod's screens use: a row's
+        // link or image is fetched by a phone or a filler (decision
+        // `mcp-grants`). Addresses the row already had stay.
+        if let Some(hosts) = &grant.hosts
+            && let Some(now) = row(conn, &collection, &id)?
+        {
+            let mut had = BTreeSet::new();
+            if let Some(b) = before
+                .as_deref()
+                .and_then(|b| serde_json::from_str::<Value>(b).ok())
+            {
+                string_hosts(&b, &mut had);
+            }
+            let mut has = BTreeSet::new();
+            string_hosts(&now.state(), &mut has);
+            if let Some(h) = has.difference(&had).find(|h| !hosts.contains(*h)) {
+                return Ok(Some(format!(
+                    "writing a row of {collection} that names {h}, a site the pod's screens don't use"
+                )));
+            }
         }
         let was_live = before
             .and_then(|b| serde_json::from_str::<Value>(&b).ok())
@@ -1318,6 +1345,16 @@ pub fn grant_refusal(
         }
     }
     Ok(None)
+}
+
+/// The web hosts every string in `v` names (`pod_core::grant::url_hosts`).
+fn string_hosts(v: &Value, out: &mut BTreeSet<String>) {
+    match v {
+        Value::String(s) => out.extend(pod_core::grant::url_hosts(s)),
+        Value::Array(a) => a.iter().for_each(|x| string_hosts(x, out)),
+        Value::Object(o) => o.values().for_each(|x| string_hosts(x, out)),
+        _ => {}
+    }
 }
 
 /// The rows changed since the last call (and forget them).

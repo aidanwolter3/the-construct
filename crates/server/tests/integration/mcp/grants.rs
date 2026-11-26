@@ -285,3 +285,143 @@ async fn a_grant_reads_only_its_collections_and_withholds_others_text() {
         "{export}"
     );
 }
+
+/// Design `background-agent-security`, step 3: a granted call reaches only
+/// the web hosts the pod's screens use (a staged group naming another is
+/// refused at stage, a row naming one too), and a screen the pod shares is
+/// protected whatever the grant lists.
+#[tokio::test]
+async fn a_grant_reaches_only_the_screens_hosts_and_never_a_shared_screen() {
+    let env = env().await;
+    let pod_code = env.pod("mine").await;
+    let owner = env.connect_with(&pod_code, "outward").await;
+    let (err, out) = env
+        .tool(
+            &owner,
+            "define_collection",
+            json!({"name": "needs", "fields": [{"name": "title", "type": "text"}]}),
+        )
+        .await;
+    assert!(!err, "{out}");
+    let (err, made) = env
+        .tool(
+            &owner,
+            "create_layout",
+            json!({"title": "Shopping", "feeds": [["collections", "needs"]],
+            "layout": {"type": "core://Page", "title": "Shopping", "root": {"type": "core://Column",
+              "children": [
+                {"type": "core://Text", "style": "Body", "value_expr": "Order at https://shop.example/list"},
+                {"type": "core://List", "query_key": "collection:needs",
+                 "item_template": {"type": "core://Text", "style": "Body", "value_expr": "$item.title"}}
+              ]}}}),
+        )
+        .await;
+    assert!(!err, "{made}");
+    let id = made["id"].as_str().unwrap().to_owned();
+    let (err, out) = env
+        .tool(
+            &owner,
+            "update_layout",
+            json!({"app": "home", "layout": {"type": "core://Page", "title": "Home",
+            "root": {"type": "core://Column", "children": [{"type": "core://Layout", "ref": id}]}}}),
+        )
+        .await;
+    assert!(!err, "{out}");
+    let key = scoped(
+        &env,
+        pod_core::mcp::Access::Edit,
+        json!({
+            "tools": ["stage_edit_group", "add_row", "get_layout"],
+            "rows": ["needs"],
+        }),
+    )
+    .await;
+    let version = |out: &Value| out["version"].as_i64().unwrap();
+    let (_, got) = env.tool(&key, "get_layout", json!({ "id": id })).await;
+    let v = version(&got);
+    let add = |node: Value| {
+        json!({ "title": "A change", "changes": [{ "id": id, "base_version": v,
+                "json_patch": [{ "op": "add", "path": "/root/children/1", "value": node }] }] })
+    };
+
+    // A new host, in an image or a text, is refused before anything is staged.
+    let (err, out) = env
+        .tool(
+            &key,
+            "stage_edit_group",
+            add(json!({"type": "core://Image", "url": "https://evil.example/pixel.png"})),
+        )
+        .await;
+    assert!(err && out["error"] == "new_host", "{out}");
+    assert!(out.to_string().contains("evil.example"), "{out}");
+    let (err, out) = env
+        .tool(
+            &key,
+            "stage_edit_group",
+            add(json!({"type": "core://Text", "style": "Body",
+                       "value_expr": "[Verify](https://evil.example/login)", "markdown": true})),
+        )
+        .await;
+    assert!(err && out["error"] == "new_host", "{out}");
+    // A host the screen uses already is fine.
+    let (err, out) = env
+        .tool(
+            &key,
+            "stage_edit_group",
+            add(json!({"type": "core://Text", "style": "Body",
+                       "value_expr": "More at https://shop.example/more"})),
+        )
+        .await;
+    assert!(!err, "{out}");
+    assert_eq!(out["report"]["safe"], true, "{out}");
+
+    // Rows: an address on another host is refused, one the screens use isn't.
+    let (err, out) = env
+        .tool(
+            &key,
+            "add_row",
+            json!({ "collection": "needs", "values": { "title": "See https://evil.example/a" } }),
+        )
+        .await;
+    assert!(err && refused_by_grant(&out), "{out}");
+    assert!(out.to_string().contains("evil.example"), "{out}");
+    let (err, out) = env
+        .tool(
+            &key,
+            "add_row",
+            json!({ "collection": "needs", "values": { "title": "Reorder at https://shop.example/b" } }),
+        )
+        .await;
+    assert!(!err, "{out}");
+
+    // Once the screen is published, the grant can't change it.
+    let (err, out) = env
+        .tool(&owner, "set_handle", json!({"handle": "mine"}))
+        .await;
+    assert!(!err, "{out}");
+    let (err, review) = env.tool(&owner, "publish", json!({"name": id})).await;
+    assert!(!err, "{review}");
+    let (err, published) = env
+        .tool(
+            &owner,
+            "publish",
+            json!({"name": id, "confirm": review["review_id"]}),
+        )
+        .await;
+    assert!(!err && published["published"] == true, "{published}");
+    let (err, out) = env
+        .tool(
+            &key,
+            "stage_edit_group",
+            add(json!({"type": "core://Text", "style": "Body", "value_expr": "A tip"})),
+        )
+        .await;
+    assert!(!err, "{out}");
+    assert_eq!(out["report"]["safe"], false, "{out}");
+    assert!(
+        out["report"]["safe_violations"]
+            .to_string()
+            .contains("is protected"),
+        "{out}"
+    );
+}

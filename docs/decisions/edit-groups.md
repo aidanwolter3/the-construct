@@ -22,7 +22,8 @@ Decision:
   expanded diff per layout, the followers it re-seals, and `additive`: only adds, plus a binding or target replaced
   inside the failing screen of the stored walk it names (`walk_id`), with added nodes that call only endpoints the
   screen already calls (or one another of the pod's screens calls, under the collection the walk's `expect-write`
-  names), link to no new host, add no delete and show no text bound to an agent's rows. A re-sealed reference is the
+  names), reach no new host (any address in a value, whichever field: an image, a link, a Markdown link; under a
+  grant a group that does is refused at stage, `new_host`), add no delete and show no text bound to an agent's rows. A re-sealed reference is the
   same reference.
 - **Apply** (`apply_edit_group`, or the app's `POST /v1/edit-groups/apply`) makes the same writes through
   `construct_write::put` in one transaction, only when every authored name is still at `base_seq` and home is still

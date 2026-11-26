@@ -244,6 +244,10 @@ does when it finishes.
   - `strip_untrusted` (and `keep_from`, writers whose values stay): values in the `untrusted` envelope come back
     as `withheld: written by others`, except numbers, true or false, dates and times.
 
+  Whatever it lists, a granted call never changes a screen the pod shares (a live publication or public link) or
+  writes rows a calendar feed or a self-updating public link reads, and it reaches only the web hosts the pod's
+  screens use: in the rows it writes, the edit groups it stages, and every fetch the pod makes for it.
+
   The host stores it with the credential, sends it as `x-construct-mcp-grant` (dropped from any request that comes
   in) and keeps it when Connected apps changes the access. The pod refuses any tool, row write or edit group
   outside it.

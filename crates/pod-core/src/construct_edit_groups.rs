@@ -458,32 +458,41 @@ struct Calls {
     allowed: BTreeSet<String>,
 }
 
-fn host_of(url: &str) -> Option<String> {
-    let rest = url
-        .strip_prefix("https://")
-        .or(url.strip_prefix("http://"))?;
-    Some(rest.split(['/', '?', '#']).next()?.to_ascii_lowercase())
-}
-
 fn collect_calls(v: &Value, out: &mut Calls) {
     match v {
         Value::Object(o) => {
             if let Some(e) = o.get("endpoint").and_then(Value::as_str) {
                 out.endpoints.insert(e.to_owned());
             }
-            for (k, x) in o {
-                if let Some(s) = x.as_str()
-                    && matches!(k.as_str(), "url" | "uri" | "href" | "target_uri")
-                    && let Some(h) = host_of(s)
-                {
-                    out.hosts.insert(h);
-                }
+            for x in o.values() {
                 collect_calls(x, out);
             }
         }
         Value::Array(a) => a.iter().for_each(|x| collect_calls(x, out)),
+        // Any address, whichever field holds it: an image's `url`, a
+        // link's, a fetch's, or one inside a text (Markdown links).
+        Value::String(s) => out.hosts.extend(crate::grant::url_hosts(s)),
         _ => {}
     }
+}
+
+/// The web hosts the pod's live screens use (every layout as clients draw
+/// it, components expanded): the only ones a granted credential's rows may
+/// name and the pod fetches from for it (`crate::grant::for_call`).
+pub fn screen_hosts(conn: &Connection) -> rusqlite::Result<BTreeSet<String>> {
+    let mut calls = Calls::default();
+    for l in write::live_layouts(conn)? {
+        collect_calls(&l.node, &mut calls);
+    }
+    Ok(calls.hosts)
+}
+
+/// The web hosts `after` names that `before` didn't.
+fn new_hosts(before: &Value, after: &Value) -> BTreeSet<String> {
+    let (mut b, mut a) = (Calls::default(), Calls::default());
+    collect_calls(before, &mut b);
+    collect_calls(after, &mut a);
+    a.hosts.difference(&b.hosts).cloned().collect()
 }
 
 /// Why an added (or replaced) value does something the screen didn't:
@@ -505,11 +514,13 @@ fn new_behaviour(v: &Value, before: &Calls) -> Option<String> {
             }
             for (k, x) in o {
                 if let Some(s) = x.as_str() {
-                    if matches!(k.as_str(), "url" | "uri" | "href" | "target_uri")
-                        && let Some(h) = host_of(s)
-                        && !before.hosts.contains(&h)
+                    if let Some(h) = crate::grant::url_hosts(s)
+                        .into_iter()
+                        .find(|h| !before.hosts.contains(h))
                     {
-                        return Some(format!("it links to {h}, which the screen didn't"));
+                        return Some(format!(
+                            "it reaches {h} (an image, link or fetch), which the screen didn't"
+                        ));
                     }
                     if s.contains("anticipate_needs") || s.contains("walk://") {
                         return Some("it shows text an agent wrote".into());
@@ -525,6 +536,11 @@ fn new_behaviour(v: &Value, before: &Calls) -> Option<String> {
             None
         }
         Value::Array(a) => a.iter().find_map(|x| new_behaviour(x, before)),
+        // A string in a list (an object's are read above).
+        Value::String(s) => crate::grant::url_hosts(s)
+            .into_iter()
+            .find(|h| !before.hosts.contains(h))
+            .map(|h| format!("it reaches {h} (an image, link or fetch), which the screen didn't")),
         _ => None,
     }
 }
@@ -943,6 +959,26 @@ pub fn stage(
         if protected.contains(&e.name) {
             violations.push(format!("{} is protected", e.name));
             safe_violations.push(format!("{} is protected", e.name));
+        }
+    }
+    // Under a grant a new web host is refused here, not only at apply: a
+    // staged group is previewed and walked, and nothing it names should be
+    // fetched (design: the pod's own fetches).
+    if grant.is_some() {
+        let mut reached: BTreeSet<String> = BTreeSet::new();
+        for e in &entries {
+            reached.extend(new_hosts(&befores[&e.name], &afters[&e.name]));
+        }
+        if !reached.is_empty() {
+            return Err(refuse(
+                "new_host",
+                format!(
+                    "the group reaches {} (an image, link or fetch), which the screen didn't; \
+                     this connection's grant stages only changes that reach the hosts a screen \
+                     already uses",
+                    reached.into_iter().collect::<Vec<_>>().join(", ")
+                ),
+            ));
         }
     }
     let followers: Vec<&String> = moved_names

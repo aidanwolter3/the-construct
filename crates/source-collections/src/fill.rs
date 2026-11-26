@@ -3197,7 +3197,10 @@ pub fn spawn(pod: &Pod, collection: &str, filler: Option<&str>, force: bool) {
     let pod = pod.clone();
     let c = collection.to_owned();
     let only = filler.map(str::to_owned);
-    tokio::spawn(async move {
+    // Started by a scoped credential's call: held to its fetch limit
+    // (decision `mcp-grants`).
+    let limit = pod_core::grant::fetch_limit();
+    tokio::spawn(pod_core::grant::with_fetch_limit(limit, async move {
         let ids: Vec<String> = match only {
             Some(f) => vec![f],
             None => {
@@ -3213,7 +3216,7 @@ pub fn spawn(pod: &Pod, collection: &str, filler: Option<&str>, force: bool) {
         for f in ids {
             fill(&pod, &c, &f, force).await;
         }
-    });
+    }));
 }
 
 /// A row of `collection` was written (by a person, an action or Claude):
@@ -3223,7 +3226,8 @@ pub fn spawn(pod: &Pod, collection: &str, filler: Option<&str>, force: bool) {
 pub fn research_soon(pod: &Pod, collection: &str) {
     let pod = pod.clone();
     let c = collection.to_owned();
-    tokio::spawn(async move {
+    let limit = pod_core::grant::fetch_limit();
+    tokio::spawn(pod_core::grant::with_fetch_limit(limit, async move {
         let c2 = c.clone();
         let targets: Vec<(String, String)> = pod
             .blocking(move |s| {
@@ -3254,7 +3258,7 @@ pub fn research_soon(pod: &Pod, collection: &str) {
                 tokio::time::sleep(RESEARCH_RETRY).await;
             }
         }
-    });
+    }));
 }
 
 /// The fillers of `def` that opening an app showing it should start: the
