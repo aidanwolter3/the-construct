@@ -843,12 +843,54 @@ async fn call_tool(pod: &Pod, headers: &HeaderMap, params: &Value) -> Value {
     {
         return tool_result(Err(crate::grant::refusal(&format!("the tool {name}"))));
     }
-    crate::grant::CALL_GRANT
+    // A grant that reads only some collections can't use sample_data, which
+    // reads any source's rows.
+    if let Some(g) = &grant
+        && g.reads.is_some()
+        && name == "sample_data"
+    {
+        return tool_result(Err(crate::grant::refusal(
+            "sample_data, which reads every source (a source's own read tools answer what it may read)",
+        )));
+    }
+    let strip = grant
+        .as_ref()
+        .filter(|g| g.strip_untrusted)
+        .map(|g| g.keep_from.clone());
+    let mut out = crate::grant::CALL_GRANT
         .scope(
             grant,
             CALL_ACCESS.scope(access, run_tool(pod, headers, name, args)),
         )
-        .await
+        .await;
+    if let Some(keep) = strip {
+        strip_result(&mut out, &keep);
+    }
+    out
+}
+
+/// A tool's answer with what others wrote withheld, for a grant with
+/// `strip_untrusted` (`crate::grant::strip_untrusted`): its structured content
+/// and every text part that is JSON. A text part that isn't JSON is the pod's
+/// own words (a preview's caption) and an image is a picture of a screen.
+fn strip_result(out: &mut Value, keep: &std::collections::BTreeSet<String>) {
+    if let Some(sc) = out.get_mut("structuredContent") {
+        crate::grant::strip_untrusted(sc, keep);
+    }
+    if let Some(parts) = out["content"].as_array_mut() {
+        for p in parts {
+            if p["type"] != "text" {
+                continue;
+            }
+            let Some(text) = p["text"].as_str() else {
+                continue;
+            };
+            if let Ok(mut v) = serde_json::from_str::<Value>(text) {
+                crate::grant::strip_untrusted(&mut v, keep);
+                p["text"] = json!(serde_json::to_string_pretty(&v).unwrap_or_default());
+            }
+        }
+    }
 }
 
 async fn run_tool(pod: &Pod, headers: &HeaderMap, name: &str, mut args: Value) -> Value {

@@ -39,4 +39,21 @@ when they would move a protected name; and Keep (`apply_edit_group` on a trial) 
 (`owner_keeps`), so a scoped job can't turn off a trial's next-morning undo. Undoing an unprotected trial stays
 allowed: Build undoes its unkept trials each morning.
 
+Since then (2026-11-26, background agent security): a grant limits reads too. A job that reads the owner's
+collections and is steered by what it reads must not read text strangers wrote there (filler and web values,
+model-written fields), and a write-only limit let it read every collection.
+
+- `reads`: the collections whose rows its tools answer. The Collections source refuses `describe_collection`,
+  `export_collection`, `collections_status`, `edit_rows`, `add_row` and `run_action` on any other (those in `rows`
+  are readable too); with a `reads` list the core refuses `sample_data`, which reads any source.
+- `strip_untrusted`: after the tool runs, the core walks its answer (the structured content and every JSON text
+  part) and turns each `untrusted` envelope (decision `untrusted-tool-content`) into `withheld: written by others`.
+  A number, true or false, an empty value, or a date or time (only digits, separators and a zone) stays, out of
+  the envelope, so the job still sees when things are. `keep_from` lists writers whose envelopes stay as they are
+  (`claude`: the owner's own Claude sessions and jobs, so Build's journeys and Sense's need titles still read).
+  Considered: dropping the wrapped field (the job couldn't tell empty from withheld); stripping in each source
+  (every future source would have to remember).
+- Previews and journey walks still draw screens with whatever they bind: `reads` holds the tools that answer rows,
+  not the screens a job is shaping, and a preview is the pod's own picture of the owner's screen.
+
 Not done: grants chosen on the OAuth consent page (the CLI makes them); a grant for row values (which fields).

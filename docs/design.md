@@ -420,8 +420,9 @@ Pod tokens are stored as hashes. Upstream tokens and jack secrets are sealed at 
 only at the access its owner gave it: read, edit, or outward (sharing publicly, starting agent runs, reaching new
 hosts, deleting). Every tool is checked against it before it runs, and rows the agent writes below outward count as
 the agent's, not the owner's (decision `mcp-access-levels`). A credential for an unattended job can carry a
-**grant** as well: its exact tools, the collections whose rows it may write, where it may delete, and screens it may
-never change. The pod enforces it inside every write transaction (decision `mcp-grants`).
+**grant** as well: its exact tools, the collections whose rows it may write, where it may delete, screens it may
+never change, the collections it may read, and whether its answers withhold what others wrote. The pod enforces it
+inside every write transaction and on every read tool (decision `mcp-grants`).
 
 #### Outbound requests
 

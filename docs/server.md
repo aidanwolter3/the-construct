@@ -238,7 +238,11 @@ does when it finishes.
   credential a narrower scope on top of its level, for an unattended job (docs/anticipate.md). A grant names:
   - `tools`;
   - `rows` and `deletes`: the data sets (collections) it may write rows of and delete in (or `no_delete`);
-  - `protected_names`.
+  - `protected_names`;
+  - `reads`: the collections whose rows its tools may answer (and those it writes); with a list, `sample_data` is
+    refused;
+  - `strip_untrusted` (and `keep_from`, writers whose values stay): values in the `untrusted` envelope come back
+    as `withheld: written by others`, except numbers, true or false, dates and times.
 
   The host stores it with the credential, sends it as `x-construct-mcp-grant` (dropped from any request that comes
   in) and keeps it when Connected apps changes the access. The pod refuses any tool, row write or edit group
