@@ -14,6 +14,7 @@ mod inbox;
 mod lookup;
 mod mcp_fillers;
 mod primitives;
+mod provenance;
 mod reminders;
 mod render;
 mod research;
