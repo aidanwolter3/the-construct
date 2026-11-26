@@ -441,7 +441,9 @@ so change a site with `set_filler` and its id rather than removing and adding it
   for `url_field`) fills on each run but skips the model when the page's text didn't change (decision
   [`web-and-agent-modules`](decisions/web-and-agent-modules.md)). A fill takes at most 20 rows; rows never filled from
   their current URL or query go first, then the ones filled longest ago, so repeated fills (and refreshes) reach
-  every row.
+  every row. A URL Claude wrote below `outward` access is fetched only from a host the filler already reaches (one
+  a person's row names, or one it filled a row from): reaching a new host is outward, so such a row waits and
+  `collections_status` says so (decision [`mcp-access-levels`](decisions/mcp-access-levels.md)).
 - **Image search:** a `query_field` filler with `extract: "images"` searches each row's text for pictures and fills
   `map` from the first image result: `{"image_url": "image"}`, where a field takes `image` (the picture's URL),
   `thumbnail`, `page` (the page it is on), `title` or `source` (the site); of the first five results, the first

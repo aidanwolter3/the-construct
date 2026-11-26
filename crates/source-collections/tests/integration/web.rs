@@ -283,6 +283,109 @@ async fn a_blocked_or_empty_page_never_erases_a_rows_values() {
     }
 }
 
+/// Decision `mcp-access-levels`: reaching a new host is outward, so a URL
+/// Claude wrote below outward access is fetched only from a host the filler
+/// already reaches; the row waits, and the status says why.
+#[tokio::test]
+async fn a_url_claude_wrote_is_fetched_only_from_a_host_already_reached() {
+    let site = Arc::new(Site::default());
+    *site.page.lock().unwrap() = "ok".into();
+    let base = serve(site.clone()).await;
+    // The same fake site under another host name.
+    let other = base.replace("127.0.0.1", "localhost");
+    let fake = Arc::new(Fake::default());
+    let pod = pod_with(fake.clone());
+    ok(
+        &pod,
+        "define_collection",
+        json!({"name": "wishlist", "fields": [
+        {"name": "url", "type": "text"},
+        {"name": "price", "type": "number", "optional": true}],
+        "fillers": [{"kind": "fetch", "url_field": "url", "extract": "llm", "fields": ["price"]}]}),
+    )
+    .await;
+    settle(&pod, "wishlist").await;
+    let d = ok(
+        &pod,
+        "describe_collection",
+        json!({"collection": "wishlist"}),
+    )
+    .await;
+    let url_id = d["definition"]["fields"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|f| f["name"] == "url")
+        .unwrap()["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    // A row whose URL Claude wrote below outward access, recorded in the
+    // same write as an MCP call's (no fill starts from it).
+    let by_claude = |url: String| {
+        let pod = pod.clone();
+        let url_id = url_id.clone();
+        async move {
+            pod.blocking(move |s| {
+                s.transaction(|tx| {
+                    let id = format!("claude-{}", url.len());
+                    let row = source_collections::db::Row {
+                        id: id.clone(),
+                        client_id: None,
+                        values: [(url_id.clone(), json!(url))].into_iter().collect(),
+                        created_at: 1,
+                        updated_at: 1,
+                        deleted_at: None,
+                        filler: None,
+                    };
+                    source_collections::db::insert_row(tx, "wishlist", &row)?;
+                    source_collections::db::note_field_writer(
+                        tx,
+                        "wishlist",
+                        &id,
+                        &url_id,
+                        source_collections::db::WRITER_CLAUDE,
+                        1,
+                    )
+                })
+            })
+            .await
+            .unwrap();
+        }
+    };
+    let price_of =
+        |rows: &[Value], url: &str| rows.iter().find(|r| r["url"] == url).unwrap()["price"].clone();
+    let f = filler_of(&pod, "wishlist").await;
+
+    // Only Claude's row, on a host nothing reached: held, not fetched.
+    let new_host = format!("{other}/page");
+    by_claude(new_host.clone()).await;
+    let out = fill::fill(&pod, "wishlist", &f, false).await;
+    assert!(matches!(out, Outcome::Filled { items: 0, .. }), "{out:?}");
+    assert_eq!(*fake.pages.lock().unwrap(), 0);
+    let status = ok(
+        &pod,
+        "collections_status",
+        json!({"collection": "wishlist"}),
+    )
+    .await;
+    assert!(status.to_string().contains("rows wait"), "{status}");
+
+    // A person's row on the first host is fetched; then Claude's row on that
+    // host is too, and the one on the new host still waits.
+    let owners = format!("{base}/page");
+    create(&pod, "wishlist", json!({ "url": owners })).await;
+    let claudes = format!("{base}/page?again");
+    by_claude(claudes.clone()).await;
+    settle(&pod, "wishlist").await;
+    fill::fill(&pod, "wishlist", &f, false).await;
+    let now = rows(&pod, "wishlist").await;
+    assert_eq!(price_of(&now, &owners), 5.95);
+    assert_eq!(price_of(&now, &claudes), 5.95);
+    assert!(price_of(&now, &new_host).is_null(), "{now:?}");
+    assert_eq!(*fake.pages.lock().unwrap(), 2);
+}
+
 #[tokio::test]
 async fn query_rows_are_filled_once_from_the_pods_own_search() {
     let site = Arc::new(Site::default());
