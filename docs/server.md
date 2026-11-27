@@ -361,11 +361,13 @@ it; decision `protected-paths-and-environments`). Make it a deploy-only token (`
 the-construct-pod`), not an org or SSH-capable one; the fake Pixelfed's `FLY_API_TOKEN_FAKE` lives in the same
 Environment. Each deploy passes the ISO week as `CHROMIUM_REFRESH`, so the image's Chromium and
 Debian packages are reinstalled at least weekly rather than kept in a cached layer (decision `browser-sandbox`). The
-web client's build waits for the server's: run at once on Fly's remote builder, the two release builds ran it out of
-memory. By hand, from the repository root:
+web client's build waits for the server's, so the two release builds never run at once. CI builds the image on its
+own runner (`--local-only`, 4 cores and 16 GB) and pushes it to Fly's registry: Fly's remote builder ran out of
+memory compiling the server (decision `deploy-builds-on-the-runner`). By hand, from the repository root of an x86-64
+Linux machine with Docker (elsewhere `--remote-only` still works, when the builder has the memory):
 
 ```bash
-flyctl deploy . --config deploy/fly/pod.toml --dockerfile deploy/pod.Dockerfile --remote-only \
+flyctl deploy . --config deploy/fly/pod.toml --dockerfile deploy/pod.Dockerfile --local-only \
   --build-arg CHROMIUM_REFRESH="$(date -u +%G-W%V)" --build-arg CONSTRUCT_BUILD="$(scripts/build_id.sh)"
 ```
 
