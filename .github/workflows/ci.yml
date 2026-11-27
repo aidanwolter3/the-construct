@@ -351,9 +351,11 @@ jobs:
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN_POD }}
         # The ISO week: Chromium's apt layer is rebuilt once a week (decision `browser-sandbox`). The build id:
-        # the one the server and its web client report (decision `device-versions`).
+        # the one the server and its web client report (decision `device-versions`). Built here on the runner
+        # (16 GB) and pushed, not on Fly's remote builder, which ran out of memory compiling the server (decision
+        # `deploy-builds-on-the-runner`).
         run: >-
-          flyctl deploy . --config deploy/fly/pod.toml --dockerfile deploy/pod.Dockerfile --remote-only --ha=false
+          flyctl deploy . --config deploy/fly/pod.toml --dockerfile deploy/pod.Dockerfile --local-only --ha=false
           --build-arg CHROMIUM_REFRESH="$(date -u +%G-W%V)"
           --build-arg CONSTRUCT_BUILD="$(scripts/build_id.sh)"
       - name: Smoke test
