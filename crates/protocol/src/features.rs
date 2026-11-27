@@ -461,6 +461,22 @@ const ICONS_6: [&str; 2] = ["flame", "timer"];
 /// Icons added in schema 9 (D51).
 const ICONS_9: [&str; 3] = ["add_photo", "add", "refresh"];
 
+/// Whether a mutation sets a field to a tapped row's or the route's value:
+/// a `value_expr` that is exactly `$item.<field>` or `$route.<name>`
+/// (feature `mutation_item_value`; older clients leave those unbound).
+fn binds_item_value(value_expr: &str, also: &[crate::intent::FieldUpdate]) -> bool {
+    let exact = |e: &str| {
+        let e = e.trim();
+        e.strip_prefix("$item.")
+            .or_else(|| e.strip_prefix("$route."))
+            .is_some_and(|n| {
+                n.starts_with(|c: char| c.is_ascii_alphabetic() || c == '_')
+                    && n.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+            })
+    };
+    exact(value_expr) || also.iter().any(|u| exact(&u.value_expr))
+}
+
 /// The features one action intent uses; see [`node_features`].
 fn intent_features(intent: &ActionIntent, out: &mut BTreeSet<&'static str>) {
     let mut add = |f: &'static str| {
@@ -498,7 +514,14 @@ fn intent_features(intent: &ActionIntent, out: &mut BTreeSet<&'static str>) {
         ActionIntent::NavigatePopTo { .. } | ActionIntent::NavigatePopToRoot => {
             add(feature::NAVIGATE_POP_TO)
         }
-        ActionIntent::OptimisticMutate { .. } => add(feature::OPTIMISTIC_MUTATION),
+        ActionIntent::OptimisticMutate {
+            value_expr, also, ..
+        } => {
+            add(feature::OPTIMISTIC_MUTATION);
+            if binds_item_value(value_expr, also) {
+                add(feature::MUTATION_ITEM_VALUE);
+            }
+        }
         ActionIntent::AuthLogin { .. } => add(feature::AUTH_LOGIN),
         ActionIntent::OpenSession { .. } => add(feature::AUTH_SESSION),
         ActionIntent::LoadData { .. } => add(feature::LOAD_DATA),
@@ -521,8 +544,16 @@ fn intent_features(intent: &ActionIntent, out: &mut BTreeSet<&'static str>) {
         }
         ActionIntent::Sequence { .. } => add(feature::ACTION_SEQUENCE),
         ActionIntent::Confirm { .. } => add(feature::ACTION_CONFIRM),
-        ActionIntent::LocalSet { keep, .. } => {
+        ActionIntent::LocalSet {
+            keep,
+            value_expr,
+            also,
+            ..
+        } => {
             add(feature::LOCAL_SET);
+            if binds_item_value(value_expr, also) {
+                add(feature::MUTATION_ITEM_VALUE);
+            }
             if *keep {
                 add(feature::LOCAL_KEEP);
             }

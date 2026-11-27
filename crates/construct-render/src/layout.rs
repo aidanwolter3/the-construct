@@ -1300,13 +1300,15 @@ fn node_type(n: &UiNode) -> String {
 }
 
 /// An intent's JSON with `$item.` and `$route.` tokens and entity bindings
-/// bound (`value_expr` is left for the engine, as the shared UI does).
+/// bound (`value_expr` is left for the engine, unless it is exactly one
+/// `$item.`/`$route.` value: `bound_value`).
 /// `$form.`, `$form?.` and `$nonce` stay: the session binds them when the
 /// tap runs (`Session::bind_form`), with the form as it is then.
 fn bind_intent(intent: &ActionIntent, ctx: &Ctx) -> Value {
     fn walk(v: &Value, ctx: &Ctx, key: Option<&str>) -> Value {
         match v {
-            Value::String(s) if key != Some("value_expr") => Value::String(
+            Value::String(s) if key == Some("value_expr") => Value::String(bound_value(s, ctx)),
+            Value::String(s) => Value::String(
                 ctx.text(&s.replace("$form.", "\u{1}form."))
                     .replace('\u{1}', "$"),
             ),
@@ -1324,6 +1326,32 @@ fn bind_intent(intent: &ActionIntent, ctx: &Ctx) -> Value {
         ctx,
         None,
     )
+}
+
+/// A mutation's `value_expr` (feature `mutation_item_value`): exactly
+/// `$item.<field>` or `$route.<name>` becomes that value as a JSON literal,
+/// so a tap can set a field to the tapped row's value (a picked recipe's id
+/// and name) at once. Anything else is left for the engine, which reads it
+/// against the entity being changed.
+fn bound_value(expr: &str, ctx: &Ctx) -> String {
+    let e = expr.trim();
+    let name_ok = |n: &str| {
+        n.starts_with(|c: char| c.is_ascii_alphabetic() || c == '_')
+            && n.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+    };
+    let v = if e.strip_prefix("$item.").is_some_and(name_ok) {
+        if ctx.item.is_none() {
+            return expr.to_owned();
+        }
+        ctx.value(e)
+    } else if let Some(n) = e.strip_prefix("$route.").filter(|n| name_ok(n)) {
+        ctx.route
+            .get(n)
+            .map_or(Value::Null, |r| Value::String(r.clone()))
+    } else {
+        return expr.to_owned();
+    };
+    serde_json::to_string(&v).unwrap_or_else(|_| "null".to_owned())
 }
 
 /// The average colour a blurhash starts with (its DC component), for an

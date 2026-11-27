@@ -114,6 +114,42 @@ fn a_checkbox_changes_at_once_and_is_sent() {
     assert_eq!(s.data.entities["x://g/a"].get_bool("done"), Some(true));
 }
 
+/// A picker that sets another entity's fields to the tapped row's values
+/// (feature `mutation_item_value`): the dinner sheet's pick of a recipe.
+#[test]
+fn a_pick_sets_the_tapped_rows_values_at_once() {
+    let root = json!({ "type": "core://List", "query_key": "meals", "item_template": {
+        "type": "core://Tappable", "tag": "pick_$item.id", "content_description": "Pick",
+        "content": { "type": "core://Text", "style": "Body", "value_expr": "$item.name" },
+        "on_click": { "intent": "action.mutation.optimistic", "entity_uri": "x://days/today",
+            "field": "dinner_skipped", "value_expr": "false",
+            "also": [ { "field": "dinner_meal", "value_expr": "$item.id" },
+                      { "field": "dinner_name", "value_expr": " $item.name " },
+                      { "field": "day", "value_expr": "$route.day" },
+                      { "field": "flipped", "value_expr": "!entity.flipped" } ],
+            "endpoint": "/v1/days/update",
+            "payload": { "dinner_meal": "$item.id", "dinner_skipped": false, "id": "today" } } } });
+    let d = json!({ "entities": {
+            "x://meals/m1": { "id": "m1", "name": "Sheet-pan \"chicken\"" },
+            "x://days/today": { "id": "today", "dinner_skipped": true, "dinner_meal": "",
+                                "dinner_name": "", "flipped": false } },
+        "queries": { "meals": ["x://meals/m1"] } });
+    let (mut s, writes) = session(root, d, false);
+    s.tap(&Target::Id("pick_m1".into())).unwrap();
+    let day = &s.data.entities["x://days/today"];
+    assert_eq!(day.get_bool("dinner_skipped"), Some(false));
+    assert_eq!(day.get_str("dinner_meal"), Some("m1"));
+    // A value with quotes stays the value, not an expression.
+    assert_eq!(day.get_str("dinner_name"), Some("Sheet-pan \"chicken\""));
+    // No route value: null. Other expressions still read the entity.
+    assert_eq!(day.0.get("day"), Some(&Value::Null));
+    assert_eq!(day.get_bool("flipped"), Some(true));
+    assert_eq!(
+        writes.lock().unwrap()[0].body,
+        json!({ "dinner_meal": "m1", "dinner_skipped": false, "id": "today" })
+    );
+}
+
 #[test]
 fn a_refused_change_is_undone() {
     let (mut s, _) = session(groceries(), grocery_data(), true);
