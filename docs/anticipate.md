@@ -104,7 +104,8 @@ That narrows the risk; it doesn't remove it.
   A row with `kind` `complete` ends each Sense run.
 - `anticipations`: what Today shows. `kind` is one of these:
   - `fixed`: a change it made, with Undo and Redo (and Keep while it is a trial);
-  - `proposal`: an idea, with Apply and Not now;
+  - `proposal`: an idea, with Apply and Not now. Apply keeps the card up with Undo and Got it, as on a `fixed`
+    change, so the owner can take it back from Today;
   - `ask`: a question, with the two answers `choice_a` and `choice_b`;
   - `reminder`: something good to know, with Got it;
   - `todo`: a task for the day, ticked off with `done`;
@@ -133,7 +134,7 @@ That narrows the risk; it doesn't remove it.
     `outcome`:
     - `approved`: Do it on a question (`choice_a`), Apply, Keep, Redo, or Got it on an applied change;
     - `denied`: the other answer (`choice_b`) or Not now;
-    - `undone`: Undo;
+    - `undone`: Undo (Got it after an Undo leaves it `undone`);
     - `acknowledged`: Got it on a reminder.
 
     A card past `expires` with no `outcome` was ignored. Cards are never deleted, so the record stays whole.
