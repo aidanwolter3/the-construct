@@ -87,3 +87,8 @@ Not done: grants chosen on the OAuth consent page (the CLI makes them); a grant 
 Since then (2026-11-26, step 5): every call a credential makes is logged by the pod under the credential's name,
 with whether its grant or access refused it, a granted credential refused 3 times in an hour raises a Runner
 warning, and the owner can undo a morning's background work in one step (decision [`mcp-call-log`](mcp-call-log.md)).
+
+Since then (2026-11-27, step 6): Sense is no longer a Claude session but the Foreman's Sense program (its decision
+`sense-program`): code fetches, checks and writes, and a model with no tools reads each stranger's message alone and
+plans needs from trusted facts apart from outside ones. Its grant narrows to the two calls it makes,
+`export_collection` and `add_row` ([anticipate.md](../anticipate.md)).
