@@ -79,6 +79,10 @@
     "category": "container",
     "use_when": "Rows in one rounded card with hairlines between them: a list, a menu, a settings group. The usual home of rows."
   },
+  "hairline": {
+    "category": "primitive",
+    "use_when": "A 1 dp line in the card border colour between rows you draw yourself or under a heading. For a list item with a divider under it use @core/divided_item."
+  },
   "header_bar": {
     "category": "scaffold",
     "use_when": "A root page's header: a title on the left, icon buttons on the right, no Back."

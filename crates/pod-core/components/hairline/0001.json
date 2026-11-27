@@ -1,0 +1,35 @@
+{
+  "note": "First version: the 1 dp line in the card border colour that layouts drew under rows as a Box over an empty Spacer",
+  "component": {
+    "doc": "A 1 dp line across its parent, in the card border colour unless color says otherwise: between the rows of a list you draw yourself, under a heading, or between the sections of a card. It is softer than core://Divider, which draws in the theme's outline colour. For a list item with a divider under it use @core/divided_item.",
+    "params": [
+      {
+        "name": "color",
+        "type": "text",
+        "doc": "Its colour (#RRGGBB or a binding such as ${local://theme#card_border}).",
+        "default": "${local://theme#card_border}"
+      }
+    ],
+    "template": {
+      "type": "core://Box",
+      "background": "$arg.color",
+      "height_dp": 1,
+      "content": {
+        "type": "core://Spacer",
+        "size_dp": 0
+      }
+    },
+    "examples": [
+      {
+        "args": {},
+        "note": "under each row of a to-do list, in a Column with the row"
+      },
+      {
+        "args": {
+          "color": "${local://theme#accent}"
+        },
+        "note": "an accent rule under a section's heading"
+      }
+    ]
+  }
+}

@@ -370,6 +370,7 @@ The server components:
 | `@core/loading_spinner` | `size` | A small spinner (16 dp by default) shown only while the screen's data loads (`local://screen#loading`): in a header you draw yourself, among its actions or beside its title. `@core/page_header` draws one with `loading`. |
 | `@core/section_header` | `text`, `style`, `padding_v`, `divider` | A section's padded heading, optionally under a divider. |
 | `@core/list_row` | `title`, `trailing`, `padding_v` | A row with a title and a quiet trailing text. |
+| `@core/hairline` | `color` | A 1 dp line across its parent in the card border colour (or `color`): between rows you draw yourself, or under a heading. Softer than `core://Divider`, which draws in the theme's outline colour. |
 | `@core/divided_item` | `inset`; children | A list item set off from the next: its children in a column with a divider under them, edge to edge or inset by `inset`. |
 | `@core/footer_bar` | paddings; children | A bar along the bottom of a page: a divider, then its children on one centred row (a count, a Spacer, a button). |
 | `@core/card` | `spacing`, `border`, `background`, `corner`; children | A bordered, rounded card of its children in a column; `corner` defaults to 14. |
