@@ -145,6 +145,12 @@ evaluated against the entity before the change: a JSON literal, `entity.<field>`
 `entity.<field> ± N`, and `cond ? a : b` with those as branches (D4). For example
 `entity.is_liked ? entity.like_count - 1 : entity.like_count + 1`.
 
+A mutation expression that is exactly `$item.<field>` or `$route.<name>` is the exception (feature
+`mutation_item_value`, decision `mutation-item-value`): the client binds it to that value, as a JSON literal,
+when the tap runs. A picker sets the entity it changes to the tapped row's values with it, so the screen behind
+shows the pick at once, before the pod answers: Dinner tonight's recipe row sets the day's `dinner_meal` to
+`$item.id` and `dinner_name` to `$item.name` in `also`. Older clients get the layout's previous version.
+
 ## Nodes
 
 | Node | Fields | Notes |

@@ -745,6 +745,23 @@ fn sequences_and_local_sets_round_trip_and_need_their_features() {
     };
     assert!(needs(&kept).contains(&protocol::feature::LOCAL_KEEP));
     assert!(!needs(&steps[1]).contains(&protocol::feature::LOCAL_KEEP));
+    // A value that is exactly `$item.<f>` or `$route.<n>`, primary or in
+    // `also`, needs `mutation_item_value`; one inside an expression doesn't.
+    let pick: ActionIntent = serde_json::from_value(json!({"intent": "action.mutation.optimistic",
+        "entity_uri": "collections://days/$route.day", "field": "dinner_skipped",
+        "value_expr": "false", "also": [{"field": "dinner_meal", "value_expr": "$item.id"}],
+        "endpoint": "/v1/collections/days/update", "payload": {"dinner_meal": "$item.id"}}))
+    .unwrap();
+    assert!(needs(&pick).contains(&protocol::feature::MUTATION_ITEM_VALUE));
+    let routed: ActionIntent = serde_json::from_value(json!({"intent": "action.local.set",
+        "entity_uri": "$item.uri", "field": "day", "value_expr": " $route.day "}))
+    .unwrap();
+    assert!(needs(&routed).contains(&protocol::feature::MUTATION_ITEM_VALUE));
+    assert!(!needs(&kept).contains(&protocol::feature::MUTATION_ITEM_VALUE));
+    let toggle: ActionIntent = serde_json::from_value(json!({"intent": "action.local.set",
+        "entity_uri": "$item.uri", "field": "done", "value_expr": "!entity.done"}))
+    .unwrap();
+    assert!(!needs(&toggle).contains(&protocol::feature::MUTATION_ITEM_VALUE));
     let button = |on_click: &ActionIntent| -> UiNode {
         serde_json::from_value(json!({
             "type": "core://IconButton", "icon": "add", "content_description": "Add",
