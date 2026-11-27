@@ -40,6 +40,11 @@ pub const HOME: &str = "home";
 /// How long opening a layout or a data path the engine has never had waits
 /// for the pod.
 const LOAD_WAIT: Duration = Duration::from_secs(20);
+/// How long a tap opening a layout the engine doesn't have waits for it
+/// before the layout opens on a page saying it is loading
+/// ([`crate::interact::stand_in::opening`]): long enough for a quick pod,
+/// short enough not to read as a frozen screen.
+const OPEN_WAIT: Duration = Duration::from_millis(300);
 /// How long a sign-in (`action.auth.session`) waits for the pod.
 const SIGN_IN_WAIT: Duration = Duration::from_secs(25);
 /// Notifications listed for the inbox.
@@ -87,6 +92,9 @@ struct Shared {
     /// The layouts opened (their JSON, by id), for the device data they
     /// bind.
     needs: Mutex<HashMap<String, String>>,
+    /// The layouts open on a page saying they are loading: when one fails,
+    /// [`observe`] sends the page saying so in its place.
+    pending: Mutex<std::collections::HashSet<String>>,
     /// The device data is being loaded again; `again`: once more after.
     loading: AtomicBool,
     again: AtomicBool,
@@ -474,6 +482,7 @@ impl PodEngine {
     pub fn session(&self, viewport: Viewport) -> Session {
         // What came in before is in the snapshot too.
         lock(&self.shared.news).take();
+        lock(&self.shared.pending).clear();
         let snap = self.engine.snapshot();
         // The session starts from this snapshot: later ones send changes.
         {
@@ -550,6 +559,30 @@ impl PodEngine {
         }
     }
 
+    /// Layout `id` once the engine has it (or failed to load it), waiting at
+    /// most `wait`: `None` when it is still on its way. The layout alone
+    /// (`layout_now`), not a snapshot: a snapshot serializes the engine's
+    /// whole state, and this runs on the tap.
+    fn layout_within(&self, id: &str, wait: Duration) -> Option<Result<UiNode, String>> {
+        let until = Instant::now() + wait;
+        loop {
+            let now = self.engine.layout_now(id);
+            if let Some(root) = now.root {
+                return Some(Ok(root));
+            }
+            if now.gone {
+                return Some(Err(client_core::LOAD_NOT_FOUND.to_owned()));
+            }
+            if let Some(e) = now.error {
+                return Some(Err(e));
+            }
+            if Instant::now() >= until {
+                return None;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    }
+
     /// Waits until `done` answers for a snapshot, or `wait` passes.
     fn wait_for<T>(
         &self,
@@ -599,6 +632,7 @@ fn observe(engine: &Weak<ConstructEngine>, shared: &Arc<Shared>, base: &str, sna
         // the same JSON: the session has to be told.
         seen.layouts
             .retain(|id, _| layouts.get(id).is_some_and(|l| !l["workspace"].is_null()));
+        stand_ins(shared, snap, &layouts, &mut c.layouts);
         for (id, l) in layouts {
             let text = l["workspace"].to_string();
             if l["workspace"].is_null() || seen.layouts.get(&id) == Some(&text) {
@@ -648,6 +682,39 @@ fn observe(engine: &Weak<ConstructEngine>, shared: &Arc<Shared>, base: &str, sna
     if reload {
         reload_device(engine.clone(), shared.clone());
     }
+}
+
+/// The layouts open on a page saying they are loading that came in (their
+/// root is in `c` already) or failed: a failed one gets the page saying so.
+fn stand_ins(
+    shared: &Shared,
+    snap: &StateSnapshot,
+    layouts: &HashMap<String, Value>,
+    out: &mut Vec<(String, UiNode)>,
+) {
+    let mut pending = lock(&shared.pending);
+    if pending.is_empty() {
+        return;
+    }
+    let loads: HashMap<String, Value> = serde_json::from_str(&snap.loads_json).unwrap_or_default();
+    pending.retain(|id| {
+        let l = layouts.get(id).unwrap_or(&Value::Null);
+        if !l["workspace"].is_null() {
+            return false;
+        }
+        let load = loads
+            .get(&format!("{}{id}", client_core::LAYOUT_LOAD_PREFIX))
+            .unwrap_or(&Value::Null);
+        let error = if l["gone"] == true {
+            client_core::LOAD_NOT_FOUND
+        } else if load["state"] == "error" {
+            load["error"].as_str().unwrap_or(client_core::LOAD_OFFLINE)
+        } else {
+            return true;
+        };
+        out.push((id.clone(), crate::interact::stand_in::failed(id, error)));
+        false
+    });
 }
 
 /// What the open layouts bind of the notifications, channels and sign-ins,
@@ -745,7 +812,9 @@ const MAX_KEPT: usize = 200;
 impl Loader for PodEngine {
     /// The engine's copy at once when it has one (its fetch goes on in the
     /// background and comes in through [`Loader::changes`]); else waits for
-    /// the pod. Only the layout: the session already has the engine's
+    /// the pod a moment ([`OPEN_WAIT`]; home, [`LOAD_WAIT`]) and then answers
+    /// the page saying it is loading, which the layout replaces when it
+    /// comes in. Only the layout: the session already has the engine's
     /// entities and device data (from its first snapshot and every change
     /// since). Snapshots and the whole cache parsed again on the tap cost a
     /// phone about 50 ms before the screen could open.
@@ -753,26 +822,30 @@ impl Loader for PodEngine {
         if id != HOME {
             self.engine.open_layout(id);
         }
-        // The layout alone (`layout_now`), not a snapshot: a snapshot
-        // serializes the engine's whole state, and this runs on the tap.
-        let until = Instant::now() + LOAD_WAIT;
-        let got = loop {
-            let now = self.engine.layout_now(id);
-            if let Some(root) = now.root {
-                break Ok(root);
+        let wait = if id == HOME { LOAD_WAIT } else { OPEN_WAIT };
+        let root = match self.layout_within(id, wait) {
+            Some(got) => got?,
+            None if id == HOME => return Err(client_core::LOAD_OFFLINE.to_owned()),
+            None => {
+                // Not here yet: the page saying it is loading, which the
+                // layout replaces when it comes in (or the page saying it
+                // failed). Noted before looking once more, as the snapshot
+                // that brings it may have come and gone while it wasn't.
+                lock(&self.shared.pending).insert(id.to_owned());
+                match self.layout_within(id, Duration::ZERO) {
+                    Some(got) => {
+                        lock(&self.shared.pending).remove(id);
+                        got?
+                    }
+                    None => {
+                        return Ok((
+                            crate::interact::stand_in::opening(id),
+                            DataBundle::default(),
+                        ));
+                    }
+                }
             }
-            if now.gone {
-                break Err(client_core::LOAD_NOT_FOUND.to_owned());
-            }
-            if let Some(e) = now.error {
-                break Err(e);
-            }
-            if Instant::now() >= until {
-                break Err(client_core::LOAD_OFFLINE.to_owned());
-            }
-            std::thread::sleep(Duration::from_millis(20));
         };
-        let root = got?;
         self.needs(id, &root);
         Ok((root, DataBundle::default()))
     }
