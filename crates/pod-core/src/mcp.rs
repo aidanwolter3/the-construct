@@ -1695,7 +1695,7 @@ fn vocabulary_with(components: Vec<Value>) -> Value {
             { "intent": "action.navigation.pop_to_root", "fields": "", "doc": "Back to home." },
             { "intent": "action.navigation.back", "fields": "", "doc": "Close the screen." },
             { "intent": "action.mutation.optimistic", "fields": "entity_uri, field, value_expr, endpoint, payload, also?: [{field, value_expr}], rollback_value?",
-              "doc": "Change a field at once and POST payload to an action endpoint ($value is the new value); a refusal restores each field's value from before (rollback_value only when the field had none; leave it out)." },
+              "doc": "Change a field at once and POST payload to an action endpoint ($value is the new value; a value_expr of exactly $item.<field> or $route.<name> sets the tapped row's value, e.g. a picker's also [{field: name, value_expr: $item.name}] so the screen behind shows the pick at once); a refusal restores each field's value from before (rollback_value only when the field had none; leave it out)." },
             { "intent": "action.mutation.create", "fields": "query_key, entity_uri (with $nonce), entity, endpoint, payload, position?, attachments?",
               "doc": "Add an item at once and POST it to an action endpoint. To close the screen after it (a compose screen's Send), put it in an action.sequence followed by action.navigation.back." },
             { "intent": "action.data.load", "fields": "path", "doc": "Load a data path (more data into the store)." },

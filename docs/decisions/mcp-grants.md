@@ -68,7 +68,8 @@ sandbox, the pod's own fetches and the screens others see. Each call widens the 
   expanded) are the only ones a granted call's rows may name (a new address on another host is refused; one the row
   had stays), and the only ones the pod fetches from for the call: `Hosts::admit` (fillers, the agent's fetch,
   search, the page renderer), a web client's requests and their redirects. The limit is a task-local, carried into
-  the fillers, research and computed fields the call starts; a filler's later scheduled run isn't the call's.
+  the fillers, research, computed fields and taste fit checks the call starts (a queued fit check keeps the limit of
+  the call that queued it); a filler's later scheduled run isn't the call's.
 - **The host check runs at stage.** The edit groups' check now reads every address in a value, whichever field
   holds it (an image's `url`, a link's, a Markdown link in a text), and under a grant `stage_edit_group` refuses a
   group that reaches a host its screen didn't (`new_host`), so a staged group is never previewed or walked with it.

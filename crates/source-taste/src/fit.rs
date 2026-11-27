@@ -978,9 +978,13 @@ pub async fn read_chart(
 #[derive(Default)]
 struct Queue(std::sync::Mutex<QueueState>);
 
+/// A scoped credential's fetch limit (decision `mcp-grants`), kept with
+/// each piece its call queued, so the check is held to it.
+type Limit = Option<std::sync::Arc<std::collections::BTreeSet<String>>>;
+
 #[derive(Default)]
 struct QueueState {
-    waiting: VecDeque<Value>,
+    waiting: VecDeque<(Value, Limit)>,
     queued: HashSet<String>,
     running: bool,
 }
@@ -1001,7 +1005,8 @@ fn able(pod: &Pod, a: &crate::TasteAdapter) -> bool {
 
 /// Check `items` that are garments with targets and not checked lately,
 /// in the background (`first`: ahead of those already waiting); each
-/// card's entity is reloaded once its check is kept.
+/// card's entity is reloaded once its check is kept. A check queued by a
+/// scoped credential's call fetches only what that call may.
 pub fn schedule(pod: &Pod, items: Vec<Value>, first: bool) {
     let Some(a) = pod.adapter::<crate::TasteAdapter>() else {
         return;
@@ -1010,6 +1015,7 @@ pub fn schedule(pod: &Pod, items: Vec<Value>, first: bool) {
         return;
     }
     let pod = pod.clone();
+    let limit = pod_core::grant::fetch_limit();
     tokio::spawn(async move {
         let ids: Vec<String> = items
             .iter()
@@ -1036,12 +1042,13 @@ pub fn schedule(pod: &Pod, items: Vec<Value>, first: bool) {
         let q = pod.local::<Queue>();
         let start = {
             let mut st = q.0.lock().unwrap_or_else(|e| e.into_inner());
-            let mut fresh: Vec<Value> = wanted
+            let mut fresh: Vec<(Value, Limit)> = wanted
                 .into_iter()
                 .filter(|v| {
                     let id = id_of(v).unwrap_or("").to_owned();
                     st.queued.insert(id)
                 })
+                .map(|v| (v, limit.clone()))
                 .collect();
             if first {
                 fresh.reverse();
@@ -1076,11 +1083,11 @@ async fn run(pod: Pod) {
                 }
             }
         };
-        let Some(v) = next else {
+        let Some((v, limit)) = next else {
             return;
         };
         let id = id_of(&v).unwrap_or("").to_owned();
-        check(&pod, &v).await;
+        pod_core::grant::with_fetch_limit(limit, check(&pod, &v)).await;
         q.0.lock()
             .unwrap_or_else(|e| e.into_inner())
             .queued
