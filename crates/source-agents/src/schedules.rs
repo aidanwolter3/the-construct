@@ -315,6 +315,19 @@ pub async fn tick(pod: &Pod, clients: &Clients, runner: Option<&Runner>, now: i6
             changed = true;
             continue;
         }
+        // Paused since this pass read it (Pause background agents, or a
+        // pause while a time fell due): what waits is dropped, not sent.
+        let id = s.id.clone();
+        let on = pod
+            .blocking(move |st| Ok(db::schedule(st, &id)?.is_some_and(|s| s.enabled)))
+            .await
+            .unwrap_or(false);
+        if !on {
+            let id = s.id.clone();
+            let _ = pod.blocking(move |st| db::drop_pending(st, &id)).await;
+            changed = true;
+            continue;
+        }
         match cap::command(clients, runner, &command(s, &o)).await {
             Ok(answer) => {
                 let run_id = cap::run_id_of(&answer).unwrap_or_default();
@@ -700,10 +713,13 @@ pub async fn set_enabled(pod: &Pod, args: &Value, enabled: bool) -> Result<Value
         s.updated_at = now;
     }
     let id = s.id.clone();
+    let answer = put(pod, s, now).await?;
+    // Dropped after the pause is saved, so a timer pass that read the
+    // schedule as on can't leave a time behind ([`tick`] checks again).
     if !enabled {
         let _ = pod.blocking(move |st| db::drop_pending(st, &id)).await;
     }
-    put(pod, s, now).await
+    Ok(answer)
 }
 
 /// Pause every schedule: the kill switch (decision `mcp-call-log`). Runs
@@ -720,9 +736,9 @@ pub async fn pause_all(pod: &Pod) -> Result<Value, Refusal> {
         s.looked_until = now;
         s.updated_at = now;
         let id = s.id.clone();
-        let _ = pod.blocking(move |st| db::drop_pending(st, &id)).await;
         paused.push(s.name.clone());
         let _ = put(pod, s, now).await?;
+        let _ = pod.blocking(move |st| db::drop_pending(st, &id)).await;
     }
     pod.publish_data_all(crate::NAME);
     Ok(json!({"ok": true, "paused": paused}))
