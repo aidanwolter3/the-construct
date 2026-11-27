@@ -127,7 +127,8 @@ when none is given), a workspace, a model (empty: the sandbox's default), a max 
   `missed`, and a "Missed: <name>" warning says so. A refused one (400, 404, 409) is `refused` and warns too.
 - **Daylight saving:** a local time the clocks skip runs at the first instant after the gap; one they repeat runs
   once, at the first of the two.
-- **Pause** drops what waits to be sent; **Resume**, or a new cron or zone, starts from now, so nothing paused counts
+- **Pause** drops what waits to be sent (after the pause is saved; and the timer checks each time is still on just
+  before sending it, so a time a pass took up as the schedule was paused is dropped, never sent); **Resume**, or a new cron or zone, starts from now, so nothing paused counts
   as missed. **Run now** sends an occurrence named by this minute (`request_id` ending `_now`): a second tap in the
   same minute answers the same run.
 - **Following another** (`after`, decision [`chained-schedules`](decisions/chained-schedules.md)): a schedule can

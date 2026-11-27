@@ -310,6 +310,41 @@ async fn a_paused_schedule_sends_nothing_and_resumes_from_now() {
     assert_eq!(b["schedule"]["enabled"], false);
 }
 
+/// A time a timer pass took up just as the schedule was paused (Pause
+/// background agents) is dropped, never sent.
+#[tokio::test]
+async fn a_time_left_waiting_for_a_paused_schedule_is_never_sent() {
+    let (pod, fake, _) = signed_in().await;
+    let (cron, minute, at) = daily_at(5.minutes());
+    let (s, b) = create(
+        &pod,
+        json!({"name": "stopped", "cron": cron, "timezone": "UTC", "workspace": "sample-repo",
+            "prompt": "p", "enabled": false}),
+    )
+    .await;
+    assert_eq!(s, StatusCode::OK, "{b}");
+    let id = b["schedule"]["id"].as_str().unwrap().to_owned();
+    // As a pass that read the schedule as on leaves it: a time waiting to
+    // be sent, the schedule paused.
+    let o = db::Occurrence {
+        schedule_id: id.clone(),
+        occurrence: minute.clone(),
+        due_at: at.as_millisecond(),
+        state: db::OCC_PENDING.into(),
+        request_id: schedules::request_id(&id, &minute, false),
+        run_id: String::new(),
+        manual: false,
+        updated_at: at.as_millisecond(),
+    };
+    db::take_up(pod.store(), &id, &[o], now().as_millisecond()).unwrap();
+    until("the waiting time is dropped", || async {
+        db::pending(pod.store()).unwrap().is_empty()
+    })
+    .await;
+    tokio::time::sleep(Duration::from_millis(400)).await;
+    assert!(fake.sent("start_run").is_empty());
+}
+
 /// Decision `chained-schedules`: a schedule that follows another starts as
 /// soon as the other's run ends, once for its time (its cron is only the
 /// fallback); a rename carries it along, and following back is refused.
