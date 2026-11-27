@@ -405,6 +405,14 @@ pub async fn search(
     )
 }
 
+/// `POST /api/explore {domain?, query?, like?, unlike?, distance?, spread?,
+/// group?, exclude?, n?, filters?}`: `{items, groups}` (decision
+/// `shopping-kit`).
+pub async fn explore(c: &OutboundClient, s: &Service, body: &Value) -> Result<Value, ApiError> {
+    let u = url(s, &["explore"])?;
+    send(c, s, MAX_BODY, || c.post(u.clone()).json(body)).await
+}
+
 /// `GET /api/likes`.
 pub async fn likes(c: &OutboundClient, s: &Service) -> Result<Vec<Value>, ApiError> {
     items(get(c, s, &["likes"], &[]).await?)

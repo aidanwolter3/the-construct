@@ -87,6 +87,7 @@ pub fn channels_definition() -> Definition {
         actions: Vec::new(),
         views: Vec::new(),
         keep: None,
+        snapshots: Vec::new(),
     }
 }
 
@@ -144,6 +145,7 @@ pub fn notifications_definition(channels: &Definition) -> Definition {
             rows: pod_core::notify::KEEP_COUNT as u32,
             days: (pod_core::notify::KEEP_SECS / 86_400) as u32,
         }),
+        snapshots: Vec::new(),
     };
     // A layout's "Mark all read" and "Clear read" are its own actions.
     let mut defs = model::Defs::default();

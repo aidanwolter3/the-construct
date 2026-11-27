@@ -290,6 +290,22 @@ pub enum Source {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         for_each: Option<ForEach>,
     },
+    /// Pieces from the owner's taste service for each row of another
+    /// collection (decision `shopping-kit`): the row's fields make an
+    /// explore request ([`crate::explore`]), and the pieces it answers are
+    /// that row's rows here. No model and no web: the pod's `taste` jack.
+    Taste {
+        for_each: ForEach,
+        /// A part of the request ([`TASTE_REQUEST`]) -> the explored row's
+        /// field (name).
+        request: BTreeMap<String, String>,
+        /// Field id -> a part of each piece ([`TASTE_PARTS`]).
+        map: BTreeMap<String, String>,
+        /// Field id -> the explored row's field (name) copied onto each of
+        /// its pieces (the need a round is for).
+        #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+        copy: BTreeMap<String, String>,
+    },
 }
 
 /// What a `for_each` agent researches (decision `research-per-row`): each
@@ -389,6 +405,41 @@ pub const RANGE_PARTS: [&str; 10] = [
 
 /// A `range` filler's interval when it names none, minutes.
 pub const RANGE_EVERY: u32 = 60;
+
+/// What a `taste` filler may ask the taste service (decision
+/// `shopping-kit`): each maps to a field of the row it explores for.
+pub const TASTE_REQUEST: [&str; 9] = [
+    "query",
+    "like",
+    "unlike",
+    "exclude",
+    "distance",
+    "spread",
+    "group",
+    "n",
+    "price_max",
+];
+
+/// What each piece a `taste` filler answers holds ([`crate::explore`]).
+pub const TASTE_PARTS: [&str; 17] = [
+    "key",
+    "title",
+    "brand",
+    "image",
+    "thumb",
+    "price",
+    "price_text",
+    "url",
+    "host",
+    "description",
+    "category",
+    "distance",
+    "group",
+    "group_label",
+    "group_ids",
+    "group_size",
+    "group_prices",
+];
 
 /// Most items a `range` filler makes (a fill writes at most this many rows
 /// anyway: [`crate::Caps::fill_items`]).
@@ -573,7 +624,13 @@ impl Filler {
             Source::Agent { .. } => "agent",
             Source::Mcp { .. } => "mcp",
             Source::Range { .. } => "range",
+            Source::Taste { .. } => "taste",
         }
+    }
+
+    /// Whether it asks the taste service for pieces.
+    pub fn is_taste(&self) -> bool {
+        matches!(self.source, Source::Taste { .. })
     }
 
     /// Whether it makes its rows from dates (`range`): no jack, network or
@@ -612,6 +669,16 @@ impl Filler {
             Source::Fetch { map, .. } | Source::Mcp { map, .. } | Source::Range { map, .. } => {
                 map.keys().cloned().collect()
             }
+            Source::Taste {
+                map,
+                copy,
+                for_each,
+                ..
+            } => {
+                let mut out: Vec<String> = map.keys().chain(copy.keys()).cloned().collect();
+                out.push(for_each.link.clone());
+                out
+            }
             Source::Agent {
                 fields, for_each, ..
             } => {
@@ -628,6 +695,7 @@ impl Filler {
     pub fn for_each(&self) -> Option<&ForEach> {
         match &self.source {
             Source::Agent { for_each, .. } => for_each.as_ref(),
+            Source::Taste { for_each, .. } => Some(for_each),
             _ => None,
         }
     }
@@ -657,7 +725,10 @@ impl Filler {
     pub fn url_field(&self) -> Option<&str> {
         match &self.source {
             Source::Fetch { url_field, .. } => url_field.as_deref(),
-            Source::Agent { .. } | Source::Mcp { .. } | Source::Range { .. } => None,
+            Source::Agent { .. }
+            | Source::Mcp { .. }
+            | Source::Range { .. }
+            | Source::Taste { .. } => None,
         }
     }
 
@@ -665,7 +736,10 @@ impl Filler {
     pub fn query_field(&self) -> Option<&str> {
         match &self.source {
             Source::Fetch { query_field, .. } => query_field.as_deref(),
-            Source::Agent { .. } | Source::Mcp { .. } | Source::Range { .. } => None,
+            Source::Agent { .. }
+            | Source::Mcp { .. }
+            | Source::Range { .. }
+            | Source::Taste { .. } => None,
         }
     }
 
@@ -690,7 +764,10 @@ impl Filler {
     pub fn render(&self) -> Option<&Render> {
         match &self.source {
             Source::Fetch { render, .. } => render.as_ref(),
-            Source::Agent { .. } | Source::Mcp { .. } | Source::Range { .. } => None,
+            Source::Agent { .. }
+            | Source::Mcp { .. }
+            | Source::Range { .. }
+            | Source::Taste { .. } => None,
         }
     }
 
@@ -698,7 +775,10 @@ impl Filler {
     pub fn url(&self) -> Option<&str> {
         match &self.source {
             Source::Fetch { url, .. } => url.as_deref(),
-            Source::Agent { .. } | Source::Mcp { .. } | Source::Range { .. } => None,
+            Source::Agent { .. }
+            | Source::Mcp { .. }
+            | Source::Range { .. }
+            | Source::Taste { .. } => None,
         }
     }
 
@@ -730,7 +810,10 @@ impl Filler {
                 }
                 out
             }
-            Source::Agent { .. } | Source::Mcp { .. } | Source::Range { .. } => Vec::new(),
+            Source::Agent { .. }
+            | Source::Mcp { .. }
+            | Source::Range { .. }
+            | Source::Taste { .. } => Vec::new(),
         }
     }
 
@@ -767,7 +850,7 @@ impl Filler {
                 script: String::new(),
                 zone: String::new(),
             }),
-            Source::Agent { .. } => None,
+            Source::Agent { .. } | Source::Taste { .. } => None,
         }
     }
 
@@ -917,6 +1000,21 @@ impl Filler {
                 });
                 if let Some(fe) = for_each {
                     v["for_each"] = fe.describe(def);
+                }
+                v
+            }
+            Source::Taste {
+                for_each,
+                request,
+                map,
+                copy,
+            } => {
+                let mut v = json!({
+                    "kind": "taste", "for_each": for_each.describe(def),
+                    "request": request, "map": names(map),
+                });
+                if !copy.is_empty() {
+                    v["copy"] = names(copy);
                 }
                 v
             }
@@ -1551,9 +1649,10 @@ pub fn parse_in(
                 for_each,
             }
         }
+        "taste" => parse_taste(def, others, o)?,
         other => {
             return Err(format!(
-                "filler.kind '{other}' is \"fetch\" (a recipe), \"mcp\" (an MCP server's tool), \"range\" (a row per day, week or month from today) or \"agent\" (a model with web search)"
+                "filler.kind '{other}' is \"fetch\" (a recipe), \"mcp\" (an MCP server's tool), \"range\" (a row per day, week or month from today), \"agent\" (a model with web search) or \"taste\" (pieces from the taste service for each row of another collection)"
             ));
         }
     };
@@ -1574,6 +1673,7 @@ pub fn parse_in(
         Source::Agent { .. } => "agent",
         Source::Mcp { .. } => "mcp",
         Source::Range { .. } => "range",
+        Source::Taste { .. } => "taste",
         Source::Fetch {
             query_field: Some(_),
             ..
@@ -1614,7 +1714,7 @@ pub fn parse_in(
         Source::Agent {
             for_each: Some(_),
             ..
-        }
+        } | Source::Taste { .. }
     );
     let refresh = match text(o, "refresh") {
         "" => None,
@@ -1723,6 +1823,76 @@ fn names_in(v: Option<&Value>, at: &str, def: &Definition) -> Result<Vec<String>
         }
         Some(_) => Err(format!("{at} is a list of field names")),
     }
+}
+
+/// A `taste` filler: `{for_each: {collection, link, where?}, request:
+/// {part: field}, map: {field: part}, copy?: {field: field}}` (decision
+/// `shopping-kit`).
+fn parse_taste(def: &Definition, others: &Defs, o: &Map<String, Value>) -> Result<Source, String> {
+    let Some(fe) = o.get("for_each").filter(|v| !v.is_null()) else {
+        return Err("a taste filler explores for each row of another collection: for_each is {collection, link, where?}".into());
+    };
+    let for_each = parse_for_each(def, others, fe)?;
+    if !for_each.context.is_empty() || !for_each.from.is_empty() {
+        return Err("a taste filler's for_each takes collection, link and where (the request names the fields it reads)".into());
+    }
+    let parent = others
+        .get(&for_each.collection)
+        .ok_or("filler.for_each.collection: no such collection")?;
+    let Some(Value::Object(req)) = o.get("request") else {
+        return Err(format!(
+            "filler.request is {{part: field of '{}'}}, parts: {}",
+            for_each.collection,
+            TASTE_REQUEST.join(", ")
+        ));
+    };
+    let mut request = BTreeMap::new();
+    for (part, f) in req {
+        if !TASTE_REQUEST.contains(&part.as_str()) {
+            return Err(format!(
+                "filler.request.{part}: not a part of an explore request ({})",
+                TASTE_REQUEST.join(", ")
+            ));
+        }
+        let n = other_field(
+            parent,
+            f.as_str().unwrap_or(""),
+            &format!("filler.request.{part}"),
+        )?;
+        request.insert(part.clone(), n);
+    }
+    if !request.contains_key("query") && !request.contains_key("like") {
+        return Err("filler.request names a query or a like field (what to explore around)".into());
+    }
+    let (map, _) = parse_map(def, o.get("map"), "filler")?;
+    if let Some((id, p)) = map.iter().find(|(_, p)| !TASTE_PARTS.contains(&p.as_str())) {
+        return Err(format!(
+            "filler.map.{}: '{p}' is not a part of a piece ({})",
+            def.name_of(id),
+            TASTE_PARTS.join(", ")
+        ));
+    }
+    if map.contains_key(&for_each.link) {
+        return Err("filler.map: the pod sets the link field".into());
+    }
+    let mut copy = BTreeMap::new();
+    match o.get("copy") {
+        None | Some(Value::Null) => {}
+        Some(Value::Object(c)) => {
+            for (mine, theirs) in c {
+                let id = field_id(def, mine, "copy field")?;
+                let n = other_field(parent, theirs.as_str().unwrap_or(""), "filler.copy")?;
+                copy.insert(id, n);
+            }
+        }
+        Some(_) => return Err("filler.copy is {field here: field of the explored row}".into()),
+    }
+    Ok(Source::Taste {
+        for_each,
+        request,
+        map,
+        copy,
+    })
 }
 
 /// `{collection, link, from?, where?, context?}` of a `for_each` agent.
@@ -1978,7 +2148,10 @@ fn check_one(def: &Definition, f: &Filler, max_fills_per_day: u32) -> Result<(),
                 x.name
             ));
         }
-        if x.kind == Kind::Ref && f.for_each().is_none_or(|fe| fe.link != *id) {
+        // A taste filler's `copy` takes the explored row's own value, a ref
+        // included (the need a round is for).
+        let copied = matches!(&f.source, Source::Taste { copy, .. } if copy.contains_key(id));
+        if x.kind == Kind::Ref && !copied && f.for_each().is_none_or(|fe| fe.link != *id) {
             return Err(format!(
                 "field '{}' is a ref, so it can't be filled (a page holds no row ids; fill a text field and look it up)",
                 x.name
@@ -2207,6 +2380,7 @@ mod tests {
             actions: Vec::new(),
             views: Vec::new(),
             keep: None,
+            snapshots: Vec::new(),
         }
     }
 

@@ -25,6 +25,7 @@
 pub mod api;
 pub mod bundle;
 pub mod db;
+pub mod explore;
 pub mod fit;
 
 use std::sync::Arc;
@@ -549,7 +550,7 @@ fn link(pod: &Pod, service: Service, h: &db::History) -> Service {
 /// the history the service built for it before the pod kept its own (`GET
 /// /api/state`); until a service can answer that (one from before), the
 /// service's own history stays in use and requests name none.
-async fn with_history(pod: &Pod, a: &TasteAdapter, service: Service) -> Service {
+pub(crate) async fn with_history(pod: &Pod, a: &TasteAdapter, service: Service) -> Service {
     let h = match pod.blocking(db::history).await {
         Ok(h) => h,
         Err(_) => return service,

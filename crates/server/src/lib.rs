@@ -45,6 +45,7 @@ pub fn adapters(pixelfed: PixelfedConfig) -> Vec<Arc<dyn Source>> {
             source_collections::CollectionsAdapter::with_caps(collections_caps_from_env())
                 .with_model(source_collections::compute::PodModel::from_env())
                 .with_agent(source_collections::agent::PodAgent::from_env())
+                .with_explorer(Some(source_taste::explore::explorer()))
                 .with_private_hosts(private)
                 .with_browser(web_extract::render::Browser::from_env(private))
         }),
