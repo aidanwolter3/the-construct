@@ -252,6 +252,27 @@ async fn without_a_chart_the_brands_guide_is_read_once() {
 }
 
 #[tokio::test]
+async fn a_check_a_scoped_call_queued_fetches_only_what_the_call_may() {
+    let (store, _) = serve_store().await;
+    let model = Arc::new(Model::default());
+    let pod = pod(model.clone());
+    targets(&pod).await;
+    let p = piece("shop.example:7", &format!("{store}/products/charted"));
+    // A granted credential's call, whose screens use only another site
+    // (decision `mcp-grants`): its background check is held to that.
+    let limit = Arc::new(std::collections::BTreeSet::from([
+        "other.example".to_owned()
+    ]));
+    pod_core::grant::with_fetch_limit(Some(limit), async {
+        fit::schedule(&pod, vec![p.clone()], true);
+    })
+    .await;
+    let kept = checked(&pod, &["shop.example:7"]).await;
+    assert_eq!(kept["shop.example:7"].0, "error");
+    assert_eq!(model.calls.load(Ordering::SeqCst), 0);
+}
+
+#[tokio::test]
 async fn a_store_that_refuses_a_plain_fetch_is_read_in_the_browser() {
     let (store, _) = serve_store().await;
     let url = format!("{store}/products/picky");

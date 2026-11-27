@@ -169,6 +169,9 @@ checked in the background, one at a time per pod, and its entity reloaded (a sco
    sleeve under 30 inches). A piece is checked again after 30 days, a page without a chart after 7, a failed fetch after
    6 hours; a page text the model has read is kept by hash (`taste_fit_reads`) and never sent again.
 
+A check queued while serving a scoped MCP credential's call (a preview or `sample_data`) keeps that call's fetch
+limit, so it fetches only from the hosts the pod's screens use (decision `mcp-grants`).
+
 The verdict is worked out whenever a list is served, against the targets as they are then, on the size with the
 fewest misses (¼ inch of slack): `fits` (Fits in M), `no` (Won't fit: sleeves 33 in, the first miss of length,
 sleeves, pits, shoulders; or waist, rise, inseam, thigh, leg opening) or `unsure` (Not sure: no length listed, when a
