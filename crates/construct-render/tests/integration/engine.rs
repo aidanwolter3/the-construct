@@ -212,6 +212,9 @@ struct Pod {
     /// Home has a button that opens `lesson`, a long scrolling page, and
     /// from version 2 a line above it.
     lesson: AtomicBool,
+    /// Milliseconds the layout `garden`, and the layouts there are none of,
+    /// take to answer (a slow pod).
+    garden_delay_ms: AtomicU64,
     construct: crate::construct_stub::Construct,
 }
 
@@ -243,8 +246,16 @@ impl Pod {
                 )),
                 (_, false) => Some((401, r#"{"error":"pod_required"}"#.to_owned())),
                 ("home", true) => Some((200, screen("Home", vec![]))),
-                ("garden", true) => Some((200, screen("Garden", vec![]))),
-                _ => None,
+                ("garden", true) => {
+                    let delay = self.garden_delay_ms.load(Ordering::SeqCst);
+                    thread::sleep(Duration::from_millis(delay));
+                    Some((200, screen("Garden", vec![])))
+                }
+                _ => {
+                    let delay = self.garden_delay_ms.load(Ordering::SeqCst);
+                    thread::sleep(Duration::from_millis(delay));
+                    None
+                }
             };
         }
         if self.lesson.load(Ordering::SeqCst) {
@@ -770,6 +781,54 @@ fn leaving_the_pod_and_opening_it_again_shows_its_layouts() {
     wait_until("the layout again", || {
         s.poll();
         shows(&mut s, "Garden")
+    });
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A layout the pod is slow to answer opens at once on a page saying it is
+/// loading (the tap doesn't wait on the pod), and shows when it comes in; one
+/// that can't be loaded says so in its place.
+#[test]
+fn a_slow_layout_opens_at_once_and_a_missing_one_says_so() {
+    let stub = Stub::start();
+    stub.pod.pod_code.store(true, Ordering::SeqCst);
+    stub.pod.garden_delay_ms.store(1500, Ordering::SeqCst);
+    let dir = storage("slow");
+    let pod = PodEngine::open_with(&stub.base, Some(&dir), store(&stub.base), config());
+    let mut s = pod.session(construct_render::Viewport::PHONE);
+    wait_until("home", || {
+        s.poll();
+        shows(&mut s, "Home")
+    });
+    let open = |layout: &str| json!({ "intent": "action.navigation.open", "layout": layout, "presentation": "Push" });
+    let tapped = Instant::now();
+    let out = s.dispatch(&open("garden")).unwrap();
+    assert!(
+        tapped.elapsed() < Duration::from_secs(1),
+        "the tap waited {:?} on the pod",
+        tapped.elapsed()
+    );
+    assert!(
+        out.effects
+            .iter()
+            .any(|e| matches!(e, Effect::Opened { layout } if layout == "garden")),
+        "{:?}",
+        out.effects
+    );
+    assert!(shows(&mut s, "Loading…"), "{:?}", texts(&mut s));
+    wait_until("the layout", || {
+        s.poll();
+        shows(&mut s, "Garden")
+    });
+    assert!(!shows(&mut s, "Loading…"));
+
+    s.dispatch(&json!({ "intent": "action.navigation.back" }))
+        .unwrap();
+    s.dispatch(&open("nowhere")).unwrap();
+    assert!(shows(&mut s, "Loading…"), "{:?}", texts(&mut s));
+    wait_until("the page saying it failed", || {
+        s.poll();
+        shows(&mut s, "Couldn't open this page")
     });
     let _ = std::fs::remove_dir_all(&dir);
 }

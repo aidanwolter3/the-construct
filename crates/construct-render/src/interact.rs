@@ -30,6 +30,7 @@ use crate::style::Rgba;
 
 mod gallery;
 mod media;
+pub mod stand_in;
 pub use gallery::{GestureEnd, PAGE_WAIT, POINT_REACH, SELECT_HOLD, ScatterGesture, bind_vars};
 pub use media::{StageDone, Staged, attachment_uri, pick_files_here};
 
@@ -642,7 +643,9 @@ enum Undo {
 /// [`Loader::send`].
 pub trait Loader: Send {
     /// A layout's plumbing root and its data, by key (from the construct:
-    /// its element materialized, and its data).
+    /// its element materialized, and its data). A loader that fetches in the
+    /// background may answer [`stand_in::opening`] at once and send the
+    /// layout (or [`stand_in::failed`]) through [`Loader::changes`] later.
     fn layout(&self, id: &str) -> Result<(UiNode, DataBundle), String>;
     /// A data path's answer (a screen's `data`, `action.data.load`).
     fn data(&self, path: &str) -> Result<DataBundle, String>;
@@ -5106,9 +5109,13 @@ impl Session {
         }
     }
 
-    /// A layout's root: given, or loaded (its data merged).
+    /// A layout's root: given, or loaded (its data merged). The page that
+    /// stands in for a layout that failed to load ([`stand_in::failed`]) is
+    /// asked for again: opening it again is trying again.
     fn layout_root(&mut self, id: &str, out: &mut Vec<Effect>) -> Option<UiNode> {
-        if let Some(r) = self.layouts.get(id) {
+        if let Some(r) = self.layouts.get(id)
+            && !stand_in::is_failed(r)
+        {
             return Some(r.clone());
         }
         let loaded = self.loader.as_ref()?.layout(id);
