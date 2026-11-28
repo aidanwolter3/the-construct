@@ -277,7 +277,7 @@ pub(crate) async fn fetch(
     }
     let (p, lookup) = (pod.clone(), id.to_owned());
     let client = protocol::ClientCaps::from_header(&protocol::features_header());
-    let served = tokio::task::spawn_blocking(move || {
+    let served = crate::timing::spawn_blocking(move || {
         crate::construct::http::serve_layout(&p, &lookup, &client)
     })
     .await
@@ -804,8 +804,23 @@ pub(crate) fn effect_line(e: &Effect) -> String {
     }
 }
 
+/// How long a new preview took to load, in milliseconds (issue #576):
+/// `load` fetching its layouts and their data from the pod, `queue` waiting
+/// for the drawing's thread to start, `device_data` the device's own data
+/// (notifications, the layouts' titles), read on that thread.
+#[derive(Debug, Clone, Copy)]
+struct Load {
+    load: f64,
+    queue: f64,
+    device_data: f64,
+}
+
+fn tenth(ms: f64) -> f64 {
+    (ms * 10.0).round() / 10.0
+}
+
 /// Draws the preview and answers image + text.
-fn answer(id: &str, p: &mut Preview, outcome: Option<&Outcome>, ms_load: f64) -> Value {
+fn answer(id: &str, p: &mut Preview, outcome: Option<&Outcome>, load: Option<Load>) -> Value {
     let t = std::time::Instant::now();
     let Preview {
         session: s,
@@ -860,11 +875,16 @@ fn answer(id: &str, p: &mut Preview, outcome: Option<&Outcome>, ms_load: f64) ->
         "preview_id": id,
         "state": s.state(),
         "effects": outcome.map(|o| json!(o.effects)),
-        "timing_ms": { "load": (ms_load * 10.0).round() / 10.0,
-                       "layout": (laid_out.as_secs_f64() * 10000.0).round() / 10.0,
+        "timing_ms": { "layout": (laid_out.as_secs_f64() * 10000.0).round() / 10.0,
                        "layout_render_encode": (took.as_secs_f64() * 10000.0).round() / 10.0 },
         "image": { "width": img.width(), "height": img.height(), "format": "webp" },
     });
+    // A new preview's load; an interaction loads nothing first.
+    if let Some(l) = load {
+        details["timing_ms"]["load"] = json!(tenth(l.load));
+        details["timing_ms"]["queue"] = json!(tenth(l.queue));
+        details["timing_ms"]["device_data"] = json!(tenth(l.device_data));
+    }
     if options.nodes != NodesMode::None {
         details["nodes"] = json!(nodes(&scene, options.nodes));
     }
@@ -984,7 +1004,13 @@ pub(crate) async fn render_layout_preview(pod: &Pod, headers: &HeaderMap, args: 
     let reader = Reader::new(pod, headers, tokio::runtime::Handle::current());
     let pod = pod.clone();
     let args = args.clone();
+    // What loading took, before the drawing's thread (issue #576): the
+    // layouts, their data and the zone.
+    let loaded = started.elapsed();
+    let queued = std::time::Instant::now();
     on_render_thread(move || {
+        let ms_queue = queued.elapsed().as_secs_f64() * 1000.0;
+        let device_started = std::time::Instant::now();
         // The device data, as a client builds it, for what these layouts bind.
         let mut needs = serde_json::to_string(&root).unwrap_or_default();
         for l in layouts.values() {
@@ -995,7 +1021,11 @@ pub(crate) async fn render_layout_preview(pod: &Pod, headers: &HeaderMap, args: 
         merge(&mut data, device.entities, device.queries);
         data.entities.extend(injected.data.entities);
         data.queries.extend(injected.data.queries);
-        let ms_load = started.elapsed().as_secs_f64() * 1000.0;
+        let load = Load {
+            load: loaded.as_secs_f64() * 1000.0,
+            queue: ms_queue,
+            device_data: device_started.elapsed().as_secs_f64() * 1000.0,
+        };
 
         let routes = screen_routes(&root);
         let mut session = Session::new(&id, root, data, options.viewport);
@@ -1051,7 +1081,7 @@ pub(crate) async fn render_layout_preview(pod: &Pod, headers: &HeaderMap, args: 
             .previews
             .insert(preview_id.clone(), Preview { session, options });
         let mut p = shared.lock().unwrap_or_else(|p| p.into_inner());
-        answer(&preview_id, &mut p, opened.as_ref(), ms_load)
+        answer(&preview_id, &mut p, opened.as_ref(), Some(load))
     })
     .await
     .unwrap_or_else(|e| error(json!({ "error": "render_failed", "detail": e })))
@@ -1135,7 +1165,7 @@ pub(crate) async fn dispatch_virtual_interaction(pod: &Pod, args: &Value) -> Val
             )),
         };
         match outcome {
-            Ok(o) => answer(&id, &mut p, Some(&o), 0.0),
+            Ok(o) => answer(&id, &mut p, Some(&o), None),
             Err(detail) => error(json!({ "error": "interaction_failed", "detail": detail })),
         }
     })

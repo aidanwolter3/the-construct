@@ -1771,6 +1771,17 @@ async fn agents_preview_a_layout_and_tap_it() {
     assert_eq!(&first[8..12], b"WEBP");
     let details = preview_details(&text);
     assert_eq!(details["image"]["width"], 780);
+    // The load stops before the drawing's thread; the wait for it and the
+    // device data are their own (issue #576).
+    for k in [
+        "load",
+        "queue",
+        "device_data",
+        "layout",
+        "layout_render_encode",
+    ] {
+        assert!(details["timing_ms"][k].is_number(), "{k}: {details}");
+    }
     let nodes = details["nodes"].as_array().unwrap();
     assert!(!nodes.is_empty());
     assert!(
@@ -1799,6 +1810,10 @@ async fn agents_preview_a_layout_and_tap_it() {
     assert_eq!(&second[0..4], b"RIFF");
     assert_ne!(first, second, "the selected chip is drawn differently");
     let details = preview_details(&text);
+    assert!(
+        details["timing_ms"]["load"].is_null(),
+        "an interaction loads nothing first"
+    );
     assert!(
         details["nodes"]
             .as_array()

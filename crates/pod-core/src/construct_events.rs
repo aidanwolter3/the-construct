@@ -47,7 +47,7 @@ async fn current_root(
     manifest: bool,
 ) -> Option<(String, i64)> {
     let (p, c) = (pod.clone(), client.clone());
-    tokio::task::spawn_blocking(move || {
+    crate::timing::spawn_blocking(move || {
         let root = super::seal::root_as(&p, &c, manifest)?;
         let g = p.store().with_conn(super::store::generation)?;
         Ok::<_, rusqlite::Error>(root.map(|r| (r, g)))
@@ -66,7 +66,7 @@ fn construct_event(root: &str, generation: i64) -> Event {
 /// The sources of home's feeds (what `event: data` is sent for).
 async fn home_sources(pod: &Pod) -> Vec<&'static str> {
     let p = pod.clone();
-    tokio::task::spawn_blocking(move || {
+    crate::timing::spawn_blocking(move || {
         p.store()
             .with_conn(|c| crate::layouts::home_sources(p.catalog(), c))
     })

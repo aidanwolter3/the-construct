@@ -7,6 +7,7 @@
 
 use std::path::Path;
 use std::sync::{Mutex, MutexGuard};
+use std::time::{Duration, Instant};
 
 use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, params};
 
@@ -107,6 +108,34 @@ pub fn is_full(e: &rusqlite::Error) -> bool {
     matches!(e, rusqlite::Error::SqliteFailure(f, _) if f.code == rusqlite::ErrorCode::DiskFull)
 }
 
+/// The store's connection, held: dereferences to it, and records the wait
+/// and the hold when dropped (issue #576).
+pub(crate) struct Held<'a> {
+    guard: MutexGuard<'a, Connection>,
+    waited: Duration,
+    taken: Instant,
+    at: &'static std::panic::Location<'static>,
+}
+
+impl std::ops::Deref for Held<'_> {
+    type Target = Connection;
+    fn deref(&self) -> &Connection {
+        &self.guard
+    }
+}
+
+impl std::ops::DerefMut for Held<'_> {
+    fn deref_mut(&mut self) -> &mut Connection {
+        &mut self.guard
+    }
+}
+
+impl Drop for Held<'_> {
+    fn drop(&mut self) {
+        crate::timing::record(self.waited, self.taken.elapsed(), self.at);
+    }
+}
+
 pub struct Store {
     conn: Mutex<Connection>,
     /// Seals adapters' upstream credentials at rest ([`crate::secrets`]).
@@ -204,14 +233,26 @@ impl Store {
         &self.secrets
     }
 
-    fn conn(&self) -> MutexGuard<'_, Connection> {
+    /// The connection, timed: how long this waited for it and, when the
+    /// guard drops, how long it was held ([`crate::timing::record`]).
+    #[track_caller]
+    fn conn(&self) -> Held<'_> {
+        let at = std::panic::Location::caller();
+        let asked = Instant::now();
         // A panic while holding the lock cannot leave SQLite inconsistent
         // (statements are atomic), so recover from poisoning.
-        self.conn.lock().unwrap_or_else(|e| e.into_inner())
+        let guard = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        Held {
+            guard,
+            waited: asked.elapsed(),
+            taken: Instant::now(),
+            at,
+        }
     }
 
     /// Run `f` on the connection (an adapter's own queries). Keep it short:
     /// the store has one connection, behind a lock.
+    #[track_caller]
     pub fn with_conn<T>(&self, f: impl FnOnce(&Connection) -> T) -> T {
         f(&self.conn())
     }
@@ -220,6 +261,7 @@ impl Store {
     /// when it decided to write nothing) and rolled back on `Err`. Adapters
     /// use it to make their own writes and a sign-in ([`open_session_on`])
     /// atomic.
+    #[track_caller]
     pub fn transaction<T>(
         &self,
         f: impl FnOnce(&Transaction<'_>) -> rusqlite::Result<T>,

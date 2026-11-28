@@ -1376,7 +1376,7 @@ type Tool = fn(&Pod, &Value) -> Result<Value, Value>;
 
 async fn blocking(pod: &Pod, args: &Value, f: Tool) -> Result<Value, Value> {
     let (p, a) = (pod.clone(), args.clone());
-    tokio::task::spawn_blocking(move || f(&p, &a))
+    crate::timing::spawn_blocking(move || f(&p, &a))
         .await
         .unwrap_or_else(|e| Err(refuse("internal", e.to_string())))
 }
@@ -1503,7 +1503,7 @@ async fn publish(pod: &Pod, args: &Value) -> Result<Value, Value> {
     // MAX_PUBLICATIONS is counted before the shelf write: one at a time.
     let _one_at_a_time = pod.sharing.lock().await;
     let (p, a) = (pod.clone(), args.clone());
-    tokio::task::spawn_blocking(move || publish_blocking(&p, &a))
+    crate::timing::spawn_blocking(move || publish_blocking(&p, &a))
         .await
         .unwrap_or_else(|e| Err(refuse("internal", e.to_string())))
 }
@@ -2150,7 +2150,7 @@ async fn adopt(pod: &Pod, args: &Value) -> Result<Value, Value> {
     }
     let bindings = args["bindings"].as_object().cloned().unwrap_or_default();
     let (p, l, b, sh) = (pod.clone(), link.clone(), bindings.clone(), shelf.clone());
-    let (fetched, plan) = tokio::task::spawn_blocking(move || {
+    let (fetched, plan) = crate::timing::spawn_blocking(move || {
         let f = fetch(sh.as_ref(), &me, &l)?;
         let plan = p.store().with_conn(|c| plan(&p, c, &f.inputs, &b));
         Ok::<_, Value>((f, plan))
@@ -2189,7 +2189,7 @@ async fn adopt(pod: &Pod, args: &Value) -> Result<Value, Value> {
         plan.feeds.clone(),
     );
     let fetched_arc = f2.clone();
-    let checked = tokio::task::spawn_blocking(move || reach_check(&p, &f2, &b, &fe))
+    let checked = crate::timing::spawn_blocking(move || reach_check(&p, &f2, &b, &fe))
         .await
         .map_err(|e| refuse("internal", e.to_string()))??;
     let Ok(fetched) = Arc::try_unwrap(fetched_arc) else {
@@ -2255,7 +2255,7 @@ async fn adopt(pod: &Pod, args: &Value) -> Result<Value, Value> {
     let fetched = Arc::new(fetched);
     let plan = Arc::new(plan);
     let (p, f2, pl) = (pod.clone(), fetched.clone(), plan.clone());
-    tokio::task::spawn_blocking(move || check_bound(&p, &f2, &pl.bind, &pl.feeds))
+    crate::timing::spawn_blocking(move || check_bound(&p, &f2, &pl.bind, &pl.feeds))
         .await
         .map_err(|e| refuse("internal", e.to_string()))??;
     let reach = Arc::new(Reached {
@@ -2399,7 +2399,7 @@ enum Update {
 
 async fn update_adoption(pod: &Pod, args: &Value) -> Result<Value, Value> {
     let (p, a) = (pod.clone(), args.clone());
-    let step = tokio::task::spawn_blocking(move || {
+    let step = crate::timing::spawn_blocking(move || {
         let step = p.store().with_conn(|c| update_check(&p, c, &a))?;
         let Update::Go(b) = step else {
             return Ok::<_, Value>((step, None));

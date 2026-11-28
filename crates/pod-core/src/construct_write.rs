@@ -901,7 +901,7 @@ fn refetch(pod: &Pod, moved: &[(String, i64)]) -> Value {
 
 async fn run(pod: &Pod, args: &Value, f: Tool) -> Result<Value, Value> {
     let (p, a) = (pod.clone(), args.clone());
-    match tokio::task::spawn_blocking(move || p.store().with_conn(|c| f(&p, c, &a))).await {
+    match crate::timing::spawn_blocking(move || p.store().with_conn(|c| f(&p, c, &a))).await {
         Ok(r) => r,
         Err(e) => Err(refuse("internal", e.to_string())),
     }
@@ -920,7 +920,7 @@ pub(crate) async fn run_write(
         b
     })?;
     let (p, a) = (pod.clone(), args.clone());
-    let r = tokio::task::spawn_blocking(move || {
+    let r = crate::timing::spawn_blocking(move || {
         let st = super::state(&p);
         let _guard = st.write_lock.lock().unwrap_or_else(|e| e.into_inner());
         let mut out = None;
@@ -955,7 +955,7 @@ pub(crate) async fn run_write(
     // Publications kept shared follow their names (decision `sharing`).
     if p.shelf().is_some() && !moved.is_empty() {
         let q = p.clone();
-        let _ = tokio::task::spawn_blocking(move || super::share::after_write(&q, &moved)).await;
+        let _ = crate::timing::spawn_blocking(move || super::share::after_write(&q, &moved)).await;
     }
     Ok(answer)
 }
@@ -1987,7 +1987,7 @@ pub fn draft_plumbing(pod: &Pod, node: &Value) -> Result<Value, Value> {
 /// root is asked for again by its generation).
 pub async fn scale_changed(pod: &Pod) {
     let p = pod.clone();
-    let _ = tokio::task::spawn_blocking(move || {
+    let _ = crate::timing::spawn_blocking(move || {
         let _ = p.store().with_conn(cstore::bump_generation);
         publish(&p, &[(crate::HOME_APP.to_owned(), 0)]);
     })
