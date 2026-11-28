@@ -2,5 +2,17 @@
   "checklist": {
     "category": "layout",
     "use_when": "A kit: things to tick off (to-dos, a packing list, chores). use_kit makes its collection and answers how to show it."
+  },
+  "shopping": {
+    "category": "layout",
+    "use_when": "A kit: things to buy, from a vague need to a watched price. use_kit shopping makes its collections; needs are explored through the taste service or found on the web."
+  },
+  "shopping_need": {
+    "category": "layout",
+    "use_when": "The shopping kit's page for one need (params need): explore or find options while nothing is chosen, then the pick, its price history and its watch."
+  },
+  "shopping_explore": {
+    "category": "layout",
+    "use_when": "The shopping kit's explore page for one need (params need): the kinds, then rounds narrowing toward what was liked, and the shortlist."
   }
 }

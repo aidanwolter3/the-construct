@@ -230,7 +230,7 @@ async fn a_need_is_explored_in_rounds_anchored_on_what_was_liked() {
     assert!(p0.iter().all(|p| p["need"] == need && p["current"] == true));
     assert_eq!(p0[0]["group_label"], "Arched");
     let n = row(&pod, "shop_needs", &need).await;
-    assert_eq!(n["status"], "Exploring · round 0");
+    assert_eq!(n["status"], "Exploring · the kinds");
 
     // A like and a dislike, then round 1 made from the need's lists.
     let (a, b) = (p0[0]["id"].as_str().unwrap(), p0[1]["id"].as_str().unwrap());

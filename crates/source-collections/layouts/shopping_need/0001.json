@@ -652,7 +652,7 @@
              {
               "type": "core://TextField",
               "field": "target",
-              "placeholder": "A price",
+              "placeholder": "$",
               "on_submit": {
                "intent": "action.mutation.optimistic",
                "entity_uri": "$item.uri",

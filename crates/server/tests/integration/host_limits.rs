@@ -135,7 +135,10 @@ async fn each_pod_is_held_to_its_storage_quota() {
         temporary_upload_quota_bytes: 64 * 1024 * KIB as u64,
         min_free_disk_bytes: 0,
         pod_storage_quota_bytes: 16 * 1024 * KIB as u64,
-        temporary_storage_quota_bytes: 2 * 1024 * KIB as u64,
+        // A fresh pod holds every core layout's elements (the shopping kit's
+        // three made it larger than 2 MiB less one upload): room for a few
+        // uploads past them.
+        temporary_storage_quota_bytes: 3 * 1024 * KIB as u64,
         ..StorageLimits::default()
     })
     .await;
@@ -144,7 +147,7 @@ async fn each_pod_is_held_to_its_storage_quota() {
     let temp = body["session_token"].as_str().unwrap().to_owned();
     let admin = env.admin("me").await;
 
-    // A temporary pod fills its 2 MiB with a few uploads, under its upload
+    // A temporary pod fills its 3 MiB with a few uploads, under its upload
     // quota.
     let mut stored = 0;
     let refusal = loop {
@@ -153,7 +156,7 @@ async fn each_pod_is_held_to_its_storage_quota() {
             break (status, body);
         }
         stored += 1;
-        assert!(stored < 16, "never refused");
+        assert!(stored < 24, "never refused");
     };
     assert!(stored >= 1, "the first upload fits");
     assert_eq!(refusal.0, StatusCode::INSUFFICIENT_STORAGE, "{}", refusal.1);

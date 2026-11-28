@@ -291,7 +291,7 @@ fn shopping_set() -> KitSet {
                     { "name": "price_text", "type": "text", "optional": true,
                       "compute": { "kind": "expr", "expr": "money(entity.price)" } },
                     { "name": "chosen_text", "type": "text", "optional": true,
-                      "compute": { "kind": "expr", "expr": "entity.chosen_price ? \"was \" + money(entity.chosen_price) : \"\"" } },
+                      "compute": { "kind": "expr", "expr": "entity.price_now ? entity.chosen_price ? \"was \" + money(entity.chosen_price) : \"\" : \"\"" } },
                     { "name": "price_query", "type": "text", "optional": true,
                       "compute": { "kind": "expr", "expr": "entity.watch ? entity.product + (entity.store ? \" \" + entity.store : \"\") : \"\"" } },
                     { "name": "target_text", "type": "text", "optional": true,
@@ -383,7 +383,7 @@ fn shopping_set() -> KitSet {
                     json!({ "op": "add_field", "name": "state", "type": "text", "optional": true,
                         "compute": { "kind": "expr", "expr": "entity.bought ? \"bought\" : entity.pick_count ? entity.watching ? \"watching\" : \"ready\" : \"choosing\"" } }),
                     json!({ "op": "add_field", "name": "status", "type": "text", "optional": true,
-                        "compute": { "kind": "expr", "expr": "entity.bought ? \"Bought\" : entity.pick_count ? entity.pick_line : entity.round_count ? \"Exploring · round \" + (entity.round_count - 1) + (entity.shortlist_count ? \" · \" + entity.shortlist_count + \" shortlisted\" : \"\") : \"Nothing chosen yet\"" } }),
+                        "compute": { "kind": "expr", "expr": "entity.bought ? \"Bought\" : entity.pick_count ? entity.pick_line : entity.round_count > 1 ? \"Exploring · round \" + (entity.round_count - 1) + (entity.shortlist_count ? \" · \" + entity.shortlist_count + \" shortlisted\" : \"\") : entity.round_count ? \"Exploring · the kinds\" : \"Nothing chosen yet\"" } }),
                 ],
             ),
             (
