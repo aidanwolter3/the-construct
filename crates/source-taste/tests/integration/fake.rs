@@ -1,7 +1,7 @@
 //! A fake taste service on 127.0.0.1, and a pod to point at it. Its data is
 //! made up.
 
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use axum::{
@@ -23,7 +23,7 @@ pub const TOKEN: &str = "test-taste-token";
 
 #[derive(Default)]
 pub struct Fake {
-    /// How many feed pages were served.
+    /// How many feed pages were asked for.
     pub pages: AtomicUsize,
     /// Every event as sent.
     pub events: Mutex<Vec<Value>>,
@@ -50,6 +50,8 @@ pub struct Fake {
     pub uploads: Mutex<Vec<Value>>,
     /// Every `X-Taste-State` sent.
     pub tags: Mutex<Vec<String>>,
+    /// How long each feed page takes, in milliseconds.
+    pub feed_delay_ms: AtomicU64,
 }
 
 impl Fake {
@@ -255,6 +257,10 @@ async fn feed(State(f): State<Arc<Fake>>, headers: HeaderMap, Query(q): Query<Q>
         return r;
     }
     let page = f.pages.fetch_add(1, Ordering::SeqCst);
+    let delay = f.feed_delay_ms.load(Ordering::SeqCst);
+    if delay > 0 {
+        tokio::time::sleep(std::time::Duration::from_millis(delay)).await;
+    }
     let n = q.n.unwrap_or(24).min(6);
     Json(json!({"items": (0..n).map(|i| product(page, i)).collect::<Vec<_>>()})).into_response()
 }

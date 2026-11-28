@@ -512,7 +512,9 @@ impl Default for TasteAdapter {
 }
 
 /// One fetch of the feed at a time per pod, so two devices opening an
-/// empty feed don't each take a page.
+/// empty feed don't each take a page. Signing in and out take it too: a
+/// fetch already under way finishes (and is cleared with the feed) before
+/// the account changes, and one that starts after finds its service gone.
 #[derive(Default)]
 struct FeedLock(tokio::sync::Mutex<()>);
 
@@ -760,7 +762,7 @@ impl Source for TasteAdapter {
     ) -> Option<BoxFuture<'a, Result<(), String>>> {
         (jack == JACK).then(|| {
             Box::pin(async move {
-                pod.blocking(db::sign_out)
+                sign_out(pod)
                     .await
                     .map_err(|_| "signing out of the taste service failed".to_owned())?;
                 pod.local::<MapCache>().forget();
@@ -804,6 +806,12 @@ async fn next_page(
 ) -> Result<Vec<Value>, ApiError> {
     let lock = pod.local::<FeedLock>();
     let _held = lock.0.lock().await;
+    // Signed out (or in elsewhere) since this fetch took its service: its
+    // page isn't for the deck the pod keeps now.
+    let current = pod.blocking(db::service).await.ok().flatten();
+    if !current.is_some_and(|c| c.url == service.url && c.token == service.token) {
+        return Ok(pod.blocking(db::waiting).await.unwrap_or_default());
+    }
     let enough = match fetch {
         Fetch::First => 1,
         Fetch::TopUp => LOW,
@@ -1004,10 +1012,13 @@ async fn sign_in_route(State(pod): State<Pod>, headers: HeaderMap, body: Bytes) 
     let (likes, skips) = (n("likes"), n("skips"));
     let host = api::host_of(&service.url);
     let now = now_ms();
-    if let Err(e) = pod
+    let feed = pod.local::<FeedLock>();
+    let held = feed.0.lock().await;
+    let kept = pod
         .blocking(move |s| db::sign_in(s, &service, likes, skips, now))
-        .await
-    {
+        .await;
+    drop(held);
+    if let Err(e) = kept {
         return e.into_response();
     }
     // A map kept from the service (or account) signed in before is not this one's.
@@ -1017,11 +1028,19 @@ async fn sign_in_route(State(pod): State<Pod>, headers: HeaderMap, body: Bytes) 
     Json(json!({"ok": true, "host": host})).into_response()
 }
 
+/// Forget the service and the feed, once a fetch of the feed under way has
+/// finished.
+async fn sign_out(pod: &Pod) -> Result<(), pod_core::ApiError> {
+    let feed = pod.local::<FeedLock>();
+    let _held = feed.0.lock().await;
+    pod.blocking(db::sign_out).await
+}
+
 async fn sign_out_route(State(pod): State<Pod>, headers: HeaderMap, body: Bytes) -> Response {
     if let Err(r) = body_of(&pod, &headers, &body).await {
         return r;
     }
-    if let Err(e) = pod.blocking(db::sign_out).await {
+    if let Err(e) = sign_out(&pod).await {
         return e.into_response();
     }
     pod.local::<MapCache>().forget();

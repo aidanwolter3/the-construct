@@ -13,7 +13,9 @@ The `taste` core layout opens on a form for the service's address (`https://…`
 `TASTE_TOKEN`). `POST /v1/taste/sign-in {url, token}` checks them with `GET /api/taste` and stores the token sealed.
 Settings shows the `taste` jack as plugged once signed in; unplugging it (Settings signs out there), or
 `/v1/taste/sign-out`, forgets the service, the kept feed and the kept map; a new sign-in forgets the map too. Neither
-forgets the owner's taste history (below), which the next service is given. Temporary pods have the jack locked.
+forgets the owner's taste history (below), which the next service is given. A page of the feed still being fetched
+when the pod signs in or out is finished first and forgotten with the feed, and one that starts after it keeps
+nothing, so the next service's deck holds only its own pieces. Temporary pods have the jack locked.
 
 The address must be `https://` on a public host. For a service on this machine (development, tests), run the server
 with `CONSTRUCT_TASTE_PRIVATE_HOSTS=1`.
