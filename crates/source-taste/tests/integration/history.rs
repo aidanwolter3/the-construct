@@ -131,7 +131,21 @@ async fn signing_out_keeps_the_history_for_the_next_service() {
     sign_in(&pod, &url).await;
     let app = taste_layout(&pod).await;
     workspace(&pod, &app).await;
+    // The reaction leaves the deck low, so the pod tops it up in the
+    // background: a slow page from the first service, still under way when
+    // the owner signs out. Sign-out waits for it and clears it with the
+    // feed, so the next service's deck is its own.
+    first.feed_delay_ms.store(300, Ordering::SeqCst);
+    let pages = first.pages.load(Ordering::SeqCst);
     react(&pod, "shop0.example:1001", true).await;
+    let asked = std::time::Instant::now();
+    while first.pages.load(Ordering::SeqCst) == pages {
+        assert!(
+            asked.elapsed().as_secs() < 5,
+            "the pod never topped the deck up"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+    }
     let (status, _) = call(
         &pod,
         "POST",
@@ -148,6 +162,10 @@ async fn signing_out_keeps_the_history_for_the_next_service() {
     .await;
     sign_in(&pod, &url).await;
     workspace(&pod, &app).await;
+    assert!(
+        second.pages.load(Ordering::SeqCst) >= 1,
+        "the deck is the new service's"
+    );
     let uploads = second.uploads.lock().unwrap().clone();
     assert_eq!(uploads.len(), 1);
     let ids: Vec<&str> = uploads[0]["events"]
@@ -161,6 +179,10 @@ async fn signing_out_keeps_the_history_for_the_next_service() {
         ["shop9.example:1", "shop9.example:2", "shop0.example:1001"]
     );
     assert_eq!(first.uploads.lock().unwrap().len(), 1);
+    assert!(
+        first.pages.load(Ordering::SeqCst) <= pages + 1,
+        "nothing more from the first service"
+    );
 }
 
 #[tokio::test]
