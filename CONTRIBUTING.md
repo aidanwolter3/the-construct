@@ -19,6 +19,9 @@ down.
   See [docs/clients.md](docs/clients.md#android).
 
 On Ubuntu, `scripts/cloud_setup.sh` installs everything the tests and the simulator need and warms the cargo caches.
+It reaches only Rust's servers and crates.io when the system already has a C toolchain, jq, pkg-config and fonts, as
+the cloud image does; `CONSTRUCT_SETUP_APT=1` also installs `sqlite3` and lavapipe (`mesa-vulkan-drivers`) for the
+GPU tests, which otherwise skip.
 
 ## Checks
 
