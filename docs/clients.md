@@ -82,7 +82,10 @@ CONSTRUCT_WEB=1 CONSTRUCT_OPEN_POD=off cargo run -p server -- serve --pod-code c
 
 `scripts/web_e2e.sh` does this on a spare port with a throwaway pod and drives the page in Chromium (Playwright): the
 code form, a wrong code, home drawn, the cookie, a reload (which takes the client from the browser's cache), a rebuild
-the next reload picks up, a phone-sized window and logging out.
+the next reload picks up, signing in to the fake Pixelfed from Settings, a phone-sized window and logging out; then a
+public link and the owner's own site. CI's `web` job runs it, and an uncaught error in the page (a panic) fails it. The
+tests tap by name: the client answers `window.constructFind(target)` (a simulator target, its text or `tag:<id>`)
+with the centre of what it draws there, in CSS pixels, so a tap follows a redesign of the screen.
 
 - **Signing in**: the page asks for the pod code and posts it to `POST /web/session`, which answers a session cookie
   (`HttpOnly`, `SameSite=Strict`): an ordinary session of the pod, which expires and which Settings' **Leave pod on
