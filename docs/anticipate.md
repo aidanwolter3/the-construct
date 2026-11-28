@@ -197,8 +197,10 @@ mode:
   the owner's screens already binds (this week's events, the pinned meals, the groceries to buy, the next
   workout). It never removes a button, list or value, and it changes no data.
 - **What it reads:** today's and this week's needs, the days and events Today already binds, the owner's notes,
-  and the record of past shapes: the `fixed` cards with `topic` `today` and their `outcome`. A shape the owner
-  kept becomes the base and is built on; an undone one says what the owner didn't want.
+  and the record of past shapes: the `fixed` and `proposal` cards with `topic` `today` and their `outcome`. A
+  shape the owner kept becomes the base and is built on. An undone one is weak evidence: the owner didn't keep
+  that shape that day (often they were only trying Undo), so Build shapes again in another form rather than
+  leaving a day's need unserved. Only a row in `anticipate_notes` rules a shape out.
 - **Its gate:** safe, not protected, valid and not stale (the server); every established journey still passes
   with the group; drawn at phone width, light and dark; it serves at least one need of confidence 0.6 or more, or
   the week ahead; and a fresh skeptic, given the needs, the before and after screenshots and the diff, answers
@@ -237,7 +239,7 @@ mode:
    ```
 
    `build.json`. Protect Settings only: protecting home or Today stops Build from shaping Today. Settings'
-   Connected apps then shows the credential as "… · 1 protected screens · reads 11 data sets · withholds
+   Connected apps then shows the credential as "… · 1 protected screens · reads 12 data sets · withholds
    others' text".
 
    Neither grant has `sample_data`: with a `reads` list it is refused, since it reads any source.
@@ -252,7 +254,7 @@ mode:
     "deletes": ["anticipations"],
     "protected_names": ["<Settings' id>"],
     "reads": ["anticipate_notes", "events", "workouts", "meals", "meal_picks", "groceries", "shopping", "tasks",
-              "plan_week", "days", "notifications"],
+              "plan_week", "days", "notifications", "checklist"],
     "strip_untrusted": true, "keep_from": ["claude"]}
    ```
 3. **The pod**, from the owner's own session:
@@ -346,19 +348,29 @@ worth it (a fresh skeptic subagent answers apply). Anything else stays proposed.
    mode) only if every gate check holds; else leave it proposed. A fix that needs a new collection field, action
    or view is a proposal in words.
 7. Shape Today when the day calls for it. Today (home's Today tab, the owner's own layout) is the screen the owner
-   most wants fitted to their day and week. Every morning, look at it against today's and this week's needs: does
-   it already serve this day well? If yes (an ordinary day, or a kept shape that still fits), change nothing and
-   say "Today already fits" in the summary. If no (a holiday, travel, a busy or empty stretch, a deadline, a
-   change in routine), change it as much as the day warrants: not the smallest change, not change for its own
-   sake.
+   most wants fitted to their day and week. Every morning, before writing today's rows, list today's needs of
+   confidence 0.6 or more and, from render_layout_preview of Today, where Today's first screen (the top 844 dp)
+   shows each one. A need with no place there means Today doesn't fit: stage a candidate shape that gives it one
+   and let the gate and the skeptic decide. The to-do rows you write in step 8 don't count as a place. Only when
+   every such need is there (an ordinary day, or a kept shape that still fits) change nothing, and say "Today
+   already fits:" and what comes first in the summary. Otherwise (a holiday, travel, a busy or empty stretch, a
+   deadline, a change in routine) change it as much as the day warrants: not the smallest change, not change for
+   its own sake.
    - Base: Today as it is after step 1 (a kept shape is part of it). Read the record of past shapes, the "fixed"
-     cards with topic "today", and their outcome: build on kept ones; undone ones say what the owner didn't
-     want.
+     and "proposal" cards with topic "today", and their state and outcome: build on kept ones. An undone one is
+     weak evidence: it says the owner didn't keep that shape that day (an Undo is often just the owner trying the
+     button), not that Today shouldn't be shaped. Never skip a shape today's needs call for because of one;
+     shape it differently (another place or form) and say in the why what changed from the undone one. Only an
+     anticipate_notes row rules a shape out.
    - Design it from today's and this week's needs, the days and events Today binds, and anticipate_notes'
      preferences: put first what today needs and push down what it doesn't; regroup; restyle (emphasis,
      headings, theme colours, density); bring in a section showing what another of the owner's screens already
      binds (this week's events, pinned meals, groceries to buy, the next workout). Never remove a button, list or
      value; change no data.
+   - Stage it small, whatever the layout's size: a json_patch on Today (stage_edit_group changes: {id, base_version,
+     json_patch}) that moves sections (`move` between paths get_layout shows, e.g. /root/content/content/children/N)
+     or adds one (`add` a section copied from the screen that already binds it). Never rewrite the whole layout;
+     its size is no reason to skip a shape.
    - One edit group on Today and on @me/ components only Today uses, only when the day calls for one. Hold the gate
      (traceable: a need of 0.6 or more, or the week ahead; covered and proven: every established journey still passes
      with the group; drawn); the skeptic gets the needs, before/after screenshots and the diff, and answers apply to

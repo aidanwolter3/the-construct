@@ -93,7 +93,10 @@ How a create carries attachments: [posting.md](posting.md).
 503 `temporarily_unavailable` when the data volume is nearly full), `/oauth/authorize` and `/oauth/token`. The
 credential it issues reaches only `/v1/mcp`. See [building.md](building.md#building-with-claude). A tool's
 answer is compact JSON (indenting it would about quadruple what a model reads); any tool call with `"pretty": true`
-among its arguments gets it indented, for a person reading it.
+among its arguments gets it indented, for a person reading it. Every tool in `tools/list` declares
+`_meta["anthropic/maxResultSizeChars"]: 200000`, so Claude Code keeps an answer of up to 200,000 characters in the
+conversation instead of saving one over 50,000 to a file, which an agent without a file tool (the sandboxed
+Anticipate runs) couldn't open.
 
 The other way round, the pod is a client of remote MCP servers (decision [`mcp-jack`](decisions/mcp-jack.md)):
 `GET /v1/mcp-servers/callback?code&state` *public* is where a server's OAuth sign-in comes back to (on a host,

@@ -466,6 +466,11 @@ async fn claude_connects_with_oauth_and_the_pod_code() {
     assert!(init["result"]["capabilities"]["tools"].is_object());
     let (status, list) = env.rpc(Some(&access), "tools/list", json!({})).await;
     assert_eq!(status, StatusCode::OK);
+    // Large answers (a big layout) stay in the conversation up to 200k
+    // characters instead of going to a file an agent may not be able to open.
+    for t in list["result"]["tools"].as_array().unwrap() {
+        assert_eq!(t["_meta"]["anthropic/maxResultSizeChars"], 200_000, "{t}");
+    }
     let names: Vec<&str> = list["result"]["tools"]
         .as_array()
         .unwrap()

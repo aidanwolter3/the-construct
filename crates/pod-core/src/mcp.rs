@@ -309,6 +309,7 @@ async fn handle(State(pod): State<Pod>, headers: HeaderMap, body: Bytes) -> Resp
                         .as_ref()
                         .is_none_or(|g| g.allows_tool(t["name"].as_str().unwrap_or("")))
                 })
+                .map(with_result_size)
                 .collect();
             Ok(json!({ "tools": tools }))
         }
@@ -322,6 +323,18 @@ async fn handle(State(pod): State<Pod>, headers: HeaderMap, body: Bytes) -> Resp
         Err((code, message)) => rpc_error(id, code, &message),
     };
     Json(reply).into_response()
+}
+
+/// The size up to which Claude Code keeps a tool's text answer in the
+/// conversation (`_meta["anthropic/maxResultSizeChars"]`). Without it, an
+/// answer over 50,000 characters is saved to a file the model must open with
+/// a file tool: a sandboxed agent run has none, so a large layout (home and
+/// Today run to ~60,000 characters) would be out of its reach.
+pub const MAX_RESULT_SIZE_CHARS: u64 = 200_000;
+
+fn with_result_size(mut tool: Value) -> Value {
+    tool["_meta"]["anthropic/maxResultSizeChars"] = json!(MAX_RESULT_SIZE_CHARS);
+    tool
 }
 
 fn rpc_error(id: Value, code: i64, message: &str) -> Value {
