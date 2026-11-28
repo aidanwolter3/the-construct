@@ -146,19 +146,21 @@ impl Report {
             self.date, self.base_url
         );
         s.push_str(
-            "| Persona | Result | Turns | Tool calls | Refused | Rebuilt | Time to working | Cost |\n",
+            "| Persona | Result | Turns | Tool calls | Refused | Rebuilt | Rebuilding writes | Time to working | Cost |\n",
         );
-        s.push_str("| --- | --- | --- | --- | --- | --- | --- | --- |\n");
+        s.push_str("| --- | --- | --- | --- | --- | --- | --- | --- | --- |\n");
         for p in &self.personas {
             let _ = writeln!(
                 s,
-                "| {} | {:?} | {} | {} | {} | {} | {} | ${:.2} |",
+                "| {} | {:?} | {} | {} | {} | {} | {} ({:.0} s) | {} | ${:.2} |",
                 p.id,
                 p.result,
                 p.turns,
                 p.tool_calls,
                 p.refused.len(),
                 p.shipped_rebuilt.len() + p.hints_left.len(),
+                p.rebuilding_writes,
+                p.rebuilding_secs,
                 p.time_to_working_secs
                     .map_or("-".to_owned(), |t| format!("{t:.0} s")),
                 p.cost_usd,
@@ -269,6 +271,6 @@ mod tests {
             personas: vec![p],
         };
         let md = r.markdown();
-        assert!(md.contains("| groceries | Pass | 0 | 0 | 0 | 0 | 42 s | $0.00 |"));
+        assert!(md.contains("| groceries | Pass | 0 | 0 | 0 | 0 | 0 (0 s) | 42 s | $0.00 |"));
     }
 }

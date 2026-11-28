@@ -20,7 +20,8 @@ pub struct Call {
     pub input: Value,
     pub output: String,
     pub is_error: bool,
-    /// From the event before the call (the agent writing it) to its answer.
+    /// From the previous tool result, or the message, to its answer: the
+    /// agent writing the call as well as the pod answering it.
     pub ms: u64,
 }
 
@@ -93,7 +94,9 @@ pub fn agent_turn(
         version: String::new(),
     };
     let mut open: HashMap<String, (usize, u64)> = HashMap::new();
-    let mut last_ms = 0u64;
+    // A call's time runs from the previous tool result (or the message), so
+    // it includes the agent writing it.
+    let mut since = 0u64;
     let mut got_result = false;
     for line in BufReader::new(stdout).lines() {
         let line = line.map_err(|e| e.to_string())?;
@@ -102,8 +105,10 @@ pub fn agent_turn(
         let Ok(ev) = serde_json::from_str::<Value>(&line) else {
             continue;
         };
-        read_event(&ev, now, last_ms, &mut turn, &mut open, &mut got_result);
-        last_ms = now;
+        read_event(&ev, now, since, &mut turn, &mut open, &mut got_result);
+        if ev["type"] == "user" {
+            since = now;
+        }
     }
     let out = child.wait_with_output().map_err(|e| e.to_string())?;
     turn.wall_ms = start.elapsed().as_millis() as u64;
@@ -122,7 +127,7 @@ pub fn agent_turn(
 fn read_event(
     ev: &Value,
     now: u64,
-    last_ms: u64,
+    since: u64,
     turn: &mut Turn,
     open: &mut HashMap<String, (usize, u64)>,
     got_result: &mut bool,
@@ -150,7 +155,7 @@ fn read_event(
                         ms: 0,
                     });
                     let id = c["id"].as_str().unwrap_or_default().to_owned();
-                    open.insert(id, (turn.calls.len() - 1, last_ms));
+                    open.insert(id, (turn.calls.len() - 1, since));
                 }
             }
         }
@@ -270,7 +275,7 @@ mod tests {
         let (mut open, mut got) = (HashMap::new(), false);
         for (i, ev) in events.iter().enumerate() {
             let now = 1000 * (i as u64 + 1);
-            read_event(ev, now, now - 1000, &mut turn, &mut open, &mut got);
+            read_event(ev, now, 500, &mut turn, &mut open, &mut got);
         }
         assert!(got);
         assert_eq!(turn.session_id, "s1");
@@ -279,7 +284,7 @@ mod tests {
         let call = &turn.calls[0];
         assert_eq!(call.name, "use_kit");
         assert!(call.is_error, "an answer with an error counts as refused");
-        assert_eq!(call.ms, 2000);
+        assert_eq!(call.ms, 2500);
         assert_eq!(turn.cost_usd, 0.25);
     }
 
