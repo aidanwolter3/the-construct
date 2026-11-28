@@ -18,7 +18,8 @@
 # Disk: a session has a fixed allowance (~30 GB). The script turns off incremental compilation for this user
 # (~/.cargo/config.toml), which otherwise grows target/debug by many GB per session.
 #
-# Network access the environment needs (allow these domains in the environment's network policy):
+# Network access the environment needs (allow these domains in the environment's network policy). On the cloud
+# image, which has a C toolchain, jq, pkg-config and fonts, nothing comes from Ubuntu's package mirrors:
 #   static.rust-lang.org, sh.rustup.rs, crates.io, index.crates.io, static.crates.io   (Rust)
 #   github.com, api.github.com, objects.githubusercontent.com                          (git, gh)
 #   the-construct-pod.fly.dev, the-construct-fake-pixelfed.fly.dev                     (staging checks)
@@ -31,22 +32,31 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SUDO=""
 if [[ $EUID -ne 0 ]] && command -v sudo >/dev/null; then SUDO="sudo"; fi
 
+# System packages: the cloud image already has what the build needs, so apt (Ubuntu's mirrors, which a session's
+# proxy can block or throttle) runs only when one of these is missing, and a failure there is a warning, never a
+# failed setup. Not installed: sqlite3 (only for poking at a cache by hand; the code bundles SQLite) and
+# mesa-vulkan-drivers (lavapipe: construct-render's GPU tests skip without an adapter, and CI's image has it).
+# CONSTRUCT_SETUP_APT=1 installs those two as well.
 if command -v apt-get >/dev/null; then
   need=()
   command -v cc >/dev/null || need+=(build-essential)
   command -v jq >/dev/null || need+=(jq)
-  command -v sqlite3 >/dev/null || need+=(sqlite3)
   dpkg -s fonts-dejavu-core >/dev/null 2>&1 || need+=(fonts-dejavu-core fontconfig)  # simulator text rendering
   dpkg -s pkg-config >/dev/null 2>&1 || need+=(pkg-config)
-  dpkg -s mesa-vulkan-drivers >/dev/null 2>&1 || need+=(mesa-vulkan-drivers)  # lavapipe: construct-render's GPU tests
+  if [[ ${CONSTRUCT_SETUP_APT:-} == 1 ]]; then
+    command -v sqlite3 >/dev/null || need+=(sqlite3)
+    dpkg -s mesa-vulkan-drivers >/dev/null 2>&1 || need+=(mesa-vulkan-drivers)
+  fi
   if [[ ${#need[@]} -gt 0 ]]; then
     # Cloud containers reach the network only through an HTTPS proxy: plain-http Ubuntu mirrors hang until apt's
     # retries run out (~10 minutes). Use https for them, and cap each request so a blocked source can't stall setup.
     for f in /etc/apt/sources.list /etc/apt/sources.list.d/*.list /etc/apt/sources.list.d/*.sources; do
       if [[ -f $f ]]; then $SUDO sed -i 's#http://\([a-z.]*\)ubuntu\.com#https://\1ubuntu.com#g' "$f"; fi
     done
-    $SUDO apt-get -o Acquire::http::Timeout=20 -o Acquire::https::Timeout=20 -o Acquire::Retries=1 update -y
-    DEBIAN_FRONTEND=noninteractive $SUDO apt-get install -y "${need[@]}"
+    if ! { $SUDO apt-get -o Acquire::http::Timeout=20 -o Acquire::https::Timeout=20 -o Acquire::Retries=1 update -y &&
+      DEBIAN_FRONTEND=noninteractive $SUDO apt-get -o Acquire::https::Timeout=20 install -y "${need[@]}"; }; then
+      echo "cloud_setup: WARNING: apt could not install ${need[*]}; builds that need them will fail." >&2
+    fi
   fi
 fi
 
