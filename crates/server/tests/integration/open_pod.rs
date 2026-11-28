@@ -9,6 +9,10 @@ fn start(addr: &str, envs: &[(&str, &str)]) -> std::process::Output {
     cmd.env("CONSTRUCT_ADDR", addr)
         .env("CONSTRUCT_DATA_DIR", dir.path())
         .env_remove("FLY_APP_NAME")
+        // No browser, so no network fence: as root the binary would load
+        // the nftables rule for the whole machine, and it would outlive the
+        // test, cutting other tests' browsers off from their proxies.
+        .env("CONSTRUCT_BROWSER", "off")
         .env_remove(server::INSECURE_OPEN_POD_VAR)
         .stdin(Stdio::null());
     for (k, v) in envs {

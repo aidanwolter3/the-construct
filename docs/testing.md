@@ -50,9 +50,17 @@ The Rust rendering engine (`crates/construct-render`) has golden frames: CPU fra
 `tests/data/goldens/`, and GPU frames with the same files when a wgpu adapter exists (CI's image has lavapipe,
 `mesa-vulkan-drivers`, and CI sets `CONSTRUCT_REQUIRE_GPU=1`). See [rendering.md](rendering.md#tests).
 
-Rendered fillers' tests (`web-extract`'s and `source-collections`' `render::`, decision `rendered-fetches`) drive a
-real headless Chromium against local pages: CI's image has Debian's `chromium`; elsewhere they skip unless
-`CONSTRUCT_BROWSER` names a browser (on Ubuntu, `npx playwright install chromium` downloads one without the snap).
+Rendered fillers' tests (`web-extract`'s and `source-collections`' `render::`, `source-taste`'s
+`fit::a_store_that_refuses_a_plain_fetch_is_read_in_the_browser`, decision `rendered-fetches`) drive a real headless
+Chromium against local pages. They use the browser `CONSTRUCT_BROWSER` names, else the first of `chromium`,
+`chromium-browser`, `headless_shell`, `chrome-headless-shell` and `google-chrome` on `PATH` (CI's image has Debian's
+`chromium`, cloud sessions a `google-chrome` wrapper around Playwright's), and skip without one
+(`CONSTRUCT_BROWSER=off` skips them too; on Ubuntu, `npx playwright install chromium` downloads one without the snap).
+Run as root, a server that finds a browser loads the browser's network fence (decision `browser-network-fence`). That
+nftables rule belongs to the machine, not the process, and stays after the server exits: later browsers that aren't that
+server's then fail with `ERR_PROXY_CONNECTION_FAILED`, and the render's error names the leftover table. Tests that
+start the `server` binary set `CONSTRUCT_BROWSER=off` so they don't leave it behind; if one is left over, remove it with
+`nft delete table inet construct_browser`.
 
 There are no on-device tests: UI is checked with the [headless simulator](simulator.md), which draws with the same
 renderer as the apps. The Android build checks that every Java class the Rust code names in a JNI signature exists;
