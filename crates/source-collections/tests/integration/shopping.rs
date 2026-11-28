@@ -437,3 +437,50 @@ async fn a_rounds_avoid_and_prefer_reach_the_service_and_a_kit_upgrades_in_place
     let p = rows(&pod, "shop_pieces").await;
     assert!(p.iter().all(|x| x["avoid"] == "logo; graphic"), "{p:?}");
 }
+
+/// A pod whose kit collections an older kit made: they lack the fields the
+/// deployed layouts already name (avoid, prefer). Using the kit again brings
+/// them in, though every change sees layouts naming fields not there yet.
+#[tokio::test]
+async fn a_pod_from_an_older_kit_upgrades_though_the_new_layouts_name_its_new_fields() {
+    use source_collections::db;
+    let pod = pod(Arc::default());
+    ok(&pod, "use_kit", json!({"kit": "shopping"})).await;
+    // Take the new fields back out, as the older kit made them.
+    pod.store()
+        .transaction(|tx| {
+            for (c, gone) in [
+                ("shop_categories", &["explore_avoid", "explore_prefer"][..]),
+                ("shop_needs", &["avoid", "prefer"][..]),
+                ("shop_rounds", &["avoid", "prefer"][..]),
+            ] {
+                let (_, mut def) = db::latest_def(tx, c)?.unwrap();
+                def.fields.retain(|f| !gone.contains(&f.name.as_str()));
+                db::append_def(tx, &def, "older kit", "test", 0)?;
+            }
+            Ok(())
+        })
+        .unwrap();
+    let d = ok(
+        &pod,
+        "describe_collection",
+        json!({"collection": "shop_rounds"}),
+    )
+    .await;
+    assert!(!d.to_string().contains("\"avoid\""));
+    ok(&pod, "use_kit", json!({"kit": "shopping"})).await;
+    for (c, f) in [
+        ("shop_categories", "explore_avoid"),
+        ("shop_needs", "avoid"),
+        ("shop_rounds", "prefer"),
+    ] {
+        let d = ok(&pod, "describe_collection", json!({"collection": c})).await;
+        let names: Vec<&str> = d["definition"]["fields"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|x| x["name"].as_str())
+            .collect();
+        assert!(names.contains(&f), "{c} lacks {f}: {names:?}");
+    }
+}
