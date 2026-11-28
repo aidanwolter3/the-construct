@@ -642,3 +642,165 @@ fn an_edit_group_swaps_back_and_forth_without_a_request() {
     assert!(e.swap_construct(&group, "after"));
     assert!(home_json(&e).contains("A tip"));
 }
+
+/// A proxy in front of the pod that holds `GET /v1/construct/data/…` (a
+/// fetch's last request, after it has drawn its tree) while `hold` is on,
+/// each until its turn is released: a fetch kept in flight on purpose.
+struct DataGate {
+    base: String,
+    state: Arc<(std::sync::Mutex<GateState>, std::sync::Condvar)>,
+}
+
+#[derive(Default)]
+struct GateState {
+    hold: bool,
+    /// Data requests held so far, and how many of them may go on.
+    held: usize,
+    released: usize,
+}
+
+impl DataGate {
+    fn new(upstream: &str) -> DataGate {
+        use std::io::{Read, Write};
+        let upstream = upstream.trim_start_matches("http://").to_owned();
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        let state = Arc::new((
+            std::sync::Mutex::new(GateState::default()),
+            std::sync::Condvar::new(),
+        ));
+        let gate = Arc::clone(&state);
+        thread::spawn(move || {
+            for client in listener.incoming() {
+                let Ok(mut client) = client else { return };
+                let upstream = upstream.clone();
+                let gate = Arc::clone(&gate);
+                thread::spawn(move || {
+                    // The request line and headers, then held or not.
+                    let mut head = Vec::new();
+                    let mut buf = [0u8; 4096];
+                    while !head.windows(4).any(|w| w == b"\r\n\r\n") {
+                        match client.read(&mut buf) {
+                            Ok(0) | Err(_) => return,
+                            Ok(n) => head.extend_from_slice(&buf[..n]),
+                        }
+                    }
+                    if head.starts_with(b"GET /v1/construct/data/") {
+                        let (lock, cv) = &*gate;
+                        let mut g = lock.lock().unwrap();
+                        if g.hold {
+                            g.held += 1;
+                            let turn = g.held;
+                            cv.notify_all();
+                            while g.released < turn {
+                                g = cv.wait(g).unwrap();
+                            }
+                        }
+                    }
+                    let Ok(mut server) = std::net::TcpStream::connect(&upstream) else {
+                        return;
+                    };
+                    if server.write_all(&head).is_err() {
+                        return;
+                    }
+                    let (mut c2, mut s2) =
+                        (client.try_clone().unwrap(), server.try_clone().unwrap());
+                    thread::spawn(move || {
+                        let _ = std::io::copy(&mut c2, &mut s2);
+                        let _ = s2.shutdown(std::net::Shutdown::Write);
+                    });
+                    let _ = std::io::copy(&mut server, &mut client);
+                    let _ = client.shutdown(std::net::Shutdown::Both);
+                });
+            }
+        });
+        DataGate { base, state }
+    }
+
+    fn hold(&self, on: bool) {
+        let (lock, cv) = &*self.state;
+        let mut g = lock.lock().unwrap();
+        g.hold = on;
+        if !on {
+            g.released = usize::MAX;
+        }
+        cv.notify_all();
+    }
+
+    /// Wait until `n` data requests are held.
+    fn wait_held(&self, n: usize) {
+        let (lock, cv) = &*self.state;
+        let mut g = lock.lock().unwrap();
+        while g.held < n {
+            let (next, timeout) = cv.wait_timeout(g, TIMEOUT).unwrap();
+            assert!(
+                !timeout.timed_out(),
+                "timed out waiting for {n} held requests"
+            );
+            g = next;
+        }
+    }
+
+    /// Let the first `n` held requests go on.
+    fn release(&self, n: usize) {
+        let (lock, cv) = &*self.state;
+        lock.lock().unwrap().released = n;
+        cv.notify_all();
+    }
+}
+
+/// Issue #594: a refresh that drew home before a swap, and lands after it,
+/// doesn't write over the swap with what it drew.
+#[test]
+fn an_edit_group_swap_survives_a_refresh_in_flight_when_it_was_made() {
+    let p = pod();
+    build(&p);
+    let home_version = tool(&p, "get_layout", json!({"app": "home"}))["version"]
+        .as_i64()
+        .unwrap();
+    let staged = tool(
+        &p,
+        "stage_edit_group",
+        json!({"title": "Show a tip", "changes": [{"id": "home", "base_version": home_version,
+            "json_patch": [{"op": "add", "path": "/root/children/1",
+                "value": {"type": "core://Text", "style": "Body", "value_expr": "A tip"}}]}]}),
+    );
+    let group = staged["id"].as_str().unwrap().to_owned();
+    tool(&p, "apply_edit_group", json!({"id": group, "trial": true}));
+
+    let gate = DataGate::new(&p.base);
+    // No polling: the only fetches are the first and the ones made here.
+    let e = Arc::new(ConstructEngine::init_with_config(
+        "",
+        &gate.base,
+        "home",
+        EngineConfig {
+            poll_interval: Duration::from_secs(600),
+            ..EngineConfig::default()
+        },
+    ));
+    wait_until("home with the tip", || home_json(&e).contains("A tip"));
+
+    // A refresh draws home with the tip, then waits for its data.
+    gate.hold(true);
+    let refresh = {
+        let e = Arc::clone(&e);
+        thread::spawn(move || e.refresh())
+    };
+    gate.wait_held(1);
+
+    // The swap is drawn at once, while that refresh is out.
+    assert!(e.swap_construct(&group, "before"));
+    assert!(!home_json(&e).contains("A tip"), "{}", home_json(&e));
+
+    // The refresh lands (the swap's own reload is still held): home stays
+    // as swapped.
+    gate.release(1);
+    refresh.join().unwrap();
+    let home = home_json(&e);
+    assert!(home.contains("Home") && !home.contains("A tip"), "{home}");
+
+    gate.hold(false);
+    assert!(e.swap_construct(&group, "after"));
+    assert!(home_json(&e).contains("A tip"));
+}
