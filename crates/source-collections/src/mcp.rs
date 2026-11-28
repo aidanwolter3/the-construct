@@ -1611,6 +1611,7 @@ fn construct_commit(
     pod: &Pod,
     edits: &[Value],
     defs: &HashMap<String, Definition>,
+    before: &HashMap<String, Definition>,
 ) -> rusqlite::Result<Result<(Vec<(String, i64)>, Vec<(String, i64)>), Value>> {
     use pod_core::construct::write as cwrite;
     let mut versions = Vec::new();
@@ -1645,6 +1646,16 @@ fn construct_commit(
     }
     for l in cwrite::live_layouts(tx)? {
         if let Err(e) = crate::bindings::check(&l.node, &feeds, defs) {
+            // Only what this change breaks: a layout that names a field the
+            // collections lack already (a core layout a deploy moved ahead of
+            // a kit's collections, decision `kits-upgrade-in-place`) doesn't
+            // stop a change that leaves it no worse.
+            let already = crate::bindings::check(&l.node, &feeds, before)
+                .err()
+                .is_some_and(|b| b.pointer == e.pointer && b.message == e.message);
+            if already {
+                continue;
+            }
             let edited = versions.iter().any(|(a, _)| *a == l.name);
             return Ok(Err(breaks_layout(&l.name, &l.title, edited, &e)));
         }
@@ -1675,6 +1686,7 @@ async fn commit(
     let defs = catalog_apps;
     let mut new_defs: HashMap<String, Definition> =
         defs.into_iter().map(|(_, d)| (d.name.clone(), d)).collect();
+    let before = new_defs.clone();
     new_defs.insert(name.to_owned(), planned.def.clone());
     for d in &planned.created {
         new_defs.insert(d.name.clone(), d.clone());
@@ -1734,7 +1746,7 @@ async fn commit(
         for id in &to_recompute {
             jobs.extend(crate::compute::backfill(tx, &def, id, true, caps.rows, now, caps)?);
         }
-        let (versions, moved) = match construct_commit(tx, &pod2, &edits, &others)? {
+        let (versions, moved) = match construct_commit(tx, &pod2, &edits, &others, &before)? {
             Ok(vm) => vm,
             Err(b) => return Ok(Err(b)),
         };
