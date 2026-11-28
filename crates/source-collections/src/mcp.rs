@@ -594,19 +594,72 @@ async fn use_kit_set(
             .map_err(db_err)?
             .remove(&name);
         match existing {
+            // One made by an earlier version of the kit: what the kit has
+            // gained since (an optional field, a change to one of its own
+            // fillers) is brought in.
             Some(def) => {
-                let missing: Vec<&str> = spec["fields"]
-                    .as_array()
-                    .into_iter()
-                    .flatten()
-                    .filter_map(|f| f["name"].as_str())
-                    .filter(|n| !def.live_fields().any(|f| f.name == *n))
-                    .collect();
-                if !missing.is_empty() {
+                let mut ops = Vec::new();
+                let mut required = Vec::new();
+                for f in spec["fields"].as_array().into_iter().flatten() {
+                    let n = f["name"].as_str().unwrap_or_default();
+                    if def.live_fields().any(|x| x.name == n) {
+                        continue;
+                    }
+                    if f["optional"] == true || f.get("default").is_some() {
+                        let mut op = f.clone();
+                        op["op"] = json!("add_field");
+                        ops.push(op);
+                    } else {
+                        required.push(n.to_owned());
+                    }
+                }
+                if !required.is_empty() {
                     return Err(
-                        json!({ "error": "collection_mismatch", "collection": name, "missing": missing,
+                        json!({ "error": "collection_mismatch", "collection": name, "missing": required,
                         "detail": "a collection of this name lacks fields the kit reads; add them (apply_change add_field) or rename that collection", "status": 409 }),
                     );
+                }
+                if !ops.is_empty() {
+                    apply_change(
+                        pod,
+                        adapter,
+                        &json!({ "collection": name, "changes": ops, "note": "The shopping kit's newer version" }),
+                    )
+                    .await?;
+                }
+                // Its own fillers (by title), as the kit has them now.
+                let (_, def) = current(pod, &name).await?;
+                let others = pod
+                    .blocking(|s| s.with_conn(db::defs_by_name))
+                    .await
+                    .map_err(db_err)?;
+                let mut fillers = Vec::new();
+                for f in spec["fillers"].as_array().into_iter().flatten() {
+                    let title = f["title"].as_str().unwrap_or_default();
+                    let Some(old) = def.fillers.iter().find(|x| x.title == title) else {
+                        continue;
+                    };
+                    let now = crate::filler::parse_in(
+                        &def,
+                        &others,
+                        f,
+                        old.id.clone(),
+                        adapter.allow_private_hosts(),
+                    );
+                    if now.as_ref().is_ok_and(|n| n == old) {
+                        continue;
+                    }
+                    let mut spec = f.clone();
+                    spec["id"] = json!(old.id);
+                    fillers.push(json!({ "op": "set_filler", "filler": spec }));
+                }
+                if !fillers.is_empty() {
+                    apply_change(
+                        pod,
+                        adapter,
+                        &json!({ "collection": name, "changes": fillers, "note": "The shopping kit's newer version" }),
+                    )
+                    .await?;
                 }
             }
             None => {

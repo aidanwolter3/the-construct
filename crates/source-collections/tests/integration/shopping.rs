@@ -377,3 +377,63 @@ async fn a_taste_filler_names_what_it_reads() {
     .await;
     assert!(!err, "{v}");
 }
+
+#[tokio::test]
+async fn a_rounds_avoid_and_prefer_reach_the_service_and_a_kit_upgrades_in_place() {
+    let taste = Arc::new(FakeTaste::default());
+    let pod = pod(taste.clone());
+    ok(&pod, "use_kit", json!({"kit": "shopping"})).await;
+    // An older kit's explorer, without avoid and prefer.
+    let f = filler_ids(&pod, "shop_pieces").await.remove(0);
+    ok(
+        &pod,
+        "apply_change",
+        json!({"collection": "shop_pieces", "changes": [{"op": "set_filler", "filler": {
+            "id": f, "kind": "taste", "title": "Explore",
+            "for_each": {"collection": "shop_rounds", "link": "round"},
+            "request": {"query": "query"}, "map": {"taste_key": "key"},
+            "copy": {"need": "need"}, "key": "taste_key"}}]}),
+    )
+    .await;
+    // Using the kit again brings it back to what the kit has now.
+    ok(&pod, "use_kit", json!({"kit": "shopping"})).await;
+    let d = ok(
+        &pod,
+        "describe_collection",
+        json!({"collection": "shop_pieces"}),
+    )
+    .await;
+    let fl = &d["definition"]["fillers"][0];
+    assert_eq!(fl["id"], json!(f));
+    assert_eq!(fl["request"]["avoid"], "avoid");
+
+    // A category's avoid and prefer words go with each round made for its needs.
+    let cats = rows(&pod, "shop_categories").await;
+    let clothes = cats.iter().find(|c| c["name"] == "Clothes").unwrap()["id"].clone();
+    update(
+        &pod,
+        "shop_categories",
+        json!({"id": clothes, "explore_avoid": "logo; graphic", "explore_prefer": "wool, olive"}),
+    )
+    .await;
+    let need = create(
+        &pod,
+        "shop_needs",
+        json!({"name": "Hoodie", "category": "Clothes"}),
+    )
+    .await;
+    let n = row(&pod, "shop_needs", &need).await;
+    assert_eq!(n["avoid"], "logo; graphic");
+    create(
+        &pod,
+        "shop_rounds",
+        json!({"need": need, "n": 0, "query": "Hoodie", "avoid": n["avoid"], "prefer": n["prefer"]}),
+    )
+    .await;
+    explore(&pod).await;
+    let asked = taste.asked.lock().unwrap()[0].clone();
+    assert_eq!(asked["avoid"], json!(["logo", "graphic"]));
+    assert_eq!(asked["prefer"], json!(["wool", "olive"]));
+    let p = rows(&pod, "shop_pieces").await;
+    assert!(p.iter().all(|x| x["avoid"] == "logo; graphic"), "{p:?}");
+}

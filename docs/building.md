@@ -179,8 +179,9 @@ filler or a model wrote, and another pod's publication in `describe_publication`
   `embed` and `open` with the kit's inputs bound, to put in home. Kits: `checklist`, and `shopping` (decision
   [`shopping-kit`](decisions/shopping-kit.md)), a kit of six collections under their own names (`shop_categories`,
   `shop_needs`, `shop_rounds`, `shop_pieces`, `shop_picks`, `shop_prices`) and three layouts (`@core/shopping`, which
-  opens `@core/shopping_need` and `@core/shopping_explore`): using it again changes nothing, and it seeds the
-  categories Clothes (explored through the taste service), Home and Other (options found on the web). See
+  opens `@core/shopping_need` and `@core/shopping_explore`): using it again changes nothing, except to bring in
+  what the kit gained since (decision [`kits-upgrade-in-place`](decisions/kits-upgrade-in-place.md)), and it seeds
+  the categories Clothes (explored through the taste service), Home and Other (options found on the web). See
   [Shopping](#shopping).
 - `set_theme` also takes `scale`: `corner_s`, `corner_m`, `corner_l`, `pad_s`, `pad_m`, `pad_l` (dp) and
   `title_weight`, which core components draw with, so a pod restyles them without copying them.
@@ -530,7 +531,7 @@ so change a site with `set_filler` and its id rather than removing and adding it
   {collection, link, where?}, request: {part: field}, map: {field: part}, copy?, key?}`, asks the owner's taste
   service (`POST /api/explore`, through the `taste` source and its jack) for pieces for each row of another
   collection: the request's parts (`query`, `like`, `unlike`, `exclude`, `distance`, `spread`, `group`, `n`,
-  `price_max`) are that row's fields, the pieces (`key`, `title`, `brand`, `image`, `price`, `price_text`, `url`,
+  `price_max`, `avoid`, `prefer`) are that row's fields, the pieces (`key`, `title`, `brand`, `image`, `price`, `price_text`, `url`,
   `host`, `group_label`, `group_ids`, ...) its rows here, and `copy` copies its fields (a ref too) onto each. It
   explores a row once, as soon as it is written (no 20 s settle: someone is waiting), never again on its own (a
   changed filler doesn't redo old rows, whose pieces carry reactions). No model, no web search. A service from
@@ -626,7 +627,9 @@ mirror" to a watched price, all in collections the owner (and Claude) can change
   spread 1, group true` (the kinds, each with a label, a count and a price range; Go this way makes round 1
   anchored on its pieces); round *n* asks `distance` 0.3, 0.18, 0.11 (`how_far` overrides it: Closer 0.1,
   Similar 0.3, Different 0.6, Very different 0.9) and `query` the need's name and any "This, but…" words. Only
-  the latest round is `current`; Back a round deletes it. ♥, ✕ and the shortlist (☆) are fields of the pieces
+  the latest round is `current`; Back a round deletes it. A category's `explore_avoid` and `explore_prefer`
+  (words or short phrases, split on commas, semicolons and lines) reach each round made for its needs: the
+  service leaves out pieces whose title or description holds an avoid one and ranks up those holding prefer ones. ♥, ✕ and the shortlist (☆) are fields of the pieces
   (`shop_pieces`), so exploring teaches the owner's general taste nothing (nor does choosing: a kit's layout calls
   only Collections). A piece opens on its store's page.
 - **A pick** (`shop_picks`) is made from a piece (Choose this): its price is checked daily by a `query_field`

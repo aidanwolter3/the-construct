@@ -187,7 +187,8 @@ and a cheap model configured; without them nothing is checked.
 
 The source answers Collections' `taste` fillers (decision [`shopping-kit`](decisions/shopping-kit.md),
 `src/explore.rs`, given to Collections by the server as its explorer): a filler's request, with piece keys turned
-back into the service's ids and `price_max` under `filters`, goes to `POST /api/explore`, and each item it answers
+back into the service's ids, `price_max` under `filters` and `avoid` and `prefer` as lists of phrases, goes to
+`POST /api/explore`, and each item it answers
 comes back as a piece (`key`, `title`, `brand`, `image`, `thumb`, `price`, `price_text`, `url` from `buy_url`,
 `host`, `description`, `category`, `distance`, `group`, and from its group `group_label`, `group_ids` (keys),
 `group_size`, `group_prices` like $140–$560). Pieces it was told to like, dislike or leave out never come back.
@@ -202,7 +203,8 @@ What the source calls, each with `Authorization: Bearer <token>` and, once the p
 `state_unknown`, `GET /api/state` (no header: the service's own history, taken over once), `GET /api/feed?n=`,
 `POST /api/event {id, kind}`,
 `GET /api/item/<id>` and its `/similar`, `/contrast` and `/steer?q=`, `GET /api/search?q=`, `GET /api/likes`,
-`POST /api/explore {domain?, query?, like?, unlike?, distance?, spread?, group?, exclude?, n?, filters?}`
+`POST /api/explore {domain?, query?, like?, unlike?, distance?, spread?, group?, exclude?, n?, filters?, avoid?,
+prefer?, any_kind?}` (kept to the kind of garment the query's words or the likes name)
 (`{items, groups}`: each item with `distance`, its percentile from the anchor, and `group`; each group `{group,
 label, size, price_low, price_high, items}`), `GET /api/taste`, `GET /api/taste/<n>?n=` (one taste: `{index, size, attributes, brands, categories, items, more}`,
 404 for no such taste), `POST /api/taste/summary`, `GET /api/map` (`{ids, xy, cluster, thumb, liked, skipped, p}`: every
