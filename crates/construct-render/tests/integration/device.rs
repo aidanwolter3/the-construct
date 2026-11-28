@@ -4,7 +4,7 @@
 //! old layout system's commands (hiding, deleting and pinning layouts) are
 //! gone (decision `one-layout-system`).
 
-use construct_render::interact::{Done, Effect, Loader, Session, Target, Write, Written};
+use construct_render::interact::{Done, Effect, Loaded, Loader, Session, Target, Write, Written};
 use construct_render::{Input, SceneBuilder, Viewport};
 use protocol::{DataBundle, UiNode};
 use serde_json::{Value, json};
@@ -32,6 +32,9 @@ struct Pod {
     servers: Vec<(&'static str, &'static str, bool)>,
     /// The sign-ins it was asked to start.
     signs_in: Arc<Mutex<Vec<Value>>>,
+    /// Sends device commands in the background: their answers wait here
+    /// until the test gives them.
+    background: Option<Arc<Mutex<Vec<Loaded>>>>,
 }
 
 impl Loader for Pod {
@@ -57,6 +60,17 @@ impl Loader for Pod {
                 "queries": { "local:notifications": ["local://notifications/old"] } })),
             _ => DataBundle::default(),
         }))
+    }
+    fn send_device(&self, command: &str, args: &Value, done: Loaded) -> bool {
+        let Some(waiting) = &self.background else {
+            return false;
+        };
+        self.commands
+            .lock()
+            .unwrap()
+            .push((command.to_owned(), args.clone()));
+        waiting.lock().unwrap().push(done);
+        true
     }
     fn send(&self, _write: Write, done: Done) -> bool {
         done(Written {
@@ -174,6 +188,49 @@ fn a_refused_switch_flips_back_and_says_why_until_dismissed() {
     let out = s.tap(&Target::Id("notice-dismiss".into())).unwrap();
     assert!(s.notice.is_none(), "{out:?}");
     assert!(s.scene().unwrap().find_node("notice").is_none());
+}
+
+/// The pod answering a switch slowly doesn't hold the switch: it moves on
+/// the tap, before any answer, and a refusal that comes later flips it back.
+#[test]
+fn a_channel_switch_moves_before_the_pod_answers() {
+    let (root, d) = channels();
+    let waiting = Arc::new(Mutex::new(Vec::new()));
+    let pod = Pod {
+        background: Some(waiting.clone()),
+        ..Pod::default()
+    };
+    let commands = pod.commands.clone();
+    let mut s = session(root, d, pod);
+    s.tap(&Target::Text("Matches".into())).unwrap();
+    let uri = "local://channels/events/match";
+    assert_eq!(s.data.entities[uri].get_bool("enabled"), Some(false));
+    assert_eq!(commands.lock().unwrap().len(), 1);
+    let answer = waiting.lock().unwrap().pop().unwrap();
+    answer(Err("/v1/x: HTTP 403 Forbidden not yours".into()));
+    s.poll();
+    assert_eq!(s.data.entities[uri].get_bool("enabled"), Some(true));
+    assert!(s.notice.is_some());
+}
+
+/// A refusal of the first of two quick flips doesn't undo the second.
+#[test]
+fn a_late_refusal_leaves_a_switch_flipped_again() {
+    let (root, d) = channels();
+    let waiting = Arc::new(Mutex::new(Vec::new()));
+    let pod = Pod {
+        background: Some(waiting.clone()),
+        ..Pod::default()
+    };
+    let mut s = session(root, d, pod);
+    s.tap(&Target::Text("Matches".into())).unwrap();
+    s.tap(&Target::Text("Matches".into())).unwrap();
+    let uri = "local://channels/events/match";
+    assert_eq!(s.data.entities[uri].get_bool("enabled"), Some(true));
+    let first = waiting.lock().unwrap().remove(0);
+    first(Err("refused".into()));
+    s.poll();
+    assert_eq!(s.data.entities[uri].get_bool("enabled"), Some(true));
 }
 
 #[test]

@@ -948,6 +948,21 @@ impl Loader for PodEngine {
         })
     }
 
+    /// `toggle_channel` on its own thread: the switch moves at once and
+    /// the pod's answer (or refusal) arrives through [`Session::poll`].
+    fn send_device(&self, command: &str, args: &Value, done: Loaded) -> bool {
+        if command != "toggle_channel" {
+            return false;
+        }
+        let pod = self.clone();
+        let (command, args) = (command.to_owned(), args.clone());
+        std::thread::spawn(move || {
+            let answer = pod.device_command(&command, &args);
+            done(answer.unwrap_or_else(|| Err(client_core::LOAD_OFFLINE.to_owned())));
+        });
+        true
+    }
+
     /// The engine opens the session (it keeps it in its secure store and
     /// loads home with it); answers its token once it has it.
     fn open_session(&self, path: &str, payload: &Value) -> Option<Result<String, String>> {
