@@ -1452,7 +1452,7 @@ pub fn revert_since(
     let since = args["since"].as_i64().unwrap_or(0);
     let ids: Vec<String> = {
         let mut stmt = conn
-            .prepare("SELECT id FROM edit_groups WHERE state = 'applied' AND applied_at >= ?1 ORDER BY applied_at DESC")
+            .prepare("SELECT id FROM edit_groups WHERE state IN ('applied', 'trial') AND applied_at >= ?1 ORDER BY applied_at DESC")
             .map_err(store_err)?;
         stmt.query_map([since], |r| r.get(0))
             .map_err(store_err)?
@@ -1710,12 +1710,33 @@ pub fn restore_checkpoint(
             }
         }
     }
-    // The groups applied since are undone by this.
-    conn.execute(
-        "UPDATE edit_groups SET state = 'reverted', reverted_at = ?2 WHERE state = 'applied' AND applied_at >= ?1",
-        params![at, now_secs()],
-    )
-    .map_err(store_err)?;
+    // The groups applied since, trials included, are undone by this: each
+    // records where the restore left its names, as `revert` does, so Today's
+    // card can still redo it (and a trial can't be kept off the screen).
+    let undone: Vec<String> = {
+        let mut stmt = conn
+            .prepare("SELECT id FROM edit_groups WHERE state IN ('applied', 'trial') AND applied_at >= ?1")
+            .map_err(store_err)?;
+        stmt.query_map([at], |r| r.get(0))
+            .map_err(store_err)?
+            .collect::<rusqlite::Result<_>>()
+            .map_err(store_err)?
+    };
+    for gid in undone {
+        let mut g = group(conn, &gid)?;
+        for e in &mut g.entries {
+            e.reverted_seq = Some(newest_written_seq(conn, &e.name).map_err(store_err)?);
+        }
+        conn.execute(
+            "UPDATE edit_groups SET state = 'reverted', reverted_at = ?2, entries = ?3 WHERE id = ?1",
+            params![
+                g.id,
+                now_secs(),
+                Value::Array(g.entries.iter().map(Entry::to_json).collect()).to_string()
+            ],
+        )
+        .map_err(store_err)?;
+    }
     Ok((
         json!({ "ok": failed.is_empty(), "restored": summary, "failed": failed, "checkpoint_before": before }),
         moved,

@@ -550,6 +550,72 @@ async fn a_trial_swaps_back_and_forth_and_is_kept() {
     assert_eq!(e["can_undo"], true, "{screen}");
 }
 
+/// Undo this morning (a checkpoint restore) also undoes a trial: the group says
+/// reverted, so Today's card offers Redo, not Keep, and Keep can't record a
+/// shape that is no longer on the screen.
+#[tokio::test]
+async fn restoring_a_checkpoint_reverts_a_trial_too() {
+    let env = env().await;
+    let pod_code = env.pod("mine").await;
+    let owner = env.connect_with(&pod_code, "outward").await;
+    let id = ok(
+        &env,
+        &owner,
+        "create_layout",
+        json!({"title": "Recipe", "icon": "recipe", "feeds": [["collections", "dishes"]],
+               "layout": recipe_layout()}),
+    )
+    .await["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let v = version(&env, &owner, &id).await;
+    let group = ok(
+        &env,
+        &owner,
+        "stage_edit_group",
+        json!({ "title": "Show a tip", "changes": [{ "id": id, "base_version": v,
+                "json_patch": add_text("Tip") }] }),
+    )
+    .await["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let out = ok(
+        &env,
+        &owner,
+        "apply_edit_group",
+        json!({ "id": group, "trial": true }),
+    )
+    .await;
+    let ckpt = out["checkpoint"].as_str().unwrap().to_owned();
+    let with_tip = texts(&env, &owner, &id).await;
+    assert!(with_tip.contains("\"Tip\""));
+
+    let restored = ok(&env, &owner, "restore_checkpoint", json!({ "id": ckpt })).await;
+    assert_eq!(restored["ok"], true, "{restored}");
+    assert!(!texts(&env, &owner, &id).await.contains("\"Tip\""));
+    let (_, screen) = env.get("/v1/edit-groups/screen", &pod_code).await;
+    let e = &screen["entities"][format!("edit_groups://{group}")];
+    assert_eq!(e["state"], "reverted", "{screen}");
+    assert_eq!(e["can_keep"], false, "{screen}");
+    assert_eq!(e["can_redo"], true, "{screen}");
+
+    // Redo brings the shape back.
+    let r = super::client()
+        .post(format!("{}/v1/edit-groups/apply", env.url))
+        .bearer_auth(&pod_code)
+        .json(&json!({ "id": group }))
+        .send()
+        .await
+        .unwrap();
+    assert!(r.status().is_success());
+    let redone: Value = r.json().await.unwrap();
+    assert_eq!(redone["ok"], true, "{redone}");
+    assert_eq!(redone["state"], "trial", "{redone}");
+    assert_eq!(texts(&env, &owner, &id).await, with_tip);
+}
+
 /// Decision `instant-swap`: the manifest a swapping client is sent lists a
 /// trial's screens before and after it, both served with the root; a client
 /// that doesn't swap is sent no swaps.

@@ -31,8 +31,20 @@ process under `cargo test`, so don't assume process-wide state (such as the serv
 
 Keep the tests fast (decision `ci-speed`): most of a server test's time used to be opening pods, each building this
 build's core layouts again. A process now builds them once (`construct::core::load_shared`) and dev builds optimize
-dependencies (`Cargo.toml`), so a test that opens several pods costs about one. A new test that is slow on its own
-(nextest reports it as `SLOW` past 60 s) is worth a look before it merges.
+dependencies (`Cargo.toml`), so a test that opens several pods costs about one. nextest runs each test in a process
+of its own, so the processes of one nextest run also share them through a file: the first test of a binary to open
+a pod writes the built core under the system's temporary directory (`construct-core-cache/<NEXTEST_RUN_ID>/`, about
+2 MB per test binary, runs older than a day removed), and the run's later tests read it instead of building it.
+`cargo test` and servers never write it. A new test that is slow on its own (nextest reports it as `SLOW` past 60 s)
+is worth a look before it merges.
+
+Test what a change touches while working on it (`cargo nextest run -p <crate>`, or a filter) and the whole workspace
+once before pushing. Measured in a 4-core cloud session (incremental compilation off, as `scripts/cloud_setup.sh`
+sets it): a cold build of the tests takes about 4.5 minutes; after it, touching a crate few others use
+(`source-dates`) rebuilds the tests in about 12 s, `pod-core` in about 65 s and `protocol`, which most crates use, in
+about 85 s; the whole suite then takes about 100 s under nextest and about 110 s under `cargo test` (which runs one
+test binary at a time, so its slowest binaries set its time). `cargo test` also stops at the first failing binary
+unless given `--no-fail-fast`.
 
 The Rust rendering engine (`crates/construct-render`) has golden frames: CPU frames are compared with
 `tests/data/goldens/`, and GPU frames with the same files when a wgpu adapter exists (CI's image has lavapipe,

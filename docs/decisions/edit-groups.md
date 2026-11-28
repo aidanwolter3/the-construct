@@ -40,7 +40,8 @@ Decision:
   keeps the feeds it binds now as well as those it bound then; each name is put back on its own savepoint and
   failures are reported per name), after a dry run that lists what moves, the owner's own edits it undoes and what
   home would no longer reach. It records a checkpoint of now first, so it can be undone too, and marks the groups it
-  supersedes reverted. Rows and collection definitions are not covered.
+  supersedes reverted (trials too), each with where the restore left its names, so a later redo works as after a
+  revert. Rows and collection definitions are not covered.
 - On the device: Settings' manifest declares `GET /v1/edit-groups/screen` (`edit_groups://<id>`,
   `checkpoints://<id>`) and `POST /v1/edit-groups/apply|revert`, `/v1/checkpoints/restore`, for the owner's own
   sessions only (an MCP credential uses the tools); an adopted layout can't call them. Existing vocabulary: no

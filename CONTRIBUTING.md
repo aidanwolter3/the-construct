@@ -36,6 +36,12 @@ scripts/web_build.sh && scripts/web_e2e.sh
 RUSTFLAGS="-D warnings" scripts/android_native.sh
 ```
 
+With [cargo-nextest](https://nexte.st) installed (`scripts/cloud_setup.sh` installs it), run the tests as CI does,
+which is faster and reports every failure, not just the first crate's: `cargo nextest run --workspace --profile ci &&
+cargo test --workspace --doc`. While working on a change, test what it touches (`cargo nextest run -p <crate>`, plus
+the crates that use what changed) and run the whole workspace once before pushing: a crate's rebuild takes seconds,
+the whole suite minutes.
+
 UI changes are checked with the [headless simulator](docs/simulator.md) (`cargo run -p construct-sim`; CI runs
 `scripts/sim_scenarios.sh`): there are no emulator or on-device tests.
 Some things (the Android permission prompt, push with the app killed, the macOS window) can only be checked on a
