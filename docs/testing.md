@@ -168,6 +168,62 @@ minute; the home timeline hides boosts unless `include_reblogs=true` and hides t
 small ways (covered by `test_pixelfed_recorded_timeline_normalization`); an unfavourite's count can lag; and Passport
 rejects a token whose user id equals the OAuth client's id, so the dev stack starts client ids at 1000.
 
+## Newcomer test
+
+Does a new user, with an empty pod and their own agent, get a working screen without anyone landing code, and how
+much does their agent rebuild of what the server already ships? (decision `newcomer-journeys`)
+
+```bash
+scripts/newcomer.sh /tmp/newcomer                     # every persona, against staging
+scripts/newcomer.sh /tmp/newcomer --only groceries    # one (a persona that starts from another brings it along)
+scripts/newcomer.sh /tmp/newcomer --base-url http://127.0.0.1:8080   # a local server started with CONSTRUCT_TEMP_PODS=1
+```
+
+It needs Claude Code (`claude`, signed in) on the path. For each persona in `crates/newcomer/personas/`, it makes a
+temporary pod and runs Claude Code headless in an empty directory with only that pod's MCP tools (no shell, files
+or web). A simulated user sends the persona's wishes in order and answers the agent's questions from the persona's
+"If asked". Then it checks the pod, never the agent:
+
+- the persona's `sim:` script, live on the pod at phone size (`construct-sim --base-url`);
+- every name on its `uses:` line (what the server already ships for the ask) is referenced, not copied or rebuilt;
+- home reaches every layout the agent made;
+- a reviewer reads the screenshots and the final layouts and answers each `judge:` line yes or no.
+
+Results are `pass`, `fail`, `flagged` (the reviewer said no; a fail when it happens two days running), `stuck`,
+`broken` (the server or the model failed) and `skipped` (a `fresh` persona: its wishes need the model or the web,
+which temporary pods lock). Time to working, refused calls, writes the pod's reuse hints flagged and the time they
+took, hints left on the final layouts and `note_gap` entries are recorded, never failed on.
+
+It writes `report.md`, `report.json` and a folder per persona: `transcript.jsonl` (the agent's stream),
+`shots/`, `layouts.json` and `review.json`. Pod tokens stay in memory, and the pods are deleted when it ends.
+Staging makes at most 5 temporary pods per client address an hour, so keep a run to four personas with their own
+pods. A Claude scheduled task runs it daily in a fresh cloud session (which clones `main` read-only) and adds a row
+per persona to the owner's "Newcomer runs" collection.
+
+A persona file:
+
+```markdown
+---
+id: groceries
+tier: temporary          # temporary | fresh
+max_turns: 6             # user messages before it counts as stuck
+max_budget_usd: 5        # the agent's spending cap for the persona
+---
+## Who I am
+## What I say
+1. The first message, in the person's own words; never a tool, layout or collection name.
+2. The next, sent when the agent is done with the first.
+## If asked
+- Facts the simulated user answers from.
+## Done when
+sim: shot home; click Groceries; type title Oat milk; click tag:send:title; wait-text 10000 Oat milk
+uses: @core/checklist
+judge:
+- A yes-or-no question about the screenshots.
+```
+
+`starts_from: <id>` runs a persona on another's pod after it, as a later visit.
+
 ## Manual checks
 
 The offline outbox, end to end on the desktop app (the state directory is `~/Library/Application Support/The

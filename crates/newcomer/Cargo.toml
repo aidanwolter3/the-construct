@@ -1,0 +1,15 @@
+[package]
+name = "newcomer"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+# The newcomer test (decision `newcomer-journeys`): an agent with nothing but
+# a new pod's MCP tools builds what a scripted person asks for; the simulator
+# and a reviewer check the result. `scripts/newcomer.sh` runs it against
+# staging. See docs/testing.md "Newcomer test".
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+reqwest.workspace = true

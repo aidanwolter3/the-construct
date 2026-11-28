@@ -1112,6 +1112,7 @@ the engine, the renderer and its clients, and the test tools.
 | `construct-render` | The renderer, the desktop and Android apps, the pod's previews |
 | `construct-web`, `construct-sim` | The web client and the headless simulator |
 | `e2e`, `fake-pixelfed/` | The end-to-end suite and a fake Pixelfed to run it against |
+| `newcomer` | The newcomer test: an agent with only a new pod's MCP tools builds what a scripted person asks for |
 | `design-lessons` | Reads this document into the course's JSON |
 
 ### 9.2 Testing
@@ -1128,6 +1129,10 @@ device says so.
   through a proxy that can be cut to test offline behaviour.
 - **The simulator** (`construct-sim`): scripts like `click Like; assert-text Unlike; shot after` drive the real
   renderer and write PNGs; CI runs the scenarios and pull requests embed the screenshots.
+- **The newcomer test** (`crates/newcomer`, run daily against staging): for each scripted person, a new empty
+  pod and an agent with nothing but its MCP tools build what they ask for in plain words; the simulator, the pod's
+  own reuse hints and a reviewer reading the screenshots check the result. It answers whether a new user gets a
+  working screen without anyone landing code, and how much the agent rebuilt of what the server already ships.
 - **Checks**: `cargo fmt`, `clippy -D warnings`, and scripts for decisions, test data (always made up) and old
   names.
 
