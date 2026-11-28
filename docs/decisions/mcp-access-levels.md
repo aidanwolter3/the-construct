@@ -63,5 +63,14 @@ could take it out of the pod. Below `outward`, the list now gives each feed with
 sources, `updated_at` and the event count stay); `set_calendar_feed` and `rotate_calendar_feed`, which answer a
 URL, already needed `outward`.
 
+Since then too (2026-11-28, security audit): a `for_each` agent filler (decision `research-per-row`) made every
+link in its request fetchable, the parent row's and the context rows' values included, so an `edit` connection
+could add a row (`add_row` on the shopping kit's `shop_needs`, `find_web: true`) whose notes carry a URL holding
+what it read, and the research's `web_fetch` sent it. A link in a value Claude wrote below `outward` now stays in
+the request as text, but isn't one the research may fetch (`AgentRequest::links_from`, the request without those
+values); without the `web_search` jack the API's own fetch reads any link in the conversation, so such a request
+gets none. And `use_kit` needs `outward` for a kit that brings fillers (`shopping`), as `define_collection` with
+fillers does; `checklist` stays `edit`.
+
 Not done: per-action approval on a device (the other option) and per-tool grants. A connection at `outward` is as
 trusted as before this decision, so the owner should give it only to an app they trust with that.

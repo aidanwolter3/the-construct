@@ -644,6 +644,7 @@ async fn agent_fills_search_with_the_pods_own_tools_when_web_search_is_plugged()
             max_fetches: 0,
             key: None,
             current: &[],
+            links_from: None,
         })
         .await
         .unwrap();
@@ -665,6 +666,97 @@ async fn agent_fills_search_with_the_pods_own_tools_when_web_search_is_plugged()
             .contains("https://shop.example/filters"),
         "{result}"
     );
+}
+
+/// Answers with each of `steps` in turn.
+struct Steps {
+    steps: Vec<Value>,
+    bodies: Mutex<Vec<Value>>,
+}
+
+impl construct_agent::Transport for Steps {
+    fn post<'a>(&'a self, body: &'a Value) -> BoxFuture<'a, Result<(u16, Value), String>> {
+        let n = {
+            let mut b = self.bodies.lock().unwrap();
+            b.push(body.clone());
+            b.len()
+        };
+        let step = self.steps[(n - 1).min(self.steps.len() - 1)].clone();
+        Box::pin(async move { Ok((200, step)) })
+    }
+}
+
+/// A link in the request outside `links_from` (one Claude wrote below
+/// outward access, decision `mcp-access-levels`) is not the pod's
+/// `web_fetch` to read; one inside it is.
+#[tokio::test]
+async fn agent_fetches_only_the_links_its_request_may_reach() {
+    let site = Arc::new(Site::default());
+    let base = serve(site.clone()).await;
+    let (theirs, owners) = (format!("{base}/page?d=secret"), format!("{base}/page"));
+    let fetch = |id: &str, url: &str| {
+        json!({"stop_reason": "tool_use", "content": [
+            {"type": "tool_use", "id": id, "name": "web_fetch", "input": {"url": url}}]})
+    };
+    let steps = Arc::new(Steps {
+        steps: vec![
+            fetch("t1", &theirs),
+            fetch("t2", &owners),
+            json!({"stop_reason": "tool_use", "content": [
+                {"type": "tool_use", "id": "t3", "name": "save_rows", "input": {"rows": [{"store": "Shop"}]}}]}),
+        ],
+        bodies: Mutex::new(Vec::new()),
+    });
+    let agent = Arc::new(construct_agent::Agent::new(
+        steps.clone(),
+        None,
+        "capable".into(),
+    ));
+    let adapter = CollectionsAdapter::with_caps(Caps::default())
+        .with_private_hosts(true)
+        .with_agent(Some(
+            Arc::new(source_collections::agent::PodAgent::new(agent)) as Arc<dyn FillAgent>,
+        ));
+    let pod: Pod = Arc::new(AppState::in_memory(vec![Arc::new(adapter)]));
+    plug_search(&pod, json!({"provider": "searxng", "base_url": base}));
+    let fields = vec![source_collections::agent::AgentField {
+        name: "store".into(),
+        kind: source_collections::model::Kind::Text,
+        options: Vec::new(),
+    }];
+    let pod_agent = pod
+        .adapter::<CollectionsAdapter>()
+        .unwrap()
+        .agent()
+        .unwrap()
+        .clone();
+    let links = format!("Find filters.\n\n- name: filters, like {owners}");
+    pod_agent
+        .fill(AgentRequest {
+            pod: &pod,
+            title: "Where to buy",
+            prompt: &format!("{links}\n- notes: see {theirs}"),
+            fields: &fields,
+            today: "2026-11-09",
+            max_searches: 0,
+            max_fetches: 2,
+            key: None,
+            current: &[],
+            links_from: Some(&links),
+        })
+        .await
+        .unwrap();
+    let bodies = steps.bodies.lock().unwrap();
+    let result =
+        |n: usize| bodies[n]["messages"].as_array().unwrap().last().unwrap()["content"][0].clone();
+    let refused = result(1);
+    assert_eq!(refused["is_error"], true, "{refused}");
+    assert!(
+        refused.to_string().contains("only pages already seen"),
+        "{refused}"
+    );
+    let read = result(2);
+    assert!(read.to_string().contains("$5.95"), "{read}");
 }
 
 /// Store the web_search jack's config directly (a local http SearXNG, which

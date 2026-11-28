@@ -191,7 +191,7 @@ fn seen_key(url: &str) -> Option<String> {
 }
 
 /// The `http(s)` URLs written in `text` (prose, JSON or markup).
-fn urls_in(text: &str) -> Vec<&str> {
+pub fn urls_in(text: &str) -> Vec<&str> {
     let mut out = Vec::new();
     for word in text.split(|c: char| {
         c.is_whitespace()

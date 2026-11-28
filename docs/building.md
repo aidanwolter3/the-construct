@@ -181,7 +181,8 @@ filler or a model wrote, and another pod's publication in `describe_publication`
   `shop_needs`, `shop_rounds`, `shop_pieces`, `shop_picks`, `shop_prices`) and three layouts (`@core/shopping`, which
   opens `@core/shopping_need` and `@core/shopping_explore`): using it again changes nothing, except to bring in
   what the kit gained since (decision [`kits-upgrade-in-place`](decisions/kits-upgrade-in-place.md)), and it seeds
-  the categories Clothes (explored through the taste service), Home and Other (options found on the web). See
+  the categories Clothes (explored through the taste service), Home and Other (options found on the web). A kit
+  that brings fillers (`shopping`) needs outward access, as `define_collection` with fillers does. See
   [Shopping](#shopping).
 - `set_theme` also takes `scale`: `corner_s`, `corner_m`, `corner_l`, `pad_s`, `pad_m`, `pad_l` (dp) and
   `title_weight`, which core components draw with, so a pod restyles them without copying them.
@@ -527,7 +528,10 @@ so change a site with `set_filler` and its id rather than removing and adding it
   (`every`: also once `every_minutes` have passed since its research, e.g. 10080 for a weekly re-check, so a write
   to one row doesn't research the others again); a write to the other collection starts a fill 20 s later.
   A row that is deleted takes its answers with it. `keep: [{field, equals}]` (any filler that adds and removes
-  rows) keeps rows someone marked, an option put in the bag, when a refill leaves them out.
+  rows) keeps rows someone marked, an option put in the bag, when a refill leaves them out. A link in a value
+  Claude wrote below `outward` access (the row's or a `context` row's) reaches the request as text, but the
+  research can't fetch it (and without the `web_search` jack, a request holding one has no `web_fetch`): reaching
+  a new host is outward (decision [`mcp-access-levels`](decisions/mcp-access-levels.md)).
 - **Taste per row** (decision [`shopping-kit`](decisions/shopping-kit.md)): a `taste` filler, `{for_each:
   {collection, link, where?}, request: {part: field}, map: {field: part}, copy?, key?}`, asks the owner's taste
   service (`POST /api/explore`, through the `taste` source and its jack) for pieces for each row of another
