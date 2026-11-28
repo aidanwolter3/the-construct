@@ -1377,6 +1377,22 @@ pub fn open_pod_host_allowed(headers: &HeaderMap, uri: &Uri, any_ip: bool) -> bo
             .is_ok_and(|a| any_ip || a.is_loopback() || a == EMULATOR_ALIAS)
 }
 
+/// Headers a reverse proxy adds. A proxy on this machine makes every
+/// internet request look loopback (nginx sends `Host: 127.0.0.1:8080` by
+/// default), so a request carrying one never gets the open pod.
+const PROXY_HEADERS: [&str; 5] = [
+    "forwarded",
+    "x-forwarded-for",
+    "x-forwarded-host",
+    "x-real-ip",
+    "cf-connecting-ip",
+];
+
+/// Whether a request came through a reverse proxy (see [`PROXY_HEADERS`]).
+fn proxied(headers: &HeaderMap) -> bool {
+    PROXY_HEADERS.iter().any(|h| headers.contains_key(*h))
+}
+
 /// Whether a write to the open pod comes from another site: a browser tells
 /// us with `Sec-Fetch-Site` (anything but `same-origin` or `none`) or with
 /// an `Origin` that is not the `Host` it asked. Native clients and curl send
@@ -1649,6 +1665,14 @@ async fn dispatch(State(host): State<Arc<Host>>, mut req: Request) -> Response {
             return json_error(
                 StatusCode::FORBIDDEN,
                 json!({ "error": "cross_site_not_allowed" }),
+            );
+        }
+        (None, Some(_)) if proxied(req.headers()) => {
+            tracing::warn!("open pod refused for a request through a proxy");
+            metrics::inc(metrics::AUTH_FAILURES, &[("kind", "open_pod_host")]);
+            return json_error(
+                StatusCode::FORBIDDEN,
+                json!({ "error": "proxied_not_allowed" }),
             );
         }
         (None, Some(open))

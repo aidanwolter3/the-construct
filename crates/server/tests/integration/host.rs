@@ -760,6 +760,51 @@ async fn the_open_pod_serves_callers_without_a_token() {
     tokio::time::sleep(Duration::from_millis(1)).await;
 }
 
+/// A proxy on the same machine sends a loopback `Host` for internet
+/// callers: a request with a proxy's header never gets the open pod, and a
+/// pod token still works through it.
+#[tokio::test]
+async fn the_open_pod_refuses_proxied_requests() {
+    let env = env_with(HostConfig {
+        open_pod: Some("dev".into()),
+        ..HostConfig::default()
+    })
+    .await;
+    let client = reqwest::Client::new();
+    let port = env.server.url.rsplit(':').next().unwrap().to_owned();
+    for (name, value) in [
+        ("x-forwarded-for", "203.0.113.7"),
+        ("forwarded", "for=203.0.113.7"),
+        ("x-real-ip", "203.0.113.7"),
+        ("x-forwarded-host", "pod.example"),
+        ("cf-connecting-ip", "203.0.113.7"),
+    ] {
+        let resp = client
+            .get(env.url("/v1/construct"))
+            .header("host", format!("127.0.0.1:{port}"))
+            .header(name, value)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::FORBIDDEN, "{name}");
+        let body: Value = resp.json().await.unwrap();
+        assert_eq!(body["error"], "proxied_not_allowed", "{name}");
+    }
+    let token = env.create("me").await;
+    let resp = client
+        .get(env.url("/v1/construct"))
+        .header("x-forwarded-for", "203.0.113.7")
+        .bearer_auth(token)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        resp.status(),
+        StatusCode::OK,
+        "a pod token works through a proxy"
+    );
+}
+
 /// Security audit #31 (L1): a DNS-rebinding page reaches the loopback
 /// server under its own domain name, so the open pod refuses that Host.
 /// Pod tokens work with any Host.
