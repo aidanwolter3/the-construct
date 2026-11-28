@@ -165,7 +165,7 @@ pub(crate) fn tools() -> Vec<Value> {
 }
 
 fn error(v: Value) -> Value {
-    json!({ "content": [{ "type": "text", "text": serde_json::to_string_pretty(&v).unwrap_or_default() }],
+    json!({ "content": [{ "type": "text", "text": serde_json::to_string(&v).unwrap_or_default() }],
             "isError": true, "structuredContent": v })
 }
 

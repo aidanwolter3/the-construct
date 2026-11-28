@@ -816,13 +816,14 @@ fn base_tools() -> Vec<Value> {
 }
 
 /// A tool result: the value as text (and structured), or an error the model
-/// can act on.
+/// can act on. The text is compact JSON: indenting it about quadruples what a
+/// model reads (a call's `pretty` argument indents it, [`pretty_result`]).
 fn tool_result(r: Result<Value, Value>) -> Value {
     let (value, is_error) = match r {
         Ok(v) => (v, false),
         Err(e) => (e, true),
     };
-    let text = serde_json::to_string_pretty(&value).unwrap_or_default();
+    let text = serde_json::to_string(&value).unwrap_or_default();
     let mut out = json!({ "content": [{ "type": "text", "text": text }], "isError": is_error });
     if value.is_object() {
         out["structuredContent"] = value;
@@ -848,16 +849,25 @@ async fn call_tool(pod: &Pod, headers: &HeaderMap, params: &Value) -> Value {
     if let Some(call) = crate::timing::current() {
         call.set_kind(format!("mcp {name}"));
     }
-    let args = params
+    let mut args = params
         .get("arguments")
         .cloned()
         .unwrap_or_else(|| json!({}));
+    // Any tool takes `pretty` (for a person reading the answer), and none
+    // sees it.
+    let pretty = args
+        .as_object_mut()
+        .and_then(|a| a.remove("pretty"))
+        .is_some_and(|p| p == json!(true));
     // The call log (decision `mcp-call-log`): every call an MCP credential
     // makes, allowed or not, recorded where it can't write.
     let caller = crate::call_log::caller(pod, headers);
     let granted = crate::grant::connection_grant(pod, headers).is_some();
     let logged = caller.as_ref().map(|_| args.clone());
-    let out = call_tool_checked(pod, headers, name, args).await;
+    let mut out = call_tool_checked(pod, headers, name, args).await;
+    if pretty {
+        pretty_result(&mut out);
+    }
     if let (Some(credential), Some(args)) = (caller, logged) {
         let call = crate::call_log::entry(
             &credential,
@@ -946,8 +956,27 @@ fn strip_result(out: &mut Value, keep: &std::collections::BTreeSet<String>) {
             };
             if let Ok(mut v) = serde_json::from_str::<Value>(text) {
                 crate::grant::strip_untrusted(&mut v, keep);
-                p["text"] = json!(serde_json::to_string_pretty(&v).unwrap_or_default());
+                p["text"] = json!(serde_json::to_string(&v).unwrap_or_default());
             }
+        }
+    }
+}
+
+/// A tool's answer with every text part that is JSON indented, for a call
+/// with `pretty`.
+fn pretty_result(out: &mut Value) {
+    let Some(parts) = out["content"].as_array_mut() else {
+        return;
+    };
+    for p in parts {
+        if p["type"] != "text" {
+            continue;
+        }
+        let Some(text) = p["text"].as_str() else {
+            continue;
+        };
+        if let Ok(v) = serde_json::from_str::<Value>(text) {
+            p["text"] = json!(serde_json::to_string_pretty(&v).unwrap_or_default());
         }
     }
 }
