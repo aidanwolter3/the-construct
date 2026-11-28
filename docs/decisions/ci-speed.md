@@ -40,3 +40,20 @@ share a group, and a new push cancels the old run; every other run has a group o
 time through the deploy job's own group (`deploy-staging`), and the deploy job first checks that its commit is still
 main's head: if a newer commit landed, its run deploys that one instead, so a slower run of an older commit can't put
 staging back. A run whose newer successor fails its checks leaves staging where it was, as a red main does anyway.
+
+**A nextest run shares the core between its processes** (2026-11-28). nextest runs each test in a process of its
+own, so `load_shared` helped `cargo test` but not CI: each server test still built the core (about 1.2 s of its
+1.4 s alone), and the workspace's tests took about 655 s of test time, 163 s wall, on 4 cores. Of that build,
+three quarters is the older files of the core layouts, which a pod's `@core/` names keep as their history, so
+building only the newest isn't an option. `load_shared` now also keeps each core it builds as a file under the
+system's temporary directory, `construct-core-cache/<NEXTEST_RUN_ID>/<hash>.json`, and a later process of the same
+run reads it instead of building it. The hash covers the test binary's path and everything `load` reads by content
+(not by address, which differs between processes), and the run id is new for every run, so a file never outlives
+the build that wrote it: no stale core after a change to a file or to the builder's code. Outside nextest there is
+no run id and nothing is read or written; a file that can't be read or written means building the core as before.
+Files are written whole and renamed into place, and runs older than a day are removed when a run writes its first.
+The same run in the same session: about 400 s of test time, 98 s wall; the server tests from 327 s to 138 s.
+
+Considered: optimizing `pod-core`, `construct-elements` and `protocol` in dev builds cut the core build from about
+1.6 s to 0.9 s but made every rebuild of those crates slower; a cache kept across runs would need a key for the
+builder's own code, which the run id makes unnecessary.

@@ -304,15 +304,28 @@ pub fn load(catalog: &Catalog) -> Result<Core, String> {
 /// opening a pod costs (seconds in a debug build, so most of a server
 /// test). A catalog's files are `'static`, so it is known by where they
 /// are and by what its sources declare ([`catalog_key`]).
+///
+/// Under nextest, which runs each test in a process of its own, the
+/// processes of one run share it too ([`run_cache`], decision `ci-speed`).
 pub fn load_shared(catalog: &Catalog) -> Result<Arc<Core>, String> {
     static BUILT: std::sync::Mutex<BTreeMap<String, Arc<Core>>> =
         std::sync::Mutex::new(BTreeMap::new());
-    let key = catalog_key(catalog);
+    let key = catalog_key(catalog, false);
     if let Some(core) = BUILT.lock().unwrap_or_else(|e| e.into_inner()).get(&key) {
         return Ok(core.clone());
     }
     // Built outside the lock: two pods opening at once may both build it.
-    let core = Arc::new(load(catalog)?);
+    let cache = run_cache::path(catalog);
+    let core = match cache.as_deref().and_then(run_cache::read) {
+        Some(core) => Arc::new(core),
+        None => {
+            let core = Arc::new(load(catalog)?);
+            if let Some(path) = &cache {
+                run_cache::write(path, &core);
+            }
+            core
+        }
+    };
     BUILT
         .lock()
         .unwrap_or_else(|e| e.into_inner())
@@ -321,33 +334,152 @@ pub fn load_shared(catalog: &Catalog) -> Result<Arc<Core>, String> {
     Ok(core)
 }
 
+/// The cores a nextest run's processes built, as files, so the next test
+/// process of the run reads one instead of building it again (about a
+/// second in a debug build, most of a server test's time under nextest).
+///
+/// A file is kept for one run of one test binary only: its path holds the
+/// run's id (`NEXTEST_RUN_ID`), the binary's path and a hash of everything
+/// [`load`] reads by content ([`catalog_key`]), so a change to the builder's
+/// code or to a file is never read from an older build. Outside nextest
+/// (`cargo test`, a server) there is no run id and nothing is written. Any
+/// failure to read or write it builds the core as before.
+mod run_cache {
+    use std::collections::BTreeMap;
+    use std::path::{Path, PathBuf};
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    use serde::{Deserialize, Serialize};
+    use serde_json::Value;
+    use sha2::{Digest, Sha256};
+
+    use super::{Catalog, Core, catalog_key};
+
+    /// Under the system's temporary directory.
+    const DIR: &str = "construct-core-cache";
+    /// Runs older than this are removed when a run writes its first file.
+    const KEEP: Duration = Duration::from_secs(24 * 3600);
+
+    #[derive(Serialize)]
+    struct Saving<'a> {
+        objects: BTreeMap<&'a str, &'a Value>,
+        features: &'a BTreeMap<String, String>,
+        names: &'a BTreeMap<String, Vec<(String, String)>>,
+    }
+
+    #[derive(Deserialize)]
+    struct Saved {
+        objects: BTreeMap<String, Value>,
+        features: BTreeMap<String, String>,
+        names: BTreeMap<String, Vec<(String, String)>>,
+    }
+
+    /// Where this process's run keeps `catalog`'s core: `None` outside
+    /// nextest.
+    pub(super) fn path(catalog: &Catalog) -> Option<PathBuf> {
+        let run = std::env::var("NEXTEST_RUN_ID").ok()?;
+        if run.is_empty() || !run.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-') {
+            return None;
+        }
+        let exe = std::env::current_exe().ok()?;
+        let mut h = Sha256::new();
+        h.update(exe.as_os_str().as_encoded_bytes());
+        h.update([0]);
+        h.update(catalog_key(catalog, true).as_bytes());
+        let name: String = h.finalize().iter().map(|b| format!("{b:02x}")).collect();
+        Some(
+            std::env::temp_dir()
+                .join(DIR)
+                .join(run)
+                .join(format!("{name}.json")),
+        )
+    }
+
+    pub(super) fn read(path: &Path) -> Option<Core> {
+        let text = std::fs::read(path).ok()?;
+        let saved: Saved = serde_json::from_slice(&text).ok()?;
+        Some(Core {
+            objects: saved
+                .objects
+                .into_iter()
+                .map(|(id, v)| (id, Arc::new(v)))
+                .collect(),
+            features: saved.features,
+            names: saved.names,
+        })
+    }
+
+    /// Written whole then renamed into place, so a process reading it at the
+    /// same time sees the whole file or none.
+    pub(super) fn write(path: &Path, core: &Core) {
+        let Some(run_dir) = path.parent() else {
+            return;
+        };
+        if !run_dir.exists() {
+            if let Some(root) = run_dir.parent() {
+                prune(root);
+            }
+            if std::fs::create_dir_all(run_dir).is_err() {
+                return;
+            }
+        }
+        let saving = Saving {
+            objects: core
+                .objects
+                .iter()
+                .map(|(id, v)| (id.as_str(), v.as_ref()))
+                .collect(),
+            features: &core.features,
+            names: &core.names,
+        };
+        let Ok(text) = serde_json::to_vec(&saving) else {
+            return;
+        };
+        let tmp = path.with_extension(format!("{}.tmp", std::process::id()));
+        if std::fs::write(&tmp, text).is_ok() && std::fs::rename(&tmp, path).is_err() {
+            let _ = std::fs::remove_file(&tmp);
+        }
+    }
+
+    /// Remove the runs last written more than [`KEEP`] ago.
+    fn prune(root: &Path) {
+        let Ok(entries) = std::fs::read_dir(root) else {
+            return;
+        };
+        for e in entries.flatten() {
+            let old = e
+                .metadata()
+                .and_then(|m| m.modified())
+                .ok()
+                .and_then(|t| t.elapsed().ok())
+                .is_some_and(|age| age > KEEP);
+            if old {
+                let _ = std::fs::remove_dir_all(e.path());
+            }
+        }
+    }
+}
+
 /// Everything [`load`] reads from `catalog`: each file by its place and
-/// its text's address (texts are `'static`, so one address is one text),
+/// its text's address (texts are `'static`, so one address is one text) or,
+/// `by_content`, the text itself (the same in every process of a build),
 /// and each source's manifest, core layouts and jacks.
-fn catalog_key(catalog: &Catalog) -> String {
+fn catalog_key(catalog: &Catalog, by_content: bool) -> String {
     use std::fmt::Write;
+    let text = |t: &'static str| {
+        if by_content {
+            t.to_owned()
+        } else {
+            format!("{:p}+{}", t.as_ptr(), t.len())
+        }
+    };
     let mut k = String::new();
     for f in catalog.component_files() {
-        let _ = write!(
-            k,
-            "c:{}/{}/{}@{:p}+{};",
-            f.dir,
-            f.name,
-            f.file,
-            f.text.as_ptr(),
-            f.text.len()
-        );
+        let _ = write!(k, "c:{}/{}/{}@{};", f.dir, f.name, f.file, text(f.text));
     }
     for f in catalog.files() {
-        let _ = write!(
-            k,
-            "l:{}/{}/{}@{:p}+{};",
-            f.dir,
-            f.app_id,
-            f.name,
-            f.text.as_ptr(),
-            f.text.len()
-        );
+        let _ = write!(k, "l:{}/{}/{}@{};", f.dir, f.app_id, f.name, text(f.text));
     }
     for (id, m) in catalog.sources() {
         let _ = write!(k, "s:{id}:{m:?};");
@@ -1114,6 +1246,39 @@ mod tests {
                 {"type": "core://Children"},
                 {"type": "core://IfArg", "arg": "chevron",
                     "then": {"type": "core://Text", "style": "Title", "value_expr": "›"}}]}})
+    }
+
+    #[test]
+    fn a_core_read_from_the_run_cache_is_the_core_written() {
+        let core = load(&Catalog::empty()).unwrap();
+        assert!(!core.objects.is_empty());
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("run").join("core.json");
+        run_cache::write(&path, &core);
+        let read = run_cache::read(&path).expect("the written core reads back");
+        assert_eq!(read.objects, core.objects);
+        assert_eq!(read.features, core.features);
+        assert_eq!(read.names, core.names);
+        // Nothing left half-written beside it.
+        let files: Vec<_> = std::fs::read_dir(path.parent().unwrap())
+            .unwrap()
+            .flatten()
+            .map(|e| e.file_name())
+            .collect();
+        assert_eq!(files, ["core.json"]);
+        // A file that isn't a whole core is built again instead.
+        std::fs::write(&path, b"{\"objects\":").unwrap();
+        assert!(run_cache::read(&path).is_none());
+    }
+
+    #[test]
+    fn the_run_cache_key_is_the_files_text_not_where_it_is() {
+        let catalog = Catalog::empty();
+        let by_content = catalog_key(&catalog, true);
+        assert_eq!(by_content, catalog_key(&catalog, true));
+        let f = catalog.component_files().first().expect("a component file");
+        assert!(by_content.contains(f.text));
+        assert!(!catalog_key(&catalog, false).contains(f.text));
     }
 
     #[test]
