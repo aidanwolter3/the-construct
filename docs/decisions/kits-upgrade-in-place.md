@@ -25,5 +25,5 @@ client build. A pod gets the new fields when the kit is used again (Claude does 
 
 Later: a new core layout may name a kit field that a pod's collections don't have yet, and every change to those
 collections was then refused as breaking it (`breaks_layout`), the upgrade included. A collection change is now
-refused only for a break it causes: a layout already broken before the change, in the same place and the same
-way, doesn't block it.
+refused only for a break it causes: a layout already broken before the change doesn't block it (the check names
+only a layout's first break, so comparing breaks would block a change that mends one of several).
