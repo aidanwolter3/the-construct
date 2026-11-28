@@ -382,10 +382,11 @@ notification's layout and `target_uri` screen; `mark_read` and `mark_all_read` m
 `next_before`; older pages stay when the inbox is listed again). `open_settings` and `open_inbox`, retired from new
 layouts, still present the `settings` layout as a panel and `inbox` as a sheet for versions written before.
 `toggle_channel` flips the switch at once and the engine tells
-the pod (registering the device first), flipping it back when refused. `set_server` hands the platform another of
+the pod on its own thread (registering the device first, `Loader::send_device`), so the tap never waits on the
+network; a refusal, when it comes, flips it back unless the user has flipped it again since. `set_server` hands the platform another of
 `local:servers` (`Effect::SwitchServer`). A refused write or device command shows a notice bar at the
 bottom (the pod's `detail`, else its error, with Dismiss; tagged `notice` and `notice-dismiss`) until dismissed.
-These commands (`Loader::device_command`) block the session while the pod answers. Left to
+The other commands (`Loader::device_command`) block the session while the pod answers. Left to
 its own ticket: `request_notification_permission` (#168).
 `action.link.open` opens an `http(s)` address in the browser (an `ACTION_VIEW` intent on Android, `open` or
 `xdg-open` on desktops, `rundll32 url.dll,FileProtocolHandler` on Windows). Desktops hand the opener only `http`,

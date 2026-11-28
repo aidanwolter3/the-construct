@@ -621,6 +621,13 @@ enum Answer {
     },
     /// The desktop's file dialog closed with these files.
     Picked(Vec<Result<std::path::PathBuf, String>>),
+    /// A device command sent in the background ([`Loader::send_device`])
+    /// came back; `flip` is the switch it flipped, put back if refused.
+    Device {
+        command: String,
+        flip: Option<(String, bool)>,
+        result: Result<DataBundle, String>,
+    },
 }
 
 /// What undoes a write's local change when the pod refuses it.
@@ -655,6 +662,12 @@ pub trait Loader: Send {
     /// to merge after it; `None` when this loader doesn't run it.
     fn device_command(&self, _command: &str, _args: &Value) -> Option<Result<DataBundle, String>> {
         None
+    }
+    /// [`Loader::device_command`] off the caller's thread, calling `done`
+    /// with its answer; false when this loader can't (the session then
+    /// runs it in place). A tap's switch shouldn't wait on the network.
+    fn send_device(&self, _command: &str, _args: &Value, _done: Loaded) -> bool {
+        false
     }
     /// Sends a write, off the caller's thread where it can, and calls
     /// `done` with the answer; false when this loader sends nothing.
@@ -2384,6 +2397,28 @@ impl Session {
                 }
                 Answer::Picked(files) => {
                     self.dialog_closed(files);
+                    continue;
+                }
+                Answer::Device {
+                    command,
+                    flip,
+                    result,
+                } => {
+                    match result {
+                        Ok(d) => self.merge_data(d),
+                        Err(e) => {
+                            eprintln!("construct-render: {command} refused: {e}");
+                            // Back, unless the user flipped it again since.
+                            if let Some((uri, on)) = flip
+                                && let Some(c) = self.data.entities.get_mut(&uri)
+                                && c.get("enabled").is_some_and(crate::bind::truthy) == on
+                            {
+                                c.set("enabled", !on);
+                            }
+                            self.notice = Some(notice_text(&e));
+                            self.last_error = Some(e);
+                        }
+                    }
                     continue;
                 }
                 Answer::Data { path, result } => {
@@ -4806,8 +4841,9 @@ impl Session {
         }
     }
 
-    /// `toggle_channel`: the switch flips at once, then the pod is told; a
-    /// refusal flips it back and says why.
+    /// `toggle_channel`: the switch flips at once and the pod is told in
+    /// the background where the loader can (the tap doesn't wait on the
+    /// network); a refusal flips it back and says why.
     fn toggle_channel(&mut self, layout: &str, id: &str, out: &mut Vec<Effect>) {
         let uri = format!("local://channels/{layout}/{id}");
         let Some(c) = self.data.entities.get_mut(&uri) else {
@@ -4817,10 +4853,30 @@ impl Session {
         let on = !c.get("enabled").is_some_and(crate::bind::truthy);
         c.set("enabled", on);
         let args = json!({ "layout": layout, "id": id, "enabled": on });
-        let answer = self
-            .loader
-            .as_ref()
-            .and_then(|l| l.device_command("toggle_channel", &args));
+        let Some(loader) = self.loader.as_ref() else {
+            c.set("enabled", !on);
+            return self.device_answer("toggle_channel", args, None, out);
+        };
+        let answered = self.answered.clone();
+        let images = self.images.clone();
+        let flip = Some((uri.clone(), on));
+        let done: Loaded = Box::new(move |result| {
+            if let Ok(mut g) = answered.lock() {
+                g.push(Answer::Device {
+                    command: "toggle_channel".into(),
+                    flip,
+                    result,
+                });
+            }
+            images.wake();
+        });
+        if loader.send_device("toggle_channel", &args, done) {
+            out.push(Effect::Device {
+                command: "toggle_channel".into(),
+            });
+            return;
+        }
+        let answer = loader.device_command("toggle_channel", &args);
         if !matches!(answer, Some(Ok(_)))
             && let Some(c) = self.data.entities.get_mut(&uri)
         {
