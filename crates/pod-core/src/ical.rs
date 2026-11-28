@@ -421,7 +421,7 @@ pub fn tool_specs() -> Vec<Value> {
                 "confirm": { "type": "string", "description": "The review_id of the review the user approved" } },
                 "required": ["name", "sources"] } }),
         json!({ "name": "list_calendar_feeds",
-            "description": "The pod's calendar feeds (set_calendar_feed): each one's url, title, sources and how many events it carries.",
+            "description": "The pod's calendar feeds (set_calendar_feed): each one's title, sources and how many events it carries, and its url for a connection with outward access (anyone with the url can read the feed).",
             "inputSchema": { "type": "object", "properties": {} } }),
         json!({ "name": "revoke_calendar_feed",
             "description": "Delete a calendar feed: its url stops working at once and its copy leaves the server (subscribers' apps keep what they last fetched until they refresh).",
@@ -617,8 +617,13 @@ async fn list(pod: &Pod, base: Option<&str>) -> Result<Value, Value> {
     let mut out = Vec::new();
     for f in feeds {
         let events = events(pod, &f.sources, crate::util::now_secs()).await;
-        let mut v = json!({ "name": f.name, "title": f.title, "url": url(base, &f.token),
+        let mut v = json!({ "name": f.name, "title": f.title,
             "sources": f.sources, "updated_at": f.updated_at });
+        // The url reads the feed from anywhere: only an outward connection
+        // gets it (decision `mcp-access-levels`).
+        if !crate::mcp::below_outward() {
+            v["url"] = json!(url(base, &f.token));
+        }
         match events {
             Ok(e) => v["events"] = json!(e.len()),
             Err(e) => v["problem"] = e,
