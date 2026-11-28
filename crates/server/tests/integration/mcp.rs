@@ -5,6 +5,7 @@
 
 mod access;
 mod call_log;
+mod compact;
 mod construct;
 mod edit_groups;
 mod grants;
