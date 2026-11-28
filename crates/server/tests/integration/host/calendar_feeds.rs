@@ -635,3 +635,71 @@ async fn a_scoped_credential_writes_no_rows_a_feed_reads() {
     assert_eq!(r["error"], "grant_refuses", "{r}");
     assert!(r.to_string().contains("others see"), "{r}");
 }
+
+/// Decision `mcp-access-levels`: a feed's url reads it from anywhere, so
+/// only an outward connection is given it; read and edit ones list the feed
+/// without it.
+#[tokio::test]
+async fn only_an_outward_connection_lists_a_feeds_url() {
+    let (env, _files) = public_env().await;
+    env.create("plans").await;
+    let key = mcp_key(&env, "plans").await;
+    define(
+        &env,
+        &key,
+        "focus_days",
+        json!([{ "name": "date", "type": "date" }, { "name": "area", "type": "text" }]),
+    )
+    .await;
+    add(
+        &env,
+        &key,
+        "focus_days",
+        json!({ "date": "2030-03-09", "area": "House" }),
+    )
+    .await;
+    let sources = json!([{ "collection": "focus_days", "start": "date", "title": "{area} day" }]);
+    let review = tool(
+        &env,
+        &key,
+        "set_calendar_feed",
+        json!({ "name": "mine", "sources": sources }),
+    )
+    .await;
+    let set = tool(
+        &env,
+        &key,
+        "set_calendar_feed",
+        json!({ "name": "mine", "sources": sources, "confirm": review["review_id"] }),
+    )
+    .await;
+    let feed_url = set["url"]
+        .as_str()
+        .unwrap_or_else(|| panic!("{set}"))
+        .to_owned();
+
+    let outward = tool(&env, &key, "list_calendar_feeds", json!({})).await;
+    assert_eq!(outward["feeds"][0]["url"], json!(feed_url), "{outward}");
+
+    for access in [pod_core::mcp::Access::Read, pod_core::mcp::Access::Edit] {
+        let below = {
+            let host = env.host.clone();
+            tokio::task::spawn_blocking(move || host.issue_mcp("plans", "test", access).unwrap())
+                .await
+                .unwrap()
+        };
+        let listed = tool(&env, &below, "list_calendar_feeds", json!({})).await;
+        let feed = &listed["feeds"][0];
+        assert_eq!(feed["name"], "mine", "{listed}");
+        assert_eq!(feed["events"], 1, "{listed}");
+        assert!(feed["sources"].is_array(), "{listed}");
+        assert!(feed["updated_at"].is_number(), "{listed}");
+        assert!(feed.get("url").is_none(), "{access:?}: {listed}");
+        let token = feed_url
+            .rsplit('/')
+            .next()
+            .unwrap()
+            .trim_end_matches(".ics");
+        assert!(!listed.to_string().contains(token), "{access:?}: {listed}");
+    }
+}

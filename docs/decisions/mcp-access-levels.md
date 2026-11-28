@@ -57,5 +57,11 @@ kept counting as the owner's: a task the owner had deleted, or marked done, coul
 agent run. A row Claude brings back is now Claude's whole, every field, though its values are as they were; an
 `undo_edit` Claude makes marks every field of the rows it puts back.
 
+Since then too (2026-11-27, security audit): `list_calendar_feeds` gave every connection each feed's URL, and the
+URL is a bearer capability: anyone holding it reads the events the feed publishes. A `read` or `edit` connection
+could take it out of the pod. Below `outward`, the list now gives each feed without its `url` (name, title,
+sources, `updated_at` and the event count stay); `set_calendar_feed` and `rotate_calendar_feed`, which answer a
+URL, already needed `outward`.
+
 Not done: per-action approval on a device (the other option) and per-tool grants. A connection at `outward` is as
 trusted as before this decision, so the owner should give it only to an app they trust with that.
