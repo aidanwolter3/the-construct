@@ -217,7 +217,7 @@ share screen.
   [`adoption-capabilities`](decisions/adoption-capabilities.md)): data of a collection it isn't bound to is
   refused (`reaches_unbound`), and its data requests load only its bound collections. Anything else it reaches,
   another source's data or actions, and the dangerous classes even within the bind (agent runs, jacks,
-  sign-ins, deletes, the device commands that sign out, leave the pod, change the server or remove a layout), is
+  undoing or restoring the user's screens (edit groups, checkpoints, background undo), sign-ins, deletes, the device commands that sign out, leave the pod, change the server or remove a layout), is
   refused (`needs_acceptance`, each with its class) unless the user agrees and Claude passes it in
   `accept_actions`. The publish review flags every endpoint, payload text and device command too. A literal
   `${…}` naming no field (`${}`) is refused in every layout write.

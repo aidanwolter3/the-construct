@@ -132,9 +132,9 @@ pub fn needs_refusal(name: &str, unaccepted: &[Value]) -> Value {
     json!({
         "error": "needs_acceptance",
         "detail": format!("{name} reaches actions or data outside what it is bound to (each \
-            listed with its class: agents, jacks, auth, device and delete are dangerous). \
-            Nothing was adopted: show the user each one and, only if they agree, call again \
-            with accept_actions listing the accept values exactly."),
+            listed with its class: agents, jacks, construct, auth, device and delete are \
+            dangerous). Nothing was adopted: show the user each one and, only if they agree, \
+            call again with accept_actions listing the accept values exactly."),
         "needs_acceptance": unaccepted,
     })
 }
@@ -150,8 +150,9 @@ fn dangerous_endpoint(path: &str) -> Option<&'static str> {
     match first {
         "agents" => return Some("agents"),
         "jacks" => return Some("jacks"),
-        // Undoing or restoring the owner's screens (decision `edit-groups`).
-        "edit-groups" | "checkpoints" => return Some("construct"),
+        // Undoing or restoring the owner's screens (decision `edit-groups`),
+        // background undo among them (`/v1/background/undo`).
+        "edit-groups" | "checkpoints" | "background" => return Some("construct"),
         "auth" | "oauth" | "sessions" | "pods" | "devices" | "sign-in" | "signin" => {
             return Some("auth");
         }
@@ -511,6 +512,10 @@ mod tests {
         assert_eq!(dangerous_endpoint("/v1/notes/chores/update"), None);
         assert_eq!(
             dangerous_endpoint("/v1/edit-groups/revert"),
+            Some("construct")
+        );
+        assert_eq!(
+            dangerous_endpoint(crate::call_log::UNDO_PATH),
             Some("construct")
         );
     }

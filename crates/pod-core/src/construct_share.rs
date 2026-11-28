@@ -1301,8 +1301,9 @@ pub fn tool_specs() -> Vec<Value> {
              (sends_data) unless the user agrees and you pass it in accept_data_urls. An \
              adopted element reaches only the data it is bound to: data of another collection \
              is refused (reaches_unbound), and actions outside its bindings or of a dangerous \
-             class (agent runs, jacks, sign-ins, deletes, leaving the pod) are refused \
-             (needs_acceptance) unless the user agrees and you pass them in accept_actions.",
+             class (agent runs, jacks, undoing the user's screens, sign-ins, deletes, leaving \
+             the pod) are refused (needs_acceptance) unless the user agrees and you pass them \
+             in accept_actions.",
             json!({
                 "link": link,
                 "bindings": bindings,

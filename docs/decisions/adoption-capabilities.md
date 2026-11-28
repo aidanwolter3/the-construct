@@ -31,7 +31,8 @@ reaches is sorted: within the bind (a source says, `Source::adopted_scope`: Coll
 adoption binds), refused (`reaches_unbound`: another collection's data, an empty `${}` hiding what a string
 names, or what no source of the pod owns), or waiting for the adopter's acceptance (`needs_acceptance`, passed
 back in `accept_actions`): another source's data (`reads:<source>`) or actions, and the dangerous classes even
-within the bind: agents, jacks, auth, any delete, and the device commands `leave_pod`, `sign_out`, `set_server`,
+within the bind: agents, jacks, undoing or restoring the owner's screens (`construct`: edit groups,
+checkpoints, background undo), auth, any delete, and the device commands `leave_pod`, `sign_out`, `set_server`,
 `sign_in`, `delete_layout`, `hide_layout`, `unhide_layout`. The adoption records what it may reach
 (`adoptions.capabilities`: its feeds, the elements it draws, what was accepted), and an adopted element's data
 requests (`/v1/construct/data/<el>`) load only those feeds, whatever the request binds.**
