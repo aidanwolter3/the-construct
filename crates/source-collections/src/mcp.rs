@@ -317,6 +317,14 @@ pub fn access(tool: &str, args: &Value) -> Option<Access> {
         }
         "edit_rows" if has("url") => Access::Outward,
         "use_kit"
+            if args["kit"]
+                .as_str()
+                .and_then(crate::kits::kit)
+                .is_some_and(crate::kits::Kit::brings_fillers) =>
+        {
+            Access::Outward
+        }
+        "use_kit"
         | "define_collection"
         | "apply_change"
         | "restore_collection_version"

@@ -2258,6 +2258,7 @@ async fn run_agent(
             max_fetches: *max_fetches,
             key: key_name.as_deref(),
             current: &current,
+            links_from: None,
         })
         .await;
     let answer = match answer {
@@ -2373,10 +2374,12 @@ async fn run_each(
                 for x in &fe.context {
                     if let Some((_, d)) = db::latest_def(c, &x.collection)? {
                         let rows = db::all_rows(c, &x.collection, false)?;
-                        contexts.push((x.clone(), d, rows));
+                        let writers = db::field_writers(c, &x.collection)?;
+                        contexts.push((x.clone(), d, rows, writers));
                     }
                 }
                 Ok((
+                    db::field_writers(c, &fe.collection)?,
                     fe,
                     parent,
                     parent_rows,
@@ -2388,7 +2391,17 @@ async fn run_each(
         })
         .await
         .map_err(|_| "the collections could not be read".to_owned())?;
-    let (fe, parent, parent_rows, contexts, own_rows, marks) = read;
+    let (writers, fe, parent, parent_rows, contexts, own_rows, marks) = read;
+    // A value Claude wrote below outward access (decision
+    // `mcp-access-levels`) is in the request as text, but its links are not
+    // the research's to fetch: reaching a new host is outward.
+    let by_claude = |w: &HashMap<String, std::collections::BTreeMap<String, String>>,
+                     r: &Row,
+                     f: &model::Field| {
+        w.get(&r.id)
+            .and_then(|w| w.get(&f.id))
+            .is_some_and(|w| w == db::WRITER_CLAUDE)
+    };
     let Some(parent) = parent else {
         return Err(format!(
             "for_each: there is no collection '{}' any more",
@@ -2402,30 +2415,34 @@ async fn run_each(
         ));
     };
     let from = named_fields(&parent, &fe.from);
-    // The context: the same for every row of this fill.
+    // The context: the same for every row of this fill (and without
+    // Claude's values, for its links).
     let mut context = String::new();
-    for (x, d, rows) in &contexts {
+    let mut context_links = String::new();
+    for (x, d, rows, w) in &contexts {
         let Some(cond) = resolved(d, &x.conditions) else {
             continue;
         };
         let fs = named_fields(d, &x.fields);
-        let lines: Vec<String> = rows
+        let line = |r: &Row, all: bool| {
+            let o: Map<String, Value> = fs
+                .iter()
+                .filter(|f| all || !by_claude(w, r, f))
+                .filter_map(|f| {
+                    let v = r.values.get(&f.id)?;
+                    let t = line_value(f, v)
+                        .or_else(|| (f.kind == Kind::Bool).then(|| v.to_string()))?;
+                    Some((f.name.clone(), json!(t)))
+                })
+                .collect();
+            (!o.is_empty()).then(|| Value::Object(o).to_string())
+        };
+        let matching: Vec<&Row> = rows
             .iter()
             .filter(|r| cond.iter().all(|c| c.matches(d, &r.values)))
             .take(x.limit as usize)
-            .filter_map(|r| {
-                let o: Map<String, Value> = fs
-                    .iter()
-                    .filter_map(|f| {
-                        let v = r.values.get(&f.id)?;
-                        let t = line_value(f, v)
-                            .or_else(|| (f.kind == Kind::Bool).then(|| v.to_string()))?;
-                        Some((f.name.clone(), json!(t)))
-                    })
-                    .collect();
-                (!o.is_empty()).then(|| Value::Object(o).to_string())
-            })
             .collect();
+        let lines: Vec<String> = matching.iter().filter_map(|r| line(r, true)).collect();
         if !lines.is_empty() {
             context.push_str(&format!(
                 "\n\nFrom \"{}\" ({} rows):\n{}",
@@ -2433,35 +2450,48 @@ async fn run_each(
                 lines.len(),
                 lines.join("\n")
             ));
+            let own: Vec<String> = matching.iter().filter_map(|r| line(r, false)).collect();
+            context_links.push_str(&format!("\n\n{}", own.join("\n")));
         }
     }
     let parents: HashSet<String> = parent_rows.iter().map(|r| r.id.clone()).collect();
     let force_all = force || state.fingerprint != filler.fingerprint();
     let refresh = filler.refresh();
-    // Each matching row: its request text and that text's key.
-    let mut todo: Vec<(&Row, String, String, Option<i64>)> = parent_rows
+    // Each matching row: its request text, that text without Claude's
+    // values (for its links) and the text's key.
+    let mut todo: Vec<(&Row, String, String, String, Option<i64>)> = parent_rows
         .iter()
         .filter(|r| conditions.iter().all(|c| c.matches(&parent, &r.values)))
         .filter_map(|r| {
-            let lines: Vec<String> = from
+            let lines: Vec<(bool, String)> = from
                 .iter()
                 .filter_map(|f| {
                     let t = line_value(f, r.values.get(&f.id)?)?;
-                    Some(format!("- {}: {t}", f.name))
+                    Some((by_claude(&writers, r, f), format!("- {}: {t}", f.name)))
                 })
                 .collect();
             if lines.is_empty() {
                 return None;
             }
-            let text = lines.join("\n");
+            let text = lines
+                .iter()
+                .map(|(_, l)| l.as_str())
+                .collect::<Vec<_>>()
+                .join("\n");
+            let links = lines
+                .iter()
+                .filter(|(claude, _)| !claude)
+                .map(|(_, l)| l.as_str())
+                .collect::<Vec<_>>()
+                .join("\n");
             let key = hash_of(format!("{text}\n{context}").as_bytes());
             let filled = marks
                 .get(&r.id)
                 .filter(|(s, _, _)| *s == key)
                 .map(|(_, _, at)| *at);
-            Some((r, text, key, filled))
+            Some((r, text, links, key, filled))
         })
-        .filter(|(_, _, _, filled)| {
+        .filter(|(_, _, _, _, filled)| {
             // `every`: a row is due again once `every_minutes` have passed
             // since its research (each fill without them), so a write to
             // one row doesn't research the others again.
@@ -2488,7 +2518,7 @@ async fn run_each(
             day,
         ));
     }
-    todo.sort_by_key(|(r, _, _, filled)| {
+    todo.sort_by_key(|(r, _, _, _, filled)| {
         let last = marks.get(&r.id).map(|(_, _, at)| *at);
         (filled.is_some(), last.is_some(), last.unwrap_or(0))
     });
@@ -2520,7 +2550,7 @@ async fn run_each(
     let mut answers = Vec::new();
     let (mut items, mut skipped, mut calls) = (0, 0, 0);
     let mut failed = Vec::new();
-    for (r, text, key, _) in todo.into_iter().take(left) {
+    for (r, text, links, key, _) in todo.into_iter().take(left) {
         let current: Vec<Map<String, Value>> = own_rows
             .iter()
             .filter(|o| {
@@ -2545,6 +2575,7 @@ async fn run_each(
             "{prompt}\n\nResearch this row of \"{}\" (every row you save is for it):\n{text}{context}",
             parent.title
         );
+        let request_links = format!("{prompt}\n\n{links}{context_links}");
         calls += 1;
         spent.fetch_add(1, Ordering::SeqCst);
         let answer = agent
@@ -2558,6 +2589,7 @@ async fn run_each(
                 max_fetches: *max_fetches,
                 key: key_name.as_deref(),
                 current: &current,
+                links_from: Some(&request_links),
             })
             .await;
         match answer {

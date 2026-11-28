@@ -382,6 +382,15 @@ async fn every_tool_has_the_level_the_decision_gives_it() {
         ]),
         "{levels:?}"
     );
+    // A kit that brings fillers reaches hosts, as define_collection with
+    // fillers does.
+    for (kit, level) in [("shopping", "outward"), ("checklist", "edit")] {
+        assert_eq!(
+            pod_core::mcp::tool_needs(&pod, "use_kit", &json!({ "kit": kit })).id(),
+            level,
+            "{kit}"
+        );
+    }
     // Public links and calendar feeds (listed when the host serves them).
     for (tool, level) in [
         ("share_publicly", "outward"),

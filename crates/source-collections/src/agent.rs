@@ -65,6 +65,10 @@ pub struct AgentRequest<'a> {
     /// The rows it filled last time (their filled fields by name), so it
     /// can keep what still holds.
     pub current: &'a [Map<String, Value>],
+    /// The part of `prompt` whose links `web_fetch` may read: all of it
+    /// (`None`), or `prompt` without what Claude wrote below outward access
+    /// (decision `mcp-access-levels`), whose links stay text.
+    pub links_from: Option<&'a str>,
 }
 
 /// What one agent fill answered.
@@ -233,6 +237,19 @@ impl FillAgent for PodAgent {
                 current: req.current,
             };
             let mut task = tasks::research(&input, MAX_TURNS);
+            // The text whose links may be fetched, and whether the prompt
+            // holds a link outside it (one Claude wrote below outward).
+            let links = tasks::research_prompt(&tasks::ResearchInput {
+                prompt: req.links_from.unwrap_or(req.prompt),
+                ..input.clone()
+            });
+            let unfetchable = req.links_from.is_some() && {
+                let ok = web_extract::tools::Seen::default();
+                ok.add_text(&links);
+                web_extract::tools::urls_in(req.prompt)
+                    .iter()
+                    .any(|u| !ok.contains(u))
+            };
             let mut own_tools = false;
             let mut seen = None;
             match pod_web(req.pod) {
@@ -242,7 +259,7 @@ impl FillAgent for PodAgent {
                     // request's own URLs to start with (decision
                     // `web-fetch-provenance`).
                     let prompt = tasks::research_prompt(&input);
-                    web.seen.add_text(&prompt);
+                    web.seen.add_text(&links);
                     // The request's own text (its current rows' quotes) counts
                     // as read.
                     web.seen.add_read(&prompt);
@@ -264,7 +281,9 @@ impl FillAgent for PodAgent {
                     if req.max_searches > 0 {
                         task.server_tools.push(json!({ "type": "web_search_20260209", "name": "web_search", "max_uses": req.max_searches }));
                     }
-                    if req.max_fetches > 0 {
+                    // The API's fetch reads any link in the conversation,
+                    // so with one that may not be fetched there is none.
+                    if req.max_fetches > 0 && !unfetchable {
                         task.server_tools.push(json!({ "type": "web_fetch_20260209", "name": "web_fetch", "max_uses": req.max_fetches }));
                     }
                 }

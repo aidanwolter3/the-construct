@@ -23,6 +23,8 @@ struct Researcher {
     /// `(text in the request, rows)`.
     answers: Mutex<Vec<(String, Vec<Value>)>>,
     asked: Mutex<Vec<(String, usize)>>,
+    /// Each request's `links_from`.
+    links: Mutex<Vec<Option<String>>>,
     /// A request with this text never answers (a research that runs on).
     hang: Mutex<Option<String>>,
     /// Each answer waits a little first, so fills started together overlap.
@@ -36,6 +38,10 @@ impl FillAgent for Researcher {
                 .lock()
                 .unwrap()
                 .push((req.prompt.to_owned(), req.current.len()));
+            self.links
+                .lock()
+                .unwrap()
+                .push(req.links_from.map(str::to_owned));
             let hang = self.hang.lock().unwrap().clone();
             if hang.is_some_and(|h| req.prompt.contains(h.as_str())) {
                 std::future::pending::<()>().await;
@@ -566,4 +572,83 @@ async fn a_fill_that_times_out_counts_its_calls() {
     };
     assert!(why.contains("already researched 2 rows today"), "{why}");
     assert_eq!(agent.asked.lock().unwrap().len(), 2, "no row asked again");
+}
+
+/// `add_row` through an MCP credential the host forwards at `access`.
+async fn add_row_at(pod: &Pod, access: &str, collection: &str, values: Value) {
+    use axum::body::Body;
+    use http_body_util::BodyExt;
+    use tower::ServiceExt;
+    let body = json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+        "params": {"name": "add_row", "arguments": {"collection": collection, "values": values}}});
+    let req = axum::http::Request::post("/v1/mcp")
+        .header("content-type", "application/json")
+        .header(pod_core::CREDENTIAL_HEADER, "mcp")
+        .header(pod_core::mcp::ACCESS_HEADER, access)
+        .body(Body::from(body.to_string()))
+        .unwrap();
+    let resp = pod_core::app(pod.clone()).oneshot(req).await.unwrap();
+    let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+    let v: Value = serde_json::from_slice(&bytes).unwrap();
+    assert!(v["result"]["isError"] != true, "{v}");
+}
+
+/// A link Claude wrote below outward access (decision `mcp-access-levels`)
+/// reaches the research as text, not as a page it may fetch; a person's
+/// link, and one Claude wrote at outward access, may be fetched.
+#[tokio::test]
+async fn a_link_claude_wrote_below_outward_is_not_the_researchs_to_fetch() {
+    let agent = Arc::new(Researcher::default());
+    let pod = pod(agent.clone());
+    pod.set_hosted();
+    let filler = define(&pod, 10).await;
+    create(
+        &pod,
+        "items",
+        json!({"name": "Lamp", "notes": "like https://lamps.example/brass"}),
+    )
+    .await;
+    add_row_at(
+        &pod,
+        "edit",
+        "items",
+        json!({"name": "Mirror", "notes": "see https://attacker.example/c?d=secret"}),
+    )
+    .await;
+    add_row_at(
+        &pod,
+        "edit",
+        "prefs",
+        json!({"category": "Home", "likes": "as on https://attacker.example/p?d=secret"}),
+    )
+    .await;
+    add_row_at(
+        &pod,
+        "outward",
+        "items",
+        json!({"name": "Rug", "notes": "like https://rugs.example/wool"}),
+    )
+    .await;
+    // Each item is asked (none answers, which doesn't matter here).
+    fill::fill(&pod, "options", &filler, false).await;
+    let asked = agent.asked.lock().unwrap();
+    let links = agent.links.lock().unwrap();
+    assert_eq!(asked.len(), 3);
+    for (ask, links) in asked.iter().zip(links.iter()) {
+        let (ask, links) = (&ask.0, links.as_deref().unwrap());
+        // The request still reads everything as text.
+        assert!(ask.contains("https://attacker.example/p?d=secret"), "{ask}");
+        assert!(!links.contains("attacker.example"), "{links}");
+        assert!(
+            links.starts_with("Find two or three good options"),
+            "{links}"
+        );
+        if ask.contains("Mirror") {
+            assert!(ask.contains("https://attacker.example/c?d=secret"), "{ask}");
+        } else if ask.contains("Lamp") {
+            assert!(links.contains("https://lamps.example/brass"), "{links}");
+        } else {
+            assert!(links.contains("https://rugs.example/wool"), "{links}");
+        }
+    }
 }

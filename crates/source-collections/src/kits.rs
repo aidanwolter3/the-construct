@@ -33,6 +33,24 @@ pub struct Kit {
     pub more: &'static [CoreLayoutInfo],
 }
 
+impl Kit {
+    /// Whether using it defines fillers, which reach hosts: outward access,
+    /// as `define_collection` with fillers is (decision `mcp-access-levels`).
+    pub fn brings_fillers(&self) -> bool {
+        self.set.is_some_and(|set| {
+            let set = set();
+            set.collections
+                .iter()
+                .any(|c| c["fillers"].as_array().is_some_and(|f| !f.is_empty()))
+                || set
+                    .changes
+                    .iter()
+                    .flat_map(|(_, c)| c)
+                    .any(|c| c["op"] == "set_filler")
+        })
+    }
+}
+
 /// The collections of a kit of several.
 pub struct KitSet {
     /// `define_collection`'s arguments, in order (a ref names an earlier
