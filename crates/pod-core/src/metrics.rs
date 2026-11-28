@@ -27,7 +27,8 @@ pub const HTTP_RESPONSES: &str = "construct_http_responses_total";
 /// screen), `oauth_pod_code` (Claude's connect page), `unknown_token` (a
 /// bearer token no pod has), `mcp_scope` (an MCP credential used outside
 /// `/v1/mcp`, or an internal request it started asking for more than it
-/// reaches) or `open_pod_host` (the open pod asked for by another `Host`).
+/// reaches) or `open_pod_host` (the open pod asked for by another `Host`
+/// or through a proxy).
 pub const AUTH_FAILURES: &str = "construct_auth_failures_total";
 /// Requests refused by a rate limit (`limit`): `pod_code`,
 /// `oauth_register`, `oauth_pod_code` or `temporary_pod`.
