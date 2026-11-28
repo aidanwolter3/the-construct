@@ -197,8 +197,10 @@ mode:
   the owner's screens already binds (this week's events, the pinned meals, the groceries to buy, the next
   workout). It never removes a button, list or value, and it changes no data.
 - **What it reads:** today's and this week's needs, the days and events Today already binds, the owner's notes,
-  and the record of past shapes: the `fixed` cards with `topic` `today` and their `outcome`. A shape the owner
-  kept becomes the base and is built on; an undone one says what the owner didn't want.
+  and the record of past shapes: the `fixed` and `proposal` cards with `topic` `today` and their `outcome`. A
+  shape the owner kept becomes the base and is built on. An undone one is weak evidence: the owner didn't keep
+  that shape that day (often they were only trying Undo), so Build shapes again in another form rather than
+  leaving a day's need unserved. Only a row in `anticipate_notes` rules a shape out.
 - **Its gate:** safe, not protected, valid and not stale (the server); every established journey still passes
   with the group; drawn at phone width, light and dark; it serves at least one need of confidence 0.6 or more, or
   the week ahead; and a fresh skeptic, given the needs, the before and after screenshots and the diff, answers
@@ -352,8 +354,11 @@ worth it (a fresh skeptic subagent answers apply). Anything else stays proposed.
    change in routine), change it as much as the day warrants: not the smallest change, not change for its own
    sake.
    - Base: Today as it is after step 1 (a kept shape is part of it). Read the record of past shapes, the "fixed"
-     cards with topic "today", and their outcome: build on kept ones; undone ones say what the owner didn't
-     want.
+     and "proposal" cards with topic "today", and their state and outcome: build on kept ones. An undone one is
+     weak evidence: it says the owner didn't keep that shape that day (an Undo is often just the owner trying the
+     button), not that Today shouldn't be shaped. Never skip a shape today's needs call for because of one;
+     shape it differently (another place or form) and say in the why what changed from the undone one. Only an
+     anticipate_notes row rules a shape out.
    - Design it from today's and this week's needs, the days and events Today binds, and anticipate_notes'
      preferences: put first what today needs and push down what it doesn't; regroup; restyle (emphasis,
      headings, theme colours, density); bring in a section showing what another of the owner's screens already
