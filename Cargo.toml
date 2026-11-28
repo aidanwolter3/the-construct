@@ -23,6 +23,7 @@ members = [
     "crates/server",
     "fake-pixelfed",
     "crates/e2e",
+    "crates/newcomer",
 ]
 
 [workspace.package]
