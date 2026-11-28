@@ -160,6 +160,9 @@ fn shop_need_fields() -> Value {
         { "name": "prefer", "type": "text", "optional": true,
           "compute": { "kind": "lookup", "from": "category", "collection": "shop_categories",
                        "key": "name", "value": "explore_prefer", "match": "exact" } },
+        { "name": "budget", "type": "number", "optional": true,
+          "compute": { "kind": "lookup", "from": "category", "collection": "shop_categories",
+                       "key": "name", "value": "budget", "match": "exact" } },
     ])
 }
 
@@ -192,6 +195,7 @@ fn shopping_set() -> KitSet {
                     { "name": "position", "type": "number", "default": 0 },
                     { "name": "explore_avoid", "type": "text", "optional": true },
                     { "name": "explore_prefer", "type": "text", "optional": true },
+                    { "name": "budget", "type": "number", "optional": true },
                 ],
                 "order_by": "position",
             }),
@@ -213,6 +217,8 @@ fn shopping_set() -> KitSet {
                     { "name": "how_far", "type": "number", "optional": true },
                     { "name": "avoid", "type": "text", "optional": true },
                     { "name": "prefer", "type": "text", "optional": true },
+                    { "name": "price_max", "type": "number", "optional": true,
+                      "compute": { "kind": "lookup", "via": "need", "value": "budget" } },
                     { "name": "distance", "type": "number", "optional": true,
                       "compute": { "kind": "expr", "expr": "entity.how_far ? entity.how_far : entity.n < 1 ? 0.5 : entity.n < 2 ? 0.3 : entity.n < 3 ? 0.18 : 0.11" } },
                     { "name": "spread", "type": "number", "optional": true,
@@ -257,7 +263,8 @@ fn shopping_set() -> KitSet {
                     "request": { "query": "query", "like": "like", "unlike": "unlike",
                                  "exclude": "exclude", "distance": "distance",
                                  "spread": "spread", "group": "group",
-                                 "avoid": "avoid", "prefer": "prefer" },
+                                 "avoid": "avoid", "prefer": "prefer",
+                                 "price_max": "price_max" },
                     "map": { "taste_key": "key", "title": "title", "brand": "brand",
                              "image": "image", "price": "price", "price_text": "price_text",
                              "url": "url", "host": "host", "description": "description",

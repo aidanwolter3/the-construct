@@ -413,7 +413,8 @@ async fn a_rounds_avoid_and_prefer_reach_the_service_and_a_kit_upgrades_in_place
     update(
         &pod,
         "shop_categories",
-        json!({"id": clothes, "explore_avoid": "logo; graphic", "explore_prefer": "wool, olive"}),
+        json!({"id": clothes, "explore_avoid": "logo; graphic", "explore_prefer": "wool, olive",
+            "budget": 120}),
     )
     .await;
     let need = create(
@@ -424,16 +425,19 @@ async fn a_rounds_avoid_and_prefer_reach_the_service_and_a_kit_upgrades_in_place
     .await;
     let n = row(&pod, "shop_needs", &need).await;
     assert_eq!(n["avoid"], "logo; graphic");
-    create(
+    let round = create(
         &pod,
         "shop_rounds",
         json!({"need": need, "n": 0, "query": "Hoodie", "avoid": n["avoid"], "prefer": n["prefer"]}),
     )
     .await;
+    // The category's budget caps every round's prices.
+    assert_eq!(row(&pod, "shop_rounds", &round).await["price_max"], 120);
     explore(&pod).await;
     let asked = taste.asked.lock().unwrap()[0].clone();
     assert_eq!(asked["avoid"], json!(["logo", "graphic"]));
     assert_eq!(asked["prefer"], json!(["wool", "olive"]));
+    assert_eq!(asked["price_max"], 120.0);
     let p = rows(&pod, "shop_pieces").await;
     assert!(p.iter().all(|x| x["avoid"] == "logo; graphic"), "{p:?}");
 }
