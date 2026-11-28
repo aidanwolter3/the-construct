@@ -4,7 +4,8 @@
 //! tests use a fake.
 //!
 //! A request is a JSON object of the parts [`crate::filler::TASTE_REQUEST`]
-//! names: `query` (text), `like`, `unlike` and `exclude` (piece keys),
+//! names: `query` (text), `like`, `unlike` and `exclude` (piece keys), `avoid` and `prefer`
+//! (words or short phrases, from text split on commas, semicolons and lines),
 //! `distance` and `spread` (0..1), `group` (true or false), `n` and
 //! `price_max` (numbers). The answer is the pieces, each an object of the
 //! parts [`crate::filler::TASTE_PARTS`] names (absent parts are empty).
@@ -49,6 +50,28 @@ pub fn keys_in(v: &Value) -> Vec<String> {
     out
 }
 
+/// A row's text as words or short phrases (`avoid`, `prefer`): split on commas, semicolons
+/// and lines, each trimmed, at most 60 characters, at most [`MAX_PHRASES`].
+pub fn phrases_in(v: &Value) -> Vec<String> {
+    let Value::String(text) = v else {
+        return Vec::new();
+    };
+    let mut out: Vec<String> = Vec::new();
+    for p in text.split([',', ';', '\n']).map(str::trim) {
+        let p: String = p.chars().take(60).collect();
+        if !p.is_empty() && !out.iter().any(|o| o.eq_ignore_ascii_case(&p)) {
+            out.push(p);
+            if out.len() == MAX_PHRASES {
+                break;
+            }
+        }
+    }
+    out
+}
+
+/// The most phrases an `avoid` or `prefer` part carries (the service takes 40).
+pub const MAX_PHRASES: usize = 40;
+
 /// The most keys a list part carries.
 pub const MAX_KEYS: usize = 200;
 
@@ -64,6 +87,10 @@ pub fn part(part: &str, v: &Value) -> Option<Value> {
         "like" | "unlike" | "exclude" => {
             let k = keys_in(v);
             (!k.is_empty()).then(|| Value::from(k))
+        }
+        "avoid" | "prefer" => {
+            let p = phrases_in(v);
+            (!p.is_empty()).then(|| Value::from(p))
         }
         "distance" | "spread" => num(v)
             .filter(|x| x.is_finite())
@@ -111,5 +138,9 @@ mod tests {
         assert_eq!(part("query", &json!("  ")), None);
         assert_eq!(part("group", &json!(true)), Some(json!(true)));
         assert_eq!(part("like", &json!("")), None);
+        assert_eq!(
+            part("avoid", &json!("logos; graphic prints,\n polyester")),
+            Some(json!(["logos", "graphic prints", "polyester"]))
+        );
     }
 }

@@ -408,7 +408,7 @@ pub const RANGE_EVERY: u32 = 60;
 
 /// What a `taste` filler may ask the taste service (decision
 /// `shopping-kit`): each maps to a field of the row it explores for.
-pub const TASTE_REQUEST: [&str; 9] = [
+pub const TASTE_REQUEST: [&str; 11] = [
     "query",
     "like",
     "unlike",
@@ -418,6 +418,8 @@ pub const TASTE_REQUEST: [&str; 9] = [
     "group",
     "n",
     "price_max",
+    "avoid",
+    "prefer",
 ];
 
 /// What each piece a `taste` filler answers holds ([`crate::explore`]).
