@@ -239,7 +239,7 @@ mode:
    ```
 
    `build.json`. Protect Settings only: protecting home or Today stops Build from shaping Today. Settings'
-   Connected apps then shows the credential as "… · 1 protected screens · reads 11 data sets · withholds
+   Connected apps then shows the credential as "… · 1 protected screens · reads 12 data sets · withholds
    others' text".
 
    Neither grant has `sample_data`: with a `reads` list it is refused, since it reads any source.
@@ -254,7 +254,7 @@ mode:
     "deletes": ["anticipations"],
     "protected_names": ["<Settings' id>"],
     "reads": ["anticipate_notes", "events", "workouts", "meals", "meal_picks", "groceries", "shopping", "tasks",
-              "plan_week", "days", "notifications"],
+              "plan_week", "days", "notifications", "checklist"],
     "strip_untrusted": true, "keep_from": ["claude"]}
    ```
 3. **The pod**, from the owner's own session:
