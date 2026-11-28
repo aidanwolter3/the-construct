@@ -59,7 +59,7 @@ async fn get_construct(State(pod): State<Pod>, headers: HeaderMap) -> Response {
     let client = crate::layouts::client_caps(&headers);
     let manifest = super::seal::wants_manifest(&headers);
     let p = pod.clone();
-    let r = tokio::task::spawn_blocking(move || {
+    let r = crate::timing::spawn_blocking(move || {
         let root = super::seal::root_as(&p, &client, manifest)?;
         let g = p.store().with_conn(cstore::generation)?;
         Ok::<_, rusqlite::Error>((root, g))
@@ -93,7 +93,7 @@ async fn get_name(
     let client = crate::layouts::client_caps(&headers);
     let manifest = super::seal::wants_manifest(&headers);
     let p = pod.clone();
-    let found = tokio::task::spawn_blocking(move || {
+    let found = crate::timing::spawn_blocking(move || {
         let names = if super::is_layout_name(&name) {
             vec![name.clone()]
         } else if p.catalog().is_core_layout(&name) {
@@ -153,7 +153,7 @@ async fn post_objects(State(pod): State<Pod>, headers: HeaderMap, body: Bytes) -
     let have: BTreeSet<String> = ids(&body["have"]).into_iter().collect();
     let want = ids(&body["want"]);
     let p = pod.clone();
-    let r = tokio::task::spawn_blocking(move || {
+    let r = crate::timing::spawn_blocking(move || {
         let objects = super::seal::objects(&p);
         let mut out = Map::new();
         let mut bytes = 0usize;
@@ -221,7 +221,7 @@ async fn get_object(
         );
     }
     let p = pod.clone();
-    let found = tokio::task::spawn_blocking(move || {
+    let found = crate::timing::spawn_blocking(move || {
         construct_elements::Objects::object(&super::seal::objects(&p), &id)
     })
     .await

@@ -514,7 +514,10 @@ group's elements. The session tells its loader what the owner did (`Loader::usag
 
 `render_layout_preview` (`id`, or a draft `layout` drawn with `data_from`'s data and every feed of home's;
 `viewport`, `form`, `dark`) answers an image (`image/webp`, lossless) and a text: a summary line, then JSON with
-`preview_id`, `state`, timing and the nodes (id, type, bounds, text, tap, selected). `dispatch_virtual_interaction`
+`preview_id`, `state`, timing and the nodes (id, type, bounds, text, tap, selected). Its `timing_ms`: `load`
+(fetching the layouts and their data from the pod), `queue` (waiting for the drawing's thread), `device_data` (the
+device's own data, read on that thread), `layout` and `layout_render_encode`; an interaction's answer has only the last
+two. `dispatch_virtual_interaction`
 (`preview_id`, `action` tap / scroll / type / back, with `node_id`, `text` or `x`/`y`, `dy`) changes that preview's
 device state and answers the same, with the interaction's effects.
 

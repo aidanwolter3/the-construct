@@ -308,6 +308,26 @@ Counts live in memory and restart from zero.
   billing API).
 - **Prometheus:** with `CONSTRUCT_METRICS_ADDR`, `GET /metrics` on that address serves the same counters as
   `construct_*` metrics.
+- **Request timing** (`pod_core::timing`, issue #576): every pod has one database connection, behind a lock, so a
+  slow request can be slow because it waits for the lock or because something else holds it. Each request is timed
+  as a kind: its route's pattern (`GET /v1/construct/data/{id}`; `internal …` when the pod's own tools sent it, as a
+  preview's reads are), `mcp <tool>` for an MCP call, `fill <collection>/<filler>` for a filler run, and `background`
+  for anything else. Logged under the `pod_timing` target (`RUST_LOG=pod_timing=debug,info` adds every element data
+  load and compose):
+  - `slow request`: a request that took 500 ms or more, or waited 100 ms or more for the lock in all: `total_ms`,
+    `lock_wait_ms`, `lock_hold_ms`, `lock_takes`, and its longest hold (`max_hold_ms`) and the code that took it
+    (`max_hold_at`, a file and line);
+  - `long store hold`: any one hold of 250 ms or more, by any request or job (whoever kept everyone else waiting),
+    with `kind` and `at`;
+  - `store lock by kind`: about once a minute, per kind, the calls, the slowest, and the lock's takes, waiting and
+    holding since the last one (all pods of a server together);
+  - `element data` and `compose` (at 500 ms or more): how long a data load (`/v1/construct/data/<id>`) spent finding
+    its feeds (`feeds_lookup_ms`) and running them (`compose_ms`), and its slowest feed (`slowest_feed`,
+    `slowest_ms`).
+
+  On Fly: `flyctl logs -a the-construct-pod | grep pod_timing`. Much waiting with short holds is many requests at
+  once; a long hold names its code; a slow request with little waiting or holding spent its time elsewhere (the
+  CPU, a fetch).
 
 ## Backups and restore
 

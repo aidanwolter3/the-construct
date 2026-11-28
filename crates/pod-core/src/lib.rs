@@ -44,6 +44,7 @@ pub mod source;
 pub mod static_app;
 pub mod store;
 pub mod testing;
+pub mod timing;
 pub mod tz;
 pub mod uploads;
 pub mod usage;
@@ -672,6 +673,8 @@ pub fn app(state: Pod) -> Router {
     }
     router
         .route_layer(middleware::from_fn_with_state(state.clone(), fault_layer))
+        // Innermost: it times the handler's store work (issue #576).
+        .route_layer(middleware::from_fn_with_state(state.clone(), timing_layer))
         .route_layer(middleware::from_fn_with_state(state.clone(), scope_layer))
         .route_layer(middleware::from_fn_with_state(
             state.clone(),
@@ -683,6 +686,23 @@ pub fn app(state: Pod) -> Router {
             recent_errors::layer,
         ))
         .with_state(state)
+}
+
+/// Run the request as a [`timing::Call`] named after its route, so its
+/// store work is timed and a slow one logged (issue #576). A request the
+/// pod's own tools sent (a preview's, a journey's) is `internal …`.
+async fn timing_layer(State(pod): State<Pod>, req: Request, next: Next) -> Response {
+    let route = req
+        .extensions()
+        .get::<axum::extract::MatchedPath>()
+        .map_or_else(|| req.uri().path().to_owned(), |p| p.as_str().to_owned());
+    let internal = if pod.internal_caller(req.headers()).is_some() {
+        "internal "
+    } else {
+        ""
+    };
+    let kind = format!("{internal}{} {route}", req.method());
+    timing::scope(kind, next.run(req)).await
 }
 
 /// Refuses an internal request its scope doesn't allow
@@ -790,7 +810,7 @@ pub async fn blocking<T: Send + 'static>(
     let grant = grant::current();
     // So does a journey walk's dry run (decision `journeys-and-dry-runs`).
     let dry = dryrun::current();
-    match tokio::task::spawn_blocking(move || {
+    match crate::timing::spawn_blocking(move || {
         let _held = grant::enter(grant);
         let _dry = dryrun::enter(dry);
         f(&state.store)
@@ -853,11 +873,12 @@ pub(crate) async fn get_element_data(
         headers,
         session: caller.clone().into_session(),
     };
+    let started = std::time::Instant::now();
     let (p, lookup) = (state.clone(), id.clone());
     let client = req.client.clone();
     // A use site's bindings (`?bind=`): the data its bound tree reads too.
     let inputs = construct::http::inputs_param(q.get("bind").map(String::as_str));
-    let owned = tokio::task::spawn_blocking(move || {
+    let owned = crate::timing::spawn_blocking(move || {
         // The elements a manifest names are made when it is: have them
         // here, should a write have cleared them since this client asked.
         if manifest {
@@ -867,11 +888,26 @@ pub(crate) async fn get_element_data(
     })
     .await
     .unwrap_or_default();
+    let looked_up = started.elapsed();
     let feeds: Vec<(&str, &str)> = owned
         .iter()
         .map(|(s, f)| (s.as_str(), f.as_str()))
         .collect();
-    match compose(&state, &feeds, &caller, &req).await {
+    let answer = compose(&state, &feeds, &caller, &req).await;
+    // Where an element's data load spent its time (issue #576).
+    let took = started.elapsed();
+    let lock = timing::current().map(|c| c.totals()).unwrap_or_default();
+    if took >= timing::SLOW_CALL {
+        tracing::info!(target: "pod_timing", element = %id, feeds = feeds.len(),
+            total_ms = timing::ms(took), feeds_lookup_ms = timing::ms(looked_up),
+            compose_ms = timing::ms(took - looked_up), lock_wait_ms = timing::ms(lock.wait),
+            lock_hold_ms = timing::ms(lock.hold), "element data");
+    } else {
+        tracing::debug!(target: "pod_timing", element = %id, feeds = feeds.len(),
+            total_ms = timing::ms(took), feeds_lookup_ms = timing::ms(looked_up),
+            compose_ms = timing::ms(took - looked_up), "element data");
+    }
+    match answer {
         Ok(b) => Json(b).into_response(),
         Err(r) => *r,
     }
@@ -891,6 +927,7 @@ pub(crate) async fn compose(
     caller: &Caller,
     req: &RequestCtx,
 ) -> Result<protocol::DataBundle, Box<Response>> {
+    let started = std::time::Instant::now();
     let runs = feeds.iter().map(|(source, feed)| async move {
         let (adapter, manifest) = state.catalog.source(source)?;
         if let Some(sign_in) = manifest.sign_in
@@ -898,21 +935,36 @@ pub(crate) async fn compose(
         {
             return None;
         }
+        let t = std::time::Instant::now();
+        let answer = adapter.feed(state, feed, req).await;
         Some((
             adapter.name(),
             manifest.sign_in,
-            adapter.feed(state, feed, req).await,
+            answer,
+            (*feed, t.elapsed()),
         ))
     });
     let mut bundle = protocol::DataBundle::default();
     // Sources whose sign-in went stale or whose feed failed.
     let mut detached: Vec<&str> = Vec::new();
     let mut errors: Vec<(&str, String)> = Vec::new();
-    for (source, sign_in, answer) in futures_util::future::join_all(runs)
+    let answers: Vec<_> = futures_util::future::join_all(runs)
         .await
         .into_iter()
         .flatten()
-    {
+        .collect();
+    // The slowest feed, for the log (issue #576).
+    let took = started.elapsed();
+    if let Some((source, _, _, (feed, slowest))) = answers.iter().max_by_key(|a| a.3.1) {
+        if took >= timing::SLOW_CALL {
+            tracing::info!(target: "pod_timing", feeds = feeds.len(), compose_ms = timing::ms(took),
+                slowest_feed = %format!("{source}/{feed}"), slowest_ms = timing::ms(*slowest), "compose");
+        } else {
+            tracing::debug!(target: "pod_timing", feeds = feeds.len(), compose_ms = timing::ms(took),
+                slowest_feed = %format!("{source}/{feed}"), slowest_ms = timing::ms(*slowest), "compose");
+        }
+    }
+    for (source, sign_in, answer, _) in answers {
         match answer {
             Hydration::Data(data) => {
                 bundle.entities.extend(data.entities);

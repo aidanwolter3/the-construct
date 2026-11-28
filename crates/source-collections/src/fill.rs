@@ -2897,6 +2897,19 @@ async fn fill_details(
 /// Fill `filler_id` of `collection` now. `force`: refetch even when the
 /// page looks unchanged.
 pub async fn fill(pod: &Pod, collection: &str, filler_id: &str, force: bool) -> Outcome {
+    // Its store work is timed as the fill's (issue #576), unless a request
+    // runs it (then it counts as that request's).
+    if pod_core::timing::current().is_some() {
+        return fill_timed(pod, collection, filler_id, force).await;
+    }
+    pod_core::timing::scope(
+        format!("fill {collection}/{filler_id}"),
+        fill_timed(pod, collection, filler_id, force),
+    )
+    .await
+}
+
+async fn fill_timed(pod: &Pod, collection: &str, filler_id: &str, force: bool) -> Outcome {
     let Some(adapter) = pod.adapter::<CollectionsAdapter>() else {
         return Outcome::Failed("no Collections".into());
     };
