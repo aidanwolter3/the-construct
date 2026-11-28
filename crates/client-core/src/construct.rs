@@ -75,6 +75,10 @@ pub struct Construct {
     /// Names swapped on this device ([`Inner::construct_swap`]) until the
     /// pod's root moves: name → the element drawn for it instead.
     pub overrides: BTreeMap<String, String>,
+    /// Bumped each time `overrides` changes (a swap, or the pod's root
+    /// ending one): a fetch that materialized a layout before is stale for
+    /// what it draws, and [`Inner::swapped_since`] draws it as it is now.
+    pub swapped: u64,
 }
 
 /// The device's objects, and the names its manifests resolve.
@@ -486,8 +490,11 @@ impl Inner {
             c.rebuild();
             return None;
         }
+        c.swapped += 1;
         let json = c.snapshot_json();
-        drop(c);
+        // Written with the construct still locked: a fetch landing now
+        // checks `swapped` under the same lock ([`Inner::swapped_since`]),
+        // so it never writes over this swap with what it drew before it.
         let mut st = lock(&self.state);
         st.construct_json = json;
         for (k, node) in nodes {
@@ -502,7 +509,21 @@ impl Inner {
             }
         }
         st.seq += 1;
+        drop(st);
+        drop(c);
         Some(changed)
+    }
+
+    /// Layout `key` as the construct draws it now, when a swap changed
+    /// what it draws since `since` (a [`Construct::swapped`] read before a
+    /// fetch): what that fetch drew is older than the swap (issue #594).
+    /// `None` when nothing was swapped meanwhile, or the key isn't drawn.
+    pub(crate) fn swapped_since(c: &Construct, key: &str, since: u64) -> Option<protocol::UiNode> {
+        if c.swapped == since {
+            return None;
+        }
+        let (_, _, node) = c.layout(key)?;
+        serde_json::from_value(node).ok()
     }
 
     /// Draw again what [`Inner::construct_current`] found changed besides
@@ -620,7 +641,10 @@ impl Inner {
                 c.previous = c.root.take();
                 c.root = Some(root.to_owned());
                 // The pod's new root says what each name is now.
-                c.overrides.clear();
+                if !c.overrides.is_empty() {
+                    c.overrides.clear();
+                    c.swapped += 1;
+                }
             }
             (before, c.rebuild(), moved)
         };

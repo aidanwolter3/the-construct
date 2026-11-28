@@ -593,9 +593,8 @@ pub(crate) async fn walk(pod: &Pod, headers: &HeaderMap, args: &Value) -> Value 
         "steps": steps,
         "writes": writes,
     });
-    let mut content = vec![
-        json!({ "type": "text", "text": serde_json::to_string_pretty(&out).unwrap_or_default() }),
-    ];
+    let mut content =
+        vec![json!({ "type": "text", "text": serde_json::to_string(&out).unwrap_or_default() })];
     if let Some(webp) = shot {
         use base64::Engine as _;
         content.insert(

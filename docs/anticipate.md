@@ -66,7 +66,10 @@ What both runs did is in the pod's call log (`call_log`), under each credential'
 refusals within an hour raise a "Refused" Runner warning. **Undo this morning** (`undo_background`, or a button on
 Today's summary card through `/v1/background/undo`) puts the screens back to the checkpoint before Build's first
 group and undoes every row edit either run made today; it also undoes the owner's own screen edits since that
-checkpoint, so it asks first. **Pause background agents** on the Agents screen stops every schedule until resumed.
+checkpoint, so it asks first. Every group it puts back, a trial included, is marked undone where the restore left
+it, so a card's Redo still brings that change back, and Keep can't keep a change that is no longer on the screen.
+It swaps nothing on the device: a card's own Undo (`action.construct.swap`, then `/v1/edit-groups/revert`) is the
+instant one. **Pause background agents** on the Agents screen stops every schedule until resumed.
 
 Both run sandboxed on the Foreman (its decision `sandboxed-workspaces`): each run starts from a clean checkpoint of
 its own Sprite, reaches only the model API, the pod and (Sense) the Proton connector, has no shell, file or web

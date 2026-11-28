@@ -38,6 +38,9 @@ fn sse_ends_cleanly_on(signal: &str) {
         .env("CONSTRUCT_DATA_DIR", dir.path())
         // A caller without a pod token uses this pod (D46).
         .env("CONSTRUCT_OPEN_POD", "dev")
+        // No browser, so no machine-wide network fence left behind (see
+        // `open_pod::start`).
+        .env("CONSTRUCT_BROWSER", "off")
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .spawn()

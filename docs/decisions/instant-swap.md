@@ -32,6 +32,8 @@ Decision:
 - A layout using the intent needs feature `construct_swap`; an older build is served the version before it, whose
   buttons only send the mutation.
 
-Not yet: a reload of home that was already on its way when the swap ran can land after it and show the old screen
-until the swap's own reload lands (a moment). The swap covers names an edit group wrote; collection changes are
-not in groups and are not swapped.
+- A fetch that was already on its way when the swap ran (a reload of home or of another layout) draws the
+  construct as it is when it lands, not the tree it drew before the swap: the engine counts its override changes,
+  and a fetch that lands after the count moved puts in the layout as the construct keys it now (issue #594).
+
+Not yet: the swap covers names an edit group wrote; collection changes are not in groups and are not swapped.

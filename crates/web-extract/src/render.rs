@@ -266,7 +266,12 @@ impl Browser {
         .unwrap_or_else(|_| Err(fail("the page took too long to render")));
         running.close().await;
         drop(proxy);
-        r
+        match r {
+            Err(e) if e.message.contains("ERR_PROXY_CONNECTION_FAILED") => {
+                Err(stray_fence(Path::new(NFT)).await.unwrap_or(e))
+            }
+            r => r,
+        }
     }
 
     /// The server's first browser: with Chromium's sandbox if it starts and
@@ -535,6 +540,35 @@ fn proxy_port() -> u16 {
         PROXY_PORT
     } else {
         0
+    }
+}
+
+/// Why the browser couldn't reach its proxy, when the cause is another
+/// server's fence: the nftables rule is the machine's, not the process's,
+/// and stays after the server that loaded it exits, so a later server that
+/// didn't load it ([`FENCED`] off: its proxy is on a free port, not
+/// [`PROXY_PORT`]) finds its browser's user let through only to
+/// [`PROXY_PORT`]. `None` when this server is fenced itself, isn't root, or
+/// the table isn't there.
+async fn stray_fence(nft: &Path) -> Option<FetchError> {
+    // SAFETY: geteuid has no preconditions and can't fail.
+    if FENCED.load(Ordering::Relaxed) || unsafe { libc::geteuid() } != 0 {
+        return None;
+    }
+    let listed = Command::new(nft)
+        .args(["list", "table", "inet", "construct_browser"])
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .kill_on_drop(true)
+        .status();
+    match tokio::time::timeout(NFT_WAIT, listed).await {
+        Ok(Ok(st)) if st.success() => Some(fail(format!(
+            "the browser could not reach its proxy: another server's network fence (nftables table \
+             inet construct_browser) lets the browser's user (uid {BROWSER_ID}) connect only to port \
+             {PROXY_PORT}; remove it with `nft delete table inet construct_browser`"
+        ))),
+        _ => None,
     }
 }
 
@@ -1231,6 +1265,11 @@ mod tests {
             .await
             .unwrap_err();
         assert!(err.contains("/nonexistent/nft could not run"), "{err}");
+    }
+
+    #[tokio::test]
+    async fn without_nft_no_stray_fence_is_named() {
+        assert!(stray_fence(Path::new("/nonexistent/nft")).await.is_none());
     }
 
     #[test]

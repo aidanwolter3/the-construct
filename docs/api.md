@@ -91,7 +91,9 @@ How a create carries attachments: [posting.md](posting.md).
 `POST /v1/mcp` is the pod's MCP endpoint, with OAuth discovery at `/.well-known/oauth-protected-resource` and
 `/.well-known/oauth-authorization-server`, and `/oauth/register` (20 an hour per client address, 40 per IPv6 /48;
 503 `temporarily_unavailable` when the data volume is nearly full), `/oauth/authorize` and `/oauth/token`. The
-credential it issues reaches only `/v1/mcp`. See [building.md](building.md#building-with-claude).
+credential it issues reaches only `/v1/mcp`. See [building.md](building.md#building-with-claude). A tool's
+answer is compact JSON (indenting it would about quadruple what a model reads); any tool call with `"pretty": true`
+among its arguments gets it indented, for a person reading it.
 
 The other way round, the pod is a client of remote MCP servers (decision [`mcp-jack`](decisions/mcp-jack.md)):
 `GET /v1/mcp-servers/callback?code&state` *public* is where a server's OAuth sign-in comes back to (on a host,
