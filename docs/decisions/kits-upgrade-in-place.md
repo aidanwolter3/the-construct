@@ -19,6 +19,8 @@ Decision:
 - **The shopping kit's categories** gain `explore_avoid` and `explore_prefer`; needs look them up as `avoid` and
   `prefer`; rounds and pieces carry them (a round's are written when it is made, from its need or, for Go this
   way, from the piece); the explorer sends them to the service, which leaves out and ranks up by them.
+- **And a `budget`**, a number: needs look it up, and rounds as `price_max` through their need (a lookup, so no
+  layout writes it); the explorer sends it as the service's price filter.
 
 Consequences: the layouts that make rounds have new versions (`shopping_need/0002`, `shopping_explore/0002`); no
 client build. A pod gets the new fields when the kit is used again (Claude does it with `use_kit`).

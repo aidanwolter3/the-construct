@@ -630,7 +630,8 @@ mirror" to a watched price, all in collections the owner (and Claude) can change
   Similar 0.3, Different 0.6, Very different 0.9) and `query` the need's name and any "This, but…" words. Only
   the latest round is `current`; Back a round deletes it. A category's `explore_avoid` and `explore_prefer`
   (words or short phrases, split on commas, semicolons and lines) reach each round made for its needs: the
-  service leaves out pieces whose title or description holds an avoid one and ranks up those holding prefer ones. ♥, ✕ and the shortlist (☆) are fields of the pieces
+  service leaves out pieces whose title, description or photo shows an avoid one and ranks up those holding prefer
+  ones. A category's `budget` (a number, USD) caps every round's prices: needs look it up, rounds as `price_max`. ♥, ✕ and the shortlist (☆) are fields of the pieces
   (`shop_pieces`), so exploring teaches the owner's general taste nothing (nor does choosing: a kit's layout calls
   only Collections). A piece opens on its store's page.
 - **A pick** (`shop_picks`) is made from a piece (Choose this): its price is checked daily by a `query_field`
