@@ -444,15 +444,23 @@ fn recompute_row(
     out: &mut Followed,
 ) -> rusqlite::Result<bool> {
     let mut dirty = false;
-    for id in fields {
-        let Some(field) = def.by_id(id).filter(|f| f.live() && f.computed()) else {
+    // In the definition's order, so a compute that reads an earlier one
+    // (decision `shopping-kit`) sees its new value and follows it.
+    let mut changed: Vec<String> = Vec::new();
+    for field in def.live_fields().filter(|f| f.computed()) {
+        let listed = fields.contains(&field.id.as_str());
+        let follows = field.compute_sources().iter().any(|s| changed.contains(s));
+        if !listed && !follows {
             continue;
-        };
+        }
         let old = row.values.get(&field.id).cloned();
         if let Some(job) = compute::recompute(tx, def, field, row, lookups, caps.text_chars)? {
             out.jobs.entry(def.name.clone()).or_default().push(job);
         }
-        dirty |= row.values.get(&field.id) != old.as_ref();
+        if row.values.get(&field.id) != old.as_ref() {
+            dirty = true;
+            changed.push(field.id.clone());
+        }
     }
     Ok(dirty)
 }

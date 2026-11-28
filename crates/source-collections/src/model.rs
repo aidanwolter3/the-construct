@@ -520,6 +520,10 @@ pub struct Definition {
     /// when a write settles ([`crate::follow::settle`]).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub keep: Option<Keep>,
+    /// Daily copies of some fields as rows of another collection (decision
+    /// `shopping-kit`, [`crate::snapshots`]).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub snapshots: Vec<crate::snapshots::Snapshot>,
 }
 
 /// A collection's retention: at most `rows` live rows (0: no limit), none
@@ -547,6 +551,13 @@ pub struct System {
 }
 
 impl Definition {
+    /// Whether field `a` comes before field `b` in the definition (the
+    /// order computes run in).
+    pub fn comes_before(&self, a: &str, b: &str) -> bool {
+        let at = |id: &str| self.fields.iter().position(|f| f.id == id);
+        matches!((at(a), at(b)), (Some(x), Some(y)) if x < y)
+    }
+
     pub fn live_fields(&self) -> impl Iterator<Item = &Field> {
         self.fields.iter().filter(|f| f.live())
     }
@@ -777,6 +788,7 @@ impl Definition {
             "alerts": self.alerts.iter().map(|a| a.describe(self)).collect::<Vec<_>>(),
             "actions": self.actions.iter().map(|a| crate::actions::describe(self, a, others)).collect::<Vec<_>>(),
             "views": self.views.iter().map(|v| v.describe(self)).collect::<Vec<_>>(),
+            "snapshots": self.snapshots.iter().map(|x| crate::snapshots::describe(self, x)).collect::<Vec<_>>(),
             "system_app": self.system.as_ref().map(|s| s.app.clone()),
         })
     }
@@ -1003,6 +1015,7 @@ pub fn rules_to_create(
             order_by: Vec::new(),
             descending: false,
             keep: None,
+            snapshots: Vec::new(),
         });
     }
     Ok(out)
@@ -2177,9 +2190,20 @@ pub fn check_definition(def: &Definition, max_fields: usize) -> Result<(), Strin
                         f.name, src.name
                     ));
                 }
-                Some(src) if src.computed() => {
+                // A chain of instant computes (decision `shopping-kit`): an
+                // earlier field worked out in the write itself (an
+                // expression, a lookup, a count or a rollup), never a
+                // model's answer, which comes later.
+                Some(src)
+                    if src.computed()
+                        && (src
+                            .compute
+                            .iter()
+                            .any(|c| matches!(c, Compute::Model { .. }))
+                            || !def.comes_before(&src.id, &f.id)) =>
+                {
                     return Err(format!(
-                        "field '{}' is computed from '{}', which is computed itself (not supported yet)",
+                        "field '{}' is computed from '{}', which is computed itself: only from an earlier field that isn't a model's answer",
                         f.name, src.name
                     ));
                 }
@@ -2380,6 +2404,7 @@ mod tests {
             actions: Vec::new(),
             views: Vec::new(),
             keep: None,
+            snapshots: Vec::new(),
         }
     }
 

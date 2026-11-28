@@ -19,5 +19,6 @@ mod reminders;
 mod render;
 mod research;
 mod row_id;
+mod shopping;
 mod views;
 mod web;

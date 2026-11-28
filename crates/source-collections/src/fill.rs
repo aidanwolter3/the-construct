@@ -72,9 +72,17 @@ pub const EACH_FILL_TIMEOUT: Duration = Duration::from_secs(60 * 60);
 /// How long after a row is written its research starts (its computed
 /// fields settle first, so it is researched once).
 pub const RESEARCH_DELAY: Duration = Duration::from_secs(20);
+/// How soon a `taste` filler explores for a row just written: at once, as
+/// someone is waiting on the screen (decision `shopping-kit`); just long
+/// enough for the write's live computed fields to settle.
+pub const EXPLORE_DELAY: Duration = Duration::from_millis(200);
+/// What a `taste` filler says without the taste source.
+pub const NO_EXPLORER: &str = "this filler needs the taste source";
 /// While a fill runs, how often (and how many times) a write's research
 /// tries again.
 const RESEARCH_RETRY: Duration = Duration::from_secs(60);
+/// How soon a busy explorer is asked again.
+const EXPLORE_RETRY: Duration = Duration::from_millis(500);
 const RESEARCH_TRIES: usize = 30;
 /// Empty fills in a row before a filler reads "empty".
 pub const EMPTY_AFTER: i64 = 3;
@@ -1368,7 +1376,9 @@ pub struct Off {
 impl Off {
     /// Whether `f` can't run for want of its jack (a `range` needs none).
     pub fn stops(self, f: &Filler) -> bool {
-        if f.is_range() {
+        // A taste filler needs the `taste` jack, not the web: the explorer
+        // says when the pod isn't signed in.
+        if f.is_range() || f.is_taste() {
             false
         } else if f.is_mcp() {
             self.mcp
@@ -2586,6 +2596,139 @@ async fn run_each(
     ))
 }
 
+/// Explore for each row of the `for_each` collection that matches and
+/// hasn't been explored with this request (decision `shopping-kit`): the
+/// row's fields make the request, the taste source answers pieces, and
+/// they become the row's rows here (`replace` among them). No model.
+async fn run_taste(
+    pod: &Pod,
+    adapter: &CollectionsAdapter,
+    def: &Definition,
+    filler: &Filler,
+    state: &State,
+    force: bool,
+) -> Result<Fetch, String> {
+    let Source::Taste {
+        for_each: fe,
+        request,
+        map,
+        copy,
+    } = &filler.source
+    else {
+        return Err("not a taste filler".into());
+    };
+    let Some(explorer) = adapter.explorer() else {
+        return Err(NO_EXPLORER.into());
+    };
+    let (name, fid, parent_name) = (def.name.clone(), filler.id.clone(), fe.collection.clone());
+    let read = pod
+        .blocking(move |s| {
+            s.with_conn(|c| {
+                let parent = db::latest_def(c, &parent_name)?.map(|(_, d)| d);
+                let rows = match &parent {
+                    Some(_) => db::all_rows(c, &parent_name, false)?,
+                    None => Vec::new(),
+                };
+                Ok((parent, rows, row_marks(c, &name, &fid)?))
+            })
+        })
+        .await
+        .map_err(|_| "the collections could not be read".to_owned())?;
+    let (parent, parent_rows, marks) = read;
+    let Some(parent) = parent else {
+        return Err(format!(
+            "for_each: there is no collection '{}' any more",
+            fe.collection
+        ));
+    };
+    let Some(conditions) = resolved(&parent, &fe.conditions) else {
+        return Err(format!(
+            "for_each.where names a field '{}' no longer has",
+            fe.collection
+        ));
+    };
+    let value_of = |r: &Row, field: &str| -> Value {
+        parent
+            .field(field)
+            .and_then(|f| r.values.get(&f.id).cloned())
+            .unwrap_or(Value::Null)
+    };
+    let parents: HashSet<String> = parent_rows.iter().map(|r| r.id.clone()).collect();
+    // A round is explored once: a changed filler doesn't explore them all
+    // again (their pieces carry what someone liked).
+    let _ = state;
+    let force_all = force;
+    let mut todo: Vec<(&Row, Map<String, Value>, String)> = parent_rows
+        .iter()
+        .filter(|r| conditions.iter().all(|c| c.matches(&parent, &r.values)))
+        .filter_map(|r| {
+            let mut req = Map::new();
+            for (p, field) in request {
+                if let Some(v) = crate::explore::part(p, &value_of(r, field)) {
+                    req.insert(p.clone(), v);
+                }
+            }
+            // Nothing to explore around yet.
+            if !req.contains_key("query") && !req.contains_key("like") {
+                return None;
+            }
+            let key = hash_of(Value::Object(req.clone()).to_string().as_bytes());
+            let done = marks.get(&r.id).is_some_and(|(s, _, _)| *s == key);
+            (force_all || !done).then_some((r, req, key))
+        })
+        .collect();
+    // Newest rows first: the one someone just made is the one they wait on.
+    todo.sort_by_key(|(r, _, _)| std::cmp::Reverse(r.created_at));
+    let caps = adapter.caps();
+    let mut answers = Vec::new();
+    let (mut items, mut skipped, mut calls) = (0, 0, 0);
+    let mut failed = Vec::new();
+    for (r, req, key) in todo.into_iter().take(crate::filler::MAX_EACH_PER_FILL) {
+        calls += 1;
+        match explorer.explore(pod, req).await {
+            Ok(pieces) => {
+                let rows: Vec<Map<String, Value>> = pieces
+                    .into_iter()
+                    .take(crate::explore::MAX_PIECES)
+                    .map(|p| {
+                        let mut out: Map<String, Value> = map
+                            .iter()
+                            .filter_map(|(id, part)| {
+                                let v = p.get(part)?;
+                                (!v.is_null()).then(|| (id.clone(), v.clone()))
+                            })
+                            .collect();
+                        for (id, field) in copy {
+                            let v = value_of(r, field);
+                            if !v.is_null() {
+                                out.insert(id.clone(), v);
+                            }
+                        }
+                        out
+                    })
+                    .collect();
+                let (vals, s) = coerce_all(def, rows, caps.fill_items, caps.text_chars, None, None);
+                skipped += s;
+                if vals.is_empty() {
+                    failed.push(format!("{}: no pieces", r.id));
+                    continue;
+                }
+                items += vals.len();
+                answers.push((r.id.clone(), vals, key));
+            }
+            Err(e) => failed.push(format!("{}: {e}", r.id)),
+        }
+    }
+    Ok(Fetch::Each {
+        answers,
+        parents,
+        items,
+        skipped,
+        calls,
+        failed,
+    })
+}
+
 /// Read each new row's own page for the filler's `details` (at most
 /// [`MAX_DETAILS`]) and store what it found.
 async fn fill_details(
@@ -2804,6 +2947,17 @@ pub async fn fill(pod: &Pod, collection: &str, filler_id: &str, force: bool) -> 
         .await
         {
             Ok(f) => f,
+            Err(_) => Fetch::Failed("the fill timed out".into(), None),
+        }
+    } else if filler.is_taste() {
+        match tokio::time::timeout(
+            FETCH_FILL_TIMEOUT,
+            run_taste(pod, adapter, &def, &filler, &st, force),
+        )
+        .await
+        {
+            Ok(Ok(f)) => f,
+            Ok(Err(e)) => Fetch::Failed(e, None),
             Err(_) => Fetch::Failed("the fill timed out".into(), None),
         }
     } else if filler.is_agent() {
@@ -3062,6 +3216,7 @@ pub async fn fill(pod: &Pod, collection: &str, filler_id: &str, force: bool) -> 
                         let mapped = f2.mapped();
                         let mut out = Stored::default();
                         let mut jobs = Vec::new();
+                        let mut snapped = Vec::new();
                         for (id, item) in &rows {
                             let Some(mut r) = db::row(tx, &d2.name, id)? else {
                                 continue;
@@ -3091,18 +3246,25 @@ pub async fn fill(pod: &Pod, collection: &str, filler_id: &str, force: bool) -> 
                                     Some(&db::filler_writer(&f2.id)),
                                     now,
                                 )?;
+                                if !d2.snapshots.is_empty() {
+                                    let today = today_on(tx, now)?;
+                                    snapped.extend(crate::snapshots::take(
+                                        tx, &d2, &r, &today, now, caps,
+                                    )?);
+                                }
                                 out.updated += 1;
                             } else {
                                 out.unchanged += 1;
                             }
                         }
                         save_marks(tx, &d2.name, &f2.id, &marks, now)?;
-                        Ok((out, jobs, crate::follow::settle(tx, now, caps)?))
+                        Ok((out, jobs, snapped, crate::follow::settle(tx, now, caps)?))
                     })
                 })
                 .await
-                .map(|(out, jobs, followed)| {
+                .map(|(out, jobs, snapped, followed)| {
                     followed.finish(pod);
+                    crate::snapshots::spawn(pod, snapped);
                     (out, jobs)
                 });
             match stored {
@@ -3229,7 +3391,7 @@ pub fn research_soon(pod: &Pod, collection: &str) {
     let limit = pod_core::grant::fetch_limit();
     tokio::spawn(pod_core::grant::with_fetch_limit(limit, async move {
         let c2 = c.clone();
-        let targets: Vec<(String, String)> = pod
+        let targets: Vec<(String, String, bool)> = pod
             .blocking(move |s| {
                 s.with_conn(|conn| {
                     Ok(db::all_defs(conn)?
@@ -3238,7 +3400,7 @@ pub fn research_soon(pod: &Pod, collection: &str) {
                             d.fillers
                                 .iter()
                                 .filter(|f| f.for_each().is_some_and(|fe| fe.collection == c2))
-                                .map(|f| (d.name.clone(), f.id.clone()))
+                                .map(|f| (d.name.clone(), f.id.clone(), f.is_taste()))
                                 .collect::<Vec<_>>()
                         })
                         .collect())
@@ -3249,8 +3411,25 @@ pub fn research_soon(pod: &Pod, collection: &str) {
         if targets.is_empty() {
             return;
         }
+        // Explorers first, at once; agents after the settle.
+        let (explore, research): (Vec<_>, Vec<_>) =
+            targets.into_iter().partition(|(_, _, taste)| *taste);
+        if !explore.is_empty() {
+            tokio::time::sleep(EXPLORE_DELAY).await;
+            for (col, f, _) in explore {
+                for _ in 0..RESEARCH_TRIES {
+                    if !matches!(fill(&pod, &col, &f, false).await, Outcome::Busy) {
+                        break;
+                    }
+                    tokio::time::sleep(EXPLORE_RETRY).await;
+                }
+            }
+        }
+        if research.is_empty() {
+            return;
+        }
         tokio::time::sleep(RESEARCH_DELAY).await;
-        for (col, f) in targets {
+        for (col, f, _) in research {
             for _ in 0..RESEARCH_TRIES {
                 if !matches!(fill(&pod, &col, &f, false).await, Outcome::Busy) {
                     break;
@@ -3316,8 +3495,26 @@ pub async fn run_due(pod: &Pod) {
     for (c, f) in due {
         fill(pod, &c, &f, false).await;
     }
+    // Snapshots, once a day (decision `shopping-kit`).
+    let day = today(pod.store(), now);
+    let last = pod.local::<SnapshotDay>();
+    let fresh = {
+        let mut d = last.0.lock().unwrap_or_else(|e| e.into_inner());
+        let fresh = d.as_deref() != Some(day.as_str());
+        if fresh {
+            *d = Some(day);
+        }
+        fresh
+    };
+    if fresh {
+        crate::snapshots::daily(pod).await;
+    }
     crate::alerts::run(pod, None).await;
 }
+
+/// The day the scheduler last took snapshots on.
+#[derive(Default)]
+struct SnapshotDay(std::sync::Mutex<Option<String>>);
 
 /// Whether any collection has a scheduled filler or an alert (the poll then
 /// comes back within [`crate::remind::MAX_WAIT`]).

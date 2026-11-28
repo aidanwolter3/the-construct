@@ -176,7 +176,12 @@ filler or a model wrote, and another pod's publication in `describe_publication`
 - `note_gap {what}` records what was missing when nothing fitted; `server pods gaps` reads it.
 - `use_kit {kit, collection?, title?}` starts from a kit: a core layout over a collection of a known shape. It
   makes the collection (or checks one of that name has the kit's fields), has home bind its feed, and answers
-  `embed` and `open` with the kit's inputs bound, to put in home. `checklist` is the one kit so far.
+  `embed` and `open` with the kit's inputs bound, to put in home. Kits: `checklist`, and `shopping` (decision
+  [`shopping-kit`](decisions/shopping-kit.md)), a kit of six collections under their own names (`shop_categories`,
+  `shop_needs`, `shop_rounds`, `shop_pieces`, `shop_picks`, `shop_prices`) and three layouts (`@core/shopping`, which
+  opens `@core/shopping_need` and `@core/shopping_explore`): using it again changes nothing, and it seeds the
+  categories Clothes (explored through the taste service), Home and Other (options found on the web). See
+  [Shopping](#shopping).
 - `set_theme` also takes `scale`: `corner_s`, `corner_m`, `corner_l`, `pad_s`, `pad_m`, `pad_l` (dp) and
   `title_weight`, which core components draw with, so a pod restyles them without copying them.
 - The `dates` source (feed `["dates", "days"]`) lists the days around today in the pod's time zone
@@ -334,7 +339,10 @@ never writes code: it declares typed fields (`text`, `number`, `bool`, `date`, `
   waves, so a cycle ends. A lookup's `value` may be `id`, the one system name it can return: the matched row's
   id, as text (into a text field, without `learn`), so a button can act on that row, e.g. `ingredients.grocery_id`
   → `/v1/collections/groceries/delete {id}`. It follows like any lookup: when that row is deleted the field
-  empties (or takes the next match's id) and comes back on restore. Decisions [`collection-computed-fields`](decisions/collection-computed-fields.md),
+  empties (or takes the next match's id) and comes back on restore. A computed field may read an earlier computed
+  field (in the definition's order) that isn't a model's answer: an expression over a rollup, a lookup through a
+  ref of a lookup; it is worked out in the same write, and follows when the earlier one does (decision
+  [`shopping-kit`](decisions/shopping-kit.md)). Decisions [`collection-computed-fields`](decisions/collection-computed-fields.md),
   [`collection-lookups`](decisions/collection-lookups.md) and
   [`live-computed-fields`](decisions/live-computed-fields.md).
 - **Views.** A collection's `views` (`define_collection`, or `apply_change` `set_view` / `remove_view`) are small
@@ -518,6 +526,21 @@ so change a site with `set_filler` and its id rather than removing and adding it
   to one row doesn't research the others again); a write to the other collection starts a fill 20 s later.
   A row that is deleted takes its answers with it. `keep: [{field, equals}]` (any filler that adds and removes
   rows) keeps rows someone marked, an option put in the bag, when a refill leaves them out.
+- **Taste per row** (decision [`shopping-kit`](decisions/shopping-kit.md)): a `taste` filler, `{for_each:
+  {collection, link, where?}, request: {part: field}, map: {field: part}, copy?, key?}`, asks the owner's taste
+  service (`POST /api/explore`, through the `taste` source and its jack) for pieces for each row of another
+  collection: the request's parts (`query`, `like`, `unlike`, `exclude`, `distance`, `spread`, `group`, `n`,
+  `price_max`) are that row's fields, the pieces (`key`, `title`, `brand`, `image`, `price`, `price_text`, `url`,
+  `host`, `group_label`, `group_ids`, ...) its rows here, and `copy` copies its fields (a ref too) onto each. It
+  explores a row once, as soon as it is written (no 20 s settle: someone is waiting), never again on its own (a
+  changed filler doesn't redo old rows, whose pieces carry reactions). No model, no web search. A service from
+  before `/api/explore` is asked for the first liked piece's similar pieces, else a search.
+- **Snapshots** (decision [`shopping-kit`](decisions/shopping-kit.md)): `snapshots: [{into, link, day, fields:
+  {field there: field here}}]` on `define_collection` keeps a daily copy of some fields as rows of `into` (its
+  ref `link` to this collection, its date field `day`): today's row is made or brought up to date on every write
+  of the row (a person's, a per-row fill's) and once a day for every live row, so a price that holds still still
+  has a point each day. Rollups over them (`min`, `max`, `count`) give a lowest and a highest, and a
+  `core://Bars` over them a chart.
 - **The web module:** every request goes through the pod's host policy (`web-extract`'s `hosts`: 1 s spacing, a
   daily cap per site, and a shared backoff after a site blocks the pod as an automated visitor). Model work runs
   through the agent module (`crates/agent`): the `model` jack, daily budgets per feature, retries.
@@ -586,6 +609,32 @@ them, and answers `sign_in_host`, the host it signs in at, for Claude to tell th
 session over Streamable HTTP, with no redirects, a minute per request and 8 MB per answer. What a server lists is kept
 capped: tool names of at most 128 characters (longer ones are skipped), descriptions of 600, an input schema of
 16 KB (a larger one reads as a bare object schema), 200 tools and 1 MB in all.
+
+## Shopping
+
+The `shopping` kit (decision [`shopping-kit`](decisions/shopping-kit.md)) takes a need from "I want a full-length
+mirror" to a watched price, all in collections the owner (and Claude) can change:
+
+- **A need** (`shop_needs`: `name`, `category`, `notes`, `quantity`, `remind_on`, `bought`) is added by the agent
+  with `add_row` or typed on the list. Its category (`shop_categories`: `name`, `explore`, `preferences`) says
+  whether it is explored through the taste service (`explore`, the taste source's catalog: clothes for now) or
+  found on the web (`find_web` starts an agent filler for about five options). Its `state` (choosing, watching,
+  ready, bought) and one-line `status` are computed from its rounds, pieces and picks; the list groups by
+  `state`.
+- **Explore** is rounds (`shop_rounds`), each made by a button with the need's lists frozen in it (`like`,
+  `unlike`, `exclude`: the keys of its pieces marked ♥, ✕ and every one shown): round 0 asks `distance 0.5,
+  spread 1, group true` (the kinds, each with a label, a count and a price range; Go this way makes round 1
+  anchored on its pieces); round *n* asks `distance` 0.3, 0.18, 0.11 (`how_far` overrides it: Closer 0.1,
+  Similar 0.3, Different 0.6, Very different 0.9) and `query` the need's name and any "This, but…" words. Only
+  the latest round is `current`; Back a round deletes it. ♥, ✕ and the shortlist (☆) are fields of the pieces
+  (`shop_pieces`), so exploring teaches the owner's general taste nothing (nor does choosing: a kit's layout calls
+  only Collections). A piece opens on its store's page.
+- **A pick** (`shop_picks`) is made from a piece (Choose this): its price is checked daily by a `query_field`
+  filler (`price_now`, `stock_now`) while `watch` is on, and its `price` (today's, else the chosen one) is kept as
+  a daily snapshot in `shop_prices`, charted on its page with its low and high. `deal` says Under your target, Down
+  from $X (10% under the chosen price) or Lowest since you chose it; the Price drops alert notifies (again after
+  the price recovers), and Back in stock notifies when it is in stock after a sold-out day. About this pick is a
+  `query_field` filler that reads a search for its reviews once.
 
 ## Events
 
