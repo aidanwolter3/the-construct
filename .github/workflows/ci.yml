@@ -270,10 +270,10 @@ jobs:
   web:
     name: Web client (wasm)
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
     # The web client (decision `web-client`): construct-web built for wasm32 with the wasm-bindgen CLI pinned to
-    # Cargo.lock's version, as scripts/web_build.sh builds it, and a size budget on the gzipped WebAssembly. It isn't
-    # deployed: the server serves it only with CONSTRUCT_WEB=1.
+    # Cargo.lock's version, as scripts/web_build.sh builds it, a size budget on the gzipped WebAssembly, and the
+    # browser end-to-end tests. It isn't deployed: the server serves it only with CONSTRUCT_WEB=1.
     # Warnings fail the build here too (clippy and the release-profile build), as in the Android job.
     env:
       RUSTFLAGS: -D warnings
@@ -300,6 +300,21 @@ jobs:
           size=$(gzip -9 -c target/web/construct_web_bg.*.wasm | wc -c)
           echo "gzipped: $size bytes"
           [ "$size" -le 2621440 ]
+      # The client driven in Chromium against a real server and the fake Pixelfed (scripts/web_e2e.sh: the owner's
+      # pod, a public link, a site of another origin). A panic in the page fails it (issue #543). The runner's Node
+      # with Playwright pinned, installed globally where the script's NODE_PATH looks.
+      - name: Install Playwright and Chromium
+        run: npm install -g playwright@1.63.0 && npx -y playwright@1.63.0 install --with-deps chromium
+      - name: Browser end-to-end (scripts/web_e2e.sh)
+        run: scripts/web_e2e.sh target/web-e2e
+      - name: Upload the browser end-to-end screenshots and logs
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: web-e2e
+          path: target/web-e2e
+          if-no-files-found: ignore
+          retention-days: 14
 
   deploy:
     name: Deploy to Fly.io staging

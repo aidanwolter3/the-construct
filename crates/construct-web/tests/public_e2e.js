@@ -1,6 +1,6 @@
 // A public link in Chromium (decision `public-web-links`) against a running server with CONSTRUCT_PUBLIC_WEB=1
 // (scripts/web_e2e.sh starts one): an agent makes a made-up recipes collection and layout over MCP, reviews and
-// shares it; a visitor with no pod opens the page; a new row reaches it; a field the page doesn't show never does;
+// shares it, letting new rows out; a visitor with no pod opens the page; a new row reaches it; a field the page doesn't show never does;
 // unsharing stops it. Then (decision `public-links-share-the-closure`) a list whose rows push their recipe is shared
 // with a short path: a visitor taps a row, the recipe shows, and Back returns. Last, a link opens in a new tab as
 // desktop Chrome opens one (running the page's frame inside window.open) and the page still answers taps after.
@@ -61,10 +61,11 @@ async function tool(name, args) {
   check(made.id, 'an agent made a recipes layout');
   await tool('update_layout', { id: 'home', layout: { type: 'core://Page', id: 'home', title: 'Home',
     root: { type: 'core://Layout', ref: made.id } } });
-  const review = await tool('share_publicly', { layout: made.id });
+  // New rows go out without a review only when the link lets them (issue #446); by default they wait.
+  const review = await tool('share_publicly', { layout: made.id, new_rows: 'publish' });
   check(review.review_id && !review.anyone_with_the_link_reads.fields.includes('notes'),
     'the review lists what goes, without the field the page doesn\'t show');
-  const shared = await tool('share_publicly', { layout: made.id, confirm: review.review_id });
+  const shared = await tool('share_publicly', { layout: made.id, new_rows: 'publish', confirm: review.review_id });
   check(shared.link && shared.url, 'confirmed: ' + shared.url);
 
   const browser = await chromium.launch();
@@ -158,7 +159,7 @@ async function tool(name, args) {
         content: { type: 'core://Box', height_dp: 64, padding_h_dp: 16,
           content: { type: 'core://Text', style: 'Title', value_expr: '$item.name' } } } }] } } });
   const linksReview = await tool('share_publicly', { layout: links.id, slug: 'links' });
-  await tool('share_publicly', { layout: links.id, slug: 'links', confirm: linksReview.review_id });
+  const linksLink = await tool('share_publicly', { layout: links.id, slug: 'links', confirm: linksReview.review_id });
   const shop = await browser.newPage({ viewport: { width: 390, height: 844 } });
   shop.on('pageerror', (e) => errors.push(e.message));
   await shop.context().route('https://shop.example/**', (r) => r.fulfill({ body: '<h1>Shop</h1>', contentType: 'text/html' }));
@@ -197,7 +198,7 @@ async function tool(name, args) {
     title: 'Search', root: { type: 'core://Column', padding_h_dp: 16, padding_v_dp: 16, children: [
       { type: 'core://TextField', field: 'q', placeholder: 'Search' }] } } });
   const searchReview = await tool('share_publicly', { layout: search.id, slug: 'search' });
-  await tool('share_publicly', { layout: search.id, slug: 'search', confirm: searchReview.review_id });
+  const searchLink = await tool('share_publicly', { layout: search.id, slug: 'search', confirm: searchReview.review_id });
   const phone = await browser.newContext({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true });
   const tapper = await phone.newPage();
   tapper.on('pageerror', (e) => errors.push(e.message));
@@ -215,6 +216,12 @@ async function tool(name, args) {
 
   check(errors.length === 0, 'no page errors' + (errors.length ? ': ' + errors.join('; ') : ''));
   await browser.close();
+
+  // The next test (site_e2e.js) shares from the same pod under another handle, which a pod can change only with
+  // no live links carrying the old one.
+  for (const l of [mealsLink, linksLink, searchLink]) {
+    check((await tool('unshare_publicly', { link: l.link })).ok, 'unshared ' + l.short_url);
+  }
 })().catch((e) => {
   console.error('FAIL ' + e.message);
   process.exit(1);
