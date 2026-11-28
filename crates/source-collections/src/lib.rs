@@ -55,6 +55,7 @@ pub mod calendar;
 pub mod changes;
 pub mod compute;
 pub mod db;
+pub mod explore;
 pub mod expr;
 pub mod fill;
 pub mod filler;
@@ -70,6 +71,7 @@ pub mod quantity;
 pub mod refs;
 pub mod remind;
 pub mod share;
+pub mod snapshots;
 pub mod subject;
 #[cfg(any(test, feature = "test-seed"))]
 pub mod test_seed;
@@ -266,6 +268,9 @@ pub struct CollectionsAdapter {
     /// What answers `agent` fillers (none: they report themselves
     /// unavailable).
     agent: Option<Arc<dyn agent::FillAgent>>,
+    /// What answers `taste` fillers (none: they report the taste source
+    /// missing).
+    explorer: Option<Arc<dyn explore::Explorer>>,
     /// Fetch fillers may read private hosts (tests; the server sets it from
     /// `CONSTRUCT_FILL_PRIVATE_HOSTS=1`).
     allow_private_hosts: bool,
@@ -284,6 +289,7 @@ impl Default for CollectionsAdapter {
             caps: Caps::default(),
             model: None,
             agent: None,
+            explorer: None,
             allow_private_hosts: false,
             fetch_client: fetch_client(false, false),
             secret_fetch_client: fetch_client(false, true),
@@ -327,6 +333,17 @@ impl CollectionsAdapter {
     pub fn with_agent(mut self, agent: Option<Arc<dyn agent::FillAgent>>) -> Self {
         self.agent = agent;
         self
+    }
+
+    /// With `explorer` answering `taste` fillers (the `taste` source's, in
+    /// the server; a fake in tests).
+    pub fn with_explorer(mut self, explorer: Option<Arc<dyn explore::Explorer>>) -> Self {
+        self.explorer = explorer;
+        self
+    }
+
+    pub fn explorer(&self) -> Option<&Arc<dyn explore::Explorer>> {
+        self.explorer.as_ref()
     }
 
     /// Let fetch fillers read private hosts (tests, or the operator's
@@ -405,7 +422,7 @@ impl Source for CollectionsAdapter {
     }
 
     fn core_layouts(&self) -> Vec<CoreLayoutInfo> {
-        kits::KITS.iter().map(|k| k.layout).collect()
+        kits::layouts()
     }
 
     fn layout_files(&self) -> &'static [LayoutSource] {
@@ -882,6 +899,10 @@ async fn write_row(
     // Claude below outward access writes as itself, not as the owner
     // (decision `mcp-access-levels`).
     let writer = db::current_writer();
+    // Snapshots the write took (decision `shopping-kit`): their computed
+    // fields run once it's stored.
+    let snapped = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let snapped_in = snapped.clone();
     let out = refusable_followed(pod, move |tx| {
         let Some((_, def)) = db::latest_def(tx, &name)? else {
             return Ok(Err(
@@ -958,6 +979,14 @@ async fn write_row(
             db::insert_row(tx, &name, &row)?;
             if writer.is_some() {
                 db::note_writes(tx, &name, None, &row, writer, now)?;
+            }
+            if !def.snapshots.is_empty() {
+                let today = fill::today_on(tx, now)?;
+                let taken = snapshots::take(tx, &def, &row, &today, now, caps)?;
+                snapped_in
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .extend(taken);
             }
             return Ok(Ok((
                 json!({ "ok": true, "id": row.id, "uri": db::row_uri(&name, &row.id) }),
@@ -1048,6 +1077,14 @@ async fn write_row(
         }
         row.updated_at = now;
         db::save_row(tx, &name, &row)?;
+        if !def.snapshots.is_empty() {
+            let today = fill::today_on(tx, now)?;
+            let taken = snapshots::take(tx, &def, &row, &today, now, caps)?;
+            snapped_in
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .extend(taken);
+        }
         // A row Claude brings back is Claude's whole (decision
         // `mcp-access-levels`), though its values are as they were.
         let revived = writer.is_some() && was_deleted && row.deleted_at.is_none();
@@ -1061,6 +1098,8 @@ async fn write_row(
         followed.publish(pod, origin.as_deref().filter(|_| !computed));
     }
     compute::spawn(pod, collection, jobs);
+    let taken = std::mem::take(&mut *snapped.lock().unwrap_or_else(|e| e.into_inner()));
+    snapshots::spawn(pod, taken);
     // Agents that research this collection's rows (decision
     // `research-per-row`).
     fill::research_soon(pod, collection);

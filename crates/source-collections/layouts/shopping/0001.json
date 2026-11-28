@@ -1,0 +1,414 @@
+{
+ "note": "The shopping kit's list (decision shopping-kit): needs by where they stand, each opening its page",
+ "layout": {
+  "type": "core://Page",
+  "id": "shopping",
+  "title": "Shopping",
+  "root": {
+   "type": "core://Use",
+   "component": "core:screen_scaffold",
+   "args": {
+    "title": "$in.title",
+    "spacing": 0
+   },
+   "children": [
+    {
+     "type": "core://TextField",
+     "field": "name",
+     "placeholder": "Add something to buy…",
+     "on_submit": {
+      "intent": "action.mutation.create",
+      "query_key": "collection:shop_needs",
+      "entity_uri": "collections://shop_needs/pending-$nonce",
+      "entity": {
+       "id": "pending-$nonce",
+       "deleted": false,
+       "name": "$form.name",
+       "status": "Nothing chosen yet",
+       "state": "choosing"
+      },
+      "endpoint": "/v1/collections/shop_needs/create",
+      "payload": {
+       "name": "$form.name",
+       "client_id": "$nonce"
+      },
+      "refresh_workspace": true
+     }
+    },
+    {
+     "type": "core://Conditional",
+     "content": {
+      "type": "core://Use",
+      "component": "core:muted_note",
+      "args": {
+       "text": "Nothing to buy. Add something above, or tell your agent what you need."
+      }
+     },
+     "not": true,
+     "count": {
+      "query_key": "collection:shop_needs",
+      "where": [
+       {
+        "field": "deleted",
+        "equals": "false"
+       }
+      ]
+     }
+    },
+    {
+     "type": "core://Conditional",
+     "content": {
+      "type": "core://Use",
+      "component": "core:titled_section",
+      "args": {
+       "text": "To choose"
+      },
+      "children": [
+       {
+        "type": "core://Use",
+        "component": "core:grouped_list",
+        "args": {},
+        "children": [
+         {
+          "type": "core://List",
+          "query_key": "collection:shop_needs",
+          "item_template": {
+           "type": "core://Gesture",
+           "content_description": "Swipe left to delete",
+           "on_swipe_left": {
+            "intent": "action.confirm",
+            "title": "Delete this?",
+            "confirm_label": "Delete",
+            "then": {
+             "intent": "action.mutation.optimistic",
+             "entity_uri": "$item.uri",
+             "field": "deleted",
+             "value_expr": "true",
+             "endpoint": "/v1/collections/shop_needs/delete",
+             "payload": {
+              "id": "$item.id"
+             }
+            }
+           },
+           "content": {
+            "type": "core://Tappable",
+            "content_description": "Open $item.name",
+            "on_click": {
+             "intent": "action.navigation.open",
+             "layout": "shopping_need",
+             "presentation": "Push",
+             "params": {
+              "need": "$item.id"
+             }
+            },
+            "content": {
+             "type": "core://Use",
+             "component": "core:item_row",
+             "args": {
+              "title": "$item.name",
+              "meta": "$item.status",
+              "leading": false,
+              "chevron": true
+             }
+            }
+           }
+          },
+          "where": [
+           {
+            "field": "deleted",
+            "equals": "false"
+           },
+           {
+            "field": "state",
+            "equals": "choosing"
+           }
+          ],
+          "spacing_dp": 1
+         }
+        ]
+       }
+      ]
+     },
+     "count": {
+      "query_key": "collection:shop_needs",
+      "where": [
+       {
+        "field": "deleted",
+        "equals": "false"
+       },
+       {
+        "field": "state",
+        "equals": "choosing"
+       }
+      ]
+     }
+    },
+    {
+     "type": "core://Conditional",
+     "content": {
+      "type": "core://Use",
+      "component": "core:titled_section",
+      "args": {
+       "text": "Watching"
+      },
+      "children": [
+       {
+        "type": "core://Use",
+        "component": "core:grouped_list",
+        "args": {},
+        "children": [
+         {
+          "type": "core://List",
+          "query_key": "collection:shop_needs",
+          "item_template": {
+           "type": "core://Gesture",
+           "content_description": "Swipe left to delete",
+           "on_swipe_left": {
+            "intent": "action.confirm",
+            "title": "Delete this?",
+            "confirm_label": "Delete",
+            "then": {
+             "intent": "action.mutation.optimistic",
+             "entity_uri": "$item.uri",
+             "field": "deleted",
+             "value_expr": "true",
+             "endpoint": "/v1/collections/shop_needs/delete",
+             "payload": {
+              "id": "$item.id"
+             }
+            }
+           },
+           "content": {
+            "type": "core://Tappable",
+            "content_description": "Open $item.name",
+            "on_click": {
+             "intent": "action.navigation.open",
+             "layout": "shopping_need",
+             "presentation": "Push",
+             "params": {
+              "need": "$item.id"
+             }
+            },
+            "content": {
+             "type": "core://Use",
+             "component": "core:item_row",
+             "args": {
+              "title": "$item.name",
+              "meta": "$item.status",
+              "leading": false,
+              "chevron": true
+             }
+            }
+           }
+          },
+          "where": [
+           {
+            "field": "deleted",
+            "equals": "false"
+           },
+           {
+            "field": "state",
+            "equals": "watching"
+           }
+          ],
+          "spacing_dp": 1
+         }
+        ]
+       }
+      ]
+     },
+     "count": {
+      "query_key": "collection:shop_needs",
+      "where": [
+       {
+        "field": "deleted",
+        "equals": "false"
+       },
+       {
+        "field": "state",
+        "equals": "watching"
+       }
+      ]
+     }
+    },
+    {
+     "type": "core://Conditional",
+     "content": {
+      "type": "core://Use",
+      "component": "core:titled_section",
+      "args": {
+       "text": "Ready to buy"
+      },
+      "children": [
+       {
+        "type": "core://Use",
+        "component": "core:grouped_list",
+        "args": {},
+        "children": [
+         {
+          "type": "core://List",
+          "query_key": "collection:shop_needs",
+          "item_template": {
+           "type": "core://Gesture",
+           "content_description": "Swipe left to delete",
+           "on_swipe_left": {
+            "intent": "action.confirm",
+            "title": "Delete this?",
+            "confirm_label": "Delete",
+            "then": {
+             "intent": "action.mutation.optimistic",
+             "entity_uri": "$item.uri",
+             "field": "deleted",
+             "value_expr": "true",
+             "endpoint": "/v1/collections/shop_needs/delete",
+             "payload": {
+              "id": "$item.id"
+             }
+            }
+           },
+           "content": {
+            "type": "core://Tappable",
+            "content_description": "Open $item.name",
+            "on_click": {
+             "intent": "action.navigation.open",
+             "layout": "shopping_need",
+             "presentation": "Push",
+             "params": {
+              "need": "$item.id"
+             }
+            },
+            "content": {
+             "type": "core://Use",
+             "component": "core:item_row",
+             "args": {
+              "title": "$item.name",
+              "meta": "$item.status",
+              "leading": false,
+              "chevron": true
+             }
+            }
+           }
+          },
+          "where": [
+           {
+            "field": "deleted",
+            "equals": "false"
+           },
+           {
+            "field": "state",
+            "equals": "ready"
+           }
+          ],
+          "spacing_dp": 1
+         }
+        ]
+       }
+      ]
+     },
+     "count": {
+      "query_key": "collection:shop_needs",
+      "where": [
+       {
+        "field": "deleted",
+        "equals": "false"
+       },
+       {
+        "field": "state",
+        "equals": "ready"
+       }
+      ]
+     }
+    },
+    {
+     "type": "core://Conditional",
+     "content": {
+      "type": "core://Use",
+      "component": "core:collapsible",
+      "args": {
+       "key": "shop_bought",
+       "title": "Bought"
+      },
+      "children": [
+       {
+        "type": "core://Use",
+        "component": "core:grouped_list",
+        "args": {},
+        "children": [
+         {
+          "type": "core://List",
+          "query_key": "collection:shop_needs",
+          "item_template": {
+           "type": "core://Gesture",
+           "content_description": "Swipe left to delete",
+           "on_swipe_left": {
+            "intent": "action.confirm",
+            "title": "Delete this?",
+            "confirm_label": "Delete",
+            "then": {
+             "intent": "action.mutation.optimistic",
+             "entity_uri": "$item.uri",
+             "field": "deleted",
+             "value_expr": "true",
+             "endpoint": "/v1/collections/shop_needs/delete",
+             "payload": {
+              "id": "$item.id"
+             }
+            }
+           },
+           "content": {
+            "type": "core://Tappable",
+            "content_description": "Open $item.name",
+            "on_click": {
+             "intent": "action.navigation.open",
+             "layout": "shopping_need",
+             "presentation": "Push",
+             "params": {
+              "need": "$item.id"
+             }
+            },
+            "content": {
+             "type": "core://Use",
+             "component": "core:item_row",
+             "args": {
+              "title": "$item.name",
+              "meta": "$item.status",
+              "leading": false,
+              "chevron": true
+             }
+            }
+           }
+          },
+          "where": [
+           {
+            "field": "deleted",
+            "equals": "false"
+           },
+           {
+            "field": "state",
+            "equals": "bought"
+           }
+          ],
+          "spacing_dp": 1
+         }
+        ]
+       }
+      ]
+     },
+     "count": {
+      "query_key": "collection:shop_needs",
+      "where": [
+       {
+        "field": "deleted",
+        "equals": "false"
+       },
+       {
+        "field": "state",
+        "equals": "bought"
+       }
+      ]
+     }
+    }
+   ]
+  }
+ }
+}

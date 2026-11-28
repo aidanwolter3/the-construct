@@ -844,6 +844,10 @@ fn str_arg<'a>(args: &'a Value, k: &str) -> Result<&'a str, Value> {
 
 async fn call_tool(pod: &Pod, headers: &HeaderMap, params: &Value) -> Value {
     let name = params["name"].as_str().unwrap_or("");
+    // Its store work counts as this tool's (issue #576).
+    if let Some(call) = crate::timing::current() {
+        call.set_kind(format!("mcp {name}"));
+    }
     let args = params
         .get("arguments")
         .cloned()
@@ -1178,7 +1182,7 @@ async fn with_advice(
     warnings.extend(crate::hints::route_text(&layout));
     let p = pod.clone();
     let reuse =
-        tokio::task::spawn_blocking(move || crate::hints::reuse(&p, &layout, writing.as_deref()))
+        crate::timing::spawn_blocking(move || crate::hints::reuse(&p, &layout, writing.as_deref()))
             .await
             .unwrap_or_default();
     warnings.extend(reuse);

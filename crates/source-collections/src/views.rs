@@ -516,6 +516,7 @@ mod tests {
             actions: Vec::new(),
             views: Vec::new(),
             keep: None,
+            snapshots: Vec::new(),
         }
     }
 

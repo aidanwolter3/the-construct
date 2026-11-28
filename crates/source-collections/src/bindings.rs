@@ -552,6 +552,7 @@ mod tests {
             actions: Vec::new(),
             views: Vec::new(),
             keep: None,
+            snapshots: Vec::new(),
         };
         def.fields[0].aliases.push("name".into());
         HashMap::from([("todos".to_owned(), def)])

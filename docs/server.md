@@ -38,7 +38,7 @@ settings are logged at startup.
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `CONSTRUCT_OPEN_POD` | `dev` on loopback, else unset | Callers without a pod token use this pod. Development only; `off` disables it. Refused on a non-loopback address (unless the next variable is set) and always on Fly. Only requests whose `Host` is loopback (`localhost`, `*.localhost`, `127.0.0.0/8`, `[::1]`) or the emulator's `10.0.2.2` use it (any IP address with the next variable), so a DNS-rebinding page can't; a browser's cross-site write (`Sec-Fetch-Site`, `Origin`) is refused, and a bearer that opens no pod gets 401 instead of the open pod. |
+| `CONSTRUCT_OPEN_POD` | `dev` on loopback, else unset | Callers without a pod token use this pod. Development only; `off` disables it. Refused on a non-loopback address (unless the next variable is set) and always on Fly. Only requests whose `Host` is loopback (`localhost`, `*.localhost`, `127.0.0.0/8`, `[::1]`) or the emulator's `10.0.2.2` use it (any IP address with the next variable), so a DNS-rebinding page can't; a request carrying a reverse proxy's header (`Forwarded`, `X-Forwarded-For`, `X-Forwarded-Host`, `X-Real-IP`, `CF-Connecting-IP`) never uses it, since a proxy on the same machine sends a loopback `Host` for internet callers; a browser's cross-site write (`Sec-Fetch-Site`, `Origin`) is refused, and a bearer that opens no pod gets 401 instead of the open pod. |
 | `CONSTRUCT_WEB` | unset | `1`: serve the web client at `/web` (decision [`web-client`](decisions/web-client.md), [clients.md](clients.md#web)), take its session cookie, and proxy images for it. Unset, none of these exist. |
 | `CONSTRUCT_WEB_DIR` | `target/web` | Where `scripts/web_build.sh` put the web client. |
 | `CONSTRUCT_PUBLIC_WEB` | unset | `1` (with `CONSTRUCT_WEB=1`): admin pods (not temporary ones) may share public links, a layout's copy anyone can open at `/s/<link>` or a chosen `/<handle>/<slug>` (decisions [`public-web-links`](decisions/public-web-links.md), [`public-links-share-the-closure`](decisions/public-links-share-the-closure.md)). Unset, the tools aren't listed and `/s/…` and the short paths answer 503 "Sharing is paused on this server"; the stored copies stay, and setting it again brings every link back. The links `share_publicly` answers start with `CONSTRUCT_PUBLIC_URL` when it is set. The same setting gates calendar feeds (decision [`ical-feeds`](decisions/ical-feeds.md)): admin pods may publish a private `.ics` of chosen rows at `/ical/<token>.ics` for a calendar app (Proton Calendar subscribes from its own servers, so the server must be reachable publicly, as staging is); unset, `/ical/…` answers 503 and the stored feeds stay. |
@@ -308,6 +308,26 @@ Counts live in memory and restart from zero.
   billing API).
 - **Prometheus:** with `CONSTRUCT_METRICS_ADDR`, `GET /metrics` on that address serves the same counters as
   `construct_*` metrics.
+- **Request timing** (`pod_core::timing`, issue #576): every pod has one database connection, behind a lock, so a
+  slow request can be slow because it waits for the lock or because something else holds it. Each request is timed
+  as a kind: its route's pattern (`GET /v1/construct/data/{id}`; `internal …` when the pod's own tools sent it, as a
+  preview's reads are), `mcp <tool>` for an MCP call, `fill <collection>/<filler>` for a filler run, and `background`
+  for anything else. Logged under the `pod_timing` target (`RUST_LOG=pod_timing=debug,info` adds every element data
+  load and compose):
+  - `slow request`: a request that took 500 ms or more, or waited 100 ms or more for the lock in all: `total_ms`,
+    `lock_wait_ms`, `lock_hold_ms`, `lock_takes`, and its longest hold (`max_hold_ms`) and the code that took it
+    (`max_hold_at`, a file and line);
+  - `long store hold`: any one hold of 250 ms or more, by any request or job (whoever kept everyone else waiting),
+    with `kind` and `at`;
+  - `store lock by kind`: about once a minute, per kind, the calls, the slowest, and the lock's takes, waiting and
+    holding since the last one (all pods of a server together);
+  - `element data` and `compose` (at 500 ms or more): how long a data load (`/v1/construct/data/<id>`) spent finding
+    its feeds (`feeds_lookup_ms`) and running them (`compose_ms`), and its slowest feed (`slowest_feed`,
+    `slowest_ms`).
+
+  On Fly: `flyctl logs -a the-construct-pod | grep pod_timing`. Much waiting with short holds is many requests at
+  once; a long hold names its code; a slow request with little waiting or holding spent its time elsewhere (the
+  CPU, a fetch).
 
 ## Backups and restore
 
@@ -398,4 +418,6 @@ A migration is a named step appended to its list (the core's in `pod-core/src/st
 may report a conflict at the end of the list: keep both.
 
 Any other host works the same way: run the image (or the `server` binary) with a persistent `CONSTRUCT_DATA_DIR`
-behind TLS, and set `CONSTRUCT_SECRETS_KEY`.
+behind TLS, and set `CONSTRUCT_SECRETS_KEY`. Behind a reverse proxy also set `CONSTRUCT_OPEN_POD=off`:
+the server refuses the open pod to requests carrying the proxy's forwarding headers, but a proxy that adds none
+would make internet callers look like this machine.

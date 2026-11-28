@@ -1,0 +1,797 @@
+{
+ "note": "One need of the shopping kit (decision shopping-kit): explore or find options while nothing is chosen; the pick, its price and its watch once one is",
+ "layout": {
+  "type": "core://Page",
+  "id": "shopping_need",
+  "title": "Shopping need",
+  "root": {
+   "type": "core://Use",
+   "component": "core:screen_scaffold",
+   "args": {
+    "title": "${collections://shop_needs/$route.need#name}"
+   },
+   "children": [
+    {
+     "type": "core://List",
+     "query_key": "collection:shop_needs",
+     "item_template": {
+      "type": "core://Column",
+      "children": [
+       {
+        "type": "core://Row",
+        "children": [
+         {
+          "type": "core://Use",
+          "component": "core:pill",
+          "args": {
+           "text": "$item.category",
+           "tone": "muted"
+          }
+         },
+         {
+          "type": "core://Use",
+          "component": "core:muted_text",
+          "args": {
+           "text": "$item.quantity",
+           "when": "$item.quantity"
+          }
+         }
+        ],
+        "spacing_dp": 8
+       },
+       {
+        "type": "core://Use",
+        "component": "core:labeled_text",
+        "args": {
+         "label": "Notes",
+         "text": "$item.notes"
+        }
+       },
+       {
+        "type": "core://Conditional",
+        "content": {
+         "type": "core://Use",
+         "component": "core:callout",
+         "args": {
+          "title": "Your $item.category preferences",
+          "text": "$item.preferences",
+          "tone": "muted"
+         }
+        },
+        "value": "$item.preferences"
+       },
+       {
+        "type": "core://Conditional",
+        "content": {
+         "type": "core://Column",
+         "children": [
+          {
+           "type": "core://Conditional",
+           "content": {
+            "type": "core://Conditional",
+            "content": {
+             "type": "core://Use",
+             "component": "core:empty_state",
+             "args": {
+              "title": "Nothing chosen yet",
+              "icon": "shopping_cart",
+              "text": "See what kinds there are, then narrow down to the one you want."
+             },
+             "children": [
+              {
+               "type": "core://Use",
+               "component": "core:button",
+               "args": {
+                "label": "Explore options",
+                "on_click": {
+                 "intent": "action.sequence",
+                 "steps": [
+                  {
+                   "intent": "action.mutation.create",
+                   "query_key": "collection:shop_rounds",
+                   "entity_uri": "collections://shop_rounds/pending-$nonce",
+                   "entity": {
+                    "id": "pending-$nonce",
+                    "deleted": false,
+                    "need": "$item.id",
+                    "n": 0,
+                    "query": "$item.name",
+                    "avoid": "$item.avoid",
+                    "prefer": "$item.prefer"
+                   },
+                   "endpoint": "/v1/collections/shop_rounds/create",
+                   "payload": {
+                    "need": "$item.id",
+                    "n": 0,
+                    "query": "$item.name",
+                    "avoid": "$item.avoid",
+                    "prefer": "$item.prefer",
+                    "client_id": "$nonce"
+                   },
+                   "refresh_workspace": true
+                  },
+                  {
+                   "intent": "action.navigation.open",
+                   "layout": "shopping_explore",
+                   "presentation": "Push",
+                   "params": {
+                    "need": "$item.id"
+                   }
+                  }
+                 ]
+                },
+                "style": "Primary",
+                "size": "Regular"
+               }
+              }
+             ]
+            },
+            "value": "$item.round_count",
+            "equals": "0"
+           },
+           "value": "$item.explorable"
+          },
+          {
+           "type": "core://Conditional",
+           "content": {
+            "type": "core://Conditional",
+            "content": {
+             "type": "core://Use",
+             "component": "core:empty_state",
+             "args": {
+              "title": "Nothing chosen yet",
+              "icon": "shopping_cart",
+              "text": "$item.status"
+             },
+             "children": [
+              {
+               "type": "core://Use",
+               "component": "core:button",
+               "args": {
+                "label": "Keep exploring",
+                "on_click": {
+                 "intent": "action.navigation.open",
+                 "layout": "shopping_explore",
+                 "presentation": "Push",
+                 "params": {
+                  "need": "$item.id"
+                 }
+                },
+                "style": "Primary",
+                "size": "Regular"
+               }
+              }
+             ]
+            },
+            "value": "$item.round_count",
+            "equals": "0",
+            "not": true
+           },
+           "value": "$item.explorable"
+          },
+          {
+           "type": "core://Conditional",
+           "content": {
+            "type": "core://Conditional",
+            "content": {
+             "type": "core://Use",
+             "component": "core:empty_state",
+             "args": {
+              "title": "Nothing chosen yet",
+              "icon": "shopping_cart",
+              "text": "Find a few options on the web, then choose one."
+             },
+             "children": [
+              {
+               "type": "core://Use",
+               "component": "core:button",
+               "args": {
+                "label": "Find options",
+                "on_click": {
+                 "intent": "action.mutation.optimistic",
+                 "entity_uri": "$item.uri",
+                 "field": "find_web",
+                 "value_expr": "true",
+                 "endpoint": "/v1/collections/shop_needs/update",
+                 "payload": {
+                  "id": "$item.id",
+                  "find_web": "$value"
+                 }
+                },
+                "style": "Primary",
+                "size": "Regular"
+               }
+              }
+             ]
+            },
+            "value": "$item.find_web",
+            "equals": "false"
+           },
+           "value": "$item.explorable",
+           "not": true
+          },
+          {
+           "type": "core://Conditional",
+           "content": {
+            "type": "core://Column",
+            "children": [
+             {
+              "type": "core://Use",
+              "component": "core:section_label",
+              "args": {
+               "text": "From the web"
+              }
+             },
+             {
+              "type": "core://Use",
+              "component": "core:muted_note",
+              "args": {
+               "text": "Looking on the web. Options show up here in a few minutes.",
+               "count": {
+                "query_key": "collection:shop_pieces",
+                "where": [
+                 {
+                  "field": "deleted",
+                  "equals": "false"
+                 },
+                 {
+                  "field": "need",
+                  "equals": "$route.need"
+                 },
+                 {
+                  "field": "web",
+                  "equals": "true"
+                 }
+                ]
+               }
+              }
+             },
+             {
+              "type": "core://List",
+              "query_key": "collection:shop_pieces",
+              "item_template": {
+               "type": "core://Use",
+               "component": "core:card",
+               "args": {
+                "spacing": 6,
+                "padding_h": 10,
+                "padding_v": 10
+               },
+               "children": [
+                {
+                 "type": "core://Tappable",
+                 "content_description": "Open $item.title",
+                 "on_click": {
+                  "intent": "action.link.open",
+                  "url": "$item.url"
+                 },
+                 "content": {
+                  "type": "core://Conditional",
+                  "content": {
+                   "type": "core://Image",
+                   "url": "$item.image",
+                   "aspect_ratio": 0.8,
+                   "shape": "Rounded",
+                   "content_description": "$item.title"
+                  },
+                  "value": "$item.image"
+                 }
+                },
+                {
+                 "type": "core://Text",
+                 "value_expr": "$item.title",
+                 "style": "Label",
+                 "weight": "SemiBold",
+                 "max_lines": 2
+                },
+                {
+                 "type": "core://Use",
+                 "component": "core:muted_text",
+                 "args": {
+                  "text": "$item.price_text · $item.host",
+                  "max_lines": 1
+                 }
+                },
+                {
+                 "type": "core://Use",
+                 "component": "core:muted_text",
+                 "args": {
+                  "text": "$item.description",
+                  "when": "$item.description",
+                  "max_lines": 3,
+                  "style": "Caption"
+                 }
+                },
+                {
+                 "type": "core://Use",
+                 "component": "core:button",
+                 "args": {
+                  "label": "Choose this",
+                  "on_click": {
+                   "intent": "action.sequence",
+                   "steps": [
+                    {
+                     "intent": "action.mutation.create",
+                     "query_key": "collection:shop_picks",
+                     "entity_uri": "collections://shop_picks/pending-$nonce",
+                     "entity": {
+                      "id": "pending-$nonce",
+                      "deleted": false,
+                      "need": "$item.need",
+                      "product": "$item.title",
+                      "brand": "$item.brand",
+                      "store": "$item.host",
+                      "url": "$item.url",
+                      "image": "$item.image",
+                      "taste_key": "$item.taste_key",
+                      "chosen_price": "$item.price"
+                     },
+                     "endpoint": "/v1/collections/shop_picks/create",
+                     "payload": {
+                      "need": "$item.need",
+                      "product": "$item.title",
+                      "brand": "$item.brand",
+                      "store": "$item.host",
+                      "url": "$item.url",
+                      "image": "$item.image",
+                      "taste_key": "$item.taste_key",
+                      "chosen_price": "$item.price",
+                      "client_id": "$nonce"
+                     },
+                     "refresh_workspace": true
+                    },
+                    {
+                     "intent": "action.mutation.optimistic",
+                     "entity_uri": "$item.uri",
+                     "field": "shortlisted",
+                     "value_expr": "true",
+                     "endpoint": "/v1/collections/shop_pieces/update",
+                     "payload": {
+                      "id": "$item.id",
+                      "shortlisted": true
+                     }
+                    },
+                    {
+                     "intent": "action.navigation.pop_to",
+                     "edge": "shopping_need"
+                    }
+                   ]
+                  },
+                  "style": "Primary",
+                  "size": "Small"
+                 }
+                }
+               ]
+              },
+              "where": [
+               {
+                "field": "deleted",
+                "equals": "false"
+               },
+               {
+                "field": "need",
+                "equals": "$route.need"
+               },
+               {
+                "field": "web",
+                "equals": "true"
+               }
+              ],
+              "columns": 2,
+              "spacing_dp": 10
+             }
+            ],
+            "spacing_dp": 8
+           },
+           "value": "$item.find_web"
+          }
+         ],
+         "spacing_dp": 12
+        },
+        "value": "$item.state",
+        "equals": "choosing"
+       },
+       {
+        "type": "core://Conditional",
+        "content": {
+         "type": "core://Use",
+         "component": "core:callout",
+         "args": {
+          "title": "Bought",
+          "text": "$item.pick_line",
+          "tone": "success"
+         }
+        },
+        "value": "$item.bought"
+       }
+      ],
+      "spacing_dp": 14
+     },
+     "where": [
+      {
+       "field": "id",
+       "equals": "$route.need"
+      }
+     ]
+    },
+    {
+     "type": "core://List",
+     "query_key": "collection:shop_picks",
+     "item_template": {
+      "type": "core://Column",
+      "children": [
+       {
+        "type": "core://Use",
+        "component": "core:card",
+        "args": {
+         "spacing": 10
+        },
+        "children": [
+         {
+          "type": "core://Conditional",
+          "content": {
+           "type": "core://Image",
+           "url": "$item.image",
+           "aspect_ratio": 1.2,
+           "shape": "Rounded",
+           "content_description": "$item.product"
+          },
+          "value": "$item.image"
+         },
+         {
+          "type": "core://Row",
+          "children": [
+           {
+            "type": "core://Column",
+            "children": [
+             {
+              "type": "core://Text",
+              "value_expr": "$item.product",
+              "style": "Label",
+              "weight": "SemiBold",
+              "max_lines": 3
+             },
+             {
+              "type": "core://Use",
+              "component": "core:muted_text",
+              "args": {
+               "text": "$item.store",
+               "when": "$item.store"
+              }
+             }
+            ],
+            "spacing_dp": 2,
+            "fill": true
+           },
+           {
+            "type": "core://Column",
+            "children": [
+             {
+              "type": "core://Text",
+              "value_expr": "$item.price_text",
+              "style": "Title",
+              "weight": "Bold"
+             },
+             {
+              "type": "core://Use",
+              "component": "core:muted_text",
+              "args": {
+               "text": "$item.chosen_text",
+               "when": "$item.chosen_text",
+               "style": "Caption"
+              }
+             }
+            ],
+            "spacing_dp": 2,
+            "align": "End"
+           }
+          ],
+          "spacing_dp": 8
+         },
+         {
+          "type": "core://Row",
+          "children": [
+           {
+            "type": "core://Conditional",
+            "content": {
+             "type": "core://Use",
+             "component": "core:pill",
+             "args": {
+              "text": "$item.deal",
+              "tone": "success"
+             }
+            },
+            "value": "$item.deal"
+           },
+           {
+            "type": "core://Conditional",
+            "content": {
+             "type": "core://Use",
+             "component": "core:pill",
+             "args": {
+              "text": "$item.stock_now",
+              "tone": "muted"
+             }
+            },
+            "value": "$item.stock_now"
+           }
+          ],
+          "spacing_dp": 6
+         },
+         {
+          "type": "core://Row",
+          "children": [
+           {
+            "type": "core://Use",
+            "component": "core:link_button",
+            "args": {
+             "label": "Buy at $item.store",
+             "url": "$item.url",
+             "size": "Small"
+            }
+           },
+           {
+            "type": "core://Use",
+            "component": "core:button",
+            "args": {
+             "label": "Bought",
+             "on_click": {
+              "intent": "action.mutation.optimistic",
+              "entity_uri": "collections://shop_needs/$item.need",
+              "field": "bought",
+              "value_expr": "true",
+              "endpoint": "/v1/collections/shop_needs/update",
+              "payload": {
+               "id": "$item.need",
+               "bought": true
+              }
+             },
+             "style": "Secondary",
+             "size": "Small"
+            }
+           }
+          ],
+          "spacing_dp": 8
+         }
+        ]
+       },
+       {
+        "type": "core://Use",
+        "component": "core:titled_section",
+        "args": {
+         "text": "Price"
+        },
+        "children": [
+         {
+          "type": "core://Use",
+          "component": "core:card",
+          "args": {
+           "spacing": 8
+          },
+          "children": [
+           {
+            "type": "core://Bars",
+            "query_key": "collection:shop_prices",
+            "bar": "day",
+            "value": "price",
+            "color": "${local://theme#accent}",
+            "height_dp": 96,
+            "where": [
+             {
+              "field": "deleted",
+              "equals": "false"
+             },
+             {
+              "field": "pick",
+              "equals": "$item.id"
+             }
+            ]
+           },
+           {
+            "type": "core://Use",
+            "component": "core:muted_text",
+            "args": {
+             "text": "$item.range_text",
+             "when": "$item.range_text"
+            }
+           },
+           {
+            "type": "core://Use",
+            "component": "core:muted_text",
+            "args": {
+             "text": "Checked once a day while you watch it.",
+             "style": "Caption"
+            }
+           }
+          ]
+         }
+        ]
+       },
+       {
+        "type": "core://Use",
+        "component": "core:grouped_list",
+        "args": {},
+        "children": [
+         {
+          "type": "core://Column",
+          "children": [
+           {
+            "type": "core://Use",
+            "component": "core:item_row",
+            "args": {
+             "title": "Watch price",
+             "meta": "Drops, new lows, back in stock",
+             "leading": false,
+             "trailing": true
+            },
+            "children": [
+             {
+              "type": "core://Switch",
+              "checked": "$item.watch",
+              "content_description": "Watch price",
+              "on_click": {
+               "intent": "action.mutation.optimistic",
+               "entity_uri": "$item.uri",
+               "field": "watch",
+               "value_expr": "!entity.watch",
+               "endpoint": "/v1/collections/shop_picks/update",
+               "payload": {
+                "id": "$item.id",
+                "watch": "$value"
+               }
+              }
+             }
+            ]
+           },
+           {
+            "type": "core://Use",
+            "component": "core:item_row",
+            "args": {
+             "title": "Tell me under",
+             "meta": "$item.target_text",
+             "leading": false,
+             "trailing": true
+            },
+            "children": [
+             {
+              "type": "core://TextField",
+              "field": "target",
+              "placeholder": "$",
+              "on_submit": {
+               "intent": "action.mutation.optimistic",
+               "entity_uri": "$item.uri",
+               "field": "target",
+               "value_expr": "$form.target",
+               "endpoint": "/v1/collections/shop_picks/update",
+               "payload": {
+                "id": "$item.id",
+                "target": "$form.target"
+               }
+              }
+             }
+            ]
+           }
+          ],
+          "spacing_dp": 1
+         }
+        ]
+       },
+       {
+        "type": "core://Conditional",
+        "content": {
+         "type": "core://Use",
+         "component": "core:titled_section",
+         "args": {
+          "text": "About this pick"
+         },
+         "children": [
+          {
+           "type": "core://Column",
+           "children": [
+            {
+             "type": "core://Use",
+             "component": "core:muted_text",
+             "args": {
+              "text": "$item.why"
+             }
+            },
+            {
+             "type": "core://Conditional",
+             "content": {
+              "type": "core://Use",
+              "component": "core:callout",
+              "args": {
+               "title": "Pros",
+               "text": "$item.pros",
+               "tone": "success",
+               "markdown": true
+              }
+             },
+             "value": "$item.pros"
+            },
+            {
+             "type": "core://Conditional",
+             "content": {
+              "type": "core://Use",
+              "component": "core:callout",
+              "args": {
+               "title": "Cons",
+               "text": "$item.cons",
+               "tone": "error",
+               "markdown": true
+              }
+             },
+             "value": "$item.cons"
+            },
+            {
+             "type": "core://Conditional",
+             "content": {
+              "type": "core://Use",
+              "component": "core:callout",
+              "args": {
+               "title": "What reviewers say",
+               "text": "$item.reviews",
+               "tone": "muted"
+              }
+             },
+             "value": "$item.reviews"
+            },
+            {
+             "type": "core://Use",
+             "component": "core:muted_text",
+             "args": {
+              "text": "$item.sources",
+              "when": "$item.sources",
+              "style": "Caption"
+             }
+            }
+           ],
+           "spacing_dp": 10
+          }
+         ]
+        },
+        "value": "$item.why"
+       },
+       {
+        "type": "core://Row",
+        "children": [
+         {
+          "type": "core://Use",
+          "component": "core:text_link",
+          "args": {
+           "label": "Choose another",
+           "description": "Choose another",
+           "on_click": {
+            "intent": "action.mutation.optimistic",
+            "entity_uri": "$item.uri",
+            "field": "deleted",
+            "value_expr": "true",
+            "endpoint": "/v1/collections/shop_picks/delete",
+            "payload": {
+             "id": "$item.id"
+            }
+           }
+          }
+         }
+        ],
+        "spacing_dp": 8
+       }
+      ],
+      "spacing_dp": 14
+     },
+     "where": [
+      {
+       "field": "deleted",
+       "equals": "false"
+      },
+      {
+       "field": "need",
+       "equals": "$route.need"
+      }
+     ],
+     "spacing_dp": 24
+    }
+   ]
+  }
+ }
+}

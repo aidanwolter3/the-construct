@@ -7,6 +7,11 @@
 const { chromium } = require('playwright');
 const { execSync } = require('child_process');
 const [base, code, out, rebuild] = process.argv.slice(2);
+// The blank home's Settings button and Settings' sign-in to the fake Pixelfed.
+const SETTINGS = 'Settings';
+const SIGN_IN = 'Sign in to Pixelfed';
+// The page's uncaught errors (a panic in the client is one).
+const errors = [];
 
 // The client's files a load asks for, each with where it came from: 'cache' (the browser's), 'network' or a 304.
 async function watchFiles(page) {
@@ -51,11 +56,22 @@ function check(ok, what) {
   console.log('ok   ' + what);
 }
 
+// Taps what a simulator target names (its text, or tag:<id>), found in the drawn scene by the client's
+// window.constructFind, so a tap follows what it means and not where a layout happens to draw it. Waits for it
+// to be drawn.
+async function tap(page, target, timeout = 15000) {
+  const handle = await page.waitForFunction((t) => window.constructFind && window.constructFind(t), target, { timeout })
+    .catch(() => {
+      throw new Error('nothing drawn is ' + JSON.stringify(target) + (errors.length ? ' (page errors: ' + errors.join('; ') + ')' : ''));
+    });
+  const [x, y] = await handle.jsonValue();
+  await page.mouse.click(x, y);
+}
+
 
 (async () => {
   const browser = await chromium.launch();
   const page = await browser.newPage({ viewport: { width: 1280, height: 800 } });
-  const errors = [];
   const logs = [];
   page.on('pageerror', (e) => errors.push(e.message));
   page.on('console', (m) => logs.push(m.text()));
@@ -117,11 +133,10 @@ function check(ok, what) {
   }
 
   // Signing in to the fake Pixelfed (decision `web-upstream-sign-in`): Settings' "Sign in to Pixelfed" goes to its
-  // authorize page and Authorize comes back to /web, signed in. Where the blank home (1280 x 800) draws its
-  // Settings button and the panel its Sign in.
-  await page.mouse.click(703, 533);
+  // authorize page and Authorize comes back to /web, signed in.
+  await tap(page, SETTINGS);
   await page.waitForTimeout(3000);
-  await page.mouse.click(100, 157);
+  await tap(page, SIGN_IN);
   await page.waitForURL((u) => u.pathname === '/oauth/authorize', { timeout: 15000 });
   const asked = new URL(page.url());
   check(asked.searchParams.get('redirect_uri') === base + '/web' && asked.searchParams.get('code_challenge_method') === 'S256',
@@ -134,7 +149,7 @@ function check(ok, what) {
   check((signIns.sign_ins || []).some((s) => s.id === 'pixelfed'),
     'back on /web (the code taken off the address), the session is signed in to Pixelfed');
   const home = await page.screenshot();
-  await page.mouse.click(703, 533);
+  await tap(page, SETTINGS);
   await page.waitForTimeout(3000);
   await page.screenshot({ path: out + '/web-signed-in.png' });
 
@@ -148,7 +163,7 @@ function check(ok, what) {
   const closed = await page.screenshot({ path: out + '/web-back-closed.png' });
   require('fs').writeFileSync(out + '/web-back-before.png', home);
   check(Buffer.compare(home, closed) === 0, "and it closed Settings, home as before");
-  await page.mouse.click(703, 533);
+  await tap(page, SETTINGS);
   await page.waitForTimeout(1500);
   await page.keyboard.press('Escape');
   await page.waitForTimeout(1500);

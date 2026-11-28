@@ -606,7 +606,8 @@ copy core layouts, and home embeds or opens them.
 #### Core layouts
 
 Core layouts are the screens the server ships: `pixelfed`, `events`, `agents`, `taste` (with `taste_item`, a piece as a sheet), `server_health`, `shell` (the blank
-home), `settings`, `inbox`, and the `checklist` kit. Each is a folder of append-only files in its source's crate,
+home), `settings`, `inbox`, and the kits: `checklist`, and `shopping` (with `shopping_need` and `shopping_explore`, over
+six collections of its own). Each is a folder of append-only files in its source's crate,
 `crates/source-*/layouts/<id>/NNNN.json`; when a pod opens, each `@core/<id>` name moves to this build's newest
 file. The server builds those files into elements once, for the first pod it opens, and every later pod moves to the
 same ones. A pod's layout can use a core layout whole by reference (`{"type": "core://Use", "ref": "@core/events"}`), which

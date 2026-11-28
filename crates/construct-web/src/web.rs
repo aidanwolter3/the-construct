@@ -1401,6 +1401,7 @@ async fn mount(session: Session, public: Option<Public>) -> Result<(), JsValue> 
     app.borrow_mut().resize();
     // A reload on one of this app's entries goes back to the page's own.
     app.borrow_mut().sync_history();
+    expose_find(&app);
     let _ = doc.body().map(|b| b.class_list().add_1("ready"));
 
     // The fallbacks after the first frame: emoji and symbols appear when
@@ -1662,6 +1663,34 @@ async fn mount(session: Session, public: Option<Public>) -> Result<(), JsValue> 
         window().request_animation_frame(cb.as_ref().unchecked_ref())?;
     }
     Ok(())
+}
+
+/// `window.constructFind(target)`: the centre of the node a simulator
+/// target names (`script::find`: its text, or `tag:<id>`) as `[x, y]` in
+/// CSS pixels, else `null`. For the browser tests, so a tap follows what it
+/// means and not where a layout happens to draw it.
+fn expose_find(app: &Rc<RefCell<App>>) {
+    let app = app.clone();
+    let find = Closure::<dyn FnMut(String) -> JsValue>::new(move |target: String| {
+        let Some(mut a) = lease(&app) else {
+            return JsValue::NULL;
+        };
+        let Ok(scene) = a.controller.session.scene() else {
+            return JsValue::NULL;
+        };
+        match construct_render::script::find(scene, &target) {
+            Some(n) => {
+                let [x, y, w, h] = n.bounds;
+                let at = js_sys::Array::new();
+                at.push(&JsValue::from_f64(f64::from(x + w / 2.0)));
+                at.push(&JsValue::from_f64(f64::from(y + h / 2.0)));
+                at.into()
+            }
+            None => JsValue::NULL,
+        }
+    });
+    let _ = js_sys::Reflect::set(&window(), &"constructFind".into(), find.as_ref());
+    find.forget();
 }
 
 /// The current history entry's place: what this app pushed it with, 0 for

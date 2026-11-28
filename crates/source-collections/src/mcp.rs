@@ -73,6 +73,9 @@ with the item's fields and context rows (the owner's preferences, a style deck's
 its rows here point back at the item; an item is researched again when its text or the context changes \
 (refresh once), or also once every_minutes have passed since its research (refresh every, every_minutes 10080: weekly), soon after a \
 row is written. keep: [{field, equals}] keeps rows someone marked (in_bag) when a refill leaves them out. \
+For shopping start from the shopping kit (use_kit shopping, decision shopping-kit): needs explored through \
+the taste service in rounds, picks with a daily price history and price alerts; add a need with add_row on \
+shop_needs {name, category}, nothing else. \
 With the web_search jack, links in its answer must be pages it saw and quotes must be on pages it read \
 (others are left out), and web_fetch lists each page's main pictures, so an image field gets the store's \
 own photo. \
@@ -158,7 +161,7 @@ pub fn tools() -> Vec<Value> {
     let order = json!({ "description": "A field, or a list of fields (first key first), rows are listed by (else oldest first). A choice sorts by the order of its options; empty values last.",
         "anyOf": [{ "type": "string" }, { "type": "array", "items": { "type": "string" } }] });
     let filler = json!({ "type": "object",
-        "description": "A filler: what keeps rows current from the web (decision collection-fillers); each writes only its own rows. kind \"fetch\" (a recipe, no model call per fill): {kind, title?, url (one page) | url_field (a text field holding each row's own page; that row is filled from it) | query_field (a text field holding each row's web search, e.g. its name: the row's item is searched with the pod's web_search jack and a model fills its fields from the results with extract llm, or with extract images (no model; Brave or SearXNG) its first image result fills map {field: image (the picture's URL) | thumbnail | page (where it is) | title | source (the site)}; people may add rows), extract: events (an ics feed or a page's schema.org events: items {id, title, start, end, venue, description, url, tickets_url}) | json | embedded-json (a page's <script id=script, default __NEXT_DATA__>) | jsonld (schema.org objects of types, e.g. [\"Product\"]) | rss (items {title, link, description, published, updated, id, author, category}) | ics (VEVENT properties lowercase: summary, dtstart, location, ...) | selectors (CSS) | llm (a model reads each changed page's text: fields? [names] and hint? instead of map), items? (json/embedded-json: a path to the list; selectors: a CSS selector per item), types?, script?, zone? (IANA, for times without an offset; UTC times move to its clock), map: {field: path} (paths: a.b, a[0], a[*]; a list key is looked into, so offers.price works; a path may end in filters: \"description | link\" the first link in it (Google redirects unwrapped), \"description | text\" its text without HTML; \"=<text>\" a constant every row gets, e.g. going: \"=true\"; selectors: a CSS selector inside the item, sel@attr for an attribute, @attr for the item's own), headers? {name: value, value may be \"Bearer {secret:<name>}\"}, details? {link: a mapped field with the row's page, extract, types?, map: {field: path} (fields not in map), text?: a field for the page's text when nothing is found; or extract \"llm\" with fields: [names] and hint?: a model reads the page's text for those fields}: read each new row's own page, once (a model call per new row with llm)}. kind \"agent\" (a model with web search and fetch answers the rows; costs model calls): {kind, title?, prompt, fields? (default every field that isn't computed or a bool with a default, the user's toggles: a listed field is locked on its rows), max_searches? (default 5, at most 20), max_fetches? (default 10, at most 30), fills_per_day? (default 4), for_each? {collection (another collection), link (a ref field here to it, set by the pod), where?: [{field, equals}] (its rows researched), from?: [its fields in the request; default every field but true/false ones and refs], context?: [{collection, where?, fields?, limit? (default 50, at most 100)}] (rows given with every request)}: research each row of that collection on its own, one model call per row (each counts toward fills_per_day), its rows here linked back; refresh? once (default: again when the row's text or the context changes) | every}. kind \"range\" (no web, no model): one row per day, week or month of a window that moves with today in the pod's zone, e.g. a calendar's days: {kind, from: \"{today}\" | \"{today+N}\" | \"{today-N}\", to (likewise), step? day (default) | week (Monday to Sunday) | month, map: {field: date (the step's first day, YYYY-MM-DD) | end (its last day) | weekday (Mon) | weekday_long | day (16) | month (Nov) | month_long | year | week (ISO number) | index (0 for the first)}, key? (give the date field, so a day keeps its row), every_minutes? (default 60)}: at most 200 rows; days that leave the window are deleted; pair it with count or lookup fields over other collections keyed by date. Every kind: mode? replace (default: its rows are the latest answer; rows it no longer lists are deleted; they can't be added or deleted by hand) | upsert (adds and updates rows by key, keeps others; people may add rows), key? (a mapped field identifying a row; with replace, rows keep their ids and unfilled fields), upcoming? (a mapped date or datetime field: past items are left out), every_minutes? (fetch: 15..10080; agent: 60..10080), on_open_minutes? (1..1440: fill when an app showing it opens and the last fill is older), keep? [{field, equals}] (rows matching every condition stay when a refill leaves them out); url_field and query_field fillers also take refresh? (once: fill a row when its URL or query first appears or changes; every: on each fill, skipping pages whose text didn't change; default every for url_field, once for query_field) and on_empty? (keep, the default: a row whose page or search yields nothing, or is blocked, keeps its values; clear). Every request goes through the pod's host policy (spacing, a daily cap per site, a shared backoff after a site blocks the pod). Values are coerced to the fields' types (prices like \"$1,299\" and feed dates are read); a value that doesn't fit is skipped. A field a filler fills can't be set by hand on that filler's rows (a url_field or query_field filler's on every row)." });
+        "description": "A filler: what keeps rows current from the web (decision collection-fillers); each writes only its own rows. kind \"fetch\" (a recipe, no model call per fill): {kind, title?, url (one page) | url_field (a text field holding each row's own page; that row is filled from it) | query_field (a text field holding each row's web search, e.g. its name: the row's item is searched with the pod's web_search jack and a model fills its fields from the results with extract llm, or with extract images (no model; Brave or SearXNG) its first image result fills map {field: image (the picture's URL) | thumbnail | page (where it is) | title | source (the site)}; people may add rows), extract: events (an ics feed or a page's schema.org events: items {id, title, start, end, venue, description, url, tickets_url}) | json | embedded-json (a page's <script id=script, default __NEXT_DATA__>) | jsonld (schema.org objects of types, e.g. [\"Product\"]) | rss (items {title, link, description, published, updated, id, author, category}) | ics (VEVENT properties lowercase: summary, dtstart, location, ...) | selectors (CSS) | llm (a model reads each changed page's text: fields? [names] and hint? instead of map), items? (json/embedded-json: a path to the list; selectors: a CSS selector per item), types?, script?, zone? (IANA, for times without an offset; UTC times move to its clock), map: {field: path} (paths: a.b, a[0], a[*]; a list key is looked into, so offers.price works; a path may end in filters: \"description | link\" the first link in it (Google redirects unwrapped), \"description | text\" its text without HTML; \"=<text>\" a constant every row gets, e.g. going: \"=true\"; selectors: a CSS selector inside the item, sel@attr for an attribute, @attr for the item's own), headers? {name: value, value may be \"Bearer {secret:<name>}\"}, details? {link: a mapped field with the row's page, extract, types?, map: {field: path} (fields not in map), text?: a field for the page's text when nothing is found; or extract \"llm\" with fields: [names] and hint?: a model reads the page's text for those fields}: read each new row's own page, once (a model call per new row with llm)}. kind \"agent\" (a model with web search and fetch answers the rows; costs model calls): {kind, title?, prompt, fields? (default every field that isn't computed or a bool with a default, the user's toggles: a listed field is locked on its rows), max_searches? (default 5, at most 20), max_fetches? (default 10, at most 30), fills_per_day? (default 4), for_each? {collection (another collection), link (a ref field here to it, set by the pod), where?: [{field, equals}] (its rows researched), from?: [its fields in the request; default every field but true/false ones and refs], context?: [{collection, where?, fields?, limit? (default 50, at most 100)}] (rows given with every request)}: research each row of that collection on its own, one model call per row (each counts toward fills_per_day), its rows here linked back; refresh? once (default: again when the row's text or the context changes) | every}. kind \"taste\" (the owner's taste service through the taste jack; no web, no model; decision shopping-kit): {kind, title?, for_each: {collection, link, where?}, request: {part: a field of that collection} (parts: query, like, unlike, exclude (piece keys, comma-separated), distance, spread (0..1), group (true: also cluster and label them), n, price_max; query or like required), map: {field: key | title | brand | image | thumb | price | price_text | url | host | description | category | distance | group | group_label | group_ids | group_size | group_prices}, copy?: {field here: field of that row} (e.g. the need a round is for), key? (key)}: explores once for each row of that collection, as soon as one is written, its pieces here linked back. kind \"range\" (no web, no model): one row per day, week or month of a window that moves with today in the pod's zone, e.g. a calendar's days: {kind, from: \"{today}\" | \"{today+N}\" | \"{today-N}\", to (likewise), step? day (default) | week (Monday to Sunday) | month, map: {field: date (the step's first day, YYYY-MM-DD) | end (its last day) | weekday (Mon) | weekday_long | day (16) | month (Nov) | month_long | year | week (ISO number) | index (0 for the first)}, key? (give the date field, so a day keeps its row), every_minutes? (default 60)}: at most 200 rows; days that leave the window are deleted; pair it with count or lookup fields over other collections keyed by date. Every kind: mode? replace (default: its rows are the latest answer; rows it no longer lists are deleted; they can't be added or deleted by hand) | upsert (adds and updates rows by key, keeps others; people may add rows), key? (a mapped field identifying a row; with replace, rows keep their ids and unfilled fields), upcoming? (a mapped date or datetime field: past items are left out), every_minutes? (fetch: 15..10080; agent: 60..10080), on_open_minutes? (1..1440: fill when an app showing it opens and the last fill is older), keep? [{field, equals}] (rows matching every condition stay when a refill leaves them out); url_field and query_field fillers also take refresh? (once: fill a row when its URL or query first appears or changes; every: on each fill, skipping pages whose text didn't change; default every for url_field, once for query_field) and on_empty? (keep, the default: a row whose page or search yields nothing, or is blocked, keeps its values; clear). Every request goes through the pod's host policy (spacing, a daily cap per site, a shared backoff after a site blocks the pod). Values are coerced to the fields' types (prices like \"$1,299\" and feed dates are read); a value that doesn't fit is skipped. A field a filler fills can't be set by hand on that filler's rows (a url_field or query_field filler's on every row)." });
     let alert = json!({ "type": "object",
         "description": "An alert: notify once when a row matches. {name?, any?: [phrases] (one must appear), all?: [phrases], none?: [phrases], fields?: [text fields searched; default all text fields], filler?: a filler id (only its rows), days?: [mon..sun], within_days?, date_field? (default the first date or datetime field; past rows stop matching), title?, body? (templates: {field}, {start_text}, {alert}, {filler}), label?, app?, repeat? (true: notify again each time a row comes back into a match)}" });
     let view = json!({ "type": "object",
@@ -174,7 +177,7 @@ pub fn tools() -> Vec<Value> {
         ),
         tool(
             "use_kit",
-            "Start from a kit: a core layout over a collection of a known shape, ready to use (find_elements lists them; category layout, scope core, their use_when says kit). It makes the collection (name it with collection; left out, the kit's own name) or, when one of that name exists, checks it has the kit's fields; adds its feed to home; and answers embed (a core://Layout to put in home, or in a tab's slot) and open (an action.navigation.open for a row or a button in home), each with the kit's inputs bound. The layout stays the server's: it follows deploys. Only home may hold the embed or the link (it binds the pod's data). Without kit it lists the kits.",
+            "Start from a kit: a core layout over a collection of a known shape (shopping: several collections under their own names), ready to use (find_elements lists them; category layout, scope core, their use_when says kit). It makes the collection (name it with collection; left out, the kit's own name) or, when one of that name exists, checks it has the kit's fields; adds its feed to home; and answers embed (a core://Layout to put in home, or in a tab's slot) and open (an action.navigation.open for a row or a button in home), each with the kit's inputs bound. The layout stays the server's: it follows deploys. Only home may hold the embed or the link (it binds the pod's data). Without kit it lists the kits.",
             json!({ "kit": { "type": "string" }, "collection": collection, "title": { "type": "string", "description": "The page's title (the kit's own when left out)" } }),
             &[],
         ),
@@ -189,6 +192,7 @@ pub fn tools() -> Vec<Value> {
                     "alerts": { "type": "array", "items": alert },
                     "actions": { "type": "array", "items": action.clone() },
                     "views": { "type": "array", "items": view },
+                    "snapshots": { "type": "array", "description": "Daily copies of some fields as rows of another collection, one row per row and day, for a history to chart: [{into: collection, link: its ref field to this one, day: its date field, fields: {field there: field here}}]. Taken on every write of the row and once a day.", "items": { "type": "object" } },
                     "note": note }),
             &["name", "fields"],
         ),
@@ -496,6 +500,9 @@ async fn use_kit(pod: &Pod, adapter: &CollectionsAdapter, args: &Value) -> Resul
     let Some(kit) = crate::kits::kit(id) else {
         return Err(json!({ "error": "unknown_kit", "kits": list(), "status": 404 }));
     };
+    if let Some(set) = kit.set {
+        return use_kit_set(pod, adapter, kit, set(), args).await;
+    }
     let name = args["collection"]
         .as_str()
         .filter(|n| !n.is_empty())
@@ -552,6 +559,182 @@ async fn use_kit(pod: &Pod, adapter: &CollectionsAdapter, args: &Value) -> Resul
     }))
 }
 
+/// `use_kit` for a kit of several collections (decision `shopping-kit`):
+/// each made under its own name, or checked to have the kit's fields when
+/// it exists; then the changes that need them all, leaving out what is
+/// there already (so a second use changes nothing); categories seeded when
+/// there are none; every feed bound by home.
+async fn use_kit_set(
+    pod: &Pod,
+    adapter: &CollectionsAdapter,
+    kit: &crate::kits::Kit,
+    set: crate::kits::KitSet,
+    args: &Value,
+) -> Result<Value, Value> {
+    if args["collection"]
+        .as_str()
+        .is_some_and(|c| !c.is_empty() && c != kit.collection)
+    {
+        return Err(json!({ "error": "invalid_request", "status": 400,
+            "detail": "this kit's collections keep their own names (its layouts read them)" }));
+    }
+    let title = args["title"]
+        .as_str()
+        .map(str::trim)
+        .filter(|t| !t.is_empty())
+        .unwrap_or(kit.layout.title)
+        .to_owned();
+    let mut made = Vec::new();
+    let mut names = Vec::new();
+    for spec in &set.collections {
+        let name = spec["name"].as_str().unwrap_or_default().to_owned();
+        let existing = pod
+            .blocking(|s| s.with_conn(db::defs_by_name))
+            .await
+            .map_err(db_err)?
+            .remove(&name);
+        match existing {
+            // One made by an earlier version of the kit: what the kit has
+            // gained since (an optional field, a change to one of its own
+            // fillers) is brought in.
+            Some(def) => {
+                let mut ops = Vec::new();
+                let mut required = Vec::new();
+                for f in spec["fields"].as_array().into_iter().flatten() {
+                    let n = f["name"].as_str().unwrap_or_default();
+                    if def.live_fields().any(|x| x.name == n) {
+                        continue;
+                    }
+                    if f["optional"] == true || f.get("default").is_some() {
+                        let mut op = f.clone();
+                        op["op"] = json!("add_field");
+                        ops.push(op);
+                    } else {
+                        required.push(n.to_owned());
+                    }
+                }
+                if !required.is_empty() {
+                    return Err(
+                        json!({ "error": "collection_mismatch", "collection": name, "missing": required,
+                        "detail": "a collection of this name lacks fields the kit reads; add them (apply_change add_field) or rename that collection", "status": 409 }),
+                    );
+                }
+                if !ops.is_empty() {
+                    apply_change(
+                        pod,
+                        adapter,
+                        &json!({ "collection": name, "changes": ops, "note": "The shopping kit's newer version" }),
+                    )
+                    .await?;
+                }
+                // Its own fillers (by title), as the kit has them now.
+                let (_, def) = current(pod, &name).await?;
+                let others = pod
+                    .blocking(|s| s.with_conn(db::defs_by_name))
+                    .await
+                    .map_err(db_err)?;
+                let mut fillers = Vec::new();
+                for f in spec["fillers"].as_array().into_iter().flatten() {
+                    let title = f["title"].as_str().unwrap_or_default();
+                    let Some(old) = def.fillers.iter().find(|x| x.title == title) else {
+                        continue;
+                    };
+                    let now = crate::filler::parse_in(
+                        &def,
+                        &others,
+                        f,
+                        old.id.clone(),
+                        adapter.allow_private_hosts(),
+                    );
+                    if now.as_ref().is_ok_and(|n| n == old) {
+                        continue;
+                    }
+                    let mut spec = f.clone();
+                    spec["id"] = json!(old.id);
+                    fillers.push(json!({ "op": "set_filler", "filler": spec }));
+                }
+                if !fillers.is_empty() {
+                    apply_change(
+                        pod,
+                        adapter,
+                        &json!({ "collection": name, "changes": fillers, "note": "The shopping kit's newer version" }),
+                    )
+                    .await?;
+                }
+            }
+            None => {
+                define(pod, adapter, spec).await?;
+                made.push(name.clone());
+            }
+        }
+        names.push(name);
+    }
+    for (name, changes) in set.changes {
+        let def = current(pod, name).await?.1;
+        let todo: Vec<Value> = changes
+            .into_iter()
+            .filter(|c| {
+                let n = c["name"].as_str().unwrap_or("");
+                match c["op"].as_str().unwrap_or("") {
+                    "add_field" => def.field(n).is_none(),
+                    "add_alert" => !def.alerts.iter().any(|a| a.name == n),
+                    "set_filler" => {
+                        let t = c["filler"]["title"].as_str().unwrap_or("");
+                        !def.fillers.iter().any(|f| f.title == t)
+                    }
+                    _ => true,
+                }
+            })
+            .collect();
+        if !todo.is_empty() {
+            apply_change(
+                pod,
+                adapter,
+                &json!({ "collection": name, "changes": todo, "note": "The shopping kit" }),
+            )
+            .await?;
+        }
+    }
+    // Categories to start from, when there are none.
+    let count = pod
+        .blocking(|s| s.with_conn(|c| db::all_rows(c, "shop_categories", false)))
+        .await
+        .map_err(db_err)?
+        .len();
+    if count == 0 {
+        for (i, (n, explore, prefs)) in [
+            ("Clothes", true, ""),
+            ("Home", false, ""),
+            ("Other", false, ""),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let mut values = json!({ "name": n, "explore": explore, "position": i });
+            if !prefs.is_empty() {
+                values["preferences"] = json!(prefs);
+            }
+            add_row(
+                pod,
+                adapter.caps,
+                &json!({ "collection": "shop_categories", "values": values, "note": "The shopping kit's categories" }),
+            )
+            .await?;
+        }
+    }
+    for n in &names {
+        pod_core::construct::write::add_home_feed(pod, (NAME.to_owned(), n.clone())).await?;
+    }
+    let reference = json!({ "name": format!("@core/{}", kit.layout.id), "as": kit.layout.id });
+    let bind = json!({ "title": title });
+    Ok(json!({
+        "kit": kit.layout.id, "collections": names, "created": made,
+        "embed": { "type": "core://Layout", "ref": reference, "bind": bind },
+        "open": { "intent": "action.navigation.open", "ref": reference, "presentation": "Push", "bind": bind },
+        "next": "Put embed in home (as its content, or in a tab's slot of @core/tab_shell), or open on a row or button of home, with update_layout on home. Add needs with add_row on shop_needs (name, category: one of shop_categories' names); a category with explore true is explored through the taste service, others find options on the web.",
+    }))
+}
+
 async fn define(pod: &Pod, adapter: &CollectionsAdapter, args: &Value) -> Result<Value, Value> {
     let caps = adapter.caps;
     let name = str_arg(args, "name")?.to_owned();
@@ -584,7 +767,9 @@ async fn define(pod: &Pod, adapter: &CollectionsAdapter, args: &Value) -> Result
         order_by: Vec::new(),
         descending: args["descending"].as_bool().unwrap_or(false),
         keep: None,
+        snapshots: Vec::new(),
     };
+    def.snapshots = crate::snapshots::parse(&def, args.get("snapshots")).map_err(bad)?;
     // After every field exists: a compute may read a later one.
     let mut others = pod
         .blocking(|s| s.with_conn(db::defs_by_name))
@@ -1426,6 +1611,7 @@ fn construct_commit(
     pod: &Pod,
     edits: &[Value],
     defs: &HashMap<String, Definition>,
+    before: &HashMap<String, Definition>,
 ) -> rusqlite::Result<Result<(Vec<(String, i64)>, Vec<(String, i64)>), Value>> {
     use pod_core::construct::write as cwrite;
     let mut versions = Vec::new();
@@ -1460,6 +1646,14 @@ fn construct_commit(
     }
     for l in cwrite::live_layouts(tx)? {
         if let Err(e) = crate::bindings::check(&l.node, &feeds, defs) {
+            // Only what this change breaks: a layout broken already (a core
+            // layout a deploy moved ahead of a kit's collections, decision
+            // `kits-upgrade-in-place`) doesn't stop a change. The check names
+            // only its first break, so a change mending one of several would
+            // seem to cause the next.
+            if crate::bindings::check(&l.node, &feeds, before).is_err() {
+                continue;
+            }
             let edited = versions.iter().any(|(a, _)| *a == l.name);
             return Ok(Err(breaks_layout(&l.name, &l.title, edited, &e)));
         }
@@ -1490,6 +1684,7 @@ async fn commit(
     let defs = catalog_apps;
     let mut new_defs: HashMap<String, Definition> =
         defs.into_iter().map(|(_, d)| (d.name.clone(), d)).collect();
+    let before = new_defs.clone();
     new_defs.insert(name.to_owned(), planned.def.clone());
     for d in &planned.created {
         new_defs.insert(d.name.clone(), d.clone());
@@ -1549,7 +1744,7 @@ async fn commit(
         for id in &to_recompute {
             jobs.extend(crate::compute::backfill(tx, &def, id, true, caps.rows, now, caps)?);
         }
-        let (versions, moved) = match construct_commit(tx, &pod2, &edits, &others)? {
+        let (versions, moved) = match construct_commit(tx, &pod2, &edits, &others, &before)? {
             Ok(vm) => vm,
             Err(b) => return Ok(Err(b)),
         };

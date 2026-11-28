@@ -556,7 +556,7 @@ pub async fn for_call(pod: &crate::Pod, mut grant: Grant) -> Grant {
     if let Some((me, shelf)) = pod.shelf().map(|(id, s)| (id.to_owned(), s.clone())) {
         let shelf2 = shelf.clone();
         let me2 = me.clone();
-        let shared = tokio::task::spawn_blocking(move || {
+        let shared = crate::timing::spawn_blocking(move || {
             let mut layouts = BTreeSet::new();
             let mut rows = BTreeSet::new();
             for p in shelf2.of_pod(&me2).unwrap_or_default() {

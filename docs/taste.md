@@ -13,7 +13,9 @@ The `taste` core layout opens on a form for the service's address (`https://…`
 `TASTE_TOKEN`). `POST /v1/taste/sign-in {url, token}` checks them with `GET /api/taste` and stores the token sealed.
 Settings shows the `taste` jack as plugged once signed in; unplugging it (Settings signs out there), or
 `/v1/taste/sign-out`, forgets the service, the kept feed and the kept map; a new sign-in forgets the map too. Neither
-forgets the owner's taste history (below), which the next service is given. Temporary pods have the jack locked.
+forgets the owner's taste history (below), which the next service is given. A page of the feed still being fetched
+when the pod signs in or out is finished first and forgotten with the feed, and one that starts after it keeps
+nothing, so the next service's deck holds only its own pieces. Temporary pods have the jack locked.
 
 The address must be `https://` on a public host. For a service on this machine (development, tests), run the server
 with `CONSTRUCT_TASTE_PRIVATE_HOSTS=1`.
@@ -181,6 +183,19 @@ the size it suggests; No size chart when there is none). Items then carry `fit_s
 a guess, from a size guide) with `fit_noted`, and `fit_source_text`. The pod needs the `model` and `web` jacks plugged
 and a cheap model configured; without them nothing is checked.
 
+## Explore, for Collections
+
+The source answers Collections' `taste` fillers (decision [`shopping-kit`](decisions/shopping-kit.md),
+`src/explore.rs`, given to Collections by the server as its explorer): a filler's request, with piece keys turned
+back into the service's ids, `price_max` under `filters` and `avoid` and `prefer` as lists of phrases, goes to
+`POST /api/explore`, and each item it answers
+comes back as a piece (`key`, `title`, `brand`, `image`, `thumb`, `price`, `price_text`, `url` from `buy_url`,
+`host`, `description`, `category`, `distance`, `group`, and from its group `group_label`, `group_ids` (keys),
+`group_size`, `group_prices` like $140–$560). Pieces it was told to like, dislike or leave out never come back.
+It names the pod's history like every request. A service from before `/api/explore` (404 or 405, but not
+`domain_unknown`) is asked for the first liked piece's similar pieces, else a search for the query: no groups, no
+distances. The pod must be signed in; otherwise the filler reports it.
+
 ## The service's API
 
 What the source calls, each with `Authorization: Bearer <token>` and, once the pod owns its history,
@@ -188,7 +203,10 @@ What the source calls, each with `Authorization: Bearer <token>` and, once the p
 `state_unknown`, `GET /api/state` (no header: the service's own history, taken over once), `GET /api/feed?n=`,
 `POST /api/event {id, kind}`,
 `GET /api/item/<id>` and its `/similar`, `/contrast` and `/steer?q=`, `GET /api/search?q=`, `GET /api/likes`,
-`GET /api/taste`, `GET /api/taste/<n>?n=` (one taste: `{index, size, attributes, brands, categories, items, more}`,
+`POST /api/explore {domain?, query?, like?, unlike?, distance?, spread?, group?, exclude?, n?, filters?, avoid?,
+prefer?, any_kind?}` (kept to the kind of garment the query's words or the likes name)
+(`{items, groups}`: each item with `distance`, its percentile from the anchor, and `group`; each group `{group,
+label, size, price_low, price_high, items}`), `GET /api/taste`, `GET /api/taste/<n>?n=` (one taste: `{index, size, attributes, brands, categories, items, more}`,
 404 for no such taste), `POST /api/taste/summary`, `GET /api/map` (`{ids, xy, cluster, thumb, liked, skipped, p}`: every
 item's place, the liked and skipped ones by index and each one's chance or null), `GET /api/map/tiles?x0=&y0=&x1=&y1=&n=` (`{bounds, n, tiles}`, each tile
 `{i, j, x0, y0, x1, y1, count, likes, skips, p, color, item}`, row by row) and `GET /api/map/items?x0=&y0=&x1=&y1=&n=`.
