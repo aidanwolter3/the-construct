@@ -817,3 +817,60 @@ async fn adopted_elements_reach_only_what_they_are_bound_to() {
     .await;
     assert!(e.to_string().contains("names no field"), "{e}");
 }
+
+/// A button undoing the background work (it restores the adopter's screens to
+/// a checkpoint) waits for the adopter's acceptance, like edit groups and
+/// checkpoints: its class is `construct`.
+#[tokio::test]
+async fn an_adopted_background_undo_waits_for_acceptance() {
+    let env = env().await;
+    let (ann, ben) = (env.pod("ann").await, env.pod("ben").await);
+    let (a, b) = (env.connect(&ann).await, env.connect(&ben).await);
+    for pod in [&a, &b] {
+        ok(
+            &env,
+            pod,
+            "define_collection",
+            json!({"name": "chores", "fields": [{"name": "title", "type": "text"}]}),
+        )
+        .await;
+    }
+    ok(&env, &a, "set_handle", json!({"handle": "ann"})).await;
+    let undo = "/v1/background/undo";
+    let button = json!({"type": "core://Button", "label": "Tidy up", "on_click": {
+        "intent": "action.mutation.create", "query_key": "collection:chores",
+        "entity_uri": "collections://chores/pending-$nonce", "entity": {"id": "pending-$nonce"},
+        "endpoint": undo, "payload": {}}});
+    let id = ok(
+        &env,
+        &a,
+        "create_layout",
+        json!({"title": "Tidy", "feeds": [["collections", "chores"], ["settings", "all"]],
+            "layout": {"type": "core://Page", "title": "Tidy", "root": button}}),
+    )
+    .await["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let link = publish(&env, &a, &id).await["link"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let bindings = json!({"chores": {"collection": "chores"}});
+    let e = refused(
+        &env,
+        &b,
+        "adopt",
+        json!({"link": link, "bindings": bindings, "dry_run": true}),
+    )
+    .await;
+    assert_eq!(e["error"], "needs_acceptance", "{e}");
+    assert!(
+        e["needs_acceptance"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|n| n["accept"] == undo && n["class"] == "construct"),
+        "{e}"
+    );
+}
