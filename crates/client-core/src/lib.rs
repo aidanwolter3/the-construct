@@ -61,7 +61,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::fs;
 use std::panic::{self, AssertUnwindSafe};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{
     Arc, Condvar, LazyLock, Mutex, MutexGuard, RwLock, RwLockReadGuard, RwLockWriteGuard, Weak,
     mpsc,
@@ -495,16 +495,70 @@ enum Followup {
 
 struct Observer {
     f: Box<dyn Fn(StateSnapshot) + Send + Sync>,
-    /// Highest state `seq` delivered to this observer.
-    last_seq: AtomicU64,
+    /// Who is calling `f` now, and the newest `seq` taken for it: calls are
+    /// one at a time and in `seq` order (issue #594), so a snapshot notified
+    /// from one thread never reaches the observer after a newer one from
+    /// another.
+    gate: Mutex<Gate>,
+    turn: Condvar,
+}
+
+#[derive(Default)]
+struct Gate {
+    /// Highest state `seq` taken for this observer (`None`: none yet, so
+    /// the initial snapshot at seq 0 is taken too).
+    last_seq: Option<u64>,
+    /// The thread calling the observer now.
+    caller: Option<thread::ThreadId>,
+    /// Snapshots taken while the caller's own callback was running (it
+    /// changed the engine itself), called once it returns, in order.
+    deferred: std::collections::VecDeque<StateSnapshot>,
 }
 
 impl Observer {
-    /// Call the observer unless it has already seen this or a newer state.
-    fn deliver(&self, snap: StateSnapshot) {
-        if self.last_seq.fetch_max(snap.seq, Ordering::SeqCst) < snap.seq {
-            self.call(snap);
+    fn new(f: Box<dyn Fn(StateSnapshot) + Send + Sync>) -> Self {
+        Self {
+            f,
+            gate: Mutex::new(Gate::default()),
+            turn: Condvar::new(),
         }
+    }
+
+    /// Call the observer unless it has already seen this or a newer state.
+    /// Another thread's call is waited for; a snapshot from inside the
+    /// observer's own callback is called after it returns (no deadlock).
+    fn deliver(&self, snap: StateSnapshot) {
+        let me = thread::current().id();
+        let mut gate = lock(&self.gate);
+        let newer = |g: &Gate, seq: u64| g.last_seq.is_none_or(|l| seq > l);
+        if gate.caller == Some(me) {
+            if newer(&gate, snap.seq) {
+                gate.last_seq = Some(snap.seq);
+                gate.deferred.push_back(snap);
+            }
+            return;
+        }
+        while gate.caller.is_some() {
+            gate = self
+                .turn
+                .wait(gate)
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+        }
+        if !newer(&gate, snap.seq) {
+            return;
+        }
+        gate.last_seq = Some(snap.seq);
+        gate.caller = Some(me);
+        let mut next = Some(snap);
+        while let Some(snap) = next {
+            drop(gate);
+            self.call(snap);
+            gate = lock(&self.gate);
+            next = gate.deferred.pop_front();
+        }
+        gate.caller = None;
+        drop(gate);
+        self.turn.notify_all();
     }
 
     /// Invoke the callback, containing any panic so it never unwinds into
@@ -1961,20 +2015,12 @@ impl ConstructEngine {
     /// and then every subsequent change. Observers are called
     /// without engine locks held, possibly from a background thread.
     pub fn subscribe<F: Fn(StateSnapshot) + Send + Sync + 'static>(&self, f: F) {
-        let observer = Arc::new(Observer {
-            f: Box::new(f),
-            last_seq: AtomicU64::new(0),
-        });
+        let observer = Arc::new(Observer::new(Box::new(f)));
         lock(&self.inner.observers).push(Arc::clone(&observer));
+        // The initial snapshot (even at seq 0), unless a concurrent notify
+        // already delivered this or a newer state.
         let snap = lock(&self.inner.state).snapshot();
-        let seq = snap.seq;
-        // Always deliver the initial snapshot (even at seq 0), unless a
-        // concurrent notify already delivered this or a newer state. `notify`
-        // never sends seq 0, so `prev == 0` at seq 0 means nothing was sent.
-        let prev = observer.last_seq.fetch_max(seq, Ordering::SeqCst);
-        if prev < seq || (seq == 0 && prev == 0) {
-            observer.call(snap);
-        }
+        observer.deliver(snap);
     }
 
     /// Handle an `ActionIntent` JSON string. Never panics; invalid or
@@ -2539,6 +2585,7 @@ impl Inner {
     fn refresh(&self) -> FetchOutcome {
         let net = read(&self.net);
         let stamp = lock(&self.state).load_stamp();
+        let swapped = lock(&self.construct).swapped;
         let mut token = self.session_token();
         let mut result = self.fetch_layout(&self.workspace_id, token.as_deref());
         if let (Err(FetchError::Status(401)), Some(t)) = (&result, &token) {
@@ -2557,6 +2604,9 @@ impl Inner {
         }
         let outcome;
         let snap = {
+            // The construct before the state, as a swap locks them: a swap
+            // made while this fetch was out is drawn, not written over.
+            let c = lock(&self.construct);
             let mut st = lock(&self.state);
             match result {
                 Ok(_) if st.session.as_ref().map(|s| &s.token) != token.as_ref() => {
@@ -2586,6 +2636,10 @@ impl Inner {
                         self.workspace_id,
                         spec.entities.len(),
                     );
+                    let mut spec = spec;
+                    if let Some(now) = Self::swapped_since(&c, &self.workspace_id, swapped) {
+                        spec.workspace = now;
+                    }
                     st.apply_fetched(&self.workspace_id, spec, stamp);
                     st.stale
                         .remove(&format!("{LAYOUT_LOAD_PREFIX}{}", self.workspace_id));
@@ -2634,7 +2688,10 @@ impl Inner {
                 }
             }
             st.seq += 1;
-            st.snapshot()
+            let snap = st.snapshot();
+            drop(st);
+            drop(c);
+            snap
         };
         drop(net);
         if snap.is_online {
@@ -3442,6 +3499,7 @@ impl Inner {
     fn load_data(&self, path: &str) {
         let net = read(&self.net);
         let stamp = lock(&self.state).load_stamp();
+        let swapped = lock(&self.construct).swapped;
         let token = self.session_token();
         // Another layout (decision `layouts-not-apps`): its workspace, whose
         // data merges like a data path's.
@@ -3470,6 +3528,10 @@ impl Inner {
         }
         let mut expired = None;
         let snap = {
+            // A layout's tree is checked against swaps made meanwhile under
+            // the construct's lock, taken before the state's as a swap does
+            // (and only then: a sign-out below locks the construct itself).
+            let c = matches!(result, Ok((_, Some(_)))).then(|| lock(&self.construct));
             let mut st = lock(&self.state);
             match result {
                 Ok(_)
@@ -3483,8 +3545,12 @@ impl Inner {
                 }
                 Ok((bundle, layout)) => {
                     if let (Some(id), Some(workspace)) = (layout_id, layout) {
-                        st.apply_layout(id, workspace);
+                        let now = c
+                            .as_deref()
+                            .and_then(|c| Self::swapped_since(c, id, swapped));
+                        st.apply_layout(id, now.unwrap_or(workspace));
                     }
+                    drop(c);
                     st.apply_data(path, bundle, stamp);
                     st.set_online(true);
                 }
@@ -4806,6 +4872,91 @@ fn reachable(client: Option<&reqwest::blocking::Client>, url: &str) -> bool {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    fn snap_at(seq: u64) -> StateSnapshot {
+        let mut snap = State::default().snapshot();
+        snap.seq = seq;
+        snap
+    }
+
+    /// Issue #594: snapshots notified from two threads reach an observer one
+    /// call at a time, oldest first: a call waits for the one running, and a
+    /// snapshot older than one taken is dropped.
+    #[test]
+    fn an_observer_is_called_one_at_a_time_in_seq_order() {
+        let (entered_tx, entered) = std::sync::mpsc::channel::<u64>();
+        let (release, released) = std::sync::mpsc::channel::<()>();
+        let released = Mutex::new(released);
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let running = Arc::new(AtomicBool::new(false));
+        let obs = {
+            let seen = Arc::clone(&seen);
+            let running = Arc::clone(&running);
+            Arc::new(Observer::new(Box::new(move |s: StateSnapshot| {
+                assert!(!running.swap(true, Ordering::SeqCst), "calls overlap");
+                seen.lock().unwrap().push(s.seq);
+                entered_tx.send(s.seq).unwrap();
+                if s.seq == 1 {
+                    released.lock().unwrap().recv().unwrap();
+                }
+                running.store(false, Ordering::SeqCst);
+            })))
+        };
+        let first = {
+            let obs = Arc::clone(&obs);
+            thread::spawn(move || obs.deliver(snap_at(1)))
+        };
+        assert_eq!(entered.recv().unwrap(), 1);
+        // While seq 1 is being called: seq 2 from another thread waits for
+        // it, and seq 0 (an older state) is never called.
+        let later: Vec<_> = [2, 0]
+            .into_iter()
+            .map(|seq| {
+                let obs = Arc::clone(&obs);
+                thread::spawn(move || obs.deliver(snap_at(seq)))
+            })
+            .collect();
+        assert!(
+            entered.recv_timeout(Duration::from_millis(200)).is_err(),
+            "called while seq 1's call runs"
+        );
+        release.send(()).unwrap();
+        first.join().unwrap();
+        for t in later {
+            t.join().unwrap();
+        }
+        let seen = seen.lock().unwrap().clone();
+        // Seq 2 waited and was called; seq 0, older than seq 1, wasn't.
+        assert_eq!(seen, [1, 2]);
+    }
+
+    /// A snapshot notified from inside the observer's own call (it changed
+    /// the engine) is called after that call returns, not deadlocked on.
+    #[test]
+    fn an_observer_notified_from_its_own_call_is_called_after_it() {
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let me: Arc<Mutex<Option<Arc<Observer>>>> = Arc::new(Mutex::new(None));
+        let obs = {
+            let seen = Arc::clone(&seen);
+            let me = Arc::clone(&me);
+            Arc::new(Observer::new(Box::new(move |s: StateSnapshot| {
+                seen.lock().unwrap().push((s.seq, "in"));
+                if s.seq == 1 {
+                    let obs = me.lock().unwrap().clone().unwrap();
+                    obs.deliver(snap_at(2));
+                    obs.deliver(snap_at(2));
+                }
+                seen.lock().unwrap().push((s.seq, "out"));
+            })))
+        };
+        *me.lock().unwrap() = Some(Arc::clone(&obs));
+        obs.deliver(snap_at(1));
+        *me.lock().unwrap() = None;
+        assert_eq!(
+            *seen.lock().unwrap(),
+            [(1, "in"), (1, "out"), (2, "in"), (2, "out")]
+        );
+    }
 
     #[test]
     fn cleartext_remote_base_urls_are_flagged() {
