@@ -445,7 +445,15 @@ async fn a_rounds_avoid_and_prefer_reach_the_service_and_a_kit_upgrades_in_place
 async fn a_pod_from_an_older_kit_upgrades_though_the_new_layouts_name_its_new_fields() {
     use source_collections::db;
     let pod = pod(Arc::default());
-    ok(&pod, "use_kit", json!({"kit": "shopping"})).await;
+    let kit = ok(&pod, "use_kit", json!({"kit": "shopping"})).await;
+    // Home shows it, so its layouts are checked on every change.
+    ok(
+        &pod,
+        "update_layout",
+        json!({"app": "home", "layout": {"type": "core://Workspace", "id": "home", "title": "Home",
+            "slots": [{"slot_id": "shop", "provider_uri": "core://custom", "content": kit["embed"]}]}}),
+    )
+    .await;
     // Take the new fields back out, as the older kit made them.
     pod.store()
         .transaction(|tx| {
@@ -453,9 +461,24 @@ async fn a_pod_from_an_older_kit_upgrades_though_the_new_layouts_name_its_new_fi
                 ("shop_categories", &["explore_avoid", "explore_prefer"][..]),
                 ("shop_needs", &["avoid", "prefer"][..]),
                 ("shop_rounds", &["avoid", "prefer"][..]),
+                ("shop_pieces", &["avoid", "prefer"][..]),
             ] {
                 let (_, mut def) = db::latest_def(tx, c)?.unwrap();
+                let ids: Vec<String> = def
+                    .fields
+                    .iter()
+                    .filter(|f| gone.contains(&f.name.as_str()))
+                    .map(|f| f.id.clone())
+                    .collect();
                 def.fields.retain(|f| !gone.contains(&f.name.as_str()));
+                for f in &mut def.fillers {
+                    if let source_collections::filler::Source::Taste { request, copy, .. } =
+                        &mut f.source
+                    {
+                        request.retain(|part, _| !gone.contains(&part.as_str()));
+                        copy.retain(|id, _| !ids.contains(id));
+                    }
+                }
                 db::append_def(tx, &def, "older kit", "test", 0)?;
             }
             Ok(())

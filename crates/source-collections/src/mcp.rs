@@ -1646,14 +1646,12 @@ fn construct_commit(
     }
     for l in cwrite::live_layouts(tx)? {
         if let Err(e) = crate::bindings::check(&l.node, &feeds, defs) {
-            // Only what this change breaks: a layout that names a field the
-            // collections lack already (a core layout a deploy moved ahead of
-            // a kit's collections, decision `kits-upgrade-in-place`) doesn't
-            // stop a change that leaves it no worse.
-            let already = crate::bindings::check(&l.node, &feeds, before)
-                .err()
-                .is_some_and(|b| b.pointer == e.pointer && b.message == e.message);
-            if already {
+            // Only what this change breaks: a layout broken already (a core
+            // layout a deploy moved ahead of a kit's collections, decision
+            // `kits-upgrade-in-place`) doesn't stop a change. The check names
+            // only its first break, so a change mending one of several would
+            // seem to cause the next.
+            if crate::bindings::check(&l.node, &feeds, before).is_err() {
                 continue;
             }
             let edited = versions.iter().any(|(a, _)| *a == l.name);
